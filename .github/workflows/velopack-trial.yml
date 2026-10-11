@@ -1,0 +1,452 @@
+# =============================================================================
+# velopack-trial.yml - Phase 0 spike of the 5.2 install/update overhaul.
+#
+# THROWAWAY: lives only on spike/velopack-trial, never merged. Builds the
+# v5.0.0 and v5.1.0 payloads with each tag's own build script (stopped before
+# Inno Setup / pkg / DMG), packs them with Velopack, measures full and delta
+# sizes, and drives install -> update -> relaunch scenarios from a local file
+# feed. Uploads only JSON results and logs, never binaries.
+# =============================================================================
+
+name: Velopack trial (spike)
+
+on:
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: Run the Windows jobs
+        type: boolean
+        default: true
+      macos:
+        description: Run the macOS jobs
+        type: boolean
+        default: true
+      variants:
+        description: 'JSON list of payload variants: a = as built today, b = deterministic'
+        type: string
+        default: '["a","b"]'
+      scenarios:
+        description: Comma-separated scenario names for variant b, or "all"
+        type: string
+        default: all
+      notarize:
+        description: Submit the 5.1 trial app to Apple notarization once (timed; never stapled)
+        type: boolean
+        default: false
+      reuse_packages:
+        description: Reuse packed releases from an earlier run (cache keyed on the payload scripts)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: velopack-trial-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  VELOPACK_VERSION: "1.2.161"
+  WINDOWS_PYTHON_VERSION: "3.13.2"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  windows:
+    if: ${{ inputs.windows }}
+    name: windows (${{ matrix.variant }})
+    runs-on: windows-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.variants) }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Work folders, disk and audit
+        run: |
+          $vt = Join-Path $env:RUNNER_TEMP "vt"
+          $res = Join-Path $env:RUNNER_TEMP "results"
+          New-Item -ItemType Directory -Force $vt, $res | Out-Null
+          "VT=$vt" >> $env:GITHUB_ENV
+          "RES=$res" >> $env:GITHUB_ENV
+          (Get-Date).ToUniversalTime().ToString("o") | Set-Content (Join-Path $env:RUNNER_TEMP "job-start.txt")
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors | Format-Table
+          Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object RealTimeProtectionEnabled, AntivirusEnabled | Format-List
+          # Record every network connection (WFP audit 5156/5157) so the
+          # results can list what Setup, Update and vpk actually contact.
+          auditpol /set /subcategory:"Filtering Platform Connection" /success:enable /failure:enable
+          wevtutil sl Security /ms:2147483648
+
+      - name: Restore packed releases
+        id: cache
+        if: ${{ inputs.reuse_packages }}
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ runner.temp }}/vt/rel
+            ${{ runner.temp }}/vt/setup-5.0.0.exe
+            ${{ runner.temp }}/vt/delta-bestsize.nupkg
+            ${{ runner.temp }}/results
+          key: velopack-trial-win-${{ matrix.variant }}-${{ env.VELOPACK_VERSION }}-${{ hashFiles('spike/velopack-trial/build_payload.py', 'spike/velopack-trial/trial_launcher.py', 'spike/velopack-trial/rowbot_stub.c', 'spike/velopack-trial/timed.py') }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.WINDOWS_PYTHON_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+
+      - name: Install vpk
+        run: |
+          dotnet tool install --global vpk --version $env:VELOPACK_VERSION
+          "$env:USERPROFILE\.dotnet\tools" >> $env:GITHUB_PATH
+
+      - name: Build the trial main executable (C stub)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cl /nologo /O2 /W4 /DUNICODE /D_UNICODE spike\velopack-trial\rowbot_stub.c /Fe:%VT%\Row-Bot.exe /link /SUBSYSTEM:WINDOWS || exit /b 1
+          dir %VT%\Row-Bot.exe
+
+      - name: Check out v5.0.0
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          ref: v5.0.0
+          path: rb
+          persist-credentials: false
+
+      - name: Build payload 5.0.0 (${{ matrix.variant }})
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: >
+          python spike/velopack-trial/build_payload.py --os windows --repo rb --variant ${{ matrix.variant }}
+          --version 5.0.0 --out "$env:VT\pack-5.0.0" --velopack-version $env:VELOPACK_VERSION
+          --python-version $env:WINDOWS_PYTHON_VERSION --stub "$env:VT\Row-Bot.exe"
+          --report "$env:RES\payload-5.0.0.json"
+
+      - name: Pack 5.0.0 (default vpk, update check left on to observe it)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          python spike/velopack-trial/timed.py pack-5.0.0 "$env:RES\timings.jsonl" -- vpk pack --packId RowBotTrial --packVersion 5.0.0 --packDir "$env:VT\pack-5.0.0" --mainExe Row-Bot.exe --packTitle Row-Bot --packAuthors "Row-Bot trial" --outputDir "$env:VT\rel" --noPortable --delta BestSpeed
+          if ($LASTEXITCODE) { throw "vpk pack failed" }
+          Copy-Item "$env:VT\rel\RowBotTrial-win-Setup.exe" "$env:VT\setup-5.0.0.exe"
+          Remove-Item -Recurse -Force "$env:VT\pack-5.0.0"
+          Get-ChildItem "$env:VT\rel" | Format-Table Name, Length
+
+      - name: Check out v5.1.0
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          ref: v5.1.0
+          path: rb
+          persist-credentials: false
+
+      - name: Build payload 5.1.0 (${{ matrix.variant }})
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: >
+          python spike/velopack-trial/build_payload.py --os windows --repo rb --variant ${{ matrix.variant }}
+          --version 5.1.0 --out "$env:VT\pack-5.1.0" --velopack-version $env:VELOPACK_VERSION
+          --python-version $env:WINDOWS_PYTHON_VERSION --stub "$env:VT\Row-Bot.exe"
+          --report "$env:RES\payload-5.1.0.json"
+
+      - name: Pack 5.1.0 and deltas
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          python spike/velopack-trial/timed.py pack-5.1.0 "$env:RES\timings.jsonl" -- vpk pack --skip-updates --packId RowBotTrial --packVersion 5.1.0 --packDir "$env:VT\pack-5.1.0" --mainExe Row-Bot.exe --packTitle Row-Bot --packAuthors "Row-Bot trial" --outputDir "$env:VT\rel" --noPortable --delta BestSpeed
+          if ($LASTEXITCODE) { throw "vpk pack failed" }
+          Remove-Item -Recurse -Force "$env:VT\pack-5.1.0"
+          python spike/velopack-trial/timed.py delta-bestsize "$env:RES\timings.jsonl" -- vpk delta generate --skip-updates --mode BestSize --base "$env:VT\rel\RowBotTrial-5.0.0-full.nupkg" --new "$env:VT\rel\RowBotTrial-5.1.0-full.nupkg" --output "$env:VT\delta-bestsize.nupkg"
+          Get-ChildItem "$env:VT\rel", "$env:VT" | Format-Table Name, Length
+          Get-Content "$env:VT\rel\releases.win.json"
+
+      - name: Sizes
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: >
+          python spike/velopack-trial/driver.py sizes --feed "$env:VT\rel" --variant ${{ matrix.variant }}
+          --installers "$env:VT\setup-5.0.0.exe" "$env:VT\rel\RowBotTrial-win-Setup.exe"
+          --extra-delta "bestsize=$env:VT\delta-bestsize.nupkg"
+          --payload-reports "$env:RES\payload-5.0.0.json" "$env:RES\payload-5.1.0.json"
+          --out "$env:RES\sizes.json"
+
+      - name: Save packed releases
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ runner.temp }}/vt/rel
+            ${{ runner.temp }}/vt/setup-5.0.0.exe
+            ${{ runner.temp }}/vt/delta-bestsize.nupkg
+            ${{ runner.temp }}/results
+          key: velopack-trial-win-${{ matrix.variant }}-${{ env.VELOPACK_VERSION }}-${{ hashFiles('spike/velopack-trial/build_payload.py', 'spike/velopack-trial/trial_launcher.py', 'spike/velopack-trial/rowbot_stub.c', 'spike/velopack-trial/timed.py') }}
+
+      - name: Install and update scenarios
+        if: ${{ matrix.variant == 'b' }}
+        timeout-minutes: 150
+        run: |
+          $which = "${{ inputs.scenarios }}"
+          $extra = @()
+          if ($which -ne "all") { $extra = @("--which", $which) }
+          python spike/velopack-trial/driver.py scenarios --feed "$env:VT\rel" --base-nupkg "$env:VT\rel\RowBotTrial-5.0.0-full.nupkg" --setup "$env:VT\setup-5.0.0.exe" --work "$env:VT\work" --out "$env:RES\scenarios" @extra
+
+      - name: Network connections by Velopack, vpk and the trial app (WFP audit)
+        if: ${{ always() }}
+        run: |
+          $start = [datetime]::Parse((Get-Content (Join-Path $env:RUNNER_TEMP "job-start.txt"))).ToLocalTime()
+          $events = Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5156, 5157; StartTime = $start } -ErrorAction SilentlyContinue
+          $rows = foreach ($e in $events) {
+            $x = [xml]$e.ToXml()
+            $d = @{}
+            foreach ($n in $x.Event.EventData.Data) { $d[$n.Name] = $n.'#text' }
+            if ($d.Application -match 'rowbottrial|\\vpk\.exe|\\dotnet\.exe|\\vt\\setup') {
+              [pscustomobject]@{ Id = $e.Id; Time = $e.TimeCreated.ToString('o'); App = $d.Application; ProcessId = $d.ProcessID; Direction = $d.Direction; Src = $d.SourceAddress; Dst = $d.DestAddress; DstPort = $d.DestPort; Protocol = $d.Protocol }
+            }
+          }
+          "audited events: $(@($events).Count); matching: $(@($rows).Count)"
+          $rows | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $env:RES "wfp-connections.json")
+          $rows | Where-Object { $_.Dst -notmatch '^(127\.|::1|0\.0\.0\.0|::$)' } | Group-Object App, Dst, DstPort | Select-Object Count, Name | Format-Table -AutoSize | Out-String -Width 400
+
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: velopack-trial-windows-${{ matrix.variant }}
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+
+  macos:
+    if: ${{ inputs.macos }}
+    name: macos (${{ matrix.variant }})
+    runs-on: macos-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.variants) }}
+    env:
+      CODESIGN_ID: "Developer ID Application: Siddharth Sachar (33PQRTZLNW)"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Work folders and disk
+        run: |
+          VT="$RUNNER_TEMP/vt"; RES="$RUNNER_TEMP/results"
+          mkdir -p "$VT" "$RES"
+          echo "VT=$VT" >> "$GITHUB_ENV"
+          echo "RES=$RES" >> "$GITHUB_ENV"
+          cp installer/entitlements.plist "$VT/entitlements.plist"
+          df -h "$RUNNER_TEMP" /Applications
+          sysctl -n machdep.cpu.brand_string hw.ncpu
+          sw_vers
+          python3 --version
+
+      - name: Restore packed releases
+        id: cache
+        if: ${{ inputs.reuse_packages }}
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ runner.temp }}/vt/rel
+            ${{ runner.temp }}/vt/portable-5.0.0.zip
+            ${{ runner.temp }}/vt/delta-bestsize.nupkg
+            ${{ runner.temp }}/vt/delta-fresh.nupkg
+            ${{ runner.temp }}/results
+          key: velopack-trial-mac-${{ matrix.variant }}-${{ env.VELOPACK_VERSION }}-${{ hashFiles('spike/velopack-trial/build_payload.py', 'spike/velopack-trial/trial_launcher.py', 'spike/velopack-trial/sign_mac.py', 'spike/velopack-trial/timed.py') }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+
+      - name: Import the Developer ID Application certificate
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        env:
+          APPLICATION_P12: ${{ secrets.APPLE_APPLICATION_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_APPLICATION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          APP_P12_PASSWORD="${APPLICATION_P12_PASSWORD:-$P12_PASSWORD}"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          printf '%s' "$APPLICATION_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          # Same legacy re-encode as release.yml so macOS tooling accepts the file.
+          openssl pkcs12 -in "$RUNNER_TEMP/app.p12" -passin pass:"$APP_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/app.pem" >/dev/null 2>&1
+          openssl pkcs12 -export -in "$RUNNER_TEMP/app.pem" -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+            -passout pass:"$APP_P12_PASSWORD" -out "$RUNNER_TEMP/app.macos.p12" >/dev/null 2>&1
+          security import "$RUNNER_TEMP/app.macos.p12" -k "$KEYCHAIN_PATH" -f pkcs12 -P "$APP_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/app.pem" "$RUNNER_TEMP/app.macos.p12"
+          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security default-keychain -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c "Developer ID Application"
+
+      - name: Install vpk
+        run: |
+          dotnet tool install --global vpk --version "$VELOPACK_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Check out v5.0.0
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          ref: v5.0.0
+          path: rb
+          persist-credentials: false
+
+      - name: Build unsigned payload 5.0.0 (${{ matrix.variant }})
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: >
+          python3 spike/velopack-trial/build_payload.py --os macos --repo rb --variant ${{ matrix.variant }}
+          --version 5.0.0 --out "$VT/u-5.0.0" --velopack-version "$VELOPACK_VERSION"
+          --report "$RES/payload-5.0.0.json"
+
+      - name: Check out v5.1.0
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          ref: v5.1.0
+          path: rb
+          persist-credentials: false
+
+      - name: Build unsigned payload 5.1.0 (${{ matrix.variant }})
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: >
+          python3 spike/velopack-trial/build_payload.py --os macos --repo rb --variant ${{ matrix.variant }}
+          --version 5.1.0 --out "$VT/u-5.1.0" --velopack-version "$VELOPACK_VERSION"
+          --report "$RES/payload-5.1.0.json"
+
+      - name: Sign and pack 5.0.0 (fresh signatures, filling the reuse cache)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          python3 spike/velopack-trial/sign_mac.py --app "$VT/u-5.0.0/Row-Bot.app" --identity "$CODESIGN_ID" \
+            --entitlements "$VT/entitlements.plist" --cache "$VT/sigcache" --report "$RES/sign-5.0.0.json"
+          python3 spike/velopack-trial/timed.py pack-5.0.0 "$RES/timings.jsonl" -- vpk pack --packId RowBotTrial --packVersion 5.0.0 \
+            --packDir "$VT/u-5.0.0/Row-Bot.app" --mainExe row-bot --packTitle Row-Bot --packAuthors "Row-Bot trial" \
+            --outputDir "$VT/rel" --noInst --delta BestSpeed \
+            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/entitlements.plist"
+          cp "$VT/rel/RowBotTrial-osx-Portable.zip" "$VT/portable-5.0.0.zip"
+          rm -rf "$VT/u-5.0.0"
+          ls -la "$VT/rel"; df -h "$RUNNER_TEMP"
+
+      - name: Sign and pack 5.1.0 with fresh signatures (sizes only)
+        if: ${{ matrix.variant == 'b' && steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          ditto "$VT/u-5.1.0" "$VT/f-5.1.0"
+          python3 spike/velopack-trial/sign_mac.py --app "$VT/f-5.1.0/Row-Bot.app" --identity "$CODESIGN_ID" \
+            --entitlements "$VT/entitlements.plist" --report "$RES/sign-5.1.0-fresh.json"
+          vpk pack --skip-updates --packId RowBotTrial --packVersion 5.1.0 \
+            --packDir "$VT/f-5.1.0/Row-Bot.app" --mainExe row-bot --packTitle Row-Bot --packAuthors "Row-Bot trial" \
+            --outputDir "$VT/rel-fresh" --noInst --noPortable --delta None \
+            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/entitlements.plist"
+          rm -rf "$VT/f-5.1.0"
+          python3 spike/velopack-trial/timed.py delta-fresh "$RES/timings.jsonl" -- vpk delta generate --skip-updates --mode BestSpeed \
+            --base "$VT/rel/RowBotTrial-5.0.0-full.nupkg" --new "$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg" --output "$VT/delta-fresh.nupkg"
+          df -h "$RUNNER_TEMP"
+
+      - name: Sign and pack 5.1.0 (b reuses unchanged signed files; a signs fresh as today)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          CACHE_ARGS=()
+          if [ "${{ matrix.variant }}" = "b" ]; then CACHE_ARGS=(--cache "$VT/sigcache" --read-cache); fi
+          python3 spike/velopack-trial/sign_mac.py --app "$VT/u-5.1.0/Row-Bot.app" --identity "$CODESIGN_ID" \
+            --entitlements "$VT/entitlements.plist" ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} --report "$RES/sign-5.1.0.json"
+          python3 spike/velopack-trial/timed.py pack-5.1.0 "$RES/timings.jsonl" -- vpk pack --skip-updates --packId RowBotTrial --packVersion 5.1.0 \
+            --packDir "$VT/u-5.1.0/Row-Bot.app" --mainExe row-bot --packTitle Row-Bot --packAuthors "Row-Bot trial" \
+            --outputDir "$VT/rel" --noInst --delta BestSpeed \
+            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/entitlements.plist"
+          rm -rf "$VT/u-5.1.0"
+          python3 spike/velopack-trial/timed.py delta-bestsize "$RES/timings.jsonl" -- vpk delta generate --skip-updates --mode BestSize \
+            --base "$VT/rel/RowBotTrial-5.0.0-full.nupkg" --new "$VT/rel/RowBotTrial-5.1.0-full.nupkg" --output "$VT/delta-bestsize.nupkg"
+          ls -la "$VT/rel" "$VT"; cat "$VT/rel/releases.osx.json"; df -h "$RUNNER_TEMP"
+
+      - name: Sizes
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          EXTRA=(--extra-delta "bestsize=$VT/delta-bestsize.nupkg")
+          if [ -f "$VT/delta-fresh.nupkg" ]; then
+            EXTRA+=(--extra-delta "fresh_signatures=$VT/delta-fresh.nupkg")
+            EXTRA+=(--extra-diff "fresh_signatures=$VT/rel/RowBotTrial-5.0.0-full.nupkg,$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg")
+          fi
+          python3 spike/velopack-trial/driver.py sizes --feed "$VT/rel" --variant ${{ matrix.variant }} \
+            --installers "$VT/portable-5.0.0.zip" "$VT/rel/RowBotTrial-osx-Portable.zip" "${EXTRA[@]}" \
+            --payload-reports "$RES/payload-5.0.0.json" "$RES/payload-5.1.0.json" \
+            --out "$RES/sizes.json"
+          rm -rf "$VT/rel-fresh"
+
+      - name: Save packed releases
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ runner.temp }}/vt/rel
+            ${{ runner.temp }}/vt/portable-5.0.0.zip
+            ${{ runner.temp }}/vt/delta-bestsize.nupkg
+            ${{ runner.temp }}/vt/delta-fresh.nupkg
+            ${{ runner.temp }}/results
+          key: velopack-trial-mac-${{ matrix.variant }}-${{ env.VELOPACK_VERSION }}-${{ hashFiles('spike/velopack-trial/build_payload.py', 'spike/velopack-trial/trial_launcher.py', 'spike/velopack-trial/sign_mac.py', 'spike/velopack-trial/timed.py') }}
+
+      - name: Notarize the 5.1.0 trial app once (timed, not stapled)
+        if: ${{ inputs.notarize && matrix.variant == 'b' }}
+        continue-on-error: true
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -uo pipefail
+          ZIP="$VT/rel/RowBotTrial-osx-Portable.zip"
+          ls -la "$ZIP"
+          START=$(date +%s)
+          xcrun notarytool submit "$ZIP" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 2h --output-format json > "$RES/notary-submit.json" 2> "$RES/notary-submit.err"
+          RC=$?
+          END=$(date +%s)
+          echo "{\"wall_seconds\": $((END-START)), \"rc\": $RC, \"bytes\": $(stat -f%z "$ZIP")}" > "$RES/notary-time.json"
+          cat "$RES/notary-time.json" "$RES/notary-submit.json"
+          ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$RES/notary-submit.json" || true)
+          if [ -n "$ID" ]; then
+            xcrun notarytool info "$ID" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --output-format json > "$RES/notary-info.json" || true
+            xcrun notarytool log "$ID" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" > "$RES/notary-log.json" || true
+          fi
+
+      - name: Install and update scenarios
+        if: ${{ matrix.variant == 'b' }}
+        timeout-minutes: 150
+        run: |
+          set -euo pipefail
+          WHICH=()
+          if [ "${{ inputs.scenarios }}" != "all" ]; then WHICH=(--which "${{ inputs.scenarios }}"); fi
+          python3 spike/velopack-trial/driver.py scenarios --feed "$VT/rel" --base-nupkg "$VT/rel/RowBotTrial-5.0.0-full.nupkg" \
+            --portable "$VT/portable-5.0.0.zip" --work "$VT/work" --out "$RES/scenarios" ${WHICH[@]+"${WHICH[@]}"}
+
+      - name: Upload results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: velopack-trial-macos-${{ matrix.variant }}
+          path: ${{ runner.temp }}/results
+          retention-days: 30
