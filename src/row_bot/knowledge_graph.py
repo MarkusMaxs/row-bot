@@ -1299,8 +1299,13 @@ def build_missing_index(*, cancelled: Callable[[], bool] | None = None) -> None:
     For callers whose provider work was disclosed and approved, such as document processing: a projection
     batch's dedup refuses a missing index rather than repair it from inside (B331).
     """
-    if not _projection_state()["generation"] and _has_knowledge():
+    if _skip_reindex or _projection_state()["generation"] or not _has_knowledge():
+        return
+    try:
         rebuild_index(cancelled=cancelled)
+    except Exception as exc:
+        # No search model yet: the work stays queued for repair, and the batch goes on as it did before.
+        logger.info("Memory search index not built before a batch: %s", exc)
 
 
 def rebuild_index(*, cancelled: Callable[[], bool] | None = None) -> None:

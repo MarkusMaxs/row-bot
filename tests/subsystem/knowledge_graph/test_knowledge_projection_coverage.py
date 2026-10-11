@@ -201,6 +201,7 @@ def test_a_missing_index_still_refuses_inside_a_batch_until_built_first(projecti
     """B331: memories saved while the index was deferred. A batch's own search never repairs; a caller whose
     provider work was approved (document processing) builds the missing index first, and dedup then works."""
     kg, embedding, _fingerprint, _config = projection_stack
+    monkeypatch.setattr(kg, "_skip_reindex", False)
     with kg.projection_batch(drain_on_exit=False):
         saved = add(kg, "Saved while the index was deferred")
     with kg.projection_batch(drain_on_exit=False):
@@ -222,3 +223,15 @@ def test_building_a_missing_index_does_nothing_on_a_fresh_profile_or_a_built_one
     monkeypatch.setattr(kg, "rebuild_index", lambda **_kw: calls.append("rebuild"))
     kg.build_missing_index()
     assert calls == []
+
+
+def test_a_missing_index_that_cannot_be_built_leaves_processing_as_it_was(projection_stack, monkeypatch):
+    kg, embedding, _fingerprint, _config = projection_stack
+    monkeypatch.setattr(kg, "_skip_reindex", False)
+    with kg.projection_batch(drain_on_exit=False):
+        add(kg, "Saved while the index was deferred")
+    embedding.failure = RuntimeError("no search model yet")
+
+    kg.build_missing_index()  # says so in the log; the document goes on
+
+    assert not kg.memory_vector_status()["ready"]
