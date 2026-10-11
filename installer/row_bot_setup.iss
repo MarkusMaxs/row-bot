@@ -268,7 +268,8 @@ var
 begin
   Launcher := ExpandConstant('{app}\Row-Bot.exe');
   if FileExists(Launcher) and not DeleteFile(Launcher) then
-    if MoveFileEx(Launcher, Launcher + '.' + IntToStr(GetTickCount) + '.old', MOVEFILE_WRITE_THROUGH) then
+    if MoveFileEx(Launcher, Launcher + '.' + GetDateTimeString('yyyymmddhhnnsszzz', #0, #0) + '.old',
+      MOVEFILE_WRITE_THROUGH) then
       Log('Moved the running Row-Bot.exe aside')
     else
       Log('Could not move the running Row-Bot.exe aside');
