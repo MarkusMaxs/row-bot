@@ -1,13 +1,26 @@
-"""Cancellable LangChain OpenRouter wrapper."""
+"""Cancellable LangChain OpenRouter wrapper.
+
+For ``anthropic/claude-*`` models it also caches a conversation's tail with
+OpenRouter's documented top-level ``cache_control`` (with ``ttl``), and retries
+a request once without cache instructions when OpenRouter rejects them
+(``prompt_cache_breakpoints``).
+"""
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
+from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openrouter import ChatOpenRouter
 
 from row_bot.brand import APP_DISPLAY_NAME, APP_WEBSITE_URL
+from row_bot.cancellation import current_cancellation_scope
+from row_bot.prompt_cache import content_has_cache_control, conversation_cache_ttl
 from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.capabilities import PROMPT_CACHE_ROUTE_OPENROUTER, prompt_cache_route
+from row_bot.providers.transports import prompt_cache_breakpoints as cache_breakpoints
 from row_bot.providers.transports.cancellable_http import (
     cancellable_async_http_client,
     cancellable_http_client,
@@ -38,6 +51,114 @@ class CancellableChatOpenRouter(ChatOpenRouter):
             if session_id:
                 params["session_id"] = session_id
         return params
+
+    # ── Prompt caching (Claude models) ──────────────────────────────────────
+
+    def _cache_route(self) -> tuple[str, str]:
+        return ("openrouter", str(self.model_name or ""))
+
+    def _sends_cache_markers(self, messages: list[BaseMessage]) -> bool:
+        if prompt_cache_route("openrouter", self.model_name) != PROMPT_CACHE_ROUTE_OPENROUTER:
+            return False
+        if cache_breakpoints.cache_markers_rejected(self._cache_route()):
+            return False
+        return bool(conversation_cache_ttl(messages)) or any(
+            isinstance(message, SystemMessage) and content_has_cache_control(message.content)
+            for message in messages
+        )
+
+    def _create_message_dicts(
+        self, messages: list[BaseMessage], stop: list[str] | None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        message_dicts, params = super()._create_message_dicts(messages, stop)
+        if prompt_cache_route("openrouter", self.model_name) != PROMPT_CACHE_ROUTE_OPENROUTER:
+            return message_dicts, params
+        if cache_breakpoints.cache_markers_rejected(self._cache_route()):
+            # This route rejected cache instructions earlier in this process.
+            return cache_breakpoints.without_cache_markers({"messages": message_dicts})["messages"], params
+        tail_ttl = conversation_cache_ttl(messages)
+        if tail_ttl:
+            params = cache_breakpoints.with_openrouter_tail(params, message_dicts, ttl=tail_ttl)
+        return message_dicts, params
+
+    def _cache_retry(self, messages: list[BaseMessage], exc: BaseException) -> bool:
+        """Whether to retry once without cache instructions (the route is remembered)."""
+        if not self._sends_cache_markers(messages) or not cache_breakpoints.is_cache_control_rejection(exc):
+            return False
+        scope = current_cancellation_scope()
+        if scope is not None and scope.is_cancelled():
+            return False
+        cache_breakpoints.remember_cache_markers_rejected(self._cache_route())
+        cache_breakpoints.log_cache_retry(self._cache_route(), remembered=True)
+        return True
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        try:
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        except Exception as exc:
+            if not self._cache_retry(messages, exc):
+                raise
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        try:
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        except Exception as exc:
+            if not self._cache_retry(messages, exc):
+                raise
+        return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        started = False
+        try:
+            for chunk in super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs):
+                started = True
+                yield chunk
+            return
+        except Exception as exc:
+            # Only a rejection before anything streamed: nothing has reached the caller yet.
+            if started or not self._cache_retry(messages, exc):
+                raise
+        yield from super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        started = False
+        try:
+            async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):
+                started = True
+                yield chunk
+            return
+        except Exception as exc:
+            if started or not self._cache_retry(messages, exc):
+                raise
+        async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):
+            yield chunk
+
+    # ── Transport ───────────────────────────────────────────────────────────
 
     def _build_client(self) -> Any:
         import openrouter

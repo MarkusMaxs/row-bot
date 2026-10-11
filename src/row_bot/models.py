@@ -743,7 +743,7 @@ def get_llm():
     return _llm_instance
 
 
-_override_llm_cache: dict[tuple[str, int, str], object] = {}
+_override_llm_cache: dict[tuple, object] = {}
 
 
 def clear_llm_cache() -> None:
@@ -751,6 +751,19 @@ def clear_llm_cache() -> None:
     global _llm_instance
     _llm_instance = None
     _override_llm_cache.clear()
+
+
+def cached_llm(key: tuple, build) -> object:
+    """The chat model cached under ``key``, built on first use.
+
+    It is dropped with the other cached clients (``clear_llm_cache`` and the
+    context-size setters), so credential and context changes still take effect.
+    """
+    model = _override_llm_cache.get(key)
+    if model is None:
+        model = build()
+        _override_llm_cache[key] = model
+    return model
 
 
 def _local_num_ctx_for(model_name: str | None) -> int:

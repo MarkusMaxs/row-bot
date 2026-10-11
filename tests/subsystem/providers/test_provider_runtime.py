@@ -1388,8 +1388,11 @@ def test_routed_claude_pre_model_trim_consolidates_long_history_without_mutating
 
     assert isinstance(provider_messages[0], SystemMessage)
     assert sum(isinstance(message, SystemMessage) for message in provider_messages) == 1
-    assert "Root system" in provider_messages[0].content
-    assert "Late recall and wind-down" in provider_messages[0].content
+    # OpenRouter keeps each system message as its own text block (WP A3); the others get one string.
+    content = provider_messages[0].content
+    system_text = content if isinstance(content, str) else "\n".join(block["text"] for block in content)
+    assert "Root system" in system_text
+    assert "Late recall and wind-down" in system_text
     assert not any(isinstance(message, SystemMessage) for message in provider_messages[1:])
     tool_call_index = next(
         index for index, message in enumerate(provider_messages) if getattr(message, "tool_calls", None)
