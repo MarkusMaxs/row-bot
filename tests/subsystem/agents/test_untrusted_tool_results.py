@@ -10,6 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import row_bot.agent as agent
+import row_bot.tools.agent_tool  # noqa: F401  (registers the Agents tools)
 import row_bot.tools.developer_tool  # noqa: F401  (registers the Developer tools)
 from row_bot.agent_budget import new_execution_budget
 from row_bot.tools import registry as tool_registry
@@ -65,6 +66,8 @@ def _assert_fenced_and_scanned(seen: str, name: str, raw: str) -> None:
         ("documents", {"documents"}),
         ("shell", {"run_command", "read_terminal"}),
         ("developer", {"developer_read_file", "developer_search", "developer_run_command"}),
+        # A child Agent's answer can repeat what it read on a page or in a file (WP C3).
+        ("agents", {"delegate_work", "agent_status", "agent_wait"}),
     ],
 )
 def test_results_of_tools_returning_outside_content_are_fenced_and_scanned(
@@ -98,3 +101,10 @@ def test_results_of_row_bots_own_tools_reach_the_model_unchanged(monkeypatch) ->
     seen = _model_view_of_tool_results(monkeypatch, {calculate: "42", "save_memory": "Saved."})
 
     assert seen == {calculate: "42", "save_memory": "Saved."}
+
+
+def test_row_bots_own_knowledge_stays_unfenced(monkeypatch) -> None:
+    """Saved memories and the wiki hold the person's preferences, which the model should follow."""
+    raw = {"wiki_read": "The person prefers British spelling.", "search_memory": "Prefers short answers."}
+
+    assert _model_view_of_tool_results(monkeypatch, raw) == raw

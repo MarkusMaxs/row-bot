@@ -23,6 +23,60 @@ _DISPATCH_QUEUE: list[tuple[str, str]] = []
 _DISPATCH_ACTIVE: dict[str, str] = {}
 _DISPATCH_WRITER_KEYS: dict[str, str] = {}
 
+# A child's answer reaches the parent model bounded (WP C3, F42): about 1.5K
+# tokens, its start and its end. The whole answer stays with the run (its
+# ``summary`` and ``result_json``), and agent_status(run_id=..., full_result=true)
+# returns it.
+CHILD_RESULT_CHARS = 6_000
+_CHILD_RESULT_TAIL_SHARE = 4
+
+
+def bounded_child_result(text: str, run_id: str = "", *, limit: int = CHILD_RESULT_CHARS) -> str:
+    """``text`` within ``limit`` characters: its start and end, with how to read the rest."""
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    tail_chars = limit // _CHILD_RESULT_TAIL_SHARE
+    head = text[: limit - tail_chars]
+    tail = text[-tail_chars:]
+    omitted = len(text) - len(head) - len(tail)
+    where = (
+        f"agent_status(run_id='{run_id}', full_result=true) returns the whole answer."
+        if run_id
+        else "The whole answer is kept with the run."
+    )
+    return f"{head.rstrip()}\n\n[... {omitted:,} characters not shown. {where}]\n\n{tail.lstrip()}"
+
+
+def full_child_result(run: Mapping[str, Any] | None) -> str:
+    """A finished child's whole final answer, as its run stored it."""
+    run = run or {}
+    result = run.get("result_json")
+    response = result.get("response") if isinstance(result, Mapping) else ""
+    return str(response or run.get("summary") or run.get("error") or "")
+
+
+def parent_view_of_result(run: Mapping[str, Any] | None, *, limit: int = CHILD_RESULT_CHARS) -> dict[str, str]:
+    """A run's ``summary``, ``error`` and ``status_message`` as the parent model reads them.
+
+    A failed run often stores one text in all three: the parent reads it once
+    (F42), and each field is bounded.
+    """
+    run = run or {}
+    run_id = str(run.get("id") or "")
+    summary = str(run.get("summary") or "").strip()
+    error = str(run.get("error") or "").strip()
+    status_message = str(run.get("status_message") or "").strip()
+    if error and summary == error:
+        summary = ""
+    if status_message and status_message in {summary, error}:
+        status_message = ""
+    return {
+        "summary": bounded_child_result(summary, run_id, limit=limit),
+        "error": bounded_child_result(error, run_id, limit=limit),
+        "status_message": bounded_child_result(status_message, run_id, limit=limit),
+    }
+
 
 def notify_agent_runtime_settings_changed() -> None:
     """Wake queued children so a safe local capacity increase applies live."""

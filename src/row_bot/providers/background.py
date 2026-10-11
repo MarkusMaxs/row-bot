@@ -27,6 +27,11 @@ Claude 5.5-generation models reject it.
 
 ``routing.task_route_model`` is read for every purpose, so a cheaper model for
 one purpose can be named later without a redesign. Nothing sets it today.
+
+A user-facing purpose (``synthesis``: the final answer written from child
+Agents' results, WP C3) goes through the same resolver as a tool-less call on
+the conversation's model, but keeps the conversation's own reasoning setting
+and has no output cap: the person reads its reply.
 """
 
 from __future__ import annotations
@@ -53,6 +58,8 @@ logger = logging.getLogger(__name__)
 
 # Unattended jobs use the default chat model; every other call belongs to a thread.
 UNATTENDED_PURPOSES = frozenset({"extraction", "dream"})
+# Replies the person reads: the conversation's reasoning setting, not the lowest, and no cap.
+USER_FACING_PURPOSES = frozenset({"synthesis"})
 # Purposes whose caller sizes the reply itself: room for reasoning only when it is
 # known to run (compaction's allowance already follows the context window).
 _CALLER_SIZED_PURPOSES = frozenset({"compaction"})
@@ -320,6 +327,20 @@ def _anthropic_reasoning(
     return BackgroundReasoning(plan, reasoning_runs=adaptive)
 
 
+def conversation_reasoning(model_ref: str, thread_id: str = "") -> BackgroundReasoning:
+    """The conversation's own reasoning request for ``model_ref``: the person's effort, not lowered."""
+    from row_bot.providers.reasoning import request_plan_for
+
+    if parse_model_ref(model_ref) is None:
+        return BackgroundReasoning(ReasoningRequestPlan(str(model_ref or "")), reasoning_runs=None)
+    try:
+        plan = request_plan_for(thread_id or None, model_ref)
+    except Exception:
+        logger.debug("Reasoning setting of %s unavailable; provider default", thread_id, exc_info=True)
+        plan = ReasoningRequestPlan(model_ref)
+    return BackgroundReasoning(plan, reasoning_runs=None)
+
+
 def _runs_adaptive_by_default(runtime_model: str) -> bool:
     from row_bot.providers.transports.thinking_binding import runs_adaptive_by_default
 
@@ -353,6 +374,14 @@ def resolve_background_model(
             canonical = canonical_reasoning_model_ref(resolved.provider_id, resolved.runtime_model)
         except Exception:
             logger.debug("Background model %s did not resolve; using it as given", ref, exc_info=True)
+
+    def tagged(runnable: Any) -> Any:
+        return with_usage_purpose(runnable, purpose, thread_id=thread_id, generation_id=generation_id)
+
+    if purpose in USER_FACING_PURPOSES:
+        reasoning = conversation_reasoning(canonical, thread_id)
+        llm = models.get_llm_for(selection_ref, reasoning_plan=reasoning.plan)
+        return BackgroundModel(tagged(llm), selection_ref, provider, reasoning, None)
     reasoning = background_reasoning(canonical)
     llm = models.get_llm_for(selection_ref, reasoning_plan=reasoning.plan)
     cap = None
@@ -360,10 +389,6 @@ def resolve_background_model(
         # A custom endpoint is left as configured: its server knows its own limits.
         answer_tokens = max_tokens if max_tokens is not None else ANSWER_TOKENS.get(purpose)
         cap = reasoning.output_cap(answer_tokens, room_when_unknown=purpose not in _CALLER_SIZED_PURPOSES)
-
-    def tagged(runnable: Any) -> Any:
-        return with_usage_purpose(runnable, purpose, thread_id=thread_id, generation_id=generation_id)
-
     return BackgroundModel(
         tagged(_capped(llm, provider, reasoning, cap)), selection_ref, provider, reasoning, cap,
         uncapped=tagged(_capped(llm, provider, reasoning, None)) if cap is not None else None,

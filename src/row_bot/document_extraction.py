@@ -28,8 +28,19 @@ from row_bot.document_jobs import (
 
 logger = logging.getLogger(__name__)
 
-_WINDOW_SIZE = 6_000
-_WINDOW_OVERLAP = 500
+# Map windows scale with the model (WP C3, F49): a quarter of its usable input,
+# at most 60K characters, so a long document takes far fewer map calls while
+# every character is still read. A small or unknown context keeps the 6K window
+# every model has always handled, and the overlap stays the same share. A job
+# keeps the windows it started with, because its saved map summaries are
+# numbered by them.
+LEGACY_WINDOW_SIZE = 6_000
+LEGACY_WINDOW_OVERLAP = 500
+MAX_WINDOW_CHARS = 60_000
+_WINDOW_INPUT_SHARE = 0.25
+_CHARS_PER_TOKEN = 4
+_WINDOW_SIZE = LEGACY_WINDOW_SIZE
+_WINDOW_OVERLAP = LEGACY_WINDOW_OVERLAP
 _state_lock = threading.Lock()
 _active_extraction: dict[str, Any] | None = None
 _worker_policy: ContextVar[Any] = ContextVar("document_extraction_worker_policy", default=None)
@@ -119,6 +130,51 @@ def iter_extraction_windows(
         yield buffer
 
 
+def map_window_for(usable_input_tokens: int | None) -> tuple[int, int]:
+    """``(window, overlap)`` in characters for a model that takes this much input."""
+    try:
+        tokens = int(usable_input_tokens or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    if tokens <= 0:
+        return LEGACY_WINDOW_SIZE, LEGACY_WINDOW_OVERLAP
+    size = int(tokens * _CHARS_PER_TOKEN * _WINDOW_INPUT_SHARE)
+    size = max(LEGACY_WINDOW_SIZE, min(MAX_WINDOW_CHARS, size))
+    return size, size * LEGACY_WINDOW_OVERLAP // LEGACY_WINDOW_SIZE
+
+
+def _usable_input_tokens() -> int | None:
+    """Usable input of the model this extraction calls: the admitted worker's, else the default model's."""
+    policy = _worker_policy.get()
+    if policy is not None:
+        return getattr(policy, "usable_input_tokens", None)
+    try:
+        from row_bot.models import get_context_policy
+        from row_bot.providers.background import background_model_ref
+
+        model_ref = background_model_ref("document")
+        return get_context_policy(model_ref, allow_probe=False).usable_input_tokens if model_ref else None
+    except Exception:
+        logger.debug("Document map window: the model's context is unknown", exc_info=True)
+        return None
+
+
+def _job_map_window(job: DocumentJob, service: Any) -> tuple[int, int]:
+    """The windows this job maps with: chosen when it starts, kept for every resume."""
+    saved_plan = getattr(service, "map_window_plan", None)
+    saved = saved_plan(job.id) if callable(saved_plan) else None
+    if saved:
+        return saved
+    if service.last_map_window(job.id) >= 0:
+        # Started before windows scaled: its saved summaries are numbered by 6K
+        # windows, so it finishes with them rather than skipping or repeating text.
+        plan = (LEGACY_WINDOW_SIZE, LEGACY_WINDOW_OVERLAP)
+    else:
+        plan = map_window_for(_usable_input_tokens())
+    record = getattr(service, "record_map_window_plan", None)
+    return record(job.id, *plan) if callable(record) else plan
+
+
 def _split_into_windows(
     text: str,
     window_size: int = _WINDOW_SIZE,
@@ -135,18 +191,17 @@ def _split_into_windows(
 
 
 def _llm_call(prompt: str) -> str:
-    from langchain_core.messages import HumanMessage
-    from row_bot.models import get_current_model, get_llm_for
-
     policy = _worker_policy.get()
-    if policy is not None:
-        policy.validate()
-        raw = policy.invoke(prompt) or ""
-        policy.validate()
-    else:
-        llm = get_llm_for(get_current_model())
-        response = llm.invoke([HumanMessage(content=prompt)])
-        raw = response.content or ""
+    if policy is None:
+        # A batch from before reviewed processing (no captured policy): a
+        # background call on the default model at its lowest effort (WP C1/C3).
+        from langchain_core.messages import HumanMessage
+        from row_bot.providers.background import invoke_background
+
+        return invoke_background("document", [HumanMessage(content=prompt)])
+    policy.validate()
+    raw = policy.invoke(prompt) or ""
+    policy.validate()
     if isinstance(raw, list):
         parts: list[str] = []
         for block in raw:
@@ -686,9 +741,11 @@ def extract_document_job(job: DocumentJob, service: Any, *, source_path: str | N
             **({**_strict_effects(), "expected_sha256":job.content_sha256} if _worker_policy.get() is not None else {}),
         )
         completed_window = service.last_map_window(job.id)
+        window_size, overlap = _job_map_window(job, service)
         window_count = 0
         windows = iter_extraction_windows(iter_document_pages(source_path if source_path is not None else job.staged_path,
-            **({"original_extension":original_extension} if original_extension is not None else {})))
+            **({"original_extension":original_extension} if original_extension is not None else {})),
+            window_size=window_size, overlap=overlap)
         for window_index, window in enumerate(windows):
             window_count = window_index + 1
             if window_index <= completed_window:
@@ -761,6 +818,7 @@ class _CompatibilityCheckpoint:
         self.stop_event = stop_event
         self.maps: dict[int, str] = {}
         self.reductions: dict[tuple[int, int], str] = {}
+        self.window_plan: tuple[int, int] | None = None
 
     def raise_if_cancelled(self, _job_id: str) -> None:
         if self.stop_event and self.stop_event.is_set():
@@ -768,6 +826,14 @@ class _CompatibilityCheckpoint:
 
     def last_map_window(self, _job_id: str) -> int:
         return max(self.maps, default=-1)
+
+    def map_window_plan(self, _job_id: str) -> tuple[int, int] | None:
+        return self.window_plan
+
+    def record_map_window_plan(self, _job_id: str, window_size: int, overlap: int) -> tuple[int, int]:
+        if self.window_plan is None:
+            self.window_plan = (int(window_size), int(overlap))
+        return self.window_plan
 
     def store_map_summary(self, _job_id: str, index: int, summary: str) -> None:
         self.maps.setdefault(index, summary)

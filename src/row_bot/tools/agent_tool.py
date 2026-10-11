@@ -138,11 +138,13 @@ def _public_run(run: dict[str, Any] | None) -> dict[str, Any]:
                 })
         except Exception:
             pass
+    # The child's answer, bounded, and each text once (F42); agent_status(full_result=true) has the rest.
+    result = agent_runner.parent_view_of_result(run)
     return {
         "id": run.get("id", ""),
         "kind": run.get("kind", ""),
         "status": run.get("status", ""),
-        "status_message": run.get("status_message", ""),
+        "status_message": result["status_message"],
         "display_name": run.get("display_name", ""),
         "thread_id": run.get("thread_id", ""),
         "parent_thread_id": run.get("parent_thread_id", ""),
@@ -162,8 +164,8 @@ def _public_run(run: dict[str, Any] | None) -> dict[str, Any]:
         "model_iterations_max": run.get("model_iterations_max", 0),
         "terminal_reason": run.get("terminal_reason", ""),
         "depth": run.get("depth", 0),
-        "summary": run.get("summary", ""),
-        "error": run.get("error", ""),
+        "summary": result["summary"],
+        "error": result["error"],
         "model_override": run.get("model_override", ""),
         "workspace": workspace,
         "stop_requested": bool(run.get("stop_requested", False)),
@@ -327,6 +329,10 @@ class _AgentStatusInput(BaseModel):
     statuses: list[str] = Field(default=[], description="Optional statuses to filter by.")
     include_events: bool = Field(default=False, description="Include recent event log entries.")
     limit: int = Field(default=10, description="Maximum runs or events to return.")
+    full_result: bool = Field(
+        default=False,
+        description="With run_id: also return the child's whole final answer (results are otherwise shortened).",
+    )
 
 
 class _AgentWaitInput(BaseModel):
@@ -584,6 +590,19 @@ def _delegate_work(
     })
 
 
+def _public_orchestration(orchestration: dict[str, Any]) -> dict[str, Any]:
+    """An orchestration overview with each member's run as the parent reads it (bounded results)."""
+    if not orchestration:
+        return {}
+    members = []
+    for member in orchestration.get("members") or []:
+        member = dict(member)
+        if isinstance(member.get("run"), dict):
+            member["run"] = _public_run(member["run"])
+        members.append(member)
+    return {**orchestration, "members": members}
+
+
 def _agent_status(
     run_id: str = "",
     orchestration_id: str = "",
@@ -591,17 +610,20 @@ def _agent_status(
     statuses: list[str] | None = None,
     include_events: bool = False,
     limit: int = 10,
+    full_result: bool = False,
 ) -> str:
     runtime = _runtime_context()
     parent_thread_id = parent_thread_id or str(runtime.get("thread_id") or "")
     if orchestration_id:
         from row_bot.agent_orchestrator import orchestration_overview
 
-        orchestration = orchestration_overview(orchestration_id)
+        orchestration = _public_orchestration(orchestration_overview(orchestration_id))
         return _json_response({"ok": bool(orchestration), "orchestration": orchestration})
     if run_id:
         run = get_agent_run(run_id)
         payload: dict[str, Any] = {"ok": bool(run), "run": _public_run(run)}
+        if full_result and run:
+            payload["full_result"] = agent_runner.full_child_result(run)
         if include_events and run:
             payload["events"] = get_agent_events(run_id, limit=limit)
         return _json_response(payload)
@@ -729,7 +751,7 @@ def _agent_stop(run_id: str = "", orchestration_id: str = "") -> str:
             from row_bot.agent_orchestrator import stop_orchestration
 
             orchestration = stop_orchestration(orchestration_id, run_id=run_id)
-            return _json_response({"ok": True, "orchestration": orchestration})
+            return _json_response({"ok": True, "orchestration": _public_orchestration(orchestration)})
         except Exception as exc:
             return _json_response({"ok": False, "message": str(exc)})
     if not run_id:
@@ -938,6 +960,13 @@ class AgentsTool(BaseTool):
     @property
     def destructive_tool_names(self) -> set[str]:
         return {"agent_profile_save", "agent_promote"}
+
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        # A child Agent's answer can repeat text from pages or files it read, so
+        # results that relay it are fenced and scanned like any outside content
+        # (S0 decision 2, WP C3).
+        return {"delegate_work", "agent_status", "agent_wait", "agent_stop", "agent_promote"}
 
     def as_langchain_tools(self) -> list:
         return [
