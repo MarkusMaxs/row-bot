@@ -64,6 +64,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
+      # Payload text files ship with LF line endings, as on macOS and Linux (D17).
+      - name: Check out with LF line endings
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v7
 
       - name: Build local client assets

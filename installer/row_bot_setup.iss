@@ -1,15 +1,26 @@
 ; =============================================================================
 ; Row-Bot v5.1.0 - Inno Setup Script
-; Self-contained installer: bundles embedded Python with all pip packages
-; pre-installed.  No internet downloads at install time.
+; Self-contained per-user installer: bundles embedded Python with all pip
+; packages pre-installed. No internet downloads at install time.
 ; =============================================================================
 ;
-; Prerequisites (placed in installer\build\ by build_installer.ps1):
-;   build\python\          â€“ Embedded Python with all packages pre-installed
+; Installs into %LOCALAPPDATA%\Programs\Row-Bot without administrator rights:
+;   Row-Bot.exe                     starts the active version (installer\windows)
+;   state.json                      names the active and previous versions
+;   versions\<version>\app          the app payload
+;   versions\<version>\python       embedded Python with the locked packages
+;   versions\<version>\version.json
+; See src/row_bot/install_layout.py for the layout contract.
 ;
-; Compile through build_installer.ps1, which validates a fresh client asset stage.
-#ifndef ClientAssetDir
-  #error ClientAssetDir is required. Run installer\build_installer.ps1 to validate and stage the client before compiling.
+; Prerequisites (placed in installer\build\ by build_installer.ps1):
+;   build\python\       Embedded Python with all packages pre-installed
+;   build\app\          The staged app payload with the client and compiled bytecode
+;   build\Row-Bot.exe    The launcher, built with MSVC
+;   build\version.json
+;
+; Compile through build_installer.ps1, which stages and validates the payload.
+#ifndef AppStageDir
+  #error AppStageDir is required. Run installer\build_installer.ps1 to stage and validate the app before compiling.
 #endif
 
 #ifnexist "build\python\Lib\site-packages\sentence_transformers\__init__.py"
@@ -80,84 +91,233 @@
   #error Embedded Python is missing youtube_transcript_api. Run installer\build_installer.ps1 before compiling row_bot_setup.iss.
 #endif
 
+#ifnexist "build\Row-Bot.exe"
+  #error Row-Bot.exe is missing. Run installer\build_installer.ps1 before compiling row_bot_setup.iss.
+#endif
+
+#ifnexist "build\version.json"
+  #error build\version.json is missing. Run installer\build_installer.ps1 before compiling row_bot_setup.iss.
+#endif
+
 #define MyAppName      "Row-Bot"
 #define MyAppVersion   "5.1.0"
 #define MyAppPublisher "Row-Bot"
 #define MyAppURL       "https://row-bot.ai"
-#define MyAppExeName   "launch_row_bot.vbs"
+#define MyAppUserModelID "ai.row-bot.desktop"
+; Each version lives in its own folder; state.json at the root names the active one.
+#define VersionDir     "{app}\versions\" + MyAppVersion
+; The AppId of the 5.x installers, which installed for all users (Program Files, HKLM).
+#define LegacyUninstallKey "Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
+; Per user, no administrator rights: %LOCALAPPDATA%\Programs\Row-Bot.
+PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#MyAppName}
-DefaultGroupName={#MyAppName}
+; No wizard pages except the progress page.
+DisableWelcomePage=yes
+DisableDirPage=yes
 DisableProgramGroupPage=yes
+DisableReadyPage=yes
+DisableFinishedPage=yes
+ShowLanguageDialog=no
 OutputDir=..\dist
 OutputBaseFilename=Row-Bot-{#MyAppVersion}-Windows-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=..\row-bot.ico
-PrivilegesRequired=admin
+UninstallDisplayIcon={app}\Row-Bot.exe
+UninstallDisplayName={#MyAppName}
+ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
-RestartApplications=yes
+; Setup starts Row-Bot itself when it is done (see [Run]).
+RestartApplications=no
+SetupLogging=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-
 [InstallDelete]
-; The Windows build is self-contained. Replace the embedded Python on repair
-; and upgrade so user-installed or broken optional packages cannot survive.
-Type: filesandordirs; Name: "{app}\python"
-; Replace the app source and shared static assets too: a module or asset a
-; release no longer ships (the NiceGUI ui package, the old Buddy runtime script)
-; must not stay behind after an upgrade. User data lives in the profile folder,
-; never under {app}.
-Type: filesandordirs; Name: "{app}\app\src"
-Type: filesandordirs; Name: "{app}\app\static"
+; Reinstalling a version replaces its folder whole, so nothing a build no
+; longer ships stays behind. User data lives in the profile folder, never
+; under {app}.
+Type: filesandordirs; Name: "{app}\versions\{#MyAppVersion}"
+; Row-Bot.exe copies renamed by an earlier install while Row-Bot was running.
+Type: files; Name: "{app}\Row-Bot.exe.*.old"
 
 [Files]
-; App payload copied from scripts/app_payload_manifest.py
-Source: "..\app.py";                  DestDir: "{app}\app"; Flags: ignoreversion
-Source: "..\launcher.py";             DestDir: "{app}\app"; Flags: ignoreversion
-Source: "..\pyproject.toml";          DestDir: "{app}\app"; Flags: ignoreversion
-Source: "..\uv.lock";                 DestDir: "{app}\app"; Flags: ignoreversion
-Source: "..\requirements.txt";       DestDir: "{app}\app"; Flags: ignoreversion
-Source: "..\row-bot.ico";            DestDir: "{app}\app"; Flags: ignoreversion
-Source: "..\scripts\verify_runtime_dependencies.py"; DestDir: "{app}\app\scripts"; Flags: ignoreversion
-Source: "..\src\row_bot\*";        DestDir: "{app}\app\src\row_bot"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc,node_modules\*,.pytest_cache\*,tests\*,test\*,test-results\*,*.test.js,*.spec.js,*.bak,*.bak[0-9]*,static\client-v2\*"
-Source: "{#ClientAssetDir}\*"; DestDir: "{app}\app\src\row_bot\static\client-v2"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Source-layout coverage: recursive src\row_bot include covers stability.py, embedding_config.py, embedding_providers.py, shared Browser runtime ownership, the Computer Use package and JSON manifest, the native Buddy overlay, coordinated conversation cleanup, provider transports and live media catalogs, Agent budgets/settings, cache-only embedding fallback, mobile access/PWA, cancellation, Developer, Skills Hub, self-evolution, and shared/native/plugin channel streaming.
-Source: "..\static\*";              DestDir: "{app}\app\static"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\sounds\*";              DestDir: "{app}\app\sounds"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\bundled_skills\*";      DestDir: "{app}\app\bundled_skills"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\tool_guides\*";         DestDir: "{app}\app\tool_guides"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-; â”€â”€ Embedded Python (with all packages pre-installed) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-Source: "build\python\*";              DestDir: "{app}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-; â”€â”€ Launcher scripts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-Source: "launch_row_bot.bat";            DestDir: "{app}"; Flags: ignoreversion
-Source: "launch_row_bot.vbs";            DestDir: "{app}"; Flags: ignoreversion
+Source: "build\Row-Bot.exe";      DestDir: "{app}"; Flags: ignoreversion
+; App payload staged from scripts/app_payload_manifest.py, with the client and compiled bytecode.
+Source: "{#AppStageDir}\*";       DestDir: "{#VersionDir}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Embedded Python with all packages pre-installed.
+Source: "build\python\*";         DestDir: "{#VersionDir}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "build\version.json";     DestDir: "{#VersionDir}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}";                    Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\row-bot.ico"; Comment: "Launch Row-Bot"
-Name: "{group}\Uninstall {#MyAppName}";           Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}";               Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; IconFilename: "{app}\app\row-bot.ico"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"
+Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"
 
 [Run]
-; â”€â”€ Launch app after install (optional) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-Filename: "wscript.exe"; Parameters: """{app}\{#MyAppExeName}"""; Description: "Launch {#MyAppName}"; \
-    Flags: nowait postinstall skipifsilent
+; Starts Row-Bot when Setup is done, also after /SILENT and /VERYSILENT (the
+; 5.1 updater runs this installer silently). /NOLAUNCH skips it (CI smokes).
+Filename: "{app}\Row-Bot.exe"; StatusMsg: "Starting Row-Bot..."; Flags: nowait runasoriginaluser; Check: ShouldLaunch
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\python"
-Type: filesandordirs; Name: "{app}\app\__pycache__"
-Type: filesandordirs; Name: "{app}\app\src"
+; The whole install root: every version, state.json and Row-Bot.exe. Never the
+; user's data in %USERPROFILE%\.row-bot.
+Type: filesandordirs; Name: "{app}\versions"
+Type: files; Name: "{app}\state.json"
+Type: files; Name: "{app}\.state.*.tmp"
+Type: files; Name: "{app}\Row-Bot.exe.*.old"
+Type: dirifempty; Name: "{app}"
+
+[Code]
+const
+  MOVEFILE_REPLACE_EXISTING = $1;
+  MOVEFILE_WRITE_THROUGH = $8;
+
+function MoveFileEx(ExistingFileName, NewFileName: string; Flags: Cardinal): Boolean;
+  external 'MoveFileExW@kernel32.dll stdcall';
+
+function HasParam(const Name: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), Name) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+function ShouldLaunch: Boolean;
+begin
+  Result := not HasParam('/NOLAUNCH');
+end;
+
+function LegacyInstallPresent: Boolean;
+begin
+  Result := RegKeyExists(HKLM64, '{#LegacyUninstallKey}') or RegKeyExists(HKLM32, '{#LegacyUninstallKey}');
+end;
+
+function LegacyUninstaller: string;
+begin
+  if not RegQueryStringValue(HKLM64, '{#LegacyUninstallKey}', 'UninstallString', Result) then
+    if not RegQueryStringValue(HKLM32, '{#LegacyUninstallKey}', 'UninstallString', Result) then
+      Result := '';
+  Result := RemoveQuotes(Result);
+end;
+
+{ Removes a Row-Bot installed for all users by an earlier installer, with one
+  administrator prompt, so Apps & features never lists Row-Bot twice. Returns
+  '' when there is nothing left to remove. }
+function RemoveLegacyInstall: string;
+var
+  Uninstaller: string;
+  ResultCode, Waited: Integer;
+  Started: Boolean;
+begin
+  Result := '';
+  if not LegacyInstallPresent then
+    Exit;
+  Uninstaller := LegacyUninstaller;
+  Log('Removing the Row-Bot installed for all users: ' + Uninstaller);
+  if (Uninstaller <> '') and FileExists(Uninstaller) then
+    Started := ShellExec('runas', Uninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode)
+  else
+    { Its folder is gone already: only the Apps & features entry is left. }
+    Started := ShellExec('runas', ExpandConstant('{sys}\reg.exe'),
+      'delete "HKLM\{#LegacyUninstallKey}" /f /reg:64', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if not Started then
+  begin
+    Log(Format('Could not remove the earlier Row-Bot (%d: %s)', [ResultCode, SysErrorMessage(ResultCode)]));
+    Result := 'Row-Bot first removes the earlier version installed for all users, which needs an administrator''s approval. ' +
+      'Run this installer again and approve the prompt, or uninstall Row-Bot from Settings > Apps first. Your data is kept either way.';
+    Exit;
+  end;
+  { The uninstaller hands over to a copy of itself, so wait until its entry is gone. }
+  Waited := 0;
+  while LegacyInstallPresent and (Waited < 180000) do
+  begin
+    Sleep(500);
+    Waited := Waited + 500;
+  end;
+  if LegacyInstallPresent then
+    Result := 'Row-Bot could not remove the earlier version installed for all users. ' +
+      'Uninstall Row-Bot from Settings > Apps, then run this installer again. Your data is kept either way.'
+  else
+    Log('The Row-Bot installed for all users was removed.');
+end;
+
+{ A running Row-Bot.exe cannot be replaced, but it can be renamed; the new one
+  then starts the new version and the old copy is deleted by the next install. }
+procedure MoveRunningLauncherAside;
+var
+  Launcher: string;
+begin
+  Launcher := ExpandConstant('{app}\Row-Bot.exe');
+  if FileExists(Launcher) and not DeleteFile(Launcher) then
+    if MoveFileEx(Launcher, Launcher + '.' + IntToStr(GetTickCount) + '.old', MOVEFILE_WRITE_THROUGH) then
+      Log('Moved the running Row-Bot.exe aside')
+    else
+      Log('Could not move the running Row-Bot.exe aside');
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := RemoveLegacyInstall;
+  if Result = '' then
+    MoveRunningLauncherAside;
+end;
+
+{ state.json: this version becomes active and the one it replaces stays as
+  previous (src/row_bot/install_layout.py, run by the version just installed).
+  Older versions are deleted. }
+procedure RecordInstall;
+var
+  Python, Params, State: string;
+  ResultCode: Integer;
+begin
+  Python := ExpandConstant('{#VersionDir}\python\python.exe');
+  Params := '-I -S "' + ExpandConstant('{#VersionDir}\app\src\row_bot\install_layout.py') +
+    '" record-install --root "' + ExpandConstant('{app}') + '" --kind windows --version {#MyAppVersion} --prune';
+  if Exec(Python, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+  begin
+    Log('Recorded the install in state.json');
+    Exit;
+  end;
+  Log(Format('install_layout record-install failed (%d); writing a minimal state.json', [ResultCode]));
+  State := ExpandConstant('{app}\state.json');
+  if SaveStringToFile(State + '.setup.tmp', '{"schema": 1, "active": "{#MyAppVersion}", "previous": null, ' +
+    '"ready": null, "pending_verification": false, "unverified_launches": 0, "last_rollback": null}' + #10, False) then
+    MoveFileEx(State + '.setup.tmp', State, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    RecordInstall;
+end;
+
+function InitializeUninstall: Boolean;
+begin
+  Result := True;
+  while not UninstallSilent and CheckForMutexes('RowBotLauncher') do
+    if MsgBox('Row-Bot is running. Quit it from its icon in the notification area, then click OK.',
+      mbInformation, MB_OKCANCEL) = IDCANCEL then
+    begin
+      Result := False;
+      Exit;
+    end;
+end;
