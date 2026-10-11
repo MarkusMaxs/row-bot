@@ -67,7 +67,8 @@ class _StatusQueryInput(BaseModel):
             "'designer' (Designer project count and recent projects), "
             "'logs' (recent warnings and errors from the log file), "
             "'errors' (recent errors with tracebacks — use to diagnose failures), "
-            "'updates' (auto-update channel + last check + available version)."
+            "'updates' (auto-update channel + last check + available version), "
+            "'usage' (tokens used in this conversation, the last day, week and month, by model and purpose, with cache share)."
         )
     )
 
@@ -1765,6 +1766,7 @@ _QUERY_HANDLERS = {
     "errors": _query_errors,
     "designer": _query_designer,
     "updates": lambda: _query_updates(),
+    "usage": lambda: _query_usage(),
 }
 
 
@@ -1792,6 +1794,57 @@ def _query_updates() -> str:
         lines.append("- No update available")
     if s.get("skipped_versions"):
         lines.append(f"- Skipped: {', '.join(s['skipped_versions'])}")
+    return "\n".join(lines)
+
+
+def _usage_line(label: str, totals: dict, *, indent: str = "") -> str:
+    calls = int(totals.get("calls") or 0)
+    if not calls:
+        return f"{indent}- {label}: no model calls recorded"
+    input_tokens = int(totals.get("input_tokens") or 0)
+    output_tokens = int(totals.get("output_tokens") or 0)
+    parts = [
+        f"{calls:,} call{'s' if calls != 1 else ''}",
+        f"{input_tokens + output_tokens:,} tokens ({input_tokens:,} in, {output_tokens:,} out)",
+    ]
+    if totals.get("cache_read_percent") is not None:
+        parts.append(f"{totals['cache_read_percent']}% of input read from cache")
+    if totals.get("cost") is not None:
+        parts.append(f"${float(totals['cost']):.4f} reported by the provider")
+    unreported = int(totals.get("unreported_calls") or 0)
+    if unreported:
+        parts.append(f"{unreported:,} without reported counts")
+    return f"{indent}- {label}: " + " · ".join(parts)
+
+
+def _query_usage() -> str:
+    """Tokens used, from the local usage ledger (counts only, no content)."""
+    import time
+
+    from row_bot.providers.usage_ledger import RETENTION_DAYS, usage_summary
+
+    now = time.time()
+    lines = [f"**Model Usage** (local ledger of token counts, kept {RETENTION_DAYS} days)"]
+    thread_id = _active_runtime_thread_id()
+    if thread_id:
+        lines.append(_usage_line("This conversation", usage_summary(thread_id=thread_id)))
+    for label, days in (("Last 24 hours", 1), ("Last 7 days", 7)):
+        lines.append(_usage_line(label, usage_summary(since=now - days * 86_400)))
+    month = usage_summary(since=now - 30 * 86_400)
+    lines.append(_usage_line("Last 30 days", month))
+    if month["by_model"]:
+        lines.append("By model (last 30 days):")
+        lines.extend(
+            _usage_line(f"{row['provider'] or 'unknown'} / {row['model'] or 'unknown'}", row, indent="  ")
+            for row in month["by_model"]
+        )
+    if month["by_purpose"]:
+        lines.append("By purpose (last 30 days):")
+        lines.extend(_usage_line(row["purpose"], row, indent="  ") for row in month["by_purpose"])
+    lines.append(
+        "Input includes tokens read from and written to a prompt cache. Costs appear only "
+        "where the provider returned one (OpenRouter); Row-Bot keeps no price table."
+    )
     return "\n".join(lines)
 
 
@@ -2551,7 +2604,7 @@ class RowBotStatusTool(BaseTool):
                     "Categories: overview, version, model, channels, memory, skills, "
                     "tools, plugins, mcp, providers, insights, evolution, api_keys, identity, tasks, "
                     "agents, agent_profiles, goals, vision, "
-                    "image_gen, video_gen, voice, config, designer, updates, logs, errors."
+                    "image_gen, video_gen, voice, config, designer, updates, logs, errors, usage."
                 ),
                 args_schema=_StatusQueryInput,
             ),

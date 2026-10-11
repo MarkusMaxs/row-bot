@@ -207,9 +207,11 @@ def channel_turn_waiting_on_parent(config: dict | None) -> bool:
 
 
 def _has_assistant_after_latest_human(messages: list[object]) -> bool:
+    from row_bot.turn_context import is_person_message
+
     start = 0
     for idx, message in enumerate(messages):
-        if str(getattr(message, "type", "") or "") == "human":
+        if is_person_message(message):
             start = idx + 1
     return any(
         str(getattr(message, "type", "") or "") == "ai"

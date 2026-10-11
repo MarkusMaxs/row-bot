@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import ContextUsage from './ContextUsage';
+import ContextUsage, { describeConversationUsage } from './ContextUsage';
 
 it('shows no ring before the first measurement, so nothing looks like it is loading', () => {
   const { container, rerender } = render(<ContextUsage />);
@@ -110,4 +110,90 @@ it('shows compaction and failure states without pretending capacity exists', () 
   expect(
     screen.getByText('Context 80% · compaction failed'),
   ).toBeInTheDocument();
+});
+
+const measured = {
+  conversation_id: 'a',
+  state: 'live' as const,
+  freshness: 'current' as const,
+  status: 'ready' as const,
+  estimated_input_tokens: 12000,
+  usable_input_tokens: 100000,
+  compact_at_tokens: 75000,
+  native_window_tokens: 128000,
+  effective_limit_tokens: 100000,
+  model_ref: 'openrouter/anthropic/claude-sonnet-4.5',
+  last_confirmed_input_tokens: null,
+  scope: 'agent' as const,
+  capacity_state: 'ready',
+};
+
+it('shows the tokens this conversation used, the share read from cache and a reported cost', () => {
+  render(
+    <ContextUsage
+      usage={{
+        ...measured,
+        conversation_usage: {
+          calls: 9,
+          input_tokens: 1_200_000,
+          output_tokens: 34_567,
+          cache_read_percent: 82,
+          cost_usd: 0.4213,
+        },
+      }}
+    />,
+  );
+  fireEvent.click(screen.getByText('Context 12%'));
+  expect(
+    screen.getByText(
+      'This conversation: 1,234,567 tokens used, 82% of input read from cache. Cost reported by the provider: $0.42.',
+    ),
+  ).toBeInTheDocument();
+  expect(
+    describeConversationUsage({
+      calls: 9,
+      input_tokens: 1_200_000,
+      output_tokens: 34_567,
+      cache_read_percent: 82,
+      cost_usd: 0.4213,
+    })?.hint,
+  ).toBe('1.2M tokens used, 82% from cache');
+});
+
+it('leaves out what the provider did not report, and says nothing before the first call', () => {
+  const { rerender } = render(
+    <ContextUsage
+      usage={{
+        ...measured,
+        conversation_usage: {
+          calls: 2,
+          input_tokens: 900,
+          output_tokens: 100,
+          cache_read_percent: null,
+          cost_usd: null,
+        },
+      }}
+    />,
+  );
+  fireEvent.click(screen.getByText('Context 12%'));
+  expect(
+    screen.getByText('This conversation: 1,000 tokens used.'),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/from cache|Cost reported/)).toBeNull();
+  rerender(<ContextUsage usage={measured} />);
+  expect(screen.queryByText(/This conversation:/)).toBeNull();
+  expect(describeConversationUsage(null)).toBeNull();
+  expect(
+    describeConversationUsage({
+      calls: 1,
+      input_tokens: 10,
+      output_tokens: 1,
+      cache_read_percent: 0,
+      cost_usd: 0.0042,
+    }),
+  ).toEqual({
+    hint: '11 tokens used, 0% from cache',
+    detail:
+      'This conversation: 11 tokens used, 0% of input read from cache. Cost reported by the provider: $0.0042.',
+  });
 });

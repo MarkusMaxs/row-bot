@@ -48,7 +48,6 @@ _PARENT_CONFIGURABLE_KEYS = {
     "approval_mode",
     "channel_streaming",
     "designer_project_id",
-    "developer_context",
     "developer_workspace_id",
     "external_discovery_active",
     "generation_id",

@@ -125,6 +125,65 @@ def test_stream_chat_only_streams_and_persists_without_tools(tmp_path, monkeypat
     assert getattr(persisted[-1], "content", "") == "hello world"
 
 
+def test_stream_chat_only_sums_streamed_usage_and_records_a_chat_only_call(tmp_path, monkeypatch):
+    """Usage comes as deltas on the last chunks; the turn keeps the sum and the ledger counts it."""
+    import sqlite3
+    from contextlib import closing
+
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGenerationChunk
+    import row_bot.agent as agent
+    import row_bot.providers.readiness as readiness
+    import row_bot.threads as threads
+    from row_bot.providers.usage_ledger import attach_usage_ledger
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / ".row-bot"))
+
+    class StreamingModel(BaseChatModel):
+        @property
+        def _llm_type(self):
+            return "usage-fixture"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise AssertionError("Chat Only streams")
+
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+            yield ChatGenerationChunk(message=AIMessageChunk(content="hello"))
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", usage_metadata={
+                "input_tokens": 1200, "output_tokens": 0, "total_tokens": 1200,
+                "input_token_details": {"cache_read": 1000}}))
+            yield ChatGenerationChunk(message=AIMessageChunk(content="", usage_metadata={
+                "input_tokens": 0, "output_tokens": 7, "total_tokens": 7}))
+
+    persisted = []
+    model = attach_usage_ledger(StreamingModel(), provider_id="custom_openai_lab", model_name="local-chat")
+    monkeypatch.setattr(readiness, "evaluate_chat_readiness", lambda model_label: _chat_ready_result())
+    monkeypatch.setattr(agent, "_chat_only_llm", lambda model_label: model)
+    monkeypatch.setattr(threads, "get_latest_checkpoint_messages", lambda thread_id: [])
+    monkeypatch.setattr(threads, "append_checkpoint_messages", lambda thread_id, messages: persisted.extend(messages) or True)
+
+    events = list(agent.stream_chat_only(
+        "hi",
+        {"configurable": {
+            "thread_id": "thread-chat",
+            "generation_id": "gen-chat",
+            "model_override": "model:custom_openai_lab:local-chat",
+        }},
+    ))
+
+    assert [payload for event_type, payload in events if event_type == "done"] == ["hello"]
+    usage = persisted[-1].response_metadata["usage_metadata"]
+    assert (usage["input_tokens"], usage["output_tokens"]) == (1200, 7)
+    assert usage["input_token_details"]["cache_read"] == 1000
+    with closing(sqlite3.connect(tmp_path / ".row-bot" / "usage.db")) as connection:
+        rows = connection.execute(
+            "SELECT purpose, thread_id, generation_id, input_tokens, cache_read_tokens, output_tokens "
+            "FROM model_usage"
+        ).fetchall()
+    assert rows == [("chat_only", "thread-chat", "gen-chat", 1200, 1000, 7)]
+
+
 def test_stream_chat_only_unknown_auto_blocks_before_model_or_checkpoint(tmp_path, monkeypatch):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / ".row-bot"))
     import row_bot.agent as agent
@@ -557,7 +616,7 @@ def test_stream_agent_auto_does_not_silently_fallback_on_tool_schema_error(tmp_p
 def test_agent_runtime_context_overrides_stale_chat_only_claims():
     import row_bot.agent as agent
 
-    context = agent._agent_runtime_system_context()
+    context = agent._agent_runtime_guidance([])
 
     assert "Agent Mode is active" in context
     assert "Do not claim this turn is Chat Only" in context

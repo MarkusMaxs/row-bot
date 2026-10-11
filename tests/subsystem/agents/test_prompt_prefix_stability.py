@@ -626,25 +626,7 @@ SCENARIOS: dict[str, Callable[[Harness], list[tuple[dict, dict]]]] = {
 # Today's breaks, by the work package of the context and cost plan that fixes them. A package
 # that fixes a case removes its entry here; strict xfail fails the run if a fixed case stays marked.
 ALL_SHAPES = "*"
-_RECALL_MOVES = "fixed by WP A2: the recall block moves from the last message to the newest one (F3)"
 KNOWN_BREAKS: dict[str, dict[str, str]] = {
-    "iteration_across_minute": {
-        ALL_SHAPES: "fixed by WP A2: the minute-resolution date line is a system section ahead of history (F1)",
-    },
-    "iteration_after_memory_save": {
-        ALL_SHAPES: "fixed by WP A2: recall re-runs every iteration and sits in or before the system prompt (F3)",
-    },
-    "iteration_after_skill_load": {
-        ALL_SHAPES: "fixed by WP A2: skill_load rewrites the stable skills section mid-turn (F5)",
-    },
-    "turn_same_recall": {
-        "openai-chat": _RECALL_MOVES,
-        "openai-responses": _RECALL_MOVES,
-        "ollama": _RECALL_MOVES,
-    },
-    "turn_across_minute_new_recall": {
-        ALL_SHAPES: "fixed by WP A2: the date line and recall change ahead of history (F1, F3)",
-    },
     "turn_masks_old_tool_output": {
         ALL_SHAPES: "fixed by WP A4: rolling 5-turn masking rewrites an old tool result (F19)",
     },
@@ -712,19 +694,24 @@ def test_debug_prefix_diff_names_the_first_change_without_prompt_text(agent_modu
     harness.agent_request(state, turn="t1")
     _step(state, "call_1", "read_file", {"path": "notes.txt"}, _paragraphs("notes", 6))
     harness.agent_request(state, turn="t1")
-    harness.tick(60)
+    harness.tick(60)  # a minute later: the turn context keeps the turn's time, so the prefix holds
     _step(state, "call_2", "web_search", {"query": "quarterly figures"}, _paragraphs("result", 4))
+    harness.agent_request(state, turn="t1")
+    monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block",
+                        lambda: "SELF KNOWLEDGE: Row-Bot was updated.")
     harness.agent_request(state, turn="t1")
 
     lines = diff_lines()
-    assert len(lines) == 3
-    assert "first request" in lines[0] and "turn.date_time=" in lines[0]
+    assert len(lines) == 4
+    assert "first request" in lines[0] and "self_knowledge.static=" in lines[0]
     assert "stable prefix" in lines[1] and "+2 appended" in lines[1]
-    assert "prefix broken at message 4: previous=system:turn.date_time" in lines[2]
-    assert "changed sections=[turn.date_time]" in lines[2]
+    assert "stable prefix" in lines[2] and "+2 appended" in lines[2]
+    assert "prefix broken at message 4: previous=system:self_knowledge.static" in lines[3]
+    assert "changed sections=[self_knowledge.static]" in lines[3]
     for line in lines:
         assert "thread=prefix-diff-log" in line
-        for text in ("Summarise notes.txt", "Current date and time", "project notes", "quarterly figures"):
+        for text in ("Summarise notes.txt", "Current date and time", "project notes", "quarterly figures",
+                     "SELF KNOWLEDGE"):
             assert text not in line
 
 

@@ -11,6 +11,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import Runnable
 
 from row_bot.cancellation import current_cancellation_scope
+from row_bot.prompt_cache import usage_metadata_from_provider_usage
 
 
 OLLAMA_CLOUD_BASE_URL = "https://ollama.com"
@@ -81,7 +82,12 @@ class ChatOllamaCloud(BaseChatModel):
         content = str(message_payload.get("content") or "")
         tool_calls = _tool_calls_from_ollama(message_payload.get("tool_calls") or [])
         metadata = _response_metadata(payload)
-        message = AIMessage(content=content, tool_calls=tool_calls, response_metadata=metadata)
+        message = AIMessage(
+            content=content,
+            tool_calls=tool_calls,
+            response_metadata=metadata,
+            usage_metadata=usage_metadata_from_provider_usage(metadata.get("token_usage")),
+        )
         return ChatResult(generations=[ChatGeneration(message=message)], llm_output=metadata)
 
     def _stream(
@@ -94,6 +100,7 @@ class ChatOllamaCloud(BaseChatModel):
         body = self._request_body(messages, stream=True, **kwargs)
         tool_index = 0
         scope = current_cancellation_scope()
+        final_usage: dict[str, Any] = {}
         for payload in self._iter_stream_events(body):
             if scope is not None and scope.is_cancelled():
                 return
@@ -110,10 +117,21 @@ class ChatOllamaCloud(BaseChatModel):
                     tool_index += 1
                     yield ChatGenerationChunk(message=AIMessageChunk(content="", tool_call_chunks=[chunk_payload]))
             if payload.get("done"):
+                final_usage = {
+                    key: value
+                    for key, value in _response_metadata(payload).items()
+                    if key in {"prompt_eval_count", "eval_count", "token_usage"}
+                }
                 break
         if scope is not None and scope.is_cancelled():
             return
-        yield ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        # The ``done`` payload carries the counts; the closing chunk keeps them.
+        yield ChatGenerationChunk(message=AIMessageChunk(
+            content="",
+            chunk_position="last",
+            usage_metadata=usage_metadata_from_provider_usage(final_usage.get("token_usage")),
+            response_metadata=final_usage,
+        ))
 
     def _request_body(self, messages: list[BaseMessage], *, stream: bool, **kwargs: Any) -> dict[str, Any]:
         accepts_tools = _model_accepts_tools(self.model_name)

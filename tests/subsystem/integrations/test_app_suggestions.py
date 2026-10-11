@@ -152,10 +152,11 @@ def test_a_turn_names_the_apps_switched_off_in_its_chat(local, monkeypatch):
     monkeypatch.setattr("row_bot.threads.get_thread_apps_off", lambda conversation_id: [added["id"]])
     token = agent._current_thread_id_var.set("chat")
     try:
-        guidance = agent._setup_guidance(["row_bot_status"])
+        guidance = agent._setup_guidance(["row_bot_status"])  # stable: what to do
+        turn = "\n".join(field.text for field in agent._runtime_turn_fields(["row_bot_status"]))  # turn context: which
     finally:
         agent._current_thread_id_var.reset(token)
-    assert "APPS SWITCHED OFF IN THIS CHAT: Notion" in guidance and "+ › Apps" in guidance
+    assert "APPS SWITCHED OFF IN THIS CHAT: Notion" in turn and "+ › Apps" in guidance
 
 
 def test_a_turn_names_the_apps_turned_off_everywhere_and_asking_by_name_offers_to_turn_it_on(local):
@@ -167,6 +168,7 @@ def test_a_turn_names_the_apps_turned_off_everywhere_and_asking_by_name_offers_t
     config._config_cache = None
     facts.invalidate()
     added = next(row for row in facts.inventory()[0] if row["name"] == "Notion MCP")
-    guidance = agent._setup_guidance(["row_bot_status"])
-    assert "APPS TURNED OFF: Notion." in guidance and "suggest_apps with that app's name" in guidance
+    guidance = agent._setup_guidance(["row_bot_status"])  # stable: what to do
+    turn = "\n".join(field.text for field in agent._runtime_turn_fields(["row_bot_status"]))  # turn context: which
+    assert "APPS TURNED OFF: Notion." in turn and "suggest_apps with that app's name" in guidance
     assert json.loads(suggest_apps("Notion"))["apps"] == [added["id"]]  # Its own card, which turns it on.

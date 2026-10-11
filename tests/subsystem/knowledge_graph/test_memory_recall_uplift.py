@@ -327,11 +327,12 @@ def test_agent_pre_model_trim_injects_policy_block_and_touches_only_selected(tmp
         "messages": messages,
     })["llm_input_messages"]
 
-    contents = [str(m.content) for m in result]
-    recall_idx = next(i for i, content in enumerate(contents) if "Relevant long-term memory" in content)
-    human_idx = next(i for i, msg in enumerate(result) if msg.type == "human")
-    assert recall_idx < human_idx
-    assert "[id=mem123]" in contents[recall_idx]
+    # Recall travels in the turn's context, after (and inside the user turn of) the person's message.
+    human = next(msg for msg in result if msg.type == "human")
+    question, _, context = str(human.content).partition("<row_bot_turn_context>")
+    assert question.strip() == "What is my code?"
+    assert "Relevant long-term memory" in context and "[id=mem123]" in context
+    assert not any("Relevant long-term memory" in str(msg.content) for msg in result if msg.type == "system")
     assert touched == ["mem123"]
 
 

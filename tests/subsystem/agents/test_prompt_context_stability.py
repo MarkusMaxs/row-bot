@@ -216,7 +216,9 @@ def test_anthropic_cache_markers_stay_on_stable_system_context_only(tmp_path, mo
     monkeypatch.setattr(agent, "is_cloud_model", lambda model: True)
     monkeypatch.setattr(agent, "get_cloud_provider", lambda model: "anthropic")
     monkeypatch.setattr(agent, "is_background_workflow", lambda: False)
-    monkeypatch.setattr(agent, "_agent_runtime_system_context", lambda: "RUNTIME_DYNAMIC_SENTINEL")
+    from row_bot.turn_context import ContextField
+    monkeypatch.setattr(agent, "_runtime_turn_fields",
+                        lambda tool_names: [ContextField("approval", "RUNTIME_DYNAMIC_SENTINEL")])
     monkeypatch.setattr("row_bot.prompts.get_platform_context", lambda: "PLATFORM_STABLE_SENTINEL")
     monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block", lambda: "SELF_STATIC_SENTINEL")
     monkeypatch.setattr("row_bot.self_knowledge.build_dynamic_self_knowledge_block", lambda: "DYNAMIC_STATE_SENTINEL")
@@ -273,7 +275,7 @@ def test_chat_only_prompt_uses_stable_chat_contract_without_agent_runtime_contex
     agent = _fresh_agent(tmp_path, monkeypatch)
 
     monkeypatch.setattr("row_bot.threads.get_latest_checkpoint_messages", lambda thread_id: [])
-    monkeypatch.setattr(agent, "_agent_runtime_system_context", lambda: "RUNTIME_DYNAMIC_SENTINEL")
+    monkeypatch.setattr(agent, "_agent_runtime_guidance", lambda tool_names: "RUNTIME_DYNAMIC_SENTINEL")
     monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block", lambda: "SELF_STATIC_SENTINEL")
     monkeypatch.setattr("row_bot.self_knowledge.build_dynamic_self_knowledge_block", lambda: "DYNAMIC_STATE_SENTINEL")
 

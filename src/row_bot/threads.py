@@ -2049,15 +2049,23 @@ def remove_latest_checkpoint_ai_message(thread_id: str, expected_text: str) -> b
             break
         if remove_index < 0:
             return False
+        from row_bot.turn_context import is_person_message, is_turn_context_message
+
         latest_human_index = -1
         for index in range(remove_index - 1, -1, -1):
-            if str(getattr(existing[index], "type", "") or "") == "human":
+            if is_person_message(existing[index]):
                 latest_human_index = index
                 break
         if latest_human_index < 0:
             return False
-        removed_count = len(existing) - latest_human_index - 1
-        channel_values["messages"] = existing[: latest_human_index + 1]
+        # The turn's context (row_bot.turn_context) is what the model was told for this turn: it
+        # stays with the person's message.
+        kept = [
+            *existing[: latest_human_index + 1],
+            *(message for message in existing[latest_human_index + 1:] if is_turn_context_message(message)),
+        ]
+        removed_count = len(existing) - len(kept)
+        channel_values["messages"] = kept
 
         next_checkpoint = empty_checkpoint()
         next_checkpoint["channel_values"] = channel_values
@@ -2110,8 +2118,11 @@ def _retried_turn(existing: list, text: str) -> int | None:
     """Where the turn a retry replaces starts: the person's last message, when it is ``text`` and nothing after
     it called a tool. A step that already ran stays on record (the person can check what changed, the model
     knows it ran), so that retry is sent as a new message instead."""
+    from row_bot.turn_context import is_person_message
+
+    # The turn's context (row_bot.turn_context) follows the person's message and goes with the turn.
     human = next((index for index in range(len(existing) - 1, -1, -1)
-                  if str(getattr(existing[index], "type", "") or "") == "human"), None)
+                  if is_person_message(existing[index])), None)
     if human is None or not text.strip() or _message_text(existing[human]) != text.strip():
         return None
     if any(getattr(message, "type", "") == "tool" or getattr(message, "tool_calls", None)
