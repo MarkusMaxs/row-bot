@@ -1004,6 +1004,37 @@ def read_document_processing_model() -> str | None:
     return _processing_model(get_row_bot_data_dir(create=False))
 
 
+def _searchable_documents(root: Path, legacy_names: set[str]) -> int | None:
+    """Documents search can find: saved records not removed, plus legacy markers no record replaced (B329).
+
+    The document list reads the same records; the legacy marker file alone undercounted to zero.
+    """
+    path = root / "document_ingestion" / "jobs.db"
+    if not path.is_file():
+        return len(legacy_names)
+    try:
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=1)
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            tables = {str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "document_records" not in tables:
+                return len(legacy_names)
+            removed = (
+                "AND NOT EXISTS (SELECT 1 FROM document_removals d WHERE d.target = r.document_id"
+                " AND json_extract(d.result, '$.status') = 'complete')"
+                if "document_removals" in tables else ""
+            )
+            names = [
+                str(row[0])
+                for row in connection.execute(f"SELECT r.original_name FROM document_records r WHERE 1 {removed}")
+            ]
+            return len(names) + len(legacy_names - set(names))
+        finally:
+            connection.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+
+
 def _documents(root: Path) -> dict[str, Any]:
     config = _mapping(_read_json(root / "embedding_config.json", default={}))
     provider = _text(config.get("provider") or "local", 16)
@@ -1027,7 +1058,8 @@ def _documents(root: Path) -> dict[str, Any]:
         and len(marker_value) <= _MAX_DOCUMENT_MARKERS
         and all(isinstance(item, str) for item in marker_value)
     ):
-        indexed_documents = len(set(marker_value))
+        saved = _searchable_documents(root, set(marker_value))
+        indexed_documents = None if saved is None else saved
     else:
         indexed_documents = None
     active_model = local_model if provider == "local" else cloud_model
