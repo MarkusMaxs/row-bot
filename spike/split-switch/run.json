@@ -1,1 +1,1 @@
-{"windows": true, "macos": false, "linux": false, "notarize": false, "kit_artifact": false, "only": [], "note": "run 4: Windows with the host loop-guard fix, hard-link thread variants, archive-vs-installed check"}
+{"windows": true, "macos": false, "linux": false, "notarize": false, "kit_artifact": false, "only": [], "note": "run 4b: stand-in maps multidict; Windows with the host loop-guard fix, hard-link thread variants, archive-vs-installed check"}

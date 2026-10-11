@@ -39,7 +39,9 @@ IS_MAC = sys.platform == "darwin"
 PORT = 8195
 BASE = "5.0.0"
 TARGET = "5.1.0"
-WINDOW_STANDIN = "import time; time.sleep(86400)  # trial window stand-in"
+# The stand-in also loads multidict's C extension (a package 5.1.0 changes), so the
+# clone's uninstall of a native module that the running version has mapped is exercised.
+WINDOW_STANDIN = "import time, contextlib\nwith contextlib.suppress(Exception): import multidict._multidict\ntime.sleep(86400)  # trial window stand-in"
 
 
 def iso() -> str:
@@ -331,6 +333,7 @@ class Trial:
             launched = {"host_pid": self.host_proc.pid}
         ready = self.wait_ready(420)
         self.start_window()
+        time.sleep(2)
         state = engine.read_state(self.root) or {}
         active_root = self.active_root()
         return {**launched, "ready_seconds": ready, "total_seconds": round(time.time() - started, 2), "active": state.get("active"),
@@ -355,6 +358,11 @@ class Trial:
                 out["error"] = repr(exc)
                 continue
             site = [p for p in maps if "site-packages" in p.lower()]
+            if self.window_proc and self.window_proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    out["window_standin_changed_mapped"] = [
+                        m.path for m in psutil.Process(self.window_proc.pid).memory_maps() if "multidict" in m.path.lower()
+                    ]
             out["mapped_files"] = len(maps)
             out["site_packages_native"] = len(site)
             out["changed_packages_mapped"] = [p for p in site if any(k in p.lower() for k in ("multidict", "pypdf", "hydra", "langgraph"))]
