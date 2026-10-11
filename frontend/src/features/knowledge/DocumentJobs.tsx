@@ -20,6 +20,8 @@ export type DocumentQueueItem = {
   revision: string;
   /** A batch's document count; its name is its first document's. */
   document_count?: number | null;
+  /** A batch's failed documents; one failure pauses the rest (B330). */
+  failed_count?: number | null;
 };
 /** How often the queue reads itself again while documents are being added. */
 export const QUEUE_POLL_MS = 3000;
@@ -34,9 +36,12 @@ const BATCH_STATUS: Record<string, string> = {
 };
 function batchStatus(item: DocumentQueueItem) {
   const status = BATCH_STATUS[item.status] ?? item.status;
-  return item.cancel_requested && !terminal.has(item.status)
-    ? `${status} · cancelling`
-    : status;
+  if (item.cancel_requested && !terminal.has(item.status))
+    return `${status} · cancelling`;
+  // A failed document pauses the rest of its batch for the person to decide (B330).
+  if (item.status === 'paused' && item.failed_count)
+    return `${status} · ${item.failed_count} failed · Process goes on with the rest`;
+  return status;
 }
 
 export type DocumentQueuePage = {

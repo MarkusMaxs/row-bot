@@ -84,6 +84,20 @@
           ],
           "title": "Extraction Total"
         },
+        "failed_count": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed Count"
+        },
         "id": {
           "pattern": "^[A-Za-z0-9_-]{1,128}$",
           "title": "Id",
