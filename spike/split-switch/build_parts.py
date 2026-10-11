@@ -136,9 +136,11 @@ def export_lock(git_dir: Path, tag: str, out: Path, uv: str) -> dict:
         data = subprocess.run(["git", "-C", str(git_dir), "show", f"{tag}:{name}"], check=True, capture_output=True).stdout
         (work / name).write_bytes(data)
     env = dict(os.environ, UV_NO_CONFIG="1")
-    base = [uv, "export", "--locked", "--all-extras", "--no-dev", "--no-emit-project"]
+    base = [uv, "export", "-q", "--locked", "--all-extras", "--no-dev", "--no-emit-project"]
     run([*base, "--output-file", out / f"requirements-hashed-{version}.txt"], cwd=work, env=env)
-    run([*base, "--format", "pylock.toml", "--output-file", out / f"pylock-{version}.toml"], cwd=work, env=env)
+    # uv only writes pylock exports to a file named pylock.toml / pylock.<name>.toml.
+    run([*base, "--format", "pylock.toml", "--output-file", work / "pylock.toml"], cwd=work, env=env)
+    shutil.copyfile(work / "pylock.toml", out / f"pylock-{version}.toml")
     lock_sha = sha256(work / "uv.lock")
     shutil.rmtree(work)
     req = out / f"requirements-hashed-{version}.txt"

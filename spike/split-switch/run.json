@@ -1,1 +1,1 @@
-{"windows": true, "macos": true, "linux": true, "notarize": false, "kit_artifact": false, "only": [], "note": "run 1: first full pass"}
+{"windows": true, "macos": true, "linux": true, "notarize": false, "kit_artifact": false, "only": [], "note": "run 1b: pylock export file name"}
