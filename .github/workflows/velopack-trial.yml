@@ -48,10 +48,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: velopack-trial-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   VELOPACK_VERSION: "1.2.161"
   WINDOWS_PYTHON_VERSION: "3.13.2"
@@ -355,6 +351,10 @@ jobs:
         run: |
           dotnet tool install --global vpk --version "$VELOPACK_VERSION"
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+          # The vpk apphost only looks in /usr/local/share/dotnet by default.
+          DOTNET_REAL="$(python3 -c 'import os, shutil; print(os.path.realpath(shutil.which("dotnet")))')"
+          echo "DOTNET_ROOT=$(dirname "$DOTNET_REAL")" >> "$GITHUB_ENV"
+          echo "dotnet at $DOTNET_REAL"; dotnet --list-runtimes
 
       - name: Check out v5.0.0
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}

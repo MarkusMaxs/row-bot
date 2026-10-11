@@ -1,1 +1,1 @@
-{"windows": true, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 1: first full trial"}
+{"windows": false, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 2: macOS after DOTNET_ROOT fix"}
