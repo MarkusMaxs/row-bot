@@ -700,3 +700,35 @@ def test_stop_during_compaction_discards_result_before_cas(monkeypatch):
     finally:
         agent._current_stop_event_var.reset(stop_token)
         agent._current_thread_id_var.reset(thread_token)
+
+
+@pytest.mark.parametrize(
+    ("model_ref", "provider_id", "marker"),
+    [
+        ("model:anthropic:claude-opus-5-5", "anthropic", {"type": "ephemeral"}),
+        ("model:openrouter:anthropic/claude-opus-5", "openrouter", {"type": "ephemeral"}),
+        ("model:openai:test", "openai", None),
+        ("model:minimax:MiniMax-M2.7", "minimax", None),
+    ],
+)
+def test_the_summarizer_prompt_gets_a_five_minute_breakpoint_on_claude_routes(monkeypatch, model_ref, provider_id, marker):
+    from row_bot.prompt_cache import CONVERSATION_CACHE_KEY
+
+    sent: list = []
+
+    class Summarizer:
+        def invoke(self, messages):
+            sent.extend(messages)
+            return AIMessage(content=_structured_summary())
+
+    monkeypatch.setattr(agent, "_compaction_model", lambda inputs, output_tokens: Summarizer())
+    inputs = replace(_inputs([]), model_ref=model_ref, provider_id=provider_id)
+
+    agent._invoke_compaction_model(inputs, prior_summary="", transcript="user: hello", output_tokens=1_000)
+
+    system, request = sent
+    markers = [block["cache_control"] for block in system.content if "cache_control" in block] if isinstance(
+        system.content, list) else []
+    assert markers == ([marker] if marker else [])
+    # A one-off summary is not a conversation: its tail is never cached.
+    assert CONVERSATION_CACHE_KEY not in request.additional_kwargs

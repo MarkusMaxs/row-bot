@@ -110,20 +110,69 @@ text stays in the stable prompt.
 
 ## Provider Rules
 
-Direct Anthropic API is the only provider that receives Anthropic
-`cache_control` markers in this rollout. Markers are placed only on stable
-system content. Conversation history and the turn context are never marked.
-A failure placing the marker is logged once per thread and the request goes
-out without it.
+Prompt caching on Claude routes is automatic: there is no setting
+(`row_bot.prompt_cache`, `row_bot.providers.capabilities.prompt_cache_route`,
+`row_bot.providers.transports.prompt_cache_breakpoints`).
 
-Anthropic-compatible routes that are not the direct Anthropic API, including
-MiniMax, OpenCode Anthropic Messages, and Claude Subscription, do not receive
-`cache_control` markers until their transports are explicitly proven to preserve
-and accept those content blocks.
+**Where the breakpoints go.**
 
-OpenAI, OpenRouter, xAI OAuth Responses, Codex Responses, AtlasCloud, and custom
-OpenAI-compatible endpoints do not receive Anthropic markers. Codex keeps its
-existing `prompt_cache_key` behavior.
+- **System prompt.** One explicit breakpoint on the last stable system block.
+- **Conversation tail.** An Agent or Chat Only request is tagged for tail
+  caching (private metadata on its last message, never sent). The transport
+  then caches up to the end of the request. On the direct API this is
+  top-level automatic caching, which the API puts on the last cacheable block
+  and moves forward as the conversation grows. The turn context never needs a
+  breakpoint of its own.
+- **Long appends.** Each breakpoint looks back at most 20 positions for an
+  earlier cache entry. A run of `tool_use` blocks counts as one position, and
+  so does a run of `tool_result` blocks. When a direct-API request adds more
+  than 15 positions since the last breakpoint Row-Bot sent with the same
+  prefix, one explicit breakpoint goes where that request ended.
+- **Limits.** A request never carries more than four breakpoints. Stray
+  markers in history are dropped before placement.
+- **Summarizer.** The compaction summarizer's fixed system prompt gets a
+  five-minute breakpoint. Its request is never tail-cached.
+- **One-off calls** (titles, background jobs) get no tail caching.
+
+**Lifetime (D3).** Both the system breakpoint and the tail use the request's
+lifetime, so a longer one never follows a shorter one, which the API rejects.
+
+| Request | Lifetime |
+|---|---|
+| A conversation a person is in: desktop and remote chat, voice, Designer, channels, channel approvals | 1 hour |
+| Back-to-back loops: workflow and task runs, goal continuations (`goal` surface or `internal_goal_continuation`), child agents (`agent_child`) | 5 minutes |
+| Compaction summary | 5 minutes |
+
+A five-minute marker is `{"type": "ephemeral"}` (the API default), and a
+one-hour marker adds `"ttl": "1h"`.
+
+**Routes.**
+
+| Route | What it gets |
+|---|---|
+| Direct Anthropic API | System breakpoint, top-level automatic caching, and the long-append breakpoint |
+| OpenRouter `anthropic/claude-*` | The system prompt as one system message of text blocks, one per section, with the breakpoint on the last stable block, plus OpenRouter's top-level `cache_control`. Both forms are documented by OpenRouter, with `ttl`. No long-append breakpoint yet |
+| Requesty Claude routes (`anthropic/`, `bedrock/`, `vertex/`) | Requesty's documented `"requesty": {"auto_cache": true}` on conversation requests. Requesty places the breakpoints itself, and it has no `ttl`. The system prompt stays one string, so the largest block is the whole prompt |
+| MiniMax, OpenCode Anthropic Messages, Atlas Cloud | Nothing, until an opt-in live check shows they accept cache instructions |
+| Claude Subscription | Nothing. It is moving to the Claude Agent SDK (D7) |
+
+OpenAI, xAI, Codex, Gemini and custom OpenAI-compatible endpoints never get
+Anthropic markers. Codex keeps its `prompt_cache_key` behaviour.
+
+**Safety net.** A 400 that names `cache_control`, `ttl` or `auto_cache` on a
+request that carried cache instructions is retried once without them. No other
+400 is retried.
+
+- On OpenRouter and Requesty, the route is then remembered for the process,
+  so a gateway that rejects them costs one failed request per process.
+- On the direct API, which documents every instruction Row-Bot sends, only
+  that request is retried.
+- A failure placing the system breakpoint is logged once per thread, and the
+  request goes out without it.
+
+**Truncation.** An Agent reply that stopped at the output token limit gets the
+"cut short" notice. That covers OpenAI-style `finish_reason: "length"`, Ollama
+`done_reason: "length"` and Anthropic `stop_reason: "max_tokens"`.
 
 ## Verification
 
@@ -140,6 +189,15 @@ compaction, and recall and skill usage once per turn.
 `tests/subsystem/agents/test_turn_context_tag_safety.py` is the security
 contract for the tag. `tests/subsystem/client_platform/test_turn_context_readers.py`
 checks that no reader of history shows it.
+
+`tests/subsystem/providers/test_prompt_cache_payloads.py` covers the breakpoints
+on the wire for each Claude route through the real request builders:
+
+- the lifetime for each surface;
+- the TTL ordering and the four-breakpoint limit;
+- the long-append breakpoint;
+- the safety net;
+- the usage ledger recording cache writes, then reads, for consecutive calls.
 
 Live provider validation is opt-in. When run, it uses the real Row-Bot runtime
 and at least one latest recommended chat-capable model per configured provider.

@@ -18,7 +18,10 @@ from row_bot.prompt_cache import (
     apply_anthropic_system_cache_marker,
     normalize_model_usage,
     normalize_prompt_cache_usage,
+    prompt_cache_lifetime,
+    with_conversation_cache,
 )
+from row_bot.providers.capabilities import PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES, prompt_cache_route
 from row_bot import prompt_prefix_diff
 from row_bot.providers.usage_ledger import with_usage_purpose
 from row_bot import turn_context
@@ -1759,6 +1762,64 @@ def _warn_cache_placement_failed(thread_id: str, exc: BaseException) -> None:
     logger.debug("Prompt cache placement failure detail", exc_info=(type(exc), exc, exc.__traceback__))
 
 
+def _prompt_cache_ttl_for(configurable: dict | None = None) -> str:
+    """This request's automatic cache lifetime (D3), from its runtime surface and run kind.
+
+    One hour for a conversation a person is in: desktop and remote chat, voice, Designer,
+    channels and channel approvals. Five minutes for back-to-back loops: workflow and task
+    runs (``is_background_workflow``), goal continuations (the ``goal`` surface or the
+    ``internal_goal_continuation`` flag) and child agents (``agent_child`` surfaces).
+    """
+    return prompt_cache_lifetime(
+        runtime_surface=str(_current_runtime_surface_var.get("") or ""),
+        background=bool(is_background_workflow()),
+        goal_continuation=bool((configurable or {}).get("internal_goal_continuation")),
+    )
+
+
+def _current_prompt_cache_ttl() -> str:
+    return _current_prompt_cache_ttl_var.get("") or _prompt_cache_ttl_for()
+
+
+def _prompt_cache_target(model_ref: str, provider_id: str | None = None) -> tuple[str, str, str]:
+    """``(route, provider id, model id)`` of a model ref for prompt caching (see ``prompt_cache_route``)."""
+    try:
+        from row_bot.providers.selection import parse_model_ref
+
+        parsed = parse_model_ref(model_ref)
+    except Exception:
+        parsed = None
+    provider = str(provider_id or (parsed[0] if parsed else "") or "")
+    model_id = str(parsed[1] if parsed else model_ref or "")
+    return prompt_cache_route(provider, model_id), provider, model_id
+
+
+def _with_conversation_cache_request(messages: list, *, model_ref: str, provider_id: str | None, ttl: str) -> list:
+    """Ask a Claude transport to cache this conversation request's tail (WP A3)."""
+    route, _provider, _model_id = _prompt_cache_target(model_ref, provider_id)
+    if not route:
+        return messages
+    return with_conversation_cache(messages, ttl=ttl)
+
+
+def _with_system_prompt_breakpoint(messages: list, *, model_ref: str, provider_id: str | None, ttl: str) -> list:
+    """A breakpoint on a prompt's first system message, on Claude routes that take one."""
+    route, provider, model_id = _prompt_cache_target(model_ref, provider_id)
+    if route not in PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES:
+        return messages
+    first_system = next((message for message in messages if isinstance(message, SystemMessage)), None)
+    if first_system is None:
+        return messages
+    marked, _result = apply_anthropic_system_cache_marker(
+        list(messages),
+        provider_id=provider,
+        model_id=model_id,
+        cache_eligible_system_message_ids={id(first_system)},
+        ttl=ttl,
+    )
+    return marked
+
+
 def _neutralize_foreign_turn_context_tags(messages: list) -> list:
     """Neutralize the turn-context tag in what people send and what tools return.
 
@@ -2514,11 +2575,33 @@ def _collect_agent_complete_input(state: dict) -> dict:
         except Exception:
             _model_id = str(_cur or "")
         if _provider_uses_anthropic_messages(_provider_id, _model_id):
-            # ── Anthropic prompt caching ─────────────────────────────
-            # Only direct Anthropic API receives cache_control, and only on
-            # stable system context. Conversation history is never marked.
-            if _provider_id != "anthropic":
+            # ── Claude prompt caching (WP A3) ────────────────────────
+            # Routes that take a breakpoint (the direct API, OpenRouter) get one on the last stable
+            # system block, with this request's lifetime; the transport caches the conversation tail
+            # (see _with_conversation_cache_request). Other Claude routes get the system prompt as
+            # one string, as before.
+            if prompt_cache_route(_provider_id, _model_id) in PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES:
+                _sys = [m for m in trimmed if isinstance(m, SystemMessage)]
+                _rest = [m for m in trimmed if not isinstance(m, SystemMessage)]
+                trimmed, _cache_marker_result = apply_anthropic_system_cache_marker(
+                    _sys + _rest,
+                    provider_id=_provider_id,
+                    model_id=_model_id,
+                    cache_eligible_system_message_ids=_cache_eligible_system_message_ids,
+                    stable_fingerprint=_stable_fingerprint,
+                    ttl=_current_prompt_cache_ttl(),
+                )
+                logger.debug(
+                    "Claude prompt caching: route=%s applied=%s eligible_systems=%d fingerprint=%s reason=%s",
+                    prompt_cache_route(_provider_id, _model_id),
+                    _cache_marker_result.applied,
+                    _cache_marker_result.eligible_system_count,
+                    _cache_marker_result.stable_fingerprint[:16],
+                    _cache_marker_result.reason,
+                )
+            else:
                 trimmed = _consolidate_system_messages(trimmed)
+            if _provider_id != "anthropic":
                 return {
                     "llm_input_messages": _normalize_provider_facing_messages(
                         trimmed,
@@ -2527,22 +2610,6 @@ def _collect_agent_complete_input(state: dict) -> dict:
                     ),
                     "execution_budget": budget,
                 }
-            _sys = [m for m in trimmed if isinstance(m, SystemMessage)]
-            _rest = [m for m in trimmed if not isinstance(m, SystemMessage)]
-            trimmed = _sys + _rest
-            trimmed, _cache_marker_result = apply_anthropic_system_cache_marker(
-                trimmed,
-                provider_id=_provider_id,
-                cache_eligible_system_message_ids=_cache_eligible_system_message_ids,
-                stable_fingerprint=_stable_fingerprint,
-            )
-            logger.debug(
-                "Anthropic prompt caching: applied=%s eligible_systems=%d fingerprint=%s reason=%s",
-                _cache_marker_result.applied,
-                _cache_marker_result.eligible_system_count,
-                _cache_marker_result.stable_fingerprint[:16],
-                _cache_marker_result.reason,
-            )
     except Exception as exc:
         # Non-fatal: the request goes out without the cache marker. Said once per thread, so a
         # persistent failure is visible without repeating on every model call.
@@ -3004,10 +3071,17 @@ def _invoke_compaction_model(
         if prior_summary
         else ""
     ) + "NEWLY AGED TRANSCRIPT RANGE:\n" + transcript
-    result = _turn_usage_tagged(_compaction_model(inputs, output_tokens), "compaction").invoke([
-        SystemMessage(content=_SUMMARY_SYSTEM_PROMPT),
-        HumanMessage(content=prompt),
-    ])
+    from row_bot.prompt_cache import CACHE_TTL_LOOP
+    from row_bot.providers.background import background_model_ref
+
+    # The summarizer's fixed instructions get a breakpoint (a back-to-back call: five minutes).
+    summary_messages = _with_system_prompt_breakpoint(
+        [SystemMessage(content=_SUMMARY_SYSTEM_PROMPT), HumanMessage(content=prompt)],
+        model_ref=background_model_ref("compaction", thread_model=inputs.model_ref),
+        provider_id=None,
+        ttl=CACHE_TTL_LOOP,
+    )
+    result = _turn_usage_tagged(_compaction_model(inputs, output_tokens), "compaction").invoke(summary_messages)
     if stop_event and stop_event.is_set():
         raise TaskStoppedError("Stopped during context compaction.")
     return _validate_summary_text(_content_to_str(getattr(result, "content", result)), output_tokens)
@@ -3536,6 +3610,7 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     messages, created = _with_turn_context(list(state.get("messages") or []), budget)
     if created:
         state = {**state, "messages": messages}
+    _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for((config or {}).get("configurable")))
     _current_compaction_succeeded_var.set(False)
     inputs = _collect_agent_preparation_inputs(state, config)
     prepared = _prepare_with_compaction(inputs)
@@ -3550,6 +3625,12 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             prepared = _prepare_with_compaction(inputs)
     # The turn context travels in the user turn it follows (see turn_context.merge_into_preceding).
     llm_messages = turn_context.merge_into_preceding(prepared.messages)
+    llm_messages = _with_conversation_cache_request(
+        llm_messages,
+        model_ref=str(getattr(inputs, "model_ref", "") or ""),
+        provider_id=getattr(inputs, "provider_id", None),
+        ttl=_current_prompt_cache_ttl(),
+    )
     if prompt_prefix_diff.enabled():
         # Diagnostics only: never let them stop a turn.
         prompt_prefix_diff.note_request(
@@ -3640,6 +3721,10 @@ _current_authorized_skill_records_var: _contextvars.ContextVar[tuple | None] = _
 )
 _current_runtime_surface_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "current_runtime_surface", default=""
+)
+# This request's prompt-cache lifetime ("1h" or "5m"), set where the request's config is known.
+_current_prompt_cache_ttl_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
+    "current_prompt_cache_ttl", default=""
 )
 _current_requested_runtime_mode_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "current_requested_runtime_mode", default=""
@@ -3800,6 +3885,7 @@ def _set_active_runtime_context(
 ) -> None:
     _current_thread_id_var.set(thread_id or "")
     _current_runtime_surface_var.set(runtime_surface or "")
+    _current_prompt_cache_ttl_var.set("")
     _current_requested_runtime_mode_var.set(requested_runtime_mode or "")
     _current_selected_runtime_mode_var.set(selected_runtime_mode or "")
     _approval_mode_var.set(normalize_approval_mode(approval_mode, DEFAULT_APPROVAL_MODE))
@@ -5712,6 +5798,14 @@ def _collect_chat_only_preparation_inputs(
     messages = _consolidate_system_messages(messages)
     model_ref = str(_active_model_override.get() or get_current_model())
     policy = get_context_policy(model_ref)
+    # The same breakpoint policy as Agent mode: the stable Chat Only prompt is marked, and
+    # stream_chat_only asks the transport to cache the conversation tail.
+    messages = _with_system_prompt_breakpoint(
+        messages,
+        model_ref=model_ref,
+        provider_id=str(getattr(policy, "provider_id", "") or "") or None,
+        ttl=_current_prompt_cache_ttl(),
+    )
     system_payload = [
         _message_fingerprint_payload(message)
         for message in messages
@@ -5751,12 +5845,32 @@ def _build_chat_only_messages(thread_id: str, user_input: str, *, context_window
 
 def _chat_only_llm(model_label: str, *, thread_id: str = ""):
     from row_bot.providers.resolution import resolve_provider_config
+    from row_bot.models import cached_llm
     from row_bot.providers.reasoning import request_plan_for
     from row_bot.providers.runtime import create_chat_model
 
-    resolved = resolve_provider_config(model_label, allow_legacy_local=True)
+    resolved =resolve_provider_config(model_label, allow_legacy_local=True)
     plan = request_plan_for(thread_id or get_current_thread_id(), resolved.selection_ref)
-    return create_chat_model(resolved.runtime_model, resolved.provider_id, reasoning_plan=plan)
+    # One instance per (model, reasoning plan), dropped with the other cached clients when
+    # credentials or context settings change (F10): no client is rebuilt on every call.
+    key: tuple = (
+        "chat_only",
+        str(resolved.provider_id or ""),
+        str(resolved.runtime_model or ""),
+        str(resolved.selection_ref or ""),
+        str(getattr(plan, "fingerprint", "") or "reasoning:provider-default"),
+    )
+    if resolved.provider_id == "ollama":
+        try:
+            from row_bot.models import get_context_size as _model_context_size
+
+            key = (*key, int(_model_context_size(resolved.selection_ref) or 0))
+        except Exception:
+            logger.debug("Chat Only model cache: context size lookup failed", exc_info=True)
+    return cached_llm(
+        key,
+        lambda: create_chat_model(resolved.runtime_model, resolved.provider_id, reasoning_plan=plan),
+    )
 
 
 def _get_llm_for_reasoning_plan(model_label: str, reasoning_plan, *, use_override: bool = True):
@@ -5810,6 +5924,7 @@ def stream_chat_only(
         app_scope=configurable.get("app_scope"),
     )
     set_active_model_override(model_label)
+    _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for(configurable))
     _readiness_started = time.perf_counter()
     readiness = evaluate_chat_readiness(model_label)
     phase_timings["generation.chat_readiness_ms"] = (
@@ -5865,7 +5980,12 @@ def stream_chat_only(
     for context_event in _current_pending_context_events_var.get() or ():
         yield (str(context_event.get("type") or "context_usage"), context_event.get("payload") or {})
     _current_pending_context_events_var.set(())
-    messages = prepared.messages
+    messages = _with_conversation_cache_request(
+        prepared.messages,
+        model_ref=preparation_inputs.model_ref,
+        provider_id=preparation_inputs.provider_id or None,
+        ttl=_current_prompt_cache_ttl(),
+    )
     prompt_prefix_diff.note_request(thread_id, messages, ())
     phase_timings["generation.chat_context_assembly_ms"] = (
         time.perf_counter() - _messages_started
@@ -6958,6 +7078,11 @@ def _log_stream_completion(
         logger.info("stream completion diagnostics=%s", diagnostics)
 
 
+# Stop reasons that mean the reply hit the output token limit: OpenAI-style finish_reason and
+# Ollama done_reason "length", and Anthropic stop_reason "max_tokens" (F17).
+_OUTPUT_LIMIT_STOP_REASONS = frozenset({"length", "max_tokens"})
+
+
 def _stream_graph(agent, input_data, config: dict,
                   *, stop_event: threading.Event | None = None,
                   phase_timings: dict[str, Any] | None = None):
@@ -7262,6 +7387,10 @@ def _stream_graph(agent, input_data, config: dict,
             _dr = _rm.get("done_reason")
             if _dr:
                 _finish_reason = _dr
+            # Anthropic says why it stopped in stop_reason (F17).
+            _sr = _rm.get("stop_reason")
+            if _sr:
+                _finish_reason = _sr
 
             content = _content_to_str(msg.content)
             has_tool_call_chunk = bool(
@@ -7597,9 +7726,9 @@ def _stream_graph(agent, input_data, config: dict,
 
     # Warn if the model stopped due to output token limit
     visible_answer = _joined_visible_answer(full_answer)
-    if _finish_reason == "length" and visible_answer:
-        logger.warning("Model output truncated (finish_reason=length) — "
-                       "response was cut short by the provider's output token limit")
+    if _finish_reason in _OUTPUT_LIMIT_STOP_REASONS and visible_answer:
+        logger.warning("Model output truncated (finish_reason=%s) — "
+                       "response was cut short by the provider's output token limit", _finish_reason)
         full_answer.append(
             "\n\n⚠️ *This response was cut short by the model's output token "
             "limit. You can ask me to continue or rephrase for a shorter answer.*"
