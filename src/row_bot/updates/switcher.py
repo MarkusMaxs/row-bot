@@ -15,9 +15,7 @@ launcher can apply a ready update while it quits.
 from __future__ import annotations
 
 import logging
-import os
 import time
-from pathlib import Path
 
 from row_bot import install_layout
 from row_bot.install_layout import InstallKind, InstallLayout
@@ -33,22 +31,15 @@ class SwitchError(RuntimeError):
     """The install has nothing valid to switch to."""
 
 
-def _python_in(version_root: Path) -> Path:
-    if os.name == "nt":
-        return version_root / "python" / "python.exe"
-    return version_root / "python" / "bin" / "python3"
-
-
 def runnable_version(layout: InstallLayout, version: str | None) -> bool:
     """True when ``versions/<version>`` (or the macOS seed) can be started."""
     if not version or not install_layout.is_valid_version_name(version):
         return False
     if layout.kind is InstallKind.MACOS and layout.seed and version == layout.version:
         return True
-    root = install_layout.version_root(layout, version)
-    if root is None:
+    if layout.root is None:
         return False
-    return (root / "app" / "launcher.py").is_file() and _python_in(root).is_file()
+    return install_layout.version_runnable(layout.root, layout.kind, version)
 
 
 def ready_version(layout: InstallLayout) -> str | None:
