@@ -281,6 +281,32 @@ def bounded(
     return f"{notice}\n{head}\n{omitted}\n{tail}"
 
 
+# The notice ``bounded`` puts first when it saved the full text.
+_SAVED_NOTICE = re.compile(
+    r"\[[^\n]{0,300} output is [\d,]+ characters; showing the first [\d,]+ and the last [\d,]+\. "
+    r"The full output is saved as (out_[0-9a-f]{16}): [^\n]*\]\n"
+)
+
+
+def full_text(text: str, *, thread_id: str, max_chars: int) -> str:
+    """The whole of a result ``bounded`` shortened, read back from its conversation's saved output.
+
+    *text* itself when it wasn't shortened, its saved output is gone, or the whole is longer than
+    *max_chars*. For a reader outside the model (an app's view of its own result), not the model.
+    """
+    match = _SAVED_NOTICE.match(str(text))
+    if match is None:
+        return text
+    path = _thread_folder(thread_id) / f"{match.group(1)}.txt"
+    try:
+        if path.stat().st_size > max_chars * 4:
+            return text
+        whole = path.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return text
+    return whole if len(whole) <= max_chars else text
+
+
 def cap_tool_message(message: Any, *, thread_id: str | None = None, source: str = "") -> Any:
     """Bound a freshly created ToolMessage's text to ``RESULT_CAP_CHARS``.
 

@@ -233,21 +233,50 @@ def _move_chart(message: Any, content: str, *, source: str, thread_id: str | Non
     return message.model_copy(update={"content": summary, "artifact": {**(artifact or {}), CHART_ARTIFACT_KEY: chart}})
 
 
+def _image_problem(encoded: str) -> str:
+    """Why an image can't be shown, as the public media error code; empty when it can.
+
+    The person's client shows PNG and JPEG images within the attachment size limit.
+    """
+    from row_bot.application.attachments import MAX_ATTACHMENT_BYTES
+
+    if len(encoded) > 4 * ((MAX_ATTACHMENT_BYTES + 2) // 3):
+        return "payload_too_large"
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return "media_unavailable"
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        return "payload_too_large"
+    return "" if data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")) else "media_unavailable"
+
+
 def _move_image(message: Any, content: str) -> Any:
     encoded, caption = split_marker(content, IMAGE_MARKER) or ("", "")
     encoded = encoded.strip()
     from row_bot.application.attachment_context import current_caches
 
-    caches = current_caches()
-    shown = bool(encoded) and caches is not None and caches.pending_image is None
-    if shown:
-        # Published with the call's media, as a generated image is (agent._wrap_platform_tool_call).
-        caches.pending_image = encoded
-    size = len(encoded) * 3 // 4
-    amount = f"about {max(1, round(size / 1024)):,} KB"
-    note = (f"[Image shown to the person ({amount}); its data is not repeated here.]" if shown
-            else f"[Image produced ({amount}); its data is not included here.]")
-    return message.model_copy(update={"content": f"{caption}\n{note}" if caption else note})
+    # Checked before the model is told anything, so its text says what the person sees.
+    problem = _image_problem(encoded)
+    update: dict[str, Any] = {}
+    if problem:
+        # The person sees the step's media error, as for a generated image that failed.
+        update["additional_kwargs"] = {**(getattr(message, "additional_kwargs", None) or {}),
+                                       "platform_media_error": problem}
+        reason = ("it is larger than the attachment limit" if problem == "payload_too_large"
+                  else "its data is not a valid PNG or JPEG image")
+        note = f"[The image could not be shown: {reason}.]"
+    else:
+        caches = current_caches()
+        shown = caches is not None and caches.pending_image is None
+        if shown:
+            # Published with the call's media, as a generated image is (agent._wrap_platform_tool_call).
+            caches.pending_image = encoded
+        amount = f"about {max(1, round(len(encoded) * 3 // 4 / 1024)):,} KB"
+        note = (f"[Image shown to the person ({amount}); its data is not repeated here.]" if shown
+                else f"[Image produced ({amount}); its data is not included here.]")
+    update["content"] = f"{caption}\n{note}" if caption else note
+    return message.model_copy(update=update)
 
 
 def move_rendered_payload(message: Any, *, source: str = "", thread_id: str | None = None) -> Any:

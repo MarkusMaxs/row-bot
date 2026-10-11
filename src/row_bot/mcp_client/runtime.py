@@ -1457,13 +1457,21 @@ def _bounded_for_model(text: str, cfg: dict[str, Any], source: str) -> str:
     ``read_tool_output`` pages through it; reading it back is fenced, as MCP results are."""
     from row_bot.tool_outputs import RESULT_CAP_CHARS, bounded
 
+    from row_bot.mcp_client.results import ERROR_PREFIX
+
     try:
         limit = int(cfg.get("output_limit", 24000) or 24000)
     except (TypeError, ValueError):
         limit = 24000
     # The agent caps every result at RESULT_CAP_CHARS too; one handle per result, not two.
     limit = max(1, min(limit, RESULT_CAP_CHARS - _NOTICE_ROOM))
-    return bounded(str(text), tool_name=source, max_chars=limit, external=True)
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    # A shortened error still leads with the error flag the model and the app's view read.
+    prefix = ERROR_PREFIX if text.startswith(ERROR_PREFIX) else ""
+    body = text[len(prefix):]
+    return prefix + bounded(body, tool_name=source, max_chars=max(1, limit - len(prefix)), external=True)
 
 
 def _call_tool_sync(server_name: str, tool_name: str, kwargs: dict[str, Any], *, expected: Any = None) -> str:

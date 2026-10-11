@@ -28,11 +28,13 @@ def _long_text(rows: int = 3_000) -> str:
 
 
 class _Session:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, structured: dict | None = None, error: bool = False) -> None:
         self.text = text
+        self.structured = structured
+        self.error = error
 
     async def call_tool(self, name: str, arguments: dict[str, Any]):
-        return FakeCallResult([FakeContentBlock("text", self.text)])
+        return FakeCallResult([FakeContentBlock("text", self.text)], self.structured, self.error)
 
     async def read_resource(self, uri: str):
         return type("ResourceRead", (), {"contents": [FakeContentBlock("text", self.text)]})()
@@ -59,9 +61,9 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(runtime, "_schedule", _OnAnotherThread)
 
-    def start(text: str, **cfg: Any):
+    def start(text: str, *, structured: dict | None = None, error: bool = False, **cfg: Any):
         server = runtime.McpServerRuntime("notes", {"tool_timeout": 5, **cfg})
-        server.session = _Session(text)
+        server.session = _Session(text, structured=structured, error=error)
         with runtime._runtime_lock:
             runtime._servers["notes"] = server
         return server
@@ -186,3 +188,43 @@ def test_reading_back_an_mcp_result_is_fenced_and_scanned(server, monkeypatch):
     (seen,) = [str(message.content) for message in prepared if isinstance(message, ToolMessage)]
     assert seen.startswith('<EXTERNAL_CONTENT source="read_tool_output">\n')
     assert "potential prompt injection" in seen.lower()
+
+
+def test_a_long_mcp_error_stays_an_error_for_the_model_and_the_apps_view(server):
+    from row_bot.integrations import views
+    from row_bot.mcp_client import runtime
+
+    text = _long_text()
+    server(text, error=True, output_limit=24_000)
+
+    seen = _in_conversation(runtime._make_tool_func("notes", "read_page"), page="all")
+
+    # The error flag still leads the shortened text, ahead of the handle notice.
+    assert seen.startswith("MCP tool error: [mcp_notes_read_page output is ")
+    assert len(seen) <= 24_000 + 1_000
+    handle, offset = _handle_and_offset(seen)
+    assert _read_whole(handle, offset) == text[offset:]
+    # An app's view reads it as an error, with or without the whole text behind it.
+    chat_text = "Approval: not needed (read-only)\n" + seen
+    assert views._result(chat_text)["isError"] is True
+    restored = views._result(chat_text, CONVERSATION)
+    assert restored["isError"] is True
+    assert restored["content"] == [{"type": "text", "text": text}]
+
+
+def test_an_apps_view_of_a_shortened_result_gets_the_whole_result_back(server):
+    """The view rebuilds its result from the chat; the structured content past the limit comes back."""
+    from row_bot.integrations import views
+    from row_bot.mcp_client import runtime
+
+    structured = {"rows": [f"row {index:05d}" for index in range(4_000)]}
+    server("Found 4,000 rows.", structured=structured, output_limit=24_000)
+    seen = _in_conversation(runtime._make_tool_func("notes", "read_page"), page="all")
+    assert seen.startswith("[mcp_notes_read_page output is ")
+
+    assert "structuredContent" not in views._result(seen)
+    restored = views._result(seen, CONVERSATION)
+
+    assert restored == {"content": [{"type": "text", "text": "Found 4,000 rows."}], "structuredContent": structured}
+    # Another conversation's saved outputs are never read.
+    assert "structuredContent" not in views._result(seen, "another-conversation")

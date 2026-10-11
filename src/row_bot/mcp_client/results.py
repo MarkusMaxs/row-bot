@@ -74,6 +74,8 @@ def _content_block_to_text(block: Any) -> str:
 # Said instead of repeating the structured content when the text already is it. An app's view
 # rebuilds structuredContent from the text then (integrations/views.py).
 STRUCTURED_SAME_AS_TEXT = "STRUCTURED_CONTENT: same as the text above"
+# Leads a result the server marked isError; the model and an app's view both read it as the error flag.
+ERROR_PREFIX = "MCP tool error: "
 
 
 def _text_carries(parts: list[str], structured: Any) -> bool:
@@ -106,7 +108,7 @@ def normalize_call_result(result: Any, *, output_limit: int = 24000) -> str:
             parts.append(f"STRUCTURED_CONTENT:\n{structured!r}")
     text = "\n\n".join(part for part in parts if part).strip()
     if getattr(result, "isError", False):
-        text = "MCP tool error: " + (text or "tool returned an error")
+        text = ERROR_PREFIX + (text or "tool returned an error")
     if not text:
         text = "MCP tool completed with no content."
     if output_limit > 0 and len(text) > output_limit:

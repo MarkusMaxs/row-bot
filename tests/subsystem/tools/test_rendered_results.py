@@ -1,6 +1,7 @@
 """A result the client renders keeps its payload out of the model's text (WP D2)."""
 from __future__ import annotations
 
+import base64
 import json
 import re
 
@@ -170,27 +171,72 @@ def test_a_plugins_html_is_capped_with_a_handle_like_any_text(data_dir, conversa
     assert _read_whole(handle) == html
 
 
-def test_a_plugins_image_goes_to_the_person_as_media_and_the_model_reads_its_caption(data_dir, conversation):
+def _with_client(message: ToolMessage):
+    """Create *message* in a call whose media a client takes; returns (result, the call's media slots)."""
     from row_bot.application import attachment_context
     from row_bot.application.attachment_context import AttachmentExecutionCaches
 
-    encoded = "iVBORw0KGgo" + "A" * 40_000
-    message = ToolMessage(content=f"__IMAGE__:{encoded}\n\nA lighthouse at dusk", name="plugin_draw",
-                          tool_call_id="c1")
     caches = AttachmentExecutionCaches("conversation-a")
     token = attachment_context._current.set(caches)
     try:
-        shown = tool_outputs.cap_tool_message(message)
+        return tool_outputs.cap_tool_message(message), caches
     finally:
         attachment_context._current.reset(token)
+
+
+def test_a_plugins_image_goes_to_the_person_as_media_and_the_model_reads_its_caption(data_dir, conversation):
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 30_000).decode()
+    message = ToolMessage(content=f"__IMAGE__:{encoded}\n\nA lighthouse at dusk", name="plugin_draw",
+                          tool_call_id="c1")
+
+    shown, caches = _with_client(message)
 
     # Published with the call's media by the Agent's ToolNode wrapper, as a generated image is.
     assert caches.pending_image == encoded
     assert shown.content == "A lighthouse at dusk\n[Image shown to the person (about 29 KB); its data is not repeated here.]"
+    assert "platform_media_error" not in shown.additional_kwargs
 
     # Where no client takes the call's media (a headless run), the model still never reads the image data.
     headless = tool_outputs.cap_tool_message(message)
     assert headless.content == "A lighthouse at dusk\n[Image produced (about 29 KB); its data is not included here.]"
+
+
+@pytest.mark.parametrize(
+    ("encoded", "code", "reason"),
+    [
+        ("not base64 at all!", "media_unavailable", "its data is not a valid PNG or JPEG image"),
+        (base64.b64encode(b"GIF89a" + b"\0" * 64).decode(), "media_unavailable",
+         "its data is not a valid PNG or JPEG image"),
+        ("", "media_unavailable", "its data is not a valid PNG or JPEG image"),
+        (base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 64).decode(), "payload_too_large",
+         "it is larger than the attachment limit"),
+    ],
+)
+def test_an_image_that_cannot_be_shown_is_never_said_to_be_shown(data_dir, conversation, monkeypatch,
+                                                                   encoded, code, reason):
+    from row_bot.application import attachments
+
+    if code == "payload_too_large":
+        monkeypatch.setattr(attachments, "MAX_ATTACHMENT_BYTES", 32)
+    message = ToolMessage(content=f"__IMAGE__:{encoded}\n\nA lighthouse", name="plugin_draw", tool_call_id="c1")
+
+    result, caches = _with_client(message)
+
+    assert result.content == f"A lighthouse\n[The image could not be shown: {reason}.]"
+    # The person sees the step's media error instead, live and when the conversation is reopened.
+    assert caches.pending_image is None
+    assert result.additional_kwargs["platform_media_error"] == code
+
+
+def test_a_moved_or_capped_result_keeps_its_error_status(data_dir, conversation):
+    chart = "__CHART__:" + json.dumps({"data": [{"type": "bar", "x": ["a"], "y": [1]}]}) + "\n\nChart created"
+    long = "Traceback line\n" * 10_000
+
+    for content in (chart, long):
+        result = tool_outputs.cap_tool_message(
+            ToolMessage(content=content, name="plugin_tool", tool_call_id="c1", status="error"))
+        assert result.content != content
+        assert result.status == "error"
 
 
 def test_results_without_a_rendered_payload_are_unchanged(data_dir, conversation):
