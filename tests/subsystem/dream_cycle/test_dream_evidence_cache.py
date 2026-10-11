@@ -59,8 +59,8 @@ def _conversation(threads, thread_id: str, text: str) -> None:
         HumanMessage(id=f"{thread_id}-h", content=text), AIMessage(id=f"{thread_id}-a", content="Noted.")])
 
 
-def test_a_second_night_with_nothing_new_asks_the_model_nothing(dream, monkeypatch) -> None:
-    threads, kg, dream_cycle, model = dream
+def _small_graph(threads, kg, dream_cycle, monkeypatch) -> None:
+    """Three thin entities that two conversations mention together."""
     dream_cycle._save_config({**dream_cycle._load_config(), "min_entities": 2})
     nights = iter(range(1, 10))
     monkeypatch.setattr(dream_cycle, "_collect_system_snapshot",
@@ -71,6 +71,11 @@ def test_a_second_night_with_nothing_new_asks_the_model_nothing(dream, monkeypat
         kg.save_entity(kind, subject, description, source="test")
     _conversation(threads, "t1", "Alice works at Acme with Bob.")
     _conversation(threads, "t2", "Alice and Bob visited Acme last spring.")
+
+
+def test_a_second_night_with_nothing_new_asks_the_model_nothing(dream, monkeypatch) -> None:
+    threads, kg, dream_cycle, model = dream
+    _small_graph(threads, kg, dream_cycle, monkeypatch)
 
     dream_cycle.run_dream_cycle()
 
@@ -99,6 +104,31 @@ def test_a_second_night_with_nothing_new_asks_the_model_nothing(dream, monkeypat
     assert "co-occur in 3 conversation(s)" in pair
     assert set(re.findall(r'subject: "(\w+)"', pair.split("Two entities co-occur")[1])) == {"Alice", "Acme"}
     assert model.asked("self-analysis engine", night_three) == []
+
+
+def test_a_candidate_one_model_turned_down_is_asked_again_once_after_the_default_model_changes(
+        dream, monkeypatch) -> None:
+    threads, kg, dream_cycle, model = dream
+    from row_bot import models
+
+    _small_graph(threads, kg, dream_cycle, monkeypatch)
+    dream_cycle.run_dream_cycle()
+    turned_down = len(model.asked("thin description")) + len(model.asked("co-occur in"))
+    assert turned_down == 6
+
+    asked = len(model.prompts)
+    dream_cycle.run_dream_cycle()  # the same model: nothing is asked again
+    assert model.prompts[asked:] == []
+
+    monkeypatch.setattr(models, "get_current_model", lambda: "model:anthropic:claude-opus-5-5")
+    asked = len(model.prompts)
+    dream_cycle.run_dream_cycle()  # another default model: each candidate gets one fresh look
+    again = model.prompts[asked:]
+    assert len([prompt for prompt in again if "thin description" in prompt or "co-occur in" in prompt]) == 6
+
+    asked = len(model.prompts)
+    dream_cycle.run_dream_cycle()
+    assert model.prompts[asked:] == []
 
 
 def test_a_merge_the_model_turned_down_waits_for_new_content(dream, monkeypatch) -> None:

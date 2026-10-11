@@ -143,10 +143,12 @@ def get_dream_status() -> dict:
 # ── Evidence cache ──────────────────────────────────────────────────────────
 #
 # A merge, enrichment or inference the model turned down is not asked again
-# while what it read is unchanged: each record keeps a hash of the exact prompt
-# (the entities' content and the conversation evidence).  New evidence, an
-# edited entity or a changed prompt asks again, and so does a record older than
-# _EVIDENCE_MAX_AGE_DAYS.  Insights keep the hash of the snapshot last read.
+# while what it read is unchanged: each record keeps a hash of the model that
+# answered (C1's resolver for "dream") and the exact prompt (the entities'
+# content and the conversation evidence).  New evidence, an edited entity, a
+# changed prompt or another default model asks again, and so does a record
+# older than _EVIDENCE_MAX_AGE_DAYS.  Insights keep the hash of the snapshot
+# last read.
 # Kept in dream_rejections.json:
 #   {"version": 2, "merge": {pair: {"evidence", "at"}}, "enrich": {entity id: ...},
 #    "infer": {pair: ...}, "insights": {"evidence", "at"}}
@@ -202,10 +204,26 @@ def _fresh(record: dict) -> bool:
     return str(record.get("at") or "") > cutoff
 
 
-def _record_rejection(kind: str, key: str, prompt: str) -> None:
+def _dream_model_ref() -> str:
+    """The model Dream's calls go to (provider and model, from C1's resolver)."""
+    try:
+        from row_bot.providers.background import background_model_ref
+
+        return str(background_model_ref("dream") or "")
+    except Exception:
+        logger.debug("Could not resolve Dream's model", exc_info=True)
+        return ""
+
+
+def _rejection_evidence(prompt: str, model_ref: str | None) -> str:
+    model = _dream_model_ref() if model_ref is None else model_ref
+    return evidence_hash(f"{model}\n{prompt}")
+
+
+def _record_rejection(kind: str, key: str, prompt: str, model_ref: str | None = None) -> None:
     """Remember that the model turned *key* down after reading *prompt*."""
     cache = _load_rejection_cache()
-    cache[kind][key] = {"evidence": evidence_hash(prompt), "at": _now_iso()}
+    cache[kind][key] = {"evidence": _rejection_evidence(prompt, model_ref), "at": _now_iso()}
     for name in _EVIDENCE_KINDS:
         cache[name] = {item: record for item, record in cache[name].items() if _fresh(record)}
     try:
@@ -214,10 +232,14 @@ def _record_rejection(kind: str, key: str, prompt: str) -> None:
         logger.debug("Could not save the Dream evidence cache", exc_info=True)
 
 
-def _rejected_with_same_evidence(kind: str, key: str, prompt: str, cache: dict | None = None) -> bool:
-    """Whether the model turned *key* down after reading this same *prompt*."""
+def _rejected_with_same_evidence(kind: str, key: str, prompt: str, cache: dict | None = None,
+                                 model_ref: str | None = None) -> bool:
+    """Whether the same model turned *key* down after reading this same *prompt*.
+
+    ``model_ref`` saves resolving Dream's model again when checking many candidates.
+    """
     record = (cache if cache is not None else _load_rejection_cache()).get(kind, {}).get(key)
-    return bool(record) and record["evidence"] == evidence_hash(prompt) and _fresh(record)
+    return bool(record) and record["evidence"] == _rejection_evidence(prompt, model_ref) and _fresh(record)
 
 
 def _answered(raw: str) -> bool:
@@ -393,6 +415,7 @@ def _find_merge_candidates(batch: list[dict], threshold: float) -> list[tuple[di
     import row_bot.knowledge_graph as kg
 
     rejections = _load_rejection_cache()
+    model_ref = _dream_model_ref()
     seen_ids: set[str] = set()
     candidates: list[tuple[dict, dict, float]] = []
 
@@ -434,7 +457,8 @@ def _find_merge_candidates(batch: list[dict], threshold: float) -> list[tuple[di
                     if score < 0.98:
                         continue
 
-            if _rejected_with_same_evidence("merge", _pair_key(eid, hid), _merge_prompt(entity, hit)[0], rejections):
+            if _rejected_with_same_evidence("merge", _pair_key(eid, hid), _merge_prompt(entity, hit)[0],
+                                            rejections, model_ref=model_ref):
                 continue
 
             candidates.append((entity, hit, score))
@@ -940,6 +964,7 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
     # Build entity lookup by ID for quick access
     entity_by_id: dict[str, dict] = {e["id"]: e for e in batch}
     rejections = _load_rejection_cache()
+    model_ref = _dream_model_ref()
 
     # Sort by co-occurrence count descending (most evidence first)
     ranked_pairs = sorted(pair_conversations.items(), key=lambda x: len(x[1]), reverse=True)
@@ -1005,7 +1030,7 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
 
         # Skip a pair the model turned down after reading this same evidence
         if _rejected_with_same_evidence("infer", _pair_key(ea_id, eb_id),
-                                        _infer_prompt(ea, eb, evidence, co_count), rejections):
+                                        _infer_prompt(ea, eb, evidence, co_count), rejections, model_ref=model_ref):
             continue
 
         pairs.append((ea, eb, evidence, co_count))
@@ -1592,6 +1617,7 @@ def run_dream_cycle(on_status=None) -> dict:
             summary["merges"],
             min_chars,
         )
+        model_ref = _dream_model_ref()
 
         for entity in enrichment_candidates:
 
@@ -1601,8 +1627,9 @@ def run_dream_cycle(on_status=None) -> dict:
             )
             if len(excerpts) < 2:
                 continue  # Need 2+ conversations as evidence
-            if _rejected_with_same_evidence("enrich", str(entity["id"]), _enrich_prompt(entity, excerpts)):
-                continue  # Turned down before, and nothing new to read
+            if _rejected_with_same_evidence("enrich", str(entity["id"]), _enrich_prompt(entity, excerpts),
+                                            model_ref=model_ref):
+                continue  # Turned down before by this model, and nothing new to read
 
             try:
                 result = _enrich_entity(entity, excerpts, other_subjects)
