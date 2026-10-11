@@ -1,0 +1,390 @@
+# =============================================================================
+# split-switch-trial.yml - Phase 1 spike of the 5.2 install/update overhaul.
+#
+# THROWAWAY: lives only on spike/split-switch, never merged. Builds a 5.0.0
+# install in the PLAN.md layout on Windows, macOS and Linux runners, stages
+# 5.1.0 next to it (clone python/, sync changed wheels from PyPI against the
+# hashed 5.1.0 lock, unpack code and assets, compile, self-test), switches
+# with the real launcher running, and measures everything. Uploads JSON
+# results and logs; the macOS kit artifact (a notarized trial app) only when
+# run.json asks for it.
+#
+# workflow_dispatch only works for workflows on the default branch, so runs
+# are requested by pushing a change to spike/split-switch/run.json on this
+# branch (the push trigger below is limited to that file and branch).
+# =============================================================================
+
+name: Split-and-switch trial (spike)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [spike/split-switch]
+    paths: [spike/split-switch/run.json]
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.12.22"
+  WINDOWS_PYTHON_VERSION: "3.13.2"
+  NODE_VERSION: "24.15.0"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      windows: ${{ steps.cfg.outputs.windows }}
+      macos: ${{ steps.cfg.outputs.macos }}
+      linux: ${{ steps.cfg.outputs.linux }}
+      notarize: ${{ steps.cfg.outputs.notarize }}
+      kit_artifact: ${{ steps.cfg.outputs.kit_artifact }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: spike/split-switch/run.json
+          sparse-checkout-cone-mode: false
+      - id: cfg
+        run: |
+          python3 - <<'PY'
+          import json, os
+          cfg = json.load(open("spike/split-switch/run.json", encoding="utf-8"))
+          out = {k: str(bool(cfg.get(k, d))).lower() for k, d in
+                 (("windows", True), ("macos", True), ("linux", True), ("notarize", True), ("kit_artifact", False))}
+          print(out)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key, value in out.items():
+                  fh.write(f"{key}={value}\n")
+          PY
+
+  parts:
+    needs: config
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/checkout@v7
+        with:
+          ref: v5.1.0
+          path: rb
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Tools
+        run: python -m pip install "uv==${UV_VERSION}" "packaging==26.2"
+      - name: Build 5.1.0 code and assets archives, hashed lock exports, wheel availability
+        run: >
+          python spike/split-switch/build_parts.py --repo rb --version 5.1.0 --git-dir .
+          --export-tags v4.5.0 v5.0.0 v5.1.0 --uv uv --out "$RUNNER_TEMP/parts"
+      - name: Today's lock (main) equals 5.1.0's?
+        run: |
+          git show origin/main:uv.lock | sha256sum
+          git show v5.1.0:uv.lock | sha256sum
+      - uses: actions/upload-artifact@v7
+        with:
+          name: split-switch-parts
+          path: ${{ runner.temp }}/parts
+          retention-days: 30
+
+  windows:
+    needs: [config, parts]
+    if: ${{ needs.config.outputs.windows == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Work folders, machine
+        run: |
+          $w = Join-Path $env:RUNNER_TEMP "ss"; $res = Join-Path $env:RUNNER_TEMP "results"
+          New-Item -ItemType Directory -Force $w, $res | Out-Null
+          "WORK=$w" >> $env:GITHUB_ENV
+          "RES=$res" >> $env:GITHUB_ENV
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfLogicalProcessors | Format-Table
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version | Format-Table
+          fsutil fsinfo volumeinfo C: | Select-String "File System Name"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.WINDOWS_PYTHON_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Tools
+        run: python -m pip install "uv==$env:UV_VERSION" "packaging==26.2" "psutil==7.2.2"
+      - uses: actions/checkout@v7
+        with:
+          ref: v5.0.0
+          path: rb
+          persist-credentials: false
+      - name: Build payload 5.0.0 (deterministic bytecode)
+        run: >
+          python spike/split-switch/build_payload.py --os windows --repo rb --version 5.0.0
+          --out "$env:WORK\payload-5.0.0" --python-version $env:WINDOWS_PYTHON_VERSION
+          --report "$env:RES\payload-5.0.0.json"
+      - uses: actions/download-artifact@v8
+        with:
+          name: split-switch-parts
+          path: ${{ runner.temp }}/parts
+      - name: Signatures (uv.exe from PyPI and from Astral's release, Python, a wheel .pyd)
+        continue-on-error: true
+        run: |
+          $uvPypi = (Get-Command uv).Source
+          $zip = Join-Path $env:WORK "uv-release.zip"
+          Invoke-WebRequest "https://github.com/astral-sh/uv/releases/download/$env:UV_VERSION/uv-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath (Join-Path $env:WORK "uv-release") -Force
+          $uvRel = Get-ChildItem (Join-Path $env:WORK "uv-release") -Recurse -Filter uv.exe | Select-Object -First 1
+          $py = Join-Path $env:WORK "payload-5.0.0\python"
+          $pyd = Get-ChildItem (Join-Path $py "Lib\site-packages\multidict") -Filter *.pyd | Select-Object -First 1
+          $rows = foreach ($f in @($uvPypi, $uvRel.FullName, (Join-Path $py "python.exe"), (Join-Path $py "python313.dll"), $pyd.FullName, (Join-Path $py "Scripts\pip.exe"))) {
+            $s = Get-AuthenticodeSignature $f
+            [pscustomobject]@{ File = $f; Status = "$($s.Status)"; Signer = "$($s.SignerCertificate.Subject)"; Sha256 = (Get-FileHash $f).Hash }
+          }
+          $rows | Format-Table -AutoSize | Out-String -Width 300
+          $rows | ConvertTo-Json | Set-Content (Join-Path $env:RES "signatures.json")
+          (Get-FileHash $uvPypi).Hash -eq (Get-FileHash $uvRel.FullName).Hash
+      - name: Trial
+        timeout-minutes: 240
+        run: >
+          python spike/split-switch/driver.py --os windows --payload "$env:WORK\payload-5.0.0"
+          --parts "$env:RUNNER_TEMP\parts" --uv (Get-Command uv).Source --work "$env:WORK\run"
+          --out "$env:RES" --config spike/split-switch/run.json
+      - name: Collect logs
+        if: ${{ always() }}
+        run: |
+          $data = Join-Path $env:WORK "run\rowbot-data"
+          if (Test-Path $data) { Get-ChildItem $data -Filter *.log* -Recurse | Copy-Item -Destination $env:RES -ErrorAction SilentlyContinue }
+          $root = Join-Path $env:LOCALAPPDATA "Programs\RowBotSplitTrial"
+          if (Test-Path $root) { Get-ChildItem $root -Force | Format-Table Name, LastWriteTime; Copy-Item (Join-Path $root "state.json") $env:RES -ErrorAction SilentlyContinue }
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: split-switch-windows
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+
+  linux:
+    needs: [config, parts]
+    if: ${{ needs.config.outputs.linux == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Work folders, machine
+        run: |
+          echo "WORK=$RUNNER_TEMP/ss" >> "$GITHUB_ENV"; echo "RES=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ss" "$RUNNER_TEMP/results"
+          df -hT "$HOME" "$RUNNER_TEMP"; nproc; lsb_release -a || true; ldd --version | head -1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Tools
+        run: python -m pip install "uv==${UV_VERSION}" "packaging==26.2" "psutil==7.2.2"
+      - uses: actions/checkout@v7
+        with:
+          ref: v5.0.0
+          path: rb
+          persist-credentials: false
+      - name: Build payload 5.0.0 (deterministic bytecode)
+        run: >
+          python spike/split-switch/build_payload.py --os linux --repo rb --version 5.0.0
+          --out "$WORK/payload-5.0.0" --report "$RES/payload-5.0.0.json"
+      - uses: actions/download-artifact@v8
+        with:
+          name: split-switch-parts
+          path: ${{ runner.temp }}/parts
+      - name: Trial
+        timeout-minutes: 200
+        run: >
+          python spike/split-switch/driver.py --os linux --payload "$WORK/payload-5.0.0"
+          --parts "$RUNNER_TEMP/parts" --uv "$(command -v uv)" --work "$WORK/run"
+          --out "$RES" --config spike/split-switch/run.json
+      - name: Collect logs
+        if: ${{ always() }}
+        run: |
+          find "$WORK/run" -maxdepth 3 -name '*.log*' -exec cp {} "$RES/" \; 2>/dev/null || true
+          cp "$HOME/rbtrial-xdg/row-bot/state.json" "$RES/" 2>/dev/null || true
+          ls -la "$HOME/rbtrial-xdg/row-bot" "$HOME/rbtrial-xdg/row-bot/releases" || true
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: split-switch-linux
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+
+  macos:
+    needs: [config, parts]
+    if: ${{ needs.config.outputs.macos == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 300
+    env:
+      CODESIGN_ID: "Developer ID Application: Siddharth Sachar (33PQRTZLNW)"
+      APP: /Applications/RowBotSplitTrial.app
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Work folders, machine
+        run: |
+          echo "WORK=$RUNNER_TEMP/ss" >> "$GITHUB_ENV"; echo "RES=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ss" "$RUNNER_TEMP/results"
+          df -h "$HOME" /Applications "$RUNNER_TEMP"; sysctl -n machdep.cpu.brand_string hw.ncpu; sw_vers
+          diskutil info / | grep -E "File System Personality|Device Node" || true
+      - name: Compile the trial tray host (fail fast)
+        run: |
+          xcrun clang -fobjc-arc -fblocks -framework Cocoa -mmacosx-version-min=11.0 -Wall \
+            spike/split-switch/TrialTrayHost.m -o "$WORK/row-bot-trial-host"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Tools
+        run: python -m pip install "uv==${UV_VERSION}" "packaging==26.2" "psutil==7.2.2"
+      - uses: actions/checkout@v7
+        with:
+          ref: v5.0.0
+          path: rb
+          persist-credentials: false
+      - name: Build unsigned payload 5.0.0 (deterministic bytecode)
+        run: >
+          python spike/split-switch/build_payload.py --os macos --repo rb --version 5.0.0
+          --out "$WORK/payload-5.0.0" --report "$RES/payload-5.0.0.json"
+      - uses: actions/download-artifact@v8
+        with:
+          name: split-switch-parts
+          path: ${{ runner.temp }}/parts
+      - name: Assemble the trial app (trial host, trial scripts, kit parts)
+        run: |
+          set -euo pipefail
+          B="$WORK/payload-5.0.0/Row-Bot.app"
+          cp "$WORK/row-bot-trial-host" "$B/Contents/MacOS/row-bot"
+          chmod +x "$B/Contents/MacOS/row-bot"
+          plutil -replace CFBundleIdentifier -string ai.row-bot.assistant.splittrial "$B/Contents/Info.plist"
+          mkdir -p "$B/Contents/Resources/trial/parts"
+          cp spike/split-switch/engine.py spike/split-switch/probe.py spike/split-switch/kit.py "$B/Contents/Resources/trial/"
+          for f in row-bot-code-5.1.0.tar.xz row-bot-assets-5.1.0.tar.xz pylock-5.1.0.toml requirements-hashed-5.1.0.txt row-bot-update-5.1.0.json; do
+            cp "$RUNNER_TEMP/parts/$f" "$B/Contents/Resources/trial/parts/"
+          done
+          plutil -p "$B/Contents/Info.plist"
+      - name: Import the Developer ID Application certificate
+        env:
+          APPLICATION_P12: ${{ secrets.APPLE_APPLICATION_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_APPLICATION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          APP_P12_PASSWORD="${APPLICATION_P12_PASSWORD:-$P12_PASSWORD}"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          printf '%s' "$APPLICATION_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          openssl pkcs12 -in "$RUNNER_TEMP/app.p12" -passin pass:"$APP_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/app.pem" >/dev/null 2>&1
+          openssl pkcs12 -export -in "$RUNNER_TEMP/app.pem" -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+            -passout pass:"$APP_P12_PASSWORD" -out "$RUNNER_TEMP/app.macos.p12" >/dev/null 2>&1
+          security import "$RUNNER_TEMP/app.macos.p12" -k "$KEYCHAIN_PATH" -f pkcs12 -P "$APP_P12_PASSWORD" -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/app.pem" "$RUNNER_TEMP/app.macos.p12"
+          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" >/dev/null 2>&1 || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security default-keychain -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c "Developer ID Application"
+      - name: Sign (release flags, every Mach-O, then the bundle) and install to /Applications
+        run: |
+          set -euo pipefail
+          B="$WORK/payload-5.0.0/Row-Bot.app"
+          python spike/split-switch/sign_mac.py --app "$B" --identity "$CODESIGN_ID" \
+            --entitlements rb/installer/entitlements.plist --report "$RES/sign-5.0.0.json"
+          START=$(date +%s)
+          codesign --force --options runtime --timestamp --entitlements rb/installer/entitlements.plist --sign "$CODESIGN_ID" "$B"
+          echo "bundle signing: $(( $(date +%s) - START )) s"
+          codesign --verify --deep --strict "$B"
+          ditto "$B" "$APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority" || true
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/RowBotSplitTrial.zip"
+          ls -la "$WORK/RowBotSplitTrial.zip"
+      - name: Submit for notarization in the background (one submission; never stapled)
+        if: ${{ needs.config.outputs.notarize == 'true' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          date +%s > "$RES/notary-start.txt"
+          nohup xcrun notarytool submit "$WORK/RowBotSplitTrial.zip" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --output-format json > "$RES/notary-submit.json" 2> "$RES/notary-submit.err" &
+          echo "submitted in background"
+      - name: Trial
+        timeout-minutes: 200
+        run: >
+          python spike/split-switch/driver.py --os macos --bundle "$APP"
+          --parts "$RUNNER_TEMP/parts" --uv "$(command -v uv)" --work "$WORK/run"
+          --out "$RES" --config spike/split-switch/run.json
+      - name: Notarization result, then Gatekeeper on the bundle after all the switches
+        if: ${{ always() && needs.config.outputs.notarize == 'true' }}
+        continue-on-error: true
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -uo pipefail
+          for i in $(seq 1 120); do
+            ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$RES/notary-submit.json" 2>/dev/null || true)
+            [ -n "$ID" ] && break; sleep 10
+          done
+          echo "submission id: $ID"; cat "$RES/notary-submit.err" | tail -5 || true
+          xcrun notarytool wait "$ID" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --timeout 60m --output-format json > "$RES/notary-wait.json" || true
+          echo "{\"wall_seconds\": $(( $(date +%s) - $(cat "$RES/notary-start.txt") ))}" > "$RES/notary-time.json"
+          xcrun notarytool log "$ID" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" > "$RES/notary-log.json" || true
+          cat "$RES/notary-wait.json" "$RES/notary-time.json"
+          codesign --verify --deep --strict --verbose=2 "$APP" > "$RES/final-codesign.txt" 2>&1; echo "codesign rc=$?" >> "$RES/final-codesign.txt"
+          spctl --assess --type execute -vv "$APP" > "$RES/final-spctl.txt" 2>&1; echo "spctl rc=$?" >> "$RES/final-spctl.txt"
+          cat "$RES/final-codesign.txt" "$RES/final-spctl.txt"
+      - name: Collect logs
+        if: ${{ always() }}
+        run: |
+          R="$HOME/Library/Application Support/RowBotSplitTrial"
+          cp "$R/host.log" "$R/state.json" "$RES/" 2>/dev/null || true
+          find "$R/data" -maxdepth 2 -name '*.log*' -exec cp {} "$RES/" \; 2>/dev/null || true
+          ls -la "$R" "$R/versions" || true
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: split-switch-macos
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+      - name: Kit artifact (notarized trial app for the Phase 5 manual check)
+        if: ${{ needs.config.outputs.kit_artifact == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: split-switch-macos-kit
+          path: ${{ runner.temp }}/ss/RowBotSplitTrial.zip
+          retention-days: 90
