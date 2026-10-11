@@ -1,5 +1,6 @@
 import type { ClientController } from '../../api/controller';
 import type { useOverlay } from '../../ui/overlays';
+import { humanizeToken } from '../../ui/format';
 import GoalProfileSettings, {
   type GoalProfileSettingsSession,
   type ProfileSummary,
@@ -79,7 +80,8 @@ export function openAgentProfiles({
               ?.items ?? []
           ).map((tool) => ({
             id: tool.id,
-            label: tool.label,
+            // The cached list may only know a tool by its ID.
+            label: tool.label === tool.id ? humanizeToken(tool.id) : tool.label,
             detail: TOOL_SOURCES[tool.source] ?? tool.source,
           }))
         }
