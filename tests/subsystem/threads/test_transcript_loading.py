@@ -36,6 +36,30 @@ def test_langchain_messages_to_ui_messages_preserves_visible_shapes():
     ]
 
 
+def test_a_chart_kept_in_a_results_artifact_is_still_one_of_the_turns_charts():
+    """WP D2: the figure is in the artifact, the model's summary in the text."""
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+    from row_bot.message_projection import langchain_messages_to_ui_messages
+    from row_bot.rendered_results import CHART_ARTIFACT_KEY
+
+    messages = [
+        HumanMessage(content="Chart it."),
+        AIMessage(content="", tool_calls=[{"id": "call_1", "name": "create_chart", "args": {}}]),
+        ToolMessage(
+            content="Chart created\nChart out_0123456789abcdef: shown to the person as an interactive bar chart.",
+            name="create_chart",
+            tool_call_id="call_1",
+            artifact={CHART_ARTIFACT_KEY: {"figure": '{"data":[]}', "label": "Chart created"}},
+        ),
+        AIMessage(content="Here is the chart."),
+    ]
+
+    (_user, answer) = langchain_messages_to_ui_messages(messages)
+
+    assert answer["charts"] == ['{"data":[]}']
+    assert answer["tool_results"][0]["name"] == "create_chart"
+
+
 def test_checkpoint_tool_invoke_results_recover_distinct_underlying_names():
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from row_bot.message_projection import langchain_messages_to_ui_messages

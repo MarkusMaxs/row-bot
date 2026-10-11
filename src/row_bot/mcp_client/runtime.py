@@ -881,10 +881,10 @@ class McpServerRuntime:
                     raise TimeoutError("MCP deadline expired")
                 if not self.session:
                     raise RuntimeError(f"MCP server '{self.name}' is not connected")
-                output_limit = int(self.cfg.get("output_limit", 24000))
                 log_event("mcp.tool.call", server=self.name, tool=tool_name)
                 result = await self.session.call_tool(tool_name, arguments or {})
-                return normalize_call_result(result, output_limit=output_limit)
+                # Whole: the caller shows the model up to the server's output_limit, with a handle to the rest.
+                return normalize_call_result(result, output_limit=0)
 
     async def read_view(self, uri: str, *, deadline: float) -> dict[str, Any]:
         """One ``ui://`` view's HTML and its ``_meta.ui`` (CSP, border), from this connection only."""
@@ -956,11 +956,8 @@ class McpServerRuntime:
             else:
                 mime = getattr(item, "mimeType", "") or getattr(item, "mime_type", "") or "binary"
                 parts.append(f"[MCP resource content omitted: {mime}]")
-        output = "\n\n".join(parts)
-        limit = int(self.cfg.get("output_limit", 24000))
-        if len(output) > limit:
-            output = output[:limit] + f"\n\n[Truncated MCP resource at {limit} characters]"
-        return output
+        # Whole: the caller shows the model up to the server's output_limit, with a handle to the rest.
+        return "\n\n".join(parts)
 
     async def list_prompts(self) -> str:
         if not self.session:
@@ -1450,6 +1447,25 @@ def _validate_bound_runtime(server_name: str, expected: Any, *, tool_name: str =
             raise RuntimeError("MCP policy changed; refresh the capability before execution")
 
 
+# Room for the notice and markers a shortened result gains, so it stays within the agent's own cap.
+_NOTICE_ROOM = 1_000
+
+
+def _bounded_for_model(text: str, cfg: dict[str, Any], source: str) -> str:
+    """An MCP result as the model sees it: whole up to the server's ``output_limit``, else its head
+    and tail plus a handle (WP D2). The full text is saved in the conversation's tool outputs, and
+    ``read_tool_output`` pages through it; reading it back is fenced, as MCP results are."""
+    from row_bot.tool_outputs import RESULT_CAP_CHARS, bounded
+
+    try:
+        limit = int(cfg.get("output_limit", 24000) or 24000)
+    except (TypeError, ValueError):
+        limit = 24000
+    # The agent caps every result at RESULT_CAP_CHARS too; one handle per result, not two.
+    limit = max(1, min(limit, RESULT_CAP_CHARS - _NOTICE_ROOM))
+    return bounded(str(text), tool_name=source, max_chars=limit, external=True)
+
+
 def _call_tool_sync(server_name: str, tool_name: str, kwargs: dict[str, Any], *, expected: Any = None) -> str:
     with _runtime_lock:
         runtime = _servers.get(server_name)
@@ -1462,12 +1478,14 @@ def _call_tool_sync(server_name: str, tool_name: str, kwargs: dict[str, Any], *,
         validate = lambda: _validate_bound_runtime(server_name, expected, tool_name=tool_name)
         validate()
     future = _schedule(runtime.call_tool(tool_name, kwargs, deadline=deadline, validate=validate))
-    return _future_result_with_generation_cancellation(
+    result = _future_result_with_generation_cancellation(
         future,
         timeout=max(0, deadline - time.monotonic()),
         stopped_message="MCP tool call stopped by user.",
         label=f"mcp_tool.{server_name}.{tool_name}.cancel",
     )
+    # Bounded here, on the agent's side, where the conversation the handle belongs to is known.
+    return _bounded_for_model(result, runtime.cfg, prefixed_tool_name(server_name, tool_name))
 
 
 def _make_tool_func(server_name: str, tool_name: str, *, enforce_policy: bool = False) -> Callable[..., str]:
@@ -1519,12 +1537,13 @@ def _make_resource_read_func(server_name: str, *, enforce_policy: bool = False) 
             raise RuntimeError(f"MCP server '{server_name}' is not running")
         deadline = time.monotonic() + float(runtime.cfg.get("tool_timeout", 120))
         future = _schedule(_authorized_operation(server_name, expected, "resources_enabled", lambda: runtime.read_resource(uri), deadline))
-        return _future_result_with_generation_cancellation(
+        result = _future_result_with_generation_cancellation(
             future,
             timeout=max(0, deadline - time.monotonic()),
             stopped_message="MCP resource read stopped by user.",
             label=f"mcp_resource.{server_name}.cancel",
         )
+        return _bounded_for_model(result, runtime.cfg, prefixed_tool_name(server_name, "read_resource"))
     return _run
 
 

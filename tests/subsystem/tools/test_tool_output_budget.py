@@ -93,7 +93,7 @@ def test_a_conversation_id_with_a_colon_still_gets_its_own_folder(data_dir, conv
     assert "End of output." in tool_outputs.read_tool_output(handle, offset=offset, limit=1_000_000)
 
 
-def test_a_tool_message_is_capped_when_created_and_rendered_results_are_left_alone(data_dir, conversation):
+def test_a_tool_message_is_capped_when_created_and_reader_pages_are_left_alone(data_dir, conversation):
     big = _numbered(5_000)  # ~180K characters
     capped = tool_outputs.cap_tool_message(ToolMessage(content=big, name="custom_plugin_tool", tool_call_id="c1"))
 
@@ -103,8 +103,6 @@ def test_a_tool_message_is_capped_when_created_and_rendered_results_are_left_alo
     assert big.startswith(capped.content.split("\n", 1)[1][:offset])
     assert _read_to_the_end(handle, offset) == big[offset:]
 
-    chart = "__CHART__:" + "{" + "1" * 200_000 + "}\n\nChart created"
-    assert tool_outputs.cap_tool_message(ToolMessage(content=chart, name="create_chart", tool_call_id="c2")).content == chart
     page = "x" * 200_000
     for name in (tool_outputs.READER_TOOL_NAME, "agent_wait", "delegate_work"):
         message = ToolMessage(content=page, name=name, tool_call_id="c3")

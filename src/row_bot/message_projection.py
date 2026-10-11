@@ -6,6 +6,7 @@ owned by ConversationProjection; importing this converter loads no UI state.
 from __future__ import annotations
 
 from row_bot.file_context import ATTACHMENT_CONTEXT_START, ATTACHMENT_CONTEXT_END
+from row_bot.rendered_results import chart_of_artifact
 from row_bot.turn_context import is_turn_context_message
 
 
@@ -131,7 +132,11 @@ def langchain_messages_to_ui_messages(messages: list) -> list[dict]:
             )
             content_value = getattr(m, "content", "")
             tool_content = content_value if isinstance(content_value, str) else str(content_value)
-            if tool_content and tool_content.startswith("__CHART__:"):
+            # A chart kept for the client in the result's artifact (WP D2); older results carry it in the text.
+            chart = chart_of_artifact(getattr(m, "artifact", None))
+            if chart is not None:
+                pending_charts.append(chart[0])
+            elif tool_content and tool_content.startswith("__CHART__:"):
                 marker_end = tool_content.find("\n\n", 10)
                 if marker_end == -1:
                     fig_json = tool_content[10:]
