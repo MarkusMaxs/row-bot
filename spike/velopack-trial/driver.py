@@ -531,11 +531,12 @@ def install(args: argparse.Namespace, logdir: Path) -> dict:
     if IS_WIN:
         proc = sh([args.setup, "--silent", "--log", logdir / "setup.log"], timeout=900)
         installer_seconds = time.time() - started
-        first = wait_event(lambda e: e["event"] == "hook_first_run", 180)
+        # Setup --silent runs the install hook but does not start the app.
+        hook = wait_event(lambda e: e["event"] == "hook_after_install", 30)
         result = {
             "rc": proc.returncode,
             "setup_seconds": round(installer_seconds, 1),
-            "setup_to_first_run_seconds": round(first["t"] - started, 1) if first else None,
+            "install_hook_seconds_after_setup_start": round(hook["t"] - started, 1) if hook else None,
         }
     else:
         stage = HOME / "unzip"
