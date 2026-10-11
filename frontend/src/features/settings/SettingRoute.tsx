@@ -146,6 +146,54 @@ export default function SettingRoute() {
       owner: new SettingsDraftOwner(),
     };
   const [processingSelectionError, setProcessingSelectionError] = useState('');
+  // Settings processes on its own, never through whichever chat was open last.
+  const processBatch = (
+    batch: Parameters<typeof batchTitle>[0] & { revision: string },
+  ) => {
+    try {
+      documentProcessingOwner
+        ?.get()
+        ?.select(
+          SETTINGS_PROCESSING_SCOPE,
+          batch.id,
+          batch.revision,
+          batchTitle(batch),
+        );
+      setProcessingSelectionError('');
+    } catch {
+      setProcessingSelectionError(
+        'Check processing before choosing another batch.',
+      );
+    }
+  };
+  // "Add and process" (F26): once the queue lists the new batch, open its
+  // processing review. The queue is already being read again for the upload,
+  // so wait for that read rather than starting a second one.
+  const processWhenListed = (batchId: string) => {
+    const queue = documentQueueOwner?.get();
+    if (!queue) return;
+    const listed = () =>
+      queue.session
+        .getSnapshot()
+        .batches?.items.find((item) => item.id === batchId);
+    let stop = () => {};
+    const open = () => {
+      const batch = listed();
+      if (!batch) return false;
+      stop();
+      processBatch(batch);
+      showYourDocuments();
+      return true;
+    };
+    if (open()) return;
+    stop = queue.session.subscribe(() => void open());
+    void queue.session.load().catch(() => undefined);
+    window.setTimeout(() => stop(), 30_000);
+  };
+  const showYourDocuments = () =>
+    document
+      .querySelector('[data-setting-anchor="your-documents"]')
+      ?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   const [selectedSubscription, setSelectedSubscription] = useState<{
     provider: string;
     action: 'connect' | 'manage' | 'disconnect';
@@ -682,44 +730,32 @@ export default function SettingRoute() {
                     if (queue && !queue.hasRetained())
                       void queue.session.load().catch(() => undefined);
                   }}
+                  // One list, one action (F26): the model that reads them sits beside "Add and process".
+                  modelControl={
+                    settingsSnapshot &&
+                    mutation && (
+                      <DocumentModelSetting
+                        snapshot={settingsSnapshot.documents}
+                        mutation={mutation}
+                        models={state.handshake?.models ?? []}
+                      />
+                    )
+                  }
+                  onAddAndProcess={
+                    documentProcessingOwner?.get() && documentQueueOwner?.get()
+                      ? processWhenListed
+                      : undefined
+                  }
+                  onView={showYourDocuments}
                 />
               )}
-              {settingsSnapshot && mutation && (
-                <div className="settings-group-surface">
-                  <DocumentModelSetting
-                    snapshot={settingsSnapshot.documents}
-                    mutation={mutation}
-                    models={state.handshake?.models ?? []}
-                  />
-                </div>
-              )}
             </SettingsGroup>
-            <SettingsGroup title="Your documents">
+            <SettingsGroup title="Your documents" anchor="your-documents">
               {documentQueueOwner?.get() && (
                 <DocumentQueuePanel
                   owner={documentQueueOwner.get()!}
                   onProcess={
-                    documentProcessingOwner?.get()
-                      ? (batch) => {
-                          // Settings processes on its own, never through
-                          // whichever chat was open last.
-                          try {
-                            documentProcessingOwner
-                              .get()!
-                              .select(
-                                SETTINGS_PROCESSING_SCOPE,
-                                batch.id,
-                                batch.revision,
-                                batchTitle(batch),
-                              );
-                            setProcessingSelectionError('');
-                          } catch {
-                            setProcessingSelectionError(
-                              'Check processing before choosing another batch.',
-                            );
-                          }
-                        }
-                      : undefined
+                    documentProcessingOwner?.get() ? processBatch : undefined
                   }
                 />
               )}

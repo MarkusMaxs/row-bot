@@ -376,6 +376,19 @@ def test_batch_rows_are_named_by_their_documents_and_stay_reviewable(client):
     assert (rows[single].name,rows[single].document_count) == ("only.txt",1)
     jobs = api.read_document_queue(kind="jobs",batch_id=batch,validate=lambda:None).items
     assert all(item.document_count is None for item in jobs)
+
+
+def test_a_batch_row_counts_its_failed_documents(client):
+    """B330: a failure pauses the rest of a batch; its row says how many failed."""
+    api,service,_ = client
+    batch = service.create_batch()
+    jobs = [service.create_staging_job(batch,index,name) for index,name in enumerate(("a.pdf","b.pdf","c.pdf"))]
+    with contextlib.closing(service._connect()) as conn,conn:
+        conn.execute("UPDATE document_jobs SET status='failed' WHERE id=?",(jobs[0].id,))
+    rows = {item.id:item for item in api.read_document_queue(validate=lambda:None).items}
+    assert rows[batch].failed_count == 1
+    files = api.read_document_queue(kind="jobs",batch_id=batch,validate=lambda:None).items
+    assert all(item.failed_count is None for item in files)
     # The page's batch revision is the reviewed one: the name is display only.
     review = api.read_document_control_review("document.batch.pause",
         {"target_id":batch,"revision":rows[batch].revision},validate=lambda:None)

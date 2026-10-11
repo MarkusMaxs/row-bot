@@ -1293,6 +1293,21 @@ def _build_vector_projection(*, cancelled=None, allow_embedding: bool = True,
             conn.close()
 
 
+def build_missing_index(*, cancelled: Callable[[], bool] | None = None) -> None:
+    """Build the vector index when knowledge exists but none was built yet (its saves deferred it).
+
+    For callers whose provider work was disclosed and approved, such as document processing: a projection
+    batch's dedup refuses a missing index rather than repair it from inside (B331).
+    """
+    if _skip_reindex or _projection_state()["generation"] or not _has_knowledge():
+        return
+    try:
+        rebuild_index(cancelled=cancelled)
+    except Exception as exc:
+        # No search model yet: the work stays queued for repair, and the batch goes on as it did before.
+        logger.info("Memory search index not built before a batch: %s", exc)
+
+
 def rebuild_index(*, cancelled: Callable[[], bool] | None = None) -> None:
     try:
         _publish_vector_projection(cancelled=cancelled)

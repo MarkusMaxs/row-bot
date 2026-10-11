@@ -44,6 +44,8 @@ class QueueItem:
     revision: str
     # A batch reads as its first document's name and how many it holds.
     document_count: int | None = None
+    # How many of a batch's documents failed: a failure pauses the rest (B330).
+    failed_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ def _item(row):
     value = _raw(row)
     # Display-only batch columns stay out of the reviewed revision.
     display_name, count = value.pop("display_name", None), value.pop("display_count", None)
+    failed = value.pop("failed_count", None)
     job = "batch_id" in value
     if value["status"] not in (JOB_STATUSES if job else BATCH_STATUSES):
         raise ValueError("Unknown document state")
@@ -92,10 +95,12 @@ def _item(row):
     if not job:
         if type(count) is not int or not 0 <= count <= 2**53-1:
             count = None
+        if type(failed) is not int or not 0 <= failed <= 2**53-1:
+            failed = None
         if isinstance(display_name, str) and len(display_name) <= 256 and is_safe_document_name(display_name):
             name = display_name
     else:
-        count = None
+        count = failed = None
     for key in ("pause_requested","cancel_requested"):
         flag = value.get(key,0)
         if type(flag) is not int or flag not in {0,1}:
@@ -106,7 +111,8 @@ def _item(row):
     return QueueItem(value["id"], common._id(value["batch_id"]) if job else None, name,
         value["status"],value.get("stage"),bool(value.get("pause_requested")),bool(value["cancel_requested"]),
         number("attempt"),number("index_progress_current"),number("index_progress_total"),
-        number("extraction_progress_current"),number("extraction_progress_total"),code,common._digest(value),count)
+        number("extraction_progress_current"),number("extraction_progress_total"),code,common._digest(value),count,
+        failed)
 
 
 def read_document_queue(*, kind: str = "batches", batch_id: str | None = None,
@@ -137,6 +143,7 @@ def read_document_queue(*, kind: str = "batches", batch_id: str | None = None,
             (SELECT j.original_name FROM document_jobs j WHERE j.batch_id=b.id
              ORDER BY j.sequence,j.created_at,j.id LIMIT 1) display_name,
             (SELECT count(*) FROM document_jobs j WHERE j.batch_id=b.id) display_count,
+            (SELECT count(*) FROM document_jobs j WHERE j.batch_id=b.id AND j.status='failed') failed_count,
             1 matched FROM document_batches b WHERE {where} ORDER BY b.created_at,b.id"""
     else:
         where = "batch_id=?" if batch_id else "1"

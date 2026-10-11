@@ -195,8 +195,43 @@ def test_internal_batch_with_no_prior_generation_never_starts_provider(projectio
         add(kg)
         # A fresh profile: nothing saved before the batch, so nothing to compare against (B323).
         assert kg.semantic_search("New source requires explicit projection") == []
-    add(kg, "Saved before the next batch")
+
+
+def test_a_missing_index_still_refuses_inside_a_batch_until_built_first(projection_stack, monkeypatch):
+    """B331: memories saved while the index was deferred. A batch's own search never repairs; a caller whose
+    provider work was approved (document processing) builds the missing index first, and dedup then works."""
+    kg, embedding, _fingerprint, _config = projection_stack
+    monkeypatch.setattr(kg, "_skip_reindex", False)
     with kg.projection_batch(drain_on_exit=False):
-        add(kg, "Another new source")
+        saved = add(kg, "Saved while the index was deferred")
+    with kg.projection_batch(drain_on_exit=False):
         with pytest.raises(kg.MemorySemanticUnavailable):
             kg.semantic_search("Prior knowledge without an index still needs a rebuild")
+
+    kg.build_missing_index()
+    with kg.projection_batch(drain_on_exit=False):
+        monkeypatch.setattr(kg, "rebuild_index", lambda **_kw: pytest.fail("a batch query must not repair"))
+        add(kg, "A new source in the batch")
+        found = kg.semantic_search("Saved while the index was deferred", top_k=5, threshold=0)
+    assert [entity["id"] for entity in found] == [saved["id"]]
+    assert embedding.batches
+
+
+def test_building_a_missing_index_does_nothing_on_a_fresh_profile_or_a_built_one(projection_stack, monkeypatch):
+    kg, _embedding, _fingerprint, _config = projection_stack
+    calls = []
+    monkeypatch.setattr(kg, "rebuild_index", lambda **_kw: calls.append("rebuild"))
+    kg.build_missing_index()
+    assert calls == []
+
+
+def test_a_missing_index_that_cannot_be_built_leaves_processing_as_it_was(projection_stack, monkeypatch):
+    kg, embedding, _fingerprint, _config = projection_stack
+    monkeypatch.setattr(kg, "_skip_reindex", False)
+    with kg.projection_batch(drain_on_exit=False):
+        add(kg, "Saved while the index was deferred")
+    embedding.failure = RuntimeError("no search model yet")
+
+    kg.build_missing_index()  # says so in the log; the document goes on
+
+    assert not kg.memory_vector_status()["ready"]
