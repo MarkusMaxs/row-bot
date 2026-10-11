@@ -173,18 +173,27 @@ export function UpdateControls({ owner }: { owner: Owner }) {
     return () => abort.abort();
   }, [load]);
   const phase = snapshot?.engine.phase ?? 'idle';
-  // Background work moves on its own: follow it while it does.
+  // Background work moves on its own: follow it while it does. A restart
+  // takes the server away for a few seconds, so a failed read tries again.
   useEffect(() => {
     if (!MOVING.has(phase)) return;
     const abort = new AbortController();
-    const timer = setTimeout(() => {
-      owner.load(abort.signal).then(
-        (value) => setSnapshot(value),
-        () => undefined,
-      );
-    }, POLL_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = (delay: number) => {
+      timer = setTimeout(() => {
+        owner.load(abort.signal).then(
+          (value) => {
+            if (!abort.signal.aborted) setSnapshot(value);
+          },
+          () => {
+            if (!abort.signal.aborted) read(Math.min(delay * 2, 10_000));
+          },
+        );
+      }, delay);
+    };
+    read(POLL_MS);
     return () => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       abort.abort();
     };
   }, [phase, snapshot, owner]);

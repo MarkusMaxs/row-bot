@@ -272,14 +272,25 @@ class Client:
             headers.update(self.headers)
         if idempotency:
             headers["Idempotency-Key"] = idempotency
-        request = urllib.request.Request(
-            self.base + path, data=None if body is None else json.dumps(body).encode(), method=method, headers=headers,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - loopback
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            raise AssertionError(f"{method} {path}: HTTP {error.code} {error.read()[:400]!r}") from None
+        # /readyz answers before startup has finished admitting commands: a
+        # retryable 503 (or a refused connection) is tried again for a while.
+        deadline = time.monotonic() + 90
+        while True:
+            request = urllib.request.Request(
+                self.base + path, data=None if body is None else json.dumps(body).encode(), method=method,
+                headers=headers,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 - loopback
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                detail = error.read()[:400]
+                if error.code != 503 or time.monotonic() > deadline:
+                    raise AssertionError(f"{method} {path}: HTTP {error.code} {detail!r}") from None
+            except (urllib.error.URLError, OSError):
+                if time.monotonic() > deadline:
+                    raise
+            time.sleep(1)
 
     def updates(self) -> dict:
         return self._call("GET", "/api/v1/system/updates")
