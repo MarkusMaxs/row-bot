@@ -123,8 +123,9 @@ For a design, read its typed setup options for Deck, Document, Landing, App
 mockup or Storyboard and submit the supported template/canvas, name and brief.
 Creation saves the artifact, associates a conversation and binds
 it without invoking generation. For a workspace, request
-`POST /api/v1/resources/folder-selection` from an authenticated local owner. The
-host picker returns a short-lived session-scoped grant; submit that grant rather
+`POST /api/v1/resources/folder-selection` from the desktop app on the computer
+Row-Bot runs on (other devices get `desktop_only`; the picker opens on that
+screen). The host picker returns a short-lived session-scoped grant; submit that grant rather
 than a renderer-supplied absolute path. Registration accepts an existing folder
 and saves registry metadata. It performs no Git initialization, cloning,
 worktree creation, dependency installation, process launch or source write.

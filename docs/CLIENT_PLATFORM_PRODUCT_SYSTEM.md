@@ -143,8 +143,8 @@ activity ring, name and status, whose button opens Buddy settings) and the
 Settings gear. Above them, one attention indicator appears only when
 something needs the person and is quiet when everything is healthy (no
 permanent health dot): "N things need attention" opens Monitor, "Update to X
-available" opens Updates (local owner only; "Remind me later" leaves that
-version out for a day on the device). It reads `GET /monitor/attention` every
+available" opens Updates (on every signed-in device; "Remind me later" leaves
+that version out for a day on the device). It reads `GET /monitor/attention` every
 minute while visible; the server counts Python state only (channels set to
 start but stopped or unreachable or waiting for a scan, a tunnel that isn't
 running, enabled plugins that didn't load, turned-on MCP servers that aren't
@@ -285,8 +285,9 @@ end. Loaded history sits in an `aria-live="off"` wrapper inside the log.
   latest picture (in memory only, read by revision, `no-store`, hidden while
   paused or waiting for approval, with a line saying why), and Pause ("you
   take over"), Resume and Stop. A paused turn shows the card instead of an
-  approval card; denying a pause is Stop. Only the local owner on a direct
-  loopback connection controls it; other devices see the trace.
+  approval card; denying a pause is Stop. The picture and controls are this computer's
+  own screen, so only the desktop app on it shows them (a capability, not a
+  permission); other devices see the trace.
 - A server-started step (a goal's next turn, work continuing in a design or
   folder the reply created) is a quiet centred note ("Goal · turn 2 of 10",
   "Continuing in Tiny date app"), never the person's bubble; Retry and Send
@@ -443,14 +444,16 @@ notice ends (`onEnd`); Undo sends nothing. If the page goes away first, nothing
 is sent and the conversation stays.
 
 **Settings › Data** (decision 21) has three parts. *Back up and restore*
-(local owner on this computer only; other devices read that backups belong
-to this computer): Back up now writes one zip to the workspace's Backups
+(any signed-in device): Back up now writes one zip to the workspace's Backups
 folder in the background — conversations, memories, workflows, designs and
 settings, read through SQLite's backup API — and never keys, sign-ins,
 browser or channel sessions, caches, logs or runtime files; webhook secrets
 and MCP headers/env are blanked, and the archive's manifest lists what to set
-up again. The page shows the last backup time and Show in folder. Restore
-from backup is desktop-only: one picked .zip (a one-use grant, never a path)
+up again. The page shows the last backup time and, in the desktop app on this
+computer, Show in folder (it opens the file manager there). A backup never
+holds its own folder, the workspace or, when the home folder is the data
+folder (Docker), the home's hidden files; a restore leaves them where they
+are. Restore from backup is desktop-only: one picked .zip (a one-use grant, never a path)
 is checked (foreign, newer, unsafe or secret-bearing archives are refused),
 described with what to sign in to again, and staged only after "Restore on
 restart" confirms that exact review; a staged restore can be cancelled. On
@@ -497,8 +500,8 @@ plugin channel gets its settings as one step, Start says it starts again with
 Row-Bot, and "Send a test message to me" sends one message to the person's
 own account only after a confirmation. A channel that needs a public address
 opens the tunnel itself and shows "Reachable at <address>" with Copy.
-WhatsApp shows "Waiting for a scan" and the live QR (read by the owner on
-this computer only) and Reset session asks first. A field supplied by the
+WhatsApp shows "Waiting for a scan" and the live QR (on any signed-in device,
+to scan from another one) and Reset session asks first. A field supplied by the
 environment says so and has no Clear. Accounts: GitHub (CLI or token, Check),
 Google (Cloud project, consent screen, Desktop client, file, Authenticate), X
 (portal, callback address, keys, Authenticate). Plugins: the README as setup
@@ -688,10 +691,10 @@ irreversibly is one reviewed step; destructive ones keep their confirmation.
   Escape) and hands focus back to Present when it ends; Present fills the
   screen (Escape leaves full screen and ends it; notes stay off the audience's
   screen). Export is four format buttons (PDF, PNG, PowerPoint, HTML; pages and
-  PowerPoint style under Options): on this computer one click exports and saves
-  a copy into the workspace's Exports folder, then offers Open and Show in
-  folder (local owner on direct loopback only); other devices get a Download
-  button. Exports wait until the panel shows the saved version. Publishing
+  PowerPoint style under Options): in the desktop app on this computer one click
+  exports and saves a copy into the workspace's Exports folder, then offers
+  Open and Show in folder (they open an app or the file manager on its
+  screen); other devices get a Download button. Exports wait until the panel shows the saved version. Publishing
   asks once ("Publish these N pages at a local link? It opens on this computer
   only."); the Share sheet then shows the saved link with Copy link, Open, a QR
   code for remote links (drawn locally) and Unpublish. Sending to a channel or
