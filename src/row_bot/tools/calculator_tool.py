@@ -137,17 +137,8 @@ _MATH_NAMES = {
 
 
 class _CalculateInput(BaseModel):
-    expression: str = Field(
-        description=(
-            "A mathematical expression to evaluate. Supports standard "
-            "operators (+, -, *, /, //, %, **) and functions like "
-            "sqrt(), sin(), cos(), log(), round(), abs(), factorial(), etc. "
-            "Constants: pi, e, tau. Examples: '2 ** 10', 'sqrt(144)', "
-            "'sin(radians(45))', 'log2(1024)', 'factorial(10)'. Dates: "
-            "weekday('2026-10-18'), days_between(today(), '2026-12-25'), "
-            "add_days(today(), 10), add_months('2026-01-31', 1)."
-        )
-    )
+    # The functions are listed once, in the tool description.
+    expression: str = Field(description="The expression, e.g. '2 ** 10' or 'days_between(today(), \"2026-12-25\")'.")
     text: str = Field(
         default="",
         description="Optional text the expression can use as `text`, e.g. len(text) to count a post's characters.",
@@ -204,17 +195,13 @@ class CalculatorTool(BaseTool):
                 func=_calculate,
                 name="calculate",
                 description=(
-                    "Evaluate a mathematical expression. Supports +, -, *, /, "
-                    "//, %, ** operators and functions: sqrt, sin, cos, tan, "
-                    "log, log2, log10, abs, round, ceil, floor, factorial, "
-                    "comb, perm, gcd, lcm, pow, min, max, sum, radians, "
-                    "degrees, hypot. Constants: pi, e, tau. Dates and "
-                    "durations (local time): today(), now(), date('2026-10-18'), "
-                    "weekday(d), add_days(d, n), add_hours(d, n), add_months(d, n), "
-                    "days_between(a, b), hours_between(a, b). Text: len(text) "
-                    "with the text in `text`. Use this instead of the shell "
-                    "for dates, weekdays and lengths. Examples: 'sqrt(144)', "
-                    "'weekday(\"2026-10-18\")', 'len(text)'."
+                    "Evaluate a math, date or text-length expression. Operators: +, -, *, /, //, %, **. "
+                    "Functions: sqrt, cbrt, pow, abs, round, ceil, floor, trunc, int, float, min, max, sum, "
+                    "log, log2, log10, sin, cos, tan, asin, acos, atan, atan2, radians, degrees, hypot, "
+                    "factorial, comb, perm, gcd, lcm. Constants: pi, e, tau. Dates and durations (local "
+                    "time): today(), now(), date('2026-10-18'), weekday(d), add_days(d, n), add_hours(d, n), "
+                    "add_months(d, n), days_between(a, b), hours_between(a, b). Text: len(text), with the "
+                    "text in `text`. Use this instead of the shell for dates, weekdays and lengths."
                 ),
                 args_schema=_CalculateInput,
             )

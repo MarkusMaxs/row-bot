@@ -174,6 +174,46 @@ request that carried cache instructions is retried once without them. No other
 "cut short" notice. That covers OpenAI-style `finish_reason: "length"`, Ollama
 `done_reason: "length"` and Anthropic `stop_reason: "max_tokens"`.
 
+## Tool schemas and results
+
+Every bound tool's schema is part of each request's prefix, so each topic has
+one home:
+
+- scheduling guidance is in the `task_create` description; the system prompt
+  only points to it;
+- status categories and settings are enums on `row_bot_status` and
+  `row_bot_update_setting`, explained in `row_bot_status_guide`;
+- memory rules are in the system prompt, not repeated in each memory tool;
+- closed sets are JSON-schema enums, and ids the runtime already knows (the
+  parent thread, run and orchestration, a goal's conversation) are not schema
+  fields;
+- descriptions do not start with the tool's display name.
+
+`tests/subsystem/tools/test_tool_schema_budget.py` keeps each default tool's
+schema size on record (`tests/snapshots/tools/default_tool_schema_sizes.txt`).
+Record a deliberate change with `ROW_BOT_UPDATE_SNAPSHOTS=1`.
+
+Tool results are bounded once, when they are created (`row_bot/tool_outputs.py`):
+
+- A result over about 25K tokens (100,000 characters) keeps its head and tail,
+  after a notice naming a handle. The full text is kept for the conversation
+  under the data folder (`tool_outputs/`) and removed with it.
+- `read_tool_output(handle, offset)` pages through it. It is bound with every
+  Agent tool set.
+- The saved output records the tool that produced it. A page is fenced as
+  external content when that source would have been: an untrusted tool, an MCP,
+  plugin or Custom Tool, or text that already held a fence (a child Agent's
+  words). Row-Bot's own results, such as `wiki_read` or `task_list`, read back
+  unfenced, and an unknown handle reads back fenced.
+- Tighter caps apply to command output (30,000 characters), skill references,
+  wiki articles, the conversation and task lists, and Gmail bodies.
+- `workspace_read_file`, `developer_read_file`, `developer_get_diff` and
+  `read_url` page with `offset` and `limit`. Their budgets are fixed: they do
+  not grow with the context window.
+
+The untrusted-content fence is added when the model reads a result, after the
+cap, so the cap never cuts it.
+
 ## Verification
 
 `tests/subsystem/agents/test_prompt_prefix_stability.py` drives the real Agent

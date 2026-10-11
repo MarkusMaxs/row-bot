@@ -1553,6 +1553,45 @@ def _is_untrusted_tool_result(tool_name: str, untrusted_names: frozenset[str] | 
     return tool_name in names
 
 
+def _answered_call_args(messages: list, message: ToolMessage) -> dict:
+    """The arguments of the tool call a ToolMessage answers, from the AI message before it."""
+    tool_call_id = str(getattr(message, "tool_call_id", "") or "")
+    message_index = next(
+        (index for index, candidate in enumerate(messages) if candidate is message),
+        len(messages),
+    )
+    if not tool_call_id:
+        return {}
+    for candidate in reversed(messages[:message_index]):
+        if not isinstance(candidate, AIMessage):
+            continue
+        for call in getattr(candidate, "tool_calls", None) or []:
+            if str((call or {}).get("id") or "") == tool_call_id:
+                args = (call or {}).get("args")
+                return args if isinstance(args, dict) else {}
+    return {}
+
+
+def _saved_output_page_is_untrusted(
+    messages: list,
+    message: ToolMessage,
+    untrusted_names: frozenset[str] | None = None,
+) -> bool:
+    """A ``read_tool_output`` page is fenced when the saved output's source would have been.
+
+    The saved output records the tools that produced it: an untrusted one, an MCP, plugin or
+    Custom Tool, or text that already held a fence (a child Agent's words) means the page is
+    fenced too. Row-Bot's own results (``wiki_read``, ``task_list``) read back unfenced. An
+    unknown handle or a missing record counts as outside content.
+    """
+    from row_bot.tool_outputs import saved_output_source
+
+    record = saved_output_source(str(_answered_call_args(messages, message).get("handle") or ""))
+    if record is None or record.get("external") or record.get("fenced") or not record.get("tools"):
+        return True
+    return any(_is_untrusted_tool_result(str(tool), untrusted_names) for tool in record["tools"])
+
+
 def _wrap_untrusted_tool_content(tool_name: str, raw: str) -> str:
     """Wrap an untrusted tool result in boundary tags, with an injection warning when one is found."""
     tagged = (
@@ -2306,7 +2345,11 @@ def _collect_agent_complete_input(state: dict) -> dict:
     for i in tool_indices:
         m = messages[i]
         _tool_name = _effective_tool_message_name(messages, m)
-        if _is_untrusted_tool_result(_tool_name, _untrusted_names):
+        if (
+            _saved_output_page_is_untrusted(messages, m, _untrusted_names)
+            if _tool_name == "read_tool_output"
+            else _is_untrusted_tool_result(_tool_name, _untrusted_names)
+        ):
             messages[i] = ToolMessage(
                 content=_wrap_untrusted_tool_content(_tool_name, _content_to_str(m.content)),
                 name=m.name,
@@ -5131,6 +5174,17 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 except Exception as exc:
                     logger.warning("Skill discovery assembly skipped: %s", type(exc).__name__)
 
+            if lc_tools:
+                # Pages through results shortened when created (tool_outputs.py), so none is cut off for good.
+                from row_bot.tool_outputs import READER_TOOL_NAME, build_reader_tool
+
+                if READER_TOOL_NAME not in {str(getattr(tool, "name", "") or "") for tool in lc_tools}:
+                    reader = _apply_provider_tool_schema_compatibility(
+                        [build_reader_tool()], readiness, has_explicit_allowlist=False
+                    )
+                    _install_custom_tool_validation_repair(reader, readiness.provider_id)
+                    lc_tools.extend(reader)
+
             from row_bot.tools.discovery import estimate_bound_tool_schema_tokens
 
             effective_parent_names = {
@@ -5705,6 +5759,12 @@ def _wrap_platform_tool_call(request: Any, execute: Any) -> Any:
         result = execute(request)
         if handle is not None:
             handle.external_outcome = "sent"
+        if isinstance(result, ToolMessage):
+            # Bounded once, when created; the untrusted-content fence is added later, so it is never cut.
+            from row_bot.tool_outputs import cap_tool_message
+
+            # The conversation is found as read_tool_output finds it; the source decides its read-back fence.
+            result = cap_tool_message(result, source=_tool_call_runtime_name(request.tool_call or {}))
         if caches is None or not isinstance(result, ToolMessage):
             return result
         from row_bot.application.generated_media import capture_generated_media

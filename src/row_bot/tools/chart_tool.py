@@ -12,7 +12,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 # Module-level attachment cache — set by the UI layer before agent invocation.
 _attachment_cache: dict[str, bytes] = {}
@@ -70,23 +70,15 @@ _MAX_PLOT_ROWS = 10_000
 
 # ── Pydantic input schema ───────────────────────────────────────────────
 class _CreateChartInput(BaseModel):
-    chart_type: str = Field(
-        description=(
-            "Type of chart to create.  One of: bar, horizontal_bar, line, "
-            "scatter, pie, donut, histogram, box, area, heatmap.  "
-            "For grouped/stacked bars use 'bar' with comma-separated "
-            "y_column values (e.g. 'Q1,Q2,Q3,Q4')."
-        )
+    chart_type: Literal[
+        "bar", "horizontal_bar", "line", "scatter", "pie", "donut", "histogram", "box", "area", "heatmap"
+    ] = Field(
+        description="Chart type. For grouped or stacked bars use 'bar' with several y_column names."
     )
     data_source: str = Field(
         description=(
-            "The data to chart.  Accepts THREE formats:\n"
-            "1. **Inline CSV/TSV** — paste the data directly, e.g. "
-            "'City,Population\\nLondon,9000000\\nParis,2100000'\n"
-            "2. **File path** — path to a CSV, Excel, JSON, or TSV file "
-            "in the workspace\n"
-            "3. **Attached filename** — the name of a file the user "
-            "uploaded in this conversation"
+            "Inline CSV/TSV (e.g. 'City,Population\\nLondon,9000000'), a workspace CSV, Excel, JSON, "
+            "JSONL or TSV file path, or the name of a file attached in this conversation."
         )
     )
     x_column: Optional[str] = Field(
@@ -115,11 +107,8 @@ class _CreateChartInput(BaseModel):
     save_to_file: Optional[str] = Field(
         default=None,
         description=(
-            "Optional filename to save the chart as a PNG image in the "
-            "workspace (e.g. 'sales_chart.png'). When set the chart is "
-            "saved to disk AND displayed inline. The returned message "
-            "includes the absolute file path — useful for sending the "
-            "image via Telegram or email."
+            "Also save the chart as a PNG in the workspace (e.g. 'sales_chart.png'); the result gives "
+            "its path, for sending by Telegram or email."
         ),
     )
 
@@ -563,19 +552,12 @@ class ChartTool(BaseTool):
             StructuredTool.from_function(
                 func=_create_chart,
                 name="create_chart",
+                # Chart types are the chart_type enum; data formats are on data_source.
                 description=(
-                    "Create an interactive chart from a data file. Supports "
-                    "chart types: bar, horizontal_bar, line, scatter, pie, "
-                    "donut, histogram, box, area, heatmap. Reads data from "
-                    "CSV, Excel (XLSX/XLS), JSON, JSONL, or TSV files. "
-                    "The tool auto-picks columns if x/y are not specified. "
-                    "Do NOT use this for Mermaid flowcharts/process diagrams/"
-                    "relationship graphs — output Mermaid code directly instead. "
-                    "Use save_to_file to save the chart as a PNG image "
-                    "(e.g. for sending via Telegram or email). "
-                    "Use this when the user asks to visualise, plot, chart, "
-                    "or graph data, or when a chart would help explain "
-                    "tabular data you have analysed."
+                    "Create an interactive chart from tabular data when the person asks to plot, chart "
+                    "or visualise data, or a chart would explain it. Columns are picked automatically "
+                    "when x/y are not given. Not for flowcharts, process diagrams or relationship "
+                    "graphs: write Mermaid for those."
                 ),
                 args_schema=_CreateChartInput,
             )

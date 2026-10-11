@@ -102,3 +102,14 @@ def test_a_workspace_file_needs_no_approval(setup) -> None:
 
     assert vision_tool._analyze_image("Describe it", source="file", file_path="photo.jpg") == "saw the file"
     assert asked == []
+
+
+@pytest.mark.parametrize("source", ["webcam", "Camera feed", "clipboard", ""])
+def test_a_source_that_is_not_offered_never_reaches_the_camera(setup, source) -> None:
+    """Any other value used to capture the webcam without asking; the tool now offers only its four sources."""
+    vision, asked, _answer, _mode = setup
+
+    result = vision_tool._analyze_image("What's in front of me?", source=source or "  ")
+
+    assert vision.captured == [] and asked == []
+    assert result.startswith("Unknown source")

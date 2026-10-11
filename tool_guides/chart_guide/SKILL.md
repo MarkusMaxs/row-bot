@@ -10,8 +10,7 @@ tags: []
 DATA VISUALISATION:
 - When you analyse tabular data (CSV, Excel, JSON) and the results would be
   clearer as a chart, use the create_chart tool to render an interactive
-  Plotly chart inline.  Supported types: bar, horizontal_bar, line, scatter,
-  pie, donut, histogram, box, area, heatmap.
+  Plotly chart inline (chart_type lists the supported types).
 - Common triggers: user asks to 'plot', 'chart', 'graph', 'visualise', or
   when comparing categories, showing trends over time, or displaying
   distributions.  You may also proactively suggest a chart when it adds value.

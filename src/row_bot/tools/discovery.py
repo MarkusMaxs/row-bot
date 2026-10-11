@@ -24,6 +24,7 @@ from row_bot.agent_budget import (
     InvalidExecutionBudget,
 )
 from row_bot.capability_search import CapabilityDocument, search_capabilities
+from row_bot.tool_outputs import READER_TOOL_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -34,8 +35,11 @@ _external_discovery_invocation_var: contextvars.ContextVar[bool] = contextvars.C
 
 BRIDGE_TOOL_NAMES = frozenset({"tool_search", "tool_invoke", "skill_search", "skill_load"})
 # Search results quote MCP, plugin and skill metadata written by third parties. A ``tool_invoke``
-# result is judged by its target's name instead.
+# result is judged by its target's name instead, and a ``read_tool_output`` page by the tool that
+# produced the saved output (``agent._saved_output_page_is_untrusted``).
 UNTRUSTED_BRIDGE_TOOL_NAMES = frozenset({"tool_search", "skill_search"})
+# Names an external tool can never take.
+RESERVED_TOOL_NAMES = BRIDGE_TOOL_NAMES | {READER_TOOL_NAME}
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _WHITESPACE = re.compile(r"\s+")
 _SUSPICIOUS_DESCRIPTION = re.compile(
@@ -136,7 +140,7 @@ def filter_external_collisions(
         record.name
         for record in records
         if not record.name
-        or record.name in BRIDGE_TOOL_NAMES
+        or record.name in RESERVED_TOOL_NAMES
         or record.name in eager_core_names
         or counts[record.name] > 1
     }

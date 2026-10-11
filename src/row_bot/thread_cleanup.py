@@ -167,6 +167,10 @@ def _purge_thread_files(thread_id: str) -> int:
         else:
             media_dir.unlink()
         removed += 1
+
+    from row_bot.tool_outputs import delete_thread_outputs
+
+    removed += delete_thread_outputs(thread_id)  # Long tool results saved for paging.
     return removed
 
 
@@ -943,6 +947,12 @@ def sweep_orphaned_thread_artifacts(
         logger.debug("Could not clean imported sandbox orphans", exc_info=True)
 
     cutoff = maintenance_now - STALE_TEMP_FILE_AGE
+    try:
+        from row_bot.tool_outputs import sweep_orphaned_outputs
+
+        stats["tool_outputs"] = sweep_orphaned_outputs(owners, older_than=cutoff.timestamp())
+    except Exception:
+        logger.debug("Could not clean orphaned tool outputs", exc_info=True)
     stats["temp_files"] = _remove_stale_temp_files(
         (
             PROJECTS_DIR,

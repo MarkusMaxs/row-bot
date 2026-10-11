@@ -782,3 +782,33 @@ def test_agent_message_records_parent_steering_for_nonterminal_run(tmp_path, mon
     terminal = json.loads(agent_tool._agent_message(queued["id"], "Too late"))
     assert terminal["ok"] is False
     assert "cannot be steered" in terminal["message"]
+
+
+def test_delegate_work_takes_its_parent_from_the_running_turn_not_from_the_model(tmp_path, monkeypatch):
+    """The parent thread, run and orchestration are runtime facts; the model can't name or forge them (WP D1)."""
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    calls = {}
+
+    def fake_spawn(objective, **kwargs):
+        calls.update(kwargs)
+        return {"id": "run-1", "status": "completed", "parent_thread_id": kwargs["parent_thread_id"]}
+
+    monkeypatch.setattr(agent_tool.agent_runner, "spawn_agent_run", fake_spawn)
+    monkeypatch.setattr(agent_tool, "_runtime_context", lambda: {
+        "thread_id": "parent-thread", "agent_run_id": "parent-run", "generation_id": "turn-1",
+    })
+    delegate = next(tool for tool in agent_tool.AgentsTool().as_langchain_tools() if tool.name == "delegate_work")
+
+    payload = json.loads(delegate.invoke({
+        "objective": "Check the numbers.",
+        "wait": True,
+        "parent_thread_id": "someone-elses-thread",
+        "parent_run_id": "forged-run",
+        "orchestration_id": "forged-orchestration",
+        "parent_message_id": "forged-message",
+    }))
+
+    assert payload["ok"] is True
+    assert calls["parent_thread_id"] == "parent-thread"
+    assert calls["parent_run_id"] == "parent-run"
+    assert calls["orchestration_id"] == "" and calls["parent_message_id"] == ""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import pathlib
 import subprocess
 import sys
@@ -46,7 +47,7 @@ def test_developer_native_tools_read_search_and_status(tmp_path, monkeypatch, re
         assert "README.md" in developer_tool._list_files()
         assert "Hello Developer" in developer_tool._read_file("README.md")
         assert "README.md:1:Hello Developer" in developer_tool._search("Developer")
-        assert '"is_git": true' in developer_tool._git_status().lower()
+        assert json.loads(developer_tool._git_status())["is_git"] is True
     finally:
         tool_context.reset_context(tokens)
 
@@ -693,7 +694,7 @@ def test_docker_network_off_blocks_network_commands_before_docker(tmp_path, monk
         tool_context.reset_context(tokens)
 
     assert "Docker Sandbox network is Off" in result
-    assert '"returncode": null' in result
+    assert "not run" in result.splitlines()[1]
 
 
 def test_docker_network_off_blocks_package_installs_before_docker(tmp_path, monkeypatch, reload_for_data_dir):
@@ -718,7 +719,7 @@ def test_docker_network_off_blocks_package_installs_before_docker(tmp_path, monk
 
     assert "Docker Sandbox network is Off" in result
     assert "package install" in result
-    assert '"returncode": null' in result
+    assert "not run" in result.splitlines()[1]
 
 
 def test_docker_sandbox_recreates_container_when_network_policy_changes(tmp_path, monkeypatch, reload_for_data_dir):

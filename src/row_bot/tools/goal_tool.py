@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, field_validator
@@ -14,7 +14,9 @@ from row_bot.tools.base import BaseTool
 
 
 def _json_response(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True)
+    from row_bot.tool_outputs import compact_json
+
+    return compact_json(payload, sort_keys=True, drop_empty_fields=False)
 
 
 def _runtime_context() -> dict[str, Any]:
@@ -45,12 +47,13 @@ def _public_goal(goal: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+# The conversation is not in these schemas: goal tools act on the running turn's conversation.
 class _GoalUpdateInput(BaseModel):
-    status: str = Field(
+    status: Literal["active", "blocked", "waiting_approval", "completed", "cleared"] = Field(
         default="active",
         description=(
-            "Goal status: active, blocked, waiting_approval, completed, or cleared. Use blocked when the goal waits "
-            "on the person (you asked them something); it shows as Needs you. Only the person pauses a goal."
+            "Use blocked when the goal waits on the person (you asked them something); it shows as Needs you. "
+            "Only the person pauses a goal."
         ),
     )
     progress: str = Field(default="", description="Concise progress update.")
@@ -64,7 +67,12 @@ class _GoalUpdateInput(BaseModel):
     )
     next_step: str = Field(default="", description="Next action planned for the goal.")
     goal_id: str = Field(default="", description="Optional goal id. Omit to update the current thread goal.")
-    thread_id: str = Field(default="", description="Optional thread id. Omit to use the current thread.")
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _paused_means_blocked(cls, value: Any) -> Any:
+        # An agent waiting on the person is blocked on them ("Needs you"), never quietly paused (B316).
+        return "blocked" if str(value or "").strip().lower() == "paused" else value
 
     @field_validator("evidence", "blockers", mode="before")
     @classmethod
@@ -92,7 +100,6 @@ class _GoalUpdateInput(BaseModel):
 
 class _GoalStatusInput(BaseModel):
     goal_id: str = Field(default="", description="Optional goal id.")
-    thread_id: str = Field(default="", description="Optional thread id. Omit to use the current thread.")
 
 
 def _goal_update(

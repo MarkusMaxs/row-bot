@@ -106,7 +106,8 @@ def test_a_failed_child_run_is_read_once(agents):
 
     assert run["error"].startswith(FENCE)
     assert f"\n{failure}\n</EXTERNAL_CONTENT>" in run["error"]
-    assert (run["summary"], run["status_message"]) == ("", "")
+    # The repeats are emptied, and empty fields are left out of a run (WP D1).
+    assert (run.get("summary", ""), run.get("status_message", "")) == ("", "")
     # The run's final event repeats the same text: it is read once, with the events too.
     assert json.dumps(payload).count("malformed tool call") == 1
     assert any(event["type"] == "run.failed" for event in payload["events"])
