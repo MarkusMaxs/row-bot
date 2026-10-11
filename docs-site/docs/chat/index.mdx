@@ -89,6 +89,8 @@ For usage beyond one conversation, ask Row-Bot in Agent mode, for example "How m
 
 When a conversation gets long, Row-Bot first clears older tool output from what it sends the model; the steps stay in your transcript. Only when that is no longer enough does it compact the conversation: it summarizes earlier turns and keeps the recent ones. The ring shows **Compacting context…** while that runs.
 
+Compaction starts near the end of the model's window, leaving room for the reply and the summary: at about 967,000 tokens on a 1M-token model, and at 167,000 to 177,000 on a 200,000-token one, depending on the provider. Smaller local models keep about a quarter of the window free. A **Reading limit** in [Settings › Models](/docs/settings/models#reading-limit) makes the window smaller.
+
 ## The Details Card
 
 **Conversation details** sits beside the conversation on a wide screen. It shows:
