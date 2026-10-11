@@ -397,7 +397,7 @@ def test_the_model_is_told_to_use_these_instead_of_the_shell_or_a_path():
 
     token = agent._current_enabled_tool_names_var.set(("conversation_setup",))
     try:
-        context = agent._agent_runtime_system_context()
+        context = agent._agent_runtime_guidance(agent._current_tool_group_names())
     finally:
         agent._current_enabled_tool_names_var.reset(token)
     assert "call use_code_folder" in context and "call clone_repository" in context
