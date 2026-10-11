@@ -87,5 +87,12 @@ def test_f_r07_child_packet_and_full_tool_envelope_are_checked_together(mode, mo
     prepared = agent._prepare_with_compaction(fitted)
     assert prepared.usage.estimated_input_tokens <= 2000
     assert "Required mission" in prepared.messages[-1].content
-    assert "Mandatory safety policy" in prepared.messages[-1].content
+    # The profile's policy is the child's system prompt (agent.profile), never cut by the packet budget.
+    assert "AGENT PROFILE" in prepared.messages[-1].content
+    assert "Mandatory safety policy" not in prepared.messages[-1].content
+    agent._set_active_runtime_context(agent_profile_snapshot={"instructions": "Mandatory safety policy"})
+    try:
+        assert "Mandatory safety policy" in agent._agent_profile_system_context()
+    finally:
+        agent._set_active_runtime_context()
     assert prepared.messages[0].content == "Mandatory runtime restrictions"

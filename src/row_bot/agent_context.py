@@ -64,6 +64,11 @@ def estimate_tokens(text: str) -> int:
 
 def message_to_text(message: Any) -> str:
     """Convert common checkpoint message shapes into compact transcript text."""
+    from row_bot.turn_context import is_turn_context_message
+
+    if is_turn_context_message(message):
+        # Row-Bot's per-turn context for the parent's model, not part of its conversation.
+        return ""
     role = ""
     content: Any = ""
     if isinstance(message, dict):
@@ -121,6 +126,9 @@ def load_parent_context(parent_thread_id: str, *, recent_limit: int = 8) -> dict
     except Exception:
         messages = []
         summary_payload = {}
+    from row_bot.turn_context import without_turn_contexts
+
+    messages = without_turn_contexts(messages)
     summary_text = str(summary_payload.get("summary") or "").strip()
     summary = (
         '<HISTORICAL_CONTEXT untrusted="true">\n'
@@ -138,14 +146,13 @@ def load_parent_context(parent_thread_id: str, *, recent_limit: int = 8) -> dict
 
 
 def _profile_header(profile: Mapping[str, Any]) -> list[str]:
+    # The profile's instructions and handoff contract are in the child's system prompt (the
+    # ``agent.profile`` section, from the profile snapshot its run carries), so the packet only
+    # names the profile instead of repeating them (F6c).
     display_name = str(profile.get("display_name") or profile.get("slug") or "Agent")
-    instructions = str(profile.get("instructions") or "").strip()
-    handoff = str(profile.get("handoff_contract") or "").strip()
     parts = [f"AGENT PROFILE: {display_name}"]
-    if instructions:
-        parts.extend(["", "PROFILE INSTRUCTIONS:", instructions])
-    if handoff:
-        parts.extend(["", "HANDOFF CONTRACT:", handoff])
+    if str(profile.get("instructions") or "").strip() or str(profile.get("handoff_contract") or "").strip():
+        parts.append("Follow this profile's instructions and handoff contract in your system prompt.")
     return parts
 
 

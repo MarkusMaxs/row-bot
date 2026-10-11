@@ -52,6 +52,7 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
     agent graph or app.py.
     """
     from row_bot.threads import checkpointer
+    from row_bot.turn_context import is_turn_context_message
 
     config = {"configurable": {"thread_id": thread_id}}
     try:
@@ -64,6 +65,8 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
 
         result: list[dict] = []
         for m in messages:
+            if is_turn_context_message(m):
+                continue  # Row-Bot's per-turn context, not a message of the conversation
             mtype = getattr(m, "type", None)
             content = getattr(m, "content", None)
             if not content or not isinstance(content, str):

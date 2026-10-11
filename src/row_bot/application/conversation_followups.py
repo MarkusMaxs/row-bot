@@ -284,13 +284,14 @@ def _count_turn_tokens(conversation_id: str, goal_id: str) -> None:
     resumed after an approval skips the ones its first part already counted.
     """
     from row_bot import goals, threads
+    from row_bot.turn_context import is_person_message
     goal = goals.get_goal(goal_id)
     if not goal:
         return
     saved = threads.checkpointer.get_tuple({"configurable": {"thread_id": conversation_id, "checkpoint_ns": ""}})
     messages = list(saved.checkpoint.get("channel_values", {}).get("messages", []) or []) if saved else []
     start = next((index + 1 for index in range(len(messages) - 1, -1, -1)
-                  if getattr(messages[index], "type", "") == "human"), 0)
+                  if is_person_message(messages[index])), 0)
     turn = messages[start:]
     ids = [str(getattr(message, "id", "") or "") for message in turn]
     counted = str(goal.get("tokens_counted_through") or "")

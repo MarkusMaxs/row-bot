@@ -115,7 +115,9 @@ def test_f_r07_final_child_packet_is_bounded_and_mission_preserved(monkeypatch, 
     packet = agent_context.build_child_agent_prompt(objective="Required mission", context="extra" * 10000,
         context_mode=mode, profile_snapshot={"instructions": "Mandatory policy", "context_policy_json": {"max_context_tokens": 400}})
     assert int(packet["estimated_tokens"]) <= 400
-    assert "Required mission" in packet["prompt"] and "Mandatory policy" in packet["prompt"]
+    assert "Required mission" in packet["prompt"] and "AGENT PROFILE" in packet["prompt"]
+    # The policy itself is the child's system prompt (agent.profile); the packet doesn't repeat it (F6c).
+    assert "Mandatory policy" not in packet["prompt"]
 
 
 def test_f_r07_impossible_mandatory_envelope_fails_closed():

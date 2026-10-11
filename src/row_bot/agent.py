@@ -21,9 +21,10 @@ from row_bot.prompt_cache import (
 )
 from row_bot import prompt_prefix_diff
 from row_bot.providers.usage_ledger import with_usage_purpose
+from row_bot import turn_context
+from row_bot.turn_context import is_turn_context_message
 from row_bot.prompt_context import (
     cache_eligible_message_ids,
-    ephemeral_section,
     section_messages,
     stable_prefix_fingerprint,
     stable_section,
@@ -632,7 +633,7 @@ from row_bot.tools import registry as tool_registry  # noqa: E402
 # ═════════════════════════════════════════════════════════════════════════════
 # ReAct Agent — LLM decides which tools to call
 # ═════════════════════════════════════════════════════════════════════════════
-from datetime import datetime as _datetime, timezone as _timezone  # noqa: E402
+from datetime import datetime as _datetime  # noqa: E402
 
 
 def create_react_agent(*args, **kwargs):
@@ -1055,15 +1056,6 @@ def _friendly_api_error(exc_str: str, model_name: str | None = None) -> str:
     if _is_transient_stream_disconnect(exc_str):
         return PROVIDER_CUT_MESSAGE
     if "recursion" in s or "recursion limit" in s:
-        try:
-            if _developer_context_var.get(""):
-                return (
-                    "I reached the coding step budget for this turn. "
-                    "Your workspace state, todos, and diffs are preserved; ask me to continue "
-                    "and I can pick up from the current checkpoint."
-                )
-        except Exception:
-            pass
         return "⚠️ I got stuck in a tool loop and had to stop. Try rephrasing your request or starting a new conversation."
     if "insufficient_quota" in s or "exceeded your current quota" in s:
         return "⚠️ API quota exceeded — please check your billing dashboard."
@@ -1203,9 +1195,65 @@ def _is_browser_navigation_tool_name(tool_name: str) -> bool:
     return action in {"navigate", "navigate_back", "back", "click", "type", "fill_form", "press_key", "select_option", "hover", "drag", "scroll", "tab"}
 
 
-def _agent_runtime_system_context() -> str:
-    """Return an authoritative current-runtime note for Agent Mode turns."""
-    tool_names = sorted(str(name) for name in (_current_enabled_tool_names_var.get() or ()) if name)
+def _current_tool_group_names() -> list[str]:
+    return sorted(str(name) for name in (_current_enabled_tool_names_var.get() or ()) if name)
+
+
+def _agent_runtime_guidance(tool_names: list[str]) -> str:
+    """The stable runtime-mode guidance for Agent Mode; the values it refers to are in the turn context."""
+    return (
+        "CURRENT RUNTIME MODE: Agent Mode is active. "
+        "Use the provided tool interface when a tool is needed or explicitly requested. "
+        "Do not claim this turn is Chat Only, and do not claim tools or long-term "
+        "memory are unavailable because of older transcript messages. "
+        "The approval mode for action-capable tools and the tool groups available are in the latest "
+        "turn context."
+        + _setup_guidance(tool_names)
+    )
+
+
+def _setup_guidance(tool_names: list[str]) -> str:
+    """How to get what the work needs without sending people to Settings (stable text).
+
+    Which tools and apps are off is a value of the turn context (``_runtime_turn_fields``).
+    """
+    parts: list[str] = []
+    if "conversation_setup" in tool_names:
+        from row_bot.tools.conversation_setup_tool import GUIDANCE
+
+        parts.append(GUIDANCE)
+    if "row_bot_status" in tool_names:
+        parts.append(
+            "TOOLS THAT ARE OFF: the turn context lists them. If the request needs one of them, call "
+            "row_bot_update_setting with setting 'tool_toggle' and value '<name>:on'; the person "
+            "sees a 'Turn on …' card in the chat and decides. Never tell them to open Settings for this. "
+            "If they choose Not now, it stays off: don't ask again unless they ask."
+        )
+        # Found live: "@Composio, find tools for Notion pages" with Composio off brought cards for Notion.
+        parts.append(
+            "APPS TURNED OFF: the turn context lists them. If the person names one of them (such as "
+            "@Name), call suggest_apps with that app's name as the need, not the task: its card "
+            "offers to turn it on. Don't do the work another way."
+        )
+        # Found live: GitHub switched off in a chat, and the answer came from a web search without a word.
+        parts.append(
+            "APPS SWITCHED OFF IN THIS CHAT: the turn context lists them. If the request is for one of "
+            "them, say it is off in this chat and that the person can switch it on in + › Apps; don't do the "
+            "work another way (such as a web search) instead."
+        )
+        parts.append(
+            "APPS: if the work needs an app, account or channel you have no tool for (email, a calendar, "
+            "Notion, a messaging channel), or a change in an app that only looks things up, call suggest_apps "
+            "(changes: true for a change) so the person gets a card to connect it or allow changes, then stop. Only the person connects "
+            "apps; never suggest installing anything another way."
+        )
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def _runtime_turn_fields(tool_names: list[str]) -> list:
+    """The runtime-mode values of the turn context: approval mode, tool groups, what is off."""
+    from row_bot.turn_context import ContextField
+
     if tool_names:
         preview = ", ".join(tool_names[:16])
         if len(tool_names) > 16:
@@ -1213,27 +1261,15 @@ def _agent_runtime_system_context() -> str:
         tool_line = f"Available tool groups for this turn include: {preview}."
     else:
         tool_line = "No user-facing tools are enabled for this turn."
-    return (
-        "CURRENT RUNTIME MODE: Agent Mode is active for this turn. "
-        "Use the provided tool interface when a tool is needed or explicitly requested. "
-        "Do not claim this turn is Chat Only, and do not claim tools or long-term "
-        "memory are unavailable because of older transcript messages. "
-        f"Approval mode for action-capable tools: {get_approval_mode()}. "
-        f"{tool_line}"
-        + _setup_guidance(tool_names)
-    )
-
-
-def _setup_guidance(tool_names: list[str]) -> str:
-    """How to get what the work needs without sending people to Settings."""
-    parts: list[str] = []
-    if "conversation_setup" in tool_names:
-        from row_bot.tools.conversation_setup_tool import GUIDANCE
-
-        parts.append(GUIDANCE)
+    fields = [
+        ContextField("approval", f"Approval mode for action-capable tools: {get_approval_mode()}."),
+        ContextField("tools", tool_line),
+    ]
+    off: list[str] = []
+    switched_off: list[str] = []
+    everywhere: list[str] = []
     if "row_bot_status" in tool_names:
         try:
-            from row_bot.tools import registry as tool_registry
             from row_bot.tools.row_bot_status_tool import _tool_display_label
 
             off = sorted(
@@ -1243,41 +1279,31 @@ def _setup_guidance(tool_names: list[str]) -> str:
             )[:16]
         except Exception:
             off = []
-        if off:
-            parts.append(
-                "TOOLS THAT ARE OFF: " + ", ".join(off) + ". If the request needs one of them, call "
-                "row_bot_update_setting with setting 'tool_toggle' and value '<name>:on'; the person "
-                "sees a 'Turn on …' card in the chat and decides. Never tell them to open Settings for this. "
-                "If they choose Not now, it stays off: don't ask again unless they ask."
-            )
         try:
             from row_bot.integrations.scope import chat_apps, turned_off
             thread = _current_thread_id_var.get("")
             switched_off = [app["name"] for app in chat_apps(thread) if not app["on"]][:8] if thread else []
-            everywhere = turned_off()
+            everywhere = list(turned_off())
         except Exception:
             switched_off, everywhere = [], []
-        if everywhere:
-            # Found live: "@Composio, find tools for Notion pages" with Composio off brought cards for Notion.
-            parts.append(
-                "APPS TURNED OFF: " + ", ".join(everywhere) + f". If the person names one of them (such as "
-                f"@{everywhere[0]}), call suggest_apps with that app's name as the need, not the task: its card "
-                "offers to turn it on. Don't do the work another way."
-            )
-        if switched_off:
-            # Found live: GitHub switched off in a chat, and the answer came from a web search without a word.
-            parts.append(
-                "APPS SWITCHED OFF IN THIS CHAT: " + ", ".join(switched_off) + ". If the request is for one of "
-                "them, say it is off in this chat and that the person can switch it on in + › Apps; don't do the "
-                "work another way (such as a web search) instead."
-            )
-        parts.append(
-            "APPS: if the work needs an app, account or channel you have no tool for (email, a calendar, "
-            "Notion, a messaging channel), or a change in an app that only looks things up, call suggest_apps "
-            "(changes: true for a change) so the person gets a card to connect it or allow changes, then stop. Only the person connects "
-            "apps; never suggest installing anything another way."
-        )
-    return (" " + " ".join(parts)) if parts else ""
+    fields.extend([
+        ContextField("tools_off", f"TOOLS THAT ARE OFF: {', '.join(off)}." if off else "",
+                     "TOOLS THAT ARE OFF: none."),
+        ContextField("apps_off", f"APPS TURNED OFF: {', '.join(everywhere)}." if everywhere else "",
+                     "APPS TURNED OFF: none."),
+        ContextField("apps_off_here",
+                     f"APPS SWITCHED OFF IN THIS CHAT: {', '.join(switched_off)}." if switched_off else "",
+                     "APPS SWITCHED OFF IN THIS CHAT: none."),
+    ])
+    return fields
+
+
+_PERSISTENT_THREAD_NOTE = (
+    "PERSISTENT THREAD: This task uses a persistent conversation thread. "
+    "Earlier messages in this thread are from PREVIOUS runs of the same task. "
+    "Use them to compare against prior results, track changes over time, "
+    "and avoid repeating work already done."
+)
 
 
 
@@ -1643,14 +1669,361 @@ def _cache_eligible_root_system_section(message: SystemMessage):
     return stable_section("agent.root", text, source="agent")
 
 
+_CACHE_PLACEMENT_WARNED: set[str] = set()
+_CACHE_PLACEMENT_WARNED_LOCK = threading.Lock()
+
+
+def _warn_cache_placement_failed(thread_id: str, exc: BaseException) -> None:
+    """Log a failed prompt-cache placement once per thread (DEBUG afterwards)."""
+    key = str(thread_id or "-")
+    with _CACHE_PLACEMENT_WARNED_LOCK:
+        first = key not in _CACHE_PLACEMENT_WARNED
+        if first:
+            if len(_CACHE_PLACEMENT_WARNED) >= 256:
+                _CACHE_PLACEMENT_WARNED.clear()
+            _CACHE_PLACEMENT_WARNED.add(key)
+    if first:
+        logger.warning(
+            "Prompt cache placement failed; the request is sent without a cache marker (thread=%s): %s",
+            key[:8],
+            type(exc).__name__,
+        )
+    logger.debug("Prompt cache placement failure detail", exc_info=(type(exc), exc, exc.__traceback__))
+
+
+def _neutralize_foreign_turn_context_tags(messages: list) -> list:
+    """Neutralize the turn-context tag in what people send and what tools return.
+
+    Only Row-Bot writes ``<row_bot_turn_context>`` blocks. The same tag in a person's message (with
+    any attached file context inlined into it) or in a tool result is replaced before the model
+    reads it, so nobody can pose as Row-Bot's turn context. The checkpoint keeps the original text.
+    """
+    result: list = []
+    for message in messages:
+        if isinstance(message, (HumanMessage, ToolMessage)) and not is_turn_context_message(message):
+            content = turn_context.neutralize_content(message.content)
+            if content is not message.content:
+                message = _copy_message(message, content=content)
+        result.append(message)
+    return result
+
+
+_TURN_CONTEXT_VALUES: dict[tuple[str, str], Any] = {}
+_TURN_CONTEXT_VALUES_LOCK = threading.Lock()
+_TURN_CONTEXT_VALUES_MAX = 32
+
+
+def _turn_id_from_budget(budget: Any) -> str:
+    return str(budget.get("budget_id") or "") if isinstance(budget, dict) else ""
+
+
+def _agent_summary_marker(messages: list) -> tuple[str, int]:
+    """The compaction summary in force for this Agent thread: (marker, boundary), or ("", 0)."""
+    thread_id = _current_thread_id_var.get() or ""
+    if not thread_id:
+        return "", 0
+    try:
+        from row_bot.threads import load_validated_summary_state
+
+        state = load_validated_summary_state(thread_id, "agent", messages=list(messages))
+    except Exception:
+        return "", 0
+    if not state or int(state.get("schema_version") or 0) != _SUMMARY_STATE_SCHEMA_VERSION:
+        return "", 0
+    return turn_context.summary_marker(state)
+
+
+def _skill_heading(record: Any) -> str:
+    heading = f"{record.icon} {record.display_name}".strip()
+    if str(record.canonical_id).startswith("plugin:"):
+        heading += f" (plugin: {record.plugin_name or str(record.source).removeprefix('plugin:')})"
+    return heading
+
+
+def _turn_recall(messages: list, max_tokens: int) -> tuple[list[dict], Any]:
+    """Run memory recall for this turn (once per turn) and return its memories and formatter."""
+    human_texts: list[str] = []
+    for message in reversed(messages):
+        if getattr(message, "type", "") != "human" or is_turn_context_message(message):
+            continue
+        content = message.content
+        if isinstance(content, str) and content.strip():
+            human_texts.append(content.strip())
+        if len(human_texts) >= 3:
+            break
+    if not human_texts:
+        return [], None
+    from row_bot.memory_policy import (
+        build_auto_recall,
+        format_recall_block,
+        record_recall_trace,
+        touch_selected_memories,
+    )
+
+    thread_id = _current_thread_id_var.get() or ""
+    recall_started = time.perf_counter()
+    context_window = max(1, int(max_tokens / 0.85))
+    recall_model_ref = _active_model_override.get() or get_current_model()
+    recall_provider_id = ""
+    try:
+        from row_bot.providers.selection import parse_model_ref
+
+        parsed = parse_model_ref(recall_model_ref)
+        recall_provider_id = str(parsed[0] if parsed else get_cloud_provider(recall_model_ref) or "")
+    except Exception:
+        recall_provider_id = str(get_cloud_provider(recall_model_ref) or "")
+    decision = build_auto_recall(
+        human_texts[0],
+        human_texts[1:],
+        thread_id=thread_id,
+        generation_id=_current_generation_id_var.get(""),
+        runtime_surface="agent",
+        provider_id=recall_provider_id,
+        model_ref=str(recall_model_ref or ""),
+        context_window=context_window,
+    )
+
+    def recall_block(memories: list[dict]) -> str:
+        return format_recall_block(memories, context_window=context_window)
+
+    selected = list(decision.selected) if decision.allowed and decision.selected else []
+    block_chars = 0
+    decision.trace["memory_recall.format_ms"] = 0.0
+    decision.trace["memory_recall.touch_ms"] = 0.0
+    if selected:
+        format_started = time.perf_counter()
+        block_chars = len(recall_block(selected))
+        decision.trace["memory_recall.format_ms"] = round((time.perf_counter() - format_started) * 1000.0, 3)
+        if block_chars:
+            touch_started = time.perf_counter()
+            touch_selected_memories(decision)
+            decision.trace["memory_recall.touch_ms"] = round((time.perf_counter() - touch_started) * 1000.0, 3)
+    decision.trace["memory_recall.block_chars"] = block_chars
+    decision.trace["memory_recall.allowed"] = decision.allowed
+    decision.trace["memory_recall.reason"] = decision.reason
+    decision.trace["memory_recall.candidates"] = decision.candidates_seen
+    decision.trace["memory_recall.selected"] = len(decision.selected)
+    decision.trace["memory_recall.total_pipeline_ms"] = round((time.perf_counter() - recall_started) * 1000.0, 3)
+    trace_started = time.perf_counter()
+    record_recall_trace(decision, block_chars=block_chars)
+    decision.trace["memory_recall.trace_write_ms"] = round((time.perf_counter() - trace_started) * 1000.0, 3)
+    logger.info(
+        "memory auto-recall trace: allowed=%s reason=%s candidates=%d selected=%d block_chars=%d total_ms=%.3f query_build_ms=%s gating_ms=%s retrieve_ms=%s rank_filter_ms=%s format_ms=%s touch_ms=%s trace_write_ms=%s thread_id=%s generation_id=%s provider_id=%s model_ref=%s trace=%s",
+        decision.allowed,
+        decision.reason,
+        decision.candidates_seen,
+        len(decision.selected),
+        block_chars,
+        decision.trace["memory_recall.total_pipeline_ms"],
+        decision.trace.get("memory_recall.query_build_ms"),
+        decision.trace.get("memory_recall.gating_ms"),
+        decision.trace.get("memory_recall.retrieve_ms"),
+        decision.trace.get("memory_recall.rank_filter_ms"),
+        decision.trace.get("memory_recall.format_ms"),
+        decision.trace.get("memory_recall.touch_ms"),
+        decision.trace.get("memory_recall.trace_write_ms"),
+        thread_id,
+        _current_generation_id_var.get(""),
+        recall_provider_id,
+        recall_model_ref,
+        decision.trace,
+    )
+    return (selected, recall_block) if block_chars else ([], None)
+
+
+def _gather_turn_context_values(messages: list, *, shown_skill_ids: frozenset[str]) -> Any:
+    """Everything this turn's context says, gathered once per turn (F3, F6b)."""
+    from row_bot.turn_context import ContextField, SkillEntry, TurnContextValues
+
+    context_size = get_context_size()
+    max_tokens = _agent_history_budget_tokens(context_size)
+    compact_custom_endpoint = _custom_endpoint_compact_agent_context(context_size)
+    now = _datetime.now().astimezone()
+    fields = list(_runtime_turn_fields(_current_tool_group_names()))
+
+    # Row-Bot's live state: model, providers, channels, MCP, Designer, Dream Cycle, update.
+    if not compact_custom_endpoint:
+        try:
+            from row_bot.self_knowledge import build_dynamic_self_knowledge_block
+
+            fields.append(ContextField("state", build_dynamic_self_knowledge_block()))
+        except Exception:
+            logger.debug("Dynamic self-knowledge skipped (non-fatal)", exc_info=True)
+
+    # The active Designer project's values; its guide is the stable designer.guide section.
+    designer: dict[str, str] = {}
+    try:
+        from row_bot.designer.tool import get_active_project
+
+        project = get_active_project()
+        if project is not None:
+            from row_bot.designer.prompt import build_designer_state_parts
+
+            designer = build_designer_state_parts(project)
+    except Exception:
+        logger.debug("Designer state skipped (non-fatal)", exc_info=True)
+    fields.extend([
+        ContextField(
+            "designer",
+            designer.get("project", ""),
+            "[DESIGNER PROJECT STATE]\nNo design project is active in this conversation now.",
+        ),
+        ContextField("designer_pages", designer.get("pages", "")),
+        ContextField("designer_canvas", designer.get("canvas", "")),
+    ])
+
+    skills: list = []
+    if not compact_custom_endpoint:
+        try:
+            stable_records, turn_records = _split_active_skill_records()
+            mentioned = {str(name) for name in (_current_app_scope_var.get(None) or {}).get("skills") or []}
+            skills = [
+                SkillEntry(
+                    skill_id=record.canonical_id,
+                    heading=_skill_heading(record),
+                    body=str(record.instructions or ""),
+                    mentioned=record.canonical_id in mentioned,
+                )
+                for record in turn_records
+            ]
+            thread_id = _current_thread_id_var.get() or ""
+            manual_names = [
+                record.canonical_id
+                for record in [*stable_records, *turn_records]
+                if record.source == "manual"
+            ]
+            if thread_id and manual_names:
+                from row_bot.skills_activation import record_usage
+
+                # Once per turn, not once per model call (F6b).
+                record_usage(thread_id, manual_names, source="agent")
+            off_text = ""
+            if thread_id and shown_skill_ids:
+                from row_bot.skills_activation import get_thread_activation_state
+
+                disabled = {str(name) for name in get_thread_activation_state(thread_id).get("disabled", [])}
+                names = {record.canonical_id: _skill_heading(record)
+                         for record in (_current_authorized_skill_records_var.get() or ())}
+                off = sorted(names.get(skill_id, skill_id) for skill_id in shown_skill_ids & disabled)
+                if off:
+                    off_text = (
+                        f"SKILLS SWITCHED OFF IN THIS CHAT: {', '.join(off)}. "
+                        "Stop following their instructions shown earlier."
+                    )
+            fields.append(ContextField("skills_off", off_text))
+        except Exception:
+            logger.debug("Turn skills skipped (non-fatal)", exc_info=True)
+
+    memories: list[dict] = []
+    recall_block = None
+    try:
+        memories, recall_block = _turn_recall(messages, max_tokens)
+    except Exception as exc:
+        logger.debug("Auto-recall failed (non-fatal): %s", exc)
+    return TurnContextValues(
+        now=now,
+        fields=tuple(fields),
+        skills=tuple(skills),
+        memories=tuple(memories),
+        recall_block=recall_block,
+    )
+
+
+def _turn_context_values(messages: list, turn_id: str, *, shown_skill_ids: frozenset[str]) -> Any:
+    """This turn's values, gathered on its first model call and reused for the rest of it."""
+    key = (_current_thread_id_var.get() or "", str(turn_id))
+    with _TURN_CONTEXT_VALUES_LOCK:
+        cached = _TURN_CONTEXT_VALUES.get(key)
+    if cached is not None:
+        return cached
+    values = _gather_turn_context_values(messages, shown_skill_ids=shown_skill_ids)
+    with _TURN_CONTEXT_VALUES_LOCK:
+        _TURN_CONTEXT_VALUES[key] = values
+        while len(_TURN_CONTEXT_VALUES) > _TURN_CONTEXT_VALUES_MAX:
+            _TURN_CONTEXT_VALUES.pop(next(iter(_TURN_CONTEXT_VALUES)))
+    return values
+
+
+def _build_turn_context_message(messages: list, turn_id: str, *, sequence: int = 0):
+    """This turn's context, diffed against the turn contexts still in view."""
+    marker, boundary = _agent_summary_marker(messages)
+    start = turn_context.visible_start(messages, boundary)
+    shown_skills = turn_context.shown_skill_ids_in_tool_results(messages, start)
+    baseline = turn_context.baseline_for(
+        messages,
+        summary_marker=marker,
+        summary_boundary=boundary,
+        shown_skill_ids=shown_skills,
+    )
+    values = _turn_context_values(
+        messages,
+        turn_id,
+        shown_skill_ids=frozenset(shown_skills) | baseline.skill_ids,
+    )
+    return turn_context.build_message(
+        turn_id=turn_id,
+        values=values,
+        baseline=baseline,
+        summary_marker=marker,
+        sequence=sequence,
+    )
+
+
+def _with_turn_context(messages: list, budget: Any) -> tuple[list, list]:
+    """*messages* with this turn's context after them, built on the turn's first model call.
+
+    Returns the messages and the newly built context messages (to persist). A turn whose context is
+    already in the checkpoint is returned unchanged, so every later call of the turn, and every later
+    turn, replays the same bytes.
+    """
+    turn_id = _turn_id_from_budget(budget)
+    if not turn_id or not messages or turn_context.turn_contexts_for(messages, turn_id):
+        return messages, []
+    try:
+        message = _build_turn_context_message(messages, turn_id)
+    except Exception:
+        logger.warning("Turn context could not be built; this call goes without it", exc_info=True)
+        return messages, []
+    return [*messages, message], [message]
+
+
+def _turn_context_after_compaction(messages: list, budget: Any, created: list) -> tuple[list, list]:
+    """After a compaction summary hid earlier turn contexts, show this turn a full snapshot again.
+
+    A context built in this same call is rebuilt in place; one already persisted earlier in the turn
+    gets a full snapshot appended after the latest message (append-only).
+    """
+    turn_id = _turn_id_from_budget(budget)
+    existing = turn_context.turn_contexts_for(messages, turn_id) if turn_id else []
+    if not existing:
+        return messages, created
+    marker, _boundary = _agent_summary_marker(messages)
+    index, meta = existing[-1]
+    if str(meta.get("summary") or "") == marker:
+        return messages, created
+    try:
+        if created and index == len(messages) - 1 and getattr(messages[index], "id", None) == getattr(created[-1], "id", None):
+            base = messages[:index]
+            message = _build_turn_context_message(base, turn_id, sequence=int(meta.get("sequence") or 0))
+            return [*base, message], [*created[:-1], message]
+        message = _build_turn_context_message(messages, turn_id, sequence=len(existing))
+    except Exception:
+        logger.warning("Turn context snapshot after compaction failed (non-fatal)", exc_info=True)
+        return messages, created
+    return [*messages, message], [*created, message]
+
+
 def _collect_agent_complete_input(state: dict) -> dict:
     """Collect the complete provider-facing Agent input without hard trimming."""
     budget = pre_model_budget_hook(state)
-    messages = [SystemMessage(content=get_agent_system_prompt()), *list(state["messages"])]
     _thread_id = _current_thread_id_var.get() or None
     context_size = get_context_size()
     max_tokens = _agent_history_budget_tokens(context_size)
     compact_custom_endpoint = _custom_endpoint_compact_agent_context(context_size)
+    # This turn's context (built once per turn; _pre_model_trim also persists it), then the
+    # turn-context tag neutralized everywhere Row-Bot did not write it.
+    history, _created = _with_turn_context(list(state["messages"]), budget)
+    messages = [SystemMessage(content=get_agent_system_prompt()), *_neutralize_foreign_turn_context_tags(history)]
 
     # ── Strip inline base64 data URIs from ALL tool outputs ──────────
     # Designer HTML, plugin results, and some marker payloads carry
@@ -1743,7 +2116,7 @@ def _collect_agent_complete_input(state: dict) -> dict:
     # For ToolMessages before the protected turn window that are large
     # (>128 approximate tokens), replace with a heuristic 1-line summary so the model
     # still knows *what happened* without the full raw output.
-    _human_indices = [i for i, m in enumerate(messages) if m.type == "human"]
+    _human_indices = [i for i, m in enumerate(messages) if m.type == "human" and not is_turn_context_message(m)]
     if len(_human_indices) > _TOOL_CLEANUP_RECENT_TURNS:
         _protect_from = _human_indices[-_TOOL_CLEANUP_RECENT_TURNS]
         for i in _tool_msg_indices:
@@ -1900,30 +2273,13 @@ def _collect_agent_complete_input(state: dict) -> dict:
             break
 
     _stable_injection_sections = []
-    _ephemeral_injection_sections = []
 
-    # Date/time — always present, with its UTC offset and the time in UTC: a model that needs UTC (a date
-    # search) never reaches for a tool, which in a workflow would wait for an approval.
-    now = _datetime.now().astimezone()
-    utc = now.astimezone(_timezone.utc)
-    _section = ephemeral_section(
-        "turn.date_time",
-        f"Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}, "
-        f"UTC{now.isoformat(timespec='minutes')[-6:]} ({utc.strftime('%Y-%m-%d %H:%M')} UTC).",
-        source="agent",
-    )
+    # Everything below is stable for a conversation. What changes from turn to turn (date and
+    # time, approval mode and tool groups, Row-Bot's state, the Designer project, recall) is in
+    # the turn context after the turn's message (see row_bot.turn_context).
+    _section = stable_section("agent.turn_context", turn_context.STABLE_CONTRACT, source="agent")
     if _section is not None:
-        _ephemeral_injection_sections.append(_section)
-
-    # Current runtime authority. This prevents stale Chat Only assistant text
-    # from a previous turn from overriding the active Agent/tool contract.
-    _section = ephemeral_section(
-        "turn.runtime_mode",
-        _agent_runtime_system_context(),
-        source="agent",
-    )
-    if _section is not None:
-        _ephemeral_injection_sections.append(_section)
+        _stable_injection_sections.append(_section)
 
     profile_context = _agent_profile_system_context(_current_thread_id_var.get() or "")
     if profile_context:
@@ -1940,65 +2296,48 @@ def _collect_agent_complete_input(state: dict) -> dict:
     except Exception:
         pass
 
-    developer_context = _developer_context_var.get("")
-    if developer_context:
-        _section = ephemeral_section("turn.developer_context", developer_context, source="developer")
-        if _section is not None:
-            _ephemeral_injection_sections.append(_section)
+    # Current runtime authority. This prevents stale Chat Only assistant text
+    # from a previous turn from overriding the active Agent/tool contract.
+    _section = stable_section(
+        "agent.runtime_guidance",
+        _agent_runtime_guidance(_current_tool_group_names()),
+        source="agent",
+    )
+    if _section is not None:
+        _stable_injection_sections.append(_section)
 
-    # Self-knowledge
+    # Self-knowledge (its live state is a turn-context value)
     if not compact_custom_endpoint:
         try:
-            from row_bot.self_knowledge import (
-                build_dynamic_self_knowledge_block,
-                build_static_self_knowledge_block,
-            )
+            from row_bot.self_knowledge import build_static_self_knowledge_block
 
-            _sk_static = build_static_self_knowledge_block()
             _section = stable_section(
                 "self_knowledge.static",
-                _sk_static,
+                build_static_self_knowledge_block(),
                 source="self_knowledge",
             )
             if _section is not None:
                 _stable_injection_sections.append(_section)
-            _sk_dynamic = build_dynamic_self_knowledge_block()
-            _section = ephemeral_section(
-                "self_knowledge.dynamic_state",
-                _sk_dynamic,
-                source="self_knowledge",
-            )
-            if _section is not None:
-                _ephemeral_injection_sections.append(_section)
         except Exception:
             pass
 
-    # Designer mode prompt — injected when a designer project is active
-    _dp = None
+    # Designer guide — when a designer project is active; its current state is a turn-context value
     try:
         from row_bot.designer.tool import get_active_project
         _dp = get_active_project()
         if _dp is not None:
-            from row_bot.designer.prompt import build_designer_prompt
-            _section = ephemeral_section(
-                "turn.designer_project",
-                build_designer_prompt(_dp),
-                source="designer",
-            )
+            from row_bot.designer.prompt import build_designer_guide
+            _section = stable_section("designer.guide", build_designer_guide(_dp.mode), source="designer")
             if _section is not None:
-                _ephemeral_injection_sections.append(_section)
+                _stable_injection_sections.append(_section)
     except Exception:
         pass
 
     progress_contract = _interactive_progress_contract(_current_runtime_surface_var.get(""))
     if progress_contract:
-        _section = ephemeral_section(
-            "turn.interactive_progress",
-            progress_contract,
-            source="agent",
-        )
+        _section = stable_section("agent.interactive_progress", progress_contract, source="agent")
         if _section is not None:
-            _ephemeral_injection_sections.append(_section)
+            _stable_injection_sections.append(_section)
 
     # Background-mode override
     if is_background_workflow():
@@ -2011,18 +2350,13 @@ def _collect_agent_complete_input(state: dict) -> dict:
         if _section is not None:
             _stable_injection_sections.append(_section)
         if _persistent_thread_var.get():
-            _section = ephemeral_section(
-                "turn.background_persistent_thread",
-                (
-                    "PERSISTENT THREAD: This task uses a persistent conversation thread. "
-                    "Earlier messages in this thread are from PREVIOUS runs of the same task. "
-                    "Use them to compare against prior results, track changes over time, "
-                    "and avoid repeating work already done."
-                ),
+            _section = stable_section(
+                "background.persistent_thread",
+                _PERSISTENT_THREAD_NOTE,
                 source="tasks",
             )
             if _section is not None:
-                _ephemeral_injection_sections.append(_section)
+                _stable_injection_sections.append(_section)
 
     # Skill instructions
     if compact_custom_endpoint:
@@ -2050,36 +2384,24 @@ def _collect_agent_complete_input(state: dict) -> dict:
             _stable_injection_sections.append(_section)
 
         try:
-            from row_bot.skills_activation import record_usage
             from row_bot.skill_discovery import render_active_skills_prompt
 
-            _thread_id = _current_thread_id_var.get() or None
-            # Unified active-skill resolution separately preserves the Designer,
-            # background, profile, and child-Agent boundaries.
-            authorized_skill_records = _current_authorized_skill_records_var.get()
-            if authorized_skill_records is None:
-                authorized_skill_records = _build_runtime_skill_snapshot()[0]
-            active_skill_records = _resolve_active_skill_records(tuple(authorized_skill_records))
-            manual_skill_names = [
-                record.canonical_id
-                for record in active_skill_records
-                if record.source == "manual"
-            ]
-            manual_skills_text = render_active_skills_prompt(active_skill_records)
+            # Skills the conversation keeps (profile, thread override, pinned). A skill loaded with
+            # skill_load arrives in its tool result and a /skill mention in the turn context, so
+            # neither rewrites this section mid-conversation (F5).
+            stable_records, _turn_records = _split_active_skill_records()
             _section = stable_section(
                 "skills.manual",
-                manual_skills_text,
+                render_active_skills_prompt(stable_records),
                 source="skills",
             )
             if _section is not None:
                 _stable_injection_sections.append(_section)
-            if _thread_id and manual_skill_names:
-                record_usage(_thread_id, manual_skill_names, source="agent")
         except Exception as exc:
             logger.debug("Skill injection skipped (non-fatal): %s", exc)
 
     # Batch-insert all injections at insert_idx
-    _injection_sections = _stable_injection_sections + _ephemeral_injection_sections
+    _injection_sections = _stable_injection_sections
     _prompt_sections.extend(_injection_sections)
     _section_messages = section_messages(_injection_sections)
     _cache_eligible_system_message_ids.update(cache_eligible_message_ids(_section_messages))
@@ -2097,128 +2419,16 @@ def _collect_agent_complete_input(state: dict) -> dict:
             (_section_message.section.section_id, _section_message.section.content)
             for _section_message in _section_messages
         )
-
-    # ── Auto-recall: inject validated background memory before latest user ─
-    try:
-        # Gather last 2-3 user messages for richer recall context.
-        # Newest-first query construction is capped at 2000 chars in
-        # memory_policy.build_auto_recall.
-        human_texts = []
-        last_human_idx = None
-        for i in range(len(trimmed) - 1, -1, -1):
-            if trimmed[i].type == "human":
-                if last_human_idx is None:
-                    last_human_idx = i
-                content = trimmed[i].content
-                if isinstance(content, str) and content.strip():
-                    human_texts.append(content.strip())
-                if len(human_texts) >= 3:
-                    break
-
-        if human_texts and last_human_idx is not None:
-            from row_bot.memory_policy import (
-                build_auto_recall,
-                format_recall_block,
-                record_recall_trace,
-                touch_selected_memories,
-            )
-
-            recall_started = time.perf_counter()
-            context_window = max(1, int(max_tokens / 0.85))
-            recall_model_ref = _active_model_override.get() or get_current_model()
-            recall_provider_id = ""
-            try:
-                from row_bot.providers.selection import parse_model_ref
-
-                parsed = parse_model_ref(recall_model_ref)
-                recall_provider_id = str(parsed[0] if parsed else get_cloud_provider(recall_model_ref) or "")
-            except Exception:
-                recall_provider_id = str(get_cloud_provider(recall_model_ref) or "")
-            decision = build_auto_recall(
-                human_texts[0],
-                human_texts[1:],
-                thread_id=_thread_id or "",
-                generation_id=_current_generation_id_var.get(""),
-                runtime_surface="agent",
-                provider_id=recall_provider_id,
-                model_ref=str(recall_model_ref or ""),
-                context_window=context_window,
-            )
-            recall_block = ""
-            if decision.allowed and decision.selected:
-                format_started = time.perf_counter()
-                recall_block = format_recall_block(
-                    decision.selected,
-                    context_window=context_window,
-                )
-                decision.trace["memory_recall.format_ms"] = round(
-                    (time.perf_counter() - format_started) * 1000.0,
-                    3,
-                )
-                if recall_block:
-                    trimmed.insert(last_human_idx, SystemMessage(content=recall_block))
-                    if prompt_prefix_diff.enabled():
-                        _prefix_sections.append(("turn.memory_recall", recall_block))
-                    touch_started = time.perf_counter()
-                    touch_selected_memories(decision)
-                    decision.trace["memory_recall.touch_ms"] = round(
-                        (time.perf_counter() - touch_started) * 1000.0,
-                        3,
-                    )
-            else:
-                decision.trace.setdefault("memory_recall.format_ms", 0.0)
-                decision.trace.setdefault("memory_recall.touch_ms", 0.0)
-            decision.trace.setdefault("memory_recall.format_ms", 0.0)
-            decision.trace.setdefault("memory_recall.touch_ms", 0.0)
-            decision.trace["memory_recall.block_chars"] = len(recall_block)
-            decision.trace["memory_recall.allowed"] = decision.allowed
-            decision.trace["memory_recall.reason"] = decision.reason
-            decision.trace["memory_recall.candidates"] = decision.candidates_seen
-            decision.trace["memory_recall.selected"] = len(decision.selected)
-            decision.trace["memory_recall.total_pipeline_ms"] = round(
-                (time.perf_counter() - recall_started) * 1000.0,
-                3,
-            )
-            trace_started = time.perf_counter()
-            record_recall_trace(decision, block_chars=len(recall_block))
-            decision.trace["memory_recall.trace_write_ms"] = round(
-                (time.perf_counter() - trace_started) * 1000.0,
-                3,
-            )
-            logger.info(
-                "memory auto-recall trace: allowed=%s reason=%s candidates=%d selected=%d block_chars=%d total_ms=%.3f query_build_ms=%s gating_ms=%s retrieve_ms=%s rank_filter_ms=%s format_ms=%s touch_ms=%s trace_write_ms=%s thread_id=%s generation_id=%s provider_id=%s model_ref=%s trace=%s",
-                decision.allowed,
-                decision.reason,
-                decision.candidates_seen,
-                len(decision.selected),
-                len(recall_block),
-                decision.trace["memory_recall.total_pipeline_ms"],
-                decision.trace.get("memory_recall.query_build_ms"),
-                decision.trace.get("memory_recall.gating_ms"),
-                decision.trace.get("memory_recall.retrieve_ms"),
-                decision.trace.get("memory_recall.rank_filter_ms"),
-                decision.trace.get("memory_recall.format_ms"),
-                decision.trace.get("memory_recall.touch_ms"),
-                decision.trace.get("memory_recall.trace_write_ms"),
-                _thread_id or "",
-                _current_generation_id_var.get(""),
-                recall_provider_id,
-                recall_model_ref,
-                decision.trace,
-            )
-    except Exception as exc:
-        logger.debug("Auto-recall failed (non-fatal): %s", exc)
     _current_prompt_prefix_sections_var.set(tuple(_prefix_sections))
 
     # ── Anthropic-compatible: consolidate system messages ─────────────
     # Anthropic Messages transports require all system messages to be
-    # consecutive at the start of the message list.  The recall and
-    # wind-down messages above are injected mid-conversation as
-    # SystemMessages, which works fine for Ollama / OpenAI / OpenRouter /
-    # Google but causes a "multiple non-consecutive system messages"
-    # error on Anthropic-compatible providers.  Fix: move all
-    # SystemMessages to the front so langchain-anthropic's
-    # _merge_messages() can merge them into one.
+    # consecutive at the start of the message list. A checkpoint can still
+    # carry a SystemMessage mid-conversation (e.g. an older one), which works
+    # fine for Ollama / OpenAI / OpenRouter / Google but causes a "multiple
+    # non-consecutive system messages" error on Anthropic-compatible
+    # providers. Fix: move all SystemMessages to the front so
+    # langchain-anthropic's _merge_messages() can merge them into one.
     if _active_custom_openai_provider():
         trimmed = _consolidate_system_messages(trimmed)
         trimmed = _repair_trimmed_tool_messages(trimmed)
@@ -2265,8 +2475,10 @@ def _collect_agent_complete_input(state: dict) -> dict:
                 _cache_marker_result.stable_fingerprint[:16],
                 _cache_marker_result.reason,
             )
-    except Exception:
-        pass  # Non-fatal
+    except Exception as exc:
+        # Non-fatal: the request goes out without the cache marker. Said once per thread, so a
+        # persistent failure is visible without repeating on every model call.
+        _warn_cache_placement_failed(_thread_id or "", exc)
 
     trimmed = _normalize_provider_facing_messages(
         trimmed,
@@ -2409,6 +2621,7 @@ def _chat_projected_prefix_count(messages: tuple[BaseMessage, ...], boundary: in
             1
             for message in messages[:boundary]
             if str(getattr(message, "type", "")) in {"human", "ai"}
+            and not is_turn_context_message(message)
             and _content_to_str(getattr(message, "content", "")).strip()
         )
 
@@ -2579,7 +2792,12 @@ def _validated_summary_for_inputs(inputs: PreparationInputs) -> dict | None:
 
 
 def _user_led_groups(messages: tuple[BaseMessage, ...]) -> list[tuple[int, int]]:
-    starts = [index for index, message in enumerate(messages) if isinstance(message, HumanMessage)]
+    # A turn context belongs to the group of the message it follows; it never starts one.
+    starts = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, HumanMessage) and not is_turn_context_message(message)
+    ]
     if not starts:
         return []
     groups: list[tuple[int, int]] = []
@@ -2590,7 +2808,7 @@ def _user_led_groups(messages: tuple[BaseMessage, ...]) -> list[tuple[int, int]]
 
 
 def _serialized_compaction_message(message: BaseMessage) -> str:
-    role = str(getattr(message, "type", type(message).__name__))
+    role = "row_bot_turn_context" if is_turn_context_message(message) else str(getattr(message, "type", type(message).__name__))
     content = _redact_data_uris(_content_to_str(getattr(message, "content", "") or ""))
     if isinstance(message, AIMessage):
         calls = list(getattr(message, "tool_calls", None) or [])
@@ -2625,6 +2843,7 @@ def _chat_only_projected_messages(messages: tuple[BaseMessage, ...]) -> tuple[Ba
             type(message)(content=_content_to_str(getattr(message, "content", "")))
             for message in messages
             if isinstance(message, (HumanMessage, AIMessage))
+            and not is_turn_context_message(message)
             and _content_to_str(getattr(message, "content", "")).strip()
         )
 
@@ -3129,6 +3348,8 @@ def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
                 "event_type": "context_compacted",
                 "display_copy": str((event.get("payload") or {}).get("display_copy") or ""),
             })
+            # The Agent pre-model hook then shows this turn a full turn-context snapshot.
+            _current_compaction_succeeded_var.set(True)
             return rebuilt
         except TaskStoppedError:
             raise
@@ -3250,13 +3471,32 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             segment_id = admissions.start_segment(execution.pass_id) if execution.invocation_started else execution.segment_id
             execution.invocation_started = True
             _emit_context_event("platform_segment", {"segment_id": segment_id})
+    # This turn's context: built on the turn's first call, persisted through the hook's
+    # ``messages`` update (LangGraph's add_messages reducer appends it after the turn's message),
+    # and found in the checkpoint by every later call of the turn.
+    budget = state.get("execution_budget")
+    messages, created = _with_turn_context(list(state.get("messages") or []), budget)
+    if created:
+        state = {**state, "messages": messages}
+    _current_compaction_succeeded_var.set(False)
     inputs = _collect_agent_preparation_inputs(state, config)
     prepared = _prepare_with_compaction(inputs)
+    if _current_compaction_succeeded_var.get():
+        # A summary now stands in for older turn contexts: show this turn a full snapshot.
+        _current_compaction_succeeded_var.set(False)
+        resnapshot, created_after = _turn_context_after_compaction(messages, budget, created)
+        if created_after != created:
+            messages, created = resnapshot, created_after
+            state = {**state, "messages": messages}
+            inputs = _collect_agent_preparation_inputs(state, config)
+            prepared = _prepare_with_compaction(inputs)
+    # The turn context travels in the user turn it follows (see turn_context.merge_into_preceding).
+    llm_messages = turn_context.merge_into_preceding(prepared.messages)
     if prompt_prefix_diff.enabled():
         # Diagnostics only: never let them stop a turn.
         prompt_prefix_diff.note_request(
             _current_thread_id_var.get() or "",
-            getattr(prepared, "messages", ()),
+            llm_messages,
             getattr(inputs, "canonical_tools", ()),
             sections=_current_prompt_prefix_sections_var.get(),
         )
@@ -3265,10 +3505,13 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
         from row_bot.application.client_queue import acknowledge_consumed
         acknowledge_consumed(execution, [str(getattr(message, "id", "") or "") for message in prepared.messages])
         generation_registry.check_dispatch(execution)
-    return {
-        "llm_input_messages": prepared.messages,
+    update: dict[str, Any] = {
+        "llm_input_messages": llm_messages,
         "execution_budget": inputs.execution_budget,
     }
+    if created:
+        update["messages"] = created
+    return update
 
 # Cache compiled agent graphs keyed by frozenset of enabled tool names
 _agent_cache: dict[frozenset[str], object] = {}
@@ -3317,6 +3560,10 @@ _current_canonical_tools_var: _contextvars.ContextVar[tuple[dict, ...]] = _conte
 _current_last_preparation_var: _contextvars.ContextVar[PreparationInputs | None] = _contextvars.ContextVar(
     "current_last_preparation", default=None
 )
+# Set when a compaction summary was saved during the current Agent preparation.
+_current_compaction_succeeded_var: _contextvars.ContextVar[bool] = _contextvars.ContextVar(
+    "current_compaction_succeeded", default=False
+)
 # (section id, text) of the system sections the last Agent request was built from; filled only
 # while the DEBUG prefix diff runs (see prompt_prefix_diff).
 _current_prompt_prefix_sections_var: _contextvars.ContextVar[tuple[tuple[str, str], ...]] = _contextvars.ContextVar(
@@ -3353,9 +3600,6 @@ _current_generation_id_var: _contextvars.ContextVar[str] = _contextvars.ContextV
 )
 _current_root_objective_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "current_root_objective", default=""
-)
-_developer_context_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
-    "developer_context", default=""
 )
 _current_agent_profile_id_var: _contextvars.ContextVar[str] = _contextvars.ContextVar(
     "current_agent_profile_id", default=""
@@ -4166,7 +4410,30 @@ def _active_profile_snapshot() -> dict[str, Any]:
         return {}
 
 
-def _resolve_active_skill_records(authorized_records: tuple) -> list:
+def _split_active_skill_records() -> tuple[list, list]:
+    """Active skills split by where their instructions go.
+
+    The first list stays in the stable ``skills.manual`` section: the profile's skills, the thread's
+    override and pinned skills. The second is turn-scoped (loaded with ``skill_load``, or mentioned
+    with ``/skill`` in this message): their instructions are appended to the conversation (the
+    ``skill_load`` result, the turn context), never edited into the system prompt (F5).
+    """
+    authorized = _current_authorized_skill_records_var.get()
+    if authorized is None:
+        authorized = _build_runtime_skill_snapshot()[0]
+    authorized = tuple(authorized)
+    every = _resolve_active_skill_records(authorized)
+    stable_ids = {
+        record.canonical_id
+        for record in _resolve_active_skill_records(authorized, include_turn_scoped=False)
+    }
+    return (
+        [record for record in every if record.canonical_id in stable_ids],
+        [record for record in every if record.canonical_id not in stable_ids],
+    )
+
+
+def _resolve_active_skill_records(authorized_records: tuple, *, include_turn_scoped: bool = True) -> list:
     """Resolve ordered task-local active records inside the frozen authorization set."""
 
     from row_bot.skills_activation import get_thread_activation_state
@@ -4191,7 +4458,7 @@ def _resolve_active_skill_records(authorized_records: tuple) -> list:
 
     if not is_background and not profile and surface != "designer":
         selected.extend(str(name) for name in state.get("pinned", []))
-    if not is_background:
+    if not is_background and include_turn_scoped:
         selected.extend(str(name) for name in state.get("auto_loaded", []))
         # Mentioned in this message: loaded for this turn only, and only if already authorized above.
         selected.extend(str(name) for name in (_current_app_scope_var.get(None) or {}).get("skills") or [])
@@ -4894,9 +5161,6 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
-    )
-    _developer_context_var.set(
-        configurable.get("developer_context", "") or ""
     )
     set_active_model_override(_model_ov or "")
     _log_runtime_decision(
@@ -5950,9 +6214,6 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
     )
-    _developer_context_var.set(
-        (config.get("configurable") or {}).get("developer_context", "") or ""
-    )
     set_active_model_override(_model_ov or "")
     _graph_build_started = time.perf_counter()
     try:
@@ -6102,9 +6363,6 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
     )
-    _developer_context_var.set(
-        configurable.get("developer_context", "") or ""
-    )
     set_active_model_override(_model_ov or "")
     try:
         from row_bot.providers.readiness import AgentCompatibilityError
@@ -6192,9 +6450,6 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
-    )
-    _developer_context_var.set(
-        configurable.get("developer_context", "") or ""
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -6306,7 +6561,7 @@ def _latest_ai_message_from_state(agent, config: dict):
     messages = list(state.values.get("messages", []))
     latest_human_idx = -1
     for idx in range(len(messages) - 1, -1, -1):
-        if getattr(messages[idx], "type", None) == "human":
+        if getattr(messages[idx], "type", None) == "human" and not is_turn_context_message(messages[idx]):
             latest_human_idx = idx
             break
     current_turn_messages = messages[latest_human_idx + 1:] if latest_human_idx >= 0 else messages
@@ -6326,7 +6581,7 @@ def _current_turn_messages_from_state(agent, config: dict) -> list[BaseMessage]:
     messages = list(state.values.get("messages", []))
     latest_human_idx = -1
     for idx in range(len(messages) - 1, -1, -1):
-        if getattr(messages[idx], "type", None) == "human":
+        if getattr(messages[idx], "type", None) == "human" and not is_turn_context_message(messages[idx]):
             latest_human_idx = idx
             break
     return messages[latest_human_idx:] if latest_human_idx >= 0 else messages
@@ -6356,7 +6611,7 @@ def _successful_tool_messages_current_turn(agent, config: dict) -> list[ToolMess
 
 def _latest_human_text_current_turn(agent, config: dict) -> str:
     for message in _current_turn_messages_from_state(agent, config):
-        if isinstance(message, HumanMessage):
+        if isinstance(message, HumanMessage) and not is_turn_context_message(message):
             return _content_to_str(getattr(message, "content", ""))
     return ""
 
@@ -6446,8 +6701,6 @@ def _run_tool_result_finalization(
 
 def _terminal_surface(config: dict) -> str:
     configurable = dict(config.get("configurable") or {})
-    if configurable.get("developer_context"):
-        return "developer"
     surface = str(configurable.get("runtime_surface") or "interactive").lower()
     if "workflow" in surface:
         return "workflow"
@@ -6461,11 +6714,6 @@ def _terminal_fallback(surface: str, reason: str) -> str:
         return (
             "I stopped because the same action kept repeating without progress. "
             "No further repeated action was executed. Try a different approach or narrow the request."
-        )
-    if surface == "developer":
-        return (
-            "I reached this run's work limit. Any workspace changes remain intact, but the task is incomplete. "
-            "Send Continue to resume from the saved checkpoint."
         )
     if surface == "workflow":
         return "This workflow step reached its work limit and needs attention before it can continue."
@@ -6509,7 +6757,6 @@ def _handle_agent_terminal(
     reasoning = ""
     if claimed and reason == "budget_exhausted":
         instruction = {
-            "developer": "Checkpoint files changed, tests and results, remaining work, and the exact next step.",
             "workflow": "Summarize partial results and state that the workflow step needs attention.",
             "child": "Provide a parent-safe partial summary and state that the child run is incomplete.",
             "interactive": "Summarize useful partial results and tell the user they may send Continue.",
