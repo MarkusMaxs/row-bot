@@ -12,7 +12,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 import row_bot.agent as agent
-from row_bot import context_calibration, models
+from row_bot import context_calibration, models, threads
 from tests.helpers.agent_requests import AgentConversation, text_of_tokens, tool_contents
 
 pytestmark = pytest.mark.subsystem
@@ -96,11 +96,17 @@ def _cleared(content: str) -> bool:
 def test_old_tool_output_is_cleared_first_and_summarizing_waits_until_the_request_is_still_over(
     monkeypatch,
 ) -> None:
+    # The platform section differs by OS (and with it the turn compaction lands on): one for all.
+    monkeypatch.setattr("row_bot.prompts.get_platform_context", lambda: "System: Test OS. Shell: bash.")
     # A large window (so no batch jump comes first) with the compaction point at 20K tokens.
     conversation = AgentConversation(
         agent, monkeypatch, context_window=1_000_000, compact_at=20_000, usable=30_000
     )
     summaries = _summarizer(monkeypatch)
+    compactions: list[int] = []
+    save_summary = threads.save_summary_state_cas
+    monkeypatch.setattr(threads, "save_summary_state_cas", lambda thread_id, state, **kwargs: (
+        compactions.append(state["boundary_message_count"]) or save_summary(thread_id, state, **kwargs)))
     record = []
     for number in range(1, 30):
         conversation.say(f"Read part {number} of the report.")
@@ -124,8 +130,11 @@ def test_old_tool_output_is_cleared_first_and_summarizing_waits_until_the_reques
     assert first_clear < first_summary
     assert not summarized(record[first_clear][1])
     assert all(not cleared_calls(request) for _call, request in record[:first_clear])
-    # Summarizing came later, once clearing could no longer bring the request under the point.
-    assert len(summaries) == 1
+    # Summarizing came later, once clearing could no longer bring the request under the point: one
+    # compaction, in the last request. (The summarizer may read a long range in more than one
+    # bounded chunk, so it can be called more than once for that one compaction.)
+    assert len(compactions) == 1
+    assert summaries
     assert first_summary == len(record) - 1
 
 
