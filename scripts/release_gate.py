@@ -6,6 +6,11 @@ unless a `CI / ci-ok` check on it succeeded. It then reports, as
 `nightly_green=true|false` in $GITHUB_OUTPUT, whether a nightly run already
 passed on that commit, so release.yml runs the nightly suite only when none has.
 
+A real release must run from its tag (`--ref refs/tags/vX.Y.Z`), because the
+draft release it creates belongs to that tag. A dry run (`--dry-run`) builds any
+branch: it skips the checks that only matter for publishing (the tag, CI and
+nightly) and reports `nightly_green=true` so the nightly suite does not run.
+
 Reads GitHub through the `gh` CLI (GH_TOKEN and GH_REPO come from the workflow).
 Stdlib only.
 """
@@ -59,13 +64,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--repository", default=os.environ.get("GH_REPO", ""))
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--ref", default=os.environ.get("GITHUB_REF", ""), help="the ref the workflow runs from")
+    parser.add_argument("--dry-run", action="store_true", help="build without the publishing checks")
     args = parser.parse_args(argv)
-    if not args.repository:
+    if not args.repository and not args.dry_run:
         parser.error("--repository (or GH_REPO) is required")
 
     versions = _source_versions(Path(args.root))
     if versions != (args.version, args.version):
         print(f"::error::version mismatch: input={args.version!r}, version.py={versions[0]!r}, iss={versions[1]!r}")
+        return 1
+    if args.dry_run:
+        print(f"version {args.version}; dry run of {args.ref or args.sha}: no tag, CI or nightly checks, nothing published")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write("nightly_green=true\n")
+        return 0
+    if args.ref != f"refs/tags/v{args.version}":
+        print(f"::error::a release runs from its tag: run release.yml with --ref v{args.version} (not {args.ref or 'no ref'}),"
+              " or set dry_run to build without publishing")
         return 1
     try:
         if not ci_passed(args.sha, args.repository):
