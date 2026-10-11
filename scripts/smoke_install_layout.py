@@ -8,9 +8,10 @@ wrapper) it checks two things:
    installed version, pending verification) and exits with 75. The launcher
    must start the installed version with the same arguments; once its server
    answers /readyz, the Python launcher must clear pending_verification.
-2. Rollback: a stand-in version that always fails to start is active and
-   unverified, with the installed version as previous. After two failed
-   launches the launcher must go back to previous and record last_rollback.
+2. The cases marked "smoke" in contracts/install-layout/launch-cases.json,
+   with A as the installed version and B as a stand-in that exits with the
+   case's codes: a newer version that keeps failing to start must be rolled
+   back to the installed one.
 
 The stand-ins share the installed version's Python through a link and are
 removed afterwards, and state.json is put back. Stdlib only.
@@ -38,7 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from smoke_app import _end_job, _job_owning_tree, _port_open  # noqa: E402
 
 RELAUNCH_VERSION = "99.0.1-smoke"
-BROKEN_VERSION = "99.0.2-smoke"
+STAND_IN_VERSION = "99.0.2-smoke"
+CASES = Path(__file__).resolve().parents[1] / "contracts" / "install-layout" / "launch-cases.json"
 
 RELAUNCH_LAUNCHER = """\
 import json, os, sys
@@ -64,13 +66,16 @@ if LINUX:
 sys.exit(75)
 """
 
-BROKEN_LAUNCHER = """\
+STAND_IN_LAUNCHER = """\
+import json, sys
 from pathlib import Path
-import sys
-runs = Path(__file__).resolve().parent / "runs.txt"
-with runs.open("a", encoding="utf-8") as handle:
-    handle.write("run\\n")
-sys.exit(3)
+here = Path(__file__).resolve().parent
+codes = json.loads((here / "codes.json").read_text(encoding="utf-8"))
+code = codes.pop(0) if codes else 0
+(here / "codes.json").write_text(json.dumps(codes), encoding="utf-8")
+with (here / "runs.txt").open("a", encoding="utf-8") as runs:
+    runs.write("run\\n")
+sys.exit(code)
 """
 
 
@@ -203,7 +208,19 @@ def _state_matches(root: Path, **expected: object) -> bool:
         state = _read_state(root)
     except (OSError, ValueError):
         return False
-    return all(state.get(key) == value for key, value in expected.items())
+    for key, value in expected.items():
+        if key == "last_rollback" and isinstance(value, dict):
+            if {field: (state.get(key) or {}).get(field) for field in value} != value:
+                return False
+        elif state.get(key) != value:
+            return False
+    return True
+
+
+def _mapped(value, names: dict[str, str]):
+    if isinstance(value, dict):
+        return {key: _mapped(item, names) for key, item in value.items()}
+    return names.get(value, value) if isinstance(value, str) else value
 
 
 def run(root: Path, kind: str, port: int, command: list[str], timeout: float, *,
@@ -253,31 +270,35 @@ def run(root: Path, kind: str, port: int, command: list[str], timeout: float, *,
         assert str(port) in ran["args"], ran
         results.append(f"relaunch: {RELAUNCH_VERSION} exited 75, {good} started with {ran['args']} and was verified")
 
-        # 2. Two unverified launches that never get ready roll back to previous.
-        broken = _make_stand_in(root, kind, BROKEN_VERSION, good_root, BROKEN_LAUNCHER)
-        stand_ins.append(broken)
-        _write_state(root, {"schema": 1, "active": BROKEN_VERSION, "previous": good, "ready": None,
-                            "pending_verification": True, "unverified_launches": 0, "last_rollback": None})
-        if linux:
-            _set_current(root, BROKEN_VERSION)
-        launcher = Launcher(command, work / "data-rollback", work / "rollback.log")
-        try:
-            _wait("/readyz after the rollback", lambda: _get(f"http://127.0.0.1:{port}/readyz") == 200, timeout,
-                  launcher)
-            _wait("the rollback in state.json",
-                  lambda: _state_matches(root, active=good, pending_verification=False, unverified_launches=0),
-                  60, launcher)
-        finally:
-            launcher.stop(port)
-        state = _read_state(root)
-        runs = (broken / "app" / "runs.txt").read_text(encoding="utf-8").split()
-        assert len(runs) == 2, runs
-        assert state["last_rollback"]["from"] == BROKEN_VERSION, state
-        assert state["last_rollback"]["to"] == good, state
-        if linux:
-            assert Path(os.readlink(root / "current")).name == good
-        results.append(f"rollback: {BROKEN_VERSION} failed {len(runs)} times, then {good} started; "
-                       f"last_rollback={state['last_rollback']}")
+        # 2. The shared launch cases that end with the installed version serving.
+        names = {"A": good, "B": STAND_IN_VERSION}
+        cases = [case for case in json.loads(CASES.read_text(encoding="utf-8"))["cases"] if case.get("smoke")]
+        for case in cases:
+            assert set(case["runnable"]) == {"A", "B"} and case["launched"][-1] == "A", case["id"]
+            stand_in = _make_stand_in(root, kind, STAND_IN_VERSION, good_root, STAND_IN_LAUNCHER)
+            stand_ins.append(stand_in)
+            (stand_in / "app" / "codes.json").write_text(json.dumps(case["exits"].get("B", [])), encoding="utf-8")
+            state = {"schema": 1, "ready": None, "last_rollback": None, **_mapped(case["state"], names)}
+            _write_state(root, state)
+            if linux:
+                _set_current(root, state["active"])
+            launcher = Launcher(command, work / f"data-{case['id']}", work / f"{case['id']}.log")
+            try:
+                _wait(f"/readyz in {case['id']}", lambda: _get(f"http://127.0.0.1:{port}/readyz") == 200, timeout,
+                      launcher)
+                _wait(f"the final state of {case['id']}",
+                      lambda: _state_matches(root, **_mapped(case["final"], names)), 60, launcher)
+            finally:
+                launcher.stop(port)
+            runs_file = stand_in / "app" / "runs.txt"
+            runs = runs_file.read_text(encoding="utf-8").split() if runs_file.exists() else []
+            assert len(runs) == case["launched"].count("B"), (case["id"], runs)
+            if linux:
+                assert Path(os.readlink(root / "current")).name == good
+            results.append(f"{case['id']}: {STAND_IN_VERSION} started {len(runs)} times, then {good} served; "
+                           f"last_rollback={_read_state(root)['last_rollback']}")
+            _remove_stand_in(stand_in)
+            stand_ins.remove(stand_in)
     except BaseException:
         for log in sorted(work.glob("*.log")):
             print(f"--- {log.name} ---\n{log.read_text(encoding='utf-8', errors='replace')[-6000:]}")

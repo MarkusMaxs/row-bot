@@ -84,6 +84,15 @@ jobs:
         shell: pwsh
         run: .\installer\build_installer.ps1 -PythonVersion "${{ env.WINDOWS_PYTHON_VERSION }}"
 
+      # The Row-Bot.exe that was just built, against contracts/install-layout/launch-cases.json.
+      - name: Check Row-Bot.exe against the shared launch cases
+        shell: pwsh
+        env:
+          ROW_BOT_LAUNCHER_EXE: ${{ github.workspace }}\installer\build\Row-Bot.exe
+        run: |
+          python -m pip install --quiet "pytest==9.1.1"
+          python -m pytest tests/subsystem/installer/test_windows_launcher.py --noconftest -p no:cacheprovider -q
+
       - name: Smoke installed Windows package
         uses: ./.github/actions/smoke-windows-installer
 

@@ -8,16 +8,17 @@
 //   2. starts <active>/python/bin/python3 <active>/app/launcher.py with
 //      --no-tray --native (or the arguments given after "--");
 //   3. starts it again only when it exits with 75, or after a failed start of a
-//      version that is not verified yet. Two unverified launches in a row roll
-//      back to previous; a start not ready after 240 s counts as failed.
+//      version that is not verified yet while the next launch can make
+//      progress. Two unverified launches in a row roll back to a runnable
+//      previous; a slow start is never stopped (the app may be migrating data).
 // The same rules live in src/row_bot/install_layout.py, Row-Bot.exe and the
-// Linux row-bot wrapper. Run from a download or a disk image, it first offers
-// to move itself to Applications.
+// Linux row-bot wrapper (shared cases: contracts/install-layout/launch-cases.json).
+// Run from a download or a disk image, it first offers to move itself to
+// Applications.
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
-#import <libproc.h>
 #import <signal.h>
 
 static NSString * const RowBotBundleIdentifier = @"ai.row-bot.assistant";
@@ -29,9 +30,9 @@ static NSInteger const RowBotDefaultPort = 8080;
 static NSInteger const RowBotPortScanCount = 50;
 static int const RowBotRelaunchExitCode = 75;
 static NSInteger const RowBotMaxUnverifiedLaunches = 2;
-static NSTimeInterval const RowBotReadyTimeout = 240.0;
 static NSTimeInterval const RowBotQuickRelaunch = 30.0;
 static NSInteger const RowBotMaxQuickRelaunches = 3;
+static NSInteger const RowBotMaxErrorRelaunches = 5;
 
 static NSString *RowBotHomeDataDir(void) {
     NSString *envDataDir = [[[NSProcessInfo processInfo] environment] objectForKey:@"ROW_BOT_DATA_DIR"];
@@ -194,25 +195,6 @@ static NSMutableDictionary *RowBotNewState(NSString *active) {
               @"pending_verification": @NO, @"unverified_launches": @0, @"last_rollback": [NSNull null]} mutableCopy];
 }
 
-// Stops every process running from a version folder (a start that never got ready).
-static void RowBotKillProcessesUnder(NSString *folder) {
-    int count = proc_listallpids(NULL, 0);
-    if (count <= 0) {
-        return;
-    }
-    pid_t *pids = calloc((size_t)count + 16, sizeof(pid_t));
-    count = proc_listallpids(pids, (int)(((size_t)count + 16) * sizeof(pid_t)));
-    NSString *prefix = [folder stringByAppendingString:@"/"];
-    for (int index = 0; index < count; index++) {
-        char path[PROC_PIDPATHINFO_MAXSIZE];
-        if (pids[index] > 0 && pids[index] != getpid() && proc_pidpath(pids[index], path, sizeof path) > 0 &&
-            [[NSString stringWithUTF8String:path] hasPrefix:prefix]) {
-            kill(pids[index], SIGKILL);
-        }
-    }
-    free(pids);
-}
-
 static NSString *RowBotHTTP(NSString *urlString, NSString *method, NSTimeInterval timeout) {
     NSURL *url = [NSURL URLWithString:urlString];
     if (!url) {
@@ -301,12 +283,10 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
 @property(nonatomic, copy) NSString *dataDir;
 @property(nonatomic, copy) NSString *launcherStatePath;
 @property(nonatomic, assign) NSInteger lastWindowPid;
-@property(nonatomic, assign) BOOL pending;
-@property(nonatomic, assign) BOOL timedOut;
 @property(nonatomic, assign) BOOL quitting;
 @property(nonatomic, assign) NSInteger quickRelaunches;
+@property(nonatomic, assign) NSInteger errorRelaunches;
 @property(nonatomic, strong) NSDate *launchedAt;
-@property(nonatomic, strong) NSTimer *readyTimer;
 @property(nonatomic, strong) dispatch_source_t termSource;
 @end
 
@@ -396,7 +376,6 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
 
     NSInteger launches = MAX(0, RowBotIntegerValue(state[@"unverified_launches"]));
     NSString *previous = RowBotVersionOrNil(state[@"previous"]);
-    self.pending = NO;
     if (![state[@"pending_verification"] isEqual:@YES]) {
         if (launches > 0) {
             state[@"unverified_launches"] = @0;
@@ -420,24 +399,25 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     } else {
         state[@"unverified_launches"] = @(launches + 1);
         RowBotWriteState(state);
-        self.pending = YES;
     }
     self.activeVersion = active;
     self.versionDir = [self folderForVersion:active] ?: self.seedDir;
 }
 
-// After an exit (install_layout.relaunch_after_exit).
+// After an exit (install_layout.relaunch_after_exit): always after 75; after an
+// error exit of an unverified version only if the next launch can make
+// progress, with another try or a rollback to a runnable previous.
 - (BOOL)relaunchAfterExit:(NSString *)version code:(int)code {
     if (code == RowBotRelaunchExitCode) {
         return YES;
     }
     NSDictionary *state = RowBotReadState();
-    if (![state[@"pending_verification"] isEqual:@YES] || ![state[@"active"] isEqual:version] ||
-        (!self.timedOut && code == 0)) {
+    if (code == 0 || ![state[@"pending_verification"] isEqual:@YES] || ![state[@"active"] isEqual:version]) {
         return NO;
     }
-    return RowBotVersionOrNil(state[@"previous"]) != nil ||
-           RowBotIntegerValue(state[@"unverified_launches"]) < RowBotMaxUnverifiedLaunches;
+    NSString *previous = RowBotVersionOrNil(state[@"previous"]);
+    return RowBotIntegerValue(state[@"unverified_launches"]) < RowBotMaxUnverifiedLaunches ||
+           (previous && ![previous isEqualToString:version] && [self folderForVersion:previous]);
 }
 
 // SIGTERM stops the Python launcher (which stops its server and window) before the host exits.
@@ -449,7 +429,6 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
         RowBotHost *host = weakSelf;
         RowBotLog(host.dataDir, @"sigterm");
         host.quitting = YES;
-        [host.readyTimer invalidate];
         NSTask *task = host.pythonTask;
         if (task.running) {
             [task terminate];
@@ -716,7 +695,6 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
 
 - (void)launchPrimary {
     [self prepareLaunch];
-    self.timedOut = NO;
     self.launchedAt = [NSDate date];
     NSTask *task = [self startPythonLauncherWithArguments:self.launchArguments];
     if (!task) {
@@ -730,55 +708,30 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
             [weakSelf launcherExited:finished version:version];
         });
     };
-    [self.readyTimer invalidate];
-    self.readyTimer = nil;
-    if (self.pending) {
-        self.readyTimer = [NSTimer scheduledTimerWithTimeInterval:RowBotReadyTimeout
-                                                           target:self
-                                                         selector:@selector(readyTimeout:)
-                                                         userInfo:version
-                                                          repeats:NO];
-    }
-}
-
-// A start of an unverified version that is not ready in time counts as failed.
-- (void)readyTimeout:(NSTimer *)timer {
-    NSString *version = timer.userInfo;
-    NSDictionary *state = RowBotReadState();
-    if (!self.pythonTask.running || ![state[@"pending_verification"] isEqual:@YES] ||
-        ![state[@"active"] isEqual:version]) {
-        return;
-    }
-    RowBotLog(self.dataDir, @"ready_timeout version=%@", version);
-    self.timedOut = YES;
-    NSTask *task = self.pythonTask;
-    NSString *folder = [self.versionDir stringByAppendingPathComponent:@"python"];
-    [task terminate];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        RowBotKillProcessesUnder(folder);
-    });
 }
 
 - (void)launcherExited:(NSTask *)task version:(NSString *)version {
     int code = task.terminationReason == NSTaskTerminationReasonUncaughtSignal ? 128 + task.terminationStatus
                                                                                 : task.terminationStatus;
-    RowBotLog(self.dataDir, @"launcher_exited version=%@ pid=%d code=%d timed_out=%d", version,
-              task.processIdentifier, code, self.timedOut);
+    RowBotLog(self.dataDir, @"launcher_exited version=%@ pid=%d code=%d", version, task.processIdentifier, code);
     if (task != self.pythonTask || self.quitting) {
         return;
     }
-    [self.readyTimer invalidate];
-    self.readyTimer = nil;
     if (![self relaunchAfterExit:version code:code]) {
         return;
     }
-    if (code == RowBotRelaunchExitCode && [[NSDate date] timeIntervalSinceDate:self.launchedAt] < RowBotQuickRelaunch) {
-        if (++self.quickRelaunches >= RowBotMaxQuickRelaunches) {
+    if (code == RowBotRelaunchExitCode) {
+        self.errorRelaunches = 0;
+        BOOL quick = [[NSDate date] timeIntervalSinceDate:self.launchedAt] < RowBotQuickRelaunch;
+        self.quickRelaunches = quick ? self.quickRelaunches + 1 : 0;
+        if (self.quickRelaunches >= RowBotMaxQuickRelaunches) {
             RowBotLog(self.dataDir, @"relaunch asked for %ld times within seconds; stopping", (long)self.quickRelaunches);
             return;
         }
-    } else {
-        self.quickRelaunches = 0;
+    } else if (++self.errorRelaunches >= RowBotMaxErrorRelaunches) {
+        // A safety net: the state rules alone stop after a rollback or two tries.
+        RowBotLog(self.dataDir, @"stopped after %ld failed starts in a row", (long)self.errorRelaunches);
+        return;
     }
     RowBotLog(self.dataDir, @"relaunching");
     [self launchPrimary];
@@ -873,7 +826,6 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     (void)sender;
     RowBotLog(self.dataDir, @"quit_requested");
     self.quitting = YES;
-    [self.readyTimer invalidate];
     NSInteger port = [self activePort];
     if (port > 0) {
         NSString *url = [NSString stringWithFormat:@"http://127.0.0.1:%ld/api/launcher-shutdown", (long)port];

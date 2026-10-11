@@ -7,14 +7,16 @@
  *      R\versions\<active>\app\launcher.py and its own arguments, with the
  *      environment launch_row_bot.bat used to set plus PYTHONDONTWRITEBYTECODE;
  *   3. starts it again only when it exits with 75 (RELAUNCH_EXIT_CODE), or
- *      after a failed start of a version that is not verified yet.
+ *      after a failed start of a version that is not verified yet while the
+ *      next launch can make progress (another try, or a rollback).
  *
  * A launch counts as unverified until the Python launcher clears
- * pending_verification (once /readyz answers). After two unverified launches
- * in a row, active goes back to previous and last_rollback records it. A start
- * that is not ready after 240 s counts as failed. The same rules live in
- * src/row_bot/install_layout.py (begin_launch, relaunch_after_exit), the macOS
- * tray host and the Linux row-bot wrapper.
+ * pending_verification (once /readyz answers, however long the start takes;
+ * a slow start is never stopped). After two unverified launches in a row,
+ * active goes back to a runnable previous and last_rollback records it. The
+ * same rules live in src/row_bot/install_layout.py (begin_launch,
+ * relaunch_after_exit), the macOS tray host and the Linux row-bot wrapper;
+ * contracts/install-layout/launch-cases.json holds the cases they share.
  *
  * python.exe runs with CREATE_NO_WINDOW: a hidden console, as the .vbs/.bat
  * pair gave it, so console programs it starts never open a window.
@@ -35,9 +37,9 @@
 
 #define RELAUNCH_EXIT_CODE 75
 #define MAX_UNVERIFIED_LAUNCHES 2
-#define READY_TIMEOUT_MS (240u * 1000u)
 #define QUICK_RELAUNCH_MS (30u * 1000u)
 #define MAX_QUICK_RELAUNCHES 3
+#define MAX_ERROR_RELAUNCHES 5
 #define APP_USER_MODEL_ID L"ai.row-bot.desktop"
 #define VERSION_MAX 64
 #define MAX_FIELDS 48
@@ -449,14 +451,13 @@ static void now_iso(char *out, size_t size)
  * The loop guard, applied to every launch (install_layout.begin_launch).
  * Fills `active` with the version to start; returns 0 when there is none.
  */
-static int begin_launch(char *active, size_t size, int *pending)
+static int begin_launch(char *active, size_t size)
 {
     State state;
     char previous[VERSION_MAX + 1] = "", ready[VERSION_MAX + 1] = "", raw[512], at[32];
     int has_state = read_state(&state);
     int launches;
 
-    *pending = 0;
     if (!has_state || !get_version(&state, "active", active, size) || !version_runnable(active)) {
         char found[VERSION_MAX + 1];
         if (!newest_version(found, sizeof found)) {
@@ -508,7 +509,6 @@ static int begin_launch(char *active, size_t size, int *pending)
     } else {
         snprintf(raw, sizeof raw, "%d", launches + 1);
         set_raw(&state, "unverified_launches", raw);
-        *pending = 1;
     }
     if (state.changed)
         write_state(&state);
@@ -516,8 +516,12 @@ static int begin_launch(char *active, size_t size, int *pending)
     return 1;
 }
 
-/* After an exit (install_layout.relaunch_after_exit). */
-static int relaunch_after_exit(const char *launched, DWORD code, int timed_out)
+/*
+ * After an exit (install_layout.relaunch_after_exit): always after 75; after an
+ * error exit of an unverified version only if the next launch can make
+ * progress, with another try or a rollback to a runnable previous.
+ */
+static int relaunch_after_exit(const char *launched, DWORD code)
 {
     State state;
     char active[VERSION_MAX + 1], previous[VERSION_MAX + 1];
@@ -525,27 +529,15 @@ static int relaunch_after_exit(const char *launched, DWORD code, int timed_out)
 
     if (code == RELAUNCH_EXIT_CODE)
         return 1;
-    if (!read_state(&state))
+    if (code == 0 || !read_state(&state))
         return 0;
     if (get_true(&state, "pending_verification") && get_version(&state, "active", active, sizeof active) &&
-        strcmp(active, launched) == 0 && (timed_out || code != 0))
-        again = get_version(&state, "previous", previous, sizeof previous) ||
-                get_count(&state, "unverified_launches") < MAX_UNVERIFIED_LAUNCHES;
+        strcmp(active, launched) == 0)
+        again = get_count(&state, "unverified_launches") < MAX_UNVERIFIED_LAUNCHES ||
+                (get_version(&state, "previous", previous, sizeof previous) && strcmp(previous, active) != 0 &&
+                 version_runnable(previous));
     free_state(&state);
     return again;
-}
-
-static int still_unverified(const char *launched)
-{
-    State state;
-    char active[VERSION_MAX + 1];
-    int pending = 0;
-    if (read_state(&state)) {
-        pending = get_true(&state, "pending_verification") &&
-                  get_version(&state, "active", active, sizeof active) && strcmp(active, launched) == 0;
-        free_state(&state);
-    }
-    return pending;
 }
 
 /* -- Starting Python ------------------------------------------------------ */
@@ -592,8 +584,8 @@ static void set_version_environment(const wchar_t *root)
     }
 }
 
-/* Starts launcher.py of `version`; the process and its job come back in *process and *job. */
-static int start_version(const char *version, PROCESS_INFORMATION *process, HANDLE *job)
+/* Starts launcher.py of `version`; the process comes back in *process. */
+static int start_version(const char *version, PROCESS_INFORMATION *process)
 {
     wchar_t root[MAX_PATH], python[MAX_PATH], app[MAX_PATH];
     const wchar_t *arguments = forwarded_arguments();
@@ -632,45 +624,25 @@ static int start_version(const char *version, PROCESS_INFORMATION *process, HAND
     }
     memset(process, 0, sizeof *process);
     started = CreateProcessW(python, command, NULL, NULL, inherit,
-                             CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, NULL, app, &startup,
+                             CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, NULL, app, &startup,
                              process);
     free(command);
     if (!started) {
         log_line("could not start %s (error %lu)", version, GetLastError());
         return 0;
     }
-    /* A job without limits, only so a start that never gets ready can be stopped with all it started. */
-    *job = CreateJobObjectW(NULL, NULL);
-    if (*job && !AssignProcessToJobObject(*job, process->hProcess)) {
-        CloseHandle(*job);
-        *job = NULL;
-    }
-    ResumeThread(process->hThread);
     CloseHandle(process->hThread);
     log_line("started %s (pid %lu)", version, process->dwProcessId);
     return 1;
 }
 
-/* Waits for the launch to end; a pending start that is not verified in time is stopped. */
-static DWORD wait_for_exit(PROCESS_INFORMATION *process, HANDLE job, const char *version, int pending,
-                           int *timed_out)
+/* Waits for the launch to end. A slow start is left alone; the app may be migrating data. */
+static DWORD wait_for_exit(PROCESS_INFORMATION *process)
 {
     DWORD code = 1;
-    *timed_out = 0;
-    if (pending && WaitForSingleObject(process->hProcess, READY_TIMEOUT_MS) == WAIT_TIMEOUT &&
-        still_unverified(version)) {
-        log_line("%s did not become ready in %u s; stopping it", version, READY_TIMEOUT_MS / 1000u);
-        *timed_out = 1;
-        if (job)
-            TerminateJobObject(job, 1);
-        else
-            TerminateProcess(process->hProcess, 1);
-    }
     WaitForSingleObject(process->hProcess, INFINITE);
     GetExitCodeProcess(process->hProcess, &code);
     CloseHandle(process->hProcess);
-    if (job)
-        CloseHandle(job);
     return code;
 }
 
@@ -719,7 +691,7 @@ static HANDLE claim_supervisor(void)
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous_instance, PWSTR command_line, int show)
 {
     char version[VERSION_MAX + 1];
-    int quick_relaunches = 0;
+    int quick_relaunches = 0, error_relaunches = 0;
     DWORD code = 1;
     DWORD path_length;
     HANDLE supervisor;
@@ -748,46 +720,47 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous_instance, PWSTR comma
     if (!supervisor) {
         /* Row-Bot already runs from here: launcher.py shows it and exits. */
         PROCESS_INFORMATION process;
-        HANDLE job = NULL;
         State state;
-        int has = read_state(&state), timed_out;
+        int has = read_state(&state);
         int ok = has && get_version(&state, "active", version, sizeof version) && version_runnable(version);
         if (has)
             free_state(&state);
         if (!ok && !newest_version(version, sizeof version))
             return 1;
-        if (!start_version(version, &process, &job))
+        if (!start_version(version, &process))
             return 1;
-        return (int)wait_for_exit(&process, job, version, 0, &timed_out);
+        return (int)wait_for_exit(&process);
     }
 
     for (;;) {
         PROCESS_INFORMATION process;
-        HANDLE job = NULL;
-        int pending, timed_out;
         DWORD started_at;
 
-        if (!begin_launch(version, sizeof version, &pending)) {
+        if (!begin_launch(version, sizeof version)) {
             show_error(L"Row-Bot could not find an installed version to start. Reinstall Row-Bot from "
                        L"https://row-bot.ai.");
             return 1;
         }
-        if (!start_version(version, &process, &job)) {
+        if (!start_version(version, &process)) {
             show_error(L"Row-Bot could not start. Reinstall Row-Bot from https://row-bot.ai.");
             return 1;
         }
         started_at = GetTickCount();
-        code = wait_for_exit(&process, job, version, pending, &timed_out);
-        log_line("%s exited with code %lu%s", version, code, timed_out ? " (not ready in time)" : "");
-        if (!relaunch_after_exit(version, code, timed_out))
+        code = wait_for_exit(&process);
+        log_line("%s exited with code %lu", version, code);
+        if (!relaunch_after_exit(version, code))
             break;
-        if (code == RELAUNCH_EXIT_CODE && GetTickCount() - started_at < QUICK_RELAUNCH_MS) {
-            if (++quick_relaunches >= MAX_QUICK_RELAUNCHES) {
+        if (code == RELAUNCH_EXIT_CODE) {
+            error_relaunches = 0;
+            quick_relaunches = GetTickCount() - started_at < QUICK_RELAUNCH_MS ? quick_relaunches + 1 : 0;
+            if (quick_relaunches >= MAX_QUICK_RELAUNCHES) {
                 log_line("relaunch asked for %d times within seconds; stopping", quick_relaunches);
                 break;
             }
-        } else {
-            quick_relaunches = 0;
+        } else if (++error_relaunches >= MAX_ERROR_RELAUNCHES) {
+            /* A safety net: the state rules alone stop after a rollback or two tries. */
+            log_line("stopped after %d failed starts in a row", error_relaunches);
+            break;
         }
         log_line("starting Row-Bot again");
     }

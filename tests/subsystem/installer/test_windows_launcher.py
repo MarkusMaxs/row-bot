@@ -29,6 +29,8 @@ pytestmark = [
 ]
 
 SOURCE = Path("installer/windows/row_bot_launcher.c")
+CASES = json.loads(Path("contracts/install-layout/launch-cases.json").read_text(encoding="utf-8"))["cases"]
+NAMES = {"A": "5.2.0", "B": "5.2.1"}
 FAKE_LAUNCHER = """\
 import json, os, sys
 from pathlib import Path
@@ -87,11 +89,12 @@ class FakeInstall:
         root.mkdir(parents=True)
         shutil.copy2(exe, root / "Row-Bot.exe")
 
-    def version(self, name: str, *codes: int) -> Path:
+    def version(self, name: str, *codes: int, runnable: bool = True) -> Path:
         folder = self.root / "versions" / name
         (folder / "app").mkdir(parents=True)
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(folder / "python"), str(Path(sys.base_prefix))],
-                       check=True, capture_output=True)
+        if runnable:
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(folder / "python"), str(Path(sys.base_prefix))],
+                           check=True, capture_output=True)
         (folder / "app" / "launcher.py").write_text(FAKE_LAUNCHER, encoding="utf-8")
         (folder / "app" / "exit_codes.json").write_text(json.dumps(list(codes)), encoding="utf-8")
         return folder
@@ -100,6 +103,9 @@ class FakeInstall:
         env = {**os.environ, "FAKE_RUNS": str(self.runs), "ROW_BOT_DATA_DIR": str(self.root.parent / "data")}
         return subprocess.run([str(self.root / "Row-Bot.exe"), *args], env=env, capture_output=True, text=True,
                               timeout=120, check=False)
+
+    def write_raw_state(self, state: dict) -> None:
+        (self.root / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
     def launches(self) -> list[dict]:
         if not self.runs.exists():
@@ -141,6 +147,30 @@ def test_it_starts_the_active_version_with_the_launch_environment_and_relaunches
             "PLAYWRIGHT_BROWSERS_PATH": str(good / "python" / "playwright-browsers"),
         }
     assert layout.read_state(install.root).extra == {"kept": {"nested": ["}", 1]}}
+
+
+def _named(value):
+    if isinstance(value, dict):
+        return {key: _named(item) for key, item in value.items()}
+    return NAMES.get(value, value) if isinstance(value, str) else value
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
+def test_row_bot_exe_follows_the_shared_launch_cases(install, case):
+    for letter, name in NAMES.items():
+        install.version(name, *case["exits"].get(letter, []), runnable=letter in case["runnable"])
+    install.write_raw_state({"schema": 1, "ready": None, "last_rollback": None, **_named(case["state"])})
+
+    result = install.run("--server")
+
+    assert [launch["version"] for launch in install.launches()] == [NAMES[letter] for letter in case["launched"]]
+    state = json.loads((install.root / "state.json").read_text(encoding="utf-8"))
+    for key, expected in _named(case["final"]).items():
+        if key == "last_rollback":
+            assert {field: state[key][field] for field in expected} == expected
+        else:
+            assert state[key] == expected, (key, state)
+    assert result.returncode in {0, 3}, result.stderr
 
 
 def test_two_unverified_launches_that_fail_roll_back_to_previous(install):

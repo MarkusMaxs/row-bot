@@ -1270,11 +1270,12 @@ def _select_app_port(preferred: int = _PORT, max_tries: int = 50) -> tuple[int, 
 # ── Server subprocess management ───────────────────────────────────────────
 
 
-def _verify_install_when_ready(port: int) -> threading.Thread | None:
+def _verify_install_when_ready(port: int, server: object) -> threading.Thread | None:
     """Clear the install's ``pending_verification`` once this server answers ``/readyz``.
 
     The native launcher counts unverified launches after a switch and goes back
-    to the previous version after two; a version that becomes ready is kept.
+    to the previous version after two; a version that becomes ready is kept,
+    however long its start takes. The watch ends when the server stops.
     """
     try:
         layout = install_layout.detect()
@@ -1286,6 +1287,7 @@ def _verify_install_when_ready(port: int) -> threading.Thread | None:
     thread = threading.Thread(
         target=install_layout.verify_when_ready,
         args=(layout, port),
+        kwargs={"alive": lambda: bool(getattr(server, "is_alive", False))},
         daemon=True,
         name="row-bot-install-verify",
     )
@@ -3163,7 +3165,7 @@ class RowBotTray:
                 duration_ms=round((time.perf_counter() - server_started) * 1000.0, 1),
             )
             self._owns_server = True
-            _verify_install_when_ready(self._port)
+            _verify_install_when_ready(self._port, self._server)
             # Register cleanup in case launcher crashes
             atexit.register(self._server.stop)
 
@@ -3392,7 +3394,7 @@ def _run_direct(args: argparse.Namespace) -> None:
             duration_ms=round((time.perf_counter() - server_started) * 1000.0, 1),
         )
         owns_server = True
-        _verify_install_when_ready(port)
+        _verify_install_when_ready(port, server)
         atexit.register(server.stop)
         if (
             splash_proc is None

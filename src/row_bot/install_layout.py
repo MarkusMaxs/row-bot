@@ -15,9 +15,12 @@ and a small pointer file, ``R/state.json``:
 The native launchers (``Row-Bot.exe``, the macOS tray host and the Linux
 ``bin/row-bot`` wrapper) read ``state.json``, apply :func:`begin_launch` (the
 loop guard), start ``<active>/python`` with ``<active>/app/launcher.py`` and
-start it again only when it exits with :data:`RELAUNCH_EXIT_CODE`. The Python
-launcher clears ``pending_verification`` once ``/readyz`` answers
-(:func:`verify_when_ready`). User data never lives under ``R``.
+start it again only as :func:`relaunch_after_exit` says: always after
+:data:`RELAUNCH_EXIT_CODE`, and after a failed start of an unverified version
+while another launch can still make progress. The Python launcher clears
+``pending_verification`` once ``/readyz`` answers (:func:`verify_when_ready`);
+a slow start is never stopped. contracts/install-layout/launch-cases.json holds
+the cases every launcher is tested against. User data never lives under ``R``.
 
 The module uses the standard library only, so it also runs as a script
 (``python -I -S install_layout.py ...``) for the Linux wrapper and
@@ -30,6 +33,7 @@ import argparse
 import copy
 import hashlib
 import json
+import logging
 import os
 import platform
 import re
@@ -53,7 +57,8 @@ VERSION_FILE = "version.json"
 #: Launches in a row that never became ready before the native launcher goes
 #: back to ``previous``.
 MAX_UNVERIFIED_LAUNCHES = 2
-#: A start that is not ready this long after launch counts as failed.
+#: A start not ready this long after launch is logged as slow. It keeps
+#: running (startup may be migrating data) and is verified once ready.
 READY_TIMEOUT_SECONDS = 240.0
 
 INSTALL_ROOT_ENV = "ROW_BOT_INSTALL_ROOT"
@@ -63,6 +68,8 @@ WINDOWS_ROOT_NAME = "Row-Bot"
 MACOS_ROOT_NAME = "Row-Bot"
 LINUX_ROOT_NAME = "row-bot"
 LINUX_CURRENT_LINK = "current"
+
+logger = logging.getLogger(__name__)
 
 _VERSION_NAME = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$")
 _KNOWN_STATE_KEYS = frozenset(
@@ -306,6 +313,18 @@ def version_root(layout: InstallLayout, version: str) -> Path | None:
     return versions / version
 
 
+def version_runnable(root: Path, kind: InstallKind, version: object) -> bool:
+    """Whether a version folder can be started: its Python and ``app/launcher.py`` exist.
+
+    (The macOS seed lives in the bundle; the tray host checks it itself.)
+    """
+    if not is_valid_version_name(version):
+        return False
+    folder = Path(root) / ("releases" if kind is InstallKind.LINUX else "versions") / str(version)
+    python = folder / "python" / ("python.exe" if kind is InstallKind.WINDOWS else "bin/python3")
+    return python.is_file() and (folder / "app" / "launcher.py").is_file()
+
+
 # ── state.json ──────────────────────────────────────────────────────────────
 
 
@@ -403,9 +422,19 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _always(_version: str) -> bool:
+    return True
+
+
+def _can_roll_back(state: InstallState, runnable: Callable[[str], bool]) -> bool:
+    previous = state.previous
+    return bool(previous) and previous != state.active and runnable(str(previous))
+
+
 def begin_launch(
     state: InstallState,
     *,
+    runnable: Callable[[str], bool] = _always,
     max_unverified: int = MAX_UNVERIFIED_LAUNCHES,
     now: Callable[[], str] = _now_iso,
 ) -> tuple[InstallState, str | None]:
@@ -414,15 +443,16 @@ def begin_launch(
     While ``pending_verification`` is set (the version has not become ready
     since the switch), each launch adds one to ``unverified_launches``. Once
     ``max_unverified`` launches did not become ready, ``active`` goes back to
-    ``previous``, the flag is cleared and ``last_rollback`` records it.
-    Returns the new state and the version rolled back from, if any.
+    ``previous`` (only when *runnable* says that folder can start), the flag is
+    cleared and ``last_rollback`` records it. Returns the new state and the
+    version rolled back from, if any.
     """
     updated = copy.deepcopy(state)
     if not updated.pending_verification:
         updated.unverified_launches = 0
         return updated, None
     previous = updated.previous
-    if updated.unverified_launches >= max_unverified and previous and previous != updated.active:
+    if updated.unverified_launches >= max_unverified and previous and _can_roll_back(updated, runnable):
         failed = updated.active
         updated.active = previous
         updated.previous = None
@@ -446,23 +476,23 @@ def relaunch_after_exit(
     launched: str,
     exit_code: int,
     *,
-    timed_out: bool = False,
+    runnable: Callable[[str], bool] = _always,
     max_unverified: int = MAX_UNVERIFIED_LAUNCHES,
 ) -> bool:
     """Whether the native launcher starts the app again after it exited.
 
-    Always after :data:`RELAUNCH_EXIT_CODE`. After a failed start of a version
-    that is still unverified (a crash or the readiness timeout) only while
-    another launch can still succeed or roll back. A normal quit never
-    relaunches.
+    Always after :data:`RELAUNCH_EXIT_CODE`. After a version that is still
+    unverified exits with an error, only when the next launch can make
+    progress: another try below ``max_unverified``, or a rollback to a
+    runnable ``previous``. A normal quit never relaunches. (The native
+    launchers also stop after a few error relaunches in a row, whatever the
+    state says.)
     """
     if exit_code == RELAUNCH_EXIT_CODE:
         return True
-    if state is None or not state.pending_verification or state.active != launched:
+    if state is None or not state.pending_verification or state.active != launched or exit_code == 0:
         return False
-    if not timed_out and exit_code == 0:
-        return False
-    return bool(state.previous) or state.unverified_launches < max_unverified
+    return state.unverified_launches < max_unverified or _can_roll_back(state, runnable)
 
 
 def mark_verified(layout: InstallLayout) -> bool:
@@ -496,7 +526,8 @@ def verify_when_ready(
     layout: InstallLayout,
     port: int,
     *,
-    timeout: float = READY_TIMEOUT_SECONDS,
+    alive: Callable[[], bool] = lambda: True,
+    timeout: float | None = None,
     interval: float = 0.25,
     probe: Callable[[int], bool] = _readyz_answers,
     clock: Callable[[], float] = time.monotonic,
@@ -504,7 +535,10 @@ def verify_when_ready(
 ) -> bool:
     """Wait for this version's server to answer ``/readyz``, then verify it.
 
-    Returns at once when the install has nothing waiting for verification.
+    Waits while *alive* says the server runs (or until *timeout*, when given).
+    A start that takes longer than :data:`READY_TIMEOUT_SECONDS` is logged but
+    still verified once it is ready. Returns at once when the install has
+    nothing waiting for verification.
     """
     if not layout.self_updating or layout.root is None or layout.version is None:
         return False
@@ -513,22 +547,41 @@ def verify_when_ready(
         return False
     if not state.pending_verification and state.unverified_launches == 0:
         return False
-    deadline = clock() + timeout
-    while clock() < deadline:
+    started = clock()
+    warned = False
+    while alive():
         if probe(port):
             return mark_verified(layout)
-        sleep(interval)
+        waited = clock() - started
+        if timeout is not None and waited >= timeout:
+            return False
+        if not warned and waited >= READY_TIMEOUT_SECONDS:
+            warned = True
+            logger.warning(
+                "Row-Bot %s is not ready %.0f s after it started; it keeps running and is verified once ready",
+                layout.version,
+                waited,
+            )
+        sleep(interval if waited < 60 else 1.0)
     return False
 
 
 # ── Installers ──────────────────────────────────────────────────────────────
 
 
-def record_install(root: Path, version: str, *, kind: InstallKind) -> InstallState:
+def record_install(
+    root: Path,
+    version: str,
+    *,
+    kind: InstallKind,
+    legacy_install_pending: bool = False,
+) -> InstallState:
     """State after a full installer put *version* in place and made it active.
 
     The version that was active before becomes ``previous`` (when it is still
     there); a staged update and an old verification are dropped.
+    *legacy_install_pending* records that an older install for all users is
+    still there (its removal was declined) so the app can offer to remove it.
     """
     if not is_valid_version_name(version):
         raise ValueError(f"not a version folder name: {version!r}")
@@ -546,6 +599,10 @@ def record_install(root: Path, version: str, *, kind: InstallKind) -> InstallSta
         state.extra = dict(before.extra)
         state.extra.pop("verified_at", None)
         state.last_rollback = before.last_rollback
+    if legacy_install_pending:
+        state.extra["legacy_install_pending"] = True
+    else:
+        state.extra.pop("legacy_install_pending", None)
     write_state(folder, state)
     return state
 
@@ -607,18 +664,14 @@ def main(argv: list[str] | None = None) -> int:
     after.add_argument("--kind", type=_cli_kind, required=True)
     after.add_argument("--version", required=True)
     after.add_argument("--code", type=int, required=True)
-    after.add_argument("--timed-out", action="store_true")
-
-    unverified = commands.add_parser("still-unverified", help="Exit 0 while VERSION is active and unverified")
-    unverified.add_argument("--root", type=Path, required=True)
-    unverified.add_argument("--kind", type=_cli_kind, required=True)
-    unverified.add_argument("--version", required=True)
 
     install = commands.add_parser("record-install", help="Make a freshly installed version active")
     install.add_argument("--root", type=Path, required=True)
     install.add_argument("--kind", type=_cli_kind, required=True)
     install.add_argument("--version", required=True)
     install.add_argument("--prune", action="store_true", help="Delete versions other than active and previous")
+    install.add_argument("--legacy-install-pending", action="store_true",
+                         help="An older install for all users could not be removed")
 
     metadata = commands.add_parser("version-json", help="Write a version.json for a build")
     metadata.add_argument("--version", required=True)
@@ -631,7 +684,7 @@ def main(argv: list[str] | None = None) -> int:
         state = load_state(args.root, args.kind)
         if state is None:
             return 1
-        updated, failed = begin_launch(state)
+        updated, failed = begin_launch(state, runnable=lambda version: version_runnable(args.root, args.kind, version))
         if failed and args.kind is InstallKind.LINUX:
             set_linux_current(args.root, updated.active)
         on_disk = read_state(args.root)
@@ -643,12 +696,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "after-exit":
         state = load_state(args.root, args.kind)
-        return 0 if relaunch_after_exit(state, args.version, args.code, timed_out=args.timed_out) else 1
-    if args.command == "still-unverified":
-        state = load_state(args.root, args.kind)
-        return 0 if state is not None and state.pending_verification and state.active == args.version else 1
+        runnable = lambda version: version_runnable(args.root, args.kind, version)  # noqa: E731
+        return 0 if relaunch_after_exit(state, args.version, args.code, runnable=runnable) else 1
     if args.command == "record-install":
-        state = record_install(args.root, args.version, kind=args.kind)
+        state = record_install(args.root, args.version, kind=args.kind,
+                               legacy_install_pending=args.legacy_install_pending)
         if args.kind is InstallKind.LINUX:
             set_linux_current(args.root, state.active)
         if args.prune:

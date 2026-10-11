@@ -26,6 +26,9 @@ from row_bot.install_layout import InstallKind, InstallState
 pytestmark = [pytest.mark.subsystem, pytest.mark.installer, pytest.mark.platform]
 
 MODULE = Path(layout.__file__)
+CASES = json.loads(Path("contracts/install-layout/launch-cases.json").read_text(encoding="utf-8"))["cases"]
+# The `current` link and its atomic swap are Linux behaviour; Windows cannot rename over a directory link.
+posix_only = pytest.mark.skipif(os.name == "nt", reason="the current link belongs to the Linux layout")
 
 
 def _version(root: Path, parent: str, version: str) -> Path:
@@ -33,16 +36,6 @@ def _version(root: Path, parent: str, version: str) -> Path:
     app.mkdir(parents=True)
     (root / parent / version / "python").mkdir()
     return app
-
-
-def _symlinks_work(tmp_path: Path) -> bool:
-    probe = tmp_path / ".symlink-probe"
-    try:
-        os.symlink("target", probe)
-    except (OSError, NotImplementedError):
-        return False
-    probe.unlink()
-    return True
 
 
 # ── Recognising an install ──────────────────────────────────────────────────
@@ -207,9 +200,8 @@ def test_a_write_waits_out_a_reader_holding_the_file(tmp_path, monkeypatch):
     assert layout.read_state(tmp_path).active == "5.2.1"
 
 
+@posix_only
 def test_linux_current_link_is_the_active_version(tmp_path):
-    if not _symlinks_work(tmp_path):
-        pytest.skip("symlinks need extra rights on this Windows machine")
     (tmp_path / "releases" / "5.2.0").mkdir(parents=True)
     (tmp_path / "releases" / "5.2.1").mkdir()
     layout.set_linux_current(tmp_path, "5.2.0")
@@ -240,6 +232,45 @@ def test_versions_compare_as_releases(left, right, expected):
 def _pending(active="5.2.1", previous="5.2.0", launches=0) -> InstallState:
     return InstallState(active=active, previous=previous, pending_verification=True,
                         unverified_launches=launches, ready={"version": active, "staged_at": "t"})
+
+
+def _run_case(case: dict) -> tuple[list[str], InstallState]:
+    """What a native launcher does for one case, with the reference rules."""
+    raw = case["state"]
+    state = InstallState(
+        active=raw["active"], previous=raw.get("previous"), ready=raw.get("ready"),
+        pending_verification=raw.get("pending_verification", False),
+        unverified_launches=raw.get("unverified_launches", 0),
+    )
+    runnable = set(case["runnable"]).__contains__
+    exits = {version: list(codes) for version, codes in case["exits"].items()}
+    launched: list[str] = []
+    for _launch in range(10):
+        state, _failed = layout.begin_launch(state, runnable=runnable)
+        launched.append(state.active)
+        queue = exits.get(state.active, [])
+        code = queue.pop(0) if queue else 0
+        if not layout.relaunch_after_exit(state, state.active, code, runnable=runnable):
+            break
+    return launched, state
+
+
+def _final_matches(expected: dict, actual: dict) -> bool:
+    rollback = expected.get("last_rollback")
+    plain = {key: value for key, value in expected.items() if key != "last_rollback"}
+    if any(actual.get(key) != value for key, value in plain.items()):
+        return False
+    if rollback is None:
+        return "last_rollback" not in expected or actual.get("last_rollback") is None
+    return {key: (actual.get("last_rollback") or {}).get(key) for key in rollback} == rollback
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
+def test_the_shared_launch_cases_hold_for_the_reference_rules(case):
+    launched, state = _run_case(case)
+
+    assert launched == case["launched"]
+    assert _final_matches(case["final"], state.to_dict()), state.to_dict()
 
 
 def test_an_unverified_version_is_rolled_back_after_two_launches_that_never_got_ready():
@@ -285,24 +316,46 @@ def test_without_a_previous_version_the_guard_stops_retrying_instead_of_looping(
 
 
 @pytest.mark.parametrize(
-    ("state", "launched", "code", "timed_out", "expected"),
+    ("state", "launched", "code", "runnable", "expected"),
     [
-        (InstallState(active="5.2.0"), "5.2.0", 75, False, True),
-        (None, "5.2.0", 75, False, True),
-        (InstallState(active="5.2.0"), "5.2.0", 0, False, False),
-        (InstallState(active="5.2.0"), "5.2.0", 1, False, False),
-        (_pending(launches=1), "5.2.1", 0, False, False),
-        (_pending(launches=1), "5.2.1", 3, False, True),
-        (_pending(launches=1), "5.2.1", 0, True, True),
-        (_pending(launches=2), "5.2.0", 3, False, False),
+        (InstallState(active="5.2.0"), "5.2.0", 75, (), True),
+        (None, "5.2.0", 75, (), True),
+        (InstallState(active="5.2.0"), "5.2.0", 0, (), False),
+        (InstallState(active="5.2.0"), "5.2.0", 1, (), False),
+        (_pending(launches=1), "5.2.1", 0, ("5.2.0",), False),
+        (_pending(launches=1), "5.2.1", 3, (), True),
+        (_pending(launches=2), "5.2.1", 3, ("5.2.0",), True),
+        (_pending(launches=2), "5.2.1", 3, (), False),
+        (_pending(launches=2), "5.2.0", 3, ("5.2.0",), False),
     ],
     ids=["relaunch", "relaunch-no-state", "quit", "crash-verified", "quit-while-starting", "crash-unverified",
-         "readiness-timeout", "another-version-active"],
+         "crash-then-rollback", "crash-previous-cannot-start", "another-version-active"],
 )
-def test_the_app_starts_again_only_on_the_relaunch_code_or_a_failed_unverified_start(
-    state, launched, code, timed_out, expected
+def test_the_app_starts_again_only_on_the_relaunch_code_or_when_a_failed_start_can_progress(
+    state, launched, code, runnable, expected
 ):
-    assert layout.relaunch_after_exit(state, launched, code, timed_out=timed_out) is expected
+    assert layout.relaunch_after_exit(state, launched, code, runnable=set(runnable).__contains__) is expected
+
+
+def test_a_previous_version_that_cannot_start_is_never_rolled_back_to():
+    state, failed = layout.begin_launch(_pending(launches=2), runnable=lambda _version: False)
+
+    assert failed is None
+    assert (state.active, state.unverified_launches) == ("5.2.1", 3)
+
+
+@pytest.mark.parametrize("kind", [InstallKind.WINDOWS, InstallKind.LINUX], ids=["windows", "linux"])
+def test_a_version_folder_can_start_only_with_its_python_and_launcher(tmp_path, kind):
+    folder = tmp_path / ("releases" if kind is InstallKind.LINUX else "versions") / "5.2.0"
+    python = folder / "python" / ("python.exe" if kind is InstallKind.WINDOWS else "bin/python3")
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"")
+    assert layout.version_runnable(tmp_path, kind, "5.2.0") is False
+
+    (folder / "app").mkdir()
+    (folder / "app" / "launcher.py").write_text("", encoding="utf-8")
+    assert layout.version_runnable(tmp_path, kind, "5.2.0") is True
+    assert layout.version_runnable(tmp_path, kind, "../5.2.0") is False
 
 
 def test_the_relaunch_exit_code_is_75():
@@ -354,13 +407,32 @@ def test_a_version_that_was_rolled_back_meanwhile_is_not_verified(tmp_path):
     assert layout.read_state(tmp_path) == InstallState(active="5.2.0")
 
 
-def test_a_start_that_never_gets_ready_stays_unverified(tmp_path):
+def test_a_slow_start_is_still_verified_once_it_is_ready(tmp_path, caplog):
     installed = _installed(tmp_path)
     layout.write_state(tmp_path, _pending(launches=1))
-    ticks = iter(range(1000))
+    now = [0.0]
 
-    verified = layout.verify_when_ready(installed, 8090, timeout=5, probe=lambda _port: False,
-                                        clock=lambda: next(ticks), sleep=lambda _seconds: None)
+    def probe(_port):
+        return now[0] >= 600  # ready ten minutes after the start
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    with caplog.at_level("WARNING", logger="row_bot.install_layout"):
+        verified = layout.verify_when_ready(installed, 8090, probe=probe, clock=lambda: now[0], sleep=sleep)
+
+    assert verified is True
+    assert layout.read_state(tmp_path).pending_verification is False
+    assert "not ready 240 s after it started" in caplog.text
+
+
+def test_a_server_that_stops_before_it_is_ready_stays_unverified(tmp_path):
+    installed = _installed(tmp_path)
+    layout.write_state(tmp_path, _pending(launches=1))
+    alive = iter([True, True, False])
+
+    verified = layout.verify_when_ready(installed, 8090, alive=lambda: next(alive), probe=lambda _port: False,
+                                        sleep=lambda _seconds: None)
 
     assert verified is False
     assert layout.read_state(tmp_path) == _pending(launches=1)
@@ -370,17 +442,18 @@ def test_the_launcher_watches_readiness_only_for_an_installed_version(monkeypatc
     import row_bot.launcher as launcher
 
     started = []
+    server = SimpleNamespace(is_alive=True)
     monkeypatch.setattr(launcher.install_layout, "detect", lambda: layout.InstallLayout(InstallKind.DEV))
-    assert launcher._verify_install_when_ready(8090) is None
+    assert launcher._verify_install_when_ready(8090, server) is None
 
     installed = layout.InstallLayout(InstallKind.WINDOWS, Path("R"), "5.2.1", Path("R/versions/5.2.1"))
     monkeypatch.setattr(launcher.install_layout, "detect", lambda: installed)
     monkeypatch.setattr(launcher.install_layout, "verify_when_ready",
-                        lambda found, port: started.append((found, port)))
-    thread = launcher._verify_install_when_ready(8091)
+                        lambda found, port, alive: started.append((found, port, alive())))
+    thread = launcher._verify_install_when_ready(8091, server)
     thread.join(5)
 
-    assert started == [(installed, 8091)]
+    assert started == [(installed, 8091, True)]
 
 
 # ── Exit code 75 from the Python launcher ──────────────────────────────────
@@ -472,11 +545,13 @@ def test_a_first_install_has_no_previous(tmp_path):
     assert state == InstallState(active="5.2.0")
 
 
+@posix_only
 def test_the_command_line_applies_the_loop_guard_for_the_linux_wrapper(tmp_path, capsys):
-    if not _symlinks_work(tmp_path):
-        pytest.skip("symlinks need extra rights on this Windows machine")
     for version in ("5.2.0", "5.2.1"):
-        (tmp_path / "releases" / version).mkdir(parents=True)
+        _version(tmp_path, "releases", version)
+        (tmp_path / "releases" / version / "python" / "bin").mkdir()
+        (tmp_path / "releases" / version / "python" / "bin" / "python3").write_bytes(b"")
+        (tmp_path / "releases" / version / "app" / "launcher.py").write_text("", encoding="utf-8")
     layout.set_linux_current(tmp_path, "5.2.1")
     layout.write_state(tmp_path, _pending(launches=2))
     root = str(tmp_path)
@@ -487,6 +562,17 @@ def test_the_command_line_applies_the_loop_guard_for_the_linux_wrapper(tmp_path,
     assert layout.read_state(tmp_path).last_rollback["from"] == "5.2.1"
     assert layout.main(["after-exit", "--root", root, "--kind", "linux", "--version", "5.2.0", "--code", "0"]) == 1
     assert layout.main(["after-exit", "--root", root, "--kind", "linux", "--version", "5.2.0", "--code", "75"]) == 0
+
+
+def test_an_install_records_that_an_old_install_for_all_users_is_still_there(tmp_path, capsys):
+    root = str(tmp_path)
+
+    assert layout.main(["record-install", "--root", root, "--kind", "windows", "--version", "5.2.0",
+                        "--legacy-install-pending"]) == 0
+    assert layout.read_state(tmp_path).extra == {"legacy_install_pending": True}
+    # A later install that removed it clears the flag.
+    assert layout.main(["record-install", "--root", root, "--kind", "windows", "--version", "5.2.0"]) == 0
+    assert layout.read_state(tmp_path).extra == {}
 
 
 def test_the_command_line_records_an_install_and_writes_version_json(tmp_path, capsys):
