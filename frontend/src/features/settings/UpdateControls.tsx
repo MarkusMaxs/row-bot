@@ -2,37 +2,71 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { remindLaterAbout } from '../shell/AttentionIndicator';
 import {
   ArrowUpCircle,
+  CheckCircle2,
   Clock,
   Download,
+  History,
   PackageCheck,
   RefreshCw,
+  RotateCcw,
+  Server,
+  ShieldAlert,
   SkipForward,
+  TriangleAlert,
 } from 'lucide-react';
 import type {
   UpdateCommand,
-  UpdateInstallCommand,
-  UpdateInstallStatus,
   UpdateReceipt,
   UpdateSnapshot,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
-import { Button, Disclosure, IconButton } from '../../ui/primitives';
+import { Button, Disclosure, IconButton, Toggle } from '../../ui/primitives';
+import { ModalTask } from '../../ui/overlays';
 import { absoluteTime, relativeTime } from '../../ui/format';
 import { SettingsItem, StatusLine } from './anatomy';
 
 type Owner = {
   load: (signal?: AbortSignal) => Promise<UpdateSnapshot>;
   send: (command: UpdateCommand) => Promise<UpdateReceipt>;
-  startInstall?: (
-    command: UpdateInstallCommand,
-  ) => Promise<UpdateInstallStatus>;
-  installStatus?: (commandId: string) => Promise<UpdateInstallStatus>;
-  cancelInstall?: (commandId: string) => Promise<UpdateInstallStatus>;
 };
 
+type Action = UpdateCommand['action'];
+type Extra = Partial<Pick<UpdateCommand, 'when' | 'force' | 'enabled'>>;
+
 const pendingKey = 'row-bot:updates:pending:v1';
-const installKey = 'row-bot:updates:install:v1';
+const POLL_MS = 1000;
+const MOVING = new Set(['checking', 'downloading', 'staging', 'applying']);
+
+const STEPS: Record<string, string> = {
+  manifest: 'Reading the release',
+  code: 'Downloading',
+  libraries: 'Downloading libraries',
+  clone: 'Copying the runtime',
+  unpack: 'Unpacking',
+  compile: 'Compiling',
+  self_test: 'Testing the new version',
+  finish: 'Finishing',
+};
+
+const HOST_STATES: Record<string, string> = {
+  unknown: 'The host hasn’t reported its update status yet.',
+  idle: 'Up to date, as far as the host knows.',
+  checking: 'The host is checking for updates.',
+  downloading: 'The host is downloading an update.',
+  ready: 'The host has an update ready.',
+  applying: 'The host is updating Row-Bot.',
+  failed: 'The host’s last update failed.',
+  paused: 'Updates are paused on the host.',
+};
+
+const HOST_ACTIONS: Record<string, string> = {
+  check: 'a check',
+  update_now: 'an update',
+  skip: 'a skip',
+  pause: 'a pause',
+  resume: 'updates to resume',
+};
 
 function savedPending(): UpdateCommand | null {
   try {
@@ -48,33 +82,75 @@ function savedPending(): UpdateCommand | null {
   }
 }
 
-function savedInstall(): UpdateInstallCommand | null {
+function megabytes(bytes: number) {
+  return `${(bytes / 1_000_000).toFixed(bytes < 10_000_000 ? 1 : 0)} MB`;
+}
+
+function githubUrl(value: string | null | undefined) {
   try {
-    const raw = sessionStorage.getItem(installKey);
-    if (!raw || raw.length > 2048) return null;
-    const value = JSON.parse(raw) as UpdateInstallCommand;
-    return typeof value.command_id === 'string' &&
-      typeof value.version === 'string'
-      ? value
-      : null;
+    const url = new URL(value ?? '');
+    return url.protocol === 'https:' &&
+      (url.hostname === 'github.com' ||
+        url.hostname.endsWith('.githubusercontent.com'))
+      ? url.href
+      : '';
   } catch {
-    return null;
+    return '';
+  }
+}
+
+function noticeFor(receipt: UpdateReceipt, command: UpdateCommand) {
+  const next = receipt.snapshot;
+  if (receipt.status === 'requested')
+    return 'Sent to the host. It applies the request on its own schedule.';
+  if (receipt.status === 'failed')
+    return command.action === 'check' || command.action === 'clear_skipped'
+      ? 'The update check could not reach a verified release source. Try again later.'
+      : 'That didn’t work. Refresh the update status and try again.';
+  switch (command.action) {
+    case 'check':
+    case 'clear_skipped':
+      if (
+        next.engine.phase === 'downloading' ||
+        next.engine.phase === 'staging'
+      )
+        return `Version ${next.engine.version} is downloading in the background.`;
+      return next.available
+        ? `Version ${next.available.version} is available.`
+        : 'No update is available on this channel.';
+    case 'skip':
+      return 'Update preference saved.';
+    case 'set_auto_check':
+      return command.enabled
+        ? 'Row-Bot checks for updates by itself.'
+        : 'Row-Bot checks for updates only when you ask.';
+    case 'set_auto_download':
+      return command.enabled
+        ? 'Updates download in the background.'
+        : 'Updates download only when you choose.';
+    case 'apply':
+      return command.when === 'when_idle'
+        ? 'Row-Bot restarts to update when it is idle.'
+        : command.when === 'on_quit'
+          ? 'The update installs the next time you quit Row-Bot.'
+          : 'Restarting…';
+    case 'remove_legacy':
+      return 'Approve the Windows prompt to remove the earlier Row-Bot.';
+    default:
+      return '';
   }
 }
 
 export function UpdateControls({ owner }: { owner: Owner }) {
   const [snapshot, setSnapshot] = useState<UpdateSnapshot | null>(null);
   const [pending, setPending] = useState<UpdateCommand | null>(savedPending);
-  const [installCommand, setInstallCommand] =
-    useState<UpdateInstallCommand | null>(savedInstall);
-  const [installStatus, setInstallStatus] =
-    useState<UpdateInstallStatus | null>(null);
-  const [installError, setInstallError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [deferred, setDeferred] = useState(false);
+  const [guard, setGuard] = useState(false);
+  const [repair, setRepair] = useState(false);
   const running = useRef(false);
   const load = useCallback(
     async (signal?: AbortSignal) => {
@@ -82,11 +158,6 @@ export function UpdateControls({ owner }: { owner: Owner }) {
       try {
         const value = await owner.load(signal);
         setSnapshot(value);
-        if (savedInstall()?.version === value.current_version) {
-          sessionStorage.removeItem(installKey);
-          setInstallCommand(null);
-          setInstallStatus(null);
-        }
         setError('');
       } catch (cause) {
         if (!signal?.aborted) setError(clientError(cause).message);
@@ -101,80 +172,22 @@ export function UpdateControls({ owner }: { owner: Owner }) {
     void load(abort.signal);
     return () => abort.abort();
   }, [load]);
+  const phase = snapshot?.engine.phase ?? 'idle';
+  // Background work moves on its own: follow it while it does.
   useEffect(() => {
-    if (!installCommand || !owner.installStatus) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      try {
-        const value = await owner.installStatus!(installCommand.command_id);
-        if (stopped || value.command_id !== installCommand.command_id) return;
-        setInstallStatus(value);
-        setInstallError('');
-        if (value.phase === 'downloading' || value.phase === 'cancel_requested')
-          timer = setTimeout(() => void poll(), 1000);
-      } catch (cause) {
-        if (!stopped) setInstallError(clientError(cause).message);
-      }
-    };
-    void poll();
+    if (!MOVING.has(phase)) return;
+    const abort = new AbortController();
+    const timer = setTimeout(() => {
+      owner.load(abort.signal).then(
+        (value) => setSnapshot(value),
+        () => undefined,
+      );
+    }, POLL_MS);
     return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
+      abort.abort();
     };
-  }, [installCommand, owner]);
-
-  async function startInstall(command: UpdateInstallCommand) {
-    if (!owner.startInstall || !snapshot || busy || running.current) return;
-    running.current = true;
-    setBusy(true);
-    setInstallError('');
-    let reserved = false;
-    try {
-      sessionStorage.setItem(installKey, JSON.stringify(command));
-      reserved = true;
-      const result = await owner.startInstall(command);
-      if (result.command_id !== command.command_id)
-        throw new Error('Installer receipt did not match this action');
-      setInstallStatus(result);
-      setInstallCommand(command);
-    } catch (cause) {
-      const issue = clientError(cause);
-      const rejected = [
-        'update_changed',
-        'update_unavailable',
-        'update_install_busy',
-        'invalid_update_command',
-        'update_command_conflict',
-      ].includes(issue.code);
-      if (!reserved || rejected) {
-        if (reserved) sessionStorage.removeItem(installKey);
-        setInstallCommand(null);
-        setInstallError(issue.message);
-      } else {
-        setInstallCommand(command);
-        setInstallError(
-          `${issue.message} Check the original installation before retrying.`,
-        );
-      }
-    } finally {
-      running.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function cancelInstall() {
-    if (!installCommand || !owner.cancelInstall || busy) return;
-    setBusy(true);
-    try {
-      setInstallStatus(await owner.cancelInstall(installCommand.command_id));
-      setInstallError('');
-    } catch (cause) {
-      setInstallError(clientError(cause).message);
-    } finally {
-      setBusy(false);
-    }
-  }
+  }, [phase, snapshot, owner]);
 
   async function execute(command: UpdateCommand) {
     if (running.current) return;
@@ -191,16 +204,7 @@ export function UpdateControls({ owner }: { owner: Owner }) {
       sessionStorage.removeItem(pendingKey);
       setPending(null);
       setSnapshot(receipt.snapshot);
-      setNotice(
-        receipt.status === 'failed'
-          ? 'The update check could not reach a verified release source. Try again later.'
-          : command.action === 'skip'
-            ? 'Update preference saved.'
-            : // Check, or Show it again (which checks).
-              receipt.snapshot.available
-              ? `Version ${receipt.snapshot.available.version} is available.`
-              : 'No update is available on this channel.',
-      );
+      setNotice(noticeFor(receipt, command));
     } catch (cause) {
       const issue = clientError(cause);
       if (
@@ -208,10 +212,20 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           'update_changed',
           'invalid_update_command',
           'update_command_conflict',
+          'update_not_ready',
+          'update_restart_busy',
+          'update_busy',
+          'update_no_previous',
+          'update_unavailable',
         ].includes(issue.code)
       ) {
         sessionStorage.removeItem(pendingKey);
         setPending(null);
+      }
+      if (issue.code === 'update_restart_busy') {
+        // Work started since the page was read: ask again.
+        setGuard(true);
+        void load();
       }
       setError(issue.message);
     } finally {
@@ -220,29 +234,298 @@ export function UpdateControls({ owner }: { owner: Owner }) {
     }
   }
 
-  function send(action: UpdateCommand['action'], version = '') {
-    if (!snapshot || pending || installCommand || busy) return;
+  function send(action: Action, version = '', extra: Extra = {}) {
+    if (!snapshot || pending || busy) return;
     void execute({
       command_id: crypto.randomUUID(),
       expected_revision: snapshot.revision,
       action,
       version,
+      ...extra,
     });
   }
 
-  const releaseUrl = (() => {
-    try {
-      const url = new URL(snapshot?.available?.html_url ?? '');
-      return url.protocol === 'https:' && url.hostname === 'github.com'
-        ? url.href
-        : '';
-    } catch {
-      return '';
-    }
-  })();
-  const locked = busy || !!pending || !!installCommand;
+  const locked = busy || !!pending;
   const available = snapshot?.available ?? null;
   const skipped = snapshot?.skipped_versions ?? [];
+  const engine = snapshot?.engine;
+  const external = snapshot?.mode === 'external';
+  const self = snapshot?.mode === 'self';
+  const readyVersion = engine?.phase === 'ready' ? engine.version : null;
+  const work = snapshot?.active_work ?? [];
+  const notesFor = (version: string | null | undefined) =>
+    available && version === available.version ? available : null;
+
+  function restartNow() {
+    if (!readyVersion) return;
+    if (work.length) {
+      setGuard(true);
+      return;
+    }
+    send('apply', readyVersion, { when: 'now' });
+  }
+
+  function whatsNew(release: NonNullable<UpdateSnapshot['available']>) {
+    const releaseUrl = githubUrl(release.html_url);
+    return (
+      <Disclosure
+        className="settings-update-notes-disclosure"
+        summary="What’s new"
+      >
+        <pre className="settings-update-notes">{release.notes}</pre>
+        {releaseUrl && (
+          <a href={releaseUrl} target="_blank" rel="noopener noreferrer">
+            View release notes
+          </a>
+        )}
+      </Disclosure>
+    );
+  }
+
+  const engineRow = (() => {
+    if (!snapshot || !engine || !self) return null;
+    const version = engine.version ?? '';
+    switch (engine.phase) {
+      case 'downloading':
+      case 'staging': {
+        const step = STEPS[engine.step ?? ''] ?? 'Preparing';
+        const percent =
+          engine.total > 0
+            ? Math.min(
+                100,
+                Math.floor((engine.downloaded / engine.total) * 100),
+              )
+            : null;
+        return (
+          <SettingsItem
+            label={`${engine.phase === 'staging' ? 'Preparing' : 'Downloading'} version ${version}`}
+            icon={<Download size={16} aria-hidden />}
+            tone="accent"
+            bind={false}
+            help={
+              engine.phase === 'downloading' && engine.total > 0
+                ? `${step}: ${megabytes(engine.downloaded)} of ${megabytes(engine.total)}. Only what changed is downloaded.`
+                : `${step}… Row-Bot keeps working while it prepares the update.`
+            }
+            control={
+              <Button disabled={locked} onClick={() => send('cancel')}>
+                Cancel
+              </Button>
+            }
+          >
+            {engine.phase === 'downloading' && percent !== null && (
+              <progress
+                aria-label="Update download"
+                value={engine.downloaded}
+                max={engine.total}
+              >
+                {percent}%
+              </progress>
+            )}
+          </SettingsItem>
+        );
+      }
+      case 'ready': {
+        const release = notesFor(version);
+        return (
+          <SettingsItem
+            label={`Version ${version} is ready`}
+            icon={<ArrowUpCircle size={16} aria-hidden />}
+            tone="accent"
+            bind={false}
+            help={
+              engine.apply_when === 'when_idle'
+                ? 'Row-Bot restarts to install it as soon as nothing is running.'
+                : engine.apply_when === 'on_quit'
+                  ? 'It installs the next time you quit Row-Bot.'
+                  : 'Restart now to install it, or it installs the next time you quit Row-Bot.'
+            }
+            status={
+              work.length ? (
+                <StatusLine tone="warning">{work.join(' · ')}</StatusLine>
+              ) : undefined
+            }
+            control={
+              <Button
+                variant="primary"
+                aria-label={`Restart now to install version ${version}`}
+                disabled={locked}
+                onClick={restartNow}
+              >
+                <RefreshCw size={14} aria-hidden />
+                Restart now
+              </Button>
+            }
+          >
+            {release && whatsNew(release)}
+          </SettingsItem>
+        );
+      }
+      case 'applying':
+        return (
+          <SettingsItem
+            label={`Installing version ${version}`}
+            icon={<RefreshCw size={16} aria-hidden />}
+            tone="accent"
+            bind={false}
+            help={<span role="status">{engine.message || 'Restarting…'}</span>}
+          />
+        );
+      case 'verified':
+        return (
+          <SettingsItem
+            label={`Updated to ${version}`}
+            icon={<CheckCircle2 size={16} aria-hidden />}
+            tone="accent"
+            bind={false}
+            help={
+              engine.message ||
+              'The update installed and Row-Bot started normally.'
+            }
+          />
+        );
+      case 'failed': {
+        const installer =
+          engine.error === 'full_installer'
+            ? githubUrl(engine.full_installer_url)
+            : '';
+        return (
+          <SettingsItem
+            label={
+              engine.error === 'full_installer'
+                ? `Version ${version} needs the full installer`
+                : `Version ${version} could not be prepared`
+            }
+            icon={<TriangleAlert size={16} aria-hidden />}
+            tone="2"
+            bind={false}
+            help={
+              <span role="alert">
+                {engine.message || 'Preparing the update failed.'}
+                {engine.error === 'full_installer' &&
+                  ' It changes Row-Bot’s runtime, so it can’t be prepared in the background.'}
+              </span>
+            }
+            control={
+              <>
+                {installer && (
+                  <a
+                    className="button primary"
+                    href={installer}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Download size={14} aria-hidden />
+                    Download the full installer
+                  </a>
+                )}
+                {engine.retryable && available?.version === version && (
+                  <Button
+                    disabled={locked}
+                    onClick={() => send('retry', version)}
+                  >
+                    Try again
+                  </Button>
+                )}
+              </>
+            }
+          />
+        );
+      }
+      default:
+        return null;
+    }
+  })();
+
+  const host = snapshot?.host ?? null;
+  const hostRow =
+    external && host ? (
+      <SettingsItem
+        label="Updated by this computer’s host"
+        icon={<Server size={16} aria-hidden />}
+        tone="neutral"
+        bind={false}
+        help={host.message || HOST_STATES[host.state]}
+        status={
+          <>
+            {host.available_version && (
+              <StatusLine>
+                Version {host.available_version} is available
+              </StatusLine>
+            )}
+            {host.request && (
+              <StatusLine tone="info" pulse>
+                Waiting for the host to act on{' '}
+                {HOST_ACTIONS[host.request.action]}
+              </StatusLine>
+            )}
+            {host.updated_at && (
+              <StatusLine>
+                Reported{' '}
+                <time
+                  dateTime={host.updated_at}
+                  title={absoluteTime(host.updated_at)}
+                >
+                  {relativeTime(host.updated_at)}
+                </time>
+              </StatusLine>
+            )}
+          </>
+        }
+        control={
+          <>
+            {host.available_version && (
+              <Button
+                variant="primary"
+                disabled={locked}
+                onClick={() =>
+                  send('apply', host.available_version ?? '', { when: 'now' })
+                }
+              >
+                Update now
+              </Button>
+            )}
+            {host.available_version && (
+              <IconButton
+                label={`Skip version ${host.available_version}`}
+                disabled={locked}
+                onClick={() => send('skip', host.available_version ?? '')}
+              >
+                <SkipForward size={16} aria-hidden />
+              </IconButton>
+            )}
+            <Button
+              disabled={locked}
+              onClick={() => send(host.state === 'paused' ? 'resume' : 'pause')}
+            >
+              {host.state === 'paused' ? 'Resume updates' : 'Pause updates'}
+            </Button>
+          </>
+        }
+      >
+        {githubUrl(host.notes_url) && (
+          <a
+            href={githubUrl(host.notes_url)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            What’s new
+          </a>
+        )}
+      </SettingsItem>
+    ) : null;
+
+  const offered =
+    available &&
+    self &&
+    !(
+      engine &&
+      engine.version === available.version &&
+      ['downloading', 'staging', 'ready', 'applying', 'failed'].includes(
+        engine.phase,
+      )
+    );
+
   return (
     <div className="settings-update-controls" aria-busy={busy || loading}>
       {loading && !snapshot && (
@@ -264,10 +547,14 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           tone="accent"
           bind={false}
           help={
-            snapshot.dev_install ? (
+            snapshot.mode === 'unavailable' ? (
               'Development checkout: installed-app updates are unavailable.'
             ) : notice ? (
               <span role="status">{notice}</span>
+            ) : phase === 'checking' ? (
+              <span role="status">Checking for updates…</span>
+            ) : external ? (
+              'This Row-Bot’s host installs its updates.'
             ) : snapshot.last_check ? (
               <>
                 Checked{' '}
@@ -283,7 +570,7 @@ export function UpdateControls({ owner }: { owner: Owner }) {
             )
           }
           status={
-            skipped.length
+            skipped.length && self
               ? skipped.map((version) => (
                   // The server reports only the skip holding back the
                   // release on offer (B261).
@@ -306,10 +593,10 @@ export function UpdateControls({ owner }: { owner: Owner }) {
               : undefined
           }
           control={
-            snapshot.dev_install ? undefined : (
+            snapshot.mode === 'unavailable' ? undefined : (
               <Button
                 aria-label="Check for updates"
-                disabled={locked}
+                disabled={locked || phase === 'checking'}
                 onClick={() => send('check')}
               >
                 <RefreshCw size={14} aria-hidden />
@@ -326,68 +613,11 @@ export function UpdateControls({ owner }: { owner: Owner }) {
               </Button>
             </div>
           )}
-          {installError && <p role="alert">{installError}</p>}
         </SettingsItem>
       )}
-      {installCommand && (
-        <SettingsItem
-          label={
-            installStatus?.message ??
-            'Checking the original installation status.'
-          }
-          icon={<Download size={16} aria-hidden />}
-          tone="accent"
-          bind={false}
-          control={
-            <>
-              {(installStatus?.phase === 'downloading' ||
-                installStatus?.phase === 'cancel_requested') && (
-                <Button
-                  disabled={busy || installStatus.phase === 'cancel_requested'}
-                  onClick={() => void cancelInstall()}
-                >
-                  Cancel download
-                </Button>
-              )}
-              {(installStatus?.phase === 'cancelled' ||
-                installStatus?.phase === 'failed') && (
-                <Button
-                  onClick={() => {
-                    sessionStorage.removeItem(installKey);
-                    setInstallCommand(null);
-                    setInstallStatus(null);
-                    void load();
-                  }}
-                >
-                  Refresh release
-                </Button>
-              )}
-              {!installStatus && (
-                <Button
-                  disabled={busy}
-                  onClick={() => void startInstall(installCommand)}
-                >
-                  Retry original installation
-                </Button>
-              )}
-            </>
-          }
-        >
-          {installStatus && installStatus.total > 0 && (
-            <progress
-              aria-label="Update download"
-              value={installStatus.downloaded}
-              max={installStatus.total}
-            >
-              {Math.floor(
-                (installStatus.downloaded / installStatus.total) * 100,
-              )}
-              %
-            </progress>
-          )}
-        </SettingsItem>
-      )}
-      {available && !deferred && (
+      {hostRow}
+      {engineRow}
+      {offered && !deferred && (
         <SettingsItem
           label={`Version ${available.version} is available`}
           icon={<ArrowUpCircle size={16} aria-hidden />}
@@ -395,33 +625,24 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           bind={false}
           help={
             !available.verified_manifest
-              ? 'No verified installer checksum is available.'
-              : snapshot!.install_here
-                ? 'Release manifest includes an installer checksum.'
-                : 'Installing on a Mac opens Finder there, so it’s done in the Row-Bot desktop app on the Mac.'
+              ? 'No verified release checksum is available, so it can’t be downloaded.'
+              : snapshot!.auto_download
+                ? 'It downloads in the background. Only what changed is downloaded.'
+                : 'Download it in the background; nothing changes until Row-Bot restarts.'
           }
           control={
             <>
-              {available.verified_manifest &&
-                owner.startInstall &&
-                // A Mac installs from Finder: the desktop app there does it.
-                snapshot!.install_here && (
-                  <Button
-                    variant="primary"
-                    aria-label={`Install version ${available.version}`}
-                    disabled={locked}
-                    onClick={() =>
-                      void startInstall({
-                        command_id: crypto.randomUUID(),
-                        expected_revision: snapshot!.revision,
-                        version: available.version,
-                      })
-                    }
-                  >
-                    <Download size={14} aria-hidden />
-                    Install
-                  </Button>
-                )}
+              {available.verified_manifest && (
+                <Button
+                  variant="primary"
+                  aria-label={`Download version ${available.version}`}
+                  disabled={locked}
+                  onClick={() => send('download', available.version)}
+                >
+                  <Download size={14} aria-hidden />
+                  Download
+                </Button>
+              )}
               <IconButton
                 label={`Skip version ${available.version}`}
                 disabled={locked}
@@ -443,20 +664,10 @@ export function UpdateControls({ owner }: { owner: Owner }) {
             </>
           }
         >
-          <Disclosure
-            className="settings-update-notes-disclosure"
-            summary="What’s new"
-          >
-            <pre className="settings-update-notes">{available.notes}</pre>
-            {releaseUrl && (
-              <a href={releaseUrl} target="_blank" rel="noopener noreferrer">
-                View release notes
-              </a>
-            )}
-          </Disclosure>
+          {whatsNew(available)}
         </SettingsItem>
       )}
-      {available && deferred && (
+      {offered && deferred && (
         <SettingsItem
           label={`Version ${available.version} is available`}
           help="Hidden until tomorrow on this device."
@@ -467,6 +678,136 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           }
         />
       )}
+      {snapshot && self && (
+        <>
+          <SettingsItem
+            label="Check for updates automatically"
+            help="Row-Bot looks for a new release a few times a day."
+            control={
+              <Toggle
+                label="Check for updates automatically"
+                checked={snapshot.auto_check}
+                disabled={locked}
+                onChange={(event) =>
+                  send('set_auto_check', '', {
+                    enabled: event.currentTarget.checked,
+                  })
+                }
+              />
+            }
+          />
+          <SettingsItem
+            label="Download updates automatically"
+            help="Downloads only what changed and prepares it next to this version. Nothing changes until Row-Bot restarts or you quit it."
+            control={
+              <Toggle
+                label="Download updates automatically"
+                checked={snapshot.auto_download}
+                disabled={locked}
+                onChange={(event) =>
+                  send('set_auto_download', '', {
+                    enabled: event.currentTarget.checked,
+                  })
+                }
+              />
+            }
+          />
+        </>
+      )}
+      {snapshot?.previous_version && self && (
+        <SettingsItem
+          label="Repair"
+          icon={<History size={16} aria-hidden />}
+          help={`If this version misbehaves, go back to Row-Bot ${snapshot.previous_version}. Your data stays as it is.`}
+          control={
+            <Button
+              aria-label={`Go back to ${snapshot.previous_version}`}
+              disabled={locked}
+              onClick={() => setRepair(true)}
+            >
+              <RotateCcw size={14} aria-hidden />
+              Go back to {snapshot.previous_version}
+            </Button>
+          }
+        />
+      )}
+      {snapshot?.legacy_install && (
+        <SettingsItem
+          label="An earlier Row-Bot is still installed for all users"
+          icon={<ShieldAlert size={16} aria-hidden />}
+          help="Removing it needs administrator approval. Your data is kept."
+          control={
+            <Button
+              aria-label="Remove the old Row-Bot"
+              disabled={locked}
+              onClick={() => send('remove_legacy')}
+            >
+              Remove the old Row-Bot
+            </Button>
+          }
+        />
+      )}
+      <ModalTask
+        open={guard && !!readyVersion}
+        onOpenChange={setGuard}
+        title="Restart now?"
+        description="Restarting stops what Row-Bot is doing right now."
+      >
+        <ul className="settings-update-work">
+          {work.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+        <div className="action-cluster">
+          <Button
+            variant="primary"
+            data-initial-focus
+            onClick={() => {
+              setGuard(false);
+              send('apply', readyVersion ?? '', { when: 'when_idle' });
+            }}
+          >
+            Restart when idle
+          </Button>
+          <Button
+            onClick={() => {
+              setGuard(false);
+              send('apply', readyVersion ?? '', { when: 'on_quit' });
+            }}
+          >
+            When I quit
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              setGuard(false);
+              send('apply', readyVersion ?? '', { when: 'now', force: true });
+            }}
+          >
+            Restart anyway
+          </Button>
+        </div>
+      </ModalTask>
+      <ModalTask
+        open={repair && !!snapshot?.previous_version}
+        onOpenChange={setRepair}
+        title={`Go back to ${snapshot?.previous_version ?? ''}?`}
+        description="Row-Bot restarts into the earlier version. You can update again later."
+      >
+        <div className="action-cluster">
+          <Button
+            variant="primary"
+            data-initial-focus
+            onClick={() => {
+              setRepair(false);
+              send('rollback', snapshot?.previous_version ?? '');
+            }}
+          >
+            Go back and restart
+          </Button>
+          <Button onClick={() => setRepair(false)}>Cancel</Button>
+        </div>
+      </ModalTask>
     </div>
   );
 }
@@ -476,9 +817,6 @@ export default function ConnectedUpdateControls() {
   const owner = useRef<Owner>({
     load: (signal) => controller.updates(signal),
     send: (command) => controller.updateCommand(command),
-    startInstall: (command) => controller.startUpdateInstall(command),
-    installStatus: (commandId) => controller.updateInstall(commandId),
-    cancelInstall: (commandId) => controller.cancelUpdateInstall(commandId),
   });
   return <UpdateControls owner={owner.current} />;
 }

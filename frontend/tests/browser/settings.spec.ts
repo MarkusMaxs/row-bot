@@ -2367,3 +2367,96 @@ test.describe('Knowledge settings', () => {
     ).toBeDisabled();
   });
 });
+
+test('A ready update says Restart to update and restarts from Settings', async ({
+  page,
+  context,
+}) => {
+  await blockFixtureServiceWorkers(context);
+  const engine = {
+    phase: 'ready',
+    version: '99.0.0',
+    step: null,
+    message: null,
+    error: null,
+    retryable: false,
+    apply_when: null,
+    full_installer_url: null,
+    downloaded: 0,
+    total: 0,
+  };
+  const snapshot = {
+    schema_version: 1,
+    revision: 'c'.repeat(64),
+    channel: 'stable',
+    current_version: '98.0.0',
+    last_check: null,
+    last_success: null,
+    skipped_versions: [],
+    available: {
+      version: '99.0.0',
+      channel: 'stable',
+      published_at: '2026-10-11T12:00:00Z',
+      notes: 'Synthetic release notes',
+      html_url: 'https://github.com/example/row-bot/releases/tag/v99.0.0',
+      asset_size: 1,
+      verified_manifest: true,
+    },
+    dev_install: false,
+    mode: 'self',
+    auto_check: true,
+    auto_download: true,
+    engine,
+    previous_version: null,
+    legacy_install: false,
+    host: null,
+    active_work: [],
+  };
+  const commands: Array<Record<string, unknown>> = [];
+  await page.route('**/api/v1/monitor/attention', (route) =>
+    route.fulfill({
+      json: {
+        schema_version: 1,
+        problems: [],
+        update: { version: '99.0.0', ready: true },
+      },
+    }),
+  );
+  await page.route('**/api/v1/system/updates', (route) =>
+    route.fulfill({ json: snapshot }),
+  );
+  await page.route('**/api/v1/system/updates/commands', async (route) => {
+    const command = route.request().postDataJSON() as Record<string, unknown>;
+    commands.push(command);
+    await route.fulfill({
+      json: {
+        schema_version: 1,
+        command_id: command.command_id,
+        status: 'completed',
+        snapshot: {
+          ...snapshot,
+          engine: { ...engine, phase: 'applying', message: 'Restarting…' },
+        },
+      },
+    });
+  });
+  await page.goto('/app-v2/');
+  const pill = page.getByRole('link', {
+    name: 'Restart to update to 99.0.0. Open Updates',
+  });
+  await expect(pill).toBeVisible();
+  await pill.click();
+  await expect(page).toHaveURL(/\/settings\/updates/);
+  await expect(page.getByText('Version 99.0.0 is ready')).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Restart now to install version 99.0.0' })
+    .click();
+  await expect(page.getByText('Installing version 99.0.0')).toBeVisible();
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({
+    action: 'apply',
+    version: '99.0.0',
+    when: 'now',
+    expected_revision: 'c'.repeat(64),
+  });
+});

@@ -71,7 +71,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupState", "DataBackupCommand", "DataBackupReceipt", "DataRestoreReview",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "UpdateInstallCommand", "UpdateInstallStatus", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -203,9 +203,6 @@ OPERATIONS = (
     ("post", "/monitor/diagnosis/settings", "SystemDiagnosisSettings", "SystemDiagnosis"),
     ("get", "/system/updates", None, "UpdateSnapshot"),
     ("post", "/system/updates/commands", "UpdateCommand", "UpdateReceipt"),
-    ("post", "/system/updates/installs", "UpdateInstallCommand", "UpdateInstallStatus"),
-    ("get", "/system/updates/installs/{command_id}", None, "UpdateInstallStatus"),
-    ("post", "/system/updates/installs/{command_id}/cancel", None, "UpdateInstallStatus"),
     ("get", "/system/migration/sources", None, "MigrationSources"),
     ("post", "/system/migration/scan", "MigrationScanRequest", "MigrationPreview"),
     ("get", "/accounts/github/access", None, "GitHubAccessSnapshot"),
@@ -707,12 +704,6 @@ export const getUpdates = (base: string, proof: SessionProof, signal?: AbortSign
   jsonRequest(base, '/system/updates', 'UpdateSnapshot', proof, 'GET', undefined, undefined, signal);
 export const sendUpdateCommand = (base: string, proof: SessionProof, command: UpdateCommand, signal?: AbortSignal): Promise<UpdateReceipt> =>
   jsonRequest(base, '/system/updates/commands', 'UpdateReceipt', proof, 'POST', validateWire('UpdateCommand', command), command.command_id, signal);
-export const startUpdateInstall = (base: string, proof: SessionProof, command: UpdateInstallCommand, signal?: AbortSignal): Promise<UpdateInstallStatus> =>
-  jsonRequest(base, '/system/updates/installs', 'UpdateInstallStatus', proof, 'POST', validateWire('UpdateInstallCommand', command), command.command_id, signal);
-export const getUpdateInstall = (base: string, proof: SessionProof, command: string, signal?: AbortSignal): Promise<UpdateInstallStatus> =>
-  jsonRequest(base, `/system/updates/installs/${id(command)}`, 'UpdateInstallStatus', proof, 'GET', undefined, undefined, signal);
-export const cancelUpdateInstall = (base: string, proof: SessionProof, command: string, signal?: AbortSignal): Promise<UpdateInstallStatus> =>
-  jsonRequest(base, `/system/updates/installs/${id(command)}/cancel`, 'UpdateInstallStatus', proof, 'POST', undefined, undefined, signal);
 export const scanMigration = (base: string, proof: SessionProof, body: MigrationScanRequest, signal?: AbortSignal): Promise<MigrationPreview> =>
   jsonRequest(base, '/system/migration/scan', 'MigrationPreview', proof, 'POST', validateWire('MigrationScanRequest', body), undefined, signal);
 export const getMigrationSources = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<MigrationSources> =>

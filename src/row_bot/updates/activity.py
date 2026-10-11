@@ -66,10 +66,10 @@ def document_jobs() -> str | None:
 DEFAULT_PROBES: tuple[Probe, ...] = (agent_runs, workflows, channel_deliveries, document_jobs)
 
 
-def active_work(probes: Iterable[Probe] = DEFAULT_PROBES) -> list[str]:
+def active_work(probes: Iterable[Probe] | None = None) -> list[str]:
     """Short sentences, one per kind of work in progress; empty when idle."""
     found: list[str] = []
-    for probe in probes:
+    for probe in DEFAULT_PROBES if probes is None else probes:
         try:
             label = probe()
         except Exception:  # noqa: BLE001 - see the module docstring

@@ -1750,10 +1750,17 @@ def _query_updates() -> str:
         f"- Current version: v{s['current_version']}",
         f"- Channel: {s['channel']}",
         f"- Auto-check: {'on' if s['auto_check'] else 'off'}",
+        f"- Download automatically: {'on' if s.get('auto_download', True) else 'off'}",
         f"- Last check: {s.get('last_check') or 'never'}",
     ]
-    if s.get("dev_install"):
+    if s.get("mode") == "external":
+        lines.append("- Updates are applied by this install's host")
+    elif s.get("dev_install"):
         lines.append("- Dev install — updater disabled")
+    if s.get("ready_version"):
+        lines.append(f"- Ready: v{s['ready_version']} installs at the next restart (or when Row-Bot quits)")
+    elif s.get("phase") in {"downloading", "staging"}:
+        lines.append(f"- Preparing the update in the background ({s['phase']})")
     if s["update_available"]:
         lines.append(f"- ⬆ Update available: v{s['available_version']}")
         if s.get("available_notes_summary"):

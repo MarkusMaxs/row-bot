@@ -179,67 +179,6 @@ def test_an_xdg_release_is_not_a_dev_install(monkeypatch, tmp_path):
     assert updater.is_dev_install() is False
 
 
-def test_linux_safe_tar_extraction_rejects_traversal(tmp_path):
-    archive = tmp_path / "bad.tar.gz"
-    payload = tmp_path / "payload.txt"
-    payload.write_text("bad", encoding="utf-8")
-    with tarfile.open(archive, "w:gz") as handle:
-        handle.add(payload, arcname="../payload.txt")
-
-    try:
-        updater._safe_extract_tar(archive, tmp_path / "out")
-    except updater.UpdateError as exc:
-        assert "unsafe path" in str(exc)
-    else:
-        raise AssertionError("expected unsafe tar path to be rejected")
-
-
-def test_linux_tarball_installs_into_xdg_tree(monkeypatch, tmp_path):
-    if os.name == "nt":
-        pytest.skip("Linux tarball installer uses POSIX symlinks")
-
-    package_root = tmp_path / "Row-Bot-3.21.0-Linux-x86_64"
-    (package_root / "bin").mkdir(parents=True)
-    (package_root / "app").mkdir()
-    (package_root / "python" / "bin").mkdir(parents=True)
-    (package_root / "share" / "applications").mkdir(parents=True)
-    (package_root / "share" / "icons" / "hicolor" / "256x256" / "apps").mkdir(parents=True)
-    (package_root / "bin" / "row-bot").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
-    (package_root / "python" / "bin" / "python3").write_text("", encoding="utf-8")
-    (package_root / "share" / "applications" / "ai.row-bot.RowBot.desktop").write_text(
-        "[Desktop Entry]\nExec=row-bot\n", encoding="utf-8"
-    )
-    (package_root / "share" / "icons" / "hicolor" / "256x256" / "apps" / "row-bot.png").write_bytes(b"png")
-    (package_root / "install_info.json").write_text(json.dumps({
-        "platform": "linux",
-        "install_kind": "xdg-user-tarball",
-        "version": "3.21.0",
-    }), encoding="utf-8")
-    archive = tmp_path / "Row-Bot-3.21.0-Linux-x86_64.tar.gz"
-    with tarfile.open(archive, "w:gz") as handle:
-        handle.add(package_root, arcname=package_root.name)
-
-    home = tmp_path / "home"
-    xdg = tmp_path / "xdg"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    monkeypatch.setattr(updater.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(updater.shutil, "which", lambda _cmd: None)
-
-    launcher_path = updater._install_linux_tarball(archive)
-
-    assert launcher_path == home / ".local" / "bin" / "row-bot"
-    assert launcher_path.is_symlink()
-    assert (xdg / "row-bot" / "current").is_symlink()
-    assert (xdg / "row-bot" / "releases" / "3.21.0" / "install_info.json").exists()
-    state = json.loads((xdg / "row-bot" / "state.json").read_text(encoding="utf-8"))
-    assert state["active"] == "3.21.0"
-    desktop_text = (xdg / "applications" / "ai.row-bot.RowBot.desktop").read_text(encoding="utf-8")
-    assert f"Exec={launcher_path}" in desktop_text
-
-
 def test_linux_native_baseline_check_blocks_x86_v2_metadata():
     blocked = check_linux_native_baseline._blocked_x86_baselines(["SSE", "SSE2", "X86_V2"])
 

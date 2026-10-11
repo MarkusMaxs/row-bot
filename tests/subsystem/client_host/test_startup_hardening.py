@@ -256,54 +256,6 @@ def test_vision_degrades_when_cv2_native_import_fails(monkeypatch):
     assert "libGL.so.1" in str(status["opencv_error"])
 
 
-def test_windows_update_install_starts_handoff_before_quit(tmp_path, monkeypatch):
-    import row_bot.updater as updater
-
-    installer = tmp_path / "Row-Bot-test.exe"
-    installer.write_bytes(b"installer")
-    calls = []
-
-    monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(updater, "verify_os_signature", lambda _path: (True, "ok"))
-    monkeypatch.setattr(updater, "_launch_windows_update_handoff", lambda _path: calls.append("handoff"))
-    monkeypatch.setitem(
-        sys.modules,
-        "row_bot.launcher",
-        SimpleNamespace(quit_for_update=lambda: calls.append("quit")),
-    )
-
-    updater.install_and_restart(installer)
-
-    assert calls == ["handoff", "quit"]
-
-
-def test_windows_update_handoff_helper_command_is_detached(tmp_path, monkeypatch):
-    import row_bot.updater as updater
-
-    installer = tmp_path / "Row-Bot-test.exe"
-    installer.write_bytes(b"installer")
-    calls = []
-
-    class FakePopen:
-        def __init__(self, cmd, **kwargs):
-            calls.append((cmd, kwargs))
-
-    monkeypatch.setenv("ROW_BOT_PORT", "8123")
-    monkeypatch.setattr(updater.subprocess, "Popen", FakePopen)
-
-    updater._launch_windows_update_handoff(installer)
-
-    cmd, kwargs = calls[0]
-    assert cmd[:3] == [sys.executable, "-m", "row_bot.update_handoff"]
-    assert "--installer" in cmd
-    assert "--app-pid" in cmd
-    assert "--launcher-pid" in cmd
-    assert "--port" in cmd and "8123" in cmd
-    assert kwargs["stdin"] is subprocess.DEVNULL
-    assert kwargs["stdout"] is subprocess.DEVNULL
-    assert kwargs["stderr"] is subprocess.DEVNULL
-
-
 def test_splash_helper_immediate_failure_returns_quickly(tmp_path, monkeypatch, caplog):
     class FakePopen:
         pid = 101

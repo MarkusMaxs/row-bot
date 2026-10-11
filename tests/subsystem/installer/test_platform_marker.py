@@ -32,8 +32,11 @@ PLATFORM_SENSITIVE = frozenset({
     "row_bot.secret_store",
     "row_bot.terminal_pty",
     "row_bot.tools.shell_tool",
-    "row_bot.update_handoff",
     "row_bot.updater",
+    "row_bot.updates.engine",
+    "row_bot.updates.stager",
+    "row_bot.updates.switcher",
+    "row_bot.updates.legacy",
 })
 # Not app lanes: docs tooling runs in docs.yml, e2e is opt-in, browser holds harnesses.
 OUTSIDE_APP_LANES = ("docs", "marketing", "e2e", "browser")

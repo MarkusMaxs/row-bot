@@ -1135,8 +1135,17 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
     return True
 
 
+async def _launcher_apply_update_handler(request: Request) -> JSONResponse:
+    """The tray's "Restart to Update": restart now, or once running work ends."""
+    if not _launcher_request_authorized(request):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    from row_bot.application.client_updates import apply_for_launcher
+
+    return JSONResponse(await asyncio.to_thread(apply_for_launcher))
+
+
 async def _launcher_shutdown_handler(request: Request) -> JSONResponse:
-    """Local launcher hook used for tray quit and updater handoff."""
+    """Local launcher hook used for tray quit."""
     if not _launcher_request_authorized(request):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
@@ -1153,6 +1162,7 @@ async def _launcher_shutdown_handler(request: Request) -> JSONResponse:
 app.add_route("/api/launcher-ping", _launcher_ping_handler, methods=["GET"])
 app.add_route("/api/startup-state", _startup_state_handler, methods=["GET"])
 app.add_route("/api/launcher-shutdown", _launcher_shutdown_handler, methods=["POST"])
+app.add_route("/api/launcher-apply-update", _launcher_apply_update_handler, methods=["POST"])
 app.add_route("/api/webhook/{task_id}", _webhook_handler, methods=["POST"])
 app.add_route("/app-views/{render_id}", _app_view_handler, methods=["GET"])
 app.add_route("/", _root_handler, methods=["GET"])

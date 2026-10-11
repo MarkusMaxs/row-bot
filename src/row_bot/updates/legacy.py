@@ -56,9 +56,9 @@ def recorded(layout: InstallLayout) -> bool:
     return bool(state is not None and state.extra.get(STATE_KEY))
 
 
-def pending(layout: InstallLayout, *, present=legacy_install_present) -> bool:  # noqa: ANN001
+def pending(layout: InstallLayout) -> bool:
     """Offer the removal: the installer recorded it and the old copy is still there."""
-    return recorded(layout) and bool(present())
+    return recorded(layout) and legacy_install_present()
 
 
 def clear(layout: InstallLayout) -> None:

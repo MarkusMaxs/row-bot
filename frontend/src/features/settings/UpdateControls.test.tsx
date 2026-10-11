@@ -1,13 +1,30 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import type {
   UpdateCommand,
-  UpdateInstallCommand,
-  UpdateInstallStatus,
   UpdateReceipt,
   UpdateSnapshot,
 } from '../../api/types';
 import { UpdateControls } from './UpdateControls';
+
+const engine: UpdateSnapshot['engine'] = {
+  phase: 'idle',
+  version: null,
+  step: null,
+  message: null,
+  error: null,
+  retryable: false,
+  apply_when: null,
+  full_installer_url: null,
+  downloaded: 0,
+  total: 0,
+};
 
 const snapshot: UpdateSnapshot = {
   schema_version: 1,
@@ -19,20 +36,46 @@ const snapshot: UpdateSnapshot = {
   skipped_versions: [],
   available: null,
   dev_install: false,
-  install_here: true,
+  mode: 'self',
+  auto_check: true,
+  auto_download: true,
+  engine,
+  previous_version: null,
+  legacy_install: false,
+  host: null,
+  active_work: [],
 };
+
+const release: NonNullable<UpdateSnapshot['available']> = {
+  version: '2.0.0',
+  channel: 'stable',
+  published_at: '2026-09-23T12:00:00Z',
+  notes: 'Synthetic changes',
+  html_url: 'https://github.com/example/release',
+  asset_size: 12,
+  verified_manifest: true,
+};
+
+function receipt(
+  command: UpdateCommand,
+  next: UpdateSnapshot,
+  status: UpdateReceipt['status'] = 'completed',
+): UpdateReceipt {
+  return {
+    schema_version: 1,
+    command_id: command.command_id,
+    status,
+    snapshot: next,
+  };
+}
 
 function show(
   load: (signal?: AbortSignal) => Promise<UpdateSnapshot> = vi.fn(
     async () => snapshot,
   ),
   send: (command: UpdateCommand) => Promise<UpdateReceipt> = vi.fn(
-    async (command) => ({
-      schema_version: 1 as const,
-      command_id: command.command_id,
-      status: 'completed' as const,
-      snapshot: { ...snapshot, last_success: '2026-09-23T12:00:00Z' },
-    }),
+    async (command) =>
+      receipt(command, { ...snapshot, last_success: '2026-09-23T12:00:00Z' }),
   ),
 ) {
   render(<UpdateControls owner={{ load, send }} />);
@@ -63,30 +106,22 @@ it('loads cached status without checking and checks from one explicit click', as
   );
 });
 
-it('shows a verified release, skips it from one click and shows it again', async () => {
-  const release: UpdateSnapshot = {
+it('shows a release, skips it from one click and shows it again', async () => {
+  const offered: UpdateSnapshot = {
     ...snapshot,
-    available: {
-      version: '2.0.0',
-      channel: 'stable',
-      published_at: '2026-09-23T12:00:00Z',
-      notes: 'Synthetic changes',
-      html_url: 'https://github.com/example/release',
-      asset_size: 12,
-      verified_manifest: true,
-    },
+    auto_download: false,
+    available: release,
   };
-  const send = vi.fn(async (command: UpdateCommand) => ({
-    schema_version: 1 as const,
-    command_id: command.command_id,
-    status: 'completed' as const,
-    snapshot:
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(
+      command,
       command.action === 'skip'
-        ? { ...release, available: null, skipped_versions: ['2.0.0'] }
-        : release,
-  }));
+        ? { ...offered, available: null, skipped_versions: ['2.0.0'] }
+        : offered,
+    ),
+  );
   show(
-    vi.fn(async () => release),
+    vi.fn(async () => offered),
     send,
   );
   expect(await screen.findByText('Version 2.0.0 is available')).toBeVisible();
@@ -111,12 +146,7 @@ it('shows a verified release, skips it from one click and shows it again', async
 it('reports a failed check without claiming the installed version is current', async () => {
   show(
     vi.fn(async () => snapshot),
-    vi.fn(async (command) => ({
-      schema_version: 1 as const,
-      command_id: command.command_id,
-      status: 'failed' as const,
-      snapshot,
-    })),
+    vi.fn(async (command) => receipt(command, snapshot, 'failed')),
   );
   fireEvent.click(
     await screen.findByRole('button', { name: 'Check for updates' }),
@@ -133,12 +163,7 @@ it('keeps an uncertain action for explicit recovery after remount', async () => 
   const send = vi
     .fn()
     .mockRejectedValueOnce(new Error('unconfirmed'))
-    .mockImplementationOnce(async (command) => ({
-      schema_version: 1,
-      command_id: command.command_id,
-      status: 'completed',
-      snapshot,
-    }));
+    .mockImplementationOnce(async (command) => receipt(command, snapshot));
   show(
     vi.fn(async () => snapshot),
     send,
@@ -159,238 +184,307 @@ it('keeps an uncertain action for explicit recovery after remount', async () => 
 
 it('shows development installs as unavailable without making a check', async () => {
   const { send } = show(
-    vi.fn(async () => ({ ...snapshot, dev_install: true })),
+    vi.fn(async () => ({
+      ...snapshot,
+      dev_install: true,
+      mode: 'unavailable' as const,
+    })),
   );
   expect(await screen.findByText(/Development checkout/)).toBeVisible();
   expect(
     screen.queryByRole('button', { name: 'Check for updates' }),
   ).toBeNull();
+  expect(
+    screen.queryByRole('switch', { name: 'Download updates automatically' }),
+  ).toBeNull();
   expect(send).not.toHaveBeenCalled();
 });
 
-it('starts a verified installed-app update from one click and shows the original progress', async () => {
-  const available: UpdateSnapshot = {
+it('downloads in the background, follows the progress and can cancel', async () => {
+  const offered: UpdateSnapshot = {
     ...snapshot,
-    available: {
+    auto_download: false,
+    available: release,
+  };
+  const downloading: UpdateSnapshot = {
+    ...offered,
+    engine: {
+      ...engine,
+      phase: 'downloading',
       version: '2.0.0',
-      channel: 'stable',
-      published_at: '',
-      notes: 'Fixture release',
-      html_url: 'https://github.com/example/release',
-      asset_size: 12,
-      verified_manifest: true,
+      step: 'code',
+      downloaded: 3_000_000,
+      total: 8_000_000,
     },
   };
-  const startInstall = vi.fn(
-    async (command: UpdateInstallCommand): Promise<UpdateInstallStatus> => ({
-      schema_version: 1,
-      command_id: command.command_id,
-      version: command.version,
-      phase: 'downloading',
-      downloaded: 3,
-      total: 12,
-      message: 'Downloading and verifying.',
-    }),
+  const load = vi
+    .fn()
+    .mockResolvedValueOnce(offered)
+    .mockResolvedValue({
+      ...downloading,
+      engine: { ...downloading.engine, downloaded: 6_000_000 },
+    });
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, command.action === 'download' ? downloading : offered),
   );
-  const installStatus = vi.fn(
-    async (commandId: string): Promise<UpdateInstallStatus> => ({
-      schema_version: 1,
-      command_id: commandId,
-      version: '2.0.0',
-      phase: 'handoff',
-      downloaded: 12,
-      total: 12,
-      message: 'Installer started.',
-    }),
-  );
-  render(
-    <UpdateControls
-      owner={{
-        load: async () => available,
-        send: vi.fn(),
-        startInstall,
-        installStatus,
-        cancelInstall: vi.fn(),
-      }}
-    />,
-  );
+  show(load, send);
   fireEvent.click(
-    await screen.findByRole('button', { name: 'Install version 2.0.0' }),
+    await screen.findByRole('button', { name: 'Download version 2.0.0' }),
   );
-  expect(await screen.findByText('Installer started.')).toBeVisible();
-  expect(startInstall).toHaveBeenCalledWith(
-    expect.objectContaining({
-      expected_revision: available.revision,
-      version: '2.0.0',
-    }),
+  expect(await screen.findByText('Downloading version 2.0.0')).toBeVisible();
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'download', version: '2.0.0' }),
   );
-  expect(installStatus).toHaveBeenCalledWith(
-    startInstall.mock.calls[0][0].command_id,
-  );
-  expect(screen.getByRole('progressbar')).toHaveAttribute('value', '12');
-});
-
-it('leaves a Mac install to the desktop app there, on another device', async () => {
-  const startInstall = vi.fn();
-  render(
-    <UpdateControls
-      owner={{
-        load: async () => ({
-          ...snapshot,
-          install_here: false,
-          available: {
-            version: '2.0.0',
-            channel: 'stable',
-            published_at: '',
-            notes: 'Fixture release',
-            html_url: 'https://github.com/example/release',
-            asset_size: 12,
-            verified_manifest: true,
-          },
-        }),
-        send: vi.fn(),
-        startInstall,
-        installStatus: vi.fn(),
-        cancelInstall: vi.fn(),
-      }}
-    />,
-  );
+  // The page follows the background download by itself.
   expect(
-    await screen.findByText(/Installing on a Mac opens Finder there/),
+    await screen.findByText(/6\.0 MB of 8\.0 MB/, undefined, { timeout: 3000 }),
   ).toBeVisible();
   expect(
-    screen.queryByRole('button', { name: 'Install version 2.0.0' }),
-  ).toBeNull();
-  // Skipping it, or being reminded later, still works from here.
-  expect(
-    screen.getByRole('button', { name: 'Skip version 2.0.0' }),
-  ).toBeEnabled();
-  expect(startInstall).not.toHaveBeenCalled();
+    screen.getByRole('progressbar', { name: 'Update download' }),
+  ).toHaveAttribute('value', '6000000');
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(send).toHaveBeenLastCalledWith(
+    expect.objectContaining({ action: 'cancel' }),
+  );
 });
 
-it('allows a running download to request cancellation without another install', async () => {
-  const available: UpdateSnapshot = {
+it('restarts into a ready update from one click when nothing is running', async () => {
+  const ready: UpdateSnapshot = {
     ...snapshot,
-    available: {
-      version: '2.0.0',
-      channel: 'stable',
-      published_at: '',
-      notes: '',
-      html_url: '',
-      asset_size: 12,
-      verified_manifest: true,
-    },
+    available: release,
+    engine: { ...engine, phase: 'ready', version: '2.0.0' },
   };
-  const status = (
-    commandId: string,
-    phase: UpdateInstallStatus['phase'],
-  ): UpdateInstallStatus => ({
-    schema_version: 1,
-    command_id: commandId,
-    version: '2.0.0',
-    phase,
-    downloaded: 1,
-    total: 12,
-    message: phase,
-  });
-  const startInstall = vi.fn(async (command: UpdateInstallCommand) =>
-    status(command.command_id, 'downloading'),
-  );
-  const cancelInstall = vi.fn(async (commandId: string) =>
-    status(commandId, 'cancel_requested'),
-  );
-  render(
-    <UpdateControls
-      owner={{
-        load: async () => available,
-        send: vi.fn(),
-        startInstall,
-        installStatus: async (commandId) => status(commandId, 'downloading'),
-        cancelInstall,
-      }}
-    />,
-  );
-  fireEvent.click(
-    await screen.findByRole('button', { name: 'Install version 2.0.0' }),
-  );
-  fireEvent.click(
-    await screen.findByRole('button', { name: 'Cancel download' }),
-  );
-  expect(cancelInstall).toHaveBeenCalledWith(
-    startInstall.mock.calls[0][0].command_id,
-  );
-  expect(startInstall).toHaveBeenCalledTimes(1);
-});
-
-it('recovers an interrupted installation by reading its original status', async () => {
-  const command: UpdateInstallCommand = {
-    command_id: crypto.randomUUID(),
-    expected_revision: snapshot.revision,
-    version: '2.0.0',
-  };
-  sessionStorage.setItem('row-bot:updates:install:v1', JSON.stringify(command));
-  const startInstall = vi.fn();
-  const installStatus = vi.fn(
-    async (commandId: string): Promise<UpdateInstallStatus> => ({
-      schema_version: 1,
-      command_id: commandId,
-      version: '2.0.0',
-      phase: 'handoff',
-      downloaded: 12,
-      total: 12,
-      message: 'Installer started.',
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, {
+      ...ready,
+      engine: { ...ready.engine, phase: 'applying', message: 'Restarting…' },
     }),
   );
-  render(
-    <UpdateControls
-      owner={{
-        load: async () => snapshot,
-        send: vi.fn(),
-        startInstall,
-        installStatus,
-      }}
-    />,
+  show(
+    vi.fn(async () => ready),
+    send,
   );
-  expect(await screen.findByText('Installer started.')).toBeVisible();
-  expect(installStatus).toHaveBeenCalledWith(command.command_id);
-  expect(startInstall).not.toHaveBeenCalled();
+  expect(await screen.findByText('Version 2.0.0 is ready')).toBeVisible();
+  expect(screen.getByText(/installs the next time you quit/)).toBeVisible();
+  // What's new sits with the ready version.
+  expect(screen.getByText('What’s new')).toBeVisible();
+  expect(screen.queryByText('Version 2.0.0 is available')).toBeNull();
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: 'Restart now to install version 2.0.0',
+    }),
+  );
+  expect(await screen.findByText('Installing version 2.0.0')).toBeVisible();
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'apply', version: '2.0.0', when: 'now' }),
+  );
 });
 
-it('clears a known stale install rejection so the release can be refreshed', async () => {
-  const available: UpdateSnapshot = {
+it('warns before a restart would interrupt work and offers when idle or on quit', async () => {
+  const ready: UpdateSnapshot = {
     ...snapshot,
-    available: {
-      version: '2.0.0',
-      channel: 'stable',
-      published_at: '',
-      notes: '',
-      html_url: '',
-      asset_size: 12,
-      verified_manifest: true,
-    },
+    engine: { ...engine, phase: 'ready', version: '2.0.0' },
+    active_work: ['An agent is working', 'A workflow is running'],
   };
-  render(
-    <UpdateControls
-      owner={{
-        load: async () => available,
-        send: vi.fn(),
-        startInstall: vi
-          .fn()
-          .mockRejectedValue({ code: 'update_changed', status: 409 }),
-        installStatus: vi.fn(),
-      }}
-    />,
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, {
+      ...ready,
+      engine: { ...ready.engine, apply_when: command.when ?? null },
+    }),
+  );
+  show(
+    vi.fn(async () => ready),
+    send,
   );
   fireEvent.click(
-    await screen.findByRole('button', { name: 'Install version 2.0.0' }),
+    await screen.findByRole('button', {
+      name: 'Restart now to install version 2.0.0',
+    }),
+  );
+  const dialog = await screen.findByRole('dialog', { name: 'Restart now?' });
+  expect(within(dialog).getByText('An agent is working')).toBeVisible();
+  expect(send).not.toHaveBeenCalled();
+  fireEvent.click(
+    within(dialog).getByRole('button', { name: 'Restart when idle' }),
+  );
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'apply', when: 'when_idle' }),
   );
   expect(
     await screen.findByText(
-      'Update status changed. Refresh it before choosing an action.',
+      'Row-Bot restarts to install it as soon as nothing is running.',
     ),
   ).toBeVisible();
-  expect(sessionStorage.getItem('row-bot:updates:install:v1')).toBeNull();
+
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: 'Restart now to install version 2.0.0',
+    }),
+  );
+  fireEvent.click(
+    within(await screen.findByRole('dialog')).getByRole('button', {
+      name: 'Restart anyway',
+    }),
+  );
+  expect(send).toHaveBeenLastCalledWith(
+    expect.objectContaining({ action: 'apply', when: 'now', force: true }),
+  );
+});
+
+it('turns background downloads off and on from Settings', async () => {
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, { ...snapshot, auto_download: command.enabled ?? true }),
+  );
+  show(
+    vi.fn(async () => snapshot),
+    send,
+  );
+  const toggle = await screen.findByRole('switch', {
+    name: 'Download updates automatically',
+  });
+  expect(toggle).toBeChecked();
+  fireEvent.click(toggle);
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'set_auto_download', enabled: false }),
+  );
   expect(
-    screen.getByRole('button', { name: 'Install version 2.0.0' }),
-  ).toBeEnabled();
+    await screen.findByText('Updates download only when you choose.'),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('switch', { name: 'Download updates automatically' }),
+  ).not.toBeChecked();
+});
+
+it('offers the full installer when an update cannot be prepared in the background', async () => {
+  show(
+    vi.fn(async () => ({
+      ...snapshot,
+      available: release,
+      engine: {
+        ...engine,
+        phase: 'failed' as const,
+        version: '2.0.0',
+        error: 'full_installer',
+        message: 'This update needs the full installer.',
+        full_installer_url:
+          'https://github.com/example/row-bot/releases/download/v2.0.0/Row-Bot-2.0.0-Windows-x64.exe',
+      },
+    })),
+  );
+  const link = await screen.findByRole('link', {
+    name: 'Download the full installer',
+  });
+  expect(link).toHaveAttribute(
+    'href',
+    'https://github.com/example/row-bot/releases/download/v2.0.0/Row-Bot-2.0.0-Windows-x64.exe',
+  );
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+});
+
+it('retries a failed preparation and repairs by going back a version', async () => {
+  const failed: UpdateSnapshot = {
+    ...snapshot,
+    available: release,
+    previous_version: '0.9.0',
+    engine: {
+      ...engine,
+      phase: 'failed',
+      version: '2.0.0',
+      error: 'download',
+      retryable: true,
+      message: 'The download stopped. Row-Bot will try again.',
+    },
+  };
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, failed),
+  );
+  show(
+    vi.fn(async () => failed),
+    send,
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'retry', version: '2.0.0' }),
+  );
+  const goBack = screen.getByRole('button', { name: 'Go back to 0.9.0' });
+  await waitFor(() => expect(goBack).toBeEnabled());
+  fireEvent.click(goBack);
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Go back to 0.9.0?',
+  });
+  fireEvent.click(
+    within(dialog).getByRole('button', { name: 'Go back and restart' }),
+  );
+  expect(send).toHaveBeenLastCalledWith(
+    expect.objectContaining({ action: 'rollback', version: '0.9.0' }),
+  );
+});
+
+it('shows the host’s status and sends requests when the host applies updates', async () => {
+  const external: UpdateSnapshot = {
+    ...snapshot,
+    mode: 'external',
+    host: {
+      state: 'ready',
+      current_version: '1.0.0',
+      available_version: '2.0.0',
+      message: 'Ready to update',
+      notes_url: null,
+      updated_at: '2026-10-11T12:00:00Z',
+      request: null,
+    },
+  };
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(
+      command,
+      {
+        ...external,
+        host: {
+          ...external.host!,
+          request: {
+            action: 'update_now',
+            requested_at: '2026-10-11T12:01:00Z',
+          },
+        },
+      },
+      'requested',
+    ),
+  );
+  show(
+    vi.fn(async () => external),
+    send,
+  );
+  expect(await screen.findByText('Ready to update')).toBeVisible();
+  expect(
+    screen.queryByRole('switch', { name: 'Download updates automatically' }),
+  ).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Update now' }));
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'apply', version: '2.0.0', when: 'now' }),
+  );
+  expect(
+    await screen.findByText('Waiting for the host to act on an update'),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Pause updates' })).toBeVisible();
+});
+
+it('offers to remove an earlier all-users install once', async () => {
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, { ...snapshot, legacy_install: true }),
+  );
+  show(
+    vi.fn(async () => ({ ...snapshot, legacy_install: true })),
+    send,
+  );
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Remove the old Row-Bot' }),
+  );
+  expect(send).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'remove_legacy' }),
+  );
+  expect(
+    await screen.findByText(
+      'Approve the Windows prompt to remove the earlier Row-Bot.',
+    ),
+  ).toBeVisible();
 });
