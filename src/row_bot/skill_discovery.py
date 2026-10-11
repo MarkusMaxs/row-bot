@@ -330,9 +330,12 @@ def build_skill_discovery_tools(
             implicit_for_task = set(get_auto_loaded_skill_ids(activation_thread_id))
         except Exception:
             implicit_for_task = set()
+        deliver_instructions = False
         if record.canonical_id in active and record.canonical_id not in implicit_for_task:
+            # Already active for this conversation: its instructions are in the prompt already.
             newly_active, evicted = False, None
         else:
+            deliver_instructions = True
             from row_bot.skills_activation import load_auto_skill
 
             try:
@@ -357,6 +360,10 @@ def build_skill_discovery_tools(
         }
         if evicted:
             result["evicted_skill_id"] = evicted
+        if deliver_instructions:
+            # The body arrives here, appended to the conversation, instead of being edited into
+            # the system prompt mid-turn: the cached start of the request stays as it was (F5).
+            result["instructions"] = record.instructions
         if reference_text is not None:
             result["reference_text"] = reference_text
         return _json_result(result)
@@ -385,7 +392,7 @@ def build_skill_discovery_tools(
             name="skill_load",
             description=(
                 "Activate one exact skill for this task, optionally reading a UTF-8 reference inside its root. "
-                "The full skill body is injected on the next model pass." + boundary
+                "The result carries the skill's full instructions; follow them." + boundary
             ),
             args_schema=_SkillLoadInput,
         ),

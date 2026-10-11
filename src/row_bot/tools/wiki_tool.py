@@ -146,8 +146,12 @@ def _export_conversation(title: str = "") -> str:
         if not messages:
             return "Current conversation has no messages to export."
 
+        from row_bot.turn_context import is_turn_context_message
+
         msg_dicts = []
         for m in messages:
+            if is_turn_context_message(m):
+                continue  # Row-Bot's per-turn context for the model, not part of the conversation
             role = getattr(m, "type", "unknown")
             content = m.content if isinstance(m.content, str) else str(m.content)
             if content.strip():

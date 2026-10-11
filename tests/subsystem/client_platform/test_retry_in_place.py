@@ -98,6 +98,29 @@ def _answered(text: str = "Check my apps", *, tool: bool = False) -> None:
         HumanMessage(id="first", content=text), *steps, AIMessage(id="answer", content="Something went wrong.")])
 
 
+def test_a_retry_replaces_the_turn_with_its_turn_context(platform, turns):
+    """The turn context (row_bot.turn_context) after the person's message belongs to the turn it replaces."""
+    from datetime import datetime, timezone
+
+    from row_bot import agent_runs, threads, turn_context
+
+    platform.stream_factory, platform.resume_factory = turns
+    agent_runs.ensure_agent_run_schema(force=True)
+    context = turn_context.build_message(
+        turn_id="replaced-turn", values=turn_context.TurnContextValues(now=datetime(2026, 10, 11, tzinfo=timezone.utc)),
+        baseline=turn_context.Baseline(), summary_marker="")
+    assert threads.append_checkpoint_messages("conversation-a", [
+        HumanMessage(id="first", content="Check my apps"), context, AIMessage(id="answer", content="Something went wrong.")])
+    assert [row["role"] for row in platform.transcript("conversation-a")["rows"]] == ["user", "assistant"]
+
+    _submit(platform, "retry-with-context", retry=True)  # this fixture's model fails its first call
+
+    assert _people(platform) == ["Check my apps"]
+    remaining = threads.get_latest_checkpoint_messages("conversation-a")
+    assert context.id not in [message.id for message in remaining]
+    assert "answer" not in [message.id for message in remaining]
+
+
 def test_a_retry_the_server_refuses_keeps_the_turn(platform, turns):
     from row_bot.application.client_platform import ClientPlatformError
 

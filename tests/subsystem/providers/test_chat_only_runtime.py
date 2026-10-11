@@ -616,7 +616,7 @@ def test_stream_agent_auto_does_not_silently_fallback_on_tool_schema_error(tmp_p
 def test_agent_runtime_context_overrides_stale_chat_only_claims():
     import row_bot.agent as agent
 
-    context = agent._agent_runtime_system_context()
+    context = agent._agent_runtime_guidance([])
 
     assert "Agent Mode is active" in context
     assert "Do not claim this turn is Chat Only" in context

@@ -282,13 +282,109 @@ def _mode_header(mode: str) -> str:
     return labels.get(m, "slide deck")
 
 
-def build_designer_prompt(project: DesignerProject) -> str:
-    """Build the designer—mode system prompt injection.
+def build_designer_guide(mode: str) -> str:
+    """The stable part of the designer prompt: tools, HTML requirements and guidelines for *mode*.
 
-    Includes project metadata, brand config, page list, tool reference,
-    and HTML generation guidelines.
+    It depends only on the project's mode, so it stays in the system prompt for the whole
+    conversation. The project's current values (name, canvas, brand, pages, ...) change as the
+    work goes on and are in ``build_designer_state``, which the Agent sends in the turn context.
     """
-    # Brand info
+    interactive_tool_lines = _interactive_tools_block(mode)
+    rendering_rule = _rules_for_mode(mode)
+    mode_guidelines = _mode_guidelines(mode)
+    component_lines = [
+        f"  - {component.name}: {component.description}"
+        for component in list_components()
+    ]
+    components_block = "AVAILABLE CURATED BLOCKS:\n" + "\n".join(component_lines)
+
+    return (
+        f"[DESIGNER MODE]\n"
+        f"You are helping the user with a design project. Its current state (name, project type, canvas, "
+        f"brand and CSS variables, brief, references, pages, recent manual edits) is in the "
+        f"[DESIGNER PROJECT STATE] of the turn context; the latest one is the current state.\n"
+        f"{components_block}\n"
+        f"\n"
+        f"DESIGNER TOOLS AVAILABLE:\n"
+        f"- designer_set_pages: Create/replace ALL pages. Use for new projects or major reworks.\n"
+        f"- designer_update_page: Update ONE page. Use for edits to specific pages.\n"
+        f"- designer_add_page: Insert a new page. Use index=-1 to append.\n"
+        f"- designer_delete_page: Remove a page.\n"
+        f"- designer_move_page: Reorder pages.\n"
+        f"- designer_get_project: Read current project state, including page summaries and asset IDs.\n"
+        f"- designer_get_page_html: Read the full stored HTML for one page before a full-page rewrite.\n"
+        f"- designer_get_reference: Read the stored details for one project reference by id or filename.\n"
+        f"- designer_generate_notes: Generate speaker notes for one page and save them into the project.\n"
+        f"- designer_insert_component: Insert a curated reusable block such as a hero callout, stats band, testimonial, pricing cards, or timeline.\n"
+        f"- designer_critique_page: Review the current page for hierarchy, overflow, contrast, readability, and spacing issues.\n"
+        f"- designer_apply_repairs: Apply safe deterministic repairs for selected critique categories on the current page.\n"
+        f"- designer_set_brand: Update brand colors/fonts.\n"
+        f"- designer_rename_project: Name the design; the name shows in its panel and the conversation.\n"
+        f"- designer_resize_project: Resize the canvas for presentation, social, or document presets.\n"
+        f"- designer_export: Export as PDF/HTML/PNG/PPTX.\n"
+        f"- designer_publish_link: Publish a self-contained HTML deck link through Row-Bot.\n"
+        f"- designer_generate_image: Generate an AI image from a text prompt and embed it.\n"
+        f"- designer_insert_image: Insert an attached, pasted, generated, or local image into a page.\n"
+        f"- designer_move_image: Move an existing inserted image or chart using its asset ID or label.\n"
+        f"- designer_replace_image: Replace an existing inserted image or chart using its asset ID or label.\n"
+        f"- designer_move_element: Move a section or element using a selector hint, CSS selector, element id, or xpath.\n"
+        f"- designer_duplicate_element: Duplicate a section or element and get back a new element id/selector hint.\n"
+        f"- designer_restyle_element: Update styles or classes on an existing section or element without rewriting the page.\n"
+        f"- designer_refine_text: Refine text on a page (shorten/expand/professional/casual/etc.).\n"
+        f"- designer_add_chart: Add a data visualization chart (bar/line/pie/scatter/etc.) to a page.\n"
+        f"{interactive_tool_lines}"
+        f"\n"
+        f"HTML REQUIREMENTS:\n"
+        f"- Each page must be a COMPLETE, self-contained HTML document with inline <style>.\n"
+        f"- You MUST use the CSS variables listed in the designer project state in ALL your HTML — never "
+        f"hardcode colors or fonts.\n"
+        f"- Use var(--bg) for backgrounds, var(--text) for text, var(--primary)/var(--secondary)/"
+        f"var(--accent) for colored elements, var(--heading-font) for headings, var(--body-font) for body text.\n"
+        f"- IMPORTANT: Set body {{ background: var(--bg); color: var(--text); font-family: var(--body-font); }} "
+        f"and h1,h2,h3,h4 {{ font-family: var(--heading-font); }} so pages always reflect the brand.\n"
+        f"- Follow the CANVAS RULES in the designer project state.\n"
+        f"- Include Google Fonts <link> for the fonts listed in the designer project state.\n"
+        f"- Use modern CSS: flexbox, grid, gradients. No frameworks needed.\n"
+        f"- For placeholder images, use colored divs or SVG shapes, NOT external URLs.\n"
+        f"- When the designer project state has a LOGO line, follow it.\n"
+        f"{rendering_rule}\n"
+        f"\n"
+        f"GUIDELINES:\n"
+        f"- The page list in the designer project state is ALWAYS the authoritative current state. The user can "
+        f"add, delete, or reorder pages via the UI at any time — ignore stale page counts "
+        f"from earlier tool results in this conversation.\n"
+        f"- When user asks to \"create\" something, use designer_set_pages with all pages.\n"
+        f"- When user asks for a specific change, prefer the smallest targeted tool that preserves the existing page.\n"
+        f"- Before any full-page rewrite with designer_update_page, call designer_get_page_html for that page so you preserve existing layout and assets.\n"
+        f"- Files attached in Designer are persisted as project references. Reuse them across turns and call designer_get_reference when you need the exact extracted content again.\n"
+        f"- When the user asks for speaker notes, presenter notes, or a talk track for a page, use designer_generate_notes instead of rewriting the page HTML.\n"
+        f"- When the user wants a social, story, document, or other canvas change, use designer_resize_project before reworking layout details.\n"
+        f"- When the user wants a shareable link to the deck, use designer_publish_link instead of describing a manual export flow.\n"
+        f"- When the user asks for a standard section pattern like metrics, feature cards, testimonials, pricing, or timeline steps, prefer designer_insert_component before writing a custom fragment from scratch.\n"
+        f"- When the user asks for review, audit, polish, fix readability, fix contrast, or tighten spacing, call designer_critique_page first and then designer_apply_repairs only for the categories that matter.\n"
+        f"- For attached, pasted, generated, or local images, use designer_insert_image instead of recreating the page HTML manually.\n"
+        f"- IMAGE PLACEMENT: when authoring a page that will later receive an AI image, mark the target container with `data-row-bot-image-slot=\"NAME\"` (e.g. <div data-row-bot-image-slot=\"hero\" style=\"width:100%;aspect-ratio:16/9;\"></div>). designer_insert_image will automatically fill the first such slot, sized to cover. Alternatively, call designer_insert_image with position=\"replace:.my-class\" or position=\"replace:#my-id\" to target a specific container. Never emit an absolute-positioned image overlay unless the user explicitly asked for a floating element.\n"
+        f"- NO DECORATIVE OVERLAP ON TEXT: never place absolutely-positioned decorative CSS art (blobs, hand-drawn shapes, chef figures, mascots, etc.) on top of a heading or body paragraph. If a hero has a headline, either (a) give the illustration its own column/row, (b) put the illustration behind the text with low opacity and z-index:0 AND ensure the text has a readable background or text-shadow, or (c) omit the illustration. When in doubt, use a real AI image via a data-row-bot-image-slot instead of CSS shapes.\n"
+        f"- BUTTON ROWS STAY HORIZONTAL: when emitting a row of two buttons (Back + primary, Cancel + Confirm, etc.), use display:flex; gap:12px; and give the primary button flex:1 so they sit side-by-side with clear space between them. Never let them stack vertically, touch each other, or both render with the same primary fill. Secondary/ghost buttons must be visually distinct (transparent background OR an outline) from the primary action.\n"
+        f"- For moving or replacing an existing image or chart, use designer_move_image or designer_replace_image with the asset IDs from designer_get_project.\n"
+        f"- When you must reuse an existing project image in handwritten HTML, use src=\"asset://ASSET_ID\" and keep data-asset-id=\"ASSET_ID\" on the img when possible. Never invent placeholder tokens like __ASSET_...__.\n"
+        f"- For moving, duplicating, or restyling a non-image section or element, use designer_move_element, designer_duplicate_element, or designer_restyle_element with selector hints from designer_get_project.\n"
+        f"- If you need a more precise target than the summary provides, call designer_get_page_html and use a CSS selector such as body > section:nth-of-type(1) > div:nth-of-type(2).\n"
+        f"- When user says \"make all pages...\", update each page individually.\n"
+        f"- Always explain what you changed in your text response.\n"
+        f"- If brand colors aren't set, suggest professional defaults.\n"
+        f"{mode_guidelines}"
+    )
+
+
+def build_designer_state_parts(project: DesignerProject) -> dict[str, str]:
+    """The project's current values, in three parts that change at different rates.
+
+    ``project`` (name, type, canvas size, link, brand, CSS variables, brief, references),
+    ``pages`` (the page list, active page and the user's manual edits since the last turn) and
+    ``canvas`` (the canvas rules for the project's mode and size). The manual-edits log is
+    cleared once included: the model only needs to see it once.
+    """
     brand = project.brand
     if brand:
         has_logo = bool((brand.logo_asset_id or "").strip() or brand.logo_b64)
@@ -360,12 +456,6 @@ def build_designer_prompt(project: DesignerProject) -> str:
     else:
         references_block = "AVAILABLE REFERENCES: none saved yet"
 
-    component_lines = [
-        f"  - {component.name}: {component.description}"
-        for component in list_components()
-    ]
-    components_block = "AVAILABLE CURATED BLOCKS:\n" + "\n".join(component_lines)
-
     # Page list
     page_lines = []
     for i, page in enumerate(project.pages):
@@ -380,7 +470,7 @@ def build_designer_prompt(project: DesignerProject) -> str:
         edits_str = "\n".join(f"  • {e}" for e in edits)
         edits_block = (
             f"\nRECENT MANUAL EDITS (user changed the project via the UI):\n"
-            f"{edits_str}\n"
+            f"{edits_str}"
         )
         # Clear after including — the LLM only needs to see them once
         project.manual_edits = []
@@ -391,14 +481,14 @@ def build_designer_prompt(project: DesignerProject) -> str:
     if brand and bool((brand.logo_asset_id or "").strip() or brand.logo_b64):
         if (brand.logo_mode or "auto") == "manual":
             logo_instruction = (
-                f"- LOGO: The brand has a logo set and is in manual placeholder mode. Place the HTML comment <!-- BRAND_LOGO --> wherever "
-                f"the logo should appear in the layout. It will be replaced with the actual <img> tag at render time.\n"
+                "LOGO: The brand has a logo set and is in manual placeholder mode. Place the HTML comment <!-- BRAND_LOGO --> wherever "
+                "the logo should appear in the layout. It will be replaced with the actual <img> tag at render time.\n"
             )
         else:
             scope_label = "all pages" if (brand.logo_scope or "all") == "all" else "the first page only"
             position_label = (brand.logo_position or "top_right").replace("_", " ")
             logo_instruction = (
-                f"- LOGO: The brand has a logo set and automatic logo placement is active. The logo is already overlaid on {scope_label} at the {position_label} corner. "
+                f"LOGO: The brand has a logo set and automatic logo placement is active. The logo is already overlaid on {scope_label} at the {position_label} corner. "
                 f"Use <!-- BRAND_LOGO --> only when the user explicitly wants a custom in-layout logo placement instead of the automatic overlay.\n"
             )
 
@@ -410,92 +500,36 @@ def build_designer_prompt(project: DesignerProject) -> str:
         if is_placeholder_project_name(project.name)
         else ""
     )
-    interactive_tool_lines = _interactive_tools_block(project.mode)
-    rendering_rule = _rules_for_mode(project.mode)
-    canvas_rules = _canvas_rules_for_mode(project)
-    mode_guidelines = _mode_guidelines(project.mode)
 
-    return (
-        f"[DESIGNER MODE]\n"
-        f"You are helping the user with a design project: \"{project.name}\"\n"
+    project_part = (
+        f"[DESIGNER PROJECT STATE]\n"
+        f"Design project: \"{project.name}\"\n"
         f"{naming_line}"
         f"Project type: {mode_label}\n"
         f"Canvas: {project.canvas_width}×{project.canvas_height} ({project.aspect_ratio})\n"
         f"Published link: {project.publish_url or 'not published yet'}\n"
         f"{brand_line}\n"
-        f"{brief_block}\n"
-        f"{references_block}\n"
-        f"{components_block}\n"
-        f"Pages ({len(project.pages)} total):\n{pages_str}\n"
-        f"Active page: {project.active_page}\n"
-        f"{edits_block}\n"
-        f"DESIGNER TOOLS AVAILABLE:\n"
-        f"- designer_set_pages: Create/replace ALL pages. Use for new projects or major reworks.\n"
-        f"- designer_update_page: Update ONE page. Use for edits to specific pages.\n"
-        f"- designer_add_page: Insert a new page. Use index=-1 to append.\n"
-        f"- designer_delete_page: Remove a page.\n"
-        f"- designer_move_page: Reorder pages.\n"
-        f"- designer_get_project: Read current project state, including page summaries and asset IDs.\n"
-        f"- designer_get_page_html: Read the full stored HTML for one page before a full-page rewrite.\n"
-        f"- designer_get_reference: Read the stored details for one project reference by id or filename.\n"
-        f"- designer_generate_notes: Generate speaker notes for one page and save them into the project.\n"
-        f"- designer_insert_component: Insert a curated reusable block such as a hero callout, stats band, testimonial, pricing cards, or timeline.\n"
-        f"- designer_critique_page: Review the current page for hierarchy, overflow, contrast, readability, and spacing issues.\n"
-        f"- designer_apply_repairs: Apply safe deterministic repairs for selected critique categories on the current page.\n"
-        f"- designer_set_brand: Update brand colors/fonts.\n"
-        f"- designer_rename_project: Name the design; the name shows in its panel and the conversation.\n"
-        f"- designer_resize_project: Resize the canvas for presentation, social, or document presets.\n"
-        f"- designer_export: Export as PDF/HTML/PNG/PPTX.\n"
-        f"- designer_publish_link: Publish a self-contained HTML deck link through Row-Bot.\n"
-        f"- designer_generate_image: Generate an AI image from a text prompt and embed it.\n"
-        f"- designer_insert_image: Insert an attached, pasted, generated, or local image into a page.\n"
-        f"- designer_move_image: Move an existing inserted image or chart using its asset ID or label.\n"
-        f"- designer_replace_image: Replace an existing inserted image or chart using its asset ID or label.\n"
-        f"- designer_move_element: Move a section or element using a selector hint, CSS selector, element id, or xpath.\n"
-        f"- designer_duplicate_element: Duplicate a section or element and get back a new element id/selector hint.\n"
-        f"- designer_restyle_element: Update styles or classes on an existing section or element without rewriting the page.\n"
-        f"- designer_refine_text: Refine text on a page (shorten/expand/professional/casual/etc.).\n"
-        f"- designer_add_chart: Add a data visualization chart (bar/line/pie/scatter/etc.) to a page.\n"
-        f"{interactive_tool_lines}"
-        f"\n"
-        f"HTML REQUIREMENTS:\n"
-        f"- Each page must be a COMPLETE, self-contained HTML document with inline <style>.\n"
-        f"- You MUST use these CSS variables in ALL your HTML — never hardcode colors or fonts:\n"
-        f"{css_vars}\n"
-        f"- Use var(--bg) for backgrounds, var(--text) for text, var(--primary)/var(--secondary)/"
-        f"var(--accent) for colored elements, var(--heading-font) for headings, var(--body-font) for body text.\n"
-        f"- IMPORTANT: Set body {{ background: var(--bg); color: var(--text); font-family: var(--body-font); }} "
-        f"and h1,h2,h3,h4 {{ font-family: var(--heading-font); }} so pages always reflect the brand.\n"
-        f"{canvas_rules}\n"
-        f"- Include Google Fonts <link> for: {fonts}.\n"
-        f"- Use modern CSS: flexbox, grid, gradients. No frameworks needed.\n"
-        f"- For placeholder images, use colored divs or SVG shapes, NOT external URLs.\n"
+        f"CSS variables to use:\n{css_vars}\n"
+        f"Google Fonts to include: {fonts}\n"
         f"{logo_instruction}"
-        f"{rendering_rule}\n"
-        f"\n"
-        f"GUIDELINES:\n"
-        f"- The page list above is ALWAYS the authoritative current state. The user can "
-        f"add, delete, or reorder pages via the UI at any time — ignore stale page counts "
-        f"from earlier tool results in this conversation.\n"
-        f"- When user asks to \"create\" something, use designer_set_pages with all pages.\n"
-        f"- When user asks for a specific change, prefer the smallest targeted tool that preserves the existing page.\n"
-        f"- Before any full-page rewrite with designer_update_page, call designer_get_page_html for that page so you preserve existing layout and assets.\n"
-        f"- Files attached in Designer are persisted as project references. Reuse them across turns and call designer_get_reference when you need the exact extracted content again.\n"
-        f"- When the user asks for speaker notes, presenter notes, or a talk track for a page, use designer_generate_notes instead of rewriting the page HTML.\n"
-        f"- When the user wants a social, story, document, or other canvas change, use designer_resize_project before reworking layout details.\n"
-        f"- When the user wants a shareable link to the deck, use designer_publish_link instead of describing a manual export flow.\n"
-        f"- When the user asks for a standard section pattern like metrics, feature cards, testimonials, pricing, or timeline steps, prefer designer_insert_component before writing a custom fragment from scratch.\n"
-        f"- When the user asks for review, audit, polish, fix readability, fix contrast, or tighten spacing, call designer_critique_page first and then designer_apply_repairs only for the categories that matter.\n"
-        f"- For attached, pasted, generated, or local images, use designer_insert_image instead of recreating the page HTML manually.\n"
-        f"- IMAGE PLACEMENT: when authoring a page that will later receive an AI image, mark the target container with `data-row-bot-image-slot=\"NAME\"` (e.g. <div data-row-bot-image-slot=\"hero\" style=\"width:100%;aspect-ratio:16/9;\"></div>). designer_insert_image will automatically fill the first such slot, sized to cover. Alternatively, call designer_insert_image with position=\"replace:.my-class\" or position=\"replace:#my-id\" to target a specific container. Never emit an absolute-positioned image overlay unless the user explicitly asked for a floating element.\n"
-        f"- NO DECORATIVE OVERLAP ON TEXT: never place absolutely-positioned decorative CSS art (blobs, hand-drawn shapes, chef figures, mascots, etc.) on top of a heading or body paragraph. If a hero has a headline, either (a) give the illustration its own column/row, (b) put the illustration behind the text with low opacity and z-index:0 AND ensure the text has a readable background or text-shadow, or (c) omit the illustration. When in doubt, use a real AI image via a data-row-bot-image-slot instead of CSS shapes.\n"
-        f"- BUTTON ROWS STAY HORIZONTAL: when emitting a row of two buttons (Back + primary, Cancel + Confirm, etc.), use display:flex; gap:12px; and give the primary button flex:1 so they sit side-by-side with clear space between them. Never let them stack vertically, touch each other, or both render with the same primary fill. Secondary/ghost buttons must be visually distinct (transparent background OR an outline) from the primary action.\n"
-        f"- For moving or replacing an existing image or chart, use designer_move_image or designer_replace_image with the asset IDs from designer_get_project.\n"
-        f"- When you must reuse an existing project image in handwritten HTML, use src=\"asset://ASSET_ID\" and keep data-asset-id=\"ASSET_ID\" on the img when possible. Never invent placeholder tokens like __ASSET_...__.\n"
-        f"- For moving, duplicating, or restyling a non-image section or element, use designer_move_element, designer_duplicate_element, or designer_restyle_element with selector hints from designer_get_project.\n"
-        f"- If you need a more precise target than the summary provides, call designer_get_page_html and use a CSS selector such as body > section:nth-of-type(1) > div:nth-of-type(2).\n"
-        f"- When user says \"make all pages...\", update each page individually.\n"
-        f"- Always explain what you changed in your text response.\n"
-        f"- If brand colors aren't set, suggest professional defaults.\n"
-        f"{mode_guidelines}"
+        f"{brief_block}\n"
+        f"{references_block}"
     )
+    pages_part = (
+        f"DESIGNER PAGES ({len(project.pages)} total):\n{pages_str}\n"
+        f"Active page: {project.active_page}"
+        f"{edits_block}"
+    )
+    canvas_part = f"DESIGNER CANVAS RULES:\n{_canvas_rules_for_mode(project)}"
+    return {"project": project_part, "pages": pages_part, "canvas": canvas_part}
+
+
+def build_designer_state(project: DesignerProject) -> str:
+    """The project's current values as one block (see ``build_designer_state_parts``)."""
+    parts = build_designer_state_parts(project)
+    return "\n".join(parts[key] for key in ("project", "pages", "canvas"))
+
+
+def build_designer_prompt(project: DesignerProject) -> str:
+    """The whole designer prompt for *project*: its stable guide followed by its current state."""
+    return build_designer_guide(project.mode) + "\n" + build_designer_state(project)

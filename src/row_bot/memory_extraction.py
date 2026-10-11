@@ -157,10 +157,15 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
     """Load messages from a thread via the LangGraph checkpointer."""
     try:
         from row_bot.threads import get_latest_checkpoint_messages
+        from row_bot.turn_context import is_turn_context_message
 
         messages = get_latest_checkpoint_messages(thread_id)
         result = []
         for m in messages:
+            if is_turn_context_message(m):
+                # Row-Bot's per-turn context (time, state, recalled memories): never a source of
+                # new memories, and never something the person said.
+                continue
             mtype = getattr(m, "type", None)
             role = "user" if mtype == "human" else ("assistant" if mtype == "ai" else None)
             content = getattr(m, "content", "") or ""
