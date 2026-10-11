@@ -413,7 +413,7 @@ jobs:
             --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/row-bot.entitlements"
           rm -rf "$VT/f-5.1.0"
           python3 spike/velopack-trial/timed.py delta-fresh "$RES/timings.jsonl" -- vpk delta generate --skip-updates --mode BestSpeed \
-            --base "$VT/rel/RowBotTrial-5.0.0-full.nupkg" --new "$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg" --output "$VT/delta-fresh.nupkg"
+            --base "$VT/rel/RowBotTrial-5.0.0-osx-full.nupkg" --new "$VT/rel-fresh/RowBotTrial-5.1.0-osx-full.nupkg" --output "$VT/delta-fresh.nupkg"
           df -h "$RUNNER_TEMP"
 
       - name: Sign and pack 5.1.0 (b reuses unchanged signed files; a signs fresh as today)
@@ -430,7 +430,7 @@ jobs:
             --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/row-bot.entitlements"
           rm -rf "$VT/u-5.1.0"
           python3 spike/velopack-trial/timed.py delta-bestsize "$RES/timings.jsonl" -- vpk delta generate --skip-updates --mode BestSize \
-            --base "$VT/rel/RowBotTrial-5.0.0-full.nupkg" --new "$VT/rel/RowBotTrial-5.1.0-full.nupkg" --output "$VT/delta-bestsize.nupkg"
+            --base "$VT/rel/RowBotTrial-5.0.0-osx-full.nupkg" --new "$VT/rel/RowBotTrial-5.1.0-osx-full.nupkg" --output "$VT/delta-bestsize.nupkg"
           ls -la "$VT/rel" "$VT"; cat "$VT/rel/releases.osx.json"; df -h "$RUNNER_TEMP"
 
       - name: Sizes
@@ -441,8 +441,8 @@ jobs:
           if [ -f "$VT/delta-fresh.nupkg" ]; then
             EXTRA+=(--extra-delta "fresh_signatures=$VT/delta-fresh.nupkg")
           fi
-          if [ -f "$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg" ]; then
-            EXTRA+=(--extra-diff "fresh_signatures=$VT/rel/RowBotTrial-5.0.0-full.nupkg,$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg")
+          if [ -f "$VT/rel-fresh/RowBotTrial-5.1.0-osx-full.nupkg" ]; then
+            EXTRA+=(--extra-diff "fresh_signatures=$VT/rel/RowBotTrial-5.0.0-osx-full.nupkg,$VT/rel-fresh/RowBotTrial-5.1.0-osx-full.nupkg")
           fi
           python3 spike/velopack-trial/driver.py sizes --feed "$VT/rel" --variant ${{ matrix.variant }} \
             --installers "$VT/portable-5.0.0.zip" "$VT/rel/RowBotTrial-osx-Portable.zip" "${EXTRA[@]}" \
@@ -493,7 +493,7 @@ jobs:
           set -euo pipefail
           WHICH=()
           if [ "${{ needs.config.outputs.scenarios }}" != "all" ]; then WHICH=(--which "${{ needs.config.outputs.scenarios }}"); fi
-          python3 spike/velopack-trial/driver.py scenarios --feed "$VT/rel" --base-nupkg "$VT/rel/RowBotTrial-5.0.0-full.nupkg" \
+          python3 spike/velopack-trial/driver.py scenarios --feed "$VT/rel" --base-nupkg "$VT/rel/RowBotTrial-5.0.0-osx-full.nupkg" \
             --portable "$VT/portable-5.0.0.zip" --work "$VT/work" --out "$RES/scenarios" ${WHICH[@]+"${WHICH[@]}"}
 
       - name: Upload results

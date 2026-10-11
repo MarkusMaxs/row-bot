@@ -54,6 +54,14 @@ def sh(cmd: list, timeout: float | None = None, **kw) -> subprocess.CompletedPro
 # ----------------------------------------------------------------------------- helpers
 
 
+def package(feed: Path, version: str, kind: str) -> Path:
+    """vpk names packages <id>-<version>-full.nupkg on Windows, <id>-<version>-osx-full.nupkg on macOS."""
+    matches = sorted(feed.glob(f"{PACK_ID}-{version}*-{kind}.nupkg"))
+    if len(matches) != 1:
+        raise FileNotFoundError(f"{kind} package for {version} in {feed}: {[m.name for m in matches]}")
+    return matches[0]
+
+
 def category(path: str) -> str:
     p = path.lower()
     if p.endswith(".pyc"):
@@ -339,9 +347,9 @@ def nupkg_diff(old: Path, new: Path) -> dict:
 
 def cmd_sizes(args: argparse.Namespace) -> None:
     feed = args.feed
-    full_old = feed / f"{PACK_ID}-{args.base}-full.nupkg"
-    full_new = feed / f"{PACK_ID}-{args.target}-full.nupkg"
-    delta = feed / f"{PACK_ID}-{args.target}-delta.nupkg"
+    full_old = package(feed, args.base, "full")
+    full_new = package(feed, args.target, "full")
+    delta = package(feed, args.target, "delta")
     result: dict = {
         "os": "windows" if IS_WIN else "macos",
         "variant": args.variant,
@@ -378,8 +386,8 @@ def copy_feed(src: Path, dst: Path, target: str) -> Path:
     dst.mkdir(parents=True)
     for p in releases_files(src):
         shutil.copy2(p, dst / p.name)
-    for name in (f"{PACK_ID}-{target}-full.nupkg", f"{PACK_ID}-{target}-delta.nupkg"):
-        shutil.copy2(src / name, dst / name)
+    for path in (package(src, target, "full"), package(src, target, "delta")):
+        shutil.copy2(path, dst / path.name)
     return dst
 
 
@@ -424,7 +432,7 @@ def rewrite_delta(path: Path, choose) -> str:
 
 def make_bad_feed(src: Path, dst: Path, target: str, mode: str) -> dict:
     copy_feed(src, dst, target)
-    delta = dst / f"{PACK_ID}-{target}-delta.nupkg"
+    delta = package(dst, target, "delta")
     detail: dict = {"mode": mode}
     if mode == "delta_bytes":
         data = bytearray(delta.read_bytes())
@@ -737,7 +745,7 @@ def cmd_scenarios(args: argparse.Namespace) -> None:
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
     feed = args.feed
-    target_nupkg = feed / f"{PACK_ID}-{args.target}-full.nupkg"
+    target_nupkg = package(feed, args.target, "full")
     base_nupkg = args.base_nupkg
     which = args.which.split(",")
     results: dict = {"os": "windows" if IS_WIN else "macos", "scenarios": {}}
@@ -772,7 +780,7 @@ def cmd_scenarios(args: argparse.Namespace) -> None:
 
     def seed(kind: str) -> dict:
         PACKAGES.mkdir(parents=True, exist_ok=True)
-        dest = PACKAGES / f"{PACK_ID}-{args.base}-full.nupkg"
+        dest = PACKAGES / base_nupkg.name
         if kind == "original":
             shutil.copy2(base_nupkg, dest)
             return {"seeded": "original"}
@@ -865,7 +873,7 @@ def cmd_scenarios(args: argparse.Namespace) -> None:
         return {"removed": removed}
 
     def corrupt_base_prepare() -> dict:
-        base = PACKAGES / f"{PACK_ID}-{args.base}-full.nupkg"
+        base = package(PACKAGES, args.base, "full")
         data = bytearray(base.read_bytes())
         mid = len(data) // 2
         for i in range(mid, mid + 4096):
@@ -900,7 +908,7 @@ def _win_synth(base_nupkg: Path, args: argparse.Namespace) -> dict:
     removed = [p.name for p in PACKAGES.glob("*-full.nupkg")]
     for p in PACKAGES.glob("*-full.nupkg"):
         p.unlink()
-    info = synthesize_base(base_nupkg, PACKAGES / f"{PACK_ID}-{args.base}-full.nupkg")
+    info = synthesize_base(base_nupkg, PACKAGES / base_nupkg.name)
     return {"removed": removed, **info}
 
 

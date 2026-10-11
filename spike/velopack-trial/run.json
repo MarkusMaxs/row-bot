@@ -1,1 +1,1 @@
-{"windows": false, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 3: macOS after entitlements extension fix"}
+{"windows": false, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 4: macOS after osx package naming fix"}
