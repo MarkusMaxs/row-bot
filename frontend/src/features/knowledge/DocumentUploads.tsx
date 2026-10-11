@@ -1,3 +1,4 @@
+import { formatBytes } from '../shell/MediaPreview';
 import { useId, useState, useSyncExternalStore } from 'react';
 import { FileUp } from 'lucide-react';
 import { Button, ErrorState } from '../../ui/primitives';
@@ -349,7 +350,7 @@ export function DocumentUploads({
         <ul className="document-staged-files" aria-label="Selected documents">
           {state.files.map((file, index) => (
             <li key={`${index}:${file.name}`}>
-              {file.name} · {file.size} bytes
+              {file.name} · {formatBytes(file.size)}
             </li>
           ))}
         </ul>

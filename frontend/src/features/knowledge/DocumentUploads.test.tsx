@@ -76,7 +76,8 @@ describe('document upload retained staging', () => {
     expect(zone).toHaveAttribute('data-dragging', 'true');
     fireEvent.drop(zone, { dataTransfer });
     expect(zone).not.toHaveAttribute('data-dragging');
-    expect(screen.getByText('example.txt · 7 bytes')).toBeVisible();
+    // B328: sizes read as attachments do, not raw bytes.
+    expect(screen.getByText('example.txt · 7 B')).toBeVisible();
     // Dropping stages nothing by itself; upload is still one explicit click.
     expect(transport.review).not.toHaveBeenCalled();
     await act(async () => {
