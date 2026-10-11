@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import io
 import re
-from urllib.parse import urlsplit
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from urllib.parse import urljoin, urlsplit
 
+import httpx
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from row_bot.integrations.safe import _Pinned, _public_addresses
 from row_bot.tools.base import BaseTool
 from row_bot.tools import registry
 
@@ -20,6 +25,53 @@ class _ReadURLInput(BaseModel):
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 _PDF_MAX_BYTES = 25 * 1024 * 1024
 _PDF_MAX_PAGES = 200
+_TIMEOUT = 15
+_MAX_REDIRECTS = 10
+_REDIRECTS = {301, 302, 303, 307, 308}
+_NOT_PUBLIC = "not_public"
+NOT_PUBLIC_MESSAGE = (
+    "This link can't be read: read_url opens public web pages only, never an address on this computer, "
+    "the local network or a cloud metadata service (this includes links that redirect there)."
+)
+
+
+class _NotPublic(Exception):
+    pass
+
+
+@contextmanager
+def _public_get(url: str) -> Iterator[tuple[str, httpx.Response]]:
+    """GET a public web page, yielding the final URL and its response.
+
+    A page the agent reads can tell it what to read next, so each hop (the link and every redirect) is
+    checked on its own: http(s) without a user name or password, a name that resolves only to public
+    addresses, and a connection to one of those checked addresses with no second lookup, so a rebinding name
+    can't swap in a private one.
+    """
+    deadline = time.monotonic() + _TIMEOUT * 4
+    for _hop in range(_MAX_REDIRECTS + 1):
+        try:
+            target = httpx.URL(url)
+        except (httpx.InvalidURL, TypeError) as exc:
+            raise ValueError(f"not a valid link: {exc}") from None
+        if target.scheme not in {"http", "https"} or not target.host or target.userinfo:
+            raise ValueError("only http:// and https:// links without a user name or password can be read")
+        try:
+            addresses = _public_addresses(target.raw_host.decode("ascii").rstrip("."), _NOT_PUBLIC)
+        except ValueError as exc:
+            raise _NotPublic() from exc
+        except ConnectionError:
+            raise ConnectionError(f"could not resolve {target.host}") from None
+        transport = _Pinned(target.host, addresses, deadline)
+        with httpx.Client(transport=transport, timeout=_TIMEOUT, follow_redirects=False, trust_env=False) as client:
+            with client.stream("GET", target, headers={"User-Agent": _USER_AGENT}) as response:
+                location = response.headers.get("Location", "")
+                if response.status_code in _REDIRECTS and location:
+                    url = urljoin(str(target), location)
+                    continue
+                yield str(target), response
+                return
+    raise ValueError(f"the link redirected more than {_MAX_REDIRECTS} times")
 
 
 def _is_pdf(response, url: str, head: bytes) -> bool:
@@ -45,19 +97,18 @@ def _pdf_text(data: bytes) -> str:
 
 def _read_url(url: str) -> str:
     """Fetch a webpage or PDF and return its text content."""
-    import requests
     from bs4 import BeautifulSoup
 
     try:
-        with requests.get(url, timeout=15, stream=True, headers={"User-Agent": _USER_AGENT}) as response:
+        with _public_get(str(url or "").strip()) as (source, response):
             chunks, size = [], 0
-            for chunk in response.iter_content(64 * 1024):
+            for chunk in response.iter_bytes(64 * 1024):
                 size += len(chunk)
                 if size > _PDF_MAX_BYTES:
                     break
                 chunks.append(chunk)
             data = b"".join(chunks)
-            if _is_pdf(response, url, data[:5]):
+            if _is_pdf(response, source, data[:5]):
                 if size > _PDF_MAX_BYTES:
                     return f"The PDF is larger than {_PDF_MAX_BYTES // (1024 * 1024)} MB, too large to read."
                 text = _pdf_text(data)
@@ -65,7 +116,8 @@ def _read_url(url: str) -> str:
                 # BeautifulSoup reads the page's own charset when the server names none.
                 charset = response.headers.get("Content-Type", "").partition("charset=")[2].strip(" \"';") or None
                 text = BeautifulSoup(data, "html.parser", from_encoding=charset).get_text()
-            source = response.url or url
+    except _NotPublic:
+        return NOT_PUBLIC_MESSAGE
     except Exception as exc:
         return f"Failed to fetch URL: {exc}"
 
