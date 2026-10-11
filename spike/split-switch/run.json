@@ -1,1 +1,1 @@
-{"windows": true, "macos": false, "linux": false, "notarize": false, "kit_artifact": false, "only": [], "note": "run 4b: stand-in maps multidict; Windows with the host loop-guard fix, hard-link thread variants, archive-vs-installed check"}
+{"windows": false, "macos": true, "linux": true, "notarize": true, "kit_artifact": true, "only": [], "note": "run 5: macOS + Linux with the loop-guard fix; notarize the trial app once (background) for spctl after switches and the Phase 5 kit"}
