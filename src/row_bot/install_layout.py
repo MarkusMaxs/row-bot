@@ -609,6 +609,11 @@ def main(argv: list[str] | None = None) -> int:
     after.add_argument("--code", type=int, required=True)
     after.add_argument("--timed-out", action="store_true")
 
+    unverified = commands.add_parser("still-unverified", help="Exit 0 while VERSION is active and unverified")
+    unverified.add_argument("--root", type=Path, required=True)
+    unverified.add_argument("--kind", type=_cli_kind, required=True)
+    unverified.add_argument("--version", required=True)
+
     install = commands.add_parser("record-install", help="Make a freshly installed version active")
     install.add_argument("--root", type=Path, required=True)
     install.add_argument("--kind", type=_cli_kind, required=True)
@@ -639,6 +644,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "after-exit":
         state = load_state(args.root, args.kind)
         return 0 if relaunch_after_exit(state, args.version, args.code, timed_out=args.timed_out) else 1
+    if args.command == "still-unverified":
+        state = load_state(args.root, args.kind)
+        return 0 if state is not None and state.pending_verification and state.active == args.version else 1
     if args.command == "record-install":
         state = record_install(args.root, args.version, kind=args.kind)
         if args.kind is InstallKind.LINUX:

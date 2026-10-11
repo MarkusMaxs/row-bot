@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Row-Bot launcher for Linux (bin/row-bot in every release).
+#
+# An installed release lives in $XDG_DATA_HOME/row-bot/releases/<version>, with
+# `current` pointing at the active one and state.json beside them. This wrapper
+# applies the loop guard (src/row_bot/install_layout.py begin-launch), starts
+# <active>/python with <active>/app/launcher.py and the original arguments, and
+# starts it again only when it exits with 75 (or after a failed start of a
+# version that is not verified yet). Two unverified launches in a row roll back
+# to the previous release; a start not ready after 240 s counts as failed.
+#
+# Under systemd (INVOCATION_ID is set) it starts the app once and leaves
+# restarts to the unit: use Restart=always, or RestartForceExitStatus=75.
+set -uo pipefail
+
+RELAUNCH_EXIT_CODE=75
+READY_TIMEOUT=240
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    TARGET="$(readlink "$SOURCE")"
+    case "$TARGET" in
+        /*) SOURCE="$TARGET" ;;
+        *) SOURCE="$DIR/$TARGET" ;;
+    esac
+done
+SELF="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+DATA_DIR="${ROW_BOT_DATA_DIR:-$HOME/.row-bot}"
+mkdir -p "$DATA_DIR"
+
+if [ "$#" -eq 0 ]; then
+    set -- --browser --no-tray
+fi
+
+# An installed release sits in <root>/releases/<version>; an unpacked tarball runs as itself.
+ROOT=""
+if [ "$(basename "$(dirname "$SELF")")" = "releases" ]; then
+    ROOT="$(dirname "$(dirname "$SELF")")"
+fi
+
+layout() {
+    "$SELF/python/bin/python3" -I -S "$SELF/app/src/row_bot/install_layout.py" "$@"
+}
+
+use_version() {
+    VROOT="$1"
+    export ROW_BOT_INSTALL_ROOT="${ROOT:-$VROOT}"
+    export PYTHONNOUSERSITE=1
+    export PYTHONIOENCODING=utf-8
+    export PYTHONDONTWRITEBYTECODE=1
+    if [ -d "$VROOT/python/playwright-browsers" ]; then
+        export PLAYWRIGHT_BROWSERS_PATH="$VROOT/python/playwright-browsers"
+    else
+        mkdir -p "$DATA_DIR/playwright-browsers"
+        export PLAYWRIGHT_BROWSERS_PATH="$DATA_DIR/playwright-browsers"
+    fi
+    cd "$VROOT/app" || exit 1
+}
+
+# Stops a start that never got ready, with everything it started from that release.
+stop_release() {
+    kill -TERM "$child" 2>/dev/null
+    for _ in $(seq 20); do
+        kill -0 "$child" 2>/dev/null || break
+        sleep 1
+    done
+    for proc in /proc/[0-9]*; do
+        case "$(readlink "$proc/exe" 2>/dev/null)" in
+            "$VROOT"/*) kill -KILL "${proc#/proc/}" 2>/dev/null ;;
+        esac
+    done
+}
+
+if [ -z "$ROOT" ]; then
+    use_version "$SELF"
+    exec "$VROOT/python/bin/python3" launcher.py "$@"
+fi
+
+quick_relaunches=0
+while :; do
+    plan="$(layout begin-launch --root "$ROOT" --kind linux)" || plan=""
+    version="${plan%% *}"
+    pending="${plan##* }"
+    if [ -z "$plan" ] || [ ! -x "$ROOT/releases/$version/python/bin/python3" ]; then
+        version="$(basename "$SELF")"
+        pending=0
+    fi
+    use_version "$ROOT/releases/$version"
+
+    if [ -n "${INVOCATION_ID:-}" ]; then
+        exec "$VROOT/python/bin/python3" launcher.py "$@"
+    fi
+
+    started=$SECONDS
+    stopping=""
+    timed_out=""
+    "$VROOT/python/bin/python3" launcher.py "$@" &
+    child=$!
+    trap 'stopping=1; kill -TERM "$child" 2>/dev/null' TERM INT HUP
+
+    # While unverified, watch for the readiness timeout; then just wait.
+    while [ "$pending" = 1 ] && kill -0 "$child" 2>/dev/null; do
+        if [ $((SECONDS - started)) -ge "$READY_TIMEOUT" ]; then
+            pending=0
+            if layout still-unverified --root "$ROOT" --kind linux --version "$version"; then
+                echo "row-bot: $version did not become ready in ${READY_TIMEOUT}s; stopping it" >&2
+                timed_out=1
+                stop_release
+            fi
+        else
+            sleep 0.25 &
+            wait $! 2>/dev/null
+        fi
+    done
+    while :; do
+        wait "$child"
+        code=$?
+        if [ "$code" -lt 128 ] || ! kill -0 "$child" 2>/dev/null; then
+            break
+        fi
+    done
+    trap - TERM INT HUP
+
+    if [ -n "$stopping" ] || ! layout after-exit --root "$ROOT" --kind linux --version "$version" \
+            --code "$code" ${timed_out:+--timed-out}; then
+        exit "$code"
+    fi
+    if [ "$code" -eq "$RELAUNCH_EXIT_CODE" ] && [ $((SECONDS - started)) -lt 30 ]; then
+        quick_relaunches=$((quick_relaunches + 1))
+        if [ "$quick_relaunches" -ge 3 ]; then
+            echo "row-bot: relaunch asked for $quick_relaunches times within seconds; stopping" >&2
+            exit 1
+        fi
+    else
+        quick_relaunches=0
+    fi
+done
