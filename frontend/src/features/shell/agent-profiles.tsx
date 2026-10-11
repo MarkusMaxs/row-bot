@@ -38,6 +38,14 @@ export function currentProfileChoice(
  * the sidebar entry and the /profiles slash command so both reach the same
  * reviewed owner instead of a text dump (B10).
  */
+// Where a tool comes from, in the profile editor's tool list (F14).
+const TOOL_SOURCES: Record<string, string> = {
+  core: 'Built in',
+  mcp: 'App',
+  plugin: 'Plugin',
+  custom: 'Custom tool',
+};
+
 export function openAgentProfiles({
   overlay,
   controller,
@@ -65,6 +73,34 @@ export function openAgentProfiles({
         }
         loadProfile={controller.profile}
         loadProfileInstructions={controller.profileInstructions}
+        searchTools={async (query, signal) =>
+          (
+            (await controller.cachedTools(undefined, query, undefined, signal))
+              ?.items ?? []
+          ).map((tool) => ({
+            id: tool.id,
+            label: tool.label,
+            detail: TOOL_SOURCES[tool.source] ?? tool.source,
+          }))
+        }
+        searchSkills={async (query, signal) =>
+          (
+            (
+              await controller.skills(
+                query,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                signal,
+              )
+            )?.items ?? []
+          ).map((skill) => ({
+            id: skill.id,
+            label: skill.display_name,
+            detail: skill.source === 'bundled' ? 'Built in' : 'Yours',
+          }))
+        }
         reviewProfile={controller.reviewProfile}
         executeProfile={(command, review) =>
           controller.executeProfile({
