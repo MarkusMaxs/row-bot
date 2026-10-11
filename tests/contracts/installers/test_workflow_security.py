@@ -20,12 +20,14 @@ pytestmark = [pytest.mark.contract, pytest.mark.installer]
 WORKFLOWS = sorted(Path(".github/workflows").glob("*.yml"))
 ACTIONS = sorted(Path(".github/actions").glob("*/action.yml"))
 EVENT_TRIGGERS = {"pull_request", "push", "schedule", "release", "workflow_run"}
-# Jobs allowed to read secrets: signing, notarization, publishing, and the
-# workflow token for labels and the update manifest.
+# Jobs allowed to read secrets: signing, notarization, publishing, the
+# workflow token for labels and the update manifest, and the live eval's
+# provider keys (a manual dispatch only; see the test below).
 SECRET_READERS = {
     ("container.yml", "release-image"),
     ("container.yml", "release-manifest"),
     ("labels.yml", "sync"),
+    ("live-e2e.yml", "live-eval"),
     ("notarize-check.yml", "check"),
     ("notarize-submit.yml", "submit"),
     ("release.yml", "build-macos"),
@@ -72,6 +74,15 @@ def test_only_signing_and_publishing_jobs_read_secrets() -> None:
         if "secrets." in str(job)
     }
     assert readers <= SECRET_READERS
+
+
+def test_provider_keys_reach_the_live_eval_only_when_a_person_starts_it() -> None:
+    workflow = _load(Path(".github/workflows/live-e2e.yml"))
+    assert _triggers(workflow) == {"workflow_dispatch"}
+    job = workflow["jobs"]["live-eval"]
+    assert job["if"] == "${{ inputs.run_live_eval }}"
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["run_live_eval"]["default"] == "false"
+    assert "secrets." not in str(workflow["jobs"]["live-e2e"])
 
 
 def test_ci_ok_passes_only_when_every_required_job_did() -> None:

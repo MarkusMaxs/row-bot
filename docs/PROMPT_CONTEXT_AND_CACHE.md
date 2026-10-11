@@ -303,3 +303,13 @@ The only acceptable provider-side failure is an explicit out-of-credits, quota,
 usage-exhausted, or billing-limit response. Any authentication, schema,
 unsupported parameter, cache-control, tool-call replay, streaming, routing, or
 serialization failure is a bug or blocker.
+
+The live eval measures what these rules buy on real providers.
+`scripts/live_eval.py plan` lists its tasks and the estimated tokens without
+any network call. `run` sends each task through the real Agent runtime, with
+keys from the environment and a fresh data folder, under a USD and token cap.
+It records pass/fail and the usage ledger's cache share, 1h writes, TTFT and
+cost per task. `tests/e2e/test_live_verification.py` checks the provider rules
+above against the real APIs: the thinking-binding controls, both cache
+lifetimes, the gateway markers, the cache keys, usage shapes and background
+schemas. See `tests/README.md` (Live eval).
