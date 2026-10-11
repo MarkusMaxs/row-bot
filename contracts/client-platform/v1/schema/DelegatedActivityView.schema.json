@@ -3,6 +3,17 @@
     "DelegatedRun": {
       "additionalProperties": false,
       "properties": {
+        "activity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DelegatedStep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "child_conversation_id": {
           "anyOf": [
             {
@@ -62,6 +73,28 @@
         "summary"
       ],
       "title": "DelegatedRun",
+      "type": "object"
+    },
+    "DelegatedStep": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "default": "",
+          "maxLength": 240,
+          "title": "Detail",
+          "type": "string"
+        },
+        "tool": {
+          "maxLength": 180,
+          "minLength": 1,
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
+      ],
+      "title": "DelegatedStep",
       "type": "object"
     }
   },

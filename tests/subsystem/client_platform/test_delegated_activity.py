@@ -441,3 +441,43 @@ def test_settling_waits_for_work_that_is_still_starting(monkeypatch):
     starter.join(5)
     settler.join(5)
     assert outcome == [True]
+
+
+def test_a_running_helpers_steps_reach_its_page_and_its_parents_list(service, monkeypatch):
+    """F16: a helper's steps showed only when it finished. Each step now refreshes its open
+    conversation, and its current tool becomes one line in the parent's Agents list."""
+    import time
+    from langchain_core.messages import AIMessage
+    from row_bot import agent, agent_runs, threads
+    from row_bot.application import client_platform
+    from row_bot.application.delegated_activity import read_activity
+
+    monkeypatch.setattr(client_platform, "client_platform_service", service)
+    parent, child = [threads.create_thread(name, seed_default_skills=False) for name in ("Parent", "Helper")]
+    run = agent_runs.create_agent_run(parent_thread_id=parent, thread_id=child, display_name="Research")
+    agent_runs.start_agent_run(run["id"])
+    cursor = service.projection.snapshot(child)["cursor"]
+    step = {"agent": {"messages": [AIMessage(content="", tool_calls=[
+        {"name": "web_search", "args": {"query": "Oslo weather"}, "id": "call-1", "type": "tool_call"}])]}}
+
+    # Only a helper's run reports its steps; a workflow's invoke does not.
+    agent._observe_child_update({"configurable": {"runtime_surface": "workflow", "agent_run_id": run["id"]}}, step)
+    assert read_activity(service, parent)["items"][0]["activity"] is None
+    agent._observe_child_update(
+        {"configurable": {"runtime_surface": "agent_child", "agent_run_id": run["id"], "thread_id": child}}, step)
+
+    item = read_activity(service, parent)["items"][0]
+    assert item["activity"]["tool"] == "web_search"
+    # Only the reviewed argument vocabulary shows, as in a chat's own trace: a search query does not.
+    assert "Oslo weather" not in json.dumps(item)
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if any(event["type"] == "transcript.checkpoint"
+               for event in service.projection.events_since(child, cursor)["events"]):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("the helper's open page was never told about its step")
+
+    agent_runs.finish_agent_run(run["id"], "completed", summary="Done")
+    assert read_activity(service, parent)["items"][0]["activity"] is None

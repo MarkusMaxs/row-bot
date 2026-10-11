@@ -1,6 +1,7 @@
 """Bounded public navigation over the retained agent-run owner."""
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import closing
 from typing import Any
@@ -38,7 +39,21 @@ def _public(service: Any, run: dict) -> dict:
         "summary": str(run.get("summary") or "")[:4096],
         # Its icon follows the profile it runs as (B240).
         "profile_id": str(run.get("profile_id") or "")[:256],
+        # What a running helper is doing now, for one line in the list (F16).
+        "activity": _activity(run),
     }
+
+
+def _activity(run: dict) -> dict | None:
+    if run.get("status") != "running" or not run.get("activity_json"):
+        return None
+    try:
+        value = json.loads(str(run["activity_json"]))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, dict) or not value.get("tool"):
+        return None
+    return {"tool": str(value["tool"])[:180], "detail": str(value.get("detail") or "")[:240]}
 
 
 def _title(service: Any, conversation_id: str) -> str | None:
@@ -156,7 +171,8 @@ def read_activity(service: Any, conversation_id: str, *, cursor: str | None = No
     # Read only public columns from the existing owner, with a stable keyset.
     with closing(agent_runs._get_conn()) as conn:
         rows = conn.execute(
-            "SELECT id,parent_thread_id,thread_id,display_name,status,substr(summary,1,4096) AS summary,profile_id "
+            "SELECT id,parent_thread_id,thread_id,display_name,status,substr(summary,1,4096) AS summary,profile_id,"
+            "activity_json "
             "FROM agent_runs WHERE parent_thread_id=? AND kind='subagent' AND id>? ORDER BY id LIMIT 51",
             (conversation_id, after),
         ).fetchall()
