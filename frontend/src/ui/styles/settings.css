@@ -2494,6 +2494,62 @@
   flex: none;
   white-space: nowrap;
 }
+/* A profile's tools and skills, picked from a searchable list (F14). */
+.profile-checklist {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.profile-checklist > legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-weight: var(--weight-semibold);
+}
+.profile-checklist-chosen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.profile-checklist-chosen li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px 2px 2px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  font-size: var(--text-12);
+}
+.profile-checklist-chosen li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-checklist-options {
+  display: grid;
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+.profile-checklist-options label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+.profile-checklist-options small {
+  margin-left: auto;
+  color: var(--text-muted);
+}
 /* A profile's saved instructions, shown on request (F15). */
 .profile-instructions-head {
   display: flex;

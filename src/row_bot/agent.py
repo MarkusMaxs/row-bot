@@ -4778,6 +4778,31 @@ def get_invoke_agent_interrupts(
     return [dict(item) for item in interrupts if isinstance(item, dict)]
 
 
+def _child_run_id(config: dict | None) -> str:
+    configurable = (config or {}).get("configurable") or {}
+    if configurable.get("runtime_surface") != "agent_child":
+        return ""
+    return str(configurable.get("agent_run_id") or "")
+
+
+def _child_stream_options(config: dict | None) -> dict:
+    """A helper's steps are checkpointed before they are seen, so its open page can re-read each one (F16)."""
+    return {"durability": "sync"} if _child_run_id(config) else {}
+
+
+def _observe_child_update(config: dict | None, update: Any) -> None:
+    """One step of a helper agent, for its own conversation and its parent's Agents list (F16)."""
+    run_id = _child_run_id(config)
+    if not run_id:
+        return
+    try:
+        from row_bot.agent_runner import observe_child_step
+
+        observe_child_step(run_id, str((config or {}).get("configurable", {}).get("thread_id") or ""), update)
+    except Exception:
+        logger.debug("Could not show a helper agent's step", exc_info=True)
+
+
 def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: dict,
                         *, stop_event: threading.Event | None = None) -> str | dict:
     """Invoke the ReAct agent and return the final answer text.
@@ -4876,9 +4901,11 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                 initial_input,
                 config=config,
                 stream_mode="updates",
+                **_child_stream_options(config),
             ):
                 if stop_event.is_set():
                     raise TaskStoppedError("Task stopped during execution")
+                _observe_child_update(config, _event)
         except TaskStoppedError:
             raise
         except (ExecutionBudgetExhausted, AgentNoProgress) as exc:
@@ -4894,9 +4921,11 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                     initial_input,
                     config=config,
                     stream_mode="updates",
+                    **_child_stream_options(config),
                 ):
                     if stop_event.is_set():
                         raise TaskStoppedError("Task stopped during retry")
+                    _observe_child_update(config, _event)
             else:
                 _err_msg = _friendly_api_error(exc_str)
                 if _is_transient_stream_disconnect(exc_str):
@@ -6156,9 +6185,11 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
             Command(resume=resume_val),
             config=config,
             stream_mode="updates",
+            **_child_stream_options(config),
         ):
             if stop_event and stop_event.is_set():
                 raise TaskStoppedError("Task stopped during resume")
+            _observe_child_update(config, _event)
     except TaskStoppedError:
         raise
     except (ExecutionBudgetExhausted, AgentNoProgress) as exc:

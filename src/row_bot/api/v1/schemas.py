@@ -7182,6 +7182,11 @@ class ConversationWorkspace(WireModel):
     composer: ConversationComposer | None = None
 
 
+class DelegatedStep(WireModel):
+    tool: str = Field(min_length=1, max_length=180)
+    detail: str = Field(default="", max_length=240)
+
+
 class DelegatedRun(WireModel):
     run_id: OpaqueId
     parent_conversation_id: OpaqueId
@@ -7190,6 +7195,8 @@ class DelegatedRun(WireModel):
     status: str = Field(max_length=80)
     summary: str = Field(max_length=4096)
     profile_id: str = Field(default="", max_length=256)
+    # The step a running helper is on: a tool and its redacted key argument (F16).
+    activity: DelegatedStep | None = None
 
 
 class DelegatedActivityView(WireModel):

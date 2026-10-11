@@ -2165,6 +2165,15 @@ button.agent-row-main:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
+/* A working helper's current step, under its name (F16). */
+.agent-row-step {
+  margin: 0 0 2px 28px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .agent-row-name {
   flex: 1 1 auto;
   min-width: 0;

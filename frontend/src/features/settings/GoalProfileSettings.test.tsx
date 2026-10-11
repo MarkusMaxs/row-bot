@@ -290,6 +290,41 @@ it('preserves stored profile instructions unless replacement is explicit', async
   );
 });
 
+it('picks profile tools and skills by name and saves their IDs (F14)', async () => {
+  const props = options();
+  render(
+    <GoalProfileSettings
+      {...props}
+      searchTools={async () => [
+        { id: 'read_file', label: 'Read file', detail: 'Built in' },
+        { id: 'calculator', label: 'Calculator', detail: 'Built in' },
+      ]}
+      searchSkills={async () => [
+        { id: 'local-style', label: 'Local style', detail: 'Yours' },
+      ]}
+    />,
+  );
+  await screen.findByText('Complete the migration');
+  await openProfiles();
+  fireEvent.click(screen.getByRole('button', { name: 'Edit Focused Writer' }));
+  await screen.findByRole('group', { name: 'Edit profile' });
+  // No ID fields: the profile's current picks show by name.
+  expect(screen.queryByText('Comma-separated stable tool IDs.')).toBeNull();
+  expect(
+    await screen.findByRole('checkbox', { name: /Read file/ }),
+  ).toBeChecked();
+  expect(screen.getByRole('list', { name: 'Chosen skills' })).toHaveTextContent(
+    'Local style',
+  );
+  fireEvent.click(screen.getByRole('checkbox', { name: /Calculator/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+  await waitFor(() => expect(props.reviewProfile).toHaveBeenCalledTimes(1));
+  expect(props.reviewProfile.mock.calls[0][0].fields).toMatchObject({
+    allow_tools: ['read_file', 'write_file', 'calculator'],
+    skills: ['local-style'],
+  });
+});
+
 it('edits a copy of the saved instructions only after showing them', async () => {
   const props = options();
   render(<GoalProfileSettings {...props} />);

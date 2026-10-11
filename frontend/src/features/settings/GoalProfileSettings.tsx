@@ -47,6 +47,7 @@ import {
   Toggle,
 } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
+import { ProfileChecklist, type ChecklistOption } from './ProfileChecklist';
 import {
   toggleAgentFavourite,
   useAgentFavourites,
@@ -268,6 +269,13 @@ function profilePolicy(profile: ProfileSummary) {
       : []),
   ].join(' · ');
 }
+/** A draft's comma-joined tool or skill IDs as a list. */
+function listedIds(value: string) {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 /** Names a profile's tools or skills: "Memory, Web search and 3 more". */
 function namedList(ids: readonly string[], shown = 20) {
   const names = ids.map(humanizeToken);
@@ -477,6 +485,15 @@ export type GoalProfileSettingsProps = {
     profileId: string,
     signal: AbortSignal,
   ) => Promise<{ schema_version: 1; profile: ProfileSummary }>;
+  /** Lists tools and skills to pick for a profile, by search text (F14). */
+  searchTools?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<ChecklistOption[]>;
+  searchSkills?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<ChecklistOption[]>;
   /** Reads the stored instructions; called only when the person asks (F15). */
   loadProfileInstructions?: (
     profileId: string,
@@ -589,6 +606,8 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
     loadProfiles,
     loadProfile,
     loadProfileInstructions,
+    searchTools,
+    searchSkills,
     reviewGoal,
     executeGoal,
     reviewProfile,
@@ -1408,22 +1427,51 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
               <option value="orchestrator">Orchestrator</option>
             </Select>
           </Field>
-          <Field label="Allowed tools" hint="Comma-separated stable tool IDs.">
-            <Input
-              value={state.profileDraft.allow_tools}
-              onChange={(event) =>
-                session.updateProfileDraft({ allow_tools: event.target.value })
+          {searchTools ? (
+            <ProfileChecklist
+              label="Tools"
+              selected={listedIds(state.profileDraft.allow_tools)}
+              onChange={(next) =>
+                session.updateProfileDraft({ allow_tools: next.join(', ') })
               }
+              search={searchTools}
+              empty="None chosen: it uses every tool turned on in Settings."
             />
-          </Field>
-          <Field label="Skills" hint="Comma-separated stable skill IDs.">
-            <Input
-              value={state.profileDraft.skills}
-              onChange={(event) =>
-                session.updateProfileDraft({ skills: event.target.value })
+          ) : (
+            <Field
+              label="Allowed tools"
+              hint="Comma-separated stable tool IDs."
+            >
+              <Input
+                value={state.profileDraft.allow_tools}
+                onChange={(event) =>
+                  session.updateProfileDraft({
+                    allow_tools: event.target.value,
+                  })
+                }
+              />
+            </Field>
+          )}
+          {searchSkills ? (
+            <ProfileChecklist
+              label="Skills"
+              selected={listedIds(state.profileDraft.skills)}
+              onChange={(next) =>
+                session.updateProfileDraft({ skills: next.join(', ') })
               }
+              search={searchSkills}
+              empty="None chosen: no extra skills."
             />
-          </Field>
+          ) : (
+            <Field label="Skills" hint="Comma-separated stable skill IDs.">
+              <Input
+                value={state.profileDraft.skills}
+                onChange={(event) =>
+                  session.updateProfileDraft({ skills: event.target.value })
+                }
+              />
+            </Field>
+          )}
           <Field label="Context mode">
             <Select
               value={state.profileDraft.context_mode}
