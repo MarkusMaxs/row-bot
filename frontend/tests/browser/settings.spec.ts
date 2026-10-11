@@ -2377,7 +2377,7 @@ test('A ready update says Restart to update and restarts from Settings', async (
     phase: 'ready',
     version: '99.0.0',
     step: null,
-    message: null,
+    message: null as string | null,
     error: null,
     retryable: false,
     apply_when: null,
@@ -2422,21 +2422,24 @@ test('A ready update says Restart to update and restarts from Settings', async (
       },
     }),
   );
+  // What the server reports: ready, then installing once Restart now is sent.
+  let current: typeof snapshot = snapshot;
   await page.route('**/api/v1/system/updates', (route) =>
-    route.fulfill({ json: snapshot }),
+    route.fulfill({ json: current }),
   );
   await page.route('**/api/v1/system/updates/commands', async (route) => {
     const command = route.request().postDataJSON() as Record<string, unknown>;
     commands.push(command);
+    current = {
+      ...snapshot,
+      engine: { ...engine, phase: 'applying', message: 'Restarting…' },
+    };
     await route.fulfill({
       json: {
         schema_version: 1,
         command_id: command.command_id,
         status: 'completed',
-        snapshot: {
-          ...snapshot,
-          engine: { ...engine, phase: 'applying', message: 'Restarting…' },
-        },
+        snapshot: current,
       },
     });
   });
