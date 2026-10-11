@@ -296,7 +296,7 @@ jobs:
           mkdir -p "$VT" "$RES"
           echo "VT=$VT" >> "$GITHUB_ENV"
           echo "RES=$RES" >> "$GITHUB_ENV"
-          cp installer/entitlements.plist "$VT/entitlements.plist"
+          cp installer/entitlements.plist "$VT/row-bot.entitlements"
           df -h "$RUNNER_TEMP" /Applications
           sysctl -n machdep.cpu.brand_string hw.ncpu
           sw_vers
@@ -391,11 +391,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 spike/velopack-trial/sign_mac.py --app "$VT/u-5.0.0/Row-Bot.app" --identity "$CODESIGN_ID" \
-            --entitlements "$VT/entitlements.plist" --cache "$VT/sigcache" --report "$RES/sign-5.0.0.json"
+            --entitlements "$VT/row-bot.entitlements" --cache "$VT/sigcache" --report "$RES/sign-5.0.0.json"
           python3 spike/velopack-trial/timed.py pack-5.0.0 "$RES/timings.jsonl" -- vpk pack --packId RowBotTrial --packVersion 5.0.0 \
             --packDir "$VT/u-5.0.0/Row-Bot.app" --mainExe row-bot --packTitle Row-Bot --packAuthors "Row-Bot trial" \
             --outputDir "$VT/rel" --noInst --delta BestSpeed \
-            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/entitlements.plist"
+            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/row-bot.entitlements"
           cp "$VT/rel/RowBotTrial-osx-Portable.zip" "$VT/portable-5.0.0.zip"
           rm -rf "$VT/u-5.0.0"
           ls -la "$VT/rel"; df -h "$RUNNER_TEMP"
@@ -406,11 +406,11 @@ jobs:
           set -euo pipefail
           ditto "$VT/u-5.1.0" "$VT/f-5.1.0"
           python3 spike/velopack-trial/sign_mac.py --app "$VT/f-5.1.0/Row-Bot.app" --identity "$CODESIGN_ID" \
-            --entitlements "$VT/entitlements.plist" --report "$RES/sign-5.1.0-fresh.json"
+            --entitlements "$VT/row-bot.entitlements" --report "$RES/sign-5.1.0-fresh.json"
           vpk pack --skip-updates --packId RowBotTrial --packVersion 5.1.0 \
             --packDir "$VT/f-5.1.0/Row-Bot.app" --mainExe row-bot --packTitle Row-Bot --packAuthors "Row-Bot trial" \
-            --outputDir "$VT/rel-fresh" --noInst --noPortable --delta None \
-            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/entitlements.plist"
+            --outputDir "$VT/rel-fresh" --noInst --delta None \
+            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/row-bot.entitlements"
           rm -rf "$VT/f-5.1.0"
           python3 spike/velopack-trial/timed.py delta-fresh "$RES/timings.jsonl" -- vpk delta generate --skip-updates --mode BestSpeed \
             --base "$VT/rel/RowBotTrial-5.0.0-full.nupkg" --new "$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg" --output "$VT/delta-fresh.nupkg"
@@ -423,11 +423,11 @@ jobs:
           CACHE_ARGS=()
           if [ "${{ matrix.variant }}" = "b" ]; then CACHE_ARGS=(--cache "$VT/sigcache" --read-cache); fi
           python3 spike/velopack-trial/sign_mac.py --app "$VT/u-5.1.0/Row-Bot.app" --identity "$CODESIGN_ID" \
-            --entitlements "$VT/entitlements.plist" ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} --report "$RES/sign-5.1.0.json"
+            --entitlements "$VT/row-bot.entitlements" ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} --report "$RES/sign-5.1.0.json"
           python3 spike/velopack-trial/timed.py pack-5.1.0 "$RES/timings.jsonl" -- vpk pack --skip-updates --packId RowBotTrial --packVersion 5.1.0 \
             --packDir "$VT/u-5.1.0/Row-Bot.app" --mainExe row-bot --packTitle Row-Bot --packAuthors "Row-Bot trial" \
             --outputDir "$VT/rel" --noInst --delta BestSpeed \
-            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/entitlements.plist"
+            --signAppIdentity "$CODESIGN_ID" --signDisableDeep --signEntitlements "$VT/row-bot.entitlements"
           rm -rf "$VT/u-5.1.0"
           python3 spike/velopack-trial/timed.py delta-bestsize "$RES/timings.jsonl" -- vpk delta generate --skip-updates --mode BestSize \
             --base "$VT/rel/RowBotTrial-5.0.0-full.nupkg" --new "$VT/rel/RowBotTrial-5.1.0-full.nupkg" --output "$VT/delta-bestsize.nupkg"

@@ -1,1 +1,1 @@
-{"windows": false, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 2: macOS after DOTNET_ROOT fix"}
+{"windows": false, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 3: macOS after entitlements extension fix"}
