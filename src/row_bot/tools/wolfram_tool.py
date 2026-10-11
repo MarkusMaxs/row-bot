@@ -8,7 +8,6 @@ Content-Type header (``text/xml;charset=utf-8``) that the API no longer returns.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import requests
@@ -102,7 +101,9 @@ class WolframAlphaTool(BaseTool):
         return {"Wolfram Alpha App ID": "WOLFRAM_ALPHA_APPID"}
 
     def as_langchain_tools(self) -> list:
-        app_id = os.environ.get("WOLFRAM_ALPHA_APPID", "")
+        from row_bot.api_keys import get_key
+
+        app_id = get_key("WOLFRAM_ALPHA_APPID")
         if not app_id:
             return []
 

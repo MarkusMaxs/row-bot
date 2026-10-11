@@ -35,9 +35,9 @@ class WebSearchTool(BaseTool):
 
     def execute(self, query: str) -> str:
         from tavily import TavilyClient
-        import os
+        from row_bot.api_keys import get_key
 
-        client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY", ""))
+        client = TavilyClient(api_key=get_key("TAVILY_API_KEY"))
         response = client.search(query, max_results=8)
         results = response.get("results", [])
 

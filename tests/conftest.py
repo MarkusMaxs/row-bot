@@ -361,6 +361,19 @@ def _channel_registry_restored():
 
 
 @pytest.fixture(autouse=True)
+def _saved_keys_restored():
+    # Saved keys are read into api_keys, not the environment, so a key one test saved stayed loaded for the
+    # next test on the worker, which cleared only the environment.
+    keys = getattr(sys.modules.get("row_bot.api_keys"), "_loaded_keys", None)
+    saved = dict(keys) if keys is not None else {}
+    yield
+    keys = getattr(sys.modules.get("row_bot.api_keys"), "_loaded_keys", None)
+    if keys is not None:
+        keys.clear()
+        keys.update(saved)
+
+
+@pytest.fixture(autouse=True)
 def _no_title_model(monkeypatch):
     # A conversation's first finished turn asks its model for a title on a background
     # thread. Tests that run turns script the agent, not that model: unscripted, the thread

@@ -36,8 +36,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from row_bot.approval_policy import normalize_approval_mode
 from row_bot.brand import APP_DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
-from row_bot.data_paths import get_row_bot_data_dir
+from row_bot.data_paths import get_row_bot_data_dir, private_data_dirs
 from row_bot.process_cancellation import run_cancellable_subprocess
+from row_bot.secret_store import SERVER_SECRETS_DIR_ENV
 from row_bot.tools.base import BaseTool
 from row_bot.tools import registry
 from row_bot.tools import approval_gate
@@ -290,14 +291,15 @@ def _slashes(text: str) -> str:
 
 
 def names_private_data(command: str) -> bool:
-    """True when a command names Row-Bot's data folder: its path in any common spelling, or its variable."""
+    """True when a command names Row-Bot's data folder or the server secrets folder: a path in any common
+    spelling, or its variable."""
     text = _slashes(command)
-    if APP_DATA_DIR_ENV.lower() in text:
+    if APP_DATA_DIR_ENV.lower() in text or SERVER_SECRETS_DIR_ENV.lower() in text:
         return True
     home = _slashes(str(Path.home()))
     text = _HOME_REFERENCES.sub(lambda _match: home, text)
-    data_dir = _slashes(str(get_row_bot_data_dir(create=False).expanduser().resolve()))
-    return data_dir in text or _DATA_DIR_SEGMENT.search(text) is not None
+    folders = [_slashes(str(folder.expanduser().resolve())) for folder in private_data_dirs()]
+    return any(folder in text for folder in folders) or _DATA_DIR_SEGMENT.search(text) is not None
 
 
 def _append_process_note(output: str, note: str) -> str:
@@ -393,6 +395,8 @@ class ShellSession:
             ``{command, output, exit_code, cwd, duration}``
         """
         start = time.time()
+        # Saved keys and Row-Bot's own secrets stay out of the command's environment.
+        from row_bot.api_keys import child_environment
 
         with self._lock:
             try:
@@ -431,6 +435,7 @@ class ShellSession:
                         timeout=timeout,
                         text=True,
                         encoding="utf-8", errors="replace",
+                        env=child_environment(),
                     )
                 else:
                     # Unix: same idea — cwd marker goes to stderr
@@ -445,6 +450,7 @@ class ShellSession:
                         timeout=timeout,
                         text=True,
                         encoding="utf-8", errors="replace",
+                        env=child_environment(),
                     )
 
                 if proc.timed_out:

@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import threading
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from row_bot.cancellation import current_cancellation_scope
 
@@ -34,8 +34,12 @@ def run_cancellable_subprocess(
     text: bool = True,
     encoding: str | None = None,
     errors: str | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> ProcessRunResult:
-    """Run a subprocess and bind the current cancellation scope to it."""
+    """Run a subprocess and bind the current cancellation scope to it.
+
+    ``env`` replaces the inherited environment when given.
+    """
 
     scope = current_cancellation_scope()
     if scope is not None and scope.is_cancelled():
@@ -64,6 +68,8 @@ def run_cancellable_subprocess(
             popen_kwargs["encoding"] = encoding
         if errors is not None:
             popen_kwargs["errors"] = errors
+        if env is not None:
+            popen_kwargs["env"] = dict(env)
         if os.name == "nt":
             popen_kwargs["creationflags"] = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0

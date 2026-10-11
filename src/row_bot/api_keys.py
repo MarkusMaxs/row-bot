@@ -2,6 +2,8 @@ import logging
 import os
 import json
 import pathlib
+import sys
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,7 +19,15 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 KEYS_PATH = DATA_DIR / "api_keys.json"
 _METADATA_VERSION = 2
 _session_keys: dict[str, str] = {}
+# Saved keys read by apply_keys, held in this process only: never in its environment, which every program it
+# starts (shell commands, Developer Studio commands, MCP servers) would inherit.
+_loaded_keys: dict[str, str] = {}
 _last_storage_warning = ""
+# Row-Bot's own secrets in its environment: the launcher's shared secret, the server secret store's key and the
+# updater's token.
+ROW_BOT_PROCESS_SECRETS = frozenset({"ROW_BOT_LAUNCH_SECRET", "ROW_BOT_SECRET_STORE_KEY", "ROW_BOT_UPDATER_TOKEN"})
+# Tokens Row-Bot reads from its environment besides the saved keys.
+_OTHER_KEY_NAMES = frozenset({"GITHUB_TOKEN", "GH_TOKEN", "NGROK_AUTHTOKEN"})
 
 # All API keys the app can use – label shown in UI → env-var name
 API_KEY_DEFINITIONS = {
@@ -127,12 +137,14 @@ def _save_keys(keys: dict[str, str]):
 
 
 def get_key(env_var: str) -> str:
-    """Return a key value (empty string if not set)."""
+    """Return a key value (empty string if not set): a saved key first, then the environment's."""
     env_var = str(env_var)
-    if os.environ.get(env_var):
-        return os.environ[env_var]
     if env_var in _session_keys:
         return _session_keys[env_var]
+    if _loaded_keys.get(env_var):
+        return _loaded_keys[env_var]
+    if os.environ.get(env_var):
+        return os.environ[env_var]
     value = _get_stored_key(env_var)
     if value:
         return value
@@ -141,7 +153,7 @@ def get_key(env_var: str) -> str:
 
 
 def set_key(env_var: str, value: str):
-    """Save a single key and push it into the environment."""
+    """Save a single key; this process reads it at once, programs it starts never see it."""
     env_var = str(env_var)
     value = str(value or "").strip()
     if not value:
@@ -157,7 +169,7 @@ def set_key(env_var: str, value: str):
         _set_storage_warning(f"Secure API key storage is unavailable; {env_var} is saved for this session only.")
         logger.warning("Using session-only API key storage for %s: %s", env_var, exc)
         secret_store.notify_change("api_keys")
-    os.environ[env_var] = value
+    _loaded_keys[env_var] = value
 
 
 def set_key_for_data_dir(data_dir: pathlib.Path | str, env_var: str, value: str) -> None:
@@ -187,39 +199,67 @@ def get_key_for_data_dir(data_dir: pathlib.Path | str, env_var: str) -> str:
 
 
 def delete_key(env_var: str) -> None:
-    """Remove a saved key from secure storage, metadata, session cache, and env."""
+    """Remove a saved key from secure storage, metadata and this process."""
     env_var = str(env_var)
     try:
         secret_store.delete_secret(env_var)
     except secret_store.SecretStoreError:
         pass
     _session_keys.pop(env_var, None)
-    os.environ.pop(env_var, None)
+    _loaded_keys.pop(env_var, None)
     _remove_metadata_key(env_var)
     secret_store.notify_change("api_keys")
 
 
 def apply_keys():
-    """Load all saved keys into environment variables."""
-    for env_var, value in _load_keys().items():
-        if value:
-            os.environ[env_var] = value
+    """Read all saved keys into this process. Never into its environment, which child programs inherit."""
+    _loaded_keys.clear()
+    _loaded_keys.update({env_var: value for env_var, value in _load_keys().items() if value})
 
 
 def saved_key_names() -> set[str]:
-    """Names of every key Row-Bot can hold in its environment; never values.
+    """Names of every key Row-Bot saves or reads from its environment; never values.
 
-    Used to keep saved keys out of programs started for the person, such as
-    their own terminal app. Reads metadata only, never the keyring.
+    Used to keep keys out of programs started for the person, such as their
+    own terminal app, and for the agent. Reads metadata only, never the keyring.
     """
     names = {str(name) for name in _metadata_keys(_read_key_file())}
     names.update(_legacy_plaintext_keys())
     names.update(_session_keys)
+    names.update(_loaded_keys)
+    names.update(_OTHER_KEY_NAMES)
     for definitions in (API_KEY_DEFINITIONS, TELEGRAM_KEY_DEFINITIONS, OPENROUTER_KEY_DEFINITIONS,
                         OPENAI_KEY_DEFINITIONS, ANTHROPIC_KEY_DEFINITIONS, GOOGLE_KEY_DEFINITIONS,
                         XAI_KEY_DEFINITIONS, MINIMAX_KEY_DEFINITIONS, ATLASCLOUD_KEY_DEFINITIONS):
         names.update(definitions.values())
+    from row_bot.channels.passive_catalog import core_channel_secret_names
+    from row_bot.providers.auth_store import PROVIDER_API_KEY_ENV
+
+    names.update(PROVIDER_API_KEY_ENV.values())
+    names.update(core_channel_secret_names())
+    # Tools and channels loaded in this process declare their own keys.
+    tools = sys.modules.get("row_bot.tools.registry")
+    if tools is not None:
+        names.update(tools.get_all_required_api_keys().values())
+    channels = sys.modules.get("row_bot.channels.registry")
+    if channels is not None:
+        names.update(str(getattr(field, "env_key", "") or "") for channel in channels.all_channels()
+                     for field in getattr(channel, "config_fields", []) or [] if getattr(field, "storage", "") == "env")
+    names.discard("")
     return names
+
+
+def child_environment(environ: Mapping[str, str] | None = None, *, keep: Iterable[str] = ()) -> dict[str, str]:
+    """The environment for a program started for the agent: a shell or Developer Studio command, an MCP server.
+
+    This process's environment without the keys Row-Bot saves or reads (an API key set for a self-hosted
+    install, a channel token) or its own secrets, so the program can't read them. ``keep`` names ones to pass
+    on anyway: an MCP server's explicit opt-in.
+    """
+    source = os.environ if environ is None else environ
+    hidden = {name.upper() for name in saved_key_names() | ROW_BOT_PROCESS_SECRETS}
+    hidden -= {str(name).upper() for name in keep}
+    return {name: value for name, value in source.items() if name.upper() not in hidden}
 
 
 def key_status(env_var: str) -> dict[str, Any]:

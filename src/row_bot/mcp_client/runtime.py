@@ -749,9 +749,13 @@ class McpServerRuntime:
                 env = _worker_environment(_run_directory(launch.plugin_id))
                 env.update(launch.declared_env)
             else:
+                from row_bot.api_keys import child_environment
+                # Row-Bot's saved keys and own secrets stay out unless this server names them in inherit_env;
+                # a key it needs is normally given explicitly, in its own variables.
                 env = ({key: value for key, value in os.environ.items() if key.upper() in
                         {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "LANG", "LC_ALL"}}
-                       if self.cfg.get("environment_mode") == "minimal" else os.environ.copy())
+                       if self.cfg.get("environment_mode") == "minimal"
+                       else child_environment(keep=self.cfg.get("inherit_env") or ()))
                 # The connection's variables with its declared inputs and saved keys filled in, for this launch only.
                 env.update({str(k): str(v) for k, v in dict(launch_cfg.get("env") or {}).items()})
                 env = apply_managed_runtime_env(self.cfg, env)

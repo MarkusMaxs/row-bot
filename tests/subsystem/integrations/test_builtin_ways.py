@@ -132,10 +132,10 @@ def test_the_github_account_token_and_githubs_hosted_connection_never_share_a_cr
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     api_keys.set_key("GITHUB_TOKEN", "account-token-1111")
     monkeypatch.setattr(auth, "discover_sign_in", lambda url: {"required": False})
+    _, plan = api.read_item(owner_id="owner", item_id="mcp:curated:github-hosted")  # The page shows the account.
     read = []
     original = api_keys.get_key
     monkeypatch.setattr(api_keys, "get_key", lambda name: read.append(name) or original(name))
-    _, plan = api.read_item(owner_id="owner", item_id="mcp:curated:github-hosted")
     context = plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=True,
                             inputs={"token": "connection-token-2222", "read_only": "true"})
     paused = api.start_plan(context, plan_id=str(uuid4()), item_id="mcp:curated:github-hosted", digest=plan["digest"])
