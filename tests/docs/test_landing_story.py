@@ -156,7 +156,7 @@ def test_sovereignty_reveal_combines_core_visual_and_local_first_proofs() -> Non
 def test_four_privacy_enhanced_demo_facades_remain() -> None:
     assert HTML.count("data-youtube=") == 4
     assert "youtube-nocookie.com/embed" in (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
-    assert all(video_id in HTML for video_id in ("hRLuOEqbsds", "GA2Tnlt4jNk", "Vuk2xz-vPcA", "wOUSGTyfEpk"))
+    assert all(video_id in HTML for video_id in ("vvnxFpOvzBQ", "hCHCVHZXHao", "-nzJoDAxcew", "Ex4taXHvcY8"))
 
 
 def test_scrollable_linux_command_is_keyboard_focusable() -> None:
