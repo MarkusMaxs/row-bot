@@ -375,6 +375,18 @@ export interface ClientTransport {
     command: Wire.DataBackupCommand,
     signal?: AbortSignal,
   ): Promise<Wire.DataBackupReceipt>;
+  /** The last backup, by the name on screen, for a device without its folder. */
+  downloadDataBackup?(name: string, signal?: AbortSignal): Promise<Blob>;
+  /** Send an archive to restore from; resolves to its upload id. */
+  uploadDataBackup?(
+    file: File,
+    progress?: (sent: number) => void,
+    signal?: AbortSignal,
+  ): Promise<string>;
+  cancelDataBackupUpload?(
+    upload: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.UploadCancelled>;
   insights?(signal?: AbortSignal): Promise<Wire.InsightsSnapshot>;
   insightReceipt?(
     command: string,

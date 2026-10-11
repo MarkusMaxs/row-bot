@@ -4265,6 +4265,20 @@ export class ClientController {
       throw clientError({ code: 'protocol_incompatible' });
     return result;
   };
+  downloadDataBackup = (name: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.downloadDataBackup?.(name, signal));
+  uploadDataBackup = (
+    file: File,
+    progress?: (sent: number) => void,
+    signal?: AbortSignal,
+  ) =>
+    this.authenticatedResult((current) => {
+      if (!this.transport.uploadDataBackup)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.uploadDataBackup(file, progress, current);
+    }, signal);
+  cancelDataBackupUpload = (upload: string) =>
+    this.query(() => this.transport.cancelDataBackupUpload?.(upload));
   insights = (signal?: AbortSignal) =>
     this.query(() => this.transport.insights?.(signal));
   insightReceipt = (command: string, signal?: AbortSignal) =>

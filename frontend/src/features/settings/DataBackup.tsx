@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArchiveRestore, FolderOpen, HardDriveDownload } from 'lucide-react';
+import {
+  ArchiveRestore,
+  Download,
+  FolderOpen,
+  HardDriveDownload,
+} from 'lucide-react';
 import type {
   DataBackupCommand,
   DataBackupReceipt,
@@ -8,21 +13,30 @@ import type {
   DataRestoreReview,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
+import { saveBrowserDownload } from '../../platform/download';
 import { useRuntime } from '../../runtime';
 import { Button } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import { When } from '../../ui/When';
 
 type Action = DataBackupCommand['action'];
+type Extra = { file_grant?: string; review_id?: string; upload_id?: string };
 
 export type DataBackupOwner = {
   read: () => Promise<DataBackupState>;
-  send: (
-    action: Action,
-    extra?: { file_grant?: string; review_id?: string },
-  ) => Promise<DataBackupReceipt>;
+  send: (action: Action, extra?: Extra) => Promise<DataBackupReceipt>;
   /** The desktop pick of one backup archive, or null (cancelled or no desktop). */
   pick: () => Promise<string | null | 'unavailable'>;
+  /** Save the named last backup on this device: null once saved, else why not. */
+  download: (name: string) => Promise<string | null>;
+  /** Send an archive to restore from (no desktop picker); its upload id. */
+  upload: (
+    file: File,
+    progress: (sent: number) => void,
+    signal: AbortSignal,
+  ) => Promise<string>;
+  /** Let a sent archive go when its restore isn't confirmed. */
+  discard: (upload: string) => Promise<unknown>;
 };
 
 const POLL_MS = 1000;
@@ -32,6 +46,23 @@ const JOB_FAILED: Record<string, string> = {
   restore_failed:
     "The restore couldn't be prepared. Your profile is unchanged.",
 };
+
+const DOWNLOAD_FAILED: Record<string, string> = {
+  user_gesture_required: 'Click Download again to save the backup.',
+  desktop_download_unavailable:
+    'Open Row-Bot in a web browser to download the backup.',
+  operation_failed: "The backup couldn't be downloaded. Try again.",
+};
+
+const UPLOAD_FAILED: Record<string, string> = {
+  upload_expired: 'Sending the backup took too long. Choose it again.',
+  upload_incomplete: "The backup didn't finish sending. Choose it again.",
+};
+
+function problem(cause: unknown, words: Record<string, string> = {}) {
+  const error = clientError(cause);
+  return words[error.code] ?? error.message;
+}
 
 function signInLine(item: DataBackupSignIn) {
   if (item.kind === 'provider') return `${humanizeToken(item.name)} (provider)`;
@@ -59,29 +90,38 @@ function size(bytes: number) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-/** A restore picks its file with the desktop app's own file picker. */
+/** The desktop app picks the file itself, when its picker can't open. */
 const RESTORE_IN_DESKTOP_APP =
   'Restoring picks the backup file in the Row-Bot desktop app on the computer Row-Bot runs on.';
 
 /**
  * Settings › Data: Back up now, and Restore from backup on the next start,
- * from any signed-in device.
+ * from any signed-in device. A device that can't open the Backups folder
+ * downloads the backup, and sends the file it restores from.
  */
 export function DataBackup({
   owner,
   canPick = true,
 }: {
   owner: DataBackupOwner;
-  /** Only the desktop app can pick a backup file to restore. */
+  /** The desktop app picks a backup file to restore; other devices send one. */
   canPick?: boolean;
 }) {
   const [state, setState] = useState<DataBackupState | null>(null);
   const [review, setReview] = useState<DataRestoreReview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [sending, setSending] = useState<{ sent: number; size: number } | null>(
+    null,
+  );
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const alive = useRef(true);
   const watched = useRef<string | null>(null);
+  const files = useRef<HTMLInputElement>(null);
+  const transfer = useRef<AbortController | null>(null);
+  // The archive this page sent, until its restore is confirmed or let go.
+  const uploaded = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -111,13 +151,21 @@ export function DataBackup({
     }
   }, [owner]);
 
+  const forget = useCallback(() => {
+    const upload = uploaded.current;
+    uploaded.current = null;
+    if (upload) void owner.discard(upload).catch(() => undefined);
+  }, [owner]);
+
   useEffect(() => {
     alive.current = true;
     void refresh();
     return () => {
       alive.current = false;
+      transfer.current?.abort();
+      forget();
     };
-  }, [refresh]);
+  }, [refresh, forget]);
 
   const running = state?.job?.status === 'running';
   useEffect(() => {
@@ -126,10 +174,7 @@ export function DataBackup({
     return () => window.clearInterval(timer);
   }, [running, refresh]);
 
-  async function send(
-    action: Action,
-    extra?: { file_grant?: string; review_id?: string },
-  ) {
+  async function send(action: Action, extra?: Extra) {
     setBusy(true);
     setError('');
     setNotice('');
@@ -148,6 +193,26 @@ export function DataBackup({
     }
   }
 
+  async function download() {
+    const name = state?.last_backup_name;
+    if (!name) return;
+    setError('');
+    setDownloading(true);
+    try {
+      // Called straight from the click: the browser saves only for a gesture.
+      const reason = await owner.download(name);
+      if (reason && alive.current)
+        setError(DOWNLOAD_FAILED[reason] ?? DOWNLOAD_FAILED.operation_failed);
+    } catch (cause) {
+      if (!alive.current) return;
+      setError(problem(cause));
+      // Gone, or a newer backup since: show the one there is now.
+      if (clientError(cause).code === 'backup_unavailable') void refresh();
+    } finally {
+      if (alive.current) setDownloading(false);
+    }
+  }
+
   async function chooseBackup() {
     setError('');
     setNotice('');
@@ -161,11 +226,55 @@ export function DataBackup({
     if (receipt?.review) setReview(receipt.review);
   }
 
+  async function sendBackup(file: File) {
+    setError('');
+    setNotice('');
+    setReview(null);
+    forget();
+    const control = new AbortController();
+    transfer.current = control;
+    setSending({ sent: 0, size: file.size });
+    let upload: string;
+    try {
+      upload = await owner.upload(
+        file,
+        (sent) => {
+          if (alive.current) setSending({ sent, size: file.size });
+        },
+        control.signal,
+      );
+    } catch (cause) {
+      if (alive.current && !control.signal.aborted)
+        setError(problem(cause, UPLOAD_FAILED));
+      return;
+    } finally {
+      if (transfer.current === control) transfer.current = null;
+      if (alive.current) setSending(null);
+    }
+    uploaded.current = upload;
+    if (!alive.current) {
+      forget();
+      return;
+    }
+    // Checked exactly as a picked file is; refused files are let go.
+    const receipt = await send('inspect_restore', { upload_id: upload });
+    if (receipt?.review) setReview(receipt.review);
+    else forget();
+  }
+
+  function cancelReview() {
+    setReview(null);
+    forget();
+  }
+
   async function confirmRestore() {
     if (!review) return;
     // The pending line below says what happens next.
-    await send('restore', { review_id: review.review_id });
+    const receipt = await send('restore', { review_id: review.review_id });
     setReview(null);
+    // Once staged, Row-Bot deletes the sent archive itself.
+    if (receipt) uploaded.current = null;
+    else forget();
   }
 
   if (!state) return <p className="muted">Checking backups…</p>;
@@ -173,6 +282,9 @@ export function DataBackup({
   const pending = state.pending_restore;
   const result = state.restore_result;
   const locked = busy || running;
+  const percent = sending
+    ? Math.floor((sending.sent / Math.max(1, sending.size)) * 100)
+    : 0;
   return (
     <div className="data-backup stack">
       {result && (
@@ -224,6 +336,17 @@ export function DataBackup({
             ) : (
               'never'
             )}
+            {/* Show in folder needs that computer's screen; other devices download it. */}
+            {!state.reveal_available && state.last_backup_name && (
+              <Button
+                variant="ghost"
+                disabled={downloading}
+                onClick={() => void download()}
+              >
+                <Download size={14} aria-hidden />
+                {downloading ? 'Downloading…' : 'Download'}
+              </Button>
+            )}
           </p>
         </div>
         <Button
@@ -259,22 +382,46 @@ export function DataBackup({
         <div>
           <strong>Restore from backup</strong>
           <p>
-            Checks the backup first. Your current profile is kept aside, and
-            nothing changes until Row-Bot restarts.
+            {canPick
+              ? 'Checks the backup first.'
+              : 'Sends the backup file to Row-Bot and checks it first.'}{' '}
+            Your current profile is kept aside, and nothing changes until
+            Row-Bot restarts.
           </p>
+          {sending && (
+            <p className="muted" role="status">
+              Sending the backup… {percent}% of {size(sending.size)}
+            </p>
+          )}
         </div>
-        {canPick ? (
+        {sending ? (
+          <Button onClick={() => transfer.current?.abort()}>Stop</Button>
+        ) : (
           <Button
             disabled={locked || Boolean(pending)}
-            onClick={() => void chooseBackup()}
+            onClick={() =>
+              canPick ? void chooseBackup() : files.current?.click()
+            }
           >
             <ArchiveRestore size={16} aria-hidden />
             {running && state.job?.kind === 'restore'
               ? 'Preparing…'
               : 'Restore from backup…'}
           </Button>
-        ) : (
-          <p className="muted">{RESTORE_IN_DESKTOP_APP}</p>
+        )}
+        {!canPick && (
+          <input
+            ref={files}
+            type="file"
+            accept=".zip,application/zip"
+            hidden
+            aria-label="Backup file to restore"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void sendBackup(file);
+            }}
+          />
         )}
       </div>
       {review && (
@@ -307,7 +454,7 @@ export function DataBackup({
             >
               Restore on restart
             </Button>
-            <Button disabled={locked} onClick={() => setReview(null)}>
+            <Button disabled={locked} onClick={cancelReview}>
               Cancel
             </Button>
           </div>
@@ -370,6 +517,23 @@ export default function ConnectedDataBackup() {
       if (value.kind !== 'file' || !value.reference) return 'unavailable';
       return value.reference;
     },
+    download: async (name) => {
+      // The server's own refusal says more than "the download failed".
+      let refused: unknown;
+      const saved = await saveBrowserDownload(async () => {
+        try {
+          return await controller.downloadDataBackup(name);
+        } catch (cause) {
+          refused = cause;
+          throw cause;
+        }
+      }, name);
+      if (refused !== undefined) throw refused;
+      return saved.status === 'unavailable' ? saved.reason : null;
+    },
+    upload: (file, progress, signal) =>
+      controller.uploadDataBackup(file, progress, signal),
+    discard: (upload) => controller.cancelDataBackupUpload(upload),
   });
   return <DataBackup owner={owner.current} canPick={desktop} />;
 }

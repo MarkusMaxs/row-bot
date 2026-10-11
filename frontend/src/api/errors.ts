@@ -1200,6 +1200,10 @@ const CATALOG: Record<string, Entry> = {
     "Row-Bot can't write to its Backups folder.",
     'none',
   ],
+  backup_storage_full: [
+    "The computer Row-Bot runs on doesn't have room for that backup. Free up space, then try again.",
+    'none',
+  ],
   data_job_running: [
     'A backup or restore is already running. Wait for it to finish.',
     'retry',
