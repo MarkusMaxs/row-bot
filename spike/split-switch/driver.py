@@ -103,6 +103,7 @@ class Trial:
         self.base_manifest: dict | None = None
         self.base_inodes: set[int] = set()
         self.bundle = args.bundle.resolve() if args.bundle else None
+        self.real_window = False
         if IS_WIN:
             # CTRL_BREAK needs a console shared with the launcher; no-op if we have one.
             import ctypes
@@ -147,7 +148,7 @@ class Trial:
     # ------------------------------------------------------------------ layout
 
     def install_base(self) -> dict:
-        payload = self.args.payload.resolve()
+        payload = self.args.payload.resolve() if self.args.payload else None
         started = time.time()
         if self.os == "windows":
             self.root = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "RowBotSplitTrial"
@@ -172,7 +173,9 @@ class Trial:
             self.root.mkdir(parents=True, exist_ok=True)
             seed = self.bundle / "Contents" / "Resources"
             self.layout = engine.Layout(self.root, "macos", seed=seed, seed_version=BASE)
-            self.launcher_args = ["--server", "--no-open", "--no-splash", "--no-ollama", "--port", str(PORT)]
+            # pywebview runs on the macOS runner: use the real native window, not a stand-in.
+            self.launcher_args = ["--no-tray", "--native", "--no-splash", "--no-ollama", "--port", str(PORT)]
+            self.real_window = True
             (self.root / "host-args.json").write_text(json.dumps(["launcher.py", *self.launcher_args]), encoding="utf-8")
         engine.write_state(self.root, engine.new_state(BASE))
         base = self.layout.version_root(BASE)
@@ -258,6 +261,8 @@ class Trial:
             return f"terminate (graceful signal failed: {exc!r})"
 
     def start_window(self) -> None:
+        if self.real_window:
+            return
         state = engine.read_state(self.root) or {}
         vroot = self.layout.version_root(state.get("active", BASE)) if self.os != "linux" else self.root / "releases" / state.get("active", BASE)
         exe = engine.Layout.python_exe(vroot, gui=True)
@@ -799,8 +804,12 @@ def main() -> int:
     clone_methods = {"windows": ["hardlink", "copy"], "linux": ["hardlink", "copy"], "macos": ["clonefile", "cp-c", "copy"]}[args.os]
     fast = "clonefile" if IS_MAC else "hardlink"
 
-    trial.scenario("install_base", trial.install_base)
-    trial.scenario("start_base", trial.start_app)
+    if "error" in trial.scenario("install_base", trial.install_base):
+        trial.save()
+        return 1
+    if trial.scenario("start_base", trial.start_app).get("ready_seconds") is None:
+        trial.save()
+        return 1
     if IS_MAC:
         trial.scenario("mac_seed_checks", trial.mac_checks, None)
     for method in clone_methods:

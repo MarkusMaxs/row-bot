@@ -1,6 +1,6 @@
-"""Summarize downloaded trial artifacts into Markdown tables (run locally).
+"""Summarize downloaded split-and-switch trial artifacts into Markdown (run locally).
 
-  python summarize.py <dir containing velopack-trial-<os>-<variant>/ folders>
+  python summarize.py <dir containing split-switch-<os>/ and split-switch-parts/>
 """
 
 from __future__ import annotations
@@ -12,110 +12,126 @@ from pathlib import Path
 MB = 1_000_000
 
 
-def mb(value: float | int | None) -> str:
-    return "-" if value is None else f"{value / MB:,.1f}"
+def mb(value) -> str:  # noqa: ANN001
+    return "-" if value in (None, "") else f"{value / MB:,.2f}"
 
 
-def load(path: Path):
+def s(value) -> str:  # noqa: ANN001
+    return "-" if value is None else f"{value:,.1f}" if isinstance(value, (int, float)) else str(value)
+
+
+def load(path: Path):  # noqa: ANN201
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
 
-def timings(folder: Path) -> dict:
-    rows = {}
-    path = folder / "timings.jsonl"
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            row = json.loads(line)
-            rows[row["label"]] = row["seconds"]
-    return rows
+def parts_section(parts: dict) -> None:
+    print("## Parts (built once, platform-independent)\n")
+    print("| Part | files | uncompressed MB | tar.xz MB | tar.gz MB | zip MB | xz seconds |")
+    print("|---|---|---|---|---|---|---|")
+    for name in ("code", "assets"):
+        p = parts[name]
+        f = p["formats"]
+        print(f"| {name} | {p['files']:,} | {mb(p['uncompressed_bytes'])} | {mb(f['tar.xz']['bytes'])} | {mb(f['tar.gz']['bytes'])} | {mb(f['zip']['bytes'])} | {f['tar.xz']['seconds']} |")
+    print(f"\nUpdate JSON: {parts['update_json_bytes']} bytes. Hashed exports: " + ", ".join(
+        f"{v}: requirements {mb(e['requirements_hashed']['bytes'])} MB, pylock {mb(e['pylock']['bytes'])} MB" for v, e in parts["exports"].items()))
+    print("\n### Libraries changed 5.0.0 -> 5.1.0 (lock diff)\n")
+    for target, info in parts["changes_from_base"].items():
+        rows = ", ".join(f"{r['name']} {r['from']}->{r['to']} ({mb(r['wheel_bytes'])} MB)" for r in info["rows"])
+        print(f"- {target}: {info['changed']} changed, {mb(info.get('download_bytes_known'))} MB of wheels: {rows}")
+    if parts.get("big_jump_from_base"):
+        print("\n### Big jump 5.0.0 -> 4.5.0 lock (synthetic large library change)\n")
+        for target, info in parts["big_jump_from_base"].items():
+            print(f"- {target}: {info['changed']} changed, {mb(info.get('download_bytes_known'))} MB of wheels with sizes in the lock; size not in lock: {info.get('size_unknown_in_lock')}")
+    print("\n### Wheel availability (today's lock)\n")
+    print("| Target | released | packages | with wheel | needs a source build | needs newer OS than floor |")
+    print("|---|---|---|---|---|---|")
+    for target, info in parts["wheel_availability"].items():
+        src = ", ".join(f"{r['name']}=={r['version']}" for r in info["source_build_needed"]) or "none"
+        newer = ", ".join(f"{r['name']} ({r['needs']})" for r in info["needs_newer_than_floor"]) or "none"
+        print(f"| {target} | {info['released_platform']} | {info['packages']} | {info['with_wheel']} | {src} | floor {info['floor']}: {newer} |")
+
+
+def staging_rows(osname: str, sc: dict) -> None:
+    print(f"\n### {osname}: staging\n")
+    print("| Scenario | ok | parts MB (code+assets) | library MB (net) | hosts | plan changes | clone s | sync s | unpack s | compile s | self-test s | finish s | total s | staged extra MB | 5.0.0 intact | error |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for name, r in sc.items():
+        if "timings" not in r or "tool" not in r:
+            continue
+        t = r["timings"]
+        parts = sum(d["bytes"] for d in r.get("downloads") or [])
+        net = r.get("network") or {}
+        hosts = ", ".join(f"{h} {mb(v['bytes_down'])}" for h, v in (net.get("hosts") or {}).items())
+        plan = r.get("plan") or {}
+        changes = f"{len(plan.get('change', []))}c/{len(plan.get('add', []))}a/{len(plan.get('remove', []))}r" if plan else "-"
+        integ = r.get("base_integrity")
+        intact = "-" if not integ else ("yes" if integ.get("ok") else f"NO ({integ['python']['content_changed']}+{integ['python']['removed']})")
+        staged = (r.get("staged_size") or {}).get("bytes_not_shared_by_inode")
+        err = (r.get("error") or {}).get("step", "")
+        if err:
+            err += ": " + (r["error"].get("message") or "")[:90].replace("|", "/").replace("\n", " ")
+        print(
+            f"| {name} | {r.get('ok')} | {mb(parts)} | {mb(net.get('bytes_down'))} | {hosts or '-'} | {changes} | {s(t.get('clone'))} | {s(t.get('sync'))} "
+            f"| {s(t.get('unpack'))} | {s(t.get('compile'))} | {s(t.get('selftest'))} | {s(t.get('finish'))} | {s(t.get('total'))} | {mb(staged)} | {intact} | {err} |"
+        )
+
+
+def switch_rows(osname: str, sc: dict) -> None:
+    print(f"\n### {osname}: switch and relaunch\n")
+    print("| Scenario | direction | signal | app exit s | exit -> new server ready s | request -> ready s | verified after ready s | port owner in new version | old processes left | launcher graceful |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for name, r in sc.items():
+        for key in ("switch", "switch_back"):
+            sw = r.get(key) if key in r else (r if name == "final_switch" and key == "switch" else None)
+            if not isinstance(sw, dict) or "seconds" not in sw:
+                continue
+            sec = sw["seconds"]
+            print(
+                f"| {name} | {sw['from']} -> {sw['to']} | {sw['signal'][:18]} | {s(sec['app_exit'])} | {s(sec['exit_to_new_server_ready'])} | {s(sec['request_to_new_server_ready'])} "
+                f"| {s(sec['verified_after_ready'])} | {sw['port_owner_in_new_version']} | {len(sw['old_version_processes_left'])} | {sw['launcher_exited_gracefully']} |"
+            )
+
+
+def clone_rows(osname: str, sc: dict) -> None:
+    print(f"\n### {osname}: clone python/ only\n")
+    print("| Scenario | method | files | seconds | disk free delta MB | extra MB by inode | rename while running | delete s | delete failures |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    for name, r in sc.items():
+        if not name.startswith(("clone_", "defender_clone_")) or "method" not in r:
+            continue
+        print(
+            f"| {name} | {r['method']} | {r['size']['files']:,} | {r['seconds']} | {mb(r['disk_free_delta_bytes'])} | {mb(r['size']['bytes_not_shared_by_inode'])} "
+            f"| {r['rename'].get('ok')} | {r['delete']['seconds']} | {r['delete']['failure_count']} |"
+        )
 
 
 def main() -> None:
     root = Path(sys.argv[1])
-    print("## Sizes (MB = 10^6 bytes)\n")
-    print("| OS | variant | payload files 5.1 | payload MB 5.1 | full 5.0 | full 5.1 | installer 5.1 | delta BestSpeed | delta BestSize | delta (fresh sigs) | delta zip overhead | delta entries |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
-    for folder in sorted(root.glob("velopack-trial-*")):
-        sizes = load(folder / "sizes.json")
-        if not sizes:
+    parts = load(root / "split-switch-parts" / "parts-report.json")
+    if parts:
+        parts_section(parts)
+    for folder in sorted(root.glob("split-switch-*")):
+        res = load(folder / "results.json")
+        if not res:
             continue
-        payload = (sizes.get("payloads") or [{}, {}])[-1]
-        extra = sizes.get("extra_deltas", {})
-        installers = list(sizes.get("installer", {}).values())
-        print(
-            f"| {sizes['os']} | {sizes['variant']} | {payload.get('file_count', '-'):,} | {mb(payload.get('bytes'))} "
-            f"| {mb(sizes['full'].get('5.0.0'))} | {mb(sizes['full'].get('5.1.0'))} | {mb(installers[-1] if installers else None)} "
-            f"| {mb(sizes['delta']['bytes'])} | {mb(extra.get('bestsize', {}).get('bytes'))} "
-            f"| {mb(extra.get('fresh_signatures', {}).get('bytes'))} | {mb(sizes['delta']['zip_overhead_bytes'])} "
-            f"| {sizes['delta']['entries']:,} |"
-        )
-    for folder in sorted(root.glob("velopack-trial-*")):
-        sizes = load(folder / "sizes.json")
-        if not sizes:
-            continue
-        print(f"\n### {folder.name}: delta composition (compressed MB)\n")
-        for label, delta in [("BestSpeed", sizes["delta"]), *sizes.get("extra_deltas", {}).items()]:
-            kinds = ", ".join(f"{k} {v['count']:,} / {mb(v['bytes'])}" for k, v in delta["by_kind"].items())
-            cats = ", ".join(
-                f"{k} {v['count']:,} / {mb(v['bytes'])}" for k, v in sorted(delta["changed_or_new_by_category"].items())
-            )
-            print(f"- **{label}** {mb(delta['bytes'])} MB. Kinds: {kinds}. Changed/new by category: {cats}")
-        diff = sizes["nupkg_diff"]["table"]
-        print("- nupkg diff 5.0->5.1: " + ", ".join(f"{k} {v['count']:,}" for k, v in diff.items()))
-        for label, extra in (sizes.get("extra_diffs") or {}).items():
-            print(f"- nupkg diff ({label}): " + ", ".join(f"{k} {v['count']:,}" for k, v in extra["table"].items()))
-        t = timings(folder)
-        if t:
-            print("- timings (s): " + ", ".join(f"{k} {v}" for k, v in t.items()))
-        for payload in sizes.get("payloads", []):
-            print(
-                f"- payload {payload['version']}: {payload['file_count']:,} files, {mb(payload['bytes'])} MB, "
-                f"build timings {payload.get('timings')}, compile {payload.get('compile')}"
-            )
-        for sign in sorted(folder.glob("sign-*.json")):
-            data = load(sign) or {}
-            print(
-                f"- {sign.stem}: libraries {data.get('libraries')}, signed {data.get('signed')}, "
-                f"reused {data.get('reused')}, {data.get('seconds')} s"
-            )
-        notary = load(folder / "notary-time.json")
-        if notary:
-            print(f"- notarization: {notary}; submit result: {load(folder / 'notary-submit.json')}")
-
-    print("\n## Scenarios\n")
-    print("| OS | scenario | install s | check s | download+stage s | apply+relaunch s | installed after | fell back | tree ok | signature | children alive after | peak extra disk MB | error |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-    for folder in sorted(root.glob("velopack-trial-*")):
-        data = load(folder / "scenarios" / "scenarios.json")
-        if not data:
-            continue
-        for name, rec in data["scenarios"].items():
-            if name == "uninstall":
-                print(f"| {data['os']} | uninstall | {rec} |")
-                continue
-            inst = rec.get("install", {})
-            upd = rec.get("update") or rec.get("probe") or {}
-            install_s = inst.get("setup_seconds", inst.get("unzip_seconds"))
-            checked = (upd.get("checked") or {}).get("seconds")
-            dl = upd.get("download_outcome") or {}
-            restarted = upd.get("restarted") or {}
-            tree = rec.get("tree") or {}
-            tree_ok = (
-                "-" if not tree else ("yes" if not (tree["missing"] or tree["mismatched"]) else f"no ({tree['missing']} missing, {tree['mismatched']} mismatched)")
-            )
-            sig = rec.get("signature") or {}
-            sig_s = "-" if not sig else f"verify {sig.get('codesign_verify_rc')}, spctl {sig.get('spctl_rc')}, team {sig.get('team_id')}"
-            alive = upd.get("children_alive_after")
-            print(
-                f"| {data['os']} | {name} | {install_s} | {round(checked, 2) if checked else '-'} "
-                f"| {round(dl.get('seconds'), 1) if dl.get('seconds') else dl.get('event', '-')} "
-                f"| {rec.get('apply_relaunch_seconds', '-')} | {restarted.get('installed_version', '-')} "
-                f"| {rec.get('fell_back_to_full', '-')} | {tree_ok} | {sig_s} | {alive} "
-                f"| {mb((upd.get('disk') or {}).get('peak_extra_bytes'))} | {rec.get('error', '')} |"
-            )
+        osname = res["os"]
+        sc = res["scenarios"]
+        print(f"\n## {osname}\n")
+        base = sc.get("install_base", {})
+        if base.get("python"):
+            print(f"- 5.0.0 install: python/ {base['python']['files']:,} files {mb(base['python']['bytes'])} MB; app/ {base['app']['files']:,} files {mb(base['app']['bytes'])} MB; hashing took {base.get('hash_seconds')} s")
+            print(f"- assets unchanged 5.0.0 -> 5.1.0: {base.get('assets_content_sha256') == base.get('manifest_assets_content_sha256')}")
+        start = sc.get("start_base", {})
+        print(f"- first start of 5.0.0: ready in {start.get('ready_seconds')} s; native modules mapped: {start.get('loaded_native')}")
+        clone_rows(osname, sc)
+        staging_rows(osname, sc)
+        switch_rows(osname, sc)
+        for name in ("defender_on", "defender_status_end", "rollback_rule", "cleanup_old_versions", "linux_launch_mode", "linux_systemd", "mac_seed_checks"):
+            if name in sc:
+                print(f"\n#### {osname}: {name}\n\n```json\n{json.dumps(sc[name], indent=1, default=str)[:5000]}\n```")
 
 
 if __name__ == "__main__":

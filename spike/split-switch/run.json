@@ -1,1 +1,1 @@
-{"windows": true, "macos": true, "linux": true, "notarize": false, "kit_artifact": false, "only": [], "note": "run 1b: pylock export file name"}
+{"windows": false, "macos": true, "linux": true, "notarize": false, "kit_artifact": false, "only": [], "note": "run 3: macOS payload fix + real native window; Linux system libraries"}

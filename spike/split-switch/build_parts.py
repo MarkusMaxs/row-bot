@@ -169,7 +169,7 @@ def lock_changes(old: Path, new: Path) -> dict:
 
     result = {}
     for target, spec in wheelcheck.TARGETS.items():
-        tags = set(spec["tags"](spec["versions"][-1]))
+        order = {t: i for i, t in enumerate(spec["tags"](spec["versions"][-1]))}
         a, b = applicable(old, spec["env"]), applicable(new, spec["env"])
         rows = []
         for name in sorted(set(a) | set(b)):
@@ -180,10 +180,14 @@ def lock_changes(old: Path, new: Path) -> dict:
             size = None
             has_wheel = False
             if vb:
-                matches = [w for w in b[name].get("wheels") or [] if parse_wheel_filename(unquote(w["url"].rsplit("/", 1)[-1]))[3] & tags]
-                has_wheel = bool(matches)
-                known = [w["size"] for w in matches if w.get("size")]
-                size = min(known) if known else None  # the most specific wheel is usually the smallest
+                ranked = []
+                for w in b[name].get("wheels") or []:
+                    ranks = [order[t] for t in parse_wheel_filename(unquote(w["url"].rsplit("/", 1)[-1]))[3] if t in order]
+                    if ranks:
+                        ranked.append((min(ranks), w))
+                has_wheel = bool(ranked)
+                best = min(ranked, key=lambda item: item[0])[1] if ranked else None  # what an installer picks
+                size = best.get("size") if best else None
             rows.append({"name": name, "from": va, "to": vb, "wheel_bytes": size, "has_wheel": has_wheel})
         result[target] = {
             "changed": len(rows),

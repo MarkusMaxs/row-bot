@@ -194,6 +194,10 @@ jobs:
           echo "WORK=$RUNNER_TEMP/ss" >> "$GITHUB_ENV"; echo "RES=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/ss" "$RUNNER_TEMP/results"
           df -hT "$HOME" "$RUNNER_TEMP"; nproc; lsb_release -a || true; ldd --version | head -1
+      - name: System libraries (same as release.yml's Linux build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rsync binutils libgl1 libegl1 libglib2.0-0 libxcb-cursor0 libportaudio2
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
