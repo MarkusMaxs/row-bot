@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
@@ -18,6 +18,7 @@ from row_bot.agent_profiles import (
     save_agent_profile,
 )
 from row_bot.agent_runs import (
+    AGENT_RUN_STATUSES,
     TERMINAL_STATUSES,
     append_agent_parent_message,
     get_agent_events,
@@ -25,12 +26,15 @@ from row_bot.agent_runs import (
     get_agent_run,
     list_agent_runs,
 )
+from row_bot.tool_outputs import compact_json, drop_empty
 from row_bot.tools import registry
 from row_bot.tools.base import BaseTool
 
 
 def _json_response(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True)
+    # Compact. Top-level keys stay (the runtime reads agent_wait results back); empty fields inside
+    # runs and profiles are left out where they are built.
+    return compact_json(payload, sort_keys=True, drop_empty_fields=False)
 
 
 def _runtime_context() -> dict[str, Any]:
@@ -216,7 +220,17 @@ def _public_run(run: dict[str, Any] | None) -> dict[str, Any]:
     }
     if result["shortened"]:
         public["result_note"] = f"The child's text above is shortened. {agent_runner.full_result_hint(run_id)}"
-    return public
+    # Counters and flags still at their starting value say nothing; leave them out.
+    for key in _DEFAULT_RUN_FIELDS:
+        if not public.get(key):
+            public.pop(key, None)
+    return drop_empty(public)
+
+
+_DEFAULT_RUN_FIELDS = (
+    "stop_requested", "parent_message_count", "turns_used", "max_turns",
+    "model_iterations_used", "model_iterations_max", "depth",
+)
 
 
 def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -287,6 +301,12 @@ def _promoted_slug(run_id: str) -> str:
     return f"promoted_{clean or 'agent'}"
 
 
+ContextMode = Literal["auto", "focused", "recent", "full", "empty", "resume"]
+RunStatus = Literal[tuple(sorted(AGENT_RUN_STATUSES))]  # type: ignore[valid-type]
+
+
+# Thread, run, message and orchestration ids are not in this schema: delegate_work takes them
+# from the running turn (the parent thread, the parent run, this turn's orchestration).
 class _DelegateWorkInput(BaseModel):
     objective: str = Field(description="Specific objective for the child Agent.")
     profile: str = Field(
@@ -300,10 +320,7 @@ class _DelegateWorkInput(BaseModel):
             "A reviewer must receive the complete material or a concrete workspace-relative artifact path plus review criteria."
         ),
     )
-    context_mode: str = Field(
-        default="auto",
-        description="Context mode: auto, focused, recent, full, empty, or resume.",
-    )
+    context_mode: ContextMode = Field(default="auto", description="How much parent context the child gets.")
     display_name: str = Field(default="", description="Optional short display name for the child Agent run.")
     model: str = Field(
         default="",
@@ -312,10 +329,6 @@ class _DelegateWorkInput(BaseModel):
             "For natural model requests, inspect row_bot_status category='model' first and pass the selected canonical ref. "
             "Leave empty to inherit the parent model."
         ),
-    )
-    parent_thread_id: str = Field(
-        default="",
-        description="Optional parent thread id. Omit to use the current thread.",
     )
     developer_workspace_id: str = Field(
         default="",
@@ -333,12 +346,10 @@ class _DelegateWorkInput(BaseModel):
         default=False,
         description="Run the child in its own local git Worktree when a git-backed Developer workspace is available.",
     )
-    workspace_mode: str = Field(
+    workspace_mode: Literal["", "auto", "read_only", "single_writer", "worktree"] = Field(
         default="",
-        description="Optional workspace mode override: auto, read_only, single_writer, or worktree.",
+        description="Optional workspace mode override.",
     )
-    parent_run_id: str = Field(default="", description="Optional parent Agent Run id for nested tracking.")
-    parent_message_id: str = Field(default="", description="Optional parent message id that triggered delegation.")
     wait: bool = Field(
         default=False,
         description=(
@@ -354,10 +365,6 @@ class _DelegateWorkInput(BaseModel):
             "Use false only for explicitly requested background/fire-and-forget work."
         ),
     )
-    orchestration_id: str = Field(
-        default="",
-        description="Internal orchestration id. Omit during normal delegation.",
-    )
     depends_on: list[str] = Field(
         default=[],
         description=(
@@ -368,10 +375,9 @@ class _DelegateWorkInput(BaseModel):
 
 
 class _AgentStatusInput(BaseModel):
-    run_id: str = Field(default="", description="Agent Run id. If omitted, list runs for the parent thread.")
+    run_id: str = Field(default="", description="Agent Run id. If omitted, list this conversation's child runs.")
     orchestration_id: str = Field(default="", description="Orchestration id to inspect as a group.")
-    parent_thread_id: str = Field(default="", description="Parent thread id. Omit to use the current thread.")
-    statuses: list[str] = Field(default=[], description="Optional statuses to filter by.")
+    statuses: list[RunStatus] = Field(default=[], description="Optional statuses to filter by.")
     include_events: bool = Field(default=False, description="Include recent event log entries.")
     limit: int = Field(default=10, description="Maximum runs or events to return.")
     full_result: bool = Field(
@@ -417,12 +423,12 @@ class _AgentProfileSaveInput(BaseModel):
     description: str = Field(default="", description="Short description of what the profile does.")
     when_to_use: str = Field(default="", description="When parent agents should choose this profile.")
     instructions: str = Field(description="Focused instructions for agents using this profile.")
-    capability: str = Field(default="read_only", description="read_only, write_capable, or orchestrator.")
+    capability: Literal["read_only", "write_capable", "orchestrator"] = "read_only"
     allow_tools: list[str] = Field(default=[], description="Optional exact tool names this profile may use.")
     skills: list[str] = Field(default=[], description="Manual skills pinned/injected when this profile is used.")
-    context_mode: str = Field(default="focused", description="Default context mode.")
-    workspace_mode: str = Field(default="read_only", description="auto, read_only, single_writer, or worktree.")
-    approval_mode: str = Field(default="inherit", description="inherit, block, approve, or allow_all.")
+    context_mode: ContextMode = Field(default="focused", description="Default context mode.")
+    workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"] = "read_only"
+    approval_mode: Literal["inherit", "block", "approve", "allow_all"] = "inherit"
 
 
 class _AgentMessageInput(BaseModel):
@@ -437,7 +443,7 @@ class _AgentRetryInput(BaseModel):
 
 class _AgentPromoteInput(BaseModel):
     run_id: str = Field(description="Completed Agent Run id to promote.")
-    target: str = Field(default="profile", description="profile or workflow.")
+    target: Literal["profile", "workflow"] = Field(default="profile", description="What to promote it into.")
 
 
 def _delegate_work(
@@ -1027,7 +1033,7 @@ class AgentsTool(BaseTool):
             StructuredTool.from_function(
                 func=_agent_status,
                 name="agent_status",
-                description="Inspect one Agent Run or list child runs for the current parent thread.",
+                description="Inspect one Agent Run, an orchestration, or this conversation's child runs.",
                 args_schema=_AgentStatusInput,
             ),
             StructuredTool.from_function(

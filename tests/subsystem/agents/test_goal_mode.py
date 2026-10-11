@@ -554,3 +554,19 @@ def test_an_agent_that_stops_to_wait_for_the_person_shows_needs_you(tmp_path, mo
     assert payload["ok"] is True
     assert goals.get_goal(goal["id"])["status"] == "blocked"
     assert goals.resume_goal_for_answer(thread_id)["status"] == "active"
+
+
+def test_goal_tools_act_on_the_running_conversation_only(tmp_path, monkeypatch):
+    """The conversation is not a model argument: a goal_update naming another thread updates this one (WP D1)."""
+    threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(tmp_path, monkeypatch)
+    here, elsewhere = threads.create_thread("Here"), threads.create_thread("Elsewhere")
+    mine, theirs = goals.start_goal(here, "Ship the report"), goals.start_goal(elsewhere, "Plan the trip")
+    monkeypatch.setattr(goal_tool, "_runtime_context", lambda: {"thread_id": here})
+    tools = {tool.name: tool for tool in goal_tool.GoalTool().as_langchain_tools()}
+
+    tools["goal_update"].invoke({"thread_id": elsewhere, "progress": "Drafted section one."})
+    status = json.loads(tools["goal_status"].invoke({"thread_id": elsewhere}))
+
+    assert goals.get_goal(mine["id"])["last_progress"] == "Drafted section one."
+    assert not goals.get_goal(theirs["id"])["last_progress"]
+    assert status["goal"]["id"] == mine["id"]

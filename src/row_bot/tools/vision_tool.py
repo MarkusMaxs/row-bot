@@ -9,6 +9,8 @@ model, and returns the description.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
@@ -63,8 +65,11 @@ def _analyze_image(
     source = str(source or "camera").strip().casefold()
     if source == "browser":
         return _analyze_browser_page(question)
+    if source == "file":
+        return _get_vision_service().capture_and_analyze(question, source="file", file_path=file_path)
     if source not in _CAPTURES:
-        return _get_vision_service().capture_and_analyze(question, source=source, file_path=file_path)
+        # Any other value used to reach the webcam capture without the approval below.
+        return f"Unknown source {source!r}: use 'camera', 'screen', 'file' or 'browser'."
     label, description = _CAPTURES[source]
     if normalize_approval_mode(current_approval_mode()) == "block":
         return f"BLOCKED: {label[:-1]} is unavailable while this conversation is in Block approval mode."
@@ -111,33 +116,15 @@ class VisionTool(BaseTool):
 
         class _AnalyzeInput(BaseModel):
             question: str = Field(
-                description=(
-                    "The question about what the camera or screen shows, "
-                    "or about the contents of an image file. "
-                    "Be specific — e.g. 'What text is on the paper?', "
-                    "'Describe the object in front of the camera', "
-                    "'What error is on the screen?', 'Describe this diagram'."
-                )
+                description="A specific visual question, e.g. 'What error is on the screen?'."
             )
-            source: str = Field(
-                default="camera",
-                description=(
-                    "Where to get the image from. Use 'browser' for a page "
-                    "open in Row-Bot's browser (a screenshot of a web page "
-                    "you navigated to). Use 'file' for an image file in the "
-                    "workspace (e.g. 'analyze photo.jpg'). Use 'screen' only "
-                    "when the person asks about their own screen, monitor or "
-                    "desktop, and 'camera' only when they ask you to look at "
-                    "something physical; both ask the person first."
-                ),
+            # When to use each source is in the tool description (and the vision guide).
+            source: Literal["camera", "screen", "file", "browser"] = Field(
+                default="camera", description="Where the image comes from."
             )
             file_path: str = Field(
                 default="",
-                description=(
-                    "Path to the image file when source='file'. Can be "
-                    "workspace-relative (e.g. 'images/photo.jpg') or "
-                    "absolute. Only used when source='file'."
-                ),
+                description="Image path for source='file', workspace-relative or absolute.",
             )
 
         return [

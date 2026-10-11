@@ -276,6 +276,34 @@ def test_reference_read_rejects_invalid_paths_and_returns_complete_utf8(tmp_path
     assert read_skill_reference(root, "reference.txt") == "complete reference\n" * 1000
 
 
+def test_skill_load_keeps_a_long_reference_readable_by_handle(tmp_path, monkeypatch) -> None:
+    """A long reference keeps its head and tail in the result; the rest reads in pages (WP D1)."""
+    import re
+
+    from row_bot import skills_activation, tool_outputs
+
+    monkeypatch.setattr(skills_activation, "STATE_PATH", tmp_path / "activation.json")
+    monkeypatch.setattr(skills_activation, "DATA_DIR", tmp_path)
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(tool_outputs, "current_thread_id", lambda: "thread")
+    root = tmp_path / "skill"
+    root.mkdir()
+    reference = "".join(f"API endpoint {index:05d}: returns the record.\n" for index in range(3_000))
+    (root / "api.md").write_bytes(reference.encode("utf-8"))
+    _search, load = build_skill_discovery_tools([_record("skill_0", root=root)], thread_id="thread",
+                                                context_tokens=32_768)
+
+    shown = _payload(load.invoke({"name": "skill_0", "relative_path": "api.md"}))["reference_text"]
+
+    assert len(shown) < 41_000
+    match = re.search(r'read_tool_output\(handle="(out_[0-9a-f]+)", offset=(\d+)\)', shown)
+    head = shown.split("\n", 1)[1][: int(match.group(2))]
+    page = tool_outputs.read_tool_output(match.group(1), offset=int(match.group(2)), limit=100_000)
+    assert "End of output." in page.split("\n", 1)[0]
+    reassembled = head + page.split("\n", 1)[1] == reference
+    assert reassembled
+
+
 def test_reference_read_rejects_symlink_escape_when_supported(tmp_path) -> None:
     root = tmp_path / "skill"
     root.mkdir()

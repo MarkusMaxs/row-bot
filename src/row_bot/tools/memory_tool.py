@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Literal
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
+from row_bot.tool_outputs import bounded, compact_json
 from row_bot.tools.base import BaseTool
 from row_bot.tools import registry
 import row_bot.memory as memory_db
@@ -25,105 +27,59 @@ import row_bot.memory_evolution as memory_evo
 
 # ── Pydantic schemas for structured input ────────────────────────────────────
 
+# What each category is for, and when to save, link or update, is in the system prompt's MEMORY
+# GUIDELINES; the schemas carry only the closed set of categories.
+MemoryCategory = Literal[tuple(sorted(kg.VALID_CATEGORIES))]  # type: ignore[valid-type]
+_LIST_MEMORIES_CHARS = 40_000  # Beyond this the list is saved, and read on with read_tool_output.
+
+
 class _SaveMemoryInput(BaseModel):
-    category: str = Field(
-        description=(
-            "Memory category. Must be one of: person, preference, fact, "
-            "event, place, project, organisation, concept, skill, media."
-        )
-    )
-    subject: str = Field(
-        description="Short identifier — a name, topic, or title (e.g. 'Mom', 'Coffee', 'Python 3.13')."
-    )
-    content: str = Field(
-        description="Detailed information to remember (e.g. 'Mom's birthday is March 15', 'User prefers dark roast')."
-    )
-    tags: str = Field(
-        default="",
-        description="Optional comma-separated tags for easier search (e.g. 'family,birthday').",
-    )
+    category: MemoryCategory = Field(description="Memory category.")  # type: ignore[valid-type]
+    subject: str = Field(description="Short name or title, e.g. 'Mom', 'Coffee', 'Python 3.13'.")
+    content: str = Field(description="What to remember, e.g. 'Mom's birthday is March 15'.")
+    tags: str = Field(default="", description="Optional comma-separated tags.")
 
 
 class _SearchMemoryInput(BaseModel):
-    query: str = Field(
-        description="Keyword or phrase to search for across subjects, content, and tags."
-    )
-    category: str = Field(
-        default="",
-        description="Optional category filter (person, preference, fact, event, place, project, organisation, concept, skill, media). Leave empty to search all.",
+    query: str = Field(description="Words or a phrase to search for.")
+    category: MemoryCategory | None = Field(  # type: ignore[valid-type]
+        default=None,
+        description="Only this category. Omit to search all.",
     )
 
 
 class _ListMemoriesInput(BaseModel):
-    category: str = Field(
-        default="",
-        description="Optional category filter. Leave empty to list all memories.",
+    category: MemoryCategory | None = Field(  # type: ignore[valid-type]
+        default=None,
+        description="Only this category. Omit to list all.",
     )
 
 
 class _UpdateMemoryInput(BaseModel):
-    memory_id: str = Field(
-        description="The ID of the memory to update (from search or list output)."
-    )
-    content: str = Field(
-        description="New content/description to replace the existing content."
-    )
-    subject: str | None = Field(
+    memory_id: str = Field(description="ID from recalled memories, search_memory or list_memories.")
+    content: str = Field(description="New content; replaces the old.")
+    subject: str | None = Field(default=None, description="New subject. Omit to keep.")
+    entity_type: MemoryCategory | None = Field(  # type: ignore[valid-type]
         default=None,
-        description="New subject/name for the entity. Omit to keep unchanged.",
+        description="New category. Omit to keep.",
     )
-    entity_type: str | None = Field(
-        default=None,
-        description="New entity type (person, preference, fact, event, place, project, organisation, concept, skill, media). Omit to keep unchanged.",
-    )
-    aliases: str | None = Field(
-        default=None,
-        description="Comma-separated aliases. Omit to keep unchanged.",
-    )
-    tags: str | None = Field(
-        default=None,
-        description="Comma-separated tags. Omit to keep unchanged.",
-    )
+    aliases: str | None = Field(default=None, description="Comma-separated aliases. Omit to keep.")
+    tags: str | None = Field(default=None, description="Comma-separated tags. Omit to keep.")
 
 
 class _DeleteMemoryInput(BaseModel):
-    memory_id: str = Field(
-        description="The ID of the memory to delete (from search or list output)."
-    )
+    memory_id: str = Field(description="ID from search_memory or list_memories.")
 
 
 class _LinkMemoriesInput(BaseModel):
-    source_id: str = Field(
-        description=(
-            "Source entity — pass the entity's **subject name** (e.g. 'Bob', "
-            "'User', 'Atlas') or its hex ID. Names are preferred."
-        )
-    )
-    target_id: str = Field(
-        description=(
-            "Target entity — pass the entity's **subject name** (e.g. 'User', "
-            "'London', 'Dune') or its hex ID. Names are preferred."
-        )
-    )
-    relation_type: str = Field(
-        description=(
-            "Label describing the relationship — e.g. 'father_of', 'lives_in', "
-            "'works_on', 'friend_of', 'prefers', 'related_to'. Use snake_case."
-        )
-    )
+    source_id: str = Field(description="Source entity: its subject name (preferred, e.g. 'Bob') or ID.")
+    target_id: str = Field(description="Target entity: its subject name (e.g. 'User') or ID.")
+    relation_type: str = Field(description="snake_case relation, e.g. 'father_of', 'lives_in', 'works_on'.")
 
 
 class _ExploreConnectionsInput(BaseModel):
-    entity_id: str = Field(
-        description=(
-            "Entity to explore — pass the **subject name** (e.g. 'Bob', "
-            "'User', 'Atlas') or its hex ID. Names are preferred."
-        )
-    )
-    hops: int = Field(
-        default=1,
-        description="Number of hops to traverse (1 = immediate neighbors, 2 = friends-of-friends).",
-    )
+    entity_id: str = Field(description="Entity to explore: its subject name (preferred, e.g. 'User') or ID.")
+    hops: int = Field(default=1, description="How far to go: 1 for direct links, up to 3.")
 
 
 # ── Contradiction detection ──────────────────────────────────────────────────
@@ -327,20 +283,24 @@ def _search_memory(query: str, category: str = "") -> str:
                 props = json.loads(props or "{}")
             except (json.JSONDecodeError, TypeError):
                 props = {}
+        props = props if isinstance(props, dict) else {}
+        score = m.get("score", "")
+        status = props.get("status", "active")
+        # Empty fields and the default status are left out (compact_json drops the empty ones).
         entry = {
             "id": m["id"],
             "category": m.get("category", m.get("entity_type", "")),
             "subject": m["subject"],
             "content": m.get("content", m.get("description", "")),
             "tags": m.get("tags", ""),
-            "relevance": m.get("score", ""),
+            "relevance": round(score, 3) if isinstance(score, float) else score,
             "source": m.get("source", ""),
-            "status": props.get("status", "active") if isinstance(props, dict) else "active",
-            "confidence": props.get("confidence", "") if isinstance(props, dict) else "",
-            "tier": props.get("memory_tier", "") if isinstance(props, dict) else "",
-            "review_reason": props.get("review_reason", "") if isinstance(props, dict) else "",
-            "superseded_by": props.get("superseded_by", "") if isinstance(props, dict) else "",
-            "supersedes": props.get("supersedes", []) if isinstance(props, dict) else [],
+            "status": "" if status == "active" else status,
+            "confidence": props.get("confidence", ""),
+            "tier": props.get("memory_tier", ""),
+            "review_reason": props.get("review_reason", ""),
+            "superseded_by": props.get("superseded_by", ""),
+            "supersedes": props.get("supersedes", []),
             "updated": m.get("updated_at", "")[:16],
         }
         # Include relationship context when available (from graph expansion)
@@ -349,7 +309,7 @@ def _search_memory(query: str, category: str = "") -> str:
                         for r in m["relations"]]
             entry["connected_via"] = "; ".join(rel_strs)
         entries.append(entry)
-    return json.dumps(entries, indent=2)
+    return compact_json(entries)
 
 
 def _list_memories(category: str = "") -> str:
@@ -368,7 +328,7 @@ def _list_memories(category: str = "") -> str:
             "tags": m["tags"],
             "updated": m["updated_at"][:16],
         })
-    return json.dumps(entries, indent=2)
+    return bounded(compact_json(entries), tool_name="list_memories", max_chars=_LIST_MEMORIES_CHARS)
 
 
 def _update_memory(
@@ -558,82 +518,53 @@ class MemoryTool(BaseTool):
         return {"delete_memory"}
 
     def as_langchain_tools(self) -> list:
+        # When to save, link, update or explore is in the system prompt's MEMORY GUIDELINES.
         return [
             StructuredTool.from_function(
                 func=_save_memory,
                 name="save_memory",
-                description=(
-                    "Save a new long-term memory. Use when the user shares personal "
-                    "information worth remembering: names, birthdays, relationships, "
-                    "preferences, important facts, upcoming events, places, or projects. "
-                    "Categories: person, preference, fact, event, place, project."
-                ),
+                description="Save a long-term memory about the person or their world.",
                 args_schema=_SaveMemoryInput,
             ),
             StructuredTool.from_function(
                 func=_search_memory,
                 name="search_memory",
                 description=(
-                    "Search stored memories using semantic similarity. Use to "
-                    "find specific memories about a person, topic, or preference. "
-                    "Relevant memories are also auto-recalled each turn, but "
-                    "this tool lets you do a deeper or more focused search."
+                    "Search memories (semantic, keyword and graph) for a deeper or more focused look than "
+                    "the memories recalled each turn."
                 ),
                 args_schema=_SearchMemoryInput,
             ),
             StructuredTool.from_function(
                 func=_list_memories,
                 name="list_memories",
-                description=(
-                    "List all stored memories, optionally filtered by category "
-                    "(person, preference, fact, event, place, project). Use when "
-                    "the user asks 'what do you remember' or wants to see all memories."
-                ),
+                description="List stored memories, e.g. for 'what do you remember?'.",
                 args_schema=_ListMemoriesInput,
             ),
             StructuredTool.from_function(
                 func=_update_memory,
                 name="update_memory",
-                description=(
-                    "Update the content of an existing memory. Use when the user "
-                    "corrects or adds to previously saved information. Requires "
-                    "the memory ID (from search_memory or list_memories)."
-                ),
+                description="Correct or extend an existing memory by its ID.",
                 args_schema=_UpdateMemoryInput,
             ),
             StructuredTool.from_function(
                 func=_delete_memory,
                 name="delete_memory",
-                description=(
-                    "Delete a memory by its ID. Use when the user asks to forget "
-                    "something. Requires the memory ID (from search_memory or "
-                    "list_memories)."
-                ),
+                description="Delete a memory by its ID, when the person asks to forget something.",
                 args_schema=_DeleteMemoryInput,
             ),
             StructuredTool.from_function(
                 func=_link_memories,
                 name="link_memories",
-                description=(
-                    "Create a relationship between two memories in the knowledge graph. "
-                    "Use when the user mentions how things are related — e.g. 'Sarah is "
-                    "my mom', 'I work at Acme Corp', 'The deadline is for Project X'. "
-                    "Pass entity **subject names** (e.g. source_id='Bob', target_id='User') "
-                    "or hex IDs. Names are preferred — no need to look up IDs first. "
-                    "relation_type should be a snake_case label like 'mother_of', 'works_at', "
-                    "'deadline_for'. Also use this proactively when you save related memories "
-                    "to build connections."
-                ),
+                description="Link two memories with a relation in the knowledge graph.",
                 args_schema=_LinkMemoriesInput,
             ),
             StructuredTool.from_function(
                 func=_explore_connections,
                 name="explore_connections",
                 description=(
-                    "Explore the knowledge graph around a memory to see how it connects "
-                    "to other memories. Shows relationships, nearby entities, and a Mermaid "
-                    "graph diagram. Use when the user asks about how things are related, "
-                    "'tell me about my family', 'what do you know about my work', etc."
+                    "Show how a memory connects to others: its relations, nearby entities and a Mermaid "
+                    "graph."
                 ),
                 args_schema=_ExploreConnectionsInput,
             ),
