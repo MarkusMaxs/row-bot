@@ -179,19 +179,16 @@ def test_windows_installer_payload_matches_app_manifest_contract():
     assert not missing_dirs, f"Windows installer is missing manifest directories: {missing_dirs}"
 
 
-def test_linux_install_marker_is_not_dev_install(monkeypatch, tmp_path):
-    app_root = tmp_path / "current" / "app"
+def test_an_xdg_release_is_not_a_dev_install(monkeypatch, tmp_path):
+    from row_bot import install_layout
+
+    app_root = tmp_path / "row-bot" / "releases" / "3.21.0" / "app"
     app_root.mkdir(parents=True)
-    marker = tmp_path / "current" / "install_info.json"
-    marker.write_text(json.dumps({
-        "platform": "linux",
-        "install_kind": "xdg-user-tarball",
-        "version": "3.21.0",
-    }), encoding="utf-8")
+    (app_root.parent / "python").mkdir()
+    found = install_layout.detect(app_root=app_root, environ={}, system="Linux")
+    monkeypatch.setattr(install_layout, "detect", lambda: found)
 
-    monkeypatch.setattr(updater.platform, "system", lambda: "Linux")
-
-    assert updater._linux_install_root(app_root) == tmp_path / "current"
+    assert updater.is_dev_install() is False
 
 
 def test_linux_safe_tar_extraction_rejects_traversal(tmp_path):
@@ -249,6 +246,8 @@ def test_linux_tarball_installs_into_xdg_tree(monkeypatch, tmp_path):
     assert launcher_path.is_symlink()
     assert (xdg / "row-bot" / "current").is_symlink()
     assert (xdg / "row-bot" / "releases" / "3.21.0" / "install_info.json").exists()
+    state = json.loads((xdg / "row-bot" / "state.json").read_text(encoding="utf-8"))
+    assert state["active"] == "3.21.0"
     desktop_text = (xdg / "applications" / "ai.row-bot.RowBot.desktop").read_text(encoding="utf-8")
     assert f"Exec={launcher_path}" in desktop_text
 
