@@ -439,7 +439,15 @@ export function UpdateControls({ owner }: { owner: Owner }) {
 
   const host = snapshot?.host ?? null;
   const hostRow =
-    external && host ? (
+    external && host?.state === 'unknown' ? (
+      <SettingsItem
+        label="Updated by this computer’s host"
+        icon={<Server size={16} aria-hidden />}
+        tone="neutral"
+        bind={false}
+        help="This Row-Bot doesn’t update itself. For Docker, pull a newer image and start the container again."
+      />
+    ) : external && host ? (
       <SettingsItem
         label="Updated by this computer’s host"
         icon={<Server size={16} aria-hidden />}

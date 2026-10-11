@@ -488,3 +488,24 @@ it('offers to remove an earlier all-users install once', async () => {
     ),
   ).toBeVisible();
 });
+
+it('explains a container that no host updater reports for', async () => {
+  show(
+    vi.fn(async () => ({
+      ...snapshot,
+      mode: 'external' as const,
+      host: {
+        state: 'unknown' as const,
+        current_version: null,
+        available_version: null,
+        message: null,
+        notes_url: null,
+        updated_at: null,
+        request: null,
+      },
+    })),
+  );
+  expect(await screen.findByText(/pull a newer image/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Pause updates' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
+});
