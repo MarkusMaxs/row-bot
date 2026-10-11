@@ -119,9 +119,10 @@ runs:
         # Without /NOLAUNCH even a silent install starts Row-Bot (the 5.1 updater
         # runs the installer silently). Reinstall this version and look for it.
         $env:ROW_BOT_DATA_DIR = Join-Path $env:RUNNER_TEMP "row-bot-after-install"
-        $installerProcess = Start-Process -FilePath $installer.FullName -Wait -PassThru -WindowStyle Hidden `
-          -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$installLog")
-        if ($installerProcess.ExitCode -ne 0) { throw "Reinstall exited with code $($installerProcess.ExitCode)" }
+        # Start-Process -Wait would also wait for Row-Bot, which Setup starts and leaves running.
+        $setup = [System.Diagnostics.Process]::Start($installer.FullName, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART `"/LOG=$installLog`"")
+        $setup.WaitForExit()
+        if ($setup.ExitCode -ne 0) { throw "Reinstall exited with code $($setup.ExitCode)" }
         $deadline = (Get-Date).AddSeconds(180)
         $healthy = $null
         while (-not $healthy -and (Get-Date) -lt $deadline) {
