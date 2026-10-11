@@ -7,6 +7,7 @@ from typing import Any
 from langchain_openrouter import ChatOpenRouter
 
 from row_bot.brand import APP_DISPLAY_NAME, APP_WEBSITE_URL
+from row_bot.providers.cache_affinity import conversation_cache_key
 from row_bot.providers.transports.cancellable_http import (
     cancellable_async_http_client,
     cancellable_http_client,
@@ -21,7 +22,22 @@ OPENROUTER_APP_ATTRIBUTION = {"http_referer": APP_WEBSITE_URL, "x_open_router_ti
 
 
 class CancellableChatOpenRouter(ChatOpenRouter):
-    """``ChatOpenRouter`` with caller-owned cancellable OpenRouter SDK clients."""
+    """``ChatOpenRouter`` with caller-owned cancellable OpenRouter SDK clients.
+
+    Each request of a conversation carries the conversation's ``session_id``,
+    OpenRouter's sticky-routing key: the conversation stays on the upstream
+    provider that holds its prompt cache. ``provider.order`` is never set,
+    because it turns stickiness off. Calls outside a conversation send none.
+    """
+
+    @property
+    def _default_params(self) -> dict[str, Any]:
+        params = super()._default_params
+        if not params.get("session_id"):
+            session_id = conversation_cache_key("openrouter")
+            if session_id:
+                params["session_id"] = session_id
+        return params
 
     def _build_client(self) -> Any:
         import openrouter

@@ -20,6 +20,9 @@ from row_bot.providers.custom import (
 if TYPE_CHECKING:
     from row_bot.providers.reasoning import ReasoningRequestPlan
 
+# xAI Chat Completions routes requests with one conversation id to one server.
+XAI_CONVERSATION_HEADER = "x-grok-conv-id"
+
 
 @dataclass(frozen=True, repr=False)
 class CapturedChatRuntime:
@@ -373,8 +376,8 @@ def captured_chat_model(
             asynchronous.event_hooks = {**asynchronous.event_hooks,
                 "request": [*asynchronous.event_hooks["request"], add_opencode_request_headers_async]}
         if provider == "ollama":
-            from langchain_ollama import ChatOllama
             from row_bot.providers.ollama import is_ollama_reasoning_model
+            from row_bot.providers.transports.ollama_local import RowBotChatOllama as ChatOllama
             kwargs = {"model":resolved.runtime_model,"base_url":resolved.base_url,"num_ctx":capture.context_size,
                 "client_kwargs":{"trust_env":False,"follow_redirects":False,"timeout":120,
                     "event_hooks":sync.event_hooks},
@@ -431,6 +434,9 @@ def captured_chat_model(
                           client=root.chat.completions, async_client=async_root.chat.completions)
             if responses:
                 kwargs.update(use_responses_api=True, output_version="responses/v1")
+                if provider == "openai":
+                    # One-shot document calls replay nothing; keep them off OpenAI's servers too.
+                    kwargs["store"] = False
             endpoint = resolved.endpoint
             if endpoint:
                 baseline = _custom_endpoint_responses_baseline(endpoint)
@@ -819,9 +825,9 @@ def _create_chat_model(
     reasoning_plan = _validated_runtime_reasoning_plan(reasoning_plan, resolved.selection_ref)
     ensure_chat_model_compatible(model_name, provider)
     if provider == "ollama":
-        from langchain_ollama import ChatOllama
         from row_bot.models import _ollama_base_url, _ollama_runtime_model_name, get_context_size
         from row_bot.providers.ollama import is_ollama_reasoning_model
+        from row_bot.providers.transports.ollama_local import RowBotChatOllama as ChatOllama
 
         runtime_model = _ollama_runtime_model_name(resolved.selection_ref)
         kwargs = {
@@ -994,8 +1000,8 @@ def _create_chat_model(
             )
         return ChatXAIOAuthResponses(model_name=model_name, reasoning_plan=reasoning_plan)
     if provider == "openai":
-        from langchain_openai import ChatOpenAI
         from row_bot.providers.transports.cancellable_http import cancellable_http_client
+        from row_bot.providers.transports.openai_direct import DirectChatOpenAI, stateless_responses_kwargs
         api_key = get_provider_secret("openai")
         if not api_key:
             raise ValueError("OpenAI API key not configured. Set it in Settings → Providers.")
@@ -1008,6 +1014,8 @@ def _create_chat_model(
         }
         if openai_model_uses_responses_api(model_name):
             kwargs.update({"use_responses_api": True, "output_version": "responses/v1"})
+            # Local-first: nothing stored at OpenAI; encrypted reasoning travels in the thread.
+            kwargs.update(stateless_responses_kwargs(model_name))
         kwargs.update(
             _reasoning_constructor_kwargs(
                 reasoning_plan,
@@ -1015,7 +1023,8 @@ def _create_chat_model(
                 responses=openai_model_uses_responses_api(model_name),
             )
         )
-        return ChatOpenAI(**kwargs)
+        # Sends the conversation's prompt_cache_key with every request.
+        return DirectChatOpenAI(**kwargs)
     if provider == "anthropic":
         from row_bot.providers.transports.anthropic_cancellable import CancellableChatAnthropic
         api_key = get_provider_secret("anthropic")
@@ -1040,6 +1049,7 @@ def _create_chat_model(
         )
     if provider == "xai":
         from langchain_xai import ChatXAI
+        from row_bot.providers.cache_affinity import conversation_header_hook
         from row_bot.providers.transports.cancellable_http import cancellable_http_client
         api_key = get_provider_secret("xai")
         if not api_key:
@@ -1047,7 +1057,10 @@ def _create_chat_model(
         return ChatXAI(
             model=model_name,
             api_key=api_key,
-            http_client=cancellable_http_client(),
+            # Chat Completions takes the conversation key as a header: one server, and its cache, per conversation.
+            http_client=cancellable_http_client(
+                event_hooks={"request": [conversation_header_hook(XAI_CONVERSATION_HEADER, "xai")]},
+            ),
             **_reasoning_constructor_kwargs(reasoning_plan, provider="xai"),
         )
     if provider == "minimax":

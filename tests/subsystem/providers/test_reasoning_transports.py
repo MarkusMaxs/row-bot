@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import sys
-from types import ModuleType
-
 from langchain_core.messages import HumanMessage
 
 from row_bot.providers.reasoning import ReasoningCapabilities, ReasoningRequestPlan, ReasoningSelection
@@ -105,15 +102,13 @@ def test_provider_default_preserves_each_custom_transport_baseline() -> None:
 
 def test_runtime_builds_dynamic_and_unchanged_default_openai_models(monkeypatch) -> None:
     import row_bot.providers.runtime as runtime
-
-    fake_module = ModuleType("langchain_openai")
+    from row_bot.providers.transports import openai_direct
 
     class FakeChatOpenAI:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOpenAI = FakeChatOpenAI
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
+    monkeypatch.setattr(openai_direct, "DirectChatOpenAI", FakeChatOpenAI)
     monkeypatch.setattr(runtime, "get_provider_secret", lambda _provider: "test-key")
     plan = _plan("model:openai:gpt-5", style="openai", effort="high")
 

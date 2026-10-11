@@ -13,6 +13,7 @@ from row_bot.cancellation import CancellationScope, use_cancellation_scope
 from row_bot.agent_budget import new_execution_budget
 from row_bot.providers.errors import ProviderErrorKind, normalize_provider_error
 from row_bot.providers.transports.anthropic_cancellable import CancellableChatAnthropic
+from row_bot.providers.transports import ollama_local, openai_direct
 from row_bot.providers.transports.openrouter_cancellable import CancellableChatOpenRouter
 
 
@@ -50,10 +51,8 @@ def _assert_sync_client_registered_with_cancellation_scope(client: httpx.Client)
 
 
 def test_openai_gpt5_family_uses_responses_api(monkeypatch):
-    fake_module = ModuleType("langchain_openai")
-    fake_module.ChatOpenAI = _FakeChatOpenAI
     _FakeChatOpenAI.calls.clear()
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
+    monkeypatch.setattr(openai_direct, "DirectChatOpenAI", _FakeChatOpenAI)
     monkeypatch.setattr(runtime, "get_provider_secret", lambda provider_id: "sk-test")
 
     model = runtime.create_chat_model("gpt-5.5-pro", provider_id="openai")
@@ -61,22 +60,24 @@ def test_openai_gpt5_family_uses_responses_api(monkeypatch):
     assert model.kwargs["model"] == "gpt-5.5-pro"
     assert model.kwargs["use_responses_api"] is True
     assert model.kwargs["output_version"] == "responses/v1"
+    # Stateless: nothing stored at OpenAI, encrypted reasoning travels in the thread.
+    assert model.kwargs["store"] is False
+    assert model.kwargs["include"] == ["reasoning.encrypted_content"]
     assert "reasoning" not in model.kwargs
     assert "reasoning_effort" not in model.kwargs
     assert isinstance(model.kwargs["http_client"], httpx.Client)
 
 
 def test_openai_legacy_chat_model_keeps_chat_completions_path(monkeypatch):
-    fake_module = ModuleType("langchain_openai")
-    fake_module.ChatOpenAI = _FakeChatOpenAI
     _FakeChatOpenAI.calls.clear()
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
+    monkeypatch.setattr(openai_direct, "DirectChatOpenAI", _FakeChatOpenAI)
     monkeypatch.setattr(runtime, "get_provider_secret", lambda provider_id: "sk-test")
 
     model = runtime.create_chat_model("gpt-4o", provider_id="openai")
 
     assert model.kwargs["model"] == "gpt-4o"
     assert "use_responses_api" not in model.kwargs
+    assert "store" not in model.kwargs and "include" not in model.kwargs
     assert "reasoning" not in model.kwargs
     assert "reasoning_effort" not in model.kwargs
     assert isinstance(model.kwargs["http_client"], httpx.Client)
@@ -497,14 +498,12 @@ def test_runtime_rejects_custom_endpoint_non_chat_model(tmp_path, monkeypatch):
 
 
 def test_ollama_provider_runtime_constructs_chat_ollama(monkeypatch):
-    fake_module = ModuleType("langchain_ollama")
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_module)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0:11435")
     monkeypatch.setattr("row_bot.models.get_context_size", lambda model_ref=None: 65_536)
 
@@ -519,14 +518,12 @@ def test_ollama_provider_runtime_constructs_chat_ollama(monkeypatch):
 
 
 def test_ollama_provider_ref_unwraps_at_runtime_edge(monkeypatch):
-    fake_module = ModuleType("langchain_ollama")
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_module)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
     monkeypatch.setattr("row_bot.models.get_context_size", lambda model_ref=None: 32_768)
 
@@ -538,14 +535,12 @@ def test_ollama_provider_ref_unwraps_at_runtime_edge(monkeypatch):
 
 
 def test_ollama_provider_runtime_expands_unique_family_alias(monkeypatch):
-    fake_module = ModuleType("langchain_ollama")
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_module)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
     monkeypatch.setattr("row_bot.models.list_local_models", lambda: ["llama3:latest"])
     monkeypatch.setattr("row_bot.models.get_context_size", lambda model_ref=None: 32_768)
@@ -2047,15 +2042,13 @@ def test_minimax_provider_raises_when_api_key_missing(monkeypatch):
 
 
 def test_ollama_runtime_does_not_force_reasoning(monkeypatch):
-    fake_langchain_ollama = ModuleType("langchain_ollama")
     captured = {}
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    fake_langchain_ollama.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_langchain_ollama)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setattr("row_bot.models._ollama_base_url", lambda: "http://127.0.0.1:11434")
 
     model = runtime.create_chat_model("vendor/non-tool-chat:14b", provider_id="ollama")
@@ -2066,15 +2059,13 @@ def test_ollama_runtime_does_not_force_reasoning(monkeypatch):
 
 
 def test_ollama_runtime_enables_reasoning_for_thinking_models(monkeypatch):
-    fake_langchain_ollama = ModuleType("langchain_ollama")
     captured = {}
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    fake_langchain_ollama.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_langchain_ollama)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setattr("row_bot.models._ollama_base_url", lambda: "http://127.0.0.1:11434")
 
     model = runtime.create_chat_model("qwen3.5:30b", provider_id="ollama")

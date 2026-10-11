@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import secrets
-import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from row_bot.brand import APP_USER_AGENT
+from row_bot.providers.cache_affinity import conversation_digest, current_conversation_id
 from row_bot.providers.models import ModelInfo, ModelModality, ModelTask, TransportMode
 from row_bot.providers.selection import model_ref
 
@@ -22,9 +19,6 @@ OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1"
 OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_MODELS_DEV_URL = "https://models.dev/api.json"
 OPENCODE_SESSION_HEADER = "x-opencode-session"
-# Keys the session digest for this process only, so the header never carries
-# the conversation id (channel conversations embed chat ids and phone numbers).
-_SESSION_KEY = secrets.token_bytes(32)
 
 
 def opencode_request_headers() -> dict[str, str]:
@@ -32,11 +26,11 @@ def opencode_request_headers() -> dict[str, str]:
 
     OpenCode Go refuses a request without a stable per-conversation
     ``x-opencode-session`` and asks clients to name themselves in the user agent.
+    The session is a per-process digest, so the header never carries the
+    conversation id (channel conversations embed chat ids and phone numbers).
+    Unlike the cache keys, it is sent outside a conversation too.
     """
-    # The conversation is the agent's; no conversation exists before it loads.
-    agent = sys.modules.get("row_bot.agent")
-    conversation_id = agent.get_current_thread_id() if agent is not None else ""
-    session = hmac.new(_SESSION_KEY, conversation_id.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    session = conversation_digest(current_conversation_id(), scope="opencode")
     return {"User-Agent": APP_USER_AGENT, OPENCODE_SESSION_HEADER: session}
 
 

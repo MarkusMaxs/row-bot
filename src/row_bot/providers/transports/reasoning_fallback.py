@@ -18,6 +18,7 @@ from row_bot.providers.reasoning import (
     remember_background_rejection,
     suppress_reasoning_override,
 )
+from row_bot.providers.transports.responses_reasoning import is_encrypted_reasoning_rejection
 from row_bot.providers.transports.thinking_binding import is_thinking_binding_error
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,10 @@ def should_retry_reasoning_error(exc: BaseException) -> bool:
         # strip-and-retry inside the primary call. Provider default would replay
         # the same history and fail the same way, and it would wrongly reset the
         # user's reasoning choice, so this is never a reasoning fallback.
+        return False
+    if is_encrypted_reasoning_rejection(exc):
+        # Replayed encrypted reasoning was unreadable. The Responses transports
+        # already retried once without it; this isn't about the effort chosen.
         return False
     detail = _safe_error_detail(exc).lower()
     return any(term in detail for term in _REASONING_ERROR_TERMS)
