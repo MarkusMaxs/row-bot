@@ -376,3 +376,35 @@ def test_a_batch_without_a_reviewed_policy_calls_the_background_model(tmp_path, 
     assert result["status"] == "completed"
     assert [purpose for purpose, _prompt in calls] == ["document", "document"]  # map, then reduce
     assert "Notes." in calls[0][1]
+
+
+def test_the_map_summary_length_grows_with_the_section():
+    import row_bot.document_extraction as extraction
+
+    assert extraction.map_summary_length(5_000).startswith("3-5 sentences")
+    assert extraction.map_summary_length(6_000).startswith("3-5 sentences")
+    assert extraction.map_summary_length(27_852).startswith("15-25 sentences")
+    assert extraction.map_summary_length(60_000).startswith("30-50 sentences")
+
+
+def test_each_map_call_asks_for_a_summary_as_long_as_its_section_needs(tmp_path, monkeypatch):
+    import row_bot.documents as documents
+
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _patch_extraction_side_effects(extraction, monkeypatch)
+    monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
+    text = "".join(f"{index:07d} " for index in range(15_000))  # 120,000 characters
+    monkeypatch.setattr(documents, "iter_document_pages", lambda _path: iter([Document(page_content=text)]))
+    policy = _Policy(950_000)  # 60K windows: 60K, 60K, then the last 10K
+
+    with extraction.captured_extraction_policy(policy):
+        extraction.extract_document_job(job, service)
+
+    assert len(policy.prompts) == 3
+    assert "30-50 sentences" in policy.prompts[0]
+    assert "30-50 sentences" in policy.prompts[1]
+    assert "6-10 sentences" in policy.prompts[2]
+    # The instructions come first and are the same for every section: a cacheable prefix.
+    instructions = {prompt.split("LENGTH:")[0] for prompt in policy.prompts}
+    assert len(instructions) == 1
+    assert all(text[:20] not in part for part in instructions)

@@ -426,16 +426,22 @@ Respond with ONLY a valid JSON array. No other text."""
 # Prompts: document knowledge extraction (map-reduce pipeline)
 # ---------------------------------------------------------------------------
 
-# Step 1 — MAP: summarize each chunk into a few key sentences
+# Step 1 — MAP: summarize each chunk into a few key sentences per ~6,000
+# characters (the length scales with the section, WP C3). The instructions come
+# before anything that varies, so they stay a cacheable prefix.
 DOC_MAP_PROMPT = """\
-Summarize this section of "{document_title}" in 3-5 sentences. \
-Focus on the main arguments, findings, and named entities (people, \
-organisations, technologies). Omit filler and formatting artifacts.
+Summarize one section of a document for a knowledge base. Focus on the main \
+arguments, findings, and named entities (people, organisations, technologies). \
+Cover the whole section evenly, not only its start. Omit filler and \
+formatting artifacts.
+
+LENGTH: {summary_length}
+DOCUMENT: "{document_title}"
 
 SECTION {section_number} of {total_sections}:
 {document_text}
 
-Respond with ONLY the summary paragraph. No headings, no bullets."""
+Respond with ONLY the summary. No headings, no bullets."""
 
 
 # Step 2 — REDUCE: combine chunk summaries into one coherent article

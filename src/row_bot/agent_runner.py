@@ -31,8 +31,13 @@ CHILD_RESULT_CHARS = 6_000
 _CHILD_RESULT_TAIL_SHARE = 4
 
 
+def full_result_hint(run_id: str) -> str:
+    """How the parent reads a shortened child answer in full."""
+    return f"agent_status(run_id='{run_id}', full_result=true) returns the whole answer."
+
+
 def bounded_child_result(text: str, run_id: str = "", *, limit: int = CHILD_RESULT_CHARS) -> str:
-    """``text`` within ``limit`` characters: its start and end, with how to read the rest."""
+    """``text`` within ``limit`` characters: its start and end; with ``run_id``, how to read the rest."""
     text = str(text or "")
     if len(text) <= limit:
         return text
@@ -40,12 +45,8 @@ def bounded_child_result(text: str, run_id: str = "", *, limit: int = CHILD_RESU
     head = text[: limit - tail_chars]
     tail = text[-tail_chars:]
     omitted = len(text) - len(head) - len(tail)
-    where = (
-        f"agent_status(run_id='{run_id}', full_result=true) returns the whole answer."
-        if run_id
-        else "The whole answer is kept with the run."
-    )
-    return f"{head.rstrip()}\n\n[... {omitted:,} characters not shown. {where}]\n\n{tail.lstrip()}"
+    where = f" {full_result_hint(run_id)}" if run_id else ""
+    return f"{head.rstrip()}\n\n[... {omitted:,} characters not shown.{where}]\n\n{tail.lstrip()}"
 
 
 def full_child_result(run: Mapping[str, Any] | None) -> str:
@@ -56,14 +57,20 @@ def full_child_result(run: Mapping[str, Any] | None) -> str:
     return str(response or run.get("summary") or run.get("error") or "")
 
 
-def parent_view_of_result(run: Mapping[str, Any] | None, *, limit: int = CHILD_RESULT_CHARS) -> dict[str, str]:
+def parent_view_of_result(
+    run: Mapping[str, Any] | None,
+    *,
+    limit: int = CHILD_RESULT_CHARS,
+    point_to_full: bool = True,
+) -> dict[str, Any]:
     """A run's ``summary``, ``error`` and ``status_message`` as the parent model reads them.
 
     A failed run often stores one text in all three: the parent reads it once
-    (F42), and each field is bounded.
+    (F42), and each field is bounded. ``shortened`` says whether any was cut;
+    with ``point_to_full`` a cut text itself says how to read the rest.
     """
     run = run or {}
-    run_id = str(run.get("id") or "")
+    pointer = str(run.get("id") or "") if point_to_full else ""
     summary = str(run.get("summary") or "").strip()
     error = str(run.get("error") or "").strip()
     status_message = str(run.get("status_message") or "").strip()
@@ -71,11 +78,10 @@ def parent_view_of_result(run: Mapping[str, Any] | None, *, limit: int = CHILD_R
         summary = ""
     if status_message and status_message in {summary, error}:
         status_message = ""
-    return {
-        "summary": bounded_child_result(summary, run_id, limit=limit),
-        "error": bounded_child_result(error, run_id, limit=limit),
-        "status_message": bounded_child_result(status_message, run_id, limit=limit),
-    }
+    fields = {"summary": summary, "error": error, "status_message": status_message}
+    view: dict[str, Any] = {key: bounded_child_result(value, pointer, limit=limit) for key, value in fields.items()}
+    view["shortened"] = any(len(value) > limit for value in fields.values())
+    return view
 
 
 def notify_agent_runtime_settings_changed() -> None:

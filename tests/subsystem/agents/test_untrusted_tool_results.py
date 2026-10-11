@@ -5,6 +5,7 @@ Prompt-injection defence: keep these in the pull request lane (not ``slow``).
 from __future__ import annotations
 
 import contextvars
+import json
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -66,8 +67,6 @@ def _assert_fenced_and_scanned(seen: str, name: str, raw: str) -> None:
         ("documents", {"documents"}),
         ("shell", {"run_command", "read_terminal"}),
         ("developer", {"developer_read_file", "developer_search", "developer_run_command"}),
-        # A child Agent's answer can repeat what it read on a page or in a file (WP C3).
-        ("agents", {"delegate_work", "agent_status", "agent_wait"}),
     ],
 )
 def test_results_of_tools_returning_outside_content_are_fenced_and_scanned(
@@ -108,3 +107,19 @@ def test_row_bots_own_knowledge_stays_unfenced(monkeypatch) -> None:
     raw = {"wiki_read": "The person prefers British spelling.", "search_memory": "Prefers short answers."}
 
     assert _model_view_of_tool_results(monkeypatch, raw) == raw
+
+
+def test_agents_results_keep_row_bots_hints_outside_the_fence(monkeypatch) -> None:
+    """The agents tools fence only the child's own text inside their results (WP C3), so Row-Bot's
+    hints next to it ("call agent_wait") stay instructions the model can follow."""
+    names = {"delegate_work", "agent_status", "agent_wait", "agent_stop", "agent_promote"}
+    assert not names & set(tool_registry.get_tool("agents").untrusted_tool_names)
+    results = {
+        name: json.dumps({
+            "run": {"summary": agent._wrap_untrusted_tool_content("child_agent", f"{name} answer. {INJECTION}")},
+            "next_action": "Before finalizing, call agent_wait(orchestration_id='orchestration-1').",
+        })
+        for name in ("delegate_work", "agent_wait")
+    }
+
+    assert _model_view_of_tool_results(monkeypatch, results) == results

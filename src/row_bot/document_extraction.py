@@ -216,6 +216,24 @@ def _llm_call(prompt: str) -> str:
     return re.sub(r"</?think>", "", raw).strip()
 
 
+def map_summary_length(section_chars: int) -> str:
+    """How long a map summary of a section this size should be (WP C3).
+
+    3-5 sentences for each ~6,000 characters, so a larger window keeps the
+    detail per source character that 6K windows had. At the 60K cap that is
+    30-50 sentences (about 1.5K tokens), inside every provider's default reply
+    allowance (C1 sets no cap for document calls). The reduce step keeps its
+    prompt: one call still takes at most 8 inputs, either map summaries (about
+    a tenth of their section each, so under one window in all) or 300-600 word
+    articles as before, and writes one 300-600 word article.
+    """
+    units = max(1, round(max(0, int(section_chars)) / LEGACY_WINDOW_SIZE))
+    if units == 1:
+        return "3-5 sentences, in one paragraph."
+    return (f"{3 * units}-{5 * units} sentences, in short paragraphs: about 3-5 sentences "
+            f"for each 6,000 characters of the section.")
+
+
 def _map_summarize_window(
     text: str,
     title: str,
@@ -225,6 +243,7 @@ def _map_summarize_window(
     from row_bot.prompts import DOC_MAP_PROMPT
 
     prompt = DOC_MAP_PROMPT.format(
+        summary_length=map_summary_length(len(text)),
         document_title=title,
         section_number=section_num,
         total_sections=total_sections or "unknown",
