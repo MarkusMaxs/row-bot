@@ -14,6 +14,7 @@ from langchain_core.runnables import Runnable
 from pydantic import Field, PrivateAttr
 
 from row_bot.cancellation import current_cancellation_scope
+from row_bot.prompt_cache import usage_metadata_from_provider_usage
 from row_bot.providers import codex as codex_auth
 
 CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -67,7 +68,12 @@ class ChatCodexResponses(BaseChatModel):
         content = _assistant_text_from_events(events)
         tool_calls = _tool_calls_from_events(events)
         response_metadata = _response_metadata_from_events(events)
-        message = AIMessage(content=content, tool_calls=tool_calls, response_metadata=response_metadata)
+        message = AIMessage(
+            content=content,
+            tool_calls=tool_calls,
+            response_metadata=response_metadata,
+            usage_metadata=usage_metadata_from_provider_usage(response_metadata.get("token_usage")),
+        )
         return ChatResult(generations=[ChatGeneration(message=message)], llm_output=response_metadata)
 
     def _stream(
@@ -98,10 +104,14 @@ class ChatCodexResponses(BaseChatModel):
         )
         scope = current_cancellation_scope()
         writing = _ToolCallProgress()
+        completed: list[dict[str, Any]] = []
         for event in self._iter_response_events(body):
             if scope is not None and scope.is_cancelled():
                 return
             event_type = event.get("type")
+            if event_type == "response.completed":
+                completed[:] = [event]
+                continue
             if event_type in {"response.output_item.added", "response.function_call_arguments.delta"}:
                 writing.observe(event)
                 continue
@@ -149,7 +159,7 @@ class ChatCodexResponses(BaseChatModel):
             thread_id,
             generation_id,
         )
-        yield ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        yield _final_usage_chunk(_response_metadata_from_events(completed))
 
     def _request_events(self, messages: list[BaseMessage], **kwargs: Any) -> list[dict[str, Any]]:
         body = self._request_body(messages, **kwargs)
@@ -656,6 +666,19 @@ def _assistant_text_parts_from_message_item(item: dict[str, Any]) -> list[str]:
         if isinstance(content_item, dict) and content_item.get("type") == "output_text":
             parts.append(str(content_item.get("text") or ""))
     return parts
+
+
+def _final_usage_chunk(response_metadata: dict[str, Any]) -> ChatGenerationChunk:
+    """The closing chunk, carrying the usage ``response.completed`` reported."""
+    usage_metadata = usage_metadata_from_provider_usage(response_metadata.get("token_usage"))
+    if usage_metadata is None:
+        return ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+    return ChatGenerationChunk(message=AIMessageChunk(
+        content="",
+        chunk_position="last",
+        usage_metadata=usage_metadata,
+        response_metadata={"token_usage": response_metadata["token_usage"]},
+    ))
 
 
 def _response_metadata_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:

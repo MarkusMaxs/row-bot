@@ -14,8 +14,13 @@ from typing import Any, Iterator
 from row_bot.models import get_llm, get_llm_for, get_context_policy, get_context_size, get_current_model, is_model_local, is_cloud_model, get_cloud_provider, set_active_model_override, _active_model_override
 from row_bot.api_keys import apply_keys
 from row_bot.prompts import get_agent_system_prompt, get_chat_only_system_prompt
-from row_bot.prompt_cache import apply_anthropic_system_cache_marker, normalize_prompt_cache_usage
+from row_bot.prompt_cache import (
+    apply_anthropic_system_cache_marker,
+    normalize_model_usage,
+    normalize_prompt_cache_usage,
+)
 from row_bot import prompt_prefix_diff
+from row_bot.providers.usage_ledger import with_usage_purpose
 from row_bot.prompt_context import (
     cache_eligible_message_ids,
     ephemeral_section,
@@ -24,6 +29,7 @@ from row_bot.prompt_context import (
     stable_section,
 )
 from langchain_core.messages import ToolMessage, AIMessage, HumanMessage, SystemMessage, BaseMessage
+from langchain_core.messages.ai import add_usage
 from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.types import interrupt, Command
@@ -2367,43 +2373,14 @@ def _normalized_confirmed_input_tokens(
     metadata: dict[str, Any] | None,
     provider_id: str,
 ) -> int | None:
-    """Normalize provider-returned input usage for diagnostics only."""
-    source = dict(metadata or {})
-    usage = source.get("usage_metadata")
-    if not isinstance(usage, dict):
-        usage = source.get("token_usage")
-    if not isinstance(usage, dict):
-        usage = source.get("usage")
-    if not isinstance(usage, dict):
-        usage = source
+    """Normalize provider-returned input usage for diagnostics only.
 
-    def _positive_int(*keys: str) -> int | None:
-        for key in keys:
-            value = usage.get(key)
-            if value is None:
-                value = source.get(key)
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError):
-                continue
-            if parsed >= 0:
-                return parsed
-        return None
-
-    total = _positive_int(
-        "input_tokens",
-        "prompt_tokens",
-        "prompt_token_count",
-        "input_token_count",
-        "prompt_eval_count",
-    )
-    if total is None:
-        return None
-    if provider_id in {"anthropic", "claude_subscription"}:
-        cache = normalize_prompt_cache_usage(source)
-        total += int(cache.get("prompt_cache_read_tokens") or 0)
-        total += int(cache.get("prompt_cache_write_tokens") or 0)
-    return total
+    The total includes cache reads and writes. LangChain ``usage_metadata``
+    already counts them; raw Anthropic ``usage`` does not, and the normalizer
+    adds them only there, so neither shape is counted twice.
+    """
+    total = normalize_model_usage(dict(metadata or {})).input_tokens
+    return total if total is not None and total >= 0 else None
 
 
 def _summary_matches_inputs(summary_state: dict | None, inputs: PreparationInputs) -> bool:
@@ -2695,6 +2672,16 @@ def _summary_output_allowance(inputs: PreparationInputs, compactable_tokens: int
     return min(max_summary, max(512, math.ceil(max(0, compactable_tokens) * 0.20)))
 
 
+def _turn_usage_tagged(runnable: Any, purpose: str) -> Any:
+    """Tag a side call made during this turn for the local usage ledger."""
+    return with_usage_purpose(
+        runnable,
+        purpose,
+        thread_id=_current_thread_id_var.get(""),
+        generation_id=_current_generation_id_var.get(""),
+    )
+
+
 def _compaction_model(inputs: PreparationInputs, output_tokens: int):
     llm = _chat_only_llm(inputs.model_ref)
     if inputs.provider_id == "google":
@@ -2740,7 +2727,7 @@ def _invoke_compaction_model(
         if prior_summary
         else ""
     ) + "NEWLY AGED TRANSCRIPT RANGE:\n" + transcript
-    result = _compaction_model(inputs, output_tokens).invoke([
+    result = _turn_usage_tagged(_compaction_model(inputs, output_tokens), "compaction").invoke([
         SystemMessage(content=_SUMMARY_SYSTEM_PROMPT),
         HumanMessage(content=prompt),
     ])
@@ -5525,7 +5512,12 @@ def stream_chat_only(
 
     try:
         _llm_started = time.perf_counter()
-        llm = _chat_only_llm(model_label)
+        llm = with_usage_purpose(
+            _chat_only_llm(model_label),
+            "chat_only",
+            thread_id=thread_id,
+            generation_id=str(configurable.get("generation_id") or ""),
+        )
         phase_timings["generation.chat_model_create_ms"] = (
             time.perf_counter() - _llm_started
         ) * 1000.0
@@ -5597,7 +5589,12 @@ def stream_chat_only(
                     latest_response_metadata.update(response_metadata)
                 usage_metadata = getattr(chunk, "usage_metadata", None) or {}
                 if isinstance(usage_metadata, dict) and usage_metadata:
-                    latest_response_metadata["usage_metadata"] = dict(usage_metadata)
+                    # Chunks carry usage deltas (input on one, output on
+                    # another for some providers); sum them as LangChain does.
+                    latest_response_metadata["usage_metadata"] = dict(add_usage(
+                        latest_response_metadata.get("usage_metadata"),
+                        usage_metadata,
+                    ))
                 parts = decode_ai_stream_parts(chunk, decoder)
                 if not parts and not thinking_signalled:
                     thinking_signalled = True
@@ -6428,7 +6425,7 @@ def _run_tool_result_finalization(
 ) -> tuple[str, str, list[dict[str, Any]]]:
     if not tool_messages:
         return "", "", []
-    llm = _chat_only_llm(model_label)
+    llm = _turn_usage_tagged(_chat_only_llm(model_label), "finalization")
     messages = _tool_result_finalization_messages(user_text, tool_messages)
     decoder = _ReasoningTextStreamDecoder()
     parts: list[dict[str, Any]] = []
@@ -6519,7 +6516,7 @@ def _handle_agent_terminal(
         }[surface]
         try:
             model_label, _ = _selected_model_label_from_config(config)
-            llm = _chat_only_llm(model_label)
+            llm = _turn_usage_tagged(_chat_only_llm(model_label), "finalization")
             messages = _terminal_finalization_messages(
                 user_text=_latest_human_text_current_turn(agent, config),
                 tool_messages=_successful_tool_messages_current_turn(agent, config),
@@ -6602,7 +6599,11 @@ def _log_stream_completion(
 ) -> None:
     """Log enough completion detail to diagnose reasoning-only model stops."""
     response_metadata = dict(getattr(latest_ai_message, "response_metadata", None) or {})
-    prompt_cache_usage = normalize_prompt_cache_usage(response_metadata)
+    latest_usage = getattr(latest_ai_message, "usage_metadata", None)
+    prompt_cache_usage = normalize_prompt_cache_usage(
+        response_metadata,
+        dict(latest_usage) if isinstance(latest_usage, dict) else None,
+    )
     additional_kwargs = getattr(latest_ai_message, "additional_kwargs", None) or {}
     checkpoint_answer_chars = len(_content_to_str(getattr(latest_ai_message, "content", "") or "")) if latest_ai_message else 0
     checkpoint_reasoning_chars = len(str(additional_kwargs.get("reasoning_content") or "")) if latest_ai_message else 0
@@ -6938,7 +6939,16 @@ def _stream_graph(agent, input_data, config: dict,
 
             # Track finish_reason from streaming response_metadata
             _rm = getattr(msg, "response_metadata", None) or {}
-            _prompt_cache_usage = normalize_prompt_cache_usage(_rm)
+            # Usage arrives on the final chunks as usage_metadata deltas.
+            _um = getattr(msg, "usage_metadata", None)
+            if isinstance(_um, dict) and _um:
+                provider_call["_usage_metadata"] = dict(
+                    add_usage(provider_call.get("_usage_metadata"), _um)
+                )
+            _prompt_cache_usage = normalize_prompt_cache_usage(
+                _rm,
+                provider_call.get("_usage_metadata"),
+            )
             if _prompt_cache_usage:
                 provider_call.update(_prompt_cache_usage)
             _fr = _rm.get("finish_reason")

@@ -151,6 +151,61 @@ def test_client_platform_publishes_live_context_meter_event(platform):
         platform.registry.finish(handle, status="interrupted")
 
 
+def _record_call(thread_id: str, **usage) -> None:
+    from row_bot.prompt_cache import ModelUsage
+    from row_bot.providers.usage_ledger import UsageRecord, record_model_usage
+
+    assert record_model_usage(UsageRecord(
+        purpose="main", provider="openrouter", model="anthropic/claude-sonnet-4.5",
+        usage=ModelUsage(**usage), thread_id=thread_id,
+    ))
+
+
+def test_meters_carry_this_conversations_ledger_totals_and_validate_on_the_wire(platform, tmp_path, monkeypatch):
+    from row_bot import threads
+    from row_bot.api.v1.schemas import ContextUpdated, ContextUsageView
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "ledger"))
+    threads.append_checkpoint_messages("conversation-a", [HumanMessage(content="PRIVATE", id="native-input")])
+    threads.save_context_usage("conversation-a", saved_usage())
+    _record_call("conversation-a", input_tokens=1000, output_tokens=50, cache_read_tokens=800, cost=0.0042)
+    _record_call("conversation-a", input_tokens=200, output_tokens=10)
+    _record_call("conversation-b", input_tokens=99_999, output_tokens=1)
+
+    saved = read_usage(platform, "conversation-a", CONTROLS)
+    live = project_live_usage("conversation-a", saved_usage(snapshot_kind="transient"), "context_usage")
+
+    expected = {"calls": 2, "input_tokens": 1200, "output_tokens": 60,
+                "cache_read_percent": 80, "cost_usd": pytest.approx(0.0042)}
+    assert saved["conversation_usage"] == expected
+    assert live["conversation_usage"] == expected
+    ContextUsageView.model_validate(saved)
+    ContextUpdated.model_validate(live)
+    assert "PRIVATE" not in json.dumps(saved)
+
+
+def test_meters_leave_usage_out_before_any_call_and_when_unknown(platform, tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "ledger"))
+    assert "conversation_usage" not in project_live_usage(
+        "conversation-a", saved_usage(snapshot_kind="transient"), "context_usage")
+    _record_call("conversation-a", input_tokens=10, output_tokens=1)
+
+    unknown = project_live_usage("conversation-a", {"model_ref": "fixture/model", "estimated_input_tokens": -1},
+                                 "context_usage")
+    assert unknown["state"] == "unknown" and "conversation_usage" not in unknown
+    assert read_usage(platform, "conversation-a", CONTROLS)["state"] == "unknown"
+    assert "conversation_usage" not in read_usage(platform, "conversation-a", CONTROLS)
+
+
+def test_a_broken_ledger_never_breaks_the_meter(platform, monkeypatch):
+    from row_bot.providers import usage_ledger
+
+    monkeypatch.setattr(usage_ledger, "conversation_usage",
+                        lambda _thread: (_ for _ in ()).throw(RuntimeError("ledger unavailable")))
+    result = project_live_usage("conversation-a", saved_usage(snapshot_kind="transient"), "context_usage")
+    assert result["state"] == "live" and "conversation_usage" not in result
+
+
 def test_oversized_snapshot_is_rejected_before_json_parsing(platform, monkeypatch):
     from row_bot.application import context_status
     store(saved_usage(private_extra="x" * (17 * 1024)))

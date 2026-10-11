@@ -67,6 +67,8 @@ class ReasoningFallbackChatModel(BaseChatModel):
             provider_default=_bind_tools(self.provider_default, tools, tool_choice=tool_choice, **kwargs),
             plan=self.plan,
             provider_id=self.provider_id,
+            # The wrapper's own callbacks (the usage ledger) see each call once.
+            callbacks=self.callbacks,
         )
 
     def _generate(
@@ -309,6 +311,7 @@ def _generation_chunk(message: Any) -> ChatGenerationChunk:
                 additional_kwargs=message.additional_kwargs,
                 response_metadata=message.response_metadata,
                 tool_call_chunks=getattr(message, "tool_call_chunks", []),
+                usage_metadata=message.usage_metadata,
             )
         )
     return ChatGenerationChunk(message=AIMessageChunk(content=str(message or "")))

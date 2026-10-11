@@ -229,3 +229,39 @@ def test_a_hanging_title_model_never_delays_or_blocks_the_conversation(platform,
     settle()
     assert title(platform) == "Cornwall Coast Walking Trip"
     assert len(naming.requests) == 1
+
+
+def test_the_title_call_is_counted_as_a_title_for_its_conversation(platform, naming, tmp_path, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    from row_bot.application import conversation_naming
+    from row_bot.providers.usage_ledger import attach_usage_ledger
+
+    class TitleChatModel(BaseChatModel):
+        @property
+        def _llm_type(self):
+            return "title-fixture"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            message = AIMessage(content="Cornwall Coast Walking Trip",
+                                usage_metadata={"input_tokens": 90, "output_tokens": 6, "total_tokens": 96})
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "ledger"))
+    model = attach_usage_ledger(TitleChatModel(), provider_id="fixture", model_name="fixture-model")
+    monkeypatch.setattr(conversation_naming, "_title_model", lambda model_ref: model)
+    changed: list[str] = []
+
+    conversation_naming._smart_name(
+        type("Service", (), {"conversation_changed": lambda self, cid: changed.append(cid)})(),
+        CONVERSATION, FIRST, "An answer.", "fixture/model",
+    )
+
+    assert title(platform) == "Cornwall Coast Walking Trip"
+    with closing(sqlite3.connect(tmp_path / "ledger" / "usage.db")) as connection:
+        rows = connection.execute("SELECT purpose, thread_id, input_tokens, output_tokens FROM model_usage").fetchall()
+    assert rows == [("title", CONVERSATION, 90, 6)]

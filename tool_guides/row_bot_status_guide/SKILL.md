@@ -38,6 +38,7 @@ QUERYING STATUS (row_bot_status):
 - Avoid saying tools are "maybe blocked" when status reports an active allow-list; say the global tool exists but is not bound under the current profile.
 - Use category='designer' to check designer project count and recent projects.
 - Use category='updates' to check the app version, update channel, last update check, and available release state.
+- Use category='usage' for "how many tokens did I use?": this conversation, the last day, week and month, by model and purpose, with the share read from cache. Cost appears only when the provider reported it.
 - Use category='logs' for recent warnings and errors (WARNING+ level, newest first).
 - Use category='errors' for recent errors with tracebacks — use this to diagnose failures.
 

@@ -15,6 +15,7 @@ from langchain_core.runnables import Runnable
 from pydantic import Field
 
 from row_bot.cancellation import current_cancellation_scope
+from row_bot.prompt_cache import usage_metadata_from_provider_usage
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,13 @@ class ChatOpenAICompatible(BaseChatModel):
                 known_tool_names=known_tool_names,
             )
         return ChatResult(
-            generations=[ChatGeneration(message=AIMessage(content=content, tool_calls=tool_calls, additional_kwargs=additional_kwargs, response_metadata=metadata))],
+            generations=[ChatGeneration(message=AIMessage(
+                content=content,
+                tool_calls=tool_calls,
+                additional_kwargs=additional_kwargs,
+                response_metadata=metadata,
+                usage_metadata=usage_metadata_from_provider_usage(metadata.get("token_usage")),
+            ))],
             llm_output=metadata,
         )
 
@@ -153,6 +160,7 @@ class ChatOpenAICompatible(BaseChatModel):
             provider=str(self.endpoint.get("provider_id") or "custom"),
             model=self.model_name,
         )
+        stream_usage: dict[str, Any] = {}
         scope = current_cancellation_scope()
         for payload in self._iter_stream_events(body):
             if scope is not None and scope.is_cancelled():
@@ -163,6 +171,7 @@ class ChatOpenAICompatible(BaseChatModel):
                 event_type = _anthropic_event_type(event_payload)
                 if event_type == "error":
                     raise RuntimeError(_atlascloud_stream_error_message(self.model_name, event_payload))
+                _merge_anthropic_stream_usage(stream_usage, event_payload)
                 if event_type == "content_block_start":
                     block = event_payload.get("content_block") if isinstance(event_payload.get("content_block"), dict) else {}
                     block_type = str(block.get("type") or "").strip()
@@ -216,6 +225,10 @@ class ChatOpenAICompatible(BaseChatModel):
                     continue
                 if event_type in {"message_start", "message_delta", "message_stop", "content_block_stop", "ping"}:
                     continue
+            usage = payload.get("usage")
+            if isinstance(usage, dict) and usage:
+                # The final chunk of an include_usage stream (choices is empty).
+                stream_usage = dict(usage)
             choice = _first_choice(payload)
             delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
             content = str(delta.get("content") or "")
@@ -303,7 +316,7 @@ class ChatOpenAICompatible(BaseChatModel):
                 reasoning_seen,
                 tool_seen,
             )
-        yield ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        yield _final_usage_chunk(stream_usage)
 
     def _stream_via_non_stream(
         self,
@@ -344,7 +357,8 @@ class ChatOpenAICompatible(BaseChatModel):
                 bool(reasoning),
                 bool(tool_calls),
             )
-        yield ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        token_usage = (getattr(message, "response_metadata", None) or {}).get("token_usage")
+        yield _final_usage_chunk(token_usage if isinstance(token_usage, dict) else {})
 
     def _request_body(
         self,
@@ -377,6 +391,8 @@ class ChatOpenAICompatible(BaseChatModel):
         for key in ("temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty"):
             if key in kwargs and kwargs[key] is not None:
                 body[key] = kwargs[key]
+        if stream and _endpoint_stream_usage_supported(self.endpoint):
+            body.setdefault("stream_options", {"include_usage": True})
         _apply_dynamic_reasoning_plan(body, self.reasoning_plan)
         if self.endpoint.get("drop_unsupported_params", True):
             _drop_empty_or_unsupported(body, accepts_tools=accepts_tools)
@@ -799,6 +815,39 @@ def _endpoint_streaming_supported(
         )
         return False
     return True
+
+
+# Servers whose OpenAI-compatible API documents ``stream_options``. Other
+# endpoints (generic, oMLX, LocalAI, LM Studio, llama.cpp, hosted routers)
+# never get the field, since a strict server may reject it; usage they send
+# unasked in a final chunk (llama.cpp does) is still read.
+_STREAM_USAGE_PROFILES = frozenset({"vllm", "sglang", "litellm"})
+
+
+def _endpoint_stream_usage_supported(endpoint: dict[str, Any]) -> bool:
+    profile = str(endpoint.get("profile") or "").strip().lower()
+    return profile in _STREAM_USAGE_PROFILES
+
+
+def _merge_anthropic_stream_usage(usage: dict[str, Any], event_payload: dict[str, Any]) -> None:
+    """Fold ``message_start`` and ``message_delta`` usage into one raw Anthropic record."""
+    message = event_payload.get("message") if isinstance(event_payload.get("message"), dict) else {}
+    for candidate in (message.get("usage"), event_payload.get("usage")):
+        if isinstance(candidate, dict):
+            usage.update({key: value for key, value in candidate.items() if value is not None})
+
+
+def _final_usage_chunk(token_usage: dict[str, Any]) -> ChatGenerationChunk:
+    """The closing chunk, carrying the usage the endpoint reported, if any."""
+    usage_metadata = usage_metadata_from_provider_usage(token_usage)
+    if usage_metadata is None:
+        return ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+    return ChatGenerationChunk(message=AIMessageChunk(
+        content="",
+        chunk_position="last",
+        usage_metadata=usage_metadata,
+        response_metadata={"token_usage": dict(token_usage)},
+    ))
 
 
 def _merge_chat_template_kwargs(body: dict[str, Any], values: dict[str, Any]) -> None:
