@@ -1,14 +1,15 @@
 name: Smoke the macOS app
 description: >-
   Check a built or installed Row-Bot.app (Mach-O host, Info.plist, the tray host's
-  self-test, the bundled Python and client assets) and start its launcher. Shared by
-  release.yml and installer-verify.yml.
+  self-test, the bundled Python and client assets, the seed version's bytecode),
+  start it through the tray host, and check the host's relaunch and rollback
+  rules against state.json. Shared by release.yml and installer-verify.yml.
 inputs:
   app-path:
     description: Path to Row-Bot.app
     required: true
   port:
-    description: Loopback port for the launcher smoke
+    description: Loopback port for the launcher smoke; the layout smoke uses the next one
     required: false
     default: "8097"
 runs:
@@ -42,6 +43,7 @@ runs:
         APP_EXEC="$APP_PATH/Contents/MacOS/row-bot"
         RESOURCES="$APP_PATH/Contents/Resources"
         APP_DIR="$RESOURCES/app"
+        VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")"
         test -x "$APP_EXEC"
         file "$APP_EXEC" | grep -q "Mach-O"
         plutil -lint "$APP_PATH/Contents/Info.plist"
@@ -51,19 +53,35 @@ runs:
           find "$APP_PATH" -maxdepth 5 -path '*/python/bin/*' -print || true
           exit 1
         fi
+        test -f "$RESOURCES/version.json"
+        # The seed version ships hash-based bytecode that is never checked
+        # against the source (flags = 1), so nothing in the bundle is rewritten.
+        PYC="$(find "$APP_DIR/src/row_bot/__pycache__" -name 'install_layout.*.pyc' | head -n 1)"
+        test -n "$PYC"
+        "$PYTHON" -I -c 'import sys; flags = int.from_bytes(open(sys.argv[1], "rb").read()[4:8], "little"); sys.exit(flags != 1)' "$PYC"
         PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 "$PYTHON" "$GITHUB_WORKSPACE/scripts/verify_client_assets.py" \
           --root "$APP_DIR/src/row_bot/static/client-v2" \
           --compare "$GITHUB_WORKSPACE/frontend/dist" --strict
-        # The launcher issues its own launch secret, so the smoke uses the public
-        # probes (B203). Nothing is written into the bundle.
-        ROW_BOT_INSTALL_ROOT="$RESOURCES" \
-        PYTHONNOUSERSITE=1 \
-        PYTHONDONTWRITEBYTECODE=1 \
-        PYTHONIOENCODING=utf-8 \
-        PLAYWRIGHT_BROWSERS_PATH="$RESOURCES/python/playwright-browsers" \
+
+        touch "$RUNNER_TEMP/row-bot-smoke-started"
+        # Staged versions and state.json go to a throwaway install root.
+        export ROW_BOT_INSTALL_ROOT="$(mktemp -d "$RUNNER_TEMP/row-bot-install-root.XXXXXX")"
+        # Start the app the way Finder does, through the tray host. The launcher
+        # issues its own launch secret, so the smoke uses the public probes (B203).
+        # Nothing is written into the bundle.
         python3 scripts/smoke_app.py \
           --port "$SMOKE_PORT" \
           --timeout 180 \
           --public-probes \
           --cwd "$APP_DIR" \
-          -- "$PYTHON" launcher.py --server --no-open --no-splash --no-ollama --port "$SMOKE_PORT"
+          -- "$APP_EXEC" -- --server --no-open --no-splash --no-ollama --port "$SMOKE_PORT"
+
+        # The host relaunches on exit code 75 and rolls back after two failed starts.
+        LAYOUT_PORT="$((SMOKE_PORT + 1))"
+        python3 scripts/smoke_install_layout.py --root "$ROW_BOT_INSTALL_ROOT" --kind macos --port "$LAYOUT_PORT" \
+          --seed "$RESOURCES" --seed-version "$VERSION" \
+          -- "$APP_EXEC" -- --server --no-open --no-splash --no-ollama --port "$LAYOUT_PORT"
+        if [ -n "$(find "$APP_PATH" -newer "$RUNNER_TEMP/row-bot-smoke-started" -name '*.pyc' -print -quit)" ]; then
+          echo "::error::Running the app wrote bytecode into the bundle"
+          exit 1
+        fi
