@@ -19,7 +19,7 @@ Open **Settings**, then choose **Models** in the **Models** group, or search for
 
 Each job has its own picker, using the same grouped, searchable list as the composer's model picker (provider, how it is paid for, and whether it is available):
 
-- **Brain** is the default model for new conversations and background work. A conversation can still choose its own model in the composer.
+- **Brain** is the default model for new conversations and background work. A conversation can still choose its own model in the composer. Background work tied to a conversation, such as checking its goal's progress or compacting it, uses that conversation's model; memory extraction and Dream Cycle use Brain. Either way, Row-Bot uses the lowest reasoning effort that model offers, when it knows the model's reasoning choices.
 - **Vision** reads images, screenshots and your camera. Leave it as **Same as Brain** if your Brain model can see, or choose another model. Choose a **Camera** here too.
 - **Image** makes and edits pictures.
 - **Video** makes short clips and animates pictures.
