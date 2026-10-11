@@ -350,7 +350,7 @@ def test_existing_summary_with_oversized_two_group_tail_ages_preceding_atomic_gr
     assert saved[0]["boundary_message_count"] == 8
     assert [kind for kind, _payload in emitted].count("compaction_succeeded") == 1
     assert all(kind != "compaction_failed" for kind, _payload in emitted)
-    assert (thread_id, inputs.checkpoint_revision) not in agent._COMPACTION_FAILURES
+    assert (thread_id, "agent") not in agent._COMPACTION_FAILURES
 
 
 def test_exact_rebuild_falls_back_once_and_persists_only_final_summary(monkeypatch):
@@ -401,7 +401,7 @@ def test_exact_rebuild_falls_back_once_and_persists_only_final_summary(monkeypat
     assert saved[0]["summary"] == final_summary
     assert [kind for kind, _payload in emitted].count("compaction_succeeded") == 1
     assert all(kind != "compaction_failed" for kind, _payload in emitted)
-    assert (thread_id, inputs.checkpoint_revision) not in agent._COMPACTION_FAILURES
+    assert (thread_id, "agent") not in agent._COMPACTION_FAILURES
 
 
 def test_current_group_too_large_fails_after_one_fallback_without_persisting(monkeypatch):
@@ -444,7 +444,7 @@ def test_current_group_too_large_fails_after_one_fallback_without_persisting(mon
     assert len(summaries) == 2
     assert saved == []
     assert [kind for kind, _payload in emitted].count("compaction_failed") == 1
-    assert (thread_id, inputs.checkpoint_revision) in agent._COMPACTION_FAILURES
+    assert (thread_id, "agent") in agent._COMPACTION_FAILURES
 
 
 def test_compaction_failure_logging_includes_only_known_bounded_reason(monkeypatch, caplog):
