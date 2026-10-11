@@ -163,7 +163,8 @@ Source: "build\version.json";     DestDir: "{#VersionDir}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"
-Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"
+; The desktop shortcut comes with the first install only: an upgrade never brings back one the user removed.
+Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"; Check: IsFirstInstall
 
 [Run]
 ; Starts Row-Bot when Setup is done, also after /SILENT and /VERYSILENT (the
@@ -187,6 +188,10 @@ const
 function MoveFileEx(ExistingFileName, NewFileName: string; Flags: Cardinal): Boolean;
   external 'MoveFileExW@kernel32.dll stdcall';
 
+var
+  FirstInstall: Boolean;
+  LegacyInstallPending: Boolean;
+
 function HasParam(const Name: string): Boolean;
 var
   I: Integer;
@@ -205,6 +210,11 @@ begin
   Result := not HasParam('/NOLAUNCH');
 end;
 
+function IsFirstInstall: Boolean;
+begin
+  Result := FirstInstall;
+end;
+
 function LegacyInstallPresent: Boolean;
 begin
   Result := RegKeyExists(HKLM64, '{#LegacyUninstallKey}') or RegKeyExists(HKLM32, '{#LegacyUninstallKey}');
@@ -219,15 +229,17 @@ begin
 end;
 
 { Removes a Row-Bot installed for all users by an earlier installer, with one
-  administrator prompt, so Apps & features never lists Row-Bot twice. Returns
-  '' when there is nothing left to remove. }
-function RemoveLegacyInstall: string;
+  administrator prompt, so Apps & features does not list Row-Bot twice. Returns
+  False when it is still there: the prompt was declined, or the user is not an
+  administrator. The per-user install goes ahead anyway; state.json records
+  legacy_install_pending so the app can offer to remove it later. }
+function RemoveLegacyInstall: Boolean;
 var
   Uninstaller: string;
   ResultCode, Waited: Integer;
   Started: Boolean;
 begin
-  Result := '';
+  Result := True;
   if not LegacyInstallPresent then
     Exit;
   Uninstaller := LegacyUninstaller;
@@ -241,9 +253,9 @@ begin
       'delete "HKLM\{#LegacyUninstallKey}" /f /reg:64', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if not Started then
   begin
-    Log(Format('Could not remove the earlier Row-Bot (%d: %s)', [ResultCode, SysErrorMessage(ResultCode)]));
-    Result := 'Row-Bot first removes the earlier version installed for all users, which needs an administrator''s approval. ' +
-      'Run this installer again and approve the prompt, or uninstall Row-Bot from Settings > Apps first. Your data is kept either way.';
+    Log(Format('Could not remove the earlier Row-Bot (%d: %s); installing for this user anyway',
+      [ResultCode, SysErrorMessage(ResultCode)]));
+    Result := False;
     Exit;
   end;
   { The uninstaller hands over to a copy of itself, so wait until its entry is gone. }
@@ -253,11 +265,11 @@ begin
     Sleep(500);
     Waited := Waited + 500;
   end;
-  if LegacyInstallPresent then
-    Result := 'Row-Bot could not remove the earlier version installed for all users. ' +
-      'Uninstall Row-Bot from Settings > Apps, then run this installer again. Your data is kept either way.'
+  Result := not LegacyInstallPresent;
+  if Result then
+    Log('The Row-Bot installed for all users was removed.')
   else
-    Log('The Row-Bot installed for all users was removed.');
+    Log('The Row-Bot installed for all users is still there; installing for this user anyway');
 end;
 
 { A running Row-Bot.exe cannot be replaced, but it can be renamed; the new one
@@ -277,9 +289,11 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  Result := RemoveLegacyInstall;
-  if Result = '' then
-    MoveRunningLauncherAside;
+  Result := '';
+  FirstInstall := not FileExists(ExpandConstant('{app}\state.json')) and
+    not FileExists(ExpandConstant('{app}\Row-Bot.exe'));
+  LegacyInstallPending := not RemoveLegacyInstall;
+  MoveRunningLauncherAside;
 end;
 
 { state.json: this version becomes active and the one it replaces stays as
@@ -287,12 +301,18 @@ end;
   Older versions are deleted. }
 procedure RecordInstall;
 var
-  Python, Params, State: string;
+  Python, Params, State, Pending: string;
   ResultCode: Integer;
 begin
   Python := ExpandConstant('{#VersionDir}\python\python.exe');
   Params := '-I -S "' + ExpandConstant('{#VersionDir}\app\src\row_bot\install_layout.py') +
     '" record-install --root "' + ExpandConstant('{app}') + '" --kind windows --version {#MyAppVersion} --prune';
+  Pending := '';
+  if LegacyInstallPending then
+  begin
+    Params := Params + ' --legacy-install-pending';
+    Pending := ', "legacy_install_pending": true';
+  end;
   if Exec(Python, Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
   begin
     Log('Recorded the install in state.json');
@@ -301,7 +321,8 @@ begin
   Log(Format('install_layout record-install failed (%d); writing a minimal state.json', [ResultCode]));
   State := ExpandConstant('{app}\state.json');
   if SaveStringToFile(State + '.setup.tmp', '{"schema": 1, "active": "{#MyAppVersion}", "previous": null, ' +
-    '"ready": null, "pending_verification": false, "unverified_launches": 0, "last_rollback": null}' + #10, False) then
+    '"ready": null, "pending_verification": false, "unverified_launches": 0, "last_rollback": null' + Pending + '}' + #10,
+    False) then
     MoveFileEx(State + '.setup.tmp', State, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH);
 end;
 

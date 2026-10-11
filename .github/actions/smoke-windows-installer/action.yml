@@ -66,8 +66,13 @@ runs:
           if (Test-Path (Join-Path $root $gone)) { throw "The old layout's $gone is still installed" }
         }
         $state = Get-Content (Join-Path $root "state.json") -Raw | ConvertFrom-Json
-        if ($state.active -ne $version -or $state.pending_verification) {
+        if ($state.active -ne $version -or $state.pending_verification -or $state.legacy_install_pending) {
           throw "state.json does not name $version as the active, verified version: $($state | ConvertTo-Json -Compress)"
+        }
+        $startMenuShortcut = Join-Path ([Environment]::GetFolderPath("Programs")) "Row-Bot.lnk"
+        $desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Row-Bot.lnk"
+        foreach ($shortcut in @($startMenuShortcut, $desktopShortcut)) {
+          if (!(Test-Path $shortcut)) { throw "The first install did not create $shortcut" }
         }
         $uninstallKey = "Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
         if (!(Test-Path "HKCU:\$uninstallKey")) { throw "No per-user Apps & features entry" }
@@ -110,7 +115,7 @@ runs:
           -- "$launcher" --server --no-open --no-splash --no-ollama --port $env:SMOKE_PORT
         if ($LASTEXITCODE -ne 0) { throw "Installed launcher smoke failed." }
 
-        # Row-Bot.exe relaunches on exit code 75 and rolls back after two failed starts.
+        # Row-Bot.exe relaunches on exit code 75 and follows the shared launch cases.
         $layoutPort = [int]$env:SMOKE_PORT + 1
         python scripts/smoke_install_layout.py --root "$root" --kind windows --port $layoutPort `
           -- "$launcher" --server --no-open --no-splash --no-ollama --port $layoutPort
@@ -118,6 +123,8 @@ runs:
 
         # Without /NOLAUNCH even a silent install starts Row-Bot (the 5.1 updater
         # runs the installer silently). Reinstall this version and look for it.
+        # An upgrade or reinstall never brings back a desktop shortcut the user removed.
+        Remove-Item -LiteralPath $desktopShortcut
         $env:ROW_BOT_DATA_DIR = Join-Path $env:RUNNER_TEMP "row-bot-after-install"
         # Start-Process -Wait would also wait for Row-Bot, which Setup starts and leaves running.
         $setup = [System.Diagnostics.Process]::Start($installer.FullName, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART `"/LOG=$installLog`"")
@@ -141,6 +148,8 @@ runs:
         if (-not ($started | Where-Object { $_.Name -eq "Row-Bot.exe" })) { throw "The silent install did not start Row-Bot.exe" }
         if (-not $healthy) { throw "Row-Bot started after the silent install never answered /healthz" }
         Write-Host "The silent install started Row-Bot; it answered on port $healthy"
+        if (Test-Path $desktopShortcut) { throw "The reinstall brought back the desktop shortcut" }
+        if (!(Test-Path $startMenuShortcut)) { throw "The reinstall removed the Start menu shortcut" }
 
     - name: Uninstall the Windows package
       shell: pwsh

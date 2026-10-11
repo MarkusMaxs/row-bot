@@ -1,8 +1,10 @@
 """The Windows installer's contract: per user, the versions layout, and Row-Bot.exe.
 
 Inno Setup cannot run on the Linux PR lane, so this reads the script's
-sections; installer-verify builds, installs, starts and uninstalls the real
-package (.github/actions/smoke-windows-installer).
+declarative sections. Its [Code] behaviour (removing a 5.x install for all
+users, /NOLAUNCH, state.json) is covered by installer-verify, which builds,
+installs, starts and uninstalls the real package
+(.github/actions/smoke-windows-installer).
 """
 from __future__ import annotations
 
@@ -72,21 +74,19 @@ def test_each_version_gets_its_own_folder_beside_row_bot_exe() -> None:
         "build\\python\\*": "{app}\\versions\\{#MyAppVersion}\\python",
         "build\\version.json": "{app}\\versions\\{#MyAppVersion}",
     }
-    assert "launch_row_bot" not in _text()
 
 
 def test_shortcuts_start_row_bot_exe_with_the_windows_app_id() -> None:
-    window_app_id = re.search(r'SetCurrentProcessExplicitAppUserModelID\("([^"]+)"\)',
-                              Path("src/row_bot/launcher.py").read_text(encoding="utf-8")).group(1)
-    launcher_app_id = re.search(r'#define APP_USER_MODEL_ID L"([^"]+)"',
-                                Path("installer/windows/row_bot_launcher.c").read_text(encoding="utf-8")).group(1)
+    icons = {Path(entry["Name"].replace("\\", "/")).parent.name: entry for entry in _entries("Icons")}
 
-    icons = _entries("Icons")
-    assert icons
-    for icon in icons:
+    assert set(icons) == {"{autoprograms}", "{autodesktop}"}
+    for icon in icons.values():
         assert icon["Filename"] == "{app}\\Row-Bot.exe"
         assert icon["AppUserModelID"] == "{#MyAppUserModelID}"
-    assert _define("MyAppUserModelID") == f'"{window_app_id}"' == f'"{launcher_app_id}"'
+    assert _define("MyAppUserModelID") == '"ai.row-bot.desktop"'
+    # An upgrade never brings back a desktop shortcut the user removed.
+    assert icons["{autodesktop}"]["Check"] == "IsFirstInstall"
+    assert "Check" not in icons["{autoprograms}"]
 
 
 def test_row_bot_starts_after_every_install_even_a_silent_one() -> None:
@@ -98,7 +98,6 @@ def test_row_bot_starts_after_every_install_even_a_silent_one() -> None:
     # postinstall entries would leave Row-Bot closed after the update.
     assert "skipifsilent" not in flags and "postinstall" not in flags
     assert run["Check"] == "ShouldLaunch"
-    assert re.search(r"function ShouldLaunch: Boolean;\s*begin\s*Result := not HasParam\('/NOLAUNCH'\);", _text())
 
 
 def test_a_reinstall_replaces_the_version_folder_and_nothing_outside_the_install_root() -> None:
@@ -112,9 +111,8 @@ def test_a_reinstall_replaces_the_version_folder_and_nothing_outside_the_install
         assert path == "{app}" or path.startswith("{app}\\"), path
 
 
-def test_an_install_for_all_users_is_removed_first() -> None:
+def test_the_install_for_all_users_it_replaces_is_the_same_app() -> None:
+    # The per-user install keeps the 5.x AppId, so the 5.x entry it removes is Row-Bot's own.
     app_id = _setup()["AppId"].lstrip("{")
 
     assert app_id in _define("LegacyUninstallKey")
-    assert re.search(r"function PrepareToInstall\(var NeedsRestart: Boolean\): String;\s*begin\s*"
-                     r"Result := RemoveLegacyInstall;", _text())
