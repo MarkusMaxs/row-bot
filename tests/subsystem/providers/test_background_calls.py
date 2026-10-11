@@ -41,6 +41,10 @@ def _fresh_process_memory(monkeypatch):
     monkeypatch.setattr(thinking_binding, "_REJECTED_ROUTES", set())
     # The routes Row-Bot ships, never the machine's own provider settings.
     monkeypatch.setattr(routing, "load_provider_config", lambda: normalize_provider_config({}))
+    # Outside a turn: an earlier test's streamed turn can leave its model set in this thread.
+    token = models._active_model_override.set(None)
+    yield
+    models._active_model_override.reset(token)
 
 
 class _HttpError(RuntimeError):

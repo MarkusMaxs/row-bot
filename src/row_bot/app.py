@@ -251,7 +251,10 @@ async def _repair_orchestration_recovery_batch(after_id: str = "") -> None:
 
 
 async def _continue_goals_after_restart() -> None:
-    """Active goals go on from their last saved turn once Row-Bot is ready (B244)."""
+    """After a restart Row-Bot caused, goals left working go on once it is ready.
+
+    After a normal launch they stay paused (decision D4): start-up paused them.
+    """
 
     from row_bot.application.client_platform import client_platform_service
     from row_bot.application.conversation_followups import continue_goals_after_restart

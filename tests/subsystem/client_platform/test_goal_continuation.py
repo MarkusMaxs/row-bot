@@ -289,11 +289,13 @@ def test_pause_keeps_the_running_turn_and_starts_nothing_after_it(goal_setup):
     assert goals.get_goal(goal["id"])["status"] == "paused"
 
 
-def test_an_active_goal_continues_after_a_restart_from_its_last_saved_turn(goal_setup):
-    """B244: overnight goals keep going when Row-Bot restarts."""
+def test_an_active_goal_continues_after_a_restart_row_bot_caused(goal_setup, monkeypatch):
+    """B244 and D4: after a restart Row-Bot caused (applying an update), a goal goes on from its
+    last saved turn. A normal launch pauses it instead (tests/subsystem/agents/test_goal_pause_rules.py)."""
     from row_bot import goals, tasks
-    from row_bot.application import conversation_followups
+    from row_bot.application import conversation_followups, startup_state
     platform, verdicts = goal_setup
+    monkeypatch.setattr(startup_state, "last_exit_was_app_initiated", lambda: True)
     goal = goals.start_goal(CONVERSATION, "Survive a restart")
     goals.update_goal_progress(goal_id=goal["id"], progress="Two of three notes written.")
     channel_goal = goals.start_goal("channel-thread", "Answer on the channel")

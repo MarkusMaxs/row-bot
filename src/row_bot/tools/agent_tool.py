@@ -108,6 +108,47 @@ def _initial_parent_continuation(
     return continuation, delivery
 
 
+def _fence_child_text(text: str) -> str:
+    """Text a child Agent wrote (its answer, an error it reported), fenced and scanned.
+
+    A child may repeat what a page or file it read said, so its text reaches the
+    parent like any outside content (S0 decision 2, WP C3). Only the child's text
+    is fenced: Row-Bot's own fields and hints in the same result stay outside it.
+    """
+    text = str(text or "")
+    if not text:
+        return ""
+    from row_bot.agent import _wrap_untrusted_tool_content
+
+    return _wrap_untrusted_tool_content("child_agent", text)
+
+
+def _public_events(events: list[dict[str, Any]], run: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """A run's events for the parent: a child's text in them once, bounded and fenced.
+
+    A run's final event repeats its summary and error, which the run itself
+    already shows; those copies are left out.
+    """
+    shown = {str((run or {}).get(key) or "").strip() for key in ("summary", "error")} - {""}
+    public = []
+    for event in events or []:
+        event = dict(event)
+        payload = event.get("payload_json")
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            for key in ("summary", "error"):
+                value = str(payload.get(key) or "").strip()
+                if not value or value in shown:
+                    payload.pop(key, None)
+                else:
+                    payload[key] = _fence_child_text(agent_runner.bounded_child_result(value))
+            if str(payload.get("status_message") or "").strip() in shown:
+                payload.pop("status_message", None)
+            event["payload_json"] = payload
+        public.append(event)
+    return public
+
+
 def _public_run(run: dict[str, Any] | None) -> dict[str, Any]:
     if not run:
         return {}
@@ -138,11 +179,14 @@ def _public_run(run: dict[str, Any] | None) -> dict[str, Any]:
                 })
         except Exception:
             pass
-    return {
+    # The child's answer, bounded, each text once (F42) and fenced; the pointer to the
+    # whole answer is Row-Bot's own note, outside the fence.
+    result = agent_runner.parent_view_of_result(run, point_to_full=False)
+    public = {
         "id": run.get("id", ""),
         "kind": run.get("kind", ""),
         "status": run.get("status", ""),
-        "status_message": run.get("status_message", ""),
+        "status_message": result["status_message"],
         "display_name": run.get("display_name", ""),
         "thread_id": run.get("thread_id", ""),
         "parent_thread_id": run.get("parent_thread_id", ""),
@@ -162,14 +206,17 @@ def _public_run(run: dict[str, Any] | None) -> dict[str, Any]:
         "model_iterations_max": run.get("model_iterations_max", 0),
         "terminal_reason": run.get("terminal_reason", ""),
         "depth": run.get("depth", 0),
-        "summary": run.get("summary", ""),
-        "error": run.get("error", ""),
+        "summary": _fence_child_text(result["summary"]),
+        "error": _fence_child_text(result["error"]),
         "model_override": run.get("model_override", ""),
         "workspace": workspace,
         "stop_requested": bool(run.get("stop_requested", False)),
         "parent_message_count": len(parent_messages),
         "latest_parent_message": parent_messages[-1] if parent_messages else "",
     }
+    if result["shortened"]:
+        public["result_note"] = f"The child's text above is shortened. {agent_runner.full_result_hint(run_id)}"
+    return public
 
 
 def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -327,6 +374,10 @@ class _AgentStatusInput(BaseModel):
     statuses: list[str] = Field(default=[], description="Optional statuses to filter by.")
     include_events: bool = Field(default=False, description="Include recent event log entries.")
     limit: int = Field(default=10, description="Maximum runs or events to return.")
+    full_result: bool = Field(
+        default=False,
+        description="With run_id: also return the child's whole final answer (results are otherwise shortened).",
+    )
 
 
 class _AgentWaitInput(BaseModel):
@@ -584,6 +635,19 @@ def _delegate_work(
     })
 
 
+def _public_orchestration(orchestration: dict[str, Any]) -> dict[str, Any]:
+    """An orchestration overview with each member's run as the parent reads it (bounded results)."""
+    if not orchestration:
+        return {}
+    members = []
+    for member in orchestration.get("members") or []:
+        member = dict(member)
+        if isinstance(member.get("run"), dict):
+            member["run"] = _public_run(member["run"])
+        members.append(member)
+    return {**orchestration, "members": members}
+
+
 def _agent_status(
     run_id: str = "",
     orchestration_id: str = "",
@@ -591,19 +655,22 @@ def _agent_status(
     statuses: list[str] | None = None,
     include_events: bool = False,
     limit: int = 10,
+    full_result: bool = False,
 ) -> str:
     runtime = _runtime_context()
     parent_thread_id = parent_thread_id or str(runtime.get("thread_id") or "")
     if orchestration_id:
         from row_bot.agent_orchestrator import orchestration_overview
 
-        orchestration = orchestration_overview(orchestration_id)
+        orchestration = _public_orchestration(orchestration_overview(orchestration_id))
         return _json_response({"ok": bool(orchestration), "orchestration": orchestration})
     if run_id:
         run = get_agent_run(run_id)
         payload: dict[str, Any] = {"ok": bool(run), "run": _public_run(run)}
+        if full_result and run:
+            payload["full_result"] = _fence_child_text(agent_runner.full_child_result(run))
         if include_events and run:
-            payload["events"] = get_agent_events(run_id, limit=limit)
+            payload["events"] = _public_events(get_agent_events(run_id, limit=limit), run)
         return _json_response(payload)
     runs = list_agent_runs(
         parent_thread_id=parent_thread_id or None,
@@ -719,7 +786,7 @@ def _agent_wait(
     run = agent_runner.wait_for_agent_run(run_id, timeout=timeout_seconds)
     payload: dict[str, Any] = {"ok": bool(run), "run": _public_run(run)}
     if include_events and run:
-        payload["events"] = get_agent_events(run_id, limit=20)
+        payload["events"] = _public_events(get_agent_events(run_id, limit=20), run)
     return _json_response(payload)
 
 
@@ -729,7 +796,7 @@ def _agent_stop(run_id: str = "", orchestration_id: str = "") -> str:
             from row_bot.agent_orchestrator import stop_orchestration
 
             orchestration = stop_orchestration(orchestration_id, run_id=run_id)
-            return _json_response({"ok": True, "orchestration": orchestration})
+            return _json_response({"ok": True, "orchestration": _public_orchestration(orchestration)})
         except Exception as exc:
             return _json_response({"ok": False, "message": str(exc)})
     if not run_id:
@@ -907,9 +974,16 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
             apply_default_skills=False,
         )
         task = tasks_db.get_task(task_id)
+        workflow = _public_workflow(task)
+        # The step's prompt quotes the child's summary: shown fenced, as data for review.
+        workflow["steps"] = [
+            {**step, "prompt": _fence_child_text(step["prompt"])}
+            if isinstance(step, dict) and step.get("prompt") else step
+            for step in workflow.get("steps") or []
+        ]
         return _json_response({
             "ok": True,
-            "workflow": _public_workflow(task),
+            "workflow": workflow,
             "message": "Workflow promoted as a disabled manual workflow. Review before enabling.",
         })
     return _json_response({

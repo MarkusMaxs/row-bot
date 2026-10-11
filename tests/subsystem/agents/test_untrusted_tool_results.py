@@ -5,11 +5,13 @@ Prompt-injection defence: keep these in the pull request lane (not ``slow``).
 from __future__ import annotations
 
 import contextvars
+import json
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import row_bot.agent as agent
+import row_bot.tools.agent_tool  # noqa: F401  (registers the Agents tools)
 import row_bot.tools.developer_tool  # noqa: F401  (registers the Developer tools)
 from row_bot.agent_budget import new_execution_budget
 from row_bot.tools import registry as tool_registry
@@ -98,3 +100,26 @@ def test_results_of_row_bots_own_tools_reach_the_model_unchanged(monkeypatch) ->
     seen = _model_view_of_tool_results(monkeypatch, {calculate: "42", "save_memory": "Saved."})
 
     assert seen == {calculate: "42", "save_memory": "Saved."}
+
+
+def test_row_bots_own_knowledge_stays_unfenced(monkeypatch) -> None:
+    """Saved memories and the wiki hold the person's preferences, which the model should follow."""
+    raw = {"wiki_read": "The person prefers British spelling.", "search_memory": "Prefers short answers."}
+
+    assert _model_view_of_tool_results(monkeypatch, raw) == raw
+
+
+def test_agents_results_keep_row_bots_hints_outside_the_fence(monkeypatch) -> None:
+    """The agents tools fence only the child's own text inside their results (WP C3), so Row-Bot's
+    hints next to it ("call agent_wait") stay instructions the model can follow."""
+    names = {"delegate_work", "agent_status", "agent_wait", "agent_stop", "agent_promote"}
+    assert not names & set(tool_registry.get_tool("agents").untrusted_tool_names)
+    results = {
+        name: json.dumps({
+            "run": {"summary": agent._wrap_untrusted_tool_content("child_agent", f"{name} answer. {INJECTION}")},
+            "next_action": "Before finalizing, call agent_wait(orchestration_id='orchestration-1').",
+        })
+        for name in ("delegate_work", "agent_wait")
+    }
+
+    assert _model_view_of_tool_results(monkeypatch, results) == results

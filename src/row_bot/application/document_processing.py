@@ -41,6 +41,18 @@ class DocumentWorkerPolicy:
     invoke: Callable[[str], str]
     validate: Callable[[], None]
     add_source_guard: Callable[[Callable[[], None]], None]
+    # How much input the captured model takes: it sizes the map windows (WP C3).
+    usable_input_tokens: int | None = None
+
+
+def _usable_input_tokens(chat: Any) -> int | None:
+    """The captured model's usable input in tokens, read from cached catalog data only."""
+    try:
+        from row_bot.models import get_context_policy
+
+        return get_context_policy(chat.resolved.selection_ref, allow_probe=False).usable_input_tokens
+    except Exception:
+        return None
 
 
 class DocumentProcessingPolicy:
@@ -183,7 +195,8 @@ class DocumentProcessingPolicy:
                     response = model.invoke([HumanMessage(content=prompt)])
                 validate()
                 return response.content
-            yield DocumentWorkerPolicy(deepcopy(captured.embedding.config), embedding, invoke, validate, source_guards.append)
+            yield DocumentWorkerPolicy(deepcopy(captured.embedding.config), embedding, invoke, validate, source_guards.append,
+                                       _usable_input_tokens(captured.chat))
 
 
 def read_document_processing_command(*, command_id: str, policy: DocumentProcessingPolicy) -> dict:

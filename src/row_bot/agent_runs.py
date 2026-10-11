@@ -181,7 +181,8 @@ _CREATE_TABLE_SQL: dict[str, str] = {
             failing_step_count INTEGER DEFAULT 0,
             max_minutes INTEGER DEFAULT 0,
             window_started_at TEXT DEFAULT '',
-            tokens_counted_through TEXT DEFAULT ''
+            tokens_counted_through TEXT DEFAULT '',
+            token_window_start INTEGER DEFAULT 0
         )
     """,
     "agent_orchestrations": """
@@ -360,6 +361,9 @@ _COLUMN_DEFINITIONS: dict[str, dict[str, str]] = {
         "window_started_at": "TEXT DEFAULT ''",
         # The last assistant message whose tokens were added to tokens_used.
         "tokens_counted_through": "TEXT DEFAULT ''",
+        # tokens_used when the goal's token budget window began (Resume at the
+        # budget starts a new window, like the time limit's window_started_at).
+        "token_window_start": "INTEGER DEFAULT 0",
     },
     "agent_orchestrations": {
         "id": "TEXT PRIMARY KEY",
