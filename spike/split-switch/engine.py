@@ -315,6 +315,9 @@ def clone_tree(src: Path, dst: Path, method: str, skip: set[str] | None = None, 
     posix paths relative to src that are left out (hardlink/copy only)."""
     if dst.exists():
         raise StageError("clone", f"destination exists: {dst}")
+    if ":" in method:  # e.g. "hardlink:32" = hard links with 32 threads
+        method, _, threads = method.partition(":")
+        jobs = int(threads)
     started = time.time()
     counts = {"files": 0, "dirs": 0, "symlinks": 0, "skipped": 0}
     if method == "clonefile":
@@ -359,7 +362,7 @@ def clone_tree(src: Path, dst: Path, method: str, skip: set[str] | None = None, 
         counts["files"] = len(work)
     else:
         raise StageError("clone", f"unknown clone method {method}")
-    return {"method": method, "seconds": round(time.time() - started, 2), **counts}
+    return {"method": method, "threads": jobs, "seconds": round(time.time() - started, 2), **counts}
 
 
 # --------------------------------------------------------------------------- dists, plan

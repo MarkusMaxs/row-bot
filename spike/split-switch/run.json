@@ -1,1 +1,1 @@
-{"windows": false, "macos": true, "linux": true, "notarize": false, "kit_artifact": false, "only": [], "note": "run 3: macOS payload fix + real native window; Linux system libraries"}
+{"windows": true, "macos": false, "linux": false, "notarize": false, "kit_artifact": false, "only": [], "note": "run 4: Windows with the host loop-guard fix, hard-link thread variants, archive-vs-installed check"}

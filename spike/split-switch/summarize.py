@@ -103,7 +103,7 @@ def clone_rows(osname: str, sc: dict) -> None:
         if not name.startswith(("clone_", "defender_clone_")) or "method" not in r:
             continue
         print(
-            f"| {name} | {r['method']} | {r['size']['files']:,} | {r['seconds']} | {mb(r['disk_free_delta_bytes'])} | {mb(r['size']['bytes_not_shared_by_inode'])} "
+            f"| {name} | {r["method"]}{(":" + str(r["threads"])) if r.get("threads") else ""} | {r["size"]["files"]:,} | {r['seconds']} | {mb(r['disk_free_delta_bytes'])} | {mb(r['size']['bytes_not_shared_by_inode'])} "
             f"| {r['rename'].get('ok')} | {r['delete']['seconds']} | {r['delete']['failure_count']} |"
         )
 

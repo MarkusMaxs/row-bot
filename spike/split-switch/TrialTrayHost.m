@@ -290,14 +290,15 @@ static NSString *HTTPGet(NSString *urlString, NSTimeInterval timeout) {
 }
 
 - (void)launchPrimary {
+    // Loop guard: launches in a row that never reached ready (reset once verified).
     if (self.launches >= RowBotMaxLaunches) {
-        TrialLog(@"max_launches_reached");
+        TrialLog(@"max_unverified_launches_reached");
         return;
     }
     self.launches += 1;
     [self resolveVersionApplyingRule:YES];
     NSString *logPath = [TrialRoot() stringByAppendingPathComponent:
-                         [NSString stringWithFormat:@"launcher-%@-%ld.log", self.activeVersion, (long)self.launches]];
+                         [NSString stringWithFormat:@"launcher-%@-%.0f.log", self.activeVersion, [[NSDate date] timeIntervalSince1970] * 1000]];
     self.verified = NO;
     self.spawnedAt = [NSDate date];
     NSTask *task = [self runPython:self.launchArguments inDir:self.versionDir wait:NO output:logPath];
@@ -333,6 +334,7 @@ static NSString *HTTPGet(NSString *urlString, NSTimeInterval timeout) {
         return;
     }
     self.verified = YES;
+    self.launches = 0;
     [timer invalidate];
     TrialLog(@"ready version=%@ seconds=%.2f", version, [[NSDate date] timeIntervalSinceDate:self.spawnedAt]);
     NSMutableDictionary *state = ReadState();

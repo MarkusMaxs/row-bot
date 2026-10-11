@@ -188,10 +188,42 @@ class Trial:
             "assets_content_sha256": engine.content_hash(base / "app"),
             "manifest_assets_content_sha256": self.manifest["assets"]["content_sha256"],
         }
+        out["archives_vs_installed_5_0_0"] = self.archives_vs_installed(base / "app")
         t = time.time()
         self.base_manifest = {p: engine.tree_manifest(base / p) for p in ("python", "app")}
         out["hash_seconds"] = round(time.time() - t, 1)
         self.base_inodes = engine.inode_set(base)
+        return out
+
+    def archives_vs_installed(self, app: Path) -> dict:
+        """Per file: is the 5.1.0 archive content identical to what 5.0.0 installed,
+        different only by line endings (CRLF from a Windows checkout), or changed?"""
+        import tarfile
+
+        out: dict = {}
+        for part in ("code", "assets"):
+            counts = {"same": 0, "line_endings_only": 0, "changed": 0, "new": 0}
+            examples: dict[str, list] = {"line_endings_only": [], "changed": [], "new": []}
+            with tarfile.open(self.parts / self.manifest[part]["file"]) as tar:
+                for member in tar:
+                    if not member.isfile():
+                        continue
+                    data = tar.extractfile(member).read()
+                    path = app / member.name
+                    if not path.exists():
+                        kind = "new"
+                    else:
+                        current = path.read_bytes()
+                        if current == data:
+                            kind = "same"
+                        elif current.replace(b"\r\n", b"\n") == data.replace(b"\r\n", b"\n"):
+                            kind = "line_endings_only"
+                        else:
+                            kind = "changed"
+                    counts[kind] += 1
+                    if kind != "same" and len(examples[kind]) < 8:
+                        examples[kind].append(member.name)
+            out[part] = {**counts, "examples": examples}
         return out
 
     def base_integrity(self) -> dict:
@@ -489,7 +521,8 @@ class Trial:
         )
         rep["label"] = label
         net = self.proxy.snapshot()
-        allowed = {"pypi.org", "files.pythonhosted.org", "download.pytorch.org"}
+        # PLAN.md's list plus the host download.pytorch.org redirects wheel downloads to.
+        allowed = {"pypi.org", "files.pythonhosted.org", "download.pytorch.org", "download-r2.pytorch.org"}
         net["hosts_outside_allow_list"] = sorted(h for h in net["hosts"] if h not in allowed)
         rep["network"] = net
         ready_name = rep.get("ready_version", label)
@@ -512,7 +545,7 @@ class Trial:
 
     def clone_only(self, method: str) -> dict:
         base = self.layout.version_root(BASE)
-        dst = self.layout.versions / f"clone-test-{method}"
+        dst = self.layout.versions / f"clone-test-{method.replace(':', '-')}"
         if dst.exists():
             engine.rmtree(dst)
         free = shutil.disk_usage(self.root).free
@@ -801,7 +834,7 @@ def main() -> int:
     def want(name: str) -> bool:
         return not only or name in only
 
-    clone_methods = {"windows": ["hardlink", "copy"], "linux": ["hardlink", "copy"], "macos": ["clonefile", "cp-c", "copy"]}[args.os]
+    clone_methods = {"windows": ["hardlink", "hardlink:1", "hardlink:32", "copy"], "linux": ["hardlink", "copy"], "macos": ["clonefile", "cp-c", "copy"]}[args.os]
     fast = "clonefile" if IS_MAC else "hardlink"
 
     if "error" in trial.scenario("install_base", trial.install_base):
@@ -845,7 +878,7 @@ def main() -> int:
     if args.os == "windows" and want("defender"):
         trial.scenario("defender_on", trial.defender, True)
         trial.scenario("defender_restart_app", lambda: {"stop": trial.stop_app(), "start": trial.start_app()})
-        for method in clone_methods:
+        for method in ("hardlink", "copy"):
             trial.scenario(f"defender_clone_{method}", trial.clone_only, method)
         for tool in ("uv", "pip"):
             trial.scenario(f"defender_stage_{tool}_plan_{fast}", trial.stage, tool, "plan", fast, switch=True)

@@ -129,7 +129,8 @@ def main() -> int:
     root = args.root
     log(args.log, "host_start", argv=sys.argv, launcher_args=launcher_args)
     launches = 0
-    while launches < args.max_launches:
+    unverified = 0  # launches in a row that never reached ready (a loop guard, not a total)
+    while unverified < args.max_launches:
         state, _ = resolve_active(root, args.layout)
         state, rollback = engine.launch_decision(state)
         if rollback and args.layout == "linux":
@@ -161,6 +162,7 @@ def main() -> int:
             time.sleep(0.1)
         code = proc.poll()
         log(args.log, "launcher_exited", version=version, rc=code, verified=verified)
+        unverified = 0 if verified else unverified + 1
         # Nothing from the stopped version may survive the switch.
         vroot = root / ("releases" if args.layout == "linux" else "versions") / version
         deadline = time.time() + args.old_process_wait
