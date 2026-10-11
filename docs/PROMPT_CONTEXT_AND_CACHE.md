@@ -249,6 +249,17 @@ Tool results are bounded once, when they are created (`row_bot/tool_outputs.py`)
 - `workspace_read_file`, `developer_read_file`, `developer_get_diff` and
   `read_url` page with `offset` and `limit`. Their budgets are fixed: they do
   not grow with the context window.
+- An MCP result is shown whole up to its server's `output_limit` (24,000
+  characters by default); a longer one keeps its head and tail with a handle,
+  as above, instead of being cut.
+- A result the client renders keeps its payload out of the model's text
+  (`row_bot/rendered_results.py`). A chart's Plotly figure moves to the
+  ToolMessage's `artifact`, which is never sent to a provider; the transcript
+  projection reads it there, and from the text for results stored before. The
+  model reads a summary instead (type, title, axes, traces with their points and
+  ranges) naming a handle that `read_tool_output` reads the figure from. A
+  plugin's image is shown to the person as generated images are, and the model
+  reads its caption.
 
 The untrusted-content fence is added when the model reads a result, after the
 cap, so the cap never cuts it.

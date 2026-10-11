@@ -44,8 +44,6 @@ MAX_SAVED_PER_THREAD = 200
 _FOLDER = "tool_outputs"
 _HANDLE = re.compile(r"out_[0-9a-f]{16}")
 _SAFE_SEGMENT = re.compile(r"[A-Za-z0-9_.-]{1,96}")
-# Results the client renders from the message itself; their payload is not the model's text.
-_RENDERED_PREFIXES = ("__CHART__:", "__HTML__:", "__IMAGE__:")
 # Results Row-Bot reads back from the conversation as JSON (agent orchestration); bounding child
 # results belongs to the orchestrator, so these are never cut here.
 _PARSED_RESULT_TOOLS = frozenset({"delegate_work", "agent_wait"})
@@ -283,26 +281,51 @@ def bounded(
     return f"{notice}\n{head}\n{omitted}\n{tail}"
 
 
-def is_client_rendered(text: str) -> bool:
-    return str(text).startswith(_RENDERED_PREFIXES)
+# The notice ``bounded`` puts first when it saved the full text.
+_SAVED_NOTICE = re.compile(
+    r"\[[^\n]{0,300} output is [\d,]+ characters; showing the first [\d,]+ and the last [\d,]+\. "
+    r"The full output is saved as (out_[0-9a-f]{16}): [^\n]*\]\n"
+)
+
+
+def full_text(text: str, *, thread_id: str, max_chars: int) -> str:
+    """The whole of a result ``bounded`` shortened, read back from its conversation's saved output.
+
+    *text* itself when it wasn't shortened, its saved output is gone, or the whole is longer than
+    *max_chars*. For a reader outside the model (an app's view of its own result), not the model.
+    """
+    match = _SAVED_NOTICE.match(str(text))
+    if match is None:
+        return text
+    path = _thread_folder(thread_id) / f"{match.group(1)}.txt"
+    try:
+        if path.stat().st_size > max_chars * 4:
+            return text
+        whole = path.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return text
+    return whole if len(whole) <= max_chars else text
 
 
 def cap_tool_message(message: Any, *, thread_id: str | None = None, source: str = "") -> Any:
     """Bound a freshly created ToolMessage's text to ``RESULT_CAP_CHARS``.
 
     *source* is the tool that really ran (a ``tool_invoke`` call names its target); it
-    defaults to the message's name. Results the client renders from the message (charts,
-    HTML, images) and pages of the reader itself are left as they are. Images and other
-    non-text blocks are kept.
+    defaults to the message's name. A chart's figure or a plugin's image first moves out of
+    the text to the client (``rendered_results``, WP D2), so the model reads a summary. Pages
+    of the reader itself are left as they are. Images and other non-text blocks are kept.
     """
-    content = getattr(message, "content", None)
+    from row_bot.rendered_results import move_rendered_payload
+
     name = str(getattr(message, "name", "") or "")
     source = source or name
+    message = move_rendered_payload(message, source=source, thread_id=thread_id)
+    content = getattr(message, "content", None)
     if READER_TOOL_NAME in {name, source} or {name, source} & _PARSED_RESULT_TOOLS:
         return message
 
     def cap(text: str) -> str:
-        if len(text) <= RESULT_CAP_CHARS or is_client_rendered(text):
+        if len(text) <= RESULT_CAP_CHARS:
             return text
         return bounded(text, tool_name=source, max_chars=RESULT_CAP_CHARS, thread_id=thread_id,
                        external=is_external_tool(source))
