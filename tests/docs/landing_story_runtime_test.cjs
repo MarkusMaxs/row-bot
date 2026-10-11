@@ -65,7 +65,7 @@ function makeRuntime({reducedMotion = false, saveData = false, search = '', intr
         }
     }
     const triggers = beats.map(beat => element({storyTrigger: beat}));
-    const demoPosters = ['launch-campaign', 'research-report', 'background-workflow', 'inbox-action-plan']
+    const demoPosters = ['bill-leak', 'four-day-week-deck', 'bug-fix-pr', 'shop-operations']
         .map(name => element({src: `demos/${name}.jpg`}));
     const panels = beats.map(beat => element({storyPanel: beat}));
     panels.slice(1).forEach(panel => { panel.hidden = true; });
@@ -240,7 +240,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(runtime.videos[0].playCalls > 0, true);
     assert.equal(runtime.demoPosters.every(image => !image.src), true);
     runtime.observers[0].callback([{isIntersecting: true, target: runtime.demoPosters[0]}]);
-    assert.equal(runtime.demoPosters[0].src, 'demos/launch-campaign.jpg');
+    assert.equal(runtime.demoPosters[0].src, 'demos/bill-leak.jpg');
     assert.equal(runtime.demoPosters.slice(1).every(image => !image.src), true);
 
     const researchTiming = makeRuntime();

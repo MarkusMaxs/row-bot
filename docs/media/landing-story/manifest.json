@@ -154,24 +154,24 @@
   },
   "demo_posters": [
     {
-      "file": "demos/launch-campaign.jpg",
-      "source": "https://img.youtube.com/vi/hRLuOEqbsds/maxresdefault.jpg",
-      "sha256": "e8f0ce9f9ccd3ff6d44d7e6c6c7c7b713f8aad1e0dc845c4d1ae832e446deb34"
+      "file": "demos/bill-leak.jpg",
+      "source": "https://img.youtube.com/vi/vvnxFpOvzBQ/maxresdefault.jpg",
+      "sha256": "2f7b34b1a1f509ef5811ded43a9e4bf179a8a968067cc6cfdef5892f7956b320"
     },
     {
-      "file": "demos/research-report.jpg",
-      "source": "https://img.youtube.com/vi/GA2Tnlt4jNk/maxresdefault.jpg",
-      "sha256": "d37c46ec5ec97993d51697798bee21e78f346322c0b53f3b49d997db87764c6c"
+      "file": "demos/four-day-week-deck.jpg",
+      "source": "https://img.youtube.com/vi/hCHCVHZXHao/maxresdefault.jpg",
+      "sha256": "9f782be95e7302b665ff33ba918d783c4ef2612723f93a89a4eafb7cb265d964"
     },
     {
-      "file": "demos/background-workflow.jpg",
-      "source": "https://img.youtube.com/vi/Vuk2xz-vPcA/maxresdefault.jpg",
-      "sha256": "3425733154b2572374ca363261e8f47832fcad554f9e5a91d158753f9114fa87"
+      "file": "demos/bug-fix-pr.jpg",
+      "source": "https://img.youtube.com/vi/-nzJoDAxcew/maxresdefault.jpg",
+      "sha256": "9c453379ae653cc3e00a5ad61285efd79cb73e20a8280f9ea40485df33952019"
     },
     {
-      "file": "demos/inbox-action-plan.jpg",
-      "source": "https://img.youtube.com/vi/wOUSGTyfEpk/maxresdefault.jpg",
-      "sha256": "a841ac003f4f7d832cf1658f3492bd69fdd526235619390216ff2edaadc93dd0"
+      "file": "demos/shop-operations.jpg",
+      "source": "https://img.youtube.com/vi/Ex4taXHvcY8/maxresdefault.jpg",
+      "sha256": "1a9db31eda5db88b4de9d89a57b18df754aa5df72fceb40b5044110c2db465b1"
     }
   ]
 }

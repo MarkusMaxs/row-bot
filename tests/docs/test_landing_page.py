@@ -145,6 +145,9 @@ def test_mobile_handoff_and_product_media_contracts() -> None:
     assert "document.execCommand?.('copy')" in JS
 
     parser = _parse()
+    # On a phone the hero's download button hands off to desktop; its partner opens the demos.
+    hero_primary = next(link for link in parser.links if link.get("data-placement") == "hero")
+    assert hero_primary.get("data-mobile-target") == "install"
     video_images = [image for image in parser.images if image.get("src", "").startswith("media/landing-story/demos/")]
     deferred_images = [image for image in parser.images if image.get("data-src", "").startswith("media/landing-story/demos/")]
     assert len(video_images) == len(deferred_images) == 4
