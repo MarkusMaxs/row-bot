@@ -1111,6 +1111,9 @@ def test_windows_tray_keeps_pystray_backend_and_menu(monkeypatch):
     assert isinstance(tray._icon, launcher._PystrayTrayBackend)
     assert events[0][0] == "icon_init"
     menu = events[0][1]["menu"]
-    labels = [item.args[0] for item in menu.items if item is not FakeMenu.SEPARATOR]
-    assert labels == ["Open Row-Bot", "Open in Browser", "Show Buddy", "Hide Buddy", "Quit"]
+    items = [item for item in menu.items if item is not FakeMenu.SEPARATOR]
+    labels = [item.args[0] for item in items]
+    assert labels == ["Open Row-Bot", "Open in Browser", "Restart to Update", "Show Buddy", "Hide Buddy", "Quit"]
+    # Restart to Update shows only while an update is ready.
+    assert items[2].kwargs["visible"](items[2]) is False
     assert events[-2:] == ["startup", ("icon_run", None)]

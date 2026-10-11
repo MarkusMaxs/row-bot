@@ -189,11 +189,10 @@ class UpdaterTool(BaseTool):
                 func=_check_for_updates,
                 name="row_bot_check_for_updates",
                 description=(
-                    "Check GitHub for a newer release of Row-Bot on the user's "
-                    "channel (stable or beta). Returns the available version, "
-                    "release summary, whether an update is already downloaded "
-                    "and ready, and a link to the release page. Read-only — "
-                    "does not download or install anything."
+                    "Check GitHub for a newer Row-Bot release on the user's "
+                    "channel (stable or beta): the version, its summary, whether "
+                    "one is already downloaded and ready, and the release page. "
+                    "Read-only — does not download or install anything."
                 ),
                 args_schema=_NoArgs,
             ),
@@ -201,11 +200,9 @@ class UpdaterTool(BaseTool):
                 func=_install_update,
                 name="row_bot_install_update",
                 description=(
-                    "Install a Row-Bot update. Follows the current thread "
-                    "approval mode. If no update is prepared yet, it downloads "
-                    "and prepares one in the background (nothing changes until a "
-                    "restart). If one is ready, Row-Bot restarts to install it "
-                    "once nothing is running."
+                    "Install a Row-Bot update (follows the thread's approval "
+                    "mode): prepares it in the background, or, once it is "
+                    "ready, restarts Row-Bot when nothing is running."
                 ),
                 args_schema=_InstallInput,
             ),
