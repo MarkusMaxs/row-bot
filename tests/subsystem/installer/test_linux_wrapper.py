@@ -140,11 +140,13 @@ def test_without_arguments_the_wrapper_opens_the_browser_client(tmp_path):
 
 
 @pytest.mark.slow
-def test_under_systemd_the_unit_restarts_the_app(tmp_path):
+def test_run_by_systemd_the_unit_restarts_the_app(tmp_path):
     root = tmp_path / "row-bot"
     _release(root, "1.0.0", "75", "0")
     layout.set_linux_current(root, "1.0.0")
-    command = [str(root / "current" / "bin" / "row-bot"), "serve"]
+    # What systemd 248+ does for ExecStart=: SYSTEMD_EXEC_PID is the started process.
+    command = ["bash", "-c", 'export SYSTEMD_EXEC_PID=$$; exec "$0" "$@"', str(root / "current" / "bin" / "row-bot"),
+               "serve"]
 
     process = subprocess.Popen(command, env=_env(tmp_path, INVOCATION_ID="unit"), stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, text=True)
@@ -154,6 +156,20 @@ def test_under_systemd_the_unit_restarts_the_app(tmp_path):
     runs = _runs(tmp_path)
     assert len(runs) == 1
     assert runs[0][1] == str(process.pid)  # exec'd: systemd sees the app itself
+
+
+@pytest.mark.slow
+def test_a_shell_inside_a_systemd_service_still_relaunches(tmp_path):
+    # Terminals and CI runners that run as services pass their unit's variables on.
+    root = tmp_path / "row-bot"
+    _release(root, "1.0.0", "75", "0")
+    layout.set_linux_current(root, "1.0.0")
+
+    result = _run([str(root / "current" / "bin" / "row-bot"), "serve"],
+                  _env(tmp_path, INVOCATION_ID="terminal", SYSTEMD_EXEC_PID="1"))
+
+    assert result.returncode == 0, result.stderr
+    assert len(_runs(tmp_path)) == 2
 
 
 @pytest.mark.slow
