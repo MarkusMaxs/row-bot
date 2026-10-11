@@ -548,6 +548,7 @@ def _make_discord_interrupt_view():
                 interaction.channel,
                 interaction.message,
                 approved=True,
+                user_id=getattr(interaction.user, "id", None),
             )
 
         @ui.button(
@@ -564,6 +565,7 @@ def _make_discord_interrupt_view():
                 interaction.channel,
                 interaction.message,
                 approved=False,
+                user_id=getattr(interaction.user, "id", None),
             )
 
     return InterruptApprovalView()
@@ -596,6 +598,7 @@ def _make_discord_task_approval_view():
                 interaction.channel,
                 interaction.message,
                 approved=True,
+                user_id=getattr(interaction.user, "id", None),
             )
 
         @ui.button(
@@ -612,6 +615,7 @@ def _make_discord_task_approval_view():
                 interaction.channel,
                 interaction.message,
                 approved=False,
+                user_id=getattr(interaction.user, "id", None),
             )
 
     return TaskApprovalView()
@@ -639,7 +643,21 @@ async def _send_discord_interrupt_approval_card(
     return int(message_id) if message_id is not None else None
 
 
-async def _handle_discord_interrupt_button(channel, message, *, approved: bool) -> None:
+def _pressed_by_owner(user_id: int | None) -> bool:
+    """Whether the person who pressed a button may answer it: the paired owner, as for messages.
+
+    Anyone in a server channel can press a button the bot posted, so a press by anyone else is ignored and
+    leaves the approval pending.
+    """
+    if user_id is not None and _is_authorised(int(user_id)):
+        return True
+    log.warning("Ignored a Discord approval button pressed by someone other than the paired owner")
+    return False
+
+
+async def _handle_discord_interrupt_button(channel, message, *, approved: bool, user_id: int | None) -> None:
+    if not _pressed_by_owner(user_id):
+        return
     channel_id = int(getattr(channel, "id", 0))
     message_id = getattr(message, "id", None)
     pending = _pop_discord_interrupt(
@@ -731,7 +749,9 @@ async def _handle_discord_interrupt_button(channel, message, *, approved: bool) 
             )
 
 
-async def _handle_discord_task_approval_button(channel, message, *, approved: bool) -> None:
+async def _handle_discord_task_approval_button(channel, message, *, approved: bool, user_id: int | None) -> None:
+    if not _pressed_by_owner(user_id):
+        return
     channel_id = int(getattr(channel, "id", 0))
     message_id = getattr(message, "id", None)
     with _pending_lock:
