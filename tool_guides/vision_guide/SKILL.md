@@ -14,7 +14,8 @@ tags: []
   you to look or see, IMMEDIATELY call analyze_image — do NOT ask for
   clarification, do NOT say you can't see, do NOT ask them to describe it.
   Just call the tool. Use source='camera' by default. Use source='screen'
-  when they mention screen, monitor, display, or desktop.
+  when they mention screen, monitor, display, or desktop. Both ask the person
+  first, because they capture their webcam or every open window.
   Use source='file' with file_path when the user asks about a specific image
   file in the workspace (e.g. 'describe diagram.png', 'what's in photo.jpg').
   Pass the user's question as the argument (or 'Describe everything you see'
@@ -25,3 +26,6 @@ tags: []
   auto-analyses. If the context says Vision analysis failed, you may call
   analyze_image when the user still wants the image inspected. Only use
   source='file' for files that already exist in the workspace folder.
+- For a web page, use source='browser': it looks at the page open in
+  Row-Bot's browser (open it with browser_navigate first) and asks nothing.
+  Never capture the screen to see a page you opened in the browser.

@@ -23,13 +23,59 @@ def _get_vision_service():
 
 # ── Tool implementation ──────────────────────────────────────────────────────
 
+# A capture of the person's screen or camera can show anything, so it asks every time, even in Auto, and says
+# what it captures (B327). A page in Row-Bot's own browser, or a file, needs no capture.
+_CAPTURES = {
+    "screen": (
+        "Capture your whole screen?",
+        "Takes a picture of everything on your main display (every open window, not just Row-Bot's browser) "
+        "and shows it to the vision model.",
+    ),
+    "camera": (
+        "Take a picture with your camera?",
+        "Takes a photo with your webcam and shows it to the vision model.",
+    ),
+}
+
+
+def _analyze_browser_page(question: str) -> str:
+    from row_bot.tools.browser_tool import _get_thread_id, get_session_manager
+
+    image = get_session_manager().take_screenshot(_get_thread_id())
+    if image is None:
+        return "No page is open in Row-Bot's browser. Open it with browser_navigate first, then look at it."
+    return _get_vision_service().analyze(image, f"This is the page open in Row-Bot's browser. {question}")
+
+
 def _analyze_image(
     question: str, source: str = "camera", file_path: str = "",
 ) -> str:
-    """Capture an image from the user's camera or screen and analyze it,
-    or analyze an existing image file."""
-    svc = _get_vision_service()
-    return svc.capture_and_analyze(question, source=source, file_path=file_path)
+    """Analyze the page in Row-Bot's browser, an image file, or (after asking) the person's screen or camera."""
+    from row_bot.approval_policy import normalize_approval_mode
+    from row_bot.tools.approval_gate import (
+        APPROVAL_DENIED,
+        APPROVAL_GIVEN,
+        current_approval_mode,
+        resolve_approval,
+        with_approval,
+    )
+
+    source = str(source or "camera").strip().casefold()
+    if source == "browser":
+        return _analyze_browser_page(question)
+    if source not in _CAPTURES:
+        return _get_vision_service().capture_and_analyze(question, source=source, file_path=file_path)
+    label, description = _CAPTURES[source]
+    if normalize_approval_mode(current_approval_mode()) == "block":
+        return f"BLOCKED: {label[:-1]} is unavailable while this conversation is in Block approval mode."
+    outcome = resolve_approval(
+        {"tool": "analyze_image", "label": label, "description": description,
+         "args": {"source": source, "question": question}},
+        approval_mode="approve",
+    )
+    if outcome != "allow":
+        return with_approval(APPROVAL_DENIED, "Capture cancelled by user.")
+    return with_approval(APPROVAL_GIVEN, _get_vision_service().capture_and_analyze(question, source=source))
 
 
 # ── Registration ─────────────────────────────────────────────────────────────
@@ -47,9 +93,9 @@ class VisionTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "See through the user's camera or capture their screen to describe "
-            "what's visible, read text from printed documents or on-screen content, "
-            "identify objects, and answer visual questions."
+            "Look at the page open in Row-Bot's browser, an image file, or (after "
+            "asking the person) their screen or camera, to describe what's visible, "
+            "read text and answer visual questions."
         )
 
     @property
@@ -71,13 +117,13 @@ class VisionTool(BaseTool):
             source: str = Field(
                 default="camera",
                 description=(
-                    "Where to get the image from. Use 'camera' when the "
-                    "user asks you to look at something physical (an object, "
-                    "a document, themselves). Use 'screen' when the user asks "
-                    "about their screen, monitor, display, or something "
-                    "shown on their computer. Use 'file' when the user "
-                    "asks about a specific image file in their workspace "
-                    "(e.g. 'analyze photo.jpg', 'what's in diagram.png')."
+                    "Where to get the image from. Use 'browser' for a page "
+                    "open in Row-Bot's browser (a screenshot of a web page "
+                    "you navigated to). Use 'file' for an image file in the "
+                    "workspace (e.g. 'analyze photo.jpg'). Use 'screen' only "
+                    "when the person asks about their own screen, monitor or "
+                    "desktop, and 'camera' only when they ask you to look at "
+                    "something physical; both ask the person first."
                 ),
             )
             file_path: str = Field(
@@ -94,16 +140,14 @@ class VisionTool(BaseTool):
                 func=_analyze_image,
                 name="analyze_image",
                 description=(
-                    "Analyze an image from the user's webcam, a screenshot "
-                    "of their screen/desktop, or a file in the workspace. "
-                    "Use this when the user asks you to look at something, "
-                    "see their screen, read text from a document or image, "
-                    "identify an object, or answer any visual question. "
-                    "Captures a real screenshot of the entire desktop — not "
-                    "limited to the browser. Set source='screen' for "
-                    "screen/monitor/display/desktop; source='file' with "
-                    "file_path for workspace image files; otherwise default "
-                    "to source='camera'."
+                    "Look at an image and answer a visual question. "
+                    "source='browser' looks at the page open in Row-Bot's "
+                    "browser: use it for any screenshot of a web page. "
+                    "source='file' with file_path reads a workspace image. "
+                    "source='screen' captures the person's whole desktop and "
+                    "source='camera' their webcam: use those only when they "
+                    "ask about their screen or something in front of the "
+                    "camera; each asks the person first."
                 ),
                 args_schema=_AnalyzeInput,
             ),
