@@ -27,6 +27,11 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+#: macOS: the app bundle's version, recorded when the first update switches
+#: away from it, so a staged version can still go back to the bundle.
+SEED_VERSION_KEY = "seed_version"
+
+
 class SwitchError(RuntimeError):
     """The install has nothing valid to switch to."""
 
@@ -39,7 +44,13 @@ def runnable_version(layout: InstallLayout, version: str | None) -> bool:
         return True
     if layout.root is None:
         return False
-    return install_layout.version_runnable(layout.root, layout.kind, version)
+    if install_layout.version_runnable(layout.root, layout.kind, version):
+        return True
+    if layout.kind is InstallKind.MACOS:
+        # The bundle (the seed) lives outside versions/; the tray host starts it.
+        state = install_layout.read_state(layout.root)
+        return bool(state is not None and state.extra.get(SEED_VERSION_KEY) == version)
+    return False
 
 
 def ready_version(layout: InstallLayout) -> str | None:
@@ -75,6 +86,8 @@ def switch_to_ready(layout: InstallLayout, *, expected: str | None = None) -> st
     state.unverified_launches = 0
     state.extra.pop("verified_at", None)
     state.extra["switched_at"] = _now_iso()
+    if layout.kind is InstallKind.MACOS and layout.seed and layout.version:
+        state.extra[SEED_VERSION_KEY] = layout.version
     install_layout.write_state(layout.root, state)
     if layout.kind is InstallKind.LINUX:
         install_layout.set_linux_current(layout.root, version)

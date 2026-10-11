@@ -148,3 +148,23 @@ def test_the_old_all_users_install_is_offered_only_when_recorded_and_present(tmp
     assert legacy.STATE_KEY not in install_layout.read_state(layout.root).extra
     other = make_install(tmp_path / "linux", kind=install_layout.InstallKind.LINUX)
     assert legacy.pending(other) is False
+
+
+def test_macos_repair_can_go_back_to_the_app_bundle(tmp_path):
+    """The seed version lives in the bundle, outside versions/."""
+    bundle = make_version(tmp_path / "Row-Bot.app" / "Contents", "Resources", dists={"pip": "26.0"})
+    root = tmp_path / "Application Support" / "Row-Bot"
+    staged = make_version(root / "versions", "5.2.1", dists={"pip": "26.0"})
+    (staged / "python" / "bin").mkdir(parents=True, exist_ok=True)
+    (staged / "python" / "bin" / "python3").write_bytes(b"python")
+    install_layout.write_state(root, install_layout.InstallState(
+        active="5.2.0", ready={"version": "5.2.1", "staged_at": "x"}))
+    seed = install_layout.InstallLayout(install_layout.InstallKind.MACOS, root, "5.2.0", bundle, seed=True)
+
+    assert switcher.switch_to_ready(seed) == "5.2.1"
+
+    running = install_layout.InstallLayout(install_layout.InstallKind.MACOS, root, "5.2.1", staged)
+    assert switcher.runnable_version(running, "5.2.0") is True
+    assert switcher.runnable_version(running, "5.1.0") is False
+    assert switcher.rollback(running) == "5.2.0"
+    assert install_layout.read_state(root).active == "5.2.0"
