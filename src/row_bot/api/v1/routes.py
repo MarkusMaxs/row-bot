@@ -12,6 +12,7 @@ import json
 import logging
 from pathlib import Path
 import secrets
+import sys
 import threading
 from typing import Any
 from uuid import UUID, uuid4
@@ -331,6 +332,7 @@ _STATUS.update(
         "backup_review_expired": 409,
         "backup_unavailable": 404,
         "backup_storage_unavailable": 503,
+        "backup_storage_full": 507,
         "data_job_running": 409,
         "custom_tool_draft_unavailable": 404,
         "custom_tool_unavailable": 404,
@@ -1285,6 +1287,12 @@ def create_router(
             while True:
                 await asyncio.sleep(30)
                 await asyncio.to_thread(uploads.expire)
+                # Archives sent to restore from: expired ones, and an earlier run's.
+                from row_bot.application.client_data_backup import (
+                    expire_uploads as expire_backup_uploads,
+                )
+
+                await asyncio.to_thread(expire_backup_uploads)
 
         cleanup = asyncio.create_task(expire_uploads(), name="client-upload-expiry")
         try:
@@ -1297,6 +1305,10 @@ def create_router(
             except asyncio.CancelledError:
                 pass
             uploads.close()
+            # Never loaded means no archive was sent to restore from.
+            data_backups = sys.modules.get("row_bot.application.client_data_backup")
+            if data_backups is not None:
+                data_backups.close_uploads()
             with terminal_clients_lock:
                 closing_terminals = tuple(terminal_clients.values())
                 terminal_clients.clear()
@@ -9090,34 +9102,43 @@ def create_router(
             await call(data.backup)
             status = "accepted"
         elif body.action == "inspect_restore":
-            if not body.file_grant:
+            # One archive: the desktop app's pick, or one this session uploaded.
+            if bool(body.file_grant) == bool(body.upload_id):
                 raise ProtocolError("invalid_command", 422)
-
-            def validate_native_file(scope: Any) -> None:
-                if not security.authorize_native_grant(
-                    scope.authority_grant,
-                    session_id=scope.session_id,
-                    policy_revision=scope.policy_revision,
-                    instance_id=scope.instance_id,
-                    window_id=scope.window_id,
-                    window_epoch=scope.window_epoch,
-                ):
-                    raise ProtocolError("action_denied", 403)
-
-            path = await call(
-                folder_selections.consume_exact_backup_file,
-                body.file_grant,
-                current.id,
-                validate_native_file,
-            )
-            if path is None:
-                raise ProtocolError("capability_revoked", 409)
             from row_bot.application.profile_backup import BackupError
 
-            try:
-                review = await call(data.inspect_restore, path)
-            except BackupError as exc:
-                raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from None
+            if body.upload_id:
+                try:
+                    review = await call(
+                        data.inspect_upload, current.id, str(body.upload_id)
+                    )
+                except BackupError as exc:
+                    raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from None
+            else:
+
+                def validate_native_file(scope: Any) -> None:
+                    if not security.authorize_native_grant(
+                        scope.authority_grant,
+                        session_id=scope.session_id,
+                        policy_revision=scope.policy_revision,
+                        instance_id=scope.instance_id,
+                        window_id=scope.window_id,
+                        window_epoch=scope.window_epoch,
+                    ):
+                        raise ProtocolError("action_denied", 403)
+
+                path = await call(
+                    folder_selections.consume_exact_backup_file,
+                    body.file_grant,
+                    current.id,
+                    validate_native_file,
+                )
+                if path is None:
+                    raise ProtocolError("capability_revoked", 409)
+                try:
+                    review = await call(data.inspect_restore, path)
+                except BackupError as exc:
+                    raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from None
         elif body.action == "restore":
             if not body.review_id:
                 raise ProtocolError("invalid_command", 422)
@@ -9141,6 +9162,110 @@ def create_router(
             _DATA_RECEIPTS[key] = receipt
         receipt = {**receipt, "state": await data_backup_state(request)}
         return await respond(request, dto.DataBackupReceipt, receipt)
+
+    @router.get("/data/backup/download")
+    async def data_backup_download(request: Request, name: str | None = None) -> Response:
+        """The last backup, for a device that can't open the Backups folder.
+
+        Bounded chunks, with the session checked before each one: a device
+        signed out mid-download is sent no more of the archive.
+        """
+        current = await session(request)
+        await call(dispatch_validation(request, current))
+        from urllib.parse import quote
+        from starlette.background import BackgroundTask
+        from row_bot.application import client_data_backup as data
+
+        source, size, filename = await call(data.open_last_backup, name)
+
+        async def chunks() -> Any:
+            try:
+                while True:
+                    security.session(await _context(request), current.id, current.csrf)
+                    part = await asyncio.to_thread(source.read, data.CHUNK_BYTES)
+                    if not part:
+                        return
+                    yield part
+            except ProtocolError:
+                return
+            finally:
+                source.close()
+
+        fallback = "".join(
+            char if " " <= char <= "~" and char not in '"\\' else "_" for char in filename
+        )
+        return StreamingResponse(
+            chunks(),
+            media_type="application/zip",
+            headers={
+                **HEADERS,
+                "Content-Length": str(size),
+                # Already compressed: the app's gzip leaves an encoded response as it is.
+                "Content-Encoding": "identity",
+                "Content-Disposition": f'attachment; filename="{fallback}"; '
+                f"filename*=UTF-8''{quote(filename, safe='')}",
+            },
+            background=BackgroundTask(source.close),
+        )
+
+    # Restore from another device: the archive comes in chunks, then the same
+    # check and confirmed restore as a desktop pick (inspect_restore, restore).
+    @router.post("/data/backup/uploads")
+    async def data_backup_upload(request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.DataBackupUploadRequest, 4096)
+        if str(body.client_session_id) != current.id:
+            raise ProtocolError("invalid_command", 422)
+        await call(dispatch_validation(request, current))
+        from row_bot.application import client_data_backup as data
+
+        view = await call(
+            data.begin_upload, current.id, name=body.name, size_bytes=body.size_bytes
+        )
+        return await respond(request, dto.DataBackupUploadView, view)
+
+    @router.get("/data/backup/uploads/{upload_id}")
+    async def data_backup_upload_status(upload_id: str, request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application import client_data_backup as data
+
+        view = await call(data.upload_status, current.id, upload_id)
+        return await respond(request, dto.DataBackupUploadView, view)
+
+    @router.put("/data/backup/uploads/{upload_id}/chunks")
+    async def data_backup_upload_chunk(
+        upload_id: str, request: Request, offset: int
+    ) -> JSONResponse:
+        # Thousands of chunks: the bounded transfer admission paces them, as it
+        # does attachment chunks, instead of the token lanes.
+        current = security.session(
+            await _context(request),
+            request.headers.get("x-client-session", ""),
+            request.headers.get("x-csrf-token", ""),
+        )
+        from row_bot.application import client_data_backup as data
+
+        uploads.enter_transfer(current.id)
+        try:
+            chunk = bytearray()
+            async for part in request.stream():
+                if len(chunk) + len(part) > data.CHUNK_BYTES:
+                    raise ProtocolError("payload_too_large", 413)
+                security.session(await _context(request), current.id, current.csrf)
+                chunk.extend(part)
+            security.session(await _context(request), current.id, current.csrf)
+            view = await call(data.write_upload, current.id, upload_id, offset, bytes(chunk))
+        finally:
+            uploads.leave_chunk(current.id)
+        return await respond(request, dto.DataBackupUploadView, view)
+
+    @router.delete("/data/backup/uploads/{upload_id}")
+    async def data_backup_upload_cancel(upload_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="control")
+        from row_bot.application import client_data_backup as data
+
+        await call(data.cancel_upload, current.id, upload_id)
+        return await respond(request, dto.UploadCancelled, {"cancelled": True})
 
     @router.get("/custom-tools")
     async def custom_tool_library(request: Request) -> JSONResponse:

@@ -3676,10 +3676,31 @@ class DataBackupCommand(WireModel):
     command_id: UUID
     client_session_id: UUID
     action: Literal["backup", "inspect_restore", "restore", "cancel_restore", "dismiss_result", "reveal"]
-    # inspect_restore: the desktop pick of one archive (never a path).
+    # inspect_restore: the desktop pick of one archive (never a path),
     file_grant: OpaqueId | None = None
+    # or, from any other device, the archive this session uploaded.
+    upload_id: UUID | None = None
     # restore: the review of that archive the person confirmed.
     review_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class DataBackupUploadRequest(WireModel):
+    """Restore from another device: room for the archive, sent in chunks next.
+
+    The size is checked against the largest backup Row-Bot restores
+    (``backup_too_large``), not here, so the answer names the reason.
+    """
+    client_session_id: UUID
+    name: str = Field(min_length=1, max_length=200)
+    size_bytes: int = Field(ge=1)
+
+
+class DataBackupUploadView(WireModel):
+    upload_id: UUID
+    size_bytes: int = Field(ge=1)
+    received_bytes: int = Field(ge=0)
+    chunk_bytes: Literal[1048576] = 1048576
+    expires_in_seconds: int = Field(ge=0, le=1800)
 
 
 class DataBackupReceipt(WireModel):

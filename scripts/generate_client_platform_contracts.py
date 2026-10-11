@@ -69,6 +69,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "CustomToolSnapshot", "CustomToolCommand", "CustomToolReceipt",
     "CustomToolLibrary", "CustomToolLibraryCommand", "CustomToolLibraryReceipt",
     "DataBackupState", "DataBackupCommand", "DataBackupReceipt", "DataRestoreReview",
+    "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
     "KnowledgeGraphSnapshot", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "UpdateInstallCommand", "UpdateInstallStatus", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
@@ -295,6 +296,11 @@ OPERATIONS = (
     ("post", "/custom-tools/commands", "CustomToolLibraryCommand", "CustomToolLibraryReceipt"),
     ("get", "/data/backup", None, "DataBackupState"),
     ("post", "/data/backup/commands", "DataBackupCommand", "DataBackupReceipt"),
+    ("get", "/data/backup/download", None, "bytes"),
+    ("post", "/data/backup/uploads", "DataBackupUploadRequest", "DataBackupUploadView"),
+    ("get", "/data/backup/uploads/{upload_id}", None, "DataBackupUploadView"),
+    ("put", "/data/backup/uploads/{upload_id}/chunks", "bytes", "DataBackupUploadView"),
+    ("delete", "/data/backup/uploads/{upload_id}", None, "UploadCancelled"),
     ("get", "/insights", None, "InsightsSnapshot"),
     ("get", "/insights/commands/{command_id}", None, "InsightReceipt"),
     ("post", "/insights/commands", "InsightCommand", "InsightReceipt"),
@@ -974,6 +980,35 @@ export const getDataBackup = (base: string, proof: SessionProof, signal?: AbortS
   jsonRequest(base, '/data/backup', 'DataBackupState', proof, 'GET', undefined, undefined, signal);
 export const sendDataBackupCommand = (base: string, proof: SessionProof, command: DataBackupCommand, signal?: AbortSignal): Promise<DataBackupReceipt> =>
   jsonRequest(base, '/data/backup/commands', 'DataBackupReceipt', proof, 'POST', validateWire('DataBackupCommand', command), command.command_id, signal);
+/** The last backup, for a device that can't open the Backups folder; ``name`` is the one on screen. */
+export async function downloadDataBackup(base: string, proof: SessionProof, name: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${base}/api/v1/data/backup/download` + query({name}), {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  const encoding = response.headers.get('Content-Encoding')?.trim().toLowerCase();
+  const length = response.headers.get('Content-Length');
+  const data = await response.blob();
+  // The server stops sending when the device is signed out: a short archive is never saved.
+  if ((!encoding || encoding === 'identity') && length !== null && Number(length) !== data.size)
+    throw new Error('protocol_incompatible');
+  return data;
+}
+export const beginDataBackupUpload = (base: string, proof: SessionProof, body: DataBackupUploadRequest, signal?: AbortSignal): Promise<DataBackupUploadView> =>
+  jsonRequest(base, '/data/backup/uploads', 'DataBackupUploadView', proof, 'POST', validateWire('DataBackupUploadRequest', body), undefined, signal);
+export const getDataBackupUpload = (base: string, proof: SessionProof, upload: string, signal?: AbortSignal): Promise<DataBackupUploadView> =>
+  jsonRequest(base, `/data/backup/uploads/${id(upload)}`, 'DataBackupUploadView', proof, 'GET', undefined, undefined, signal);
+export const cancelDataBackupUpload = (base: string, proof: SessionProof, upload: string, signal?: AbortSignal): Promise<UploadCancelled> =>
+  jsonRequest(base, `/data/backup/uploads/${id(upload)}`, 'UploadCancelled', proof, 'DELETE', undefined, undefined, signal);
+export async function uploadDataBackupChunk(base: string, proof: SessionProof, upload: string, offset: number, data: Blob, signal?: AbortSignal): Promise<DataBackupUploadView> {
+  if (data.size > 1048576) throw new Error('payload_too_large');
+  const response = await fetch(`${base}/api/v1/data/backup/uploads/${id(upload)}/chunks` + query({offset}), {
+    method: 'PUT', credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), body: data, signal,
+  });
+  const value = await response.json();
+  if (!response.ok) throw validateWire<Problem>('Problem', value);
+  return validateWire<DataBackupUploadView>('DataBackupUploadView', value);
+}
 export const getInsights = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<InsightsSnapshot> =>
   jsonRequest(base, '/insights', 'InsightsSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getInsightReceipt = (base: string, proof: SessionProof, command: string, signal?: AbortSignal): Promise<InsightReceipt> =>
