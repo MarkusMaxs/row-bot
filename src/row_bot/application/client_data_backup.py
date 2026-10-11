@@ -38,10 +38,20 @@ def _data_dir() -> Path:
     return get_row_bot_data_dir()
 
 
-def _backups_folder() -> Path:
+def _workspace() -> Path | None:
+    """The workspace: never part of a backup, and a restore leaves it alone."""
     from row_bot.application.conversation_creation import configured_workspace_root
 
-    root = configured_workspace_root()
+    try:
+        return configured_workspace_root()
+    except (OSError, ValueError):
+        return None
+
+
+def _backups_folder() -> Path:
+    root = _workspace()
+    if root is None:
+        raise ClientPlatformError("backup_storage_unavailable")
     folder = root / _BACKUPS_FOLDER
     if folder.is_symlink():
         raise ClientPlatformError("backup_storage_unavailable")
@@ -160,13 +170,15 @@ def restore(review_id: str) -> None:
     if not hmac.compare_digest(_review_id(path, info), review_id):
         raise ClientPlatformError("backup_review_expired")  # the file changed since it was checked
     data = _data_dir()
-    _start("restore", lambda: {**profile_backup.stage_restore(path, data, source_name=name), "name": name})
+    outside = tuple(folder for folder in (_workspace(),) if folder is not None)
+    _start("restore", lambda: {**profile_backup.stage_restore(path, data, source_name=name, outside=outside),
+                               "name": name})
 
 
 def backup() -> None:
     folder = _backups_folder()
     data = _data_dir()
-    _start("backup", lambda: profile_backup.create_backup(data, folder))
+    _start("backup", lambda: profile_backup.create_backup(data, folder, outside=(folder.parent,)))
 
 
 def cancel_restore() -> bool:
