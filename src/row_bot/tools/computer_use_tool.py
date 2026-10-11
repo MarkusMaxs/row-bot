@@ -642,6 +642,10 @@ class ComputerUseTool(BaseTool):
         return set()
 
     @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {"computer_use"}
+
+    @property
     def inference_keywords(self) -> list[str]:
         return [
             "desktop",

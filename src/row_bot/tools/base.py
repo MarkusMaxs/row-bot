@@ -157,6 +157,18 @@ class BaseTool(ABC):
         return set()
 
     @property
+    def untrusted_tool_names(self) -> set[str]:
+        """Names of sub-tools whose results carry third-party or file content:
+        web pages and search results, mail, transcripts, uploaded documents,
+        repository files, command output.
+
+        The agent wraps these results in an ``EXTERNAL_CONTENT`` boundary and
+        scans them for prompt injection.  List the names the tools are bound
+        under (what ``as_langchain_tools()`` returns), not the parent name.
+        """
+        return set()
+
+    @property
     def inference_keywords(self) -> list[str]:
         """Extra keywords to help the auto-detect engine match prompts to
         this tool.  These are merged with keywords extracted automatically

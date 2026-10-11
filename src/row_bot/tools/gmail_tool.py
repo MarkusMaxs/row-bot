@@ -241,6 +241,10 @@ class GmailTool(BaseTool):
         return {"send_gmail_message"}
 
     @property
+    def untrusted_tool_names(self) -> set[str]:
+        return set(_READ_OPS)
+
+    @property
     def enabled_by_default(self) -> bool:
         return False  # Must set up OAuth credentials first
 

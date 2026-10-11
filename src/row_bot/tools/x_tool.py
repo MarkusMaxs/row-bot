@@ -635,6 +635,10 @@ class XTool(BaseTool):
         return {"x_post"}
 
     @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {"x_read"}
+
+    @property
     def enabled_by_default(self) -> bool:
         return False  # Must set up OAuth credentials first
 
