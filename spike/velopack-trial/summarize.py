@@ -64,7 +64,7 @@ def main() -> None:
             )
             print(f"- **{label}** {mb(delta['bytes'])} MB. Kinds: {kinds}. Changed/new by category: {cats}")
         diff = sizes["nupkg_diff"]["table"]
-        print("- nupkg diff 5.0→5.1: " + ", ".join(f"{k} {v['count']:,}" for k, v in diff.items()))
+        print("- nupkg diff 5.0->5.1: " + ", ".join(f"{k} {v['count']:,}" for k, v in diff.items()))
         for label, extra in (sizes.get("extra_diffs") or {}).items():
             print(f"- nupkg diff ({label}): " + ", ".join(f"{k} {v['count']:,}" for k, v in extra["table"].items()))
         t = timings(folder)

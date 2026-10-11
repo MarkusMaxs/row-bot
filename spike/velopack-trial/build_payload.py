@@ -66,7 +66,7 @@ def build_client(repo: Path) -> None:
     run([node, "scripts/asset-manifest.mjs", "dist", "--package"], cwd=frontend, env=env)
 
 
-def compile_deterministic(python: Path, targets: list[Path]) -> dict:
+def compile_deterministic(python: Path, targets: list[Path], strip: Path | None = None) -> dict:
     removed = 0
     for target in targets:
         for cache in list(target.rglob("__pycache__")):
@@ -75,8 +75,11 @@ def compile_deterministic(python: Path, targets: list[Path]) -> dict:
                 removed += 1
     env = dict(os.environ, PYTHONNOUSERSITE="1")
     env.pop("PYTHONDONTWRITEBYTECODE", None)
+    # co_filename is baked into each .pyc; strip the build folder so the bytes do
+    # not depend on where the payload was staged (importlib fixes it up on load).
+    strip_args = ["-s", str(strip)] if strip else []
     code = run(
-        [python, "-m", "compileall", "-q", "-f", "-j", "0", "--invalidation-mode", "unchecked-hash", *targets],
+        [python, "-m", "compileall", "-q", "-f", "-j", "0", *strip_args, "--invalidation-mode", "unchecked-hash", *targets],
         env=env,
         check=False,
     )
@@ -195,7 +198,9 @@ def build_windows(args: argparse.Namespace, repo: Path, out: Path) -> dict:
 
     if args.variant == "b":
         with timed("compileall"):
-            info["compile"] = compile_deterministic(out / "python" / "python.exe", [out / "python" / "Lib", out / "app"])
+            info["compile"] = compile_deterministic(
+                out / "python" / "python.exe", [out / "python" / "Lib", out / "app"], strip=out
+            )
     return info
 
 

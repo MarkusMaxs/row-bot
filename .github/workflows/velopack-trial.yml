@@ -104,7 +104,7 @@ jobs:
     if: ${{ needs.config.outputs.windows == 'true' }}
     name: windows (${{ matrix.variant }})
     runs-on: windows-latest
-    timeout-minutes: 300
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -241,7 +241,7 @@ jobs:
 
       - name: Install and update scenarios
         if: ${{ matrix.variant == 'b' }}
-        timeout-minutes: 150
+        timeout-minutes: 200
         run: |
           $which = "${{ needs.config.outputs.scenarios }}"
           $extra = @()

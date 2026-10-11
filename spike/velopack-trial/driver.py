@@ -187,6 +187,10 @@ def wait_event(pred, timeout: float, since: int = 0) -> dict | None:
     return None
 
 
+def is_hook(event: dict) -> bool:
+    return any(str(a).startswith("--veloapp-") for a in event.get("argv") or [])
+
+
 def write_control(data: dict) -> None:
     HOME.mkdir(parents=True, exist_ok=True)
     CONTROL.write_text(json.dumps(data), encoding="utf-8")
@@ -398,7 +402,8 @@ def rehash(feed: Path, name: str) -> None:
         text = p.read_text(encoding="utf-8-sig")
         if p.suffix == ".json":
             doc = json.loads(text)
-            for asset in doc.get("Assets", []):
+            assets = doc if isinstance(doc, list) else doc.get("Assets", [])
+            for asset in assets:
                 if asset.get("FileName") == name:
                     asset["SHA1"], asset["SHA256"], asset["Size"] = sha1, sha256, size
             p.write_text(json.dumps(doc), encoding="utf-8")
@@ -475,29 +480,31 @@ def synthesize_base(template: Path, out: Path) -> dict:
         tmp = out.with_suffix(".tmp")
         written = 0
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as dst:
-            for info in meta:
+            for info in meta + [i for i in lib if i.filename.endswith("/")]:
                 dst.writestr(info, src.read(info), compress_type=info.compress_type)
             for base, dirs, names in os.walk(INSTALL):
                 dirs.sort()
                 for name in sorted(names) + [d for d in dirs if os.path.islink(os.path.join(base, d))]:
                     full = Path(base) / name
                     rel = full.relative_to(INSTALL).as_posix()
+                    if IS_WIN and rel == "sq.version":
+                        continue  # Setup writes it from the .nuspec; not a lib/ entry
                     arc = f"{prefix}{rel}"
+                    if full.is_symlink():
+                        arc += ".__symlink"
+                        target = os.readlink(full).replace(os.sep, "/")
+                        data = (target + "/" if full.is_dir() else target).encode("utf-8")
+                    else:
+                        data = full.read_bytes()
                     zinfo = zipfile.ZipInfo(arc, date_time=(2020, 1, 1, 0, 0, 0))
                     template_info = attrs.get(arc)
                     if template_info is not None:
                         zinfo.external_attr = template_info.external_attr
                         zinfo.create_system = template_info.create_system
-                    if full.is_symlink():
-                        if template_info is None:
-                            zinfo.external_attr = (0o120777 << 16)
-                            zinfo.create_system = 3
-                        dst.writestr(zinfo, os.readlink(full), compress_type=zipfile.ZIP_STORED)
                     else:
-                        if template_info is None:
-                            zinfo.external_attr = (0o100755 << 16)
-                            zinfo.create_system = 3
-                        dst.writestr(zinfo, full.read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
+                        zinfo.external_attr = 0o100755 << 16
+                        zinfo.create_system = 3
+                    dst.writestr(zinfo, data, compress_type=zipfile.ZIP_DEFLATED)
                     written += 1
     os.replace(tmp, out)
     return {"entries": written, "seconds": round(time.time() - started, 1), "bytes": out.stat().st_size}
@@ -594,13 +601,19 @@ def verify_tree(nupkg: Path) -> dict:
     missing, mismatched = [], []
     for info in entries:
         rel = info.filename[len(prefix) :]
+        if rel.endswith(".__symlink"):
+            rel = rel[: -len(".__symlink")]
+            expected.add(rel)
+            path = INSTALL / rel
+            with zipfile.ZipFile(nupkg) as archive:
+                target = archive.read(info).decode("utf-8").rstrip("/")
+            if not path.is_symlink():
+                missing.append(rel + " (symlink)")
+            elif os.readlink(path).replace(os.sep, "/").rstrip("/") != target:
+                mismatched.append(rel + " (symlink target)")
+            continue
         expected.add(rel)
         path = INSTALL / rel
-        is_link = (info.external_attr >> 16) & 0o170000 == 0o120000
-        if is_link:
-            if not path.is_symlink():
-                mismatched.append(rel + " (symlink expected)")
-            continue
         if not path.exists():
             missing.append(rel)
             continue
@@ -616,7 +629,7 @@ def verify_tree(nupkg: Path) -> dict:
     for base, _dirs, names in os.walk(INSTALL):
         for name in names:
             rel = (Path(base) / name).relative_to(INSTALL).as_posix()
-            if rel not in expected:
+            if rel not in expected and not (IS_WIN and rel == "sq.version"):
                 extra.append(rel)
     return {
         "expected": len(entries),
@@ -667,6 +680,7 @@ def update(feed: str, opts: dict, timeout_restart: float = 300) -> dict:
                 wait_event(
                     lambda e: e["event"] == "start"
                     and e["t"] > exiting["t"]
+                    and not is_hook(e)
                     and (target is None or e.get("installed_version") == target),
                     timeout_restart,
                     since,
@@ -674,7 +688,9 @@ def update(feed: str, opts: dict, timeout_restart: float = 300) -> dict:
                 if exiting
                 else None
             )
-            first_after = wait_event(lambda e: e["event"] == "start" and exiting and e["t"] > exiting["t"], 1, since)
+            first_after = wait_event(
+                lambda e: e["event"] == "start" and exiting and e["t"] > exiting["t"] and not is_hook(e), 1, since
+            )
             result["exiting_t"] = exiting["t"] if exiting else None
             result["restarted"] = restarted
             result["first_start_after_exit"] = first_after
@@ -694,7 +710,13 @@ def update(feed: str, opts: dict, timeout_restart: float = 300) -> dict:
     ]
     starts = [e for e in evs if e["event"] == "start"]
     result["starts"] = [
-        {"t": round(e["t"] - launched, 2), "pid": e["pid"], "restart": e.get("env_restart"), "installed": e.get("installed_version")}
+        {
+            "t": round(e["t"] - launched, 2),
+            "pid": e["pid"],
+            "restart": e.get("env_restart"),
+            "installed": e.get("installed_version"),
+            "hook": is_hook(e),
+        }
         for e in starts
     ]
     child_pids = []
@@ -703,7 +725,14 @@ def update(feed: str, opts: dict, timeout_restart: float = 300) -> dict:
             child_pids = [c["pid"] for c in e.get("children", [])]
     result["children_alive_after"] = {str(pid): pid_alive(pid) for pid in child_pids}
     result["processes_after"] = processes()
-    result["velopack_log"] = vlog_since(offset)[-20000:]
+    log = vlog_since(offset)
+    noisy = ("applying zsdiff patch", "deleting old/removed file", "Skipped", "copying unchanged")
+    result["velopack_log_key_lines"] = [
+        line for line in log.splitlines() if line.strip() and not any(n in line for n in noisy)
+    ][:400]
+    result["velopack_log_bytes"] = len(log)
+    result["velopack_fell_back_to_full"] = "Falling back to full update" in log
+    result["velopack_log"] = log[:6000] + "\n...\n" + log[-6000:] if len(log) > 12000 else log
     result["sizes_after"] = install_sizes()
     return result
 
@@ -797,6 +826,7 @@ def cmd_scenarios(args: argparse.Namespace) -> None:
         opts = {**opts, "target_version": args.target}
         record["update"] = update(str(feed_dir), opts, timeout_restart=opts.get("restart_timeout", 300))
         record["apply_relaunch_seconds"] = record["update"].get("apply_relaunch_seconds")
+        record["fell_back_to_full"] = record["update"].get("velopack_fell_back_to_full")
         record["tree"] = verify_tree(target_nupkg)
         record["signature"] = code_signature()
         return record
@@ -820,23 +850,62 @@ def cmd_scenarios(args: argparse.Namespace) -> None:
 
     if IS_WIN:
 
-        def lock_prepare() -> dict:
-            target = INSTALL / "app" / "src" / "row_bot" / "__init__.py"
+        def run_locked(logdir: Path) -> dict:
+            """A process outside the install dir holds a file in current/ open with no sharing."""
+            record = {"install": install(args, logdir)}
+            # Full-package path (no cached base) keeps staging short; locking is about apply.
+            removed = [p.name for p in PACKAGES.glob("*-full.nupkg")]
+            for p in PACKAGES.glob("*-full.nupkg"):
+                p.unlink()
+            target_file = INSTALL / "app" / "src" / "row_bot" / "__init__.py"
             holder = subprocess.Popen(  # noqa: S603
                 [
                     "pwsh",
                     "-NoProfile",
                     "-Command",
-                    f"$f=[IO.File]::Open('{target}','Open','Read','None'); Start-Sleep {args.lock_seconds}; $f.Close()",
+                    f"$f=[IO.File]::Open('{target_file}','Open','Read','None'); Start-Sleep 1800; $f.Close()",
                 ]
             )
             time.sleep(3)
-            return {"lock_holder_pid": holder.pid, "file": str(target), "seconds": args.lock_seconds}
+            record["prepare"] = {"removed": removed, "lock_holder_pid": holder.pid, "file": str(target_file)}
+            record["update"] = update(
+                str(feed), {"children": False, "target_version": args.target}, timeout_restart=args.lock_seconds
+            )
+            record["apply_relaunch_seconds"] = record["update"].get("apply_relaunch_seconds")
+            record["fell_back_to_full"] = record["update"].get("velopack_fell_back_to_full")
+            record["installed_while_locked"] = [
+                s for s in record["update"]["starts"] if not s.get("hook")
+            ]
+            kill_everything([holder.pid])
+            # Next launch after the lock is gone: does the pending update apply on startup?
+            since = len(events())
+            offset = vlog_offset()
+            write_control({"action": "idle", "idle_seconds": 1})
+            launched = time.time()
+            launch_app()
+            later = wait_event(
+                lambda e: e["event"] == "start" and not is_hook(e) and e.get("installed_version") == args.target,
+                400,
+                since,
+            )
+            record["after_unlock_launch"] = {
+                "target_start_seconds": round(later["t"] - launched, 1) if later else None,
+                "starts": [
+                    {"t": round(e["t"] - launched, 1), "installed": e.get("installed_version"), "hook": is_hook(e)}
+                    for e in events()[since:]
+                    if e["event"] == "start"
+                ],
+                "velopack_log_key_lines": [
+                    line
+                    for line in vlog_since(offset).splitlines()
+                    if line.strip() and "deleting old" not in line and "Skipped" not in line
+                ][:200],
+            }
+            time.sleep(5)
+            record["tree"] = verify_tree(target_nupkg)
+            return record
 
-        scenario(
-            "locked_file",
-            lambda d: basic(d, {"children": False, "restart_timeout": args.lock_seconds + 240}, prepare=lock_prepare),
-        )
+        scenario("locked_file", run_locked)
 
     for mode in ("delta_bytes", "delta_zsdiff_rehash", "delta_newfile_rehash"):
         bad = args.work / f"feed-{mode}"
@@ -845,8 +914,7 @@ def cmd_scenarios(args: argparse.Namespace) -> None:
             detail = make_bad_feed(feed, bad, args.target, mode)
             record = basic(logdir, {"children": False, "quit_host": True}, feed_dir=bad, seed_kind=mac_seed)
             record["bad_feed"] = detail
-            log = record["update"].get("velopack_log", "")
-            record["fell_back_to_full"] = "Falling back to full update" in log
+            record["fell_back_to_full"] = record["update"].get("velopack_fell_back_to_full")
             shutil.rmtree(bad, ignore_errors=True)
             return record
 
@@ -933,7 +1001,7 @@ def main() -> None:
     p.add_argument("--setup", type=Path)
     p.add_argument("--portable", type=Path)
     p.add_argument("--work", type=Path, required=True)
-    p.add_argument("--lock-seconds", type=int, default=60)
+    p.add_argument("--lock-seconds", type=int, default=420)
     p.add_argument(
         "--which",
         default="normal,synth_base,synth_base_quit_host,seeded_quit_host,locked_file,delta_bytes,"

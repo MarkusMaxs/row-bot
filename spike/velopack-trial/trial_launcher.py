@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -79,9 +80,10 @@ def wait_http(url: str, timeout: float) -> float | None:
     start = time.time()
     while time.time() - start < timeout:
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:  # noqa: S310 - loopback only
-                if 200 <= response.status < 500:
-                    return time.time() - start
+            with urllib.request.urlopen(url, timeout=2):  # noqa: S310 - loopback only
+                return time.time() - start
+        except urllib.error.HTTPError:
+            return time.time() - start  # the server answered
         except Exception:  # noqa: BLE001
             pass
         time.sleep(0.25)
@@ -118,7 +120,7 @@ def start_children(control: dict) -> list[dict]:
             stderr=server_log,
             creationflags=flags,
         )
-        ready = wait_http(f"http://127.0.0.1:{port}/api/launcher-ping", float(control.get("server_timeout", 240)))
+        ready = wait_http(f"http://127.0.0.1:{port}/healthz", float(control.get("server_timeout", 240)))
         children.append({"kind": "server", "pid": proc.pid, "ready_seconds": ready, "port": port})
         log("server_child", pid=proc.pid, ready_seconds=ready, port=port)
     if control.get("window_child", True):

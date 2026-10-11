@@ -1,1 +1,1 @@
-{"windows": false, "macos": true, "variants": ["a", "b"], "scenarios": "all", "notarize": false, "reuse_packages": true, "note": "run 4: macOS after osx package naming fix"}
+{"windows": true, "macos": true, "variants": ["b"], "scenarios": "normal,locked_file,delta_bytes,delta_zsdiff_rehash,delta_newfile_rehash,http_probe,seeded_quit_host,synth_base_quit_host,uninstall", "notarize": true, "reuse_packages": true, "note": "run 5: rebuild b with path-independent pyc and fixed probes; notarize the macOS 5.1 app once"}
