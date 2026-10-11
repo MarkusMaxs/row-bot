@@ -47,7 +47,7 @@ def test_migration_scan_rejects_overlap_and_missing_source(tmp_path):
 
 
 @pytest.mark.slow
-def test_migration_scan_api_denies_remote_before_reading_source(tmp_path, monkeypatch):
+def test_migration_scan_api_reads_the_source_only_when_asked_from_any_device(tmp_path, monkeypatch):
     source = create_realistic_hermes_home(tmp_path / "source")
     target = tmp_path / "target"
     calls = []
@@ -58,15 +58,14 @@ def test_migration_scan_api_denies_remote_before_reading_source(tmp_path, monkey
         return original(**kwargs)
 
     monkeypatch.setattr(client_migration, "scan_migration", observed)
-    local, _, _ = client_app()
-    remote, _, _ = client_app(remote=True)
+    remote, _, active = client_app(remote=True)
     body = {"provider": "hermes", "source": str(source), "target": str(target), "include_secrets": False}
-    with local, remote:
-        _, headers = bootstrap(local)
+    with remote:
         _, remote_headers = bootstrap(remote)
-        assert remote.post("/api/v1/system/migration/scan", headers=remote_headers, json=body).status_code == 403
         assert calls == []
-        result = local.post("/api/v1/system/migration/scan", headers=headers, json=body)
+        result = remote.post("/api/v1/system/migration/scan", headers=remote_headers, json=body)
+        active["value"] = False
+        assert remote.post("/api/v1/system/migration/scan", headers=remote_headers, json=body).status_code == 401
     assert result.status_code == 200, result.text
     assert result.json()["summary"]["selected"] > 0
     assert calls == ["hermes"]
@@ -125,16 +124,17 @@ def test_migration_apply_rejects_stale_denied_and_unconfirmed(tmp_path, monkeypa
     assert not target.exists()
 
 
-def test_migration_api_review_apply_recover_and_remote_denial(tmp_path, monkeypatch):
+def test_migration_api_review_apply_and_recover_from_another_device(tmp_path, monkeypatch):
+    """One owner: a paired phone or a server session imports as this computer does."""
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-profile"))
     source = create_realistic_hermes_home(tmp_path / "source")
     target = tmp_path / "target"
     local, _, _ = client_app()
-    remote, _, _ = client_app(remote=True)
+    remote, _, active = client_app(remote=True)
     with local, remote:
-        _, headers = bootstrap(local)
-        _, remote_headers = bootstrap(remote)
-        scan = local.post("/api/v1/system/migration/scan", headers=headers, json={
+        _, local_headers = bootstrap(local)
+        _, headers = bootstrap(remote)
+        scan = remote.post("/api/v1/system/migration/scan", headers=headers, json={
             "provider": "hermes", "source": str(source), "target": str(target),
         })
         assert scan.status_code == 200, scan.text
@@ -142,24 +142,25 @@ def test_migration_api_review_apply_recover_and_remote_denial(tmp_path, monkeypa
         chosen = [next(item["id"] for item in preview["items"] if item["category"] == "identity" and item["status"] == "planned")]
         request = {"plan_id": preview["plan_id"], "revision": preview["revision"],
                    "selected_ids": chosen, "overwrite": False}
-        assert remote.post("/api/v1/system/migration/review", headers=remote_headers, json=request).status_code == 403
-        review = local.post("/api/v1/system/migration/review", headers=headers, json=request)
+        review = remote.post("/api/v1/system/migration/review", headers=headers, json=request)
         assert review.status_code == 200, review.text
         command_id = str(uuid4())
         body = {**request, "command_id": command_id,
                 "review_digest": review.json()["review_digest"], "confirmed": True}
-        assert remote.post("/api/v1/system/migration/apply", headers={**remote_headers, "idempotency-key": command_id}, json=body).status_code == 403
         assert not target.exists()
-        assert local.post("/api/v1/system/migration/apply", headers=headers, json=body).status_code == 409
-        executed = local.post("/api/v1/system/migration/apply", headers={**headers, "idempotency-key": command_id}, json=body)
+        assert remote.post("/api/v1/system/migration/apply", headers=headers, json=body).status_code == 409
+        executed = remote.post("/api/v1/system/migration/apply", headers={**headers, "idempotency-key": command_id}, json=body)
         assert executed.status_code == 200, executed.text
         receipt = executed.json()
         assert receipt["summary"]["migrated"] == 1
-        repeat = local.post("/api/v1/system/migration/apply", headers={**headers, "idempotency-key": command_id}, json=body)
+        repeat = remote.post("/api/v1/system/migration/apply", headers={**headers, "idempotency-key": command_id}, json=body)
         assert repeat.json() == receipt
-        recovered = local.get(f"/api/v1/system/migration/apply/{command_id}", headers=headers)
+        recovered = remote.get(f"/api/v1/system/migration/apply/{command_id}", headers=headers)
         assert recovered.json() == receipt
-        assert remote.get(f"/api/v1/system/migration/apply/{command_id}", headers=remote_headers).status_code == 403
+        # The owner's other devices read the same receipt.
+        assert local.get(f"/api/v1/system/migration/apply/{command_id}", headers=local_headers).json() == receipt
+        active["value"] = False
+        assert remote.get(f"/api/v1/system/migration/apply/{command_id}", headers=headers).status_code == 401
 
 
 def test_migration_interruption_keeps_durable_original_command(tmp_path, monkeypatch):
@@ -246,7 +247,8 @@ def test_migration_finds_the_old_app_in_its_usual_folder(tmp_path, monkeypatch):
     assert not (tmp_path / "target").exists()
 
 
-def test_migration_sources_api_is_for_this_computer_only(tmp_path, monkeypatch):
+def test_migration_sources_name_the_usual_folders_on_the_computer_row_bot_runs_on(tmp_path, monkeypatch):
+    """Any signed-in device reads them: the folders are on the computer Row-Bot runs on."""
     home = tmp_path / "home"
     create_realistic_hermes_home(home / ".hermes")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
@@ -255,9 +257,10 @@ def test_migration_sources_api_is_for_this_computer_only(tmp_path, monkeypatch):
     with local, remote:
         _, headers = bootstrap(local)
         _, remote_headers = bootstrap(remote)
-        assert remote.get("/api/v1/system/migration/sources", headers=remote_headers).status_code == 403
+        elsewhere = remote.get("/api/v1/system/migration/sources", headers=remote_headers)
         result = local.get("/api/v1/system/migration/sources", headers=headers)
-    assert result.status_code == 200, result.text
+    assert result.status_code == elsewhere.status_code == 200, result.text
+    assert result.json() == elsewhere.json()
     assert result.json()["sources"][0] == {"provider": "hermes", "label": "Hermes Agent",
                                            "found": True, "place": "~/.hermes"}
 

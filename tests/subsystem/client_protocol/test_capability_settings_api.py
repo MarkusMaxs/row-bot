@@ -317,20 +317,26 @@ def test_plugin_command_rejects_route_identity_mismatch(api):
     assert response.json()["code"] == "invalid_plugin_command"
 
 
-def test_a_channel_link_code_is_read_only_by_the_owner_on_this_computer(tmp_path, monkeypatch):
-    """B139: WhatsApp's QR links a phone to Row-Bot; a remote device never
-    reads it, and the local owner's read never starts anything."""
+def test_a_channel_link_code_is_read_by_any_signed_in_device_and_starts_nothing(tmp_path, monkeypatch):
+    """B139: WhatsApp's QR links a phone to Row-Bot. Any of the owner's devices
+    shows it (to scan from another one); a signed-out one never reads it, and a
+    read never starts anything."""
     from row_bot.application import channel_controls
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
     reads = []
     monkeypatch.setattr(channel_controls, "read_channel_link", lambda channel_id, **_kwargs: (
         reads.append(channel_id) or {"state": "scan", "code": "synthetic-link-code"}))
-    remote, _, _ = client_app(remote=True)
+    remote, _, active = client_app(remote=True)
     with remote:
         _, headers = bootstrap(remote)
-        assert remote.get("/api/v1/settings/channels/whatsapp/link", headers=headers).status_code == 403
-    assert reads == []
+        elsewhere = remote.get("/api/v1/settings/channels/whatsapp/link", headers=headers)
+        assert elsewhere.status_code == 200, elsewhere.text
+        assert elsewhere.json() == {"state": "scan", "code": "synthetic-link-code"}
+        active["value"] = False
+        assert remote.get("/api/v1/settings/channels/whatsapp/link", headers=headers).status_code == 401
+    assert reads == ["whatsapp"]
+    reads.clear()
     local, _, _ = client_app()
     with local:
         _, headers = bootstrap(local)

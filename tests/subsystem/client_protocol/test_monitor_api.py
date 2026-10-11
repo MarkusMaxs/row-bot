@@ -63,25 +63,31 @@ def test_monitor_snapshot_is_passive_bounded_and_redacts_local_logs(
     assert root.exists()
 
 
-def test_monitor_api_separates_remote_log_authority(tmp_path, monkeypatch):
+def test_every_signed_in_device_reads_the_redacted_logs(tmp_path, monkeypatch):
+    """One owner: a paired phone or a server session reads what this computer does."""
     _monitor_store(tmp_path, monkeypatch)
     local, _, _ = client_app()
-    remote, _, _ = client_app(remote=True)
+    remote, _, active = client_app(remote=True)
     with local, remote:
         _, local_headers = bootstrap(local)
         _, remote_headers = bootstrap(remote)
         local_snapshot = local.get("/api/v1/monitor", headers=local_headers)
         remote_snapshot = remote.get("/api/v1/monitor", headers=remote_headers)
-        denied = remote.get("/api/v1/monitor/logs", headers=remote_headers)
+        logs = remote.get("/api/v1/monitor/logs", headers=remote_headers)
+        active["value"] = False
+        signed_out = remote.get("/api/v1/monitor/logs", headers=remote_headers)
     assert local_snapshot.status_code == remote_snapshot.status_code == 200
     assert local_snapshot.json()["logs"]["authorized"] is True
-    assert remote_snapshot.json()["logs"]["authorized"] is False
-    assert denied.status_code == 403
+    assert remote_snapshot.json()["logs"]["authorized"] is True
+    assert logs.status_code == 200, logs.text
+    assert "token=private" not in logs.text and "Users\\\\Fixture" not in logs.text
+    assert signed_out.status_code == 401
 
 
-def test_system_diagnosis_requires_local_explicit_request(tmp_path, monkeypatch):
-    """Reading the kept results runs nothing, on any device; running every
-    check (it contacts providers and the internet) is the local owner's."""
+def test_system_diagnosis_runs_only_on_an_explicit_request_from_any_device(tmp_path, monkeypatch):
+    """Reading the kept results runs nothing; running every check (it contacts
+    providers and the internet) takes an explicit request, from any of the
+    owner's signed-in devices, never from a signed-out one."""
     _monitor_store(tmp_path, monkeypatch)
     from row_bot import status_checks
     from row_bot.status_checks import CheckResult
@@ -99,18 +105,20 @@ def test_system_diagnosis_requires_local_explicit_request(tmp_path, monkeypatch)
     monkeypatch.setattr(status_checks, "NETWORK_CHECKS", (fake_ollama,))
     monkeypatch.setattr(status_checks, "LOCAL_CHECKS", (fake_disk,))
     local, _, _ = client_app()
-    remote, _, _ = client_app(remote=True)
+    remote, _, remote_active = client_app(remote=True)
     with local, remote:
         _, local_headers = bootstrap(local)
         _, remote_headers = bootstrap(remote)
         empty = {"schema_version": 1, "hourly_network_checks": True, "checks": []}
         assert local.get("/api/v1/monitor/diagnosis", headers=local_headers).json() == empty
         assert calls == []
-        assert remote.post("/api/v1/monitor/diagnosis", headers=remote_headers).status_code == 403
-        assert calls == []
-        result = local.post("/api/v1/monitor/diagnosis", headers=local_headers)
+        result = remote.post("/api/v1/monitor/diagnosis", headers=remote_headers)
         assert result.status_code == 200, result.text
-        kept = remote.get("/api/v1/monitor/diagnosis", headers=remote_headers)
+        kept = local.get("/api/v1/monitor/diagnosis", headers=local_headers)
+        signed_out_calls = list(calls)
+        remote_active["value"] = False
+        assert remote.post("/api/v1/monitor/diagnosis", headers=remote_headers).status_code == 401
+        assert calls == signed_out_calls
     assert result.json() == {"schema_version": 1, "hourly_network_checks": True, "checks": [
         {"id": "ollama", "name": "Ollama", "status": "warn", "detail": "Server offline",
          "checked_at": 1.0, "settings_tab": "Models", "network": True, "stale": True,
@@ -261,12 +269,18 @@ def test_attention_is_quiet_when_healthy_and_names_what_needs_you(tmp_path, monk
     value = client_monitor.read_attention(include_update=True)
     assert [problem["id"] for problem in value["problems"]] == ["channel:telegram"]
     assert value["update"] == {"version": "9.1.0"}
-    # Another device reads the problems, never the update (it can't install).
+    # Without its update (for the projection's own callers).
     assert client_monitor.read_attention(include_update=False)["update"] is None
 
     local, _, _ = client_app()
-    with local:
+    remote, _, _ = client_app(remote=True)
+    with local, remote:
         _, headers = bootstrap(local)
         response = local.get("/api/v1/monitor/attention", headers=headers)
         assert response.status_code == 200, response.text
         assert response.json()["problems"][0]["title"] == "Telegram stopped"
+        # Every signed-in device hears about the update: any of them can install it.
+        _, remote_headers = bootstrap(remote)
+        elsewhere = remote.get("/api/v1/monitor/attention", headers=remote_headers)
+        assert elsewhere.status_code == 200, elsewhere.text
+        assert elsewhere.json()["update"] == {"version": "9.1.0"}

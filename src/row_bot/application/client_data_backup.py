@@ -1,4 +1,4 @@
-"""Settings › Data: Back up now and Restore from backup for the local owner.
+"""Settings › Data: Back up now and Restore from backup, from any signed-in device.
 
 Backups and restores are long, so one runs at a time in the background and
 the page reads its progress. A restore is two steps: the picked archive is
@@ -76,17 +76,13 @@ def _job_view() -> dict | None:
                                                "skipped")}
 
 
-def read_state(*, local_owner: bool) -> dict:
-    """What the Data page shows; other devices see only that it is local."""
-    if not local_owner:
-        return {"local_owner": False, "last_backup_at": None, "last_backup_name": None,
-                "folder": None, "job": None, "pending_restore": None, "restore_result": None}
+def read_state() -> dict:
+    """What the Data page shows, the same on every signed-in device."""
     data = _data_dir()
     state = profile_backup.backup_state(data)
     pending = profile_restore.pending(data)
     result = profile_restore.result(data)
     return {
-        "local_owner": True,
         "last_backup_at": state.get("last_backup_at"),
         "last_backup_name": state.get("name"),
         "folder": _folder_words(),

@@ -1,4 +1,4 @@
-"""Account health stays passive until an explicit local-owner action."""
+"""Account health stays passive until an explicit action, from any signed-in device."""
 
 from __future__ import annotations
 
@@ -75,22 +75,32 @@ def test_github_cli_action_starts_only_on_click_and_does_not_claim_login(tmp_pat
     assert starts == ["login"]
 
 
-def test_github_access_api_denies_remote_before_account_probe(tmp_path, monkeypatch):
+def test_another_device_checks_github_but_the_cli_sign_in_needs_the_desktop_app(tmp_path, monkeypatch):
+    """The GitHub CLI's sign-in opens a console on the computer Row-Bot runs on."""
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
     monkeypatch.setattr(github_account, "shared_github_status", _passive)
-    monkeypatch.setattr(client_accounts, "resolve_github_cli", lambda: "")
+    monkeypatch.setattr(client_accounts, "resolve_github_cli", lambda: "gh")
     calls = []
-    monkeypatch.setattr(github_account, "check_github_access", lambda: calls.append("check"))
-    remote, _, _ = client_app(remote=True)
+    monkeypatch.setattr(github_account, "check_github_access", lambda: calls.append("check") or _passive())
+    monkeypatch.setattr(client_accounts, "_start_cli", lambda mode: calls.append(mode))
+    remote, _, active = client_app(remote=True)
     with remote:
         _, headers = bootstrap(remote)
-        assert remote.get("/api/v1/accounts/github/access", headers=headers).status_code == 403
-        command_id = str(uuid4())
-        response = remote.post("/api/v1/accounts/github/access/commands", headers={**headers, "idempotency-key": command_id}, json={
-            "command_id": command_id, "expected_revision": "a" * 64, "action": "check",
-        })
-        assert response.status_code == 403
-    assert calls == []
+        read = remote.get("/api/v1/accounts/github/access", headers=headers)
+        assert read.status_code == 200, read.text
+        revision = read.json()["revision"]
+        login_id = str(uuid4())
+        login = remote.post("/api/v1/accounts/github/access/commands", headers={**headers, "idempotency-key": login_id},
+                            json={"command_id": login_id, "expected_revision": revision, "action": "cli_login"})
+        check_id = str(uuid4())
+        check = remote.post("/api/v1/accounts/github/access/commands", headers={**headers, "idempotency-key": check_id},
+                            json={"command_id": check_id, "expected_revision": revision, "action": "check"})
+        active["value"] = False
+        signed_out = remote.get("/api/v1/accounts/github/access", headers=headers)
+    assert login.status_code == 409 and login.json()["code"] == "desktop_only"
+    assert check.status_code == 200, check.text
+    assert calls == ["check"]
+    assert signed_out.status_code == 401
 
 
 def test_accounts_and_monitor_share_one_github_status(tmp_path, monkeypatch):

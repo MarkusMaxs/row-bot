@@ -70,6 +70,13 @@ _LOCAL_APPLICATION_CAPABILITIES = (
     "computer:interactive",
 )
 _PRESENTATION_FEATURES = frozenset({"panels", "responsive", "pwa", "compact"})
+# Settings actions that act on this computer's screen (Computer Use's test
+# opens Calculator; the others open macOS System Settings): desktop app only.
+_SCREEN_SETTINGS_ACTIONS = frozenset({
+    ("system", "computer_use.test"),
+    ("system", "computer_use.open_accessibility"),
+    ("system", "computer_use.open_screen_recording"),
+})
 _STATUS = {
     "not_found": 404,
     "cursor_expired": 410,
@@ -316,7 +323,7 @@ _STATUS.update(
 )
 _STATUS.update(
     {
-        "owner_local_only": 403,
+        "desktop_only": 409,
         "backup_not_row_bot": 422,
         "backup_newer": 422,
         "backup_invalid": 422,
@@ -1330,13 +1337,28 @@ def create_router(
         return current
 
     async def integration_owner(request: Request) -> str:
-        """Durable principal identity; every effect still validates its session."""
+        """Durable principal identity; every effect still validates its session.
+
+        Row-Bot has one owner, so each of their signed-in devices is the same
+        principal: a change started on one can be read or finished on another.
+        """
         context = await _context(request)
-        if context.is_local_owner:
-            return security.instance_id
-        if not context.device_id:
+        if not context.authenticated:
             raise ProtocolError("authentication_required", 401)
-        return security.instance_id + ":device:" + context.device_id
+        return security.instance_id
+
+    def on_this_computer(context: AccessContext) -> bool:
+        """The desktop app on the computer Row-Bot runs on (not a permission).
+
+        Every signed-in device has the owner's full authority. Only what has to
+        happen on this computer's own screen (a native window, picker or
+        terminal, the file manager, its browser, Computer Use) needs it.
+        """
+        return context.is_local_owner and context.direct_loopback
+
+    def require_this_computer(context: AccessContext) -> None:
+        if not on_this_computer(context):
+            raise ProtocolError("desktop_only", 409)
 
     async def call(method: Callable, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(method, *args, **kwargs)
@@ -1415,7 +1437,7 @@ def create_router(
         )
         security.rate(current, "query")
         discovery = await call(choices)
-        local_owner = context.is_local_owner and context.direct_loopback
+        local_owner = on_this_computer(context)
         if not local_owner:
             discovery = {
                 **discovery,
@@ -1467,7 +1489,9 @@ def create_router(
         )
 
     def require_native_local(request: Request, context: AccessContext) -> None:
-        if not context.is_local_owner or not context.direct_loopback:
+        # The native bridge's own routes, for the desktop app on this computer;
+        # their one-shot attestation and grants keep other tabs out as well.
+        if not on_this_computer(context):
             raise ProtocolError("action_denied", 403)
         # Browsers omit Origin on ordinary same-origin GETs. Keep a supplied
         # Origin strict, and require it for commands that can change state.
@@ -2678,10 +2702,10 @@ def create_router(
     async def computer_control_authority(
         conversation_id: str, request: Request, current: Any
     ) -> Callable[[], None]:
-        # The picture and the controls are this computer's own screen: only
-        # the local owner on a direct loopback connection may see or use them.
+        # The picture and the controls are this computer's own screen: they
+        # are there only in the desktop app on this computer (a capability).
         context = await _context(request)
-        if not (context.is_local_owner and context.direct_loopback):
+        if not on_this_computer(context):
             raise ProtocolError("computer_use_local_only", 403)
         await readable_conversation(conversation_id)
         access = dispatch_validation(request, current)
@@ -3202,11 +3226,8 @@ def create_router(
             "folder_grant"
         ):
             context = await _context(request)
-            if (
-                context.authentication_kind != "local_owner"
-                or not context.direct_loopback
-            ):
-                raise ProtocolError("action_denied", 403)
+            if not on_this_computer(context):
+                raise ProtocolError("action_denied", 403)  # a pick in the desktop app's own picker
 
             def validate_native_folder(scope: Any) -> None:
                 if not security.authorize_native_grant(
@@ -3774,9 +3795,11 @@ def create_router(
             command=wire,
             target=target,
             validate=validate_dispatch,
+            # Same authority either way; the label says whose screen the turn
+            # is on, which Computer Use needs (it drives this computer's own).
             runtime_surface=(
                 "normal_chat"
-                if (await _context(request)).is_local_owner
+                if on_this_computer(await _context(request))
                 else "remote_client"
             ),
             **(
@@ -4013,9 +4036,8 @@ def create_router(
     @router.post("/resources/folder-selection")
     async def select_folder(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        if context.authentication_kind != "local_owner" or not context.direct_loopback:
-            raise ProtocolError("action_denied", 403)
+        # The system's folder picker opens on this computer's screen.
+        require_this_computer(await _context(request))
         result = await call(
             folder_selections.pick, current.id, dispatch_validation(request, current)
         )
@@ -4056,8 +4078,8 @@ def create_router(
         request: Request, current: Any, grant_id: str
     ) -> tuple[Any, Callable[[], None]]:
         context = await _context(request)
-        if context.authentication_kind != "local_owner" or not context.direct_loopback:
-            raise ProtocolError("action_denied", 403)
+        if not on_this_computer(context):
+            raise ProtocolError("action_denied", 403)  # a pick in the desktop app's own picker
         folder = await call(folder_selections.resolve, grant_id, current.id)
         from row_bot.application.wiki_commands import WikiScope
         from row_bot.file_ownership import directory_identity
@@ -4099,9 +4121,8 @@ def create_router(
     @router.post("/settings/wiki/open-folder")
     async def wiki_open_folder(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        if context.authentication_kind != "local_owner" or not context.direct_loopback:
-            raise ProtocolError("action_denied", 403)
+        # The file manager opens on this computer's screen.
+        require_this_computer(await _context(request))
         from row_bot.application.wiki_commands import open_configured_wiki_folder
 
         result = await call(
@@ -4291,10 +4312,9 @@ def create_router(
 
     @router.get("/settings/channels/{channel_id}/link")
     async def channel_link(channel_id: str, request: Request) -> JSONResponse:
-        # The code links a phone to Row-Bot (WhatsApp's QR, B139): only the
-        # owner on this computer reads it.
+        # The code links a phone to Row-Bot (WhatsApp's QR, B139). Any of the
+        # owner's devices may show it, to be scanned from another one.
         current = await session(request)
-        require_native_local(request, await _context(request))
         from row_bot.application.channel_controls import read_channel_link
 
         result = await call(
@@ -4369,18 +4389,13 @@ def create_router(
         )
         return await respond(request, dto.PluginCatalogPage, result)
 
-    async def plugin_lifecycle_authority(request: Request) -> None:
-        context = await _context(request)
-        if not (context.is_local_owner and context.direct_loopback):
-            raise ProtocolError("owner_local_only", 403)
-
     async def oauth_callback(request: Request) -> str:
-        """The loopback (local owner) or single approved public origin for MCP sign-in."""
+        """The loopback (desktop app) or single approved public origin for MCP sign-in."""
         from row_bot.application.client_mcp_auth import callback_uri
         context = await _context(request)
         server_address = request.scope.get("server")
         local_origin = None
-        if context.direct_loopback and context.is_local_owner and server_address:
+        if on_this_computer(context) and server_address:
             host, port = server_address
             if host in {"127.0.0.1", "::1", "localhost", "0.0.0.0", "::"} and isinstance(port, int) and 0 < port <= 65535:
                 local_origin = f"{request.scope.get('scheme', 'http')}://127.0.0.1:{port}"
@@ -4388,13 +4403,12 @@ def create_router(
 
     async def plan_context(request: Request, current: Any, **fields: Any) -> Any:
         from row_bot.integrations.plans import Context
-        context = await _context(request)
         try:
             redirect = await oauth_callback(request)
         except ValueError:
             redirect = ""
         return Context(owner_id=await integration_owner(request), mcp_owner_id=security.instance_id,
-            validate=dispatch_validation(request, current), local_owner=context.is_local_owner and context.direct_loopback,
+            validate=dispatch_validation(request, current),
             redirect_uri=redirect, runtimes=runtime_installations, read_policy=installation_policy, **fields)
 
     @router.get("/integrations/sources")
@@ -4573,9 +4587,8 @@ def create_router(
 
     @router.post("/integrations/uploads")
     async def integration_upload(request: Request) -> JSONResponse:
-        """A picked .zip, .skill or .mcpb file, kept privately and only read; Row-Bot on this computer only."""
+        """A picked .zip, .skill or .mcpb file, kept privately and only read."""
         current = await session(request, lane="mutation")
-        await plugin_lifecycle_authority(request)
         from row_bot.application.client_integrations import upload_file
         from row_bot.integrations.uploads import MAX_BYTES
         from urllib.parse import unquote
@@ -5148,27 +5161,19 @@ def create_router(
     @router.get("/monitor")
     async def monitor_snapshot(request: Request) -> JSONResponse:
         await session(request)
-        context = await _context(request)
         from row_bot.application.client_monitor import read_monitor_snapshot
 
-        result = await call(
-            read_monitor_snapshot,
-            include_logs=context.is_local_owner and context.direct_loopback,
-        )
+        result = await call(read_monitor_snapshot, include_logs=True)
         return await respond(request, dto.MonitorSnapshot, result)
 
     @router.get("/monitor/attention")
     async def monitor_attention(request: Request) -> JSONResponse:
-        # The sidebar's one indicator (parity rows 12, 13). Only the owner on
-        # this computer hears about updates: other devices can't install.
+        # The sidebar's one indicator (parity rows 12, 13), updates included:
+        # every signed-in device can install one.
         await session(request)
-        context = await _context(request)
         from row_bot.application.client_monitor import read_attention
 
-        result = await call(
-            read_attention,
-            include_update=context.is_local_owner and context.direct_loopback,
-        )
+        result = await call(read_attention, include_update=True)
         return await respond(request, dto.AttentionSnapshot, result)
 
     @router.get("/monitor/approvals")
@@ -5184,8 +5189,6 @@ def create_router(
     @router.get("/monitor/logs")
     async def monitor_logs(request: Request, limit: int = 200) -> JSONResponse:
         await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_monitor import read_monitor_logs
 
         result = await call(read_monitor_logs, limit=limit)
@@ -5194,8 +5197,6 @@ def create_router(
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:
         await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_diagnosis import run_system_diagnosis
 
         result = await call(run_system_diagnosis)
@@ -5218,20 +5219,23 @@ def create_router(
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
 
+    async def updates_for_this_device(request: Request, snapshot: dict) -> dict:
+        from row_bot.application.client_updates import install_needs_this_computer
+
+        here = not install_needs_this_computer() or on_this_computer(await _context(request))
+        return {**snapshot, "install_here": here}
+
     @router.get("/system/updates")
     async def update_snapshot(request: Request) -> JSONResponse:
         await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_updates import read_updates
 
-        return await respond(request, dto.UpdateSnapshot, await call(read_updates))
+        snapshot = await updates_for_this_device(request, await call(read_updates))
+        return await respond(request, dto.UpdateSnapshot, snapshot)
 
     @router.post("/system/updates/commands")
     async def update_command(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.UpdateCommand, 4096)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
@@ -5245,17 +5249,19 @@ def create_router(
             action=body.action,
             version=body.version,
         )
+        result = {**result, "snapshot": await updates_for_this_device(request, result["snapshot"])}
         return await respond(request, dto.UpdateReceipt, result)
 
     @router.post("/system/updates/installs")
     async def update_install_start(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.UpdateInstallCommand, 4096)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
-        from row_bot.application.client_updates import start_update_install
+        from row_bot.application.client_updates import install_needs_this_computer, start_update_install
+
+        if install_needs_this_computer():
+            require_this_computer(await _context(request))
 
         result = await call(
             start_update_install,
@@ -5270,8 +5276,6 @@ def create_router(
     @router.get("/system/updates/installs/{command_id}")
     async def update_install_status(command_id: UUID, request: Request) -> JSONResponse:
         current = await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_updates import read_update_install
 
         result = await call(
@@ -5282,8 +5286,6 @@ def create_router(
     @router.post("/system/updates/installs/{command_id}/cancel")
     async def update_install_cancel(command_id: UUID, request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_updates import cancel_update_install
 
         result = await call(
@@ -5294,8 +5296,6 @@ def create_router(
     @router.get("/accounts/github/access")
     async def github_access(request: Request) -> JSONResponse:
         current = await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_accounts import read_github_access
 
         result = await call(read_github_access, owner_id=current.id)
@@ -5304,11 +5304,12 @@ def create_router(
     @router.post("/accounts/github/access/commands")
     async def github_access_command(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.GitHubAccessCommand, 4096)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
+        if body.action in {"cli_login", "cli_refresh"}:
+            # GitHub CLI sign-in opens a console window on this computer.
+            require_this_computer(await _context(request))
         from row_bot.application.client_accounts import execute_github_access
 
         result = await call(
@@ -5323,8 +5324,6 @@ def create_router(
     @router.get("/accounts/github/access/commands/{command_id}")
     async def github_access_receipt(command_id: UUID, request: Request) -> JSONResponse:
         current = await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_accounts import read_github_receipt
 
         result = await call(
@@ -5335,8 +5334,6 @@ def create_router(
     @router.get("/accounts/{account}/auth")
     async def account_auth_snapshot(account: str, request: Request) -> JSONResponse:
         await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_account_oauth import read_account_auth
 
         result = await call(read_account_auth, account=account)
@@ -5345,13 +5342,15 @@ def create_router(
     @router.post("/accounts/{account}/auth/commands")
     async def account_auth_command(account: str, request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.AccountAuthCommand, 80000)
         if body.account != account or request.headers.get("idempotency-key", "") != str(
             body.command_id
         ):
             raise ProtocolError("idempotency_mismatch", 409)
+        if body.action == "start":
+            # Google and X sign-in opens this computer's browser and returns to a
+            # loopback address on it, so it needs the desktop app here for now.
+            require_this_computer(await _context(request))
         from row_bot.application.client_account_oauth import execute_account_auth
 
         result = await call(
@@ -5372,8 +5371,6 @@ def create_router(
         account: str, command_id: UUID, request: Request
     ) -> JSONResponse:
         current = await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_account_oauth import read_account_auth_receipt
 
         result = await call(
@@ -5388,8 +5385,6 @@ def create_router(
         account: str, command_id: UUID, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_account_oauth import cancel_account_auth
 
         result = await call(
@@ -5402,8 +5397,6 @@ def create_router(
     @router.get("/system/migration/sources")
     async def migration_sources(request: Request) -> JSONResponse:
         await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_migration import detect_sources
 
         return await respond(request, dto.MigrationSources, await call(detect_sources))
@@ -5411,8 +5404,6 @@ def create_router(
     @router.post("/system/migration/scan")
     async def migration_scan(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.MigrationScanRequest, 8192)
         from row_bot.application.client_migration import scan_migration
 
@@ -5458,8 +5449,6 @@ def create_router(
     @router.post("/system/migration/review")
     async def migration_review(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.MigrationApplyReviewRequest, 524288)
         from row_bot.application.client_migration import review_migration_apply
 
@@ -5476,8 +5465,6 @@ def create_router(
     @router.post("/system/migration/apply")
     async def migration_apply(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        require_native_local(request, context)
         body = await _body(request, dto.MigrationApplyCommand, 524288)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
@@ -5499,8 +5486,6 @@ def create_router(
     @router.get("/system/migration/apply/{command_id}")
     async def migration_receipt(command_id: UUID, request: Request) -> JSONResponse:
         current = await session(request)
-        context = await _context(request)
-        require_native_local(request, context)
         from row_bot.application.client_migration import read_migration_receipt
 
         result = await call(
@@ -6097,12 +6082,23 @@ def create_router(
             read_settings_snapshot,
             validate=dispatch_validation(request, current),
         )
-        context = await _context(request)
-        if not (context.is_local_owner and context.direct_loopback):
-            result["system"]["tunnel"]["main_app_url"] = None
-            result["system"]["tunnel"]["local_owner_control_available"] = False
-            result["system"]["computer_use"]["local_owner_control_available"] = False
-        return await respond(request, dto.SettingsSnapshot, result)
+        return await respond(request, dto.SettingsSnapshot, await for_this_device(request, result))
+
+    async def for_this_device(request: Request, snapshot: dict) -> dict:
+        # The same settings on every device; only the screen actions say where
+        # they can run. A copy: a kept receipt is never changed.
+        system = snapshot.get("system")
+        if on_this_computer(await _context(request)) or not isinstance(system, dict):
+            return snapshot
+        computer_use = system.get("computer_use")
+        if not isinstance(computer_use, dict):
+            return snapshot
+        return {**snapshot, "system": {**system, "computer_use": {**computer_use, "screen_actions_available": False}}}
+
+    async def receipt_for_this_device(request: Request, receipt: dict) -> dict:
+        if isinstance(receipt.get("snapshot"), dict):
+            receipt = {**receipt, "snapshot": await for_this_device(request, receipt["snapshot"])}
+        return receipt
 
     @router.get("/settings/tracker/{tracker_id}/entries")
     async def tracker_entries(tracker_id: str, request: Request) -> JSONResponse:
@@ -6120,12 +6116,8 @@ def create_router(
     async def settings_snapshot_review(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
         body = await _body(request, dto.SettingsMutationRequest, 32768)
-        if body.page == "system" and body.field.startswith(
-            ("tunnel.", "computer_use.")
-        ):
-            context = await _context(request)
-            if not (context.is_local_owner and context.direct_loopback):
-                raise ProtocolError("action_denied", 403)
+        if (body.page, body.field) in _SCREEN_SETTINGS_ACTIONS:
+            require_this_computer(await _context(request))
         from row_bot.application.settings_commands import review_settings_update
 
         result = await call(
@@ -6162,18 +6154,14 @@ def create_router(
         )
         if result is None:
             raise ProtocolError("not_found", 404)
-        return await respond(request, dto.SettingsMutationReceipt, result)
+        return await respond(request, dto.SettingsMutationReceipt, await receipt_for_this_device(request, result))
 
     @router.post("/settings/snapshot/commands")
     async def settings_snapshot_command(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
         body = await _body(request, dto.SettingsMutationCommand, 32768)
-        if body.payload.page == "system" and body.payload.field.startswith(
-            ("tunnel.", "computer_use.")
-        ):
-            context = await _context(request)
-            if not (context.is_local_owner and context.direct_loopback):
-                raise ProtocolError("action_denied", 403)
+        if (body.payload.page, body.payload.field) in _SCREEN_SETTINGS_ACTIONS:
+            require_this_computer(await _context(request))
         if request.headers.get("idempotency-key") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
         if str(body.client_session_id) != current.id:
@@ -6205,7 +6193,7 @@ def create_router(
                 folder_selections.resolve(grant_id, current.id).path
             ),
         )
-        return await respond(request, dto.SettingsMutationReceipt, result)
+        return await respond(request, dto.SettingsMutationReceipt, await receipt_for_this_device(request, result))
 
     @router.get("/tasks")
     async def saved_tasks(
@@ -8634,11 +8622,8 @@ def create_router(
     async def local_export(
         conversation_id: str, binding_id: str, export_id: str, request: Request
     ) -> tuple[str, Callable[[], None]]:
-        """Saving and opening files on this computer: the local owner only."""
+        """Saving an export into the workspace's Exports folder, from any device."""
         current = await session(request, lane="mutation")
-        context = await _context(request)
-        if context.authentication_kind != "local_owner" or not context.direct_loopback:
-            raise ProtocolError("owner_local_only", 403)
         try:
             if str(UUID(export_id)) != export_id:
                 raise ValueError
@@ -8675,6 +8660,9 @@ def create_router(
         conversation_id: str, binding_id: str, export_id: str, request: Request
     ) -> JSONResponse:
         identity, validate = await local_export(conversation_id, binding_id, export_id, request)
+        # Open and Show in folder open an app or the file manager on this
+        # computer's screen.
+        require_this_computer(await _context(request))
         body = await _body(request, dto.ArtifactExportReveal)
         from row_bot.designer.client_exports import reveal_export_copy
 
@@ -9020,15 +9008,9 @@ def create_router(
         )
         return await respond(request, dto.DeveloperRepositoryReceipt, result)
 
-    async def insight_authority(request: Request) -> None:
-        context = await _context(request)
-        if not (context.is_local_owner and context.direct_loopback):
-            raise ProtocolError("owner_local_only", 403)
-
     @router.get("/insights")
     async def insights_snapshot(request: Request) -> JSONResponse:
         current = await session(request)
-        await insight_authority(request)
         from row_bot.application.client_insights import read_insights
 
         return await respond(
@@ -9040,7 +9022,6 @@ def create_router(
     @router.get("/insights/commands/{command_id}")
     async def insight_receipt(command_id: UUID, request: Request) -> JSONResponse:
         current = await session(request)
-        await insight_authority(request)
         from row_bot.application.client_insights import read_insight_receipt
 
         result = await call(
@@ -9054,7 +9035,6 @@ def create_router(
     @router.post("/insights/commands")
     async def insight_command(request: Request) -> JSONResponse:
         current = await session(request, lane="mutation")
-        await insight_authority(request)
         body = await _body(request, dto.InsightCommand, 4096)
         if str(body.client_session_id) != current.id:
             raise ProtocolError("invalid_command", 422)
@@ -9070,30 +9050,13 @@ def create_router(
         )
         return await respond(request, dto.InsightReceipt, result)
 
-    async def custom_tool_authority(
-        conversation_id: str, binding_id: str, request: Request, current: Any
-    ) -> tuple[str, Callable[[], None]]:
-        context = await _context(request)
-        if not (context.is_local_owner and context.direct_loopback):
-            raise ProtocolError("owner_local_only", 403)
-        return await import_authority(conversation_id, binding_id, request, current)
-
-    async def custom_tool_library_authority(
-        request: Request, current: Any
-    ) -> Callable[[], None]:
-        context = await _context(request)
-        if not (context.is_local_owner and context.direct_loopback):
-            raise ProtocolError("owner_local_only", 403)
-        return dispatch_validation(request, current)
-
-    # Settings › Data (decision 21): the local owner on this computer only.
+    # Settings › Data (decision 21), from any signed-in device.
     _DATA_RECEIPTS: dict[str, dict] = {}
 
     async def data_backup_state(request: Request) -> dict:
-        context = await _context(request)
         from row_bot.application.client_data_backup import read_state
 
-        return await call(read_state, local_owner=bool(context.is_local_owner and context.direct_loopback))
+        return {**await call(read_state), "reveal_available": on_this_computer(await _context(request))}
 
     @router.get("/data/backup")
     async def data_backup(request: Request) -> JSONResponse:
@@ -9108,7 +9071,10 @@ def create_router(
             raise ProtocolError("invalid_command", 422)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
-        validate = await custom_tool_library_authority(request, current)
+        validate = dispatch_validation(request, current)
+        if body.action == "reveal":
+            # Show in folder opens the file manager on this computer's screen.
+            require_this_computer(await _context(request))
         key = f"{current.id}:{body.command_id}"
         if key in _DATA_RECEIPTS:
             receipt = dict(_DATA_RECEIPTS[key])
@@ -9118,7 +9084,7 @@ def create_router(
 
         review = None
         status = "completed"
-        # The owner check waits on the event loop, so it runs in a worker.
+        # The session check waits on the event loop, so it runs in a worker.
         await call(validate)
         if body.action == "backup":
             await call(data.backup)
@@ -9166,7 +9132,7 @@ def create_router(
             await call(data.cancel_restore)
         elif body.action == "dismiss_result":
             await call(data.dismiss_result)
-        else:
+        else:  # reveal
             await call(data.reveal_last)
         receipt = {"command_id": str(body.command_id), "status": status, "review": review}
         if body.action != "inspect_restore":
@@ -9179,7 +9145,7 @@ def create_router(
     @router.get("/custom-tools")
     async def custom_tool_library(request: Request) -> JSONResponse:
         current = await session(request)
-        validate = await custom_tool_library_authority(request, current)
+        validate = dispatch_validation(request, current)
         from row_bot.developer.client_custom_tool_library import read_custom_tool_library
 
         result = await call(read_custom_tool_library, validate=validate)
@@ -9188,7 +9154,7 @@ def create_router(
     @router.get("/custom-tools/commands/{command_id}")
     async def custom_tool_library_receipt(command_id: UUID, request: Request) -> JSONResponse:
         current = await session(request)
-        validate = await custom_tool_library_authority(request, current)
+        validate = dispatch_validation(request, current)
         from row_bot.developer.client_custom_tool_library import read_custom_tool_library_receipt
 
         result = await call(
@@ -9204,7 +9170,7 @@ def create_router(
             raise ProtocolError("invalid_command", 422)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
-        validate = await custom_tool_library_authority(request, current)
+        validate = dispatch_validation(request, current)
         folder = None
         if body.folder_grant:
             if body.action != "inspect":
@@ -9245,7 +9211,7 @@ def create_router(
         conversation_id: str, binding_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request)
-        identity, validate = await custom_tool_authority(
+        identity, validate = await import_authority(
             conversation_id, binding_id, request, current
         )
         from row_bot.developer.client_custom_tools import read_custom_tools
@@ -9260,7 +9226,7 @@ def create_router(
         conversation_id: str, binding_id: str, command_id: UUID, request: Request
     ) -> JSONResponse:
         current = await session(request)
-        identity, validate = await custom_tool_authority(
+        identity, validate = await import_authority(
             conversation_id, binding_id, request, current
         )
         from row_bot.developer.client_custom_tools import read_custom_tool_receipt
@@ -9285,7 +9251,7 @@ def create_router(
             raise ProtocolError("invalid_command", 422)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
-        identity, validate = await custom_tool_authority(
+        identity, validate = await import_authority(
             conversation_id, binding_id, request, current
         )
         from row_bot.developer.client_custom_tools import execute_custom_tool
@@ -10234,19 +10200,11 @@ def create_router(
             },
         )
 
-    async def local_owner_session(request: Request) -> Any:
-        """Writing and showing files on this computer: the local owner only."""
-        current = await session(request, lane="mutation")
-        context = await _context(request)
-        if context.authentication_kind != "local_owner" or not context.direct_loopback:
-            raise ProtocolError("owner_local_only", 403)
-        return current
-
     @router.post("/attachments/{reference}/save")
     async def attachment_save(reference: str, request: Request) -> JSONResponse:
         """Save a conversation export into Exports when the desktop window
         cannot show its Save dialog (B238)."""
-        current = await local_owner_session(request)
+        current = await session(request, lane="mutation")
         from row_bot.application.attachments import read_attachment
         from row_bot.application.export_folder import save_export
 
@@ -10261,7 +10219,9 @@ def create_router(
 
     @router.post("/exports/reveal")
     async def export_reveal(request: Request) -> JSONResponse:
-        await local_owner_session(request)
+        await session(request, lane="mutation")
+        # Show in folder opens the file manager on this computer's screen.
+        require_this_computer(await _context(request))
         body = await _body(request, dto.ExportRevealRequest)
         from row_bot.application.export_folder import reveal_export
 

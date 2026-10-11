@@ -32,7 +32,7 @@ def item(owner):
 
 
 def ctx(**fields):
-    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=True, **fields)
+    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, **fields)
 
 
 def connect(item_id, preset, overrides=None):
@@ -294,14 +294,13 @@ def test_a_server_that_fails_to_start_shows_what_it_wrote(item, owner, monkeypat
     _, plan = api.read_item(owner_id="owner", item_id=item)
     plan_id = str(uuid4())
     assert api.start_plan(ctx(), plan_id=plan_id, item_id=item, digest=plan["digest"])["state"] == "failed"
-    failed = plans.read_plan(ctx(), plan_id)  # Row-Bot on this computer.
+    # Any of the owner's signed-in devices reads the same masked lines.
+    failed = plans.read_plan(ctx(), plan_id)
     step = next(s for s in failed["steps"] if s["state"] == "failed")
     assert failed["state"] == "failed" and says in failed["message"]
     assert step["log"] == [line.replace("synthetic-secret", "\u2026").replace("shortpw99", "\u2026") for line in wrote]
     assert "synthetic-secret" not in json.dumps(failed) and "shortpw99" not in json.dumps(failed)
-    remote = plans.read_plan(plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None), plan_id)
-    assert all("log" not in s for s in remote["steps"])  # Never to another device,
-    assert wrote[-1] not in json.dumps(plans._load("owner", plan_id)[0])  # and never kept in the plan's record.
+    assert wrote[-1] not in json.dumps(plans._load("owner", plan_id)[0])  # Never kept in the plan's record.
 
 
 def test_a_refused_key_fails_the_check_and_lets_the_app_go(item, owner, monkeypatch):
@@ -546,7 +545,7 @@ def test_removing_what_a_package_left_behind_is_agreed_as_deleting_its_data():
     assert plans.compute(row, {}, intent="remove", cleanup=True)["digest"] == plan["digest"]
 
 
-def test_retry_checks_only_this_owners_unfinished_changes_again_and_packages_stay_local(item, owner, monkeypatch):
+def test_retry_checks_only_this_owners_unfinished_changes_again(item, owner, monkeypatch):
     from row_bot.mcp_client import targets
     from row_bot.runtime import admissions
     target = targets.admission_target(targets.normalize(None))
@@ -559,11 +558,6 @@ def test_retry_checks_only_this_owners_unfinished_changes_again_and_packages_sta
         checked.append((command_id, explicit)) or {"command_id": command_id, "settled": True, "message": ""}))
     assert api.settle_item(ctx(), item_id=item)["entry"]["id"] == item
     assert [c for c in checked if c[1]] == [("owner-change", True)]
-    package = facts.finish(facts.entry("plugin", "kit", "Kit", installed=True, lifecycle="installed"))
-    monkeypatch.setattr(facts, "read", lambda item_id, validate=None: package)
-    remote = plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=False)
-    with pytest.raises(ClientPlatformError, match="owner_local_only"):
-        api.settle_item(remote, item_id="plugin:kit")
 
 
 def test_a_package_cannot_choose_what_runs_without_asking(monkeypatch):

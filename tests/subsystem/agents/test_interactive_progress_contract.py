@@ -59,7 +59,8 @@ def test_interactive_progress_contract_is_injected_for_interactive_agent_surface
     agent = _fresh_agent(tmp_path, monkeypatch)
     _quiet_prompt_dependencies(agent, monkeypatch)
 
-    for surface in ("normal_chat", "designer", "developer"):
+    # remote_client: a chat on another of the owner's signed-in devices.
+    for surface in ("normal_chat", "remote_client", "designer", "developer"):
         prompt = _prompt_for(agent, surface=surface)
         assert "INTERACTIVE PROGRESS:" in prompt
         assert "stream occasional short user-facing progress updates" in prompt

@@ -435,7 +435,7 @@ def test_items_from_5_0_0_turn_off_from_apps_and_keep_their_other_settings(v5, m
     from row_bot.mcp_client import runtime
     monkeypatch.setattr(runtime, "_schedule", _never)
     servers_before = json.loads((v5.root / "mcp_servers.json").read_text(encoding="utf-8"))["servers"]
-    context = plans.Context(OWNER, OWNER, lambda: None, local_owner=True)
+    context = plans.Context(OWNER, OWNER, lambda: None)
     for name, kind in (("Fixture Notes", "mcp"), ("Meeting prep", "skill"), ("Fixture Notes Pack", "plugin")):
         item_id = _items(kind)[name]["id"]
         _, plan = api.read_item(owner_id=OWNER, item_id=item_id, intent="turn_off")

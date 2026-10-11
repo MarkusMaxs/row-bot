@@ -409,14 +409,13 @@ def _route_inventory(request: Request, context: AccessContext):
     )
 
 
-def _route_settings(context: AccessContext) -> dict[str, Any]:
+def _route_settings() -> dict[str, Any]:
     config = AccessRouteConfigStore().load_or_default()
     return {
         "listen_mode": config.listen_mode.value,
         "listening_on_network": _listening_on_network(),
         "configured_origins": list(config.configured_origins),
         "managed_externally": "ROW_BOT_ALLOWED_HOSTS" in os.environ,
-        "can_manage_routes": context.is_local_owner,
     }
 
 
@@ -724,14 +723,14 @@ def build_access_router(
             {
                 "ok": True,
                 **_route_inventory(request, context).to_dict(),
-                **_route_settings(context),
+                **_route_settings(),
             }
         )
 
     async def set_listen_mode(request: Request) -> JSONResponse:
         context = _owner_context(request)
-        if context is None or not context.is_local_owner:
-            return _error(403, "local_owner_required", "Use the local owner session.")
+        if context is None:
+            return _error(403, "forbidden", "Owner access is required.")
         if not _origin_ok(request, context):
             return _error(403, "origin_required", "Exact same origin is required.")
         if not _rate_ok(
@@ -770,8 +769,8 @@ def build_access_router(
 
     async def change_trusted_origin(request: Request) -> JSONResponse:
         context = _owner_context(request)
-        if context is None or not context.is_local_owner:
-            return _error(403, "local_owner_required", "Use the local owner session.")
+        if context is None:
+            return _error(403, "forbidden", "Owner access is required.")
         if not _origin_ok(request, context):
             return _error(403, "origin_required", "Exact same origin is required.")
         if not _rate_ok(
@@ -840,7 +839,6 @@ def build_access_router(
         return _json(
             {
                 "ok": True,
-                "can_manage": context.is_local_owner,
                 "status": verified.status.to_public_dict() if verified else None,
                 "verified_at": verified.verified_at.isoformat() if verified else None,
             }
@@ -848,8 +846,8 @@ def build_access_router(
 
     async def tailscale_check(request: Request) -> JSONResponse:
         context = _owner_context(request)
-        if context is None or not context.is_local_owner:
-            return _error(403, "local_owner_required", "Use the local owner session.")
+        if context is None:
+            return _error(403, "forbidden", "Owner access is required.")
         if not _origin_ok(request, context):
             return _error(403, "origin_required", "Exact same origin is required.")
         if not _rate_ok(
@@ -862,8 +860,8 @@ def build_access_router(
 
     async def tailscale_mutate(request: Request) -> JSONResponse:
         context = _owner_context(request)
-        if context is None or not context.is_local_owner:
-            return _error(403, "local_owner_required", "Use the local owner session.")
+        if context is None:
+            return _error(403, "forbidden", "Owner access is required.")
         if not _origin_ok(request, context):
             return _error(403, "origin_required", "Exact same origin is required.")
         if not _rate_ok(
@@ -967,8 +965,8 @@ def build_access_router(
 
     async def tailscale_receipt(request: Request) -> JSONResponse:
         context = _owner_context(request)
-        if context is None or not context.is_local_owner:
-            return _error(403, "local_owner_required", "Use the local owner session.")
+        if context is None:
+            return _error(403, "forbidden", "Owner access is required.")
         command_id = str(request.path_params.get("command_id") or "")
         if not command_id or len(command_id) > 80:
             return _error(400, "invalid_command", "Invalid Tailscale command ID.")

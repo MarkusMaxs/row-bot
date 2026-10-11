@@ -30,7 +30,6 @@ def isolated(tmp_path, monkeypatch, reload_for_data_dir):
 
 def test_recommendations_are_passive_and_packages_are_inspected_only_after_consent_for_one_owner(isolated, monkeypatch):
     from row_bot.application.client_plugin_lifecycle import review_plugin_lifecycle
-    from row_bot.integrations import plans
     from row_bot.mcp_client import marketplace
     from row_bot.plugins import hermes_catalog
     monkeypatch.setattr(marketplace, "_fetch_json", lambda *a, **k: pytest.fail("passive fetch"))
@@ -48,10 +47,7 @@ def test_recommendations_are_passive_and_packages_are_inspected_only_after_conse
     bundle = next(row for row in page["items"] if row["name"] == "Local text tools")
     _, plan = client_integrations.read_item(owner_id="local", item_id=bundle["id"], revision=page["revision"])
     assert plan["intent"] == "add" and [s["type"] for s in plan["steps"]] == ["consent", "test", "enable"]
-    with pytest.raises(plans.PlanError, match="owner_local_only"):
-        client_integrations.start_plan(plans.Context("local", "local", lambda: None), plan_id=str(uuid4()),
-                                       item_id=bundle["id"], revision=page["revision"], digest=plan["digest"])
-    assert before == files(), "searching, reviewing and a refused start neither inspect nor write"
+    assert before == files(), "searching and reviewing neither inspect nor write"
     # After consent the plan's check inspects the package for its own owner; another owner cannot use that review.
     inspected = inspect(owner_id="local", reference="bundled:local-text-tools")
     assert len(inspected["skills"]) == 2 and len(inspected["servers"]) == 1
@@ -239,3 +235,26 @@ def test_skill_discovery_reuses_saved_results_and_preserves_preview_authority(is
     assert done["state"] == "completed", (done["message"], done["steps"])
     assert installed == ["writing"], "the saved result's own skill was checked and added after consent"
     assert [bundle.install_ref for bundle in rechecked] == ["clawhub:example/writing"]
+
+
+def test_another_device_adds_a_package_file_and_a_signed_out_one_cannot(monkeypatch):
+    """One owner: a paired phone or a server session adds a .zip, .skill or .mcpb
+    file too; it is kept privately and only read, as from this computer."""
+    from row_bot.application import client_integrations as owner
+    from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
+
+    received = []
+    page = {"schema_version": 1, "revision": "d" * 64, "items": [], "total": 0, "next_cursor": None, "sources": []}
+    monkeypatch.setattr(owner, "upload_file", lambda **kwargs: received.append(
+        (kwargs["owner_id"], kwargs["filename"], kwargs["data"])) or page)
+    client, _service, active = client_app(remote=True)
+    with client:
+        _, headers = bootstrap(client)
+        upload = {**headers, "content-type": "application/octet-stream", "x-file-name": "notes.skill"}
+        added = client.post("/api/v1/integrations/uploads", headers=upload, content=b"fixture")
+        active["value"] = False
+        signed_out = client.post("/api/v1/integrations/uploads", headers=upload, content=b"fixture")
+    assert added.status_code == 200, added.text
+    # Every device is the owner's one principal for Apps & Skills.
+    assert received == [("fixture-instance", "notes.skill", b"fixture")]
+    assert signed_out.status_code == 401

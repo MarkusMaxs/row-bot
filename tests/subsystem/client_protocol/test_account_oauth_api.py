@@ -188,21 +188,39 @@ def test_disconnect_requires_confirmation_and_removes_only_account_tokens(tmp_pa
     assert not [value for value in keychain.values.values() if "google-token" in value]
 
 
-def test_account_auth_api_rejects_remote_before_provider_or_file_access(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
-    calls = []
-    monkeypatch.setattr(owner, "read_account_auth", lambda **kwargs: calls.append(kwargs))
-    remote, _, _ = client_app(remote=True)
+def test_another_device_manages_an_account_but_the_browser_sign_in_needs_the_desktop_app(
+        tmp_path, monkeypatch, keychain):
+    """Every signed-in device reads, disconnects and checks; the sign-in itself opens
+    the browser of the computer Row-Bot runs on and returns to a loopback address
+    there, so another device gets a capability error before any flow starts."""
+    _google_ready(tmp_path, monkeypatch, token={"token": "google-token"})
+    flows = []
+    monkeypatch.setattr(owner, "_google_flow", lambda: flows.append("google") or b"{}")
+    monkeypatch.setattr(owner, "Thread", ImmediateThread)
+    remote, _, active = client_app(remote=True)
     with remote:
         _, headers = bootstrap(remote)
-        assert remote.get("/api/v1/accounts/google/auth", headers=headers).status_code == 403
-        command_id = str(uuid4())
-        response = remote.post("/api/v1/accounts/google/auth/commands", headers={**headers, "idempotency-key": command_id}, json={
-            "command_id": command_id, "account": "google", "action": "check",
-            "expected_revision": "a" * 64,
+        read = remote.get("/api/v1/accounts/google/auth", headers=headers)
+        assert read.status_code == 200, read.text
+        snapshot = read.json()
+        start_id = str(uuid4())
+        start = remote.post("/api/v1/accounts/google/auth/commands", headers={**headers, "idempotency-key": start_id}, json={
+            "command_id": start_id, "account": "google", "action": "start", "expected_revision": snapshot["revision"],
         })
-        assert response.status_code == 403
-    assert calls == []
+        disconnect_id = str(uuid4())
+        disconnect = remote.post("/api/v1/accounts/google/auth/commands",
+                                 headers={**headers, "idempotency-key": disconnect_id}, json={
+            "command_id": disconnect_id, "account": "google", "action": "disconnect",
+            "expected_revision": snapshot["revision"], "confirmed": True,
+        })
+        active["value"] = False
+        signed_out = remote.get("/api/v1/accounts/google/auth", headers=headers)
+    assert start.status_code == 409 and start.json()["code"] == "desktop_only"
+    assert flows == []
+    assert disconnect.status_code == 200, disconnect.text
+    assert disconnect.json()["phase"] == "completed"
+    assert account_tokens.read("google") is None
+    assert signed_out.status_code == 401
 
 
 def test_account_auth_api_local_start_receipt_and_cancel(tmp_path, monkeypatch, keychain):

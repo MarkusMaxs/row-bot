@@ -1,4 +1,4 @@
-"""Settings › Data backup and restore through the API: local owner only, reviewed restores."""
+"""Settings › Data backup and restore through the API: any signed-in device, reviewed restores."""
 from __future__ import annotations
 
 import time
@@ -63,7 +63,7 @@ def test_back_up_then_restore_on_the_next_start_only_after_confirming(places):
     with client:
         proof, headers = _native_proof(client)
         state = client.get("/api/v1/data/backup", headers=headers).json()
-        assert state["local_owner"] is True and state["last_backup_at"] is None
+        assert state["reveal_available"] is True and state["last_backup_at"] is None
         started = _command(client, headers, "backup")
         assert started.status_code == 200, started.text
         assert started.json()["status"] == "accepted"
@@ -108,12 +108,30 @@ def test_a_foreign_archive_is_refused_before_anything_is_staged(places, tmp_path
     assert not (profile / ".restore-pending").exists()
 
 
-def test_other_devices_cannot_back_up_or_restore(places):
-    client, _service, _active = client_app(remote=True)
+def test_another_device_backs_up_and_reads_the_state_but_not_the_file_manager(places, monkeypatch):
+    """One owner: a paired phone or a server session backs up too. Show in folder
+    opens the file manager on the computer Row-Bot runs on, and a restore picks
+    its file with the desktop app's picker, so those stay with the desktop app."""
+    _profile, backups = places
+    opened = []
+    monkeypatch.setattr(data, "reveal_last", lambda: opened.append("reveal") or True)
+    client, _service, active = client_app(remote=True)
     with client:
         _handshake, headers = bootstrap(client)
         state = client.get("/api/v1/data/backup", headers=headers)
-        assert state.status_code == 200 and state.json()["local_owner"] is False
-        assert state.json()["last_backup_name"] is None
-        refused = _command(client, headers, "backup")
-        assert refused.status_code == 403 and refused.json()["code"] == "owner_local_only"
+        assert state.status_code == 200, state.text
+        assert state.json()["reveal_available"] is False and state.json()["folder"] == "Row-Bot › Backups"
+        started = _command(client, headers, "backup")
+        assert started.status_code == 200, started.text
+        assert started.json()["status"] == "accepted"
+        settled = _settled(client, headers)
+        assert settled["job"]["status"] == "completed"
+        assert (backups / settled["last_backup_name"]).is_file()
+        reveal = _command(client, headers, "reveal")
+        assert reveal.status_code == 409 and reveal.json()["code"] == "desktop_only"
+        # A restore takes a pick from the desktop app's own picker; nothing else names a file.
+        forged = _command(client, headers, "inspect_restore", file_grant="not-a-pick")
+        assert forged.status_code == 409 and forged.json()["code"] == "capability_revoked"
+        active["value"] = False
+        assert _command(client, headers, "backup").status_code == 401
+    assert opened == []

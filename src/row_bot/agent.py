@@ -1284,7 +1284,7 @@ def _interactive_progress_contract(runtime_surface: str) -> str:
         return ""
     if surface == "channel" and not _current_channel_streaming_var.get(False):
         return ""
-    if surface not in {"normal_chat", "designer", "developer", "channel"}:
+    if surface not in {"normal_chat", "remote_client", "designer", "developer", "channel"}:
         return ""
 
     parts = [
@@ -5810,7 +5810,8 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
     )
-    auto_allowed = runtime_mode == "auto" and runtime_surface in {"normal_chat", "channel"}
+    # A chat on another of the owner's devices runs like one on this computer.
+    auto_allowed = runtime_mode == "auto" and runtime_surface in {"normal_chat", "remote_client", "channel"}
     if runtime_mode == "chat_only" or auto_allowed:
         try:
             from row_bot.providers.readiness import evaluate_runtime_readiness
