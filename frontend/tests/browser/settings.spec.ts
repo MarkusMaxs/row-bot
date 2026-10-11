@@ -587,22 +587,20 @@ test('Document processing reviews the selected conversation and runs the admitte
       `Synthetic reviewed source bytes for the canonical document processing pipeline: ${info.project.name}.`,
     ),
   });
-  // Uploads are reviewed by the server and staged paused in one step.
+  // Uploads are reviewed by the server and staged paused in one step; "Add
+  // and process" then opens the new batch's processing review (F26).
   const uploaded = page.waitForResponse(
     (response) =>
       response.url().endsWith('/api/v1/documents/uploads/commands') &&
       response.request().method() === 'POST',
   );
   await upload
-    .getByRole('button', { name: 'Upload selected', exact: true })
+    .getByRole('button', { name: 'Add and process', exact: true })
     .click();
   const uploadResponse = await uploaded;
   expect(uploadResponse.ok()).toBe(true);
   const { batch_id } = await uploadResponse.json();
   const fileName = `Reviewed ${info.project.name}.txt`;
-  await page
-    .getByRole('button', { name: `Process ${fileName}`, exact: true })
-    .click();
   const processing = page.getByRole('region', {
     name: 'Document processing',
     exact: true,
@@ -753,13 +751,19 @@ test('Document upload retains selected files and stages exact streamed bytes pau
   await upload
     .getByLabel('Choose documents', { exact: true })
     .setInputFiles(files);
-  // The selection is retained by its owner across navigation.
+  // The selection is retained by its owner across navigation, each file with
+  // its size as attachments show it (B328).
   await openHomeThroughNavigation(page);
   await openDocumentsFromHome(page);
+  const selected = upload.getByRole('list', {
+    name: 'Selected documents',
+    exact: true,
+  });
   await expect(
-    upload.getByText(`${files[0].name} · ${files[0].buffer.length} bytes`, {
-      exact: true,
-    }),
+    selected.getByText(`${files[0].name} · 30 B`, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    selected.getByText(`${files[1].name} · 2.0 MB`, { exact: true }),
   ).toBeVisible();
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
@@ -772,15 +776,14 @@ test('Document upload retains selected files and stages exact streamed bytes pau
       response.url().endsWith('/api/v1/documents/uploads/commands') &&
       response.request().method() === 'POST',
   );
-  await upload
-    .getByRole('button', { name: 'Upload selected', exact: true })
-    .click();
+  // "Add only" stages the files paused; nothing is processed.
+  await upload.getByRole('button', { name: 'Add only', exact: true }).click();
   const response = await completed;
   expect(response.ok()).toBe(true);
   const receipt = await response.json();
   expect(receipt.status).toBe('completed');
-  await expect(upload.getByRole('status')).toHaveText(
-    'Upload staged. The batch is paused.',
+  await expect(upload.getByRole('status')).toContainText(
+    '2 documents added. They wait, paused, until you process them.',
   );
   const stored = await page.request.get(
     `/__p4_fixture/document-upload/${receipt.batch_id}`,
