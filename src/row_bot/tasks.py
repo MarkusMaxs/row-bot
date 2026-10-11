@@ -221,6 +221,15 @@ _CREATE_TABLE_SQL = {
             delivered_at     TEXT DEFAULT ''
         )
     """,
+    "channel_conversations": """
+        CREATE TABLE IF NOT EXISTS channel_conversations (
+            channel          TEXT NOT NULL,
+            conversation_key TEXT NOT NULL,
+            thread_id        TEXT NOT NULL,
+            updated_at       TEXT NOT NULL,
+            PRIMARY KEY (channel, conversation_key)
+        )
+    """,
 }
 
 _COLUMN_MIGRATIONS = {
@@ -326,6 +335,7 @@ _REQUIRED_COLUMNS = {
         "key", "thread_id", "channel", "target", "kind", "text", "payload_json",
         "status", "attempts", "last_error", "created_at", "updated_at", "delivered_at",
     },
+    "channel_conversations": {"channel", "conversation_key", "thread_id", "updated_at"},
 }
 
 
@@ -3234,6 +3244,12 @@ def cleanup_thread_state(thread_id: str) -> dict[str, int]:
 
         before = conn.total_changes
         conn.execute("DELETE FROM channel_thread_refs WHERE thread_id = ?", (clean_thread_id,))
+        # The chat keeps its place, so its next message starts a fresh
+        # conversation instead of falling back to one it moved away from.
+        conn.execute(
+            "UPDATE channel_conversations SET thread_id = '' WHERE thread_id = ?",
+            (clean_thread_id,),
+        )
         stats["channel_refs"] = max(0, conn.total_changes - before)
 
         before = conn.total_changes
@@ -3603,6 +3619,50 @@ def get_thread_channel_ref(thread_id: str) -> dict | None:
             (clean_thread_id,),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_channel_conversation(channel: str, conversation_key: str) -> dict | None:
+    """Return the current-conversation pointer of one channel chat or thread.
+
+    ``thread_id`` is empty when the conversation it pointed to was deleted.
+    ``None`` means the chat has never had a pointer.
+    """
+
+    clean_channel = str(channel or "").strip()
+    clean_key = str(conversation_key or "").strip()
+    if not clean_channel or not clean_key:
+        return None
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM channel_conversations WHERE channel = ? AND conversation_key = ?",
+            (clean_channel, clean_key),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_channel_conversation(channel: str, conversation_key: str, thread_id: str) -> None:
+    """Point one channel chat or thread at the Row-Bot conversation it continues."""
+
+    clean_channel = str(channel or "").strip()
+    clean_key = str(conversation_key or "").strip()
+    clean_thread_id = str(thread_id or "").strip()
+    if not clean_channel or not clean_key or not clean_thread_id:
+        return
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO channel_conversations (channel, conversation_key, thread_id, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(channel, conversation_key) DO UPDATE SET "
+            "thread_id = excluded.thread_id, updated_at = excluded.updated_at",
+            (clean_channel, clean_key, clean_thread_id, datetime.now().isoformat()),
+        )
+        conn.commit()
     finally:
         conn.close()
 

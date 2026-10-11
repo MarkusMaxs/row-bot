@@ -47,6 +47,22 @@ def test_fake_channel_approval_contract_records_resolution() -> None:
     assert approval_payload("resume-1", True) == {"resume_token": "resume-1", "approved": True, "source": "fake"}
 
 
+def test_generic_new_moves_a_chat_only_through_its_adapters_hook() -> None:
+    from row_bot.channels import commands
+
+    moved: list[str] = []
+
+    refused = commands.dispatch("Fake Channel", "/new")
+    started = commands.dispatch("Fake Channel", "/new", new_conversation=lambda: moved.append("chat"))
+    custom = commands.dispatch("Fake Channel", "/new", new_conversation=lambda: "Reply in this thread.")
+
+    assert refused == "Fake Channel can't start a new conversation from here."
+    assert started == commands.NEW_CONVERSATION_STARTED
+    assert custom == "Reply in this thread."
+    assert moved == ["chat"]
+    assert "`/new`" in commands.cmd_help("Fake Channel")
+
+
 def test_channel_base_thread_id_contract() -> None:
     channel = FakeChannel(name="slack")
 

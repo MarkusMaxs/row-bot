@@ -45,7 +45,9 @@ from row_bot.channels.auth_store import get_channel_secret
 from row_bot.channels import commands as ch_commands
 from row_bot.channels import auth as ch_auth
 from row_bot.channels import config as ch_config
+from row_bot.channels import conversations as ch_conversations
 from row_bot.channels import runtime as ch_runtime
+from row_bot.channels.media import AttachmentCoalescer, InboundAttachment
 from row_bot.channels.streaming import (
     ChannelDeliveryResult,
     ChannelDeliveryUncertain,
@@ -57,7 +59,6 @@ from row_bot.channels.streaming import (
 )
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.runtime_paths import app_root
-from row_bot.threads import _save_thread_meta
 
 log = logging.getLogger("row_bot.whatsapp")
 
@@ -402,51 +403,37 @@ def _make_thread_id(chat_id: str) -> str:
     return f"whatsapp_{safe}"
 
 
-def _get_or_create_thread(chat_id: str) -> str:
-    thread_id = _make_thread_id(chat_id)
-    try:
-        from row_bot.tasks import record_thread_channel_ref
+def _conversation(chat_id: str) -> ch_conversations.ChannelConversation:
+    # One rolling conversation per chat; /new moves it to a fresh one (D6).
+    return ch_conversations.ChannelConversation(
+        channel="whatsapp",
+        key=str(chat_id),
+        default_thread_id=_make_thread_id(chat_id),
+        name="📲 WhatsApp conversation",
+        target=str(chat_id),
+    )
 
-        record_thread_channel_ref(
-            thread_id,
-            channel="whatsapp",
-            target=chat_id,
-            external_conversation_id=str(chat_id),
-        )
-    except Exception:
-        log.debug("WhatsApp thread channel ref skipped", exc_info=True)
-    _save_thread_meta(
-        thread_id,
-        "📲 WhatsApp conversation",
-        seed_default_skills=True,
-        allow_recreate=True,
-    )  # creates or bumps updated_at
-    return thread_id
+
+def _get_or_create_thread(chat_id: str) -> str:
+    """Return the chat's current conversation, starting one if needed."""
+    return ch_conversations.current_thread(_conversation(chat_id))
 
 
 def _new_thread(chat_id: str) -> str:
-    """Force-create a new thread for this chat."""
-    import time
-    suffix = str(int(time.time()))
-    thread_id = f"wa_{chat_id}_{suffix}"
-    try:
-        from row_bot.tasks import record_thread_channel_ref
+    """Move this chat to a fresh conversation; the earlier one stays in Row-Bot."""
+    return ch_conversations.start_new_thread(_conversation(chat_id))
 
-        record_thread_channel_ref(
-            thread_id,
-            channel="whatsapp",
-            target=chat_id,
-            external_conversation_id=str(chat_id),
-        )
-    except Exception:
-        log.debug("WhatsApp thread channel ref skipped", exc_info=True)
-    _save_thread_meta(
-        thread_id,
-        "WhatsApp conversation",
-        seed_default_skills=True,
-        allow_recreate=True,
-    )
-    return thread_id
+
+def _new_conversation_for(chat_id: str):
+    """``/new`` for one chat: a fresh conversation, and no approval left waiting."""
+
+    def _new_conversation() -> str | None:
+        _new_thread(chat_id)
+        with _pending_lock:
+            _pending_interrupts.pop(chat_id, None)
+        return None
+
+    return _new_conversation
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -778,19 +765,29 @@ def _process_inbound(data: dict) -> None:
                 detail = approval_helpers.format_interrupt_text(result.interrupt_data)
                 _send_message_sync(chat_id, detail + "\n\nReply YES or NO.")
             return
-        cmd_response = ch_commands.dispatch("whatsapp", body, thread_id=_cmd_thread_id)
+        cmd_response = ch_commands.dispatch(
+            "whatsapp",
+            body,
+            thread_id=_cmd_thread_id,
+            new_conversation=_new_conversation_for(chat_id),
+        )
         if cmd_response is not None:
             _send_message_sync(chat_id, cmd_response)
             return
 
-    # Handle media
+    # Handle media: an album's items join one turn
     if has_media:
-        _handle_media(chat_id, data, body)
+        _queue_media(chat_id, data, body)
         return
 
     if not body:
         return
 
+    _run_text_turn(chat_id, body, msg_key)
+
+
+def _run_text_turn(chat_id: str, body: str, msg_key: dict | None) -> None:
+    """Answer one person message: approvals waiting on it first, then an agent turn."""
     # Check pending task approvals first (background workflows)
     from row_bot.channels import approval as approval_helpers
     with _pending_lock:
@@ -910,7 +907,21 @@ def _process_inbound(data: dict) -> None:
         answer, interrupt_data, captured_images, captured_video_paths, delivery = (
             _run_whatsapp_stream_turn_sync(chat_id, body, config)
         )
-    except Exception:
+    except Exception as exc:
+        from row_bot.channels.thread_repair import is_corrupt_thread_error
+
+        if is_corrupt_thread_error(exc):
+            # The model refused the stuck conversation's history, so nothing
+            # ran. The chat moves to a fresh conversation; the stuck one stays
+            # in Row-Bot. The turn is not run again by itself.
+            log.warning("WhatsApp conversation had a stuck tool call; moved to a fresh one")
+            _new_thread(chat_id)
+            _send_message_sync(
+                chat_id,
+                "⚠️ The previous conversation had a stuck tool call.\n"
+                "🆕 I've started a fresh thread — please resend your message.",
+            )
+            return
         log.warning("WhatsApp turn outcome could not be confirmed", exc_info=True)
         _send_message_sync(
             chat_id,
@@ -965,78 +976,48 @@ def _cache_inbound_image(thread_id: str, filename: str, data: bytes) -> str:
     return cache_name
 
 
-def _handle_media(chat_id: str, data: dict, caption: str) -> None:
-    """Process media attachments from WhatsApp."""
-    from row_bot.channels.media import (
-        transcribe_audio, analyze_image, save_inbound_file,
-        extract_document_text, copy_to_workspace,
-    )
+_MEDIA_SETTLE_S = 1.0  # an album's items arrive within a moment of each other
 
-    media_type = data.get("mediaType", "")
-    filename = data.get("filename", "file")
+
+def _queue_media(chat_id: str, data: dict, caption: str) -> None:
+    """Hold an inbound media item for its batch: an album becomes one agent turn."""
     # Media data is base64-encoded by the bridge
-    import base64
     media_b64 = data.get("mediaData", "")
     if not media_b64:
         return
-    file_data = base64.b64decode(media_b64)
+    attachment = InboundAttachment(
+        filename=data.get("filename", "file"),
+        data=base64.b64decode(media_b64),
+        content_type=data.get("mediaType", ""),
+    )
+    order = _media_batches.begin(chat_id)
+    _media_batches.add(chat_id, order, (attachment, caption, data.get("msgKey")))
+
+
+def _run_media_batch(chat_id: str, items: list[tuple[InboundAttachment, str, dict | None]]) -> None:
+    """Read a batch of media (vision pre-call per image, transcription per voice
+    note) and answer it with one agent turn."""
+    from row_bot.channels.media import build_attachment_turn
 
     thread_id = _get_or_create_thread(chat_id)
-    config = {"configurable": {"thread_id": thread_id}}
+    caption = "\n\n".join(dict.fromkeys(text for _item, text, _key in items if text))
+    turn = build_attachment_turn(
+        [attachment for attachment, _text, _key in items],
+        caption,
+        cache_image=lambda name, data: _cache_inbound_image(thread_id, name, data),
+    )
+    if not turn.usable:
+        _send_message_sync(chat_id, "⚠️ I couldn't read that attachment.")
+        return
+    msg_key = next((key for _item, _text, key in items if key), None)
+    _run_text_turn(chat_id, turn.text, msg_key)
 
-    if media_type.startswith("audio/"):
-        ext = Path(filename).suffix or ".ogg"
-        transcript = transcribe_audio(file_data, ext)
-        if transcript:
-            user_text = f"[Voice message]: {transcript}"
-            if caption:
-                user_text += f"\n\nCaption: {caption}"
-            answer, _, _, _ = _run_agent_sync(user_text, config)
-            if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                _send_message_sync(chat_id, answer)
 
-    elif media_type.startswith("image/"):
-        cache_name = _cache_inbound_image(thread_id, filename, file_data)
-        analysis = analyze_image(file_data, caption or "Describe this image")
-        if analysis or caption:
-            if analysis:
-                user_text = (
-                    f"[Attached image: {cache_name} — ALREADY ANALYZED, do NOT call analyze_image]\n"
-                    f"{analysis}"
-                )
-            else:
-                user_text = f"[Attached image: {cache_name}]"
-            if caption:
-                user_text += f"\n\nUser said: {caption}"
-            answer, _, _, _ = _run_agent_sync(user_text, config)
-            if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                _send_message_sync(chat_id, answer)
-
-    else:
-        saved = save_inbound_file(file_data, filename)
-        extracted = extract_document_text(file_data, filename)
-        ws_rel = copy_to_workspace(saved)
-
-        parts = [f"[User sent a file: {filename}]"]
-        if ws_rel:
-            parts.append(f"Workspace path: {ws_rel}")
-        else:
-            parts.append(f"Saved to: {saved}")
-        if extracted:
-            parts.append(
-                f"\n--- File content ---\n{extracted}"
-                f"\n--- End of file ---")
-        else:
-            parts.append(
-                "(Could not extract text — file may be "
-                "image-based or unsupported format)")
-        if caption:
-            parts.append(f"\nUser's message: {caption}")
-
-        user_text = "\n".join(parts)
-        answer, _, _, _ = _run_agent_sync(user_text, config)
-        if answer and not ch_runtime.channel_turn_is_suspended(answer):
-            _send_message_sync(chat_id, answer)
+_media_batches: AttachmentCoalescer[tuple[InboundAttachment, str, dict | None]] = AttachmentCoalescer(
+    _run_media_batch,
+    settle_s=_MEDIA_SETTLE_S,
+    name="whatsapp-media",
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
