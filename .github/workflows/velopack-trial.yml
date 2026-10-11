@@ -6,6 +6,10 @@
 # Inno Setup / pkg / DMG), packs them with Velopack, measures full and delta
 # sizes, and drives install -> update -> relaunch scenarios from a local file
 # feed. Uploads only JSON results and logs, never binaries.
+#
+# workflow_dispatch only works for workflows on the default branch, so runs
+# are requested by pushing a change to spike/velopack-trial/run.json on this
+# branch (the push trigger below is limited to that file and branch).
 # =============================================================================
 
 name: Velopack trial (spike)
@@ -37,6 +41,9 @@ on:
         description: Reuse packed releases from an earlier run (cache keyed on the payload scripts)
         type: boolean
         default: true
+  push:
+    branches: [spike/velopack-trial]
+    paths: [spike/velopack-trial/run.json]
 
 permissions:
   contents: read
@@ -54,15 +61,58 @@ env:
   PYTHONUTF8: "1"
 
 jobs:
+  config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      windows: ${{ steps.cfg.outputs.windows }}
+      macos: ${{ steps.cfg.outputs.macos }}
+      variants: ${{ steps.cfg.outputs.variants }}
+      scenarios: ${{ steps.cfg.outputs.scenarios }}
+      notarize: ${{ steps.cfg.outputs.notarize }}
+      reuse_packages: ${{ steps.cfg.outputs.reuse_packages }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: spike/velopack-trial/run.json
+          sparse-checkout-cone-mode: false
+      - id: cfg
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          if os.environ["EVENT"] == "workflow_dispatch":
+              cfg = json.loads(os.environ["INPUTS"])
+              cfg["variants"] = json.loads(cfg["variants"])
+          else:
+              cfg = json.load(open("spike/velopack-trial/run.json", encoding="utf-8"))
+          out = {
+              "windows": str(bool(cfg.get("windows", True))).lower(),
+              "macos": str(bool(cfg.get("macos", True))).lower(),
+              "variants": json.dumps(cfg.get("variants", ["a", "b"])),
+              "scenarios": cfg.get("scenarios", "all"),
+              "notarize": str(bool(cfg.get("notarize", False))).lower(),
+              "reuse_packages": str(bool(cfg.get("reuse_packages", True))).lower(),
+          }
+          print(out)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key, value in out.items():
+                  fh.write(f"{key}={value}\n")
+          PY
+
   windows:
-    if: ${{ inputs.windows }}
+    needs: config
+    if: ${{ needs.config.outputs.windows == 'true' }}
     name: windows (${{ matrix.variant }})
     runs-on: windows-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(inputs.variants) }}
+        variant: ${{ fromJSON(needs.config.outputs.variants) }}
     defaults:
       run:
         shell: pwsh
@@ -89,7 +139,7 @@ jobs:
 
       - name: Restore packed releases
         id: cache
-        if: ${{ inputs.reuse_packages }}
+        if: ${{ needs.config.outputs.reuse_packages == 'true' }}
         uses: actions/cache/restore@v6
         with:
           path: |
@@ -174,7 +224,7 @@ jobs:
           Get-Content "$env:VT\rel\releases.win.json"
 
       - name: Sizes
-        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
         run: >
           python spike/velopack-trial/driver.py sizes --feed "$env:VT\rel" --variant ${{ matrix.variant }}
           --installers "$env:VT\setup-5.0.0.exe" "$env:VT\rel\RowBotTrial-win-Setup.exe"
@@ -197,7 +247,7 @@ jobs:
         if: ${{ matrix.variant == 'b' }}
         timeout-minutes: 150
         run: |
-          $which = "${{ inputs.scenarios }}"
+          $which = "${{ needs.config.outputs.scenarios }}"
           $extra = @()
           if ($which -ne "all") { $extra = @("--which", $which) }
           python spike/velopack-trial/driver.py scenarios --feed "$env:VT\rel" --base-nupkg "$env:VT\rel\RowBotTrial-5.0.0-full.nupkg" --setup "$env:VT\setup-5.0.0.exe" --work "$env:VT\work" --out "$env:RES\scenarios" @extra
@@ -228,14 +278,15 @@ jobs:
           retention-days: 30
 
   macos:
-    if: ${{ inputs.macos }}
+    needs: config
+    if: ${{ needs.config.outputs.macos == 'true' }}
     name: macos (${{ matrix.variant }})
     runs-on: macos-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(inputs.variants) }}
+        variant: ${{ fromJSON(needs.config.outputs.variants) }}
     env:
       CODESIGN_ID: "Developer ID Application: Siddharth Sachar (33PQRTZLNW)"
     steps:
@@ -257,7 +308,7 @@ jobs:
 
       - name: Restore packed releases
         id: cache
-        if: ${{ inputs.reuse_packages }}
+        if: ${{ needs.config.outputs.reuse_packages == 'true' }}
         uses: actions/cache/restore@v6
         with:
           path: |
@@ -383,12 +434,14 @@ jobs:
           ls -la "$VT/rel" "$VT"; cat "$VT/rel/releases.osx.json"; df -h "$RUNNER_TEMP"
 
       - name: Sizes
-        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
         run: |
           set -euo pipefail
           EXTRA=(--extra-delta "bestsize=$VT/delta-bestsize.nupkg")
           if [ -f "$VT/delta-fresh.nupkg" ]; then
             EXTRA+=(--extra-delta "fresh_signatures=$VT/delta-fresh.nupkg")
+          fi
+          if [ -f "$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg" ]; then
             EXTRA+=(--extra-diff "fresh_signatures=$VT/rel/RowBotTrial-5.0.0-full.nupkg,$VT/rel-fresh/RowBotTrial-5.1.0-full.nupkg")
           fi
           python3 spike/velopack-trial/driver.py sizes --feed "$VT/rel" --variant ${{ matrix.variant }} \
@@ -410,7 +463,7 @@ jobs:
           key: velopack-trial-mac-${{ matrix.variant }}-${{ env.VELOPACK_VERSION }}-${{ hashFiles('spike/velopack-trial/build_payload.py', 'spike/velopack-trial/trial_launcher.py', 'spike/velopack-trial/sign_mac.py', 'spike/velopack-trial/timed.py') }}
 
       - name: Notarize the 5.1.0 trial app once (timed, not stapled)
-        if: ${{ inputs.notarize && matrix.variant == 'b' }}
+        if: ${{ needs.config.outputs.notarize == 'true' && matrix.variant == 'b' }}
         continue-on-error: true
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -439,7 +492,7 @@ jobs:
         run: |
           set -euo pipefail
           WHICH=()
-          if [ "${{ inputs.scenarios }}" != "all" ]; then WHICH=(--which "${{ inputs.scenarios }}"); fi
+          if [ "${{ needs.config.outputs.scenarios }}" != "all" ]; then WHICH=(--which "${{ needs.config.outputs.scenarios }}"); fi
           python3 spike/velopack-trial/driver.py scenarios --feed "$VT/rel" --base-nupkg "$VT/rel/RowBotTrial-5.0.0-full.nupkg" \
             --portable "$VT/portable-5.0.0.zip" --work "$VT/work" --out "$RES/scenarios" ${WHICH[@]+"${WHICH[@]}"}
 
