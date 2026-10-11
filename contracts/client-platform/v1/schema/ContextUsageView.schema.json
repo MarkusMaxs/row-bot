@@ -1,4 +1,64 @@
 {
+  "$defs": {
+    "ConversationTokenUsage": {
+      "additionalProperties": false,
+      "description": "Tokens this conversation's model calls used, from the local ledger.",
+      "properties": {
+        "cache_read_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Read Percent"
+        },
+        "calls": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Calls",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "input_tokens": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "calls",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "title": "ConversationTokenUsage",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "capacity_state": {
@@ -27,6 +87,17 @@
       "pattern": "^[A-Za-z0-9:_-]+$",
       "title": "Conversation Id",
       "type": "string"
+    },
+    "conversation_usage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConversationTokenUsage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "effective_limit_tokens": {
       "anyOf": [

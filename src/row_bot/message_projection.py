@@ -6,6 +6,7 @@ owned by ConversationProjection; importing this converter loads no UI state.
 from __future__ import annotations
 
 from row_bot.file_context import ATTACHMENT_CONTEXT_START, ATTACHMENT_CONTEXT_END
+from row_bot.turn_context import is_turn_context_message
 
 
 def strip_file_context(content: str) -> str:
@@ -104,6 +105,9 @@ def langchain_messages_to_ui_messages(messages: list) -> list[dict]:
     pending_charts: list[str] = []
     pending_tool_names: dict[str, str] = {}
     for m in messages:
+        if is_turn_context_message(m):
+            # Row-Bot's per-turn context for the model; never a transcript row.
+            continue
         m_type = getattr(m, "type", "")
         if m_type == "human":
             pending_tool_names.clear()

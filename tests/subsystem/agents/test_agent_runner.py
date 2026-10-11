@@ -92,7 +92,10 @@ def test_spawn_agent_run_creates_child_thread_and_completes(tmp_path, monkeypatc
     assert run["parent_thread_id"] == parent_thread_id
     assert run["context_mode"] == "focused"
     assert "Review the auth change." in captured["prompt"]
-    assert "PROFILE INSTRUCTIONS" in captured["prompt"]
+    # The profile's instructions reach the child once, in its system prompt (F6c).
+    assert "AGENT PROFILE" in captured["prompt"]
+    assert "PROFILE INSTRUCTIONS" not in captured["prompt"]
+    assert captured["config"]["configurable"]["agent_profile_snapshot"]["instructions"]
     assert "Runtime model override: model:test" in captured["prompt"]
     assert "Do not call row_bot_update_setting(setting='model')" in captured["prompt"]
     assert "agents" not in captured["tools"]

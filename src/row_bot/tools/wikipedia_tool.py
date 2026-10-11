@@ -51,6 +51,10 @@ class WikipediaTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {self.name}
+
     def get_retriever(self, **kwargs):
         from langchain_community.retrievers.wikipedia import WikipediaRetriever
 

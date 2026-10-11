@@ -8,8 +8,22 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import closing
 import json
+import logging
+import math
 import sqlite3
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
+
+logger = logging.getLogger(__name__)
+
+
+class ConversationTokenUsage(TypedDict):
+    """What this conversation's model calls used, from the local usage ledger."""
+
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_percent: int | None
+    cost_usd: float | None
 
 
 class ContextUsageView(TypedDict):
@@ -26,10 +40,13 @@ class ContextUsageView(TypedDict):
     model_ref: str | None
     scope: Literal["agent", "chat_only", "unknown"]
     capacity_state: str
+    # Present once the conversation has a recorded model call.
+    conversation_usage: NotRequired[ConversationTokenUsage]
 
 
 _MAX_SNAPSHOT_BYTES = 16 * 1024
 _MAX_TOKENS = 2_147_483_647
+_MAX_USAGE_TOKENS = 9_007_199_254_740_991
 _COUNTS = (
     "estimated_input_tokens",
     "usable_input_tokens",
@@ -49,10 +66,48 @@ def _unknown(conversation_id: str) -> ContextUsageView:
             "scope": "unknown", "capacity_state": "unavailable"}
 
 
+def _conversation_usage(conversation_id: str) -> ConversationTokenUsage | None:
+    """Bounded ledger totals for the meter; counts only, never content."""
+    try:
+        from row_bot.providers.usage_ledger import conversation_usage
+
+        totals = conversation_usage(conversation_id)
+    except Exception:
+        logger.debug("Conversation usage unavailable", exc_info=True)
+        return None
+    if not totals:
+        return None
+    counts = [totals.get(key) for key in ("calls", "input_tokens", "output_tokens")]
+    if any(type(value) is not int or not 0 <= value <= _MAX_USAGE_TOKENS for value in counts):
+        return None
+    percent = totals.get("cache_read_percent")
+    if percent is not None and (type(percent) is not int or not 0 <= percent <= 100):
+        percent = None
+    cost = totals.get("cost")
+    if cost is not None and (not isinstance(cost, float) or not math.isfinite(cost) or cost < 0):
+        cost = None
+    return {"calls": counts[0], "input_tokens": counts[1], "output_tokens": counts[2],
+            "cache_read_percent": percent, "cost_usd": cost}
+
+
+def _with_conversation_usage(view: ContextUsageView) -> ContextUsageView:
+    usage = _conversation_usage(view["conversation_id"])
+    if usage is not None:
+        view["conversation_usage"] = usage
+    return view
+
+
 def project_live_usage(
     conversation_id: str, payload: Any, event_type: str
 ) -> ContextUsageView:
     """Project one transient context event without private fingerprints."""
+    view = _project_live_usage(conversation_id, payload, event_type)
+    return view if view["state"] == "unknown" else _with_conversation_usage(view)
+
+
+def _project_live_usage(
+    conversation_id: str, payload: Any, event_type: str
+) -> ContextUsageView:
 
     unknown = _unknown(conversation_id)
     if not isinstance(payload, Mapping):
@@ -97,9 +152,12 @@ def read_usage(service: Any, conversation_id: str, controls: Mapping[str, Any]) 
     """
     _assert_readable(conversation_id)
     try:
-        return _read_saved(service, conversation_id, controls)
+        view = _read_saved(service, conversation_id, controls)
+        if view["state"] != "unknown":
+            view = _with_conversation_usage(view)
     finally:
         _assert_readable(conversation_id)
+    return view
 
 
 def _assert_readable(conversation_id: str) -> None:

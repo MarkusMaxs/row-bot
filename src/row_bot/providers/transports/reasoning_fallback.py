@@ -17,6 +17,7 @@ from row_bot.providers.reasoning import (
     queue_reasoning_notice,
     suppress_reasoning_override,
 )
+from row_bot.providers.transports.thinking_binding import is_thinking_binding_error
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,12 @@ def _isolated_delegated_model_config() -> Iterator[dict[str, Any]]:
 
 
 class ReasoningFallbackChatModel(BaseChatModel):
-    """Retry one rejected explicit reasoning request with Provider default."""
+    """Retry one rejected explicit reasoning request with Provider default.
+
+    Thinking-binding 400s (``thinking_binding``) are not reasoning errors. The
+    direct Anthropic transport recovers from them first, inside the primary
+    call, and this wrapper never retries them.
+    """
 
     primary: Any
     provider_default: Any
@@ -67,6 +73,8 @@ class ReasoningFallbackChatModel(BaseChatModel):
             provider_default=_bind_tools(self.provider_default, tools, tool_choice=tool_choice, **kwargs),
             plan=self.plan,
             provider_id=self.provider_id,
+            # The wrapper's own callbacks (the usage ledger) see each call once.
+            callbacks=self.callbacks,
         )
 
     def _generate(
@@ -238,6 +246,13 @@ def should_retry_reasoning_error(exc: BaseException) -> bool:
     status = _status_code(exc)
     if status not in {400, 422}:
         return False
+    if is_thinking_binding_error(exc):
+        # A replayed thinking block's signature, or the binding controls, were
+        # rejected. The direct Anthropic transport already made its one
+        # strip-and-retry inside the primary call. Provider default would replay
+        # the same history and fail the same way, and it would wrongly reset the
+        # user's reasoning choice, so this is never a reasoning fallback.
+        return False
     detail = _safe_error_detail(exc).lower()
     return any(term in detail for term in _REASONING_ERROR_TERMS)
 
@@ -309,6 +324,7 @@ def _generation_chunk(message: Any) -> ChatGenerationChunk:
                 additional_kwargs=message.additional_kwargs,
                 response_metadata=message.response_metadata,
                 tool_call_chunks=getattr(message, "tool_call_chunks", []),
+                usage_metadata=message.usage_metadata,
             )
         )
     return ChatGenerationChunk(message=AIMessageChunk(content=str(message or "")))

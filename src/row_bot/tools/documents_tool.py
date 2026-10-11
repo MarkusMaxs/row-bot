@@ -33,6 +33,11 @@ class DocumentsTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        # Uploaded files hold whatever their authors wrote.
+        return {self.name}
+
     def get_retriever(self, **kwargs):
         import row_bot.documents as documents
         retriever = documents.get_vector_store().as_retriever(search_kwargs={"k": 5})

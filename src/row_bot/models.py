@@ -713,7 +713,13 @@ def _chat_ollama(model: str, **kwargs):
                 kwargs["reasoning"] = True
         except Exception:
             logger.debug("Could not resolve thinking for Ollama model %s", model, exc_info=True)
-    return ChatOllama(model=model, base_url=_ollama_base_url(), **kwargs)
+    from row_bot.providers.usage_ledger import attach_usage_ledger
+
+    return attach_usage_ledger(
+        ChatOllama(model=model, base_url=_ollama_base_url(), **kwargs),
+        provider_id="ollama",
+        model_name=model,
+    )
 
 
 def get_llm():

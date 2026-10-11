@@ -1625,6 +1625,11 @@ class DesignerTool(BaseTool):
         return {"designer_delete_page"}
 
     @property
+    def untrusted_tool_names(self) -> set[str]:
+        # Text extracted from files the person attached as references.
+        return {"designer_get_reference"}
+
+    @property
     def inference_keywords(self) -> list[str]:
         return [
             "design", "slide", "presentation", "deck", "page",

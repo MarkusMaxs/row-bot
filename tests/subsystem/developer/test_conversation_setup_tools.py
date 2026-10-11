@@ -299,7 +299,7 @@ def test_the_model_is_told_when_to_create_and_when_not_to(monkeypatch):
 
     token = agent._current_enabled_tool_names_var.set(("conversation_setup", "row_bot_status"))
     try:
-        context = agent._agent_runtime_system_context()
+        context = agent._agent_runtime_guidance(agent._current_tool_group_names())
     finally:
         agent._current_enabled_tool_names_var.reset(token)
     assert "build, make or write an app" in context

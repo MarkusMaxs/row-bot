@@ -774,6 +774,14 @@ class DeveloperTool(BaseTool):
     def enabled_by_default(self) -> bool:
         return True
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        # Repository files and the output of commands run in the code folder.
+        return {
+            "developer_read_file", "developer_search", "developer_get_diff",
+            "developer_run_detected_test", "developer_run_command",
+        }
+
     def execute(self, query: str) -> str:
         return _workspace_info()
 

@@ -160,3 +160,34 @@ def test_revoking_authority_still_stops_a_stream_part_way(monkeypatch) -> None:
                     for line in response.iter_lines():
                         read.append(line)
     assert 0 < len(read) < 400
+
+
+def _usage_shapes() -> dict:
+    import json
+    from pathlib import Path
+
+    payloads = json.loads(
+        (Path(__file__).resolve().parents[1] / "fixtures" / "provider_usage_payloads.json").read_text(encoding="utf-8")
+    )
+    return {name: value for name, value in payloads.items() if not name.startswith("_")}
+
+
+@pytest.mark.parametrize("shape", sorted(_usage_shapes()))
+def test_every_usage_shape_keeps_one_meaning_for_input_and_output(shape) -> None:
+    """Input always includes cache reads and writes; output always includes reasoning.
+
+    The usage ledger, the context meter and compaction calibration all rely on
+    this, whatever provider or transport reported the counts.
+    """
+    from row_bot.prompt_cache import normalize_model_usage
+
+    payload = _usage_shapes()[shape]
+    usage = normalize_model_usage(payload["response_metadata"], payload["usage_metadata"])
+
+    if usage.input_tokens is not None:
+        assert usage.input_tokens >= (usage.cache_read_tokens or 0) + (usage.cache_write_tokens or 0)
+    if usage.output_tokens is not None:
+        assert usage.output_tokens >= (usage.reasoning_tokens or 0)
+    if usage.cache_write_1h_tokens is not None:
+        assert usage.cache_write_tokens is not None and usage.cache_write_1h_tokens <= usage.cache_write_tokens
+    assert usage.cost is None or usage.cost >= 0

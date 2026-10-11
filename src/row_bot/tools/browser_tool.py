@@ -132,6 +132,13 @@ class BrowserTool(BaseTool):
     def destructive_tool_names(self) -> set[str]:
         return set()
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {
+            "browser_navigate", "browser_click", "browser_type", "browser_scroll",
+            "browser_snapshot", "browser_back", "browser_tab",
+        }
+
     def as_langchain_tools(self) -> list:
         def browser_navigate(url: str) -> str:
             """Open an ordinary website in Row-Bot's managed browser and return one bounded observation."""

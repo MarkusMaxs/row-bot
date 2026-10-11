@@ -322,8 +322,13 @@ class BlobReader:
                     "platform_media_error",
                     "platform_note",
                     "row_bot_ui",
+                    "row_bot_turn_context",
                 },
             )
+            if name == "HumanMessage" and "row_bot_turn_context" in metadata:
+                # Row-Bot's per-turn context for the model (row_bot.turn_context): never a row
+                # of the transcript, its exports or its search.
+                return None
             if name == "HumanMessage":
                 public_position = metadata.get("platform_public_content")
                 if public_position is not None and self.node(public_position).kind == "str":

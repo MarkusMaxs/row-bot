@@ -6289,6 +6289,19 @@ class MediaError(WireModel):
     message_id: str = Field(default="", max_length=256)
 
 
+class ConversationTokenUsage(WireModel):
+    """Tokens this conversation's model calls used, from the local ledger."""
+
+    calls: int = Field(ge=0, le=9007199254740991)
+    # Every prompt token, including those read from or written to a cache.
+    input_tokens: int = Field(ge=0, le=9007199254740991)
+    output_tokens: int = Field(ge=0, le=9007199254740991)
+    # Share of input read from a prompt cache, where the provider reports it.
+    cache_read_percent: int | None = Field(default=None, ge=0, le=100)
+    # Only a cost the provider itself returned (OpenRouter); no price table.
+    cost_usd: float | None = Field(default=None, ge=0)
+
+
 class ContextUpdated(WireModel):
     conversation_id: OpaqueId
     state: Literal["unknown", "saved", "live", "stale"]
@@ -6303,6 +6316,7 @@ class ContextUpdated(WireModel):
     model_ref: str | None = Field(default=None, max_length=256)
     scope: Literal["agent", "chat_only", "unknown"] = "unknown"
     capacity_state: str = Field(default="unavailable", max_length=64)
+    conversation_usage: ConversationTokenUsage | None = None
 
 
 EVENT_PAYLOADS = {

@@ -14,9 +14,11 @@ from typing import Any
 
 
 def public_message(message: Any) -> dict | None:
+    from row_bot.turn_context import is_turn_context_message
+
     kind = str(getattr(message, "type", ""))
-    if kind not in {"human", "ai", "tool"}:
-        return None
+    if kind not in {"human", "ai", "tool"} or is_turn_context_message(message):
+        return None  # a turn context is Row-Bot's note to the model, never a transcript row
     message_id = str(getattr(message, "id", "") or "")
     if not message_id:
         return None  # Legacy IDs require an explicit compare-write migration.
