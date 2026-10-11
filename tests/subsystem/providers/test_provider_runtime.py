@@ -1636,6 +1636,112 @@ def test_provider_transcript_normalizer_repairs_google_reasoning_blocks(tmp_path
     assert history[1].parts[1].text == "hello"
 
 
+def _foreign_provider_history():
+    """A thread's turns on OpenAI Responses (gpt-5) and Anthropic, as the checkpoint keeps them."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    return [
+        SystemMessage(content="Root system"),
+        HumanMessage(content="Look it up"),
+        AIMessage(
+            content=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "private plan"}],
+                    "encrypted_content": "gAAAA-private-ciphertext",
+                },
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            ],
+            tool_calls=[{"name": "lookup", "args": {}, "id": "call_1", "type": "tool_call"}],
+            response_metadata={"model_provider": "openai"},
+        ),
+        ToolMessage(content="found it", tool_call_id="call_1"),
+        AIMessage(
+            content=[
+                {"type": "reasoning", "id": "rs_2", "summary": []},
+                {"type": "text", "text": "OpenAI answer.", "annotations": [], "id": "msg_1"},
+            ],
+            response_metadata={"model_provider": "openai"},
+        ),
+        HumanMessage(content="And now?"),
+        AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "private reasoning", "signature": "sig"},
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "output_text", "text": "Claude answer."},
+            ],
+        ),
+        HumanMessage(content="Continue on the local model"),
+    ]
+
+
+def test_switching_a_thread_to_local_ollama_sends_only_what_ollama_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    import row_bot.agent as agent
+    from langchain_ollama import ChatOllama
+
+    monkeypatch.setattr(agent, "get_context_size", lambda: 32_768)
+    monkeypatch.setattr(agent, "get_current_model", lambda: "qwen3:8b")
+    monkeypatch.setattr(agent, "is_cloud_model", lambda model: False)
+    monkeypatch.setattr(agent, "is_background_workflow", lambda: False)
+
+    agent.set_active_model_override("qwen3:8b")
+    try:
+        provider_messages = agent._pre_model_trim({
+            "execution_budget": new_execution_budget("ollama-switch"),
+            "messages": _foreign_provider_history(),
+        })["llm_input_messages"]
+    finally:
+        agent.set_active_model_override("")
+
+    # ChatOllama raised "Unsupported message content type" on this history before.
+    ollama_messages = ChatOllama(model="qwen3:8b", num_ctx=32_768)._convert_messages_to_ollama_messages(
+        provider_messages
+    )
+    payload = json.dumps(ollama_messages, default=str)
+    assistant = [message for message in ollama_messages if message["role"] == "assistant"]
+
+    assert "OpenAI answer." in payload
+    assert "Claude answer." in payload
+    assert any(message.get("tool_calls") for message in assistant)
+    assert [message["tool_call_id"] for message in ollama_messages if message["role"] == "tool"] == ["call_1"]
+    for private in ("private plan", "gAAAA-private-ciphertext", "private reasoning", "opaque"):
+        assert private not in payload
+
+
+def test_ollama_target_keeps_text_images_and_skipped_tool_use_blocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    import row_bot.agent as agent
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    tool_use = {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}
+    messages = [
+        HumanMessage(content="hi"),
+        AIMessage(content=[{"type": "text", "text": "plain"}, image, tool_use, "bare string"]),
+        AIMessage(content="string content stays"),
+    ]
+
+    result = agent._normalize_provider_facing_messages(messages, provider_id="ollama")
+
+    assert result[1].content == messages[1].content
+    assert result[2].content == "string content stays"
+
+
+def test_cloud_targets_keep_their_own_content_blocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    import row_bot.agent as agent
+
+    history = _foreign_provider_history()
+
+    result = agent._normalize_provider_facing_messages(list(history), provider_id="openai")
+
+    # OpenAI Responses replays its own reasoning and function-call items; nothing is dropped for it.
+    assert result[2].content == history[2].content
+    assert result[4].content == history[4].content
+
+
 def test_provider_transcript_normalizer_strips_reasoning_for_custom_artifacts(tmp_path, monkeypatch):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
     import row_bot.agent as agent

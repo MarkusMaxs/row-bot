@@ -435,21 +435,74 @@ def _normalize_google_content_blocks(content: Any) -> tuple[Any, int, int]:
     return (normalized if changed else content), repaired, dropped
 
 
+# Content blocks ``langchain-ollama`` accepts as-is (it skips ``tool_use`` itself).
+_OLLAMA_CONTENT_BLOCK_TYPES = frozenset({"text", "tool_use", "image_url"})
+# Text-bearing output blocks other providers write, sent to Ollama as plain text.
+_TEXT_OUTPUT_BLOCK_TYPES = frozenset({"output_text", "input_text"})
+
+
+def _normalize_ollama_content_blocks(content: Any) -> tuple[Any, int, int]:
+    """Return content blocks accepted by ``langchain-ollama``.
+
+    A conversation can move to a local Ollama model after turns on another
+    provider. Those turns keep provider-native blocks, such as OpenAI Responses
+    ``reasoning`` and ``function_call`` or Anthropic ``thinking``, and
+    ``ChatOllama`` rejects them with "Unsupported message content type" before
+    making the call. Keep text, images and the tool-use blocks it skips itself;
+    send other text output blocks as text; drop private reasoning and the
+    provider's own tool-call records, which the message's ``tool_calls`` carry.
+    """
+
+    if not isinstance(content, list):
+        return content, 0, 0
+
+    from langchain_core.messages import is_data_content_block
+
+    normalized: list[Any] = []
+    converted = 0
+    dropped = 0
+    for block in content:
+        if isinstance(block, str):
+            normalized.append(block)
+            continue
+        if not isinstance(block, dict):
+            dropped += 1
+            continue
+        block_type = str(block.get("type") or "")
+        text = block.get("text")
+        if block_type == "text" and not isinstance(text, str):
+            dropped += 1
+            continue
+        if block_type in _OLLAMA_CONTENT_BLOCK_TYPES or is_data_content_block(block):
+            normalized.append(block)
+            continue
+        if block_type in _TEXT_OUTPUT_BLOCK_TYPES and isinstance(text, str) and text:
+            normalized.append({"type": "text", "text": text})
+            converted += 1
+            continue
+        dropped += 1
+
+    changed = bool(converted or dropped)
+    return (normalized if changed else content), converted, dropped
+
+
 def _normalize_provider_facing_messages(
     messages: list[BaseMessage],
     *,
     provider_id: str | None = None,
     anthropic_messages: bool | None = None,
     google_genai: bool | None = None,
+    ollama_chat: bool | None = None,
 ) -> list[BaseMessage]:
     """Return a protocol-valid copy of messages for the next LLM call only.
 
     The checkpoint/UI transcript remains untouched. The global fixes here are
     restricted to invalid tool protocol state: invalid tool calls, duplicate
-    tool-call ids, orphan tool results, and provider-native Anthropic/Google
-    thinking content blocks. Reasoning fields are compatibility metadata, so
-    they are stripped only when custom endpoint artifacts are present in the
-    transcript.
+    tool-call ids, orphan tool results, and provider-native content blocks the
+    target can't read (Anthropic thinking, Google reasoning, and anything
+    other than text and images for a local Ollama model). Reasoning fields are
+    compatibility metadata, so they are stripped only when custom endpoint
+    artifacts are present in the transcript.
     """
 
     before = _provider_transcript_diagnostics(messages)
@@ -464,6 +517,11 @@ def _normalize_provider_facing_messages(
         if google_genai is not None
         else _provider_uses_google_genai(provider_id)
     )
+    use_ollama_chat = (
+        bool(ollama_chat)
+        if ollama_chat is not None
+        else str(provider_id or "").strip().lower() in {"ollama", "local"}
+    )
     keep_empty_reasoning_turns = _custom_endpoint_supports_reasoning_replay(provider_id)
     normalized: list[BaseMessage] = []
     used_tool_call_ids: set[str] = set()
@@ -475,6 +533,8 @@ def _normalize_provider_facing_messages(
     cleaned_anthropic_blocks = 0
     repaired_google_reasoning = 0
     dropped_google_reasoning = 0
+    converted_ollama_blocks = 0
+    dropped_ollama_blocks = 0
     rewritten_ids = 0
     dropped_orphans = 0
     dropped_empty = 0
@@ -501,6 +561,10 @@ def _normalize_provider_facing_messages(
                 content, repaired, dropped = _normalize_google_content_blocks(content)
                 repaired_google_reasoning += repaired
                 dropped_google_reasoning += dropped
+            if use_ollama_chat:
+                content, converted, dropped = _normalize_ollama_content_blocks(content)
+                converted_ollama_blocks += converted
+                dropped_ollama_blocks += dropped
             tool_calls: list[dict] = []
             pending_tool_pairs = []
             for index, call in enumerate(getattr(message, "tool_calls", None) or []):
@@ -557,6 +621,8 @@ def _normalize_provider_facing_messages(
         or cleaned_anthropic_blocks
         or repaired_google_reasoning
         or dropped_google_reasoning
+        or converted_ollama_blocks
+        or dropped_ollama_blocks
         or rewritten_ids
         or dropped_orphans
         or dropped_empty
@@ -573,6 +639,8 @@ def _normalize_provider_facing_messages(
                 "cleaned_anthropic_content_blocks": cleaned_anthropic_blocks,
                 "repaired_google_reasoning_blocks": repaired_google_reasoning,
                 "dropped_google_reasoning_blocks": dropped_google_reasoning,
+                "converted_ollama_text_blocks": converted_ollama_blocks,
+                "dropped_ollama_content_blocks": dropped_ollama_blocks,
                 "rewritten_tool_call_ids": rewritten_ids,
                 "dropped_orphan_tool_messages": dropped_orphans,
                 "dropped_empty_assistant_messages": dropped_empty,
@@ -2484,6 +2552,8 @@ def _collect_agent_complete_input(state: dict) -> dict:
         trimmed,
         provider_id=_provider_id,
         google_genai=_provider_uses_google_genai(_provider_id, _model_id),
+        # A model that isn't a cloud model runs on local Ollama (ChatOllama).
+        ollama_chat=not _provider_id,
     )
     return {"llm_input_messages": trimmed, "execution_budget": budget}
 
