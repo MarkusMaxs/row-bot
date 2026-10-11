@@ -70,6 +70,7 @@ _CREATE_TABLE_SQL: dict[str, str] = {
             kind TEXT NOT NULL DEFAULT 'subagent',
             status TEXT NOT NULL DEFAULT 'queued',
             status_message TEXT DEFAULT '',
+            activity_json TEXT DEFAULT '',
             parent_run_id TEXT DEFAULT '',
             root_run_id TEXT DEFAULT '',
             parent_thread_id TEXT DEFAULT '',
@@ -251,6 +252,7 @@ _COLUMN_DEFINITIONS: dict[str, dict[str, str]] = {
         "kind": "TEXT NOT NULL DEFAULT 'subagent'",
         "status": "TEXT NOT NULL DEFAULT 'queued'",
         "status_message": "TEXT DEFAULT ''",
+        "activity_json": "TEXT DEFAULT ''",
         "parent_run_id": "TEXT DEFAULT ''",
         "root_run_id": "TEXT DEFAULT ''",
         "parent_thread_id": "TEXT DEFAULT ''",
@@ -835,7 +837,7 @@ def start_agent_run(run_id: str) -> dict[str, Any] | None:
     conn = _get_conn()
     try:
         conn.execute(
-            "UPDATE agent_runs SET status = 'running', status_message = '', "
+            "UPDATE agent_runs SET status = 'running', status_message = '', activity_json = '', "
             "started_at = COALESCE(NULLIF(started_at, ''), ?), "
             "heartbeat_at = ?, updated_at = ? WHERE id = ?",
             (now, now, now, run_id),
@@ -902,6 +904,26 @@ def update_agent_budget_progress(
     finally:
         conn.close()
     return get_agent_run(run_id)
+
+
+def record_agent_run_activity(run_id: str, tool: str, detail: str = "") -> bool:
+    """The step a running helper is on, for its parent's Agents list (F16).
+
+    Only a tool's name and its already-redacted key argument are kept, never raw
+    arguments or results. True when the step changed.
+    """
+    ensure_agent_run_schema()
+    value = json.dumps({"tool": str(tool)[:180], "detail": str(detail)[:240]}, separators=(",", ":"))
+    conn = _get_conn()
+    try:
+        changed = conn.execute(
+            "UPDATE agent_runs SET activity_json = ? WHERE id = ? AND status = 'running' AND activity_json != ?",
+            (value, str(run_id), value),
+        ).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return bool(changed)
 
 
 def heartbeat_agent_run(run_id: str) -> dict[str, Any] | None:
@@ -1085,7 +1107,7 @@ def finish_agent_run(
             if current and str(current["status"] or "") == "running":
                 active_seconds += _elapsed_active_seconds(str(current["heartbeat_at"] or ""), now)
             conn.execute(
-                "UPDATE agent_runs SET status = ?, status_message = ?, "
+                "UPDATE agent_runs SET status = ?, status_message = ?, activity_json = '', "
                 "summary = ?, result_json = ?, error = ?, terminal_reason = ?, "
                 "heartbeat_at = ?, active_seconds = ?, finished_at = ?, updated_at = ? "
                 "WHERE id = ?",

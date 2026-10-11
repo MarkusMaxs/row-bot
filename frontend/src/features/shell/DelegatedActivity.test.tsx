@@ -675,3 +675,29 @@ it('shows no interrupted-work controls when nothing waits on the person', async 
     screen.queryByRole('group', { name: 'Interrupted agent work' }),
   ).not.toBeInTheDocument();
 });
+
+it('shows what a working helper is doing now (F16)', async () => {
+  show({
+    loadPage: async () => ({
+      ...page,
+      items: [
+        {
+          ...run,
+          run_id: 'run-live',
+          name: 'Find sources',
+          status: 'running',
+          activity: {
+            tool: 'read_url',
+            detail: "url='https://example.org/report'",
+          },
+        },
+      ],
+    }),
+  });
+  const live = (
+    await screen.findByRole('button', { name: 'Find sources, Working' })
+  ).closest('li')!;
+  expect(live.querySelector('.agent-row-step')?.textContent).toMatch(
+    /example\.org\/report/,
+  );
+});

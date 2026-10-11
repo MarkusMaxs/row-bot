@@ -955,6 +955,31 @@ def _conversation_changed(thread_id: str) -> None:
         logger.debug("Could not tell open pages about %s", thread_id, exc_info=True)
 
 
+def observe_child_step(run_id: str, thread_id: str, update: Any) -> None:
+    """A running helper finished a step (F16).
+
+    Its open conversation re-reads the checkpoint, so each tool call and message
+    shows as it happens instead of only at the end, and a new tool call becomes
+    the one line its parent's Agents list shows ("Searching the web · ...").
+    """
+    from row_bot.agent_runs import append_agent_event, record_agent_run_activity
+    from row_bot.application.conversation_traces import canonical_tool_name, safe_tool_input
+
+    calls = [
+        call
+        for node in (update.values() if isinstance(update, Mapping) else ())
+        if isinstance(node, Mapping)
+        for message in node.get("messages") or ()
+        for call in getattr(message, "tool_calls", None) or ()
+    ]
+    if calls:
+        latest = calls[-1]
+        tool = canonical_tool_name(latest.get("name"))
+        if record_agent_run_activity(run_id, tool, safe_tool_input(latest.get("args"))):
+            append_agent_event(run_id, "step.started", {"tool": tool}, visibility="internal")
+    _conversation_changed(thread_id)
+
+
 def _agent_entry_failed(run_id: str, exc: BaseException) -> None:
     """Finish domain state when cancellation/resource gates reject entry."""
     from row_bot.agent_runs import finish_agent_run

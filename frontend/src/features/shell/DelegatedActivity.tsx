@@ -22,6 +22,15 @@ import {
   agentState,
   AgentStatus,
 } from './agent-status';
+import { keyArgument, stepVerb } from './tool-activity';
+
+/** "Searching the web · Oslo weather": a helper's current step, as the overlay words one. */
+function stepLine(step: { tool: string; detail?: string }) {
+  const argument = keyArgument(step.detail);
+  return argument
+    ? `${stepVerb(step.tool, 'pending')} · ${argument}`
+    : `${stepVerb(step.tool, 'pending')}…`;
+}
 
 /**
  * Agent work of a conversation that a restart or a failed step cut off and
@@ -263,6 +272,10 @@ function AgentRow({
           </span>
         )}
       </div>
+      {live && run.activity && (
+        // What a working helper is doing now (F16).
+        <p className="agent-row-step">{stepLine(run.activity)}</p>
+      )}
       {writing && canMessage && (
         <form
           className="agent-message"
