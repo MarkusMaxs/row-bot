@@ -175,6 +175,8 @@ Filename: "{app}\Row-Bot.exe"; StatusMsg: "Starting Row-Bot..."; Flags: nowait r
 ; The whole install root: every version, state.json and Row-Bot.exe. Never the
 ; user's data in %USERPROFILE%\.row-bot.
 Type: filesandordirs; Name: "{app}\versions"
+; Background updates keep their downloads and engine state here (src/row_bot/updates).
+Type: filesandordirs; Name: "{app}\.updates"
 Type: files; Name: "{app}\state.json"
 Type: files; Name: "{app}\.state.*.tmp"
 Type: files; Name: "{app}\Row-Bot.exe.*.old"
