@@ -237,6 +237,18 @@ def read_policy_snapshot() -> dict:
             "global_config": copy.deepcopy(_global_config) if same_scope else {}}
 
 
+def get_untrusted_tool_names() -> frozenset[str]:
+    """Aggregate ``untrusted_tool_names`` from *all* registered tools.
+
+    Disabled tools count too: a result already in a conversation stays
+    untrusted after its tool is switched off or disconnected.
+    """
+    names: set[str] = set()
+    for tool in list(_tools.values()):
+        names.update(getattr(tool, "untrusted_tool_names", None) or ())
+    return frozenset(names)
+
+
 def get_all_required_api_keys() -> dict[str, str]:
     """Aggregate ``required_api_keys`` from *all* registered tools.
     Returns ``{UI label: ENV_VAR_NAME}``.

@@ -140,6 +140,10 @@ class YouTubeTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {"youtube_search", "youtube_transcript"}
+
     def as_langchain_tools(self) -> list:
         return [
             StructuredTool.from_function(

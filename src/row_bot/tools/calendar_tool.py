@@ -447,6 +447,11 @@ class CalendarTool(BaseTool):
     def destructive_tool_names(self) -> set[str]:
         return {"move_calendar_event", "delete_calendar_event"}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        # Event titles and descriptions come from whoever sent the invitation.
+        return {"search_events"}
+
     def has_credentials_file(self) -> bool:
         """Whether Google's Desktop client is saved (or the person keeps their own client file)."""
         return account_tokens.google_client() is not None

@@ -511,6 +511,10 @@ class ShellTool(BaseTool):
         # safety classification (safe commands auto-run, others prompt).
         return set()
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {"run_command", "read_terminal"}
+
     def _get_developer_workspace_root(
         self,
         thread_id: str = "",

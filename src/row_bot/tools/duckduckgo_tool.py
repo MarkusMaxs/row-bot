@@ -32,6 +32,10 @@ class DuckDuckGoTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {self.name}
+
     def execute(self, query: str) -> str:
         from langchain_community.tools import DuckDuckGoSearchResults
         from langchain_community.utilities import DuckDuckGoSearchAPIWrapper

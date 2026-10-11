@@ -32,7 +32,7 @@ _AGENT_GUIDELINES = (
     "- Connected MCP servers are used through their tools, never by reading their configuration or Row-Bot's\n"
     "  data folder (it holds private conversations, settings and keys; commands that read it are refused).\n"
     "- When the user's question could relate to their own uploaded files or notes,\n"
-    "  search their documents library (search_documents) for exact passages, or\n"
+    "  search their documents library (documents) for exact passages, or\n"
     "  search your knowledge base (search_memory) for compiled\n"
     "  knowledge extracted from those documents.\n"
     "TASKS & REMINDERS:\n"

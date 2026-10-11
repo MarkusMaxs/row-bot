@@ -65,6 +65,10 @@ class FileSystemTool(BaseTool):
     def destructive_tool_names(self) -> set[str]:
         return {"workspace_move_file", "workspace_file_delete"}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {"workspace_read_file"}
+
     # ── Build the toolkit tools ──────────────────────────────────────────────
     def _get_workspace_root(self) -> str:
         import os

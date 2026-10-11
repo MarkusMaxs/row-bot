@@ -102,6 +102,11 @@ class VisionTool(BaseTool):
     def enabled_by_default(self) -> bool:
         return True
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        # Answers read text off web pages, screens and image files.
+        return {"analyze_image"}
+
     def as_langchain_tools(self) -> list:
 
         class _AnalyzeInput(BaseModel):
