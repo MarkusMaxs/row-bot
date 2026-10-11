@@ -54,6 +54,8 @@ _THREAD_META_COLUMNS = {
     "apps_off_json": "TEXT NOT NULL DEFAULT ''",
     # How far background memory extraction has read this chat (memory_extraction.py).
     "memory_extraction_json": "TEXT NOT NULL DEFAULT ''",
+    # Where old tool output stops being sent in full (history_hygiene.py); moves only in jumps.
+    "history_hygiene_json": "TEXT NOT NULL DEFAULT ''",
 }
 
 THREAD_NAME_SOURCE_AUTO = "auto"
@@ -1322,6 +1324,39 @@ def load_validated_summary_state(
     if expected != str(state.get("boundary_digest") or ""):
         return None
     return state
+
+
+def load_history_hygiene(thread_id: str) -> dict | None:
+    """The thread's persisted tool-output clearing marks (see history_hygiene), or None."""
+    if not thread_id:
+        return None
+    _ensure_thread_db()
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        row = conn.execute(
+            "SELECT COALESCE(history_hygiene_json, '') FROM thread_meta WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        state = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def save_history_hygiene(thread_id: str, state: dict) -> bool:
+    """Persist the thread's tool-output clearing marks; False when there is no thread row."""
+    if not thread_id or _thread_write_blocked(thread_id):
+        return False
+    _ensure_thread_db()
+    encoded = json.dumps(dict(state or {}), sort_keys=True, ensure_ascii=False)
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as conn, conn:
+        updated = conn.execute(
+            "UPDATE thread_meta SET history_hygiene_json = ? WHERE thread_id = ?",
+            (encoded, thread_id),
+        ).rowcount
+    return bool(updated)
 
 
 def save_context_usage(thread_id: str, usage: dict) -> None:

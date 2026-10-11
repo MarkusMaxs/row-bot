@@ -1658,6 +1658,55 @@ def wait_for_required_group(
     }
 
 
+# Event payload fields holding text a child agent wrote (its answer or error), fenced with its content.
+_CHILD_TEXT_FIELDS = ("summary", "error")
+_CHILD_TEXT_SHORTENED = "\n[Child result shortened to fit the context budget.]"
+
+
+def _fenced_child_text(
+    event: ThreadEvent,
+    fields: dict[str, Any],
+    *,
+    budget: int,
+) -> tuple[str, str]:
+    """The event's content and the child-written payload text, bounded and then fenced.
+
+    A child may have read web pages or files, so what it wrote is relayed inside an
+    ``EXTERNAL_CONTENT`` fence (C3 decision 2). Each text appears once, bounded (F42). Row-Bot's
+    own lines (the event header, status fields, the pointer to the whole answer) stay outside the
+    fence. The text is cut before it is fenced, so the closing tag always survives. Returns
+    ``(content, fenced child text)``.
+    """
+    from row_bot import external_content
+    from row_bot.agent_runner import bounded_child_result, full_result_hint
+
+    content = str(event.content or "")
+    child_content = event.kind == "child_terminal"
+    shortened = False
+
+    def bounded(value: str) -> str:
+        nonlocal shortened
+        cut = bounded_child_result(value)
+        shortened = shortened or cut != value
+        return cut
+
+    parts = [bounded(content)] if child_content and content.strip() else []
+    for key in _CHILD_TEXT_FIELDS:
+        value = str(fields.pop(key, "") or "").strip()
+        if value and value != content.strip():
+            parts.append(f"{key.capitalize()}: {bounded(value)}")
+    if not parts:
+        return content, ""
+    child_text = "\n\n".join(parts)
+    if len(child_text) > budget:
+        child_text = child_text[: max(0, budget - len(_CHILD_TEXT_SHORTENED))].rstrip() + _CHILD_TEXT_SHORTENED
+        shortened = True
+    fenced = external_content.wrap("child_agent", child_text)
+    if shortened and child_content and event.run_id:
+        fenced += f"\nThe child's text above is shortened. {full_result_hint(event.run_id)}"
+    return ("" if child_content else content), fenced
+
+
 def _format_thread_events(
     orchestration: Mapping[str, Any],
     events: Sequence[ThreadEvent],
@@ -1672,19 +1721,15 @@ def _format_thread_events(
         "Continue as the original parent. Use the event facts below, delegate "
         "later work if useful, and answer the user naturally.",
     ]
-    from row_bot.agent_runner import bounded_child_result
-
+    # Each event's child text gets a share of the budget, so the final cut never splits a fence.
+    child_budget = max(500, (limit - len("\n".join(blocks))) // max(1, len(events)) - 800)
     for event in events:
-        fields, content = dict(event.payload), event.content
-        if event.kind == "child_terminal":
-            # The child's answer once, bounded (F42): the content already is its
-            # summary or error, and agent_status(full_result=true) has the rest.
-            content = bounded_child_result(content, event.run_id)
-            for key in ("summary", "error"):
-                if str(fields.get(key) or "").strip() in {"", str(event.content or "").strip()}:
-                    fields.pop(key, None)
-                else:
-                    fields[key] = bounded_child_result(str(fields[key]), event.run_id)
+        fields = dict(event.payload)
+        content, fenced = (
+            _fenced_child_text(event, fields, budget=child_budget)
+            if event.kind in CHILD_LIFECYCLE_EVENT_KINDS
+            else (str(event.content or ""), "")
+        )
         payload = json.dumps(fields, sort_keys=True, ensure_ascii=False)
         blocks.extend(
             [
@@ -1693,13 +1738,16 @@ def _format_thread_events(
                 f"Event ID: {event.source_event_id or event.id}",
                 f"Child run: {event.run_id or '(parent)'}",
                 f"Payload: {payload}",
-                f"Content:\n{content}",
+                f"Content:\n{content}" + (f"\n{fenced}" if content and fenced else fenced),
             ]
         )
     text = "\n".join(blocks)
     if len(text) <= limit:
         return text
-    return text[: max(0, limit - 70)].rstrip() + "\n\n[Thread events truncated to context budget.]"
+    text = text[: max(0, limit - 90)].rstrip()
+    if text.count("<EXTERNAL_CONTENT") > text.count("</EXTERNAL_CONTENT>"):
+        text += "\n</EXTERNAL_CONTENT>"
+    return text + "\n\n[Thread events truncated to context budget.]"
 
 
 def _mark_events_consumed(orchestration_id: str, event_ids: Sequence[str]) -> None:
