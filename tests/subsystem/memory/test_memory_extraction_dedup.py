@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from tests.fixtures.memory_stack import fresh_memory_stack
 
@@ -41,6 +42,9 @@ def test_extract_from_conversation_handles_response_shapes_and_invalid_payloads(
         def __init__(self, response):
             self.response = response
 
+        def bind(self, **_kwargs):
+            return self
+
         def invoke(self, _messages):
             if isinstance(self.response, Exception):
                 raise self.response
@@ -48,7 +52,7 @@ def test_extract_from_conversation_handles_response_shapes_and_invalid_payloads(
 
     responses = iter([ListResponse(), EmptyResponse(), InvalidResponse(), RuntimeError("model down")])
     monkeypatch.setattr("row_bot.models.get_current_model", lambda: "fake")
-    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model: FakeLLM(next(responses)))
+    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model, **_kwargs: FakeLLM(next(responses)))
 
     assert memory_extraction._extract_from_conversation("User: Ada likes tests.") == [
         {"category": "person", "subject": "Ada", "content": "Ada likes tests."},
@@ -57,6 +61,57 @@ def test_extract_from_conversation_handles_response_shapes_and_invalid_payloads(
     assert memory_extraction._extract_from_conversation("User: nothing") == []
     assert memory_extraction._extract_from_conversation("User: invalid") == []
     assert memory_extraction._extract_from_conversation("User: offline") == []
+
+
+def test_extraction_runs_on_the_default_model_and_reads_a_schema_reply(tmp_path, monkeypatch) -> None:
+    """WP C1: an unattended job uses the default chat model even when a turn runs
+    on another model, asks for its entities and relations as a JSON schema with a
+    bounded reply, and drops the fields a schema reply had to fill."""
+    import contextvars
+
+    from row_bot import models
+    from row_bot.providers import background
+
+    stack = fresh_memory_stack(tmp_path, monkeypatch)
+    memory_extraction = stack["memory_extraction"]
+    calls = []
+
+    class SchemaModel:
+        def __init__(self, ref):
+            self.ref, self.bound = ref, {}
+
+        def bind(self, **kwargs):
+            self.bound.update(kwargs)
+            return self
+
+        def invoke(self, _messages):
+            calls.append((self.ref, dict(self.bound)))
+            return AIMessage(content=json.dumps({"memories": [
+                {"category": "person", "subject": "Ada", "content": "Ada maintains the test suite.", "aliases": ""},
+                {"relation_type": "works_on", "source_subject": "Ada", "target_subject": "Row-Bot",
+                 "confidence": 0.9},
+            ]}))
+
+    monkeypatch.setattr(models, "get_current_model", lambda: "model:openai:gpt-5")
+    monkeypatch.setattr(models, "get_llm_for", lambda ref, **_kwargs: SchemaModel(ref))
+    monkeypatch.setattr(background, "resolve_reasoning_capabilities_for_ref", lambda _ref: None)
+
+    def during_a_local_turn():
+        models.set_active_model_override("model:ollama:qwen3:8b")
+        return memory_extraction._extract_from_conversation("User: Ada maintains the Row-Bot tests.")
+
+    extracted = contextvars.copy_context().run(during_a_local_turn)
+
+    assert extracted == [
+        {"category": "person", "subject": "Ada", "content": "Ada maintains the test suite."},
+        {"relation_type": "works_on", "source_subject": "Ada", "target_subject": "Row-Bot", "confidence": 0.9},
+    ]
+    [(ref, bound)] = calls
+    assert ref == "model:openai:gpt-5"
+    assert bound["max_tokens"] == background.ANSWER_TOKENS["extraction"] + background.REASONING_HEADROOM_TOKENS
+    schema = bound["response_format"]["json_schema"]["schema"]
+    assert schema["properties"]["memories"]["items"]["anyOf"][1]["required"] == [
+        "relation_type", "source_subject", "target_subject", "confidence"]
 
 
 def test_entry_properties_preserve_source_context_evidence_confidence_and_method(tmp_path, monkeypatch) -> None:

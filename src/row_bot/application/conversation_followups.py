@@ -9,9 +9,11 @@ an approval pause, and a message the person queued goes first. Its prompt is
 stored as an internal input whose public text is a short note ("Goal · turn 3
 of 10"), so the transcript explains why the assistant continues.
 
-Pending follow-ups live in memory: a restart drops them, and once Row-Bot is
-ready again every active goal takes its next turn from its last saved state
-(``continue_goals_after_restart``; B244).
+Pending follow-ups live in memory: a restart drops them. Goals that were
+working when Row-Bot closed come back paused with one notice, and the person
+resumes them (decision D4, ``goals.settle_interrupted_goals``). Only after a
+restart Row-Bot caused does a goal take its next turn from its last saved state
+by itself (``continue_goals_after_restart``).
 
 A turn stopped by a provider's rate or usage limit makes the goal wait and
 continue by itself when the provider said when the limit resets; without a
@@ -330,13 +332,18 @@ def start_goal_turn(service: Any, conversation_id: str, goal: dict[str, Any], *,
 
 
 def continue_goals_after_restart(service: Any) -> int:
-    """Goals left working when Row-Bot closed go on from their last saved turn (B244).
+    """After a restart Row-Bot caused, goals left working go on from their last saved turn.
 
     Their next turn gets the continuation prompt with the saved progress; a goal
-    waiting for an approval keeps waiting for it, and channel goals are paused
-    at start (``goals.settle_interrupted_goals``).
+    waiting for an approval keeps waiting for it. After a normal launch nothing
+    starts here: start-up paused the goals with one notice and the person
+    resumes them (decision D4, ``goals.settle_interrupted_goals``), as it
+    always pauses channel goals.
     """
     from row_bot import goals
+    from row_bot.application.startup_state import last_exit_was_app_initiated
+    if not last_exit_was_app_initiated():
+        return 0
     goals_left = goals.goals_left_working()
     for goal in goals_left:
         start_goal_turn(service, str(goal["thread_id"]), goal, initial=False)

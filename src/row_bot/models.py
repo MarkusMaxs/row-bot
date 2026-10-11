@@ -700,7 +700,8 @@ def _chat_ollama(model: str, **kwargs):
     global ChatOllama
     if ChatOllama is None:
         try:
-            from langchain_ollama import ChatOllama as _ChatOllama
+            # Sends its num_ctx and keep_alive on every request (no runner reloads).
+            from row_bot.providers.transports.ollama_local import RowBotChatOllama as _ChatOllama
         except ImportError as exc:
             raise RuntimeError("langchain-ollama is not installed") from exc
         ChatOllama = _ChatOllama
@@ -742,7 +743,7 @@ def get_llm():
     return _llm_instance
 
 
-_override_llm_cache: dict[tuple[str, int, str], object] = {}
+_override_llm_cache: dict[tuple, object] = {}
 
 
 def clear_llm_cache() -> None:
@@ -750,6 +751,19 @@ def clear_llm_cache() -> None:
     global _llm_instance
     _llm_instance = None
     _override_llm_cache.clear()
+
+
+def cached_llm(key: tuple, build) -> object:
+    """The chat model cached under ``key``, built on first use.
+
+    It is dropped with the other cached clients (``clear_llm_cache`` and the
+    context-size setters), so credential and context changes still take effect.
+    """
+    model = _override_llm_cache.get(key)
+    if model is None:
+        model = build()
+        _override_llm_cache[key] = model
+    return model
 
 
 def _local_num_ctx_for(model_name: str | None) -> int:
@@ -766,6 +780,44 @@ def _local_num_ctx_for(model_name: str | None) -> int:
     if observed and observed > 0:
         candidates.append(observed)
     return min(candidates)
+
+
+def _ollama_tag(model_name: str | None) -> str:
+    name = _runtime_model_name(model_name).strip()
+    return name if not name or ":" in name else f"{name}:latest"
+
+
+def ollama_chat_request_settings(model_name: str | None) -> dict | None:
+    """What a direct Ollama call must send when it targets a local chat model.
+
+    Chat requests for a model always carry the same ``num_ctx`` and the chat
+    ``keep_alive`` (``RowBotChatOllama``). A direct ``Client.chat`` call to the
+    same model (Vision on a multimodal chat model, the tool probe) sends them
+    too, or Ollama reloads the runner with another context size and drops its
+    prompt cache. Returns ``{"options": {"num_ctx": ...}, "keep_alive": ...}``
+    (no ``keep_alive`` when ``OLLAMA_KEEP_ALIVE`` leaves it to the server), or
+    ``None`` when ``model_name`` is not this conversation's or the default
+    local chat model.
+    """
+    target = _ollama_tag(model_name)
+    chat_model = next(
+        (
+            name
+            for name in (_active_model_override.get(), _current_model)
+            if name and target and _ollama_tag(name) == target and not is_cloud_model(name)
+        ),
+        None,
+    )
+    if chat_model is None:
+        return None
+    from row_bot.providers.transports.ollama_local import ollama_chat_keep_alive
+
+    # Computed exactly as for the chat model's own requests.
+    settings: dict = {"options": {"num_ctx": _local_num_ctx_for(chat_model)}}
+    keep_alive = ollama_chat_keep_alive()
+    if keep_alive is not None:
+        settings["keep_alive"] = keep_alive
+    return settings
 
 
 def get_llm_for(model_name: str, num_ctx: int | None = None, *, reasoning_plan=None):

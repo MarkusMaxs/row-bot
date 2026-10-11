@@ -52,6 +52,8 @@ _THREAD_META_COLUMNS = {
     "client_runtime_mode": "TEXT NOT NULL DEFAULT 'agent'",
     # Apps switched off in this chat (item ids); every other ready app stays on, as before.
     "apps_off_json": "TEXT NOT NULL DEFAULT ''",
+    # How far background memory extraction has read this chat (memory_extraction.py).
+    "memory_extraction_json": "TEXT NOT NULL DEFAULT ''",
 }
 
 THREAD_NAME_SOURCE_AUTO = "auto"

@@ -844,7 +844,10 @@ class ShellTool(BaseTool):
 
         parts = [f"$ {command}"]
         if output:
-            parts.append(output)
+            # Long output keeps its head and tail here; the whole of it stays readable by handle.
+            from row_bot.tool_outputs import COMMAND_OUTPUT_CHARS, bounded
+
+            parts.append(bounded(output, tool_name="run_command", max_chars=COMMAND_OUTPUT_CHARS))
         parts.append(f"\n[Exit code: {exit_code} | Duration: {duration}s | cwd: {cwd}]")
 
         return with_approval(approval, "\n".join(parts))

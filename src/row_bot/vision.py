@@ -596,11 +596,14 @@ class VisionService:
         """Send image to a local Ollama vision model."""
         if _ollama_mod is None:
             return "Ollama is not installed. Install it or switch to a provider-backed Vision model."
-        from row_bot.models import _ollama_client
+        from row_bot.models import _ollama_client, ollama_chat_request_settings
         client = _ollama_client()
         if client is None:
             return "Ollama is not installed. Install it or switch to a provider-backed Vision model."
         runtime_model = _runtime_vision_model(model or self.effective_model())
+        # On the chat model itself, keep its context size and lifetime so the
+        # loaded runner (and its prompt cache) is reused, not reloaded.
+        request = ollama_chat_request_settings(runtime_model) or {"keep_alive": "5m"}
         response = client.chat(
             model=runtime_model,
             messages=[{
@@ -608,7 +611,7 @@ class VisionService:
                 "content": question,
                 "images": [b64],
             }],
-            keep_alive="5m",
+            **request,
         )
         return response["message"]["content"]
 

@@ -248,6 +248,9 @@ class _SkillLoadInput(BaseModel):
     relative_path: str | None = Field(default=None, description="Optional reference file within the skill root.")
 
 
+_REFERENCE_CHARS = 40_000
+
+
 def _json_result(value: Mapping[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
@@ -365,7 +368,14 @@ def build_skill_discovery_tools(
             # the system prompt mid-turn: the cached start of the request stays as it was (F5).
             result["instructions"] = record.instructions
         if reference_text is not None:
-            result["reference_text"] = reference_text
+            # A long reference keeps its head and tail here; the rest stays readable by handle.
+            from row_bot.tool_outputs import bounded
+
+            result["reference_text"] = bounded(
+                reference_text,
+                tool_name="skill_load",
+                max_chars=_REFERENCE_CHARS,
+            )
         return _json_result(result)
 
     boundary = (

@@ -723,6 +723,8 @@ def _execute_goal(
             goal_owner.extend_goal_budget(goal_id)
         if goal_owner.time_limit_reached(current):
             goal_owner.restart_time_window(goal_id)
+        if goal_owner.token_budget_reached(current):
+            goal_owner.restart_token_window(goal_id)
     status, verdict, default_reason, finish = {
         "pause": ("paused", "paused", "Paused by user.", ""),
         "resume": ("active", "continue", "Goal resumed.", ""),

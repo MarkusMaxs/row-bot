@@ -18,8 +18,15 @@ from row_bot.tools.base import BaseTool
 from row_bot.tools import registry
 
 
+# One page of a fetched page's text: fixed, not scaled to the model's context window.
+PAGE_CHARS = 40_000
+PAGE_CHARS_MAX = 100_000
+
+
 class _ReadURLInput(BaseModel):
     url: str = Field(description="The full URL to read (must start with http:// or https://)")
+    offset: int = Field(default=0, description="Character offset to start from, to read on in a long page.")
+    limit: int = Field(default=PAGE_CHARS, description=f"Characters to return, at most {PAGE_CHARS_MAX}.")
 
 
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
@@ -95,8 +102,8 @@ def _pdf_text(data: bytes) -> str:
     return "\n\n".join(pages)
 
 
-def _read_url(url: str) -> str:
-    """Fetch a webpage or PDF and return its text content."""
+def _read_url(url: str, offset: int = 0, limit: int = PAGE_CHARS) -> str:
+    """Fetch a webpage or PDF and return a page of its text content."""
     from bs4 import BeautifulSoup
 
     try:
@@ -129,13 +136,18 @@ def _read_url(url: str) -> str:
     if not text:
         return "The page was fetched but no readable text content was found."
 
-    # Truncate very long pages to avoid overwhelming the LLM context
-    from row_bot.models import get_tool_budget
-    max_chars = get_tool_budget(0.20, floor=15_000, ceiling=150_000)
-    if len(text) > max_chars:
-        text = text[:max_chars] + "\n\n… [content truncated]"
+    # A long page is read a window at a time; the footer says where to continue.
+    from row_bot.tool_outputs import page_chars
 
-    return f"SOURCE_URL: {source}\n\n{text}"
+    limit = min(max(1_000, int(limit or PAGE_CHARS)), PAGE_CHARS_MAX)
+    window, start, end = page_chars(text, offset=offset, limit=limit)
+    total = len(text)
+    if start == 0 and end >= total:
+        return f"SOURCE_URL: {source}\n\n{text}"
+    if start >= total:
+        return f"SOURCE_URL: {source}\n\n[Offset {start:,} is past the end: the page has {total:,} characters.]"
+    more = f"Continue with offset={end}." if end < total else "End of page."
+    return f"SOURCE_URL: {source}\n\n{window}\n\n[Characters {start:,}–{end:,} of {total:,}. {more}]"
 
 
 class URLReaderTool(BaseTool):
@@ -174,10 +186,9 @@ class URLReaderTool(BaseTool):
                 func=_read_url,
                 name="read_url",
                 description=(
-                    "Fetch a webpage or PDF and extract its text content. "
-                    "Input must be a full URL starting with http:// or https://. "
-                    "Returns the page's readable text. Use this whenever a user "
-                    "shares a link or asks about a specific webpage."
+                    "Fetch a webpage or PDF and return its readable text. Use this whenever the person "
+                    "shares a link or asks about a specific page. A long page comes in parts: the result "
+                    "ends with the offset to continue from."
                 ),
                 args_schema=_ReadURLInput,
             )

@@ -15,7 +15,9 @@ from langchain_core.runnables import Runnable
 from pydantic import Field
 
 from row_bot.cancellation import current_cancellation_scope
-from row_bot.prompt_cache import usage_metadata_from_provider_usage
+from row_bot.prompt_cache import conversation_cache_ttl, usage_metadata_from_provider_usage
+from row_bot.providers.capabilities import PROMPT_CACHE_ROUTE_REQUESTY, prompt_cache_route
+from row_bot.providers.transports import prompt_cache_breakpoints as cache_breakpoints
 
 logger = logging.getLogger(__name__)
 
@@ -396,9 +398,45 @@ class ChatOpenAICompatible(BaseChatModel):
         _apply_dynamic_reasoning_plan(body, self.reasoning_plan)
         if self.endpoint.get("drop_unsupported_params", True):
             _drop_empty_or_unsupported(body, accepts_tools=accepts_tools)
+        if self._requests_auto_cache(messages):
+            body = cache_breakpoints.with_requesty_auto_cache(body)
         return body
 
+    # ── Prompt caching (Requesty Claude routes) ─────────────────────────────
+
+    def _cache_route(self) -> tuple[str, str]:
+        return (str(self.endpoint.get("provider_id") or ""), str(self.model_name or ""))
+
+    def _requests_auto_cache(self, messages: list[BaseMessage]) -> bool:
+        """Requesty's documented auto-cache flag, on Claude routes, for conversation requests only."""
+        provider_id = str(self.endpoint.get("provider_id") or "")
+        if prompt_cache_route(provider_id, self.model_name) != PROMPT_CACHE_ROUTE_REQUESTY:
+            return False
+        if cache_breakpoints.cache_markers_rejected(self._cache_route()):
+            return False
+        return bool(conversation_cache_ttl(messages))
+
+    def _cache_retry_body(self, body: dict[str, Any], exc: BaseException) -> dict[str, Any] | None:
+        """The one retry without cache instructions, for a 400 that names them (the route is remembered)."""
+        if not cache_breakpoints.has_cache_markers(body) or not cache_breakpoints.is_cache_control_rejection(exc):
+            return None
+        scope = current_cancellation_scope()
+        if scope is not None and scope.is_cancelled():
+            return None
+        cache_breakpoints.remember_cache_markers_rejected(self._cache_route())
+        cache_breakpoints.log_cache_retry(self._cache_route(), remembered=True)
+        return cache_breakpoints.without_cache_markers(body)
+
     def _post(self, body: dict[str, Any]) -> Any:
+        try:
+            return self._post_once(body)
+        except RuntimeError as exc:
+            retry = self._cache_retry_body(body, exc)
+            if retry is None:
+                raise
+        return self._post_once(retry)
+
+    def _post_once(self, body: dict[str, Any]) -> Any:
         client = self.http_client or _new_http_client(self.timeout)
         owns_client = self.http_client is None
         request_timeout = _httpx_timeout(self.timeout)
@@ -416,6 +454,20 @@ class ChatOpenAICompatible(BaseChatModel):
                 client.close()
 
     def _iter_stream_events(self, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        produced = False
+        try:
+            for payload in self._iter_stream_attempts(body):
+                produced = True
+                yield payload
+            return
+        except RuntimeError as exc:
+            # A rejection before the first event: nothing has reached the caller yet.
+            retry = None if produced else self._cache_retry_body(body, exc)
+            if retry is None:
+                raise
+        yield from self._iter_stream_attempts(retry)
+
+    def _iter_stream_attempts(self, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         import httpx
 
         scope = current_cancellation_scope()

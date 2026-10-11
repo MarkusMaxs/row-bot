@@ -43,6 +43,7 @@ class _ListConversationsInput(BaseModel):
 
 _SNIPPET_LEN = 500  # max chars per message snippet
 _MAX_THREADS = 200  # safety cap on how many threads to scan
+_LIST_CHARS = 20_000  # list_conversations beyond this is read on with read_tool_output
 
 
 def _get_thread_messages(thread_id: str) -> list[dict]:
@@ -156,7 +157,11 @@ def _list_conversations() -> str:
         date_str = (updated_at or created_at or "")[:16].replace("T", " ")
         lines.append(f"• \"{name}\" — last used: {date_str}")
 
-    return f"{len(threads)} conversation(s):\n" + "\n".join(lines)
+    from row_bot.tool_outputs import bounded
+
+    # Thousands of conversations keep the newest and oldest here; the rest stays readable by handle.
+    listing = f"{len(threads)} conversation(s):\n" + "\n".join(lines)
+    return bounded(listing, tool_name="list_conversations", max_chars=_LIST_CHARS)
 
 
 # ── Tool class ───────────────────────────────────────────────────────────────

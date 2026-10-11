@@ -72,7 +72,7 @@ def test_persisted_map_result_resumes_at_next_window(tmp_path, monkeypatch):
     _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
     _patch_extraction_side_effects(extraction, monkeypatch)
     windows = ["window zero", "window one", "window two"]
-    monkeypatch.setattr(extraction, "iter_extraction_windows", lambda _pages: iter(windows))
+    monkeypatch.setattr(extraction, "iter_extraction_windows", lambda _pages, **_bounds: iter(windows))
     calls = []
     service.store_map_summary(job.id, 0, "already summarized")
     monkeypatch.setattr(
@@ -130,7 +130,7 @@ def test_cancellation_between_provider_calls_prevents_more_calls(tmp_path, monke
     monkeypatch.setattr(
         extraction,
         "iter_extraction_windows",
-        lambda _pages: iter(("one", "two", "three")),
+        lambda _pages, **_bounds: iter(("one", "two", "three")),
     )
     calls = []
 
@@ -150,7 +150,7 @@ def test_cancellation_between_provider_calls_prevents_more_calls(tmp_path, monke
 def test_provider_failure_isolated_and_next_job_remains_claimable(tmp_path, monkeypatch):
     jobs, extraction, service, first = _extracting_job(tmp_path, monkeypatch)
     _patch_extraction_side_effects(extraction, monkeypatch)
-    monkeypatch.setattr(extraction, "iter_extraction_windows", lambda _pages: iter(("one",)))
+    monkeypatch.setattr(extraction, "iter_extraction_windows", lambda _pages, **_bounds: iter(("one",)))
     monkeypatch.setattr(
         extraction,
         "_map_summarize_window",
@@ -255,3 +255,156 @@ def test_document_hub_commit_is_idempotent_by_document_id(tmp_path, monkeypatch)
     finally:
         conn.close()
     assert count == 1
+
+
+# ── Map windows scale with the model (WP C3, F49) ─────────────────────────────
+
+
+class _Policy:
+    """An admitted worker's policy: the captured model's input size and its calls."""
+
+    def __init__(self, usable_input_tokens):
+        self.usable_input_tokens = usable_input_tokens
+        self.prompts = []
+
+    def validate(self):
+        return None
+
+    def invoke(self, prompt):
+        self.prompts.append(prompt)
+        return "A section summary."
+
+
+def _map_with_policy(extraction, service, job, policy, monkeypatch, text):
+    import row_bot.documents as documents
+
+    monkeypatch.setattr(documents, "iter_document_pages", lambda _path: iter([Document(page_content=text)]))
+    mapped = []
+    monkeypatch.setattr(
+        extraction, "_map_summarize_window",
+        lambda window, *_args: mapped.append(window) or "A section summary.",
+    )
+    with extraction.captured_extraction_policy(policy):
+        extraction.extract_document_job(job, service)
+    return mapped
+
+
+def test_map_window_is_a_quarter_of_the_models_input_within_bounds():
+    import row_bot.document_extraction as extraction
+
+    assert extraction.map_window_for(None) == (6_000, 500)
+    # A small local context keeps the window every model has always handled.
+    assert extraction.map_window_for(4_096) == (6_000, 500)
+    assert extraction.map_window_for(27_852) == (27_852, 2_321)
+    # Large contexts stop at 60K characters; the overlap stays the same share.
+    assert extraction.map_window_for(950_000) == (60_000, 5_000)
+
+
+def test_a_long_document_takes_far_fewer_map_calls_and_every_character_is_read(tmp_path, monkeypatch):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _patch_extraction_side_effects(extraction, monkeypatch)
+    monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
+    text = "".join(f"{index:07d} " for index in range(15_000))  # 120,000 characters
+
+    mapped = _map_with_policy(extraction, service, job, _Policy(50_000), monkeypatch, text)
+
+    window, overlap = 50_000, 4_166
+    assert service.map_window_plan(job.id) == (window, overlap)
+    assert mapped == extraction._split_into_windows(text, window, overlap)
+    assert len(mapped) == 3  # 6K windows would have taken 22 calls
+    assert len(extraction._split_into_windows(text)) == 22
+    # Nothing is skipped: each window starts with the previous one's overlap.
+    rebuilt = mapped[0] + "".join(part[overlap:] for part in mapped[1:])
+    assert rebuilt == text
+
+
+def test_a_resumed_job_keeps_the_windows_it_started_with(tmp_path, monkeypatch):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _patch_extraction_side_effects(extraction, monkeypatch)
+    monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
+    text = "".join(f"{index:07d} " for index in range(15_000))
+    service.record_map_window_plan(job.id, 50_000, 4_166)
+    service.store_map_summary(job.id, 0, "Window zero, summarized before a restart.")
+
+    # The conversation's model changed size since the job started.
+    mapped = _map_with_policy(extraction, service, job, _Policy(16_000), monkeypatch, text)
+
+    assert service.map_window_plan(job.id) == (50_000, 4_166)
+    assert mapped == extraction._split_into_windows(text, 50_000, 4_166)[1:]
+
+
+def test_a_job_started_before_windows_scaled_finishes_with_6k_windows(tmp_path, monkeypatch):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _patch_extraction_side_effects(extraction, monkeypatch)
+    monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
+    text = "".join(f"{index:07d} " for index in range(3_750))  # 30,000 characters
+    # Saved by an older Row-Bot: three map summaries and no window plan.
+    for index in range(3):
+        service.store_map_summary(job.id, index, f"Old summary {index}.")
+
+    mapped = _map_with_policy(extraction, service, job, _Policy(200_000), monkeypatch, text)
+
+    legacy = extraction._split_into_windows(text, 6_000, 500)
+    assert service.map_window_plan(job.id) == (6_000, 500)
+    assert mapped == legacy[3:]
+    assert service.last_map_window(job.id) == len(legacy) - 1
+
+
+def test_a_batch_without_a_reviewed_policy_calls_the_background_model(tmp_path, monkeypatch):
+    import row_bot.document_extraction as extraction
+    import row_bot.documents as documents
+    from row_bot import models
+    from row_bot.providers import background
+
+    extraction = importlib.reload(extraction)
+    calls = []
+    monkeypatch.setattr(
+        background, "invoke_background",
+        lambda purpose, messages, **_kwargs: calls.append((purpose, messages[0].content)) or "Mapped.",
+    )
+    monkeypatch.setattr(models, "get_llm_for", lambda *_args, **_kwargs: pytest.fail("legacy model path"))
+    monkeypatch.setattr(extraction, "_usable_input_tokens", lambda: None)
+    monkeypatch.setattr(extraction, "_copy_to_vault_raw", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(extraction, "_commit_knowledge", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(documents, "release_document_embedding_resources", lambda *_args: None)
+    monkeypatch.setattr(documents, "iter_document_pages", lambda _path: iter([Document(page_content="Notes. " * 40)]))
+    source = tmp_path / "notes.txt"
+    source.write_text("Notes. " * 40, encoding="utf-8")
+
+    result = extraction.extract_from_document(str(source), "notes.txt")
+
+    assert result["status"] == "completed"
+    assert [purpose for purpose, _prompt in calls] == ["document", "document"]  # map, then reduce
+    assert "Notes." in calls[0][1]
+
+
+def test_the_map_summary_length_grows_with_the_section():
+    import row_bot.document_extraction as extraction
+
+    assert extraction.map_summary_length(5_000).startswith("3-5 sentences")
+    assert extraction.map_summary_length(6_000).startswith("3-5 sentences")
+    assert extraction.map_summary_length(27_852).startswith("15-25 sentences")
+    assert extraction.map_summary_length(60_000).startswith("30-50 sentences")
+
+
+def test_each_map_call_asks_for_a_summary_as_long_as_its_section_needs(tmp_path, monkeypatch):
+    import row_bot.documents as documents
+
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _patch_extraction_side_effects(extraction, monkeypatch)
+    monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
+    text = "".join(f"{index:07d} " for index in range(15_000))  # 120,000 characters
+    monkeypatch.setattr(documents, "iter_document_pages", lambda _path: iter([Document(page_content=text)]))
+    policy = _Policy(950_000)  # 60K windows: 60K, 60K, then the last 10K
+
+    with extraction.captured_extraction_policy(policy):
+        extraction.extract_document_job(job, service)
+
+    assert len(policy.prompts) == 3
+    assert "30-50 sentences" in policy.prompts[0]
+    assert "30-50 sentences" in policy.prompts[1]
+    assert "6-10 sentences" in policy.prompts[2]
+    # The instructions come first and are the same for every section: a cacheable prefix.
+    instructions = {prompt.split("LENGTH:")[0] for prompt in policy.prompts}
+    assert len(instructions) == 1
+    assert all(text[:20] not in part for part in instructions)

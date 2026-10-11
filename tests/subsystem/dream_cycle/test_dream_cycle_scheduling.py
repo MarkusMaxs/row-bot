@@ -25,14 +25,17 @@ def fresh_dream_cycle(tmp_path, monkeypatch):
     return importlib.reload(dream_cycle)
 
 
-def test_should_dream_requires_enabled_idle_window_and_free_ollama(tmp_path, monkeypatch) -> None:
+def test_should_dream_requires_enabled_idle_window_and_no_turn_in_flight(tmp_path, monkeypatch) -> None:
+    from row_bot.runtime import executions
+
     dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+    registry = executions.GenerationRuntimeRegistry()
+    monkeypatch.setattr(executions, "generation_registry", registry)
 
     monkeypatch.setattr(dream_cycle, "is_enabled", lambda: True)
     monkeypatch.setattr(dream_cycle, "_already_ran_today", lambda: False)
     monkeypatch.setattr(dream_cycle, "_in_dream_window", lambda: True)
     monkeypatch.setattr(dream_cycle, "_is_idle", lambda: True)
-    monkeypatch.setattr(dream_cycle, "_is_ollama_busy", lambda: False)
 
     assert dream_cycle._should_dream() is True
 
@@ -40,10 +43,10 @@ def test_should_dream_requires_enabled_idle_window_and_free_ollama(tmp_path, mon
     assert dream_cycle._should_dream() is False
 
     monkeypatch.setattr(dream_cycle, "_is_idle", lambda: True)
-    monkeypatch.setattr(dream_cycle, "_is_ollama_busy", lambda: True)
+    turn = registry.register("conversation-a")
     assert dream_cycle._should_dream() is False
+    registry.finish(turn)
 
-    monkeypatch.setattr(dream_cycle, "_is_ollama_busy", lambda: False)
     monkeypatch.setattr(dream_cycle, "_already_ran_today", lambda: True)
     assert dream_cycle._should_dream() is False
 

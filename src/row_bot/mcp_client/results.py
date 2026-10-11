@@ -71,15 +71,37 @@ def _content_block_to_text(block: Any) -> str:
     return str(block)
 
 
+# Said instead of repeating the structured content when the text already is it. An app's view
+# rebuilds structuredContent from the text then (integrations/views.py).
+STRUCTURED_SAME_AS_TEXT = "STRUCTURED_CONTENT: same as the text above"
+
+
+def _text_carries(parts: list[str], structured: Any) -> bool:
+    """Whether the text is the structured content serialized (the MCP spec asks servers to send it
+    in a text block too), so appending it again would only repeat it."""
+    text = "\n\n".join(part for part in parts if part).strip()
+    if not text:
+        return False
+    try:
+        return json.loads(text) == structured
+    except (TypeError, ValueError):
+        return False
+
+
 def normalize_call_result(result: Any, *, output_limit: int = 24000) -> str:
     """Convert an MCP call result into model-facing text."""
     parts: list[str] = []
     for block in getattr(result, "content", None) or []:
         parts.append(_content_block_to_text(block))
     structured = getattr(result, "structuredContent", None)
-    if structured is not None:
+    if structured is not None and _text_carries(parts, structured):
+        parts.append(STRUCTURED_SAME_AS_TEXT)
+    elif structured is not None:
         try:
-            parts.append("STRUCTURED_CONTENT:\n" + json.dumps(structured, ensure_ascii=False, indent=2, default=str))
+            parts.append(
+                "STRUCTURED_CONTENT:\n"
+                + json.dumps(structured, ensure_ascii=False, separators=(",", ":"), default=str)
+            )
         except Exception:
             parts.append(f"STRUCTURED_CONTENT:\n{structured!r}")
     text = "\n\n".join(part for part in parts if part).strip()

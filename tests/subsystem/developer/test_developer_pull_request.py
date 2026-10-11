@@ -76,7 +76,6 @@ def test_ask_mode_asks_then_opens_a_draft_described_from_the_branch(branch) -> N
         "url": PR_URL,
         "draft": True,
         "title": "Quote CSV fields that contain commas",
-        "error": "",
     }
     (call,) = pr_creates(gh)
     assert call[call.index("--title") + 1] == "Quote CSV fields that contain commas"

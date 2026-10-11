@@ -211,6 +211,12 @@ def _result(text: str | None) -> dict | None:
     error = body.startswith("MCP tool error: ")
     body = body.removeprefix("MCP tool error: ")
     content, _, structured = body.partition("STRUCTURED_CONTENT:\n")
+    from row_bot.mcp_client.results import STRUCTURED_SAME_AS_TEXT
+
+    if not structured and body.rstrip().endswith(STRUCTURED_SAME_AS_TEXT):
+        # Not repeated in the chat because the text already is the structured content.
+        content = body.rstrip()[: -len(STRUCTURED_SAME_AS_TEXT)]
+        structured = content.strip()
     found: dict[str, Any] = {"content": [{"type": "text", "text": content.strip()}] if content.strip() else []}
     try:
         value = json.loads(structured) if structured else None

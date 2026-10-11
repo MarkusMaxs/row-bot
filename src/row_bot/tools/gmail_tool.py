@@ -323,7 +323,7 @@ class GmailTool(BaseTool):
             all_lc_tools = toolkit.get_tools()
             for t in all_lc_tools:
                 if t.name in selected and t.name in _READ_OPS:
-                    tools.append(_wrap_gmail_tool_empty_guard(t))
+                    tools.append(_wrap_gmail_tool_empty_guard(_bounded_gmail_read_tool(t)))
 
         # Custom draft with attachments
         if "create_gmail_draft" in selected:
@@ -357,6 +357,63 @@ class GmailTool(BaseTool):
 
     def execute(self, query: str) -> str:
         return "Use the individual Gmail operations instead."
+
+
+# ── Bounded read results ─────────────────────────────────────────────────
+
+# A search returns each message's whole body; a newsletter or a long thread could fill the
+# context. Search results carry the start of each body, and one message reads in full up to
+# a cap, beyond which the rest stays readable by handle.
+_SEARCH_BODY_CHARS = 1_500
+_MESSAGE_BODY_CHARS = 30_000
+
+
+def _bounded_gmail_result(tool_name: str, result):
+    """Compact JSON for a Gmail read result, with long bodies shortened (nothing unreachable)."""
+    from row_bot.tool_outputs import bounded, compact_json
+
+    def shorten_search_body(message: dict) -> dict:
+        body = message.get("body")
+        if not isinstance(body, str) or len(body) <= _SEARCH_BODY_CHARS:
+            return message
+        return {
+            **message,
+            "body": body[:_SEARCH_BODY_CHARS],
+            "body_note": (
+                f"First {_SEARCH_BODY_CHARS:,} of {len(body):,} characters; "
+                f"get_gmail_message(message_id='{message.get('id', '')}') reads all of it."
+            ),
+        }
+
+    if tool_name == "search_gmail" and isinstance(result, list):
+        result = [shorten_search_body(item) if isinstance(item, dict) else item for item in result]
+    elif tool_name == "get_gmail_message" and isinstance(result, dict) and isinstance(result.get("body"), str):
+        result = {
+            **result,
+            "body": bounded(result["body"], tool_name=tool_name, max_chars=_MESSAGE_BODY_CHARS),
+        }
+    if isinstance(result, (dict, list)):
+        return compact_json(result)
+    return result
+
+
+def _bounded_gmail_read_tool(tool):
+    """Wrap a LangChain Gmail read tool so its result is bounded and compact."""
+    from langchain_core.tools import StructuredTool
+
+    run = getattr(tool, "_run", None)
+    if run is None:
+        return tool
+
+    def _read(**kwargs):
+        return _bounded_gmail_result(tool.name, run(**kwargs))
+
+    return StructuredTool.from_function(
+        func=_read,
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+    )
 
 
 # ── Empty-result guard ───────────────────────────────────────────────────
@@ -398,6 +455,7 @@ def _wrap_gmail_tool_empty_guard(tool):
         func=_guarded,
         name=tool.name,
         description=tool.description,
+        args_schema=tool.args_schema,
     )
 
 
