@@ -338,6 +338,9 @@ it('offers processing only for eligible paused client batches without dispatchin
   const select = vi.fn();
   render(<DocumentJobs session={session} onProcess={select} />);
   expect(screen.getAllByRole('button', { name: /^Process / })).toHaveLength(1);
+  // A batch waiting to be processed offers Process only, not Resume too (F26);
+  // the other three still offer Resume.
+  expect(screen.getAllByRole('button', { name: 'Resume' })).toHaveLength(3);
   fireEvent.click(screen.getByRole('button', { name: 'Process Upload' }));
   expect(select).toHaveBeenCalledWith(item);
 });

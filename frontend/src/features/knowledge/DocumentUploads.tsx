@@ -1,7 +1,8 @@
 import { formatBytes } from '../shell/MediaPreview';
-import { useId, useState, useSyncExternalStore } from 'react';
-import { FileUp } from 'lucide-react';
-import { Button, ErrorState } from '../../ui/primitives';
+import { useId, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Check, FileUp, X } from 'lucide-react';
+import { Button, ErrorState, IconButton } from '../../ui/primitives';
+import { plural } from '../home/home-format';
 
 export type DocumentUploadFile = { name: string; size_bytes: number };
 export type DocumentUploadReview = {
@@ -274,8 +275,17 @@ export type DocumentUploadsSession = ReturnType<
 
 export function DocumentUploads({
   session,
+  modelControl,
+  onAddAndProcess,
+  onView,
 }: {
   session: DocumentUploadsSession;
+  /** The "Read documents with" choice, shown beside the actions (F26). */
+  modelControl?: ReactNode;
+  /** Opens processing for the batch just added: "Add and process" (F26). */
+  onAddAndProcess?: (batchId: string) => void;
+  /** Shows the added batch in Your documents. */
+  onView?: () => void;
 }) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const inputId = useId();
@@ -291,6 +301,20 @@ export function DocumentUploads({
       /* Session exposes the recoverable error. */
     }
   };
+  // One list: chosen files turn into one "added" line once the upload lands (F26).
+  const added = state.receipt?.status === 'completed' ? state.receipt : null;
+  const [processing, setProcessing] = useState(false);
+  const add = (andProcess: boolean) =>
+    invoke(async () => {
+      setProcessing(andProcess);
+      await session.start();
+      const receipt = session.getSnapshot().receipt;
+      if (andProcess && receipt?.status === 'completed' && receipt.batch_id)
+        onAddAndProcess?.(receipt.batch_id);
+    });
+  const duplicates =
+    added?.files?.filter((file) => file.status === 'skipped_duplicate')
+      .length ?? 0;
   return (
     <section
       aria-label="Document uploads"
@@ -346,11 +370,23 @@ export function DocumentUploads({
           onChange={(event) => choose(Array.from(event.target.files ?? []))}
         />
       </div>
-      {state.files.length > 0 && (
+      {state.files.length > 0 && !added && (
         <ul className="document-staged-files" aria-label="Selected documents">
           {state.files.map((file, index) => (
             <li key={`${index}:${file.name}`}>
-              {file.name} · {formatBytes(file.size)}
+              <span>
+                {file.name} · {formatBytes(file.size)}
+              </span>
+              <IconButton
+                size="sm"
+                label={`Don't add ${file.name}`}
+                disabled={disabled}
+                onClick={() =>
+                  choose(state.files.filter((_, other) => other !== index))
+                }
+              >
+                <X size={14} aria-hidden />
+              </IconButton>
             </li>
           ))}
         </ul>
@@ -358,14 +394,28 @@ export function DocumentUploads({
       {state.error && (
         <ErrorState title="Upload needs attention">{state.error}</ErrorState>
       )}
-      {state.files.length > 0 && (
-        <Button
-          variant="primary"
-          disabled={disabled}
-          onClick={() => invoke(() => session.start())}
-        >
-          Upload selected
-        </Button>
+      {state.files.length > 0 && !added && (
+        <div className="document-add-actions">
+          {modelControl}
+          <div className="action-cluster">
+            {onAddAndProcess && (
+              <Button
+                variant="primary"
+                disabled={disabled}
+                onClick={() => add(true)}
+              >
+                Add and process
+              </Button>
+            )}
+            <Button
+              variant={onAddAndProcess ? 'ghost' : 'primary'}
+              disabled={disabled}
+              onClick={() => add(false)}
+            >
+              {onAddAndProcess ? 'Add only' : 'Add documents'}
+            </Button>
+          </div>
+        </div>
       )}
       {state.pending && (
         <Button
@@ -375,23 +425,32 @@ export function DocumentUploads({
           Refresh original upload
         </Button>
       )}
-      {state.receipt && (
-        <p role="status">
-          {state.receipt.status === 'completed'
-            ? 'Upload staged. The batch is paused.'
-            : state.receipt.status === 'partial'
+      {added ? (
+        <p role="status" className="document-added">
+          <Check size={15} aria-hidden />
+          <span>
+            {plural(added.files?.length ?? state.files.length, 'document')}{' '}
+            added
+            {duplicates > 0 && ` (${duplicates} already in your documents)`}
+            {processing
+              ? '. Check the details and start processing in Your documents.'
+              : '. They wait, paused, until you process them.'}
+          </span>
+          {onView && (
+            <Button variant="ghost" className="settings-link" onClick={onView}>
+              View in Your documents
+            </Button>
+          )}
+        </p>
+      ) : (
+        state.receipt && (
+          <p role="status">
+            {state.receipt.status === 'partial'
               ? 'Upload outcome is uncertain. Retained bytes may exist; do not repeat the upload.'
               : 'Upload was rejected.'}
-        </p>
+          </p>
+        )
       )}
-      {state.receipt?.files?.map((file) => (
-        <p key={file.id}>
-          {file.name} ·{' '}
-          {file.status === 'skipped_duplicate'
-            ? 'Duplicate detected; retained copy'
-            : 'Staged for processing'}
-        </p>
-      ))}
     </section>
   );
 }

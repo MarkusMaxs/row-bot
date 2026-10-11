@@ -463,6 +463,12 @@ export function DocumentJobs({
   onProcess?: (batch: DocumentQueueItem) => void;
 }) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  // A paused batch from Settings that hasn't been processed yet.
+  const canProcess = (item: DocumentQueueItem) =>
+    Boolean(onProcess) &&
+    item.id.startsWith('client_') &&
+    item.status === 'paused' &&
+    !item.cancel_requested;
   const disabled = state.busy || state.pending || state.revoked;
   const invoke = (call: () => Promise<unknown>) => {
     void call().catch(() => undefined);
@@ -546,21 +552,19 @@ export function DocumentJobs({
             </small>
           </div>
           <div className="document-batch-actions">
-            {onProcess &&
-              item.id.startsWith('client_') &&
-              item.status === 'paused' &&
-              !item.cancel_requested && (
-                <Button
-                  variant="ghost"
-                  className="settings-link"
-                  disabled={disabled}
-                  aria-label={`Process ${batchTitle(item)}`}
-                  onClick={() => onProcess(item)}
-                >
-                  Process
-                </Button>
-              )}
-            {!terminal.has(item.status) && (
+            {canProcess(item) && (
+              <Button
+                variant="ghost"
+                className="settings-link"
+                disabled={disabled}
+                aria-label={`Process ${batchTitle(item)}`}
+                onClick={() => onProcess?.(item)}
+              >
+                Process
+              </Button>
+            )}
+            {/* A batch waiting to be processed offers Process only, not Resume as well (F26). */}
+            {!terminal.has(item.status) && !canProcess(item) && (
               <Button
                 variant="ghost"
                 className="settings-link"

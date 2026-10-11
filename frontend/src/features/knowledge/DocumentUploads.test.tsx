@@ -47,22 +47,65 @@ function fixture() {
 }
 
 describe('document upload retained staging', () => {
+  it('adds and processes from one list and one action (F26)', async () => {
+    const { session } = fixture();
+    const onAddAndProcess = vi.fn();
+    const onView = vi.fn();
+    render(
+      <DocumentUploads
+        session={session}
+        modelControl={<span>Read documents with qwen</span>}
+        onAddAndProcess={onAddAndProcess}
+        onView={onView}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Choose documents'), {
+      target: { files: [source(), new File(['second'], 'second.txt')] },
+    });
+    // The model that reads them sits beside the actions; a chosen file can be taken out.
+    expect(screen.getByText('Read documents with qwen')).toBeVisible();
+    fireEvent.click(
+      screen.getByRole('button', { name: "Don't add second.txt" }),
+    );
+    expect(
+      screen.getByRole('list', { name: 'Selected documents' }),
+    ).not.toHaveTextContent('second.txt');
+    expect(screen.getByRole('button', { name: 'Add only' })).toBeVisible();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add and process' }));
+    });
+    expect(onAddAndProcess).toHaveBeenCalledWith(
+      `client_${commandId.replaceAll('-', '')}`,
+    );
+    // The chosen list turns into one line, with no second list of staged rows.
+    expect(
+      screen.queryByRole('list', { name: 'Selected documents' }),
+    ).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '1 document added. Check the details and start processing in Your documents.',
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'View in Your documents' }),
+    );
+    expect(onView).toHaveBeenCalledOnce();
+  });
+
   it('mounts passively and requires selection and review before upload', async () => {
     const { transport, session } = fixture();
     render(<DocumentUploads session={session} />);
     expect(transport.review).not.toHaveBeenCalled();
     expect(transport.upload).not.toHaveBeenCalled();
     // Nothing to upload yet, so no Upload button (B258).
-    expect(
-      screen.queryByRole('button', { name: 'Upload selected' }),
-    ).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add documents' })).toBeNull();
     fireEvent.change(screen.getByLabelText('Choose documents'), {
       target: { files: [source()] },
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Upload selected' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add documents' }));
     });
-    expect(screen.getByRole('status')).toHaveTextContent('The batch is paused');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '1 document added. They wait, paused, until you process them.',
+    );
   });
 
   it('accepts files dropped on the drop zone like chosen files', async () => {
@@ -81,7 +124,7 @@ describe('document upload retained staging', () => {
     // Dropping stages nothing by itself; upload is still one explicit click.
     expect(transport.review).not.toHaveBeenCalled();
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Upload selected' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add documents' }));
     });
     expect(transport.upload).toHaveBeenCalledOnce();
   });
@@ -230,6 +273,8 @@ describe('document upload retained staging', () => {
     await session.review();
     await session.confirm();
     render(<DocumentUploads session={session} />);
-    expect(screen.getByText(/Duplicate detected; retained copy/)).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '1 document added (1 already in your documents)',
+    );
   });
 });
