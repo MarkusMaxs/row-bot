@@ -1,9 +1,44 @@
 import * as Popover from '@radix-ui/react-popover';
-import type { ContextUsageView } from '../../api/types';
+import type { ContextUsageView, ConversationTokenUsage } from '../../api/types';
 import { Hint } from '../../ui/primitives';
 
 function tokens(value: number | null | undefined) {
   return value == null ? 'unknown' : value.toLocaleString('en-GB');
+}
+
+// en-US: its compact suffixes (K, M, B) are the same in every ICU build.
+const compact = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
+
+/**
+ * What this conversation's model calls used, from the local usage ledger:
+ * a short hover suffix and a full sentence for the details. The cost is only
+ * one the provider itself returned (OpenRouter); there is no price table.
+ */
+export function describeConversationUsage(
+  usage?: ConversationTokenUsage | null,
+): {
+  hint: string;
+  detail: string;
+} | null {
+  if (!usage || usage.calls <= 0) return null;
+  const total = usage.input_tokens + usage.output_tokens;
+  const cache =
+    usage.cache_read_percent == null
+      ? ''
+      : `${usage.cache_read_percent}% from cache`;
+  const cost =
+    usage.cost_usd == null
+      ? ''
+      : `$${usage.cost_usd.toFixed(usage.cost_usd > 0 && usage.cost_usd < 0.01 ? 4 : 2)}`;
+  return {
+    hint: `${compact.format(total)} tokens used${cache ? `, ${cache}` : ''}`,
+    detail: `This conversation: ${tokens(total)} tokens used${
+      cache ? `, ${usage.cache_read_percent}% of input read from cache` : ''
+    }${cost ? `. Cost reported by the provider: ${cost}` : ''}.`,
+  };
 }
 
 const RADIUS = 7;
@@ -112,12 +147,14 @@ export default function ContextUsage({
         : usable
           ? `Context ${stale ? '~' : ''}${percentLabel}`
           : 'Context unavailable';
-  const hint =
+  const spent = describeConversationUsage(usage.conversation_usage);
+  const contextHint =
     usage.status === 'compacting'
       ? 'Compacting context…'
       : usable
         ? `${stale ? '~' : ''}${percentLabel} of context${threshold ? ` · compacts at ${Math.round(threshold)}%` : ''}`
         : 'Context unavailable';
+  const hint = spent ? `${contextHint} · ${spent.hint}` : contextHint;
   const tooltip = [
     `${stale ? 'Last measured: approximately' : 'Approximately'} ${tokens(used)} of ${tokens(usage.usable_input_tokens)} usable tokens.`,
     usage.compact_at_tokens
@@ -164,6 +201,7 @@ export default function ContextUsage({
           >
             <strong className="context-meter-title">{label}</strong>
             <p>{tooltip}</p>
+            {spent && <p>{spent.detail}</p>}
             {usage.last_confirmed_input_tokens != null && (
               <p>
                 Last provider-confirmed input:{' '}

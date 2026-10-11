@@ -92,6 +92,44 @@ def test_ollama_compactor_binds_output_limit_in_supported_options(monkeypatch):
     }
 
 
+def test_compaction_calls_are_counted_as_compaction_for_the_running_conversation(tmp_path, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    from row_bot.providers.usage_ledger import attach_usage_ledger
+
+    class Summarizer(BaseChatModel):
+        @property
+        def _llm_type(self):
+            return "summary-fixture"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            message = AIMessage(content=_structured_summary(),
+                                usage_metadata={"input_tokens": 3000, "output_tokens": 200, "total_tokens": 3200})
+            return ChatResult(generations=[ChatGeneration(message=message)])
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    model = attach_usage_ledger(Summarizer(), provider_id="openai", model_name="test")
+    monkeypatch.setattr(agent, "_chat_only_llm", lambda _model_ref: model)
+    thread = agent._current_thread_id_var.set("thread-compacting")
+    generation = agent._current_generation_id_var.set("gen-compacting")
+    try:
+        summary = agent._invoke_compaction_model(
+            _inputs([]), prior_summary="", transcript="user: hello", output_tokens=1_000)
+    finally:
+        agent._current_generation_id_var.reset(generation)
+        agent._current_thread_id_var.reset(thread)
+
+    assert summary == _structured_summary()
+    with closing(sqlite3.connect(tmp_path / "usage.db")) as connection:
+        rows = connection.execute(
+            "SELECT purpose, thread_id, generation_id, input_tokens, output_tokens FROM model_usage").fetchall()
+    assert rows == [("compaction", "thread-compacting", "gen-compacting", 3000, 200)]
+
+
 def test_fake_summary_preserves_designated_identifier_in_prepared_input(monkeypatch):
     opaque_id = "QA-ROWBOT-7f9c2a11"
     raw = []
@@ -507,6 +545,26 @@ def test_chat_only_compaction_projection_never_contains_tool_body():
             },
             150,
         ),
+        (
+            # LangChain usage_metadata already includes cache reads and
+            # writes; the raw Anthropic block beside it must not add them again.
+            "anthropic",
+            {
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_input_tokens": 20,
+                    "cache_creation_input_tokens": 30,
+                },
+                "usage_metadata": {
+                    "input_tokens": 150,
+                    "output_tokens": 5,
+                    "total_tokens": 155,
+                    "input_token_details": {"cache_read": 20, "cache_creation": 30},
+                },
+            },
+            150,
+        ),
+        ("openai", {"finish_reason": "stop"}, None),
     ),
 )
 def test_provider_input_usage_is_diagnostic_only(provider_id, metadata, expected):

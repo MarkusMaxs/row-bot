@@ -407,6 +407,9 @@ def captured_chat_model(capture: CapturedChatRuntime, *, validate: Callable[[], 
             kwargs = {"model":resolved.runtime_model,"api_key":capture.credential,"base_url":resolved.base_url,
                 "organization":capture.organization,"openai_proxy":"","max_retries":0,
                 "http_client":sync,"http_async_client":asynchronous}
+            if provider in {"openai", "xai"} or responses:
+                # Explicit clients turn stream usage off; these routes accept it.
+                kwargs["stream_usage"] = True
             # Explicit SDK clients prevent OPENAI_PROJECT/BASE_URL fallback as well.
             import openai
             headers = deepcopy(resolved.endpoint.get("headers") or {})
@@ -471,6 +474,9 @@ def captured_chat_model(capture: CapturedChatRuntime, *, validate: Callable[[], 
                 **_reasoning_constructor_kwargs(capture.reasoning_plan, provider="google"))
         else:
             raise ValueError("document_provider_capture_unsupported")
+        from row_bot.providers.usage_ledger import attach_usage_ledger
+
+        attach_usage_ledger(model, provider_id=provider, model_name=resolved.runtime_model)
         validate()
         try:
             yield _CapturedChatInvocation(model, validate)
@@ -741,7 +747,7 @@ def create_chat_model(
 ):
     primary = _create_chat_model(model_name, provider_id, reasoning_plan=reasoning_plan)
     if reasoning_plan is None or reasoning_plan.is_default:
-        return primary
+        return _with_usage_ledger(primary, model_name, provider_id)
     from row_bot.providers.resolution import resolve_provider_config
     from row_bot.providers.transports.reasoning_fallback import ReasoningFallbackChatModel
 
@@ -751,12 +757,35 @@ def create_chat_model(
         allow_legacy_local=provider_id is not None,
     )
     provider_default = _create_chat_model(model_name, provider_id, reasoning_plan=None)
-    return ReasoningFallbackChatModel(
-        primary=primary,
-        provider_default=provider_default,
-        plan=reasoning_plan,
-        provider_id=resolved.provider_id,
+    # The ledger sits on the wrapper: the inner calls run without callbacks.
+    return _with_usage_ledger(
+        ReasoningFallbackChatModel(
+            primary=primary,
+            provider_default=provider_default,
+            plan=reasoning_plan,
+            provider_id=resolved.provider_id,
+        ),
+        model_name,
+        provider_id,
     )
+
+
+def _with_usage_ledger(model: Any, model_name: str, provider_id: str | None) -> Any:
+    """Record this model's calls in the local usage ledger (counts only)."""
+    from row_bot.providers.usage_ledger import attach_usage_ledger
+
+    try:
+        from row_bot.providers.resolution import resolve_provider_config
+
+        resolved = resolve_provider_config(
+            model_name,
+            provider_id,
+            allow_legacy_local=provider_id is not None,
+        )
+        provider, runtime_model = resolved.provider_id, resolved.runtime_model
+    except Exception:
+        provider, runtime_model = str(provider_id or ""), str(model_name or "")
+    return attach_usage_ledger(model, provider_id=provider, model_name=runtime_model)
 
 
 def _create_chat_model(
@@ -855,6 +884,8 @@ def _create_chat_model(
                 base_url=opencode_base_url(provider),
                 use_responses_api=True,
                 output_version="responses/v1",
+                # A custom http_client silently turns stream usage off.
+                stream_usage=True,
                 http_client=cancellable_http_client(event_hooks={"request": [add_opencode_request_headers]}),
                 http_async_client=cancellable_async_http_client(
                     event_hooks={"request": [add_opencode_request_headers_async]},
@@ -901,6 +932,8 @@ def _create_chat_model(
                 "api_key": api_key,
                 "base_url": endpoint["base_url"],
                 "http_client": cancellable_http_client(),
+                # A custom http_client silently turns stream usage off.
+                "stream_usage": True,
             }
             baseline = _custom_endpoint_responses_baseline(endpoint)
             if baseline:
@@ -954,7 +987,13 @@ def _create_chat_model(
         api_key = get_provider_secret("openai")
         if not api_key:
             raise ValueError("OpenAI API key not configured. Set it in Settings → Providers.")
-        kwargs = {"model": model_name, "api_key": api_key, "http_client": cancellable_http_client()}
+        # A custom http_client silently turns stream usage off, so ask for it.
+        kwargs = {
+            "model": model_name,
+            "api_key": api_key,
+            "http_client": cancellable_http_client(),
+            "stream_usage": True,
+        }
         if openai_model_uses_responses_api(model_name):
             kwargs.update({"use_responses_api": True, "output_version": "responses/v1"})
         kwargs.update(

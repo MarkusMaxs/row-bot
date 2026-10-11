@@ -308,6 +308,12 @@ def _purge_owned_state(thread_id: str) -> tuple[int, tuple[str, ...]]:
         delete_thread_activation_state(thread_id)
     except Exception:
         logger.debug("Skill activation cleanup failed for %s", thread_id, exc_info=True)
+    try:
+        from row_bot.providers.usage_ledger import delete_thread_usage
+
+        delete_thread_usage(thread_id)
+    except Exception:
+        logger.debug("Usage ledger cleanup failed for %s", thread_id, exc_info=True)
     return changed, tuple(warnings)
 
 
@@ -967,16 +973,25 @@ def run_idle_maintenance() -> dict[str, Any]:
             with checkpointer_lock:
                 compaction.append(compact_sqlite_database(threads.DB_PATH))
         compaction.append(compact_sqlite_database(tasks._DB_PATH))  # noqa: SLF001
+        usage_pruned = 0
+        try:
+            from row_bot.providers.usage_ledger import prune_usage
+
+            usage_pruned = prune_usage()
+        except Exception:
+            logger.debug("Usage ledger pruning skipped", exc_info=True)
         logger.info(
-            "Idle conversation maintenance checkpoints=%s orphans=%s compaction=%s",
+            "Idle conversation maintenance checkpoints=%s orphans=%s compaction=%s usage_pruned=%s",
             checkpoint_stats,
             orphan_stats,
             [item.get("reason") for item in compaction],
+            usage_pruned,
         )
         return {
             "checkpoints": checkpoint_stats,
             "orphans": orphan_stats,
             "compaction": compaction,
+            "usage_pruned": usage_pruned,
         }
     finally:
         _maintenance_lock.release()

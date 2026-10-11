@@ -1,0 +1,223 @@
+{
+  "_about": "Recorded-shape fake usage payloads per provider, as the LangChain clients and Row-Bot transports hand them over (response_metadata plus usage_metadata). Counts are synthetic. 'expected' is the one meaning Row-Bot reads: input includes cache reads and writes, output includes reasoning, null means not reported.",
+  "anthropic_stream_langchain": {
+    "response_metadata": {"model_provider": "anthropic", "stop_reason": "end_turn", "stop_sequence": null, "model_name": "claude-sonnet-4-5"},
+    "usage_metadata": {
+      "input_tokens": 15230,
+      "output_tokens": 420,
+      "total_tokens": 15650,
+      "input_token_details": {"cache_read": 15000, "cache_creation": 0, "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 200}
+    },
+    "expected": {"input_tokens": 15230, "output_tokens": 420, "cache_read_tokens": 15000, "cache_write_tokens": 200, "cache_write_1h_tokens": 200, "reasoning_tokens": null, "cost": null}
+  },
+  "anthropic_invoke_raw_and_langchain": {
+    "response_metadata": {
+      "id": "msg_fixture",
+      "model": "claude-sonnet-4-5",
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 30,
+        "cache_read_input_tokens": 15000,
+        "cache_creation_input_tokens": 200,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 200},
+        "output_tokens": 420,
+        "service_tier": "standard"
+      },
+      "model_provider": "anthropic"
+    },
+    "usage_metadata": {
+      "input_tokens": 15230,
+      "output_tokens": 420,
+      "total_tokens": 15650,
+      "input_token_details": {"cache_read": 15000, "cache_creation": 0, "ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 200}
+    },
+    "expected": {"input_tokens": 15230, "output_tokens": 420, "cache_read_tokens": 15000, "cache_write_tokens": 200, "cache_write_1h_tokens": 200, "reasoning_tokens": null, "cost": null}
+  },
+  "anthropic_raw_only": {
+    "response_metadata": {
+      "usage": {"input_tokens": 100, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 30, "output_tokens": 5}
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 150, "output_tokens": 5, "cache_read_tokens": 20, "cache_write_tokens": 30, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  },
+  "openai_chat_completions": {
+    "response_metadata": {
+      "token_usage": {
+        "prompt_tokens": 2006,
+        "completion_tokens": 300,
+        "total_tokens": 2306,
+        "prompt_tokens_details": {"cached_tokens": 1920, "audio_tokens": 0},
+        "completion_tokens_details": {"reasoning_tokens": 64, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}
+      },
+      "model_name": "gpt-4.1-2025-04-14",
+      "model_provider": "openai",
+      "finish_reason": "stop"
+    },
+    "usage_metadata": {
+      "input_tokens": 2006,
+      "output_tokens": 300,
+      "total_tokens": 2306,
+      "input_token_details": {"audio": 0, "cache_read": 1920},
+      "output_token_details": {"audio": 0, "reasoning": 64}
+    },
+    "expected": {"input_tokens": 2006, "output_tokens": 300, "cache_read_tokens": 1920, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": 64, "cost": null}
+  },
+  "openai_stream_usage_metadata_only": {
+    "response_metadata": {"finish_reason": "stop", "model_name": "gpt-4.1-2025-04-14", "model_provider": "openai"},
+    "usage_metadata": {
+      "input_tokens": 2006,
+      "output_tokens": 300,
+      "total_tokens": 2306,
+      "input_token_details": {"audio": 0, "cache_read": 1920},
+      "output_token_details": {"audio": 0, "reasoning": 64}
+    },
+    "expected": {"input_tokens": 2006, "output_tokens": 300, "cache_read_tokens": 1920, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": 64, "cost": null}
+  },
+  "token_usage_without_cache_beside_usage_metadata": {
+    "response_metadata": {
+      "token_usage": {"prompt_tokens": 2006, "completion_tokens": 300, "total_tokens": 2306},
+      "usage_metadata": {"input_tokens": 2006, "output_tokens": 300, "total_tokens": 2306, "input_token_details": {"cache_read": 1920}}
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 2006, "output_tokens": 300, "cache_read_tokens": 1920, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  },
+  "openai_responses_codex": {
+    "response_metadata": {
+      "response_id": "resp_fixture",
+      "token_usage": {
+        "input_tokens": 5000,
+        "input_tokens_details": {"cached_tokens": 4096},
+        "output_tokens": 800,
+        "output_tokens_details": {"reasoning_tokens": 512},
+        "total_tokens": 5800
+      }
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 5000, "output_tokens": 800, "cache_read_tokens": 4096, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": 512, "cost": null}
+  },
+  "responses_with_cache_write": {
+    "response_metadata": {
+      "token_usage": {
+        "input_tokens": 1200,
+        "input_tokens_details": {"cached_tokens": 1000, "cache_write_tokens": 150},
+        "output_tokens": 40,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 1240
+      }
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 1200, "output_tokens": 40, "cache_read_tokens": 1000, "cache_write_tokens": 150, "cache_write_1h_tokens": null, "reasoning_tokens": 0, "cost": null}
+  },
+  "gemini_raw_usage_metadata": {
+    "response_metadata": {
+      "usage_metadata": {
+        "prompt_token_count": 8000,
+        "cached_content_token_count": 6000,
+        "candidates_token_count": 300,
+        "thoughts_token_count": 120,
+        "total_token_count": 8420
+      }
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 8000, "output_tokens": 420, "cache_read_tokens": 6000, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": 120, "cost": null}
+  },
+  "gemini_langchain": {
+    "response_metadata": {"finish_reason": "STOP", "model_name": "gemini-2.5-pro", "model_provider": "google_genai"},
+    "usage_metadata": {
+      "input_tokens": 8000,
+      "output_tokens": 420,
+      "total_tokens": 8420,
+      "input_token_details": {"cache_read": 6000},
+      "output_token_details": {"reasoning": 120}
+    },
+    "expected": {"input_tokens": 8000, "output_tokens": 420, "cache_read_tokens": 6000, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": 120, "cost": null}
+  },
+  "deepseek_hit_miss": {
+    "response_metadata": {
+      "token_usage": {
+        "prompt_tokens": 3000,
+        "completion_tokens": 200,
+        "total_tokens": 3200,
+        "prompt_cache_hit_tokens": 2560,
+        "prompt_cache_miss_tokens": 440,
+        "completion_tokens_details": {"reasoning_tokens": 150}
+      },
+      "model": "deepseek-reasoner"
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 3000, "output_tokens": 200, "cache_read_tokens": 2560, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": 150, "cost": null}
+  },
+  "deepseek_hit_miss_without_prompt_total": {
+    "response_metadata": {
+      "usage": {"prompt_cache_hit_tokens": 2560, "prompt_cache_miss_tokens": 440, "completion_tokens": 200}
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 3000, "output_tokens": 200, "cache_read_tokens": 2560, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  },
+  "openrouter_langchain": {
+    "response_metadata": {
+      "model_provider": "openrouter",
+      "cost": 0.00123,
+      "cost_details": {"upstream_inference_cost": 0.00123},
+      "model_name": "anthropic/claude-sonnet-4.5"
+    },
+    "usage_metadata": {
+      "input_tokens": 4000,
+      "output_tokens": 250,
+      "total_tokens": 4250,
+      "input_token_details": {"cache_read": 3000, "cache_creation": 500},
+      "output_token_details": {"reasoning": 0}
+    },
+    "expected": {"input_tokens": 4000, "output_tokens": 250, "cache_read_tokens": 3000, "cache_write_tokens": 500, "cache_write_1h_tokens": null, "reasoning_tokens": 0, "cost": 0.00123}
+  },
+  "openrouter_raw_token_usage": {
+    "response_metadata": {
+      "token_usage": {
+        "prompt_tokens": 4000,
+        "completion_tokens": 250,
+        "total_tokens": 4250,
+        "prompt_tokens_details": {"cached_tokens": 3000, "cache_write_tokens": 500},
+        "completion_tokens_details": {"reasoning_tokens": 0},
+        "cost": 0.00123
+      }
+    },
+    "usage_metadata": null,
+    "expected": {"input_tokens": 4000, "output_tokens": 250, "cache_read_tokens": 3000, "cache_write_tokens": 500, "cache_write_1h_tokens": null, "reasoning_tokens": 0, "cost": 0.00123}
+  },
+  "ollama_local": {
+    "response_metadata": {
+      "model": "qwen3:14b",
+      "done": true,
+      "done_reason": "stop",
+      "total_duration": 3576619666,
+      "load_duration": 788524916,
+      "prompt_eval_count": 1500,
+      "prompt_eval_duration": 128125000,
+      "eval_count": 200,
+      "eval_duration": 2656556000,
+      "model_name": "qwen3:14b",
+      "model_provider": "ollama"
+    },
+    "usage_metadata": {"input_tokens": 1500, "output_tokens": 200, "total_tokens": 1700},
+    "expected": {"input_tokens": 1500, "output_tokens": 200, "cache_read_tokens": null, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  },
+  "ollama_counts_only": {
+    "response_metadata": {"prompt_eval_count": 789, "eval_count": 21},
+    "usage_metadata": null,
+    "expected": {"input_tokens": 789, "output_tokens": 21, "cache_read_tokens": null, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  },
+  "ollama_cloud_transport": {
+    "response_metadata": {
+      "prompt_eval_count": 640,
+      "eval_count": 88,
+      "token_usage": {"prompt_tokens": 640, "completion_tokens": 88, "total_tokens": 728}
+    },
+    "usage_metadata": {"input_tokens": 640, "output_tokens": 88, "total_tokens": 728},
+    "expected": {"input_tokens": 640, "output_tokens": 88, "cache_read_tokens": null, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  },
+  "nothing_reported": {
+    "response_metadata": {"finish_reason": "stop", "model_name": "fixture"},
+    "usage_metadata": null,
+    "expected": {"input_tokens": null, "output_tokens": null, "cache_read_tokens": null, "cache_write_tokens": null, "cache_write_1h_tokens": null, "reasoning_tokens": null, "cost": null}
+  }
+}

@@ -15,6 +15,7 @@ changed, and nothing here logs message text.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import sqlite3
@@ -23,6 +24,11 @@ from contextlib import closing
 from typing import Any
 
 _LOG = logging.getLogger(__name__)
+
+# The conversation a title call is for, so the usage ledger can count it there.
+_titled_conversation: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "titled_conversation", default=""
+)
 
 _TITLE_LIMIT = 60
 TITLE_TIMEOUT_SECONDS = 15.0
@@ -126,7 +132,11 @@ def _smart_name(service: Any, conversation_id: str, message: str, reply: str, mo
                                (conversation_id,)).fetchone()
         if row is None or row[1] == threads.THREAD_NAME_SOURCE_MANUAL:
             return
-        title = _clean_title(_ask(model_ref, message, reply))
+        token = _titled_conversation.set(conversation_id)
+        try:
+            title = _clean_title(_ask(model_ref, message, reply))
+        finally:
+            _titled_conversation.reset(token)
         if not title:
             _LOG.info("Conversation %s keeps its first-words name: the title was empty", conversation_id)
             return
@@ -142,16 +152,19 @@ def _ask(model_ref: str, message: str, reply: str) -> str:
     """One capped call to the conversation's own model, abandoned after the timeout."""
     from langchain_core.messages import HumanMessage, SystemMessage
     from row_bot.cancellation import CancellationScope, use_cancellation_scope
+    from row_bot.providers.usage_ledger import with_usage_purpose
 
     prompt = [SystemMessage(content=_INSTRUCTION), HumanMessage(content=(
         f"User's message:\n{message[:_MESSAGE_LIMIT]}\n\nStart of the reply:\n{reply[:_REPLY_LIMIT]}"))]
     scope = CancellationScope()
     outcome: list[Any] = []
+    conversation_id = _titled_conversation.get()
 
     def call() -> None:
         with use_cancellation_scope(scope):
             try:
-                outcome.append(_title_model(model_ref).invoke(prompt))
+                model = with_usage_purpose(_title_model(model_ref), "title", thread_id=conversation_id)
+                outcome.append(model.invoke(prompt))
             except Exception as exc:
                 outcome.append(exc)
 
