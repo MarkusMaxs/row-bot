@@ -322,7 +322,10 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
     major, minor, patch = (previous.split("+")[0].split("-")[0].split(".") + ["0", "0"])[:3]
     version = f"{major}.{minor}.{int(patch) + 1}"
     staged = _versions_dir(root, kind) / version
-    work = Path(tempfile.mkdtemp(prefix="row_bot_update_rehearsal_"))
+    # Resolved: macOS temp folders sit under the /var symlink, and Row-Bot
+    # refuses a data folder reached through a symlink (tool settings read as
+    # unavailable, so the client handshake answers 503).
+    work = Path(tempfile.mkdtemp(prefix="row_bot_update_rehearsal_")).resolve()
     feed_dir = work / "feed"
     feed_port = port + 100
     server = None
@@ -406,7 +409,10 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
         for name in ("launcher-host.log", "launcher.log", "row_bot_app.log", "row_bot_app.log.prev"):
             path = work / "data" / name
             if path.exists():
-                print(f"--- data/{name} ---\n{path.read_text(encoding='utf-8', errors='replace')[-8000:]}")
+                text = path.read_text(encoding="utf-8", errors="replace")
+                errors = [line for line in text.splitlines() if "Error" in line or "Traceback" in line]
+                print(f"--- data/{name}: error lines ---\n" + "\n".join(errors[-60:]))
+                print(f"--- data/{name} ---\n{text[-8000:]}")
         for log in sorted((root / ".updates").glob("*/stage/staging.log")):
             print(f"--- {log} ---\n{log.read_text(encoding='utf-8', errors='replace')[-8000:]}")
         engine_state = root / ".updates" / "engine.json"
