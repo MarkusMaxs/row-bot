@@ -9,7 +9,8 @@ reuse) only pay off for that shared start, so:
 - everything that changes from turn to turn travels in one **turn context**
   message per turn, appended after the turn's message and kept in the
   checkpoint;
-- conversation history is replayed as it was stored.
+- conversation history is replayed as it was stored, and old tool output is
+  cleared only in rare jumps (see Tool results in history).
 
 ## Stable sections
 
@@ -107,6 +108,44 @@ instructions) are neutralized the same way. A message is recognized as a turn
 context by its metadata, never by its text. The checkpoint keeps what was
 sent. Approvals and tool gating stay enforced in code, and the approval policy
 text stays in the stable prompt.
+
+## Tool results in history
+
+The checkpoint keeps every tool result as it was created (after its cap, see
+Tool schemas and results). What the model
+sees is derived from it on each request (`agent._apply_history_hygiene`,
+`row_bot.history_hygiene`), deterministically, so an earlier request stays an
+exact prefix of a later one:
+
+- **Sticky clearing.** Two marks per thread (`thread_meta.history_hygiene_json`)
+  say where old output stops being sent in full: a non-browser result before
+  the `mask` mark (over 128 tokens) is sent as a one-line summary, and a browser
+  result before the `browser` mark as a URL and title stub. The marks move only
+  in jumps: once the output they would clear reaches about a fifth of the
+  history budget (2K to 50K tokens), or the request reaches the compaction
+  point. A jump keeps the latest five person turns and the newest browser
+  results in full, and is one cache rewrite instead of one per turn. A cleared
+  result is cleared the same way on every later call. Marks are anchored on a
+  message and reset when it is gone (a retry or rewind past it); results behind
+  a compaction summary never count towards a jump.
+- **Repeats.** A result identical to an earlier one still in view is sent as a
+  one-line reference to that call; the earlier copy never changes.
+- **Emergency shrink.** Every result is cut in proportion to its size only when
+  the newest turn alone reaches the compaction point, so compaction cannot bring
+  the request back (without a known context policy: when the request passes the
+  history budget). Otherwise results go as they were stored.
+- **Fields kept.** A rewritten result keeps its `status` (Claude is told an
+  error is an error), artifact, id and metadata.
+- **Untrusted content.** When a result is stored, after its cap, Row-Bot decides
+  once whether it carries outside text (the tools' declared names, MCP tools,
+  plugin and custom tools, tool and skill search; a `read_tool_output` page by
+  its saved output's source) and runs the injection scan once. The
+  decision is kept with the result, and every request wraps its text in an
+  `<EXTERNAL_CONTENT>` fence from it, after any shortening, so the tags are never
+  cut. A result stays fenced even if its tool is later not registered. Results
+  stored before this decide on each request, as before. A child agent's answer
+  or error relayed to its parent in a wake-up event is fenced the same way;
+  Row-Bot's own lines around it are not.
 
 ## Provider Rules
 
@@ -229,6 +268,14 @@ compaction, and recall and skill usage once per turn.
 `tests/subsystem/agents/test_turn_context_tag_safety.py` is the security
 contract for the tag. `tests/subsystem/client_platform/test_turn_context_readers.py`
 checks that no reader of history shows it.
+
+`tests/subsystem/agents/test_history_hygiene.py` covers the tool-result rules:
+jumps are rare and in one step, cleared results are byte-stable, the marks are
+kept with the thread, browser stubs move on jumps, repeats stub the newer copy,
+and the emergency shrink only happens over the limit.
+`tests/subsystem/regression/test_tool_result_fields.py` covers the kept fields,
+and `tests/subsystem/agents/test_untrusted_tool_results.py` the fence (store
+time, older results, plugin results and wake-up events).
 
 `tests/subsystem/providers/test_prompt_cache_payloads.py` covers the breakpoints
 on the wire for each Claude route through the real request builders:
