@@ -999,8 +999,10 @@ class AccountSettingsItem(WireModel):
     engage_operations: list[Annotated[str, StringConstraints(max_length=128)]] = Field(
         max_length=128
     )
-    # The address to register with the provider (X's fixed OAuth callback),
-    # shown with Copy in the account's connect sheet (parity row 45).
+    # The address to register with the provider for this device's sign-in,
+    # shown with Copy in the account's connect sheet (parity row 45): X's
+    # fixed loopback callback, or Row-Bot's public callback for X or a Google
+    # Web application client when this device signs in through it.
     callback_url: str | None = Field(default=None, max_length=512)
 
 
@@ -1065,6 +1067,15 @@ class AccountAuthSnapshot(WireModel):
         "unavailable",
     ]
     token_files: int = Field(ge=0, le=2)
+    # How a sign-in started from this device works; it differs by device, so
+    # the revision leaves it out. The desktop app on the host signs in through
+    # that computer's browser and a loopback address; another device opens the
+    # provider's page itself, which returns to Row-Bot's one public HTTPS address.
+    sign_in: Literal["this_computer", "link", "unavailable"]
+    sign_in_blocker: (
+        Literal["public_address_required", "desktop_client", "redirect_not_listed"]
+        | None
+    ) = None
 
 
 class AccountAuthCommand(WireModel):
@@ -1084,6 +1095,9 @@ class AccountAuthReceipt(WireModel):
     phase: Literal["running", "cancel_requested", "cancelled", "completed", "failed"]
     message: str = Field(max_length=256)
     snapshot: AccountAuthSnapshot
+    # The provider's sign-in page for this device's browser, while a sign-in
+    # through Row-Bot's public address waits for its callback.
+    authorization_url: str | None = Field(default=None, max_length=8192)
 
 
 class UtilitySettingsItem(WireModel):

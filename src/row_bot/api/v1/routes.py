@@ -180,6 +180,10 @@ _STATUS.update(
         "account_credentials_invalid": 422,
         "account_credentials_required": 409,
         "account_confirmation_required": 409,
+        # A sign-in through Row-Bot's public address: there isn't exactly one,
+        # or the Google client doesn't list its callback.
+        "account_callback_unavailable": 409,
+        "account_redirect_mismatch": 422,
     }
 )
 
@@ -5331,12 +5335,25 @@ def create_router(
         )
         return await respond(request, dto.GitHubAccessReceipt, result)
 
+    async def account_device(request: Request) -> Any:
+        """Where an account action comes from, which decides how its sign-in runs:
+        the desktop app here (this computer's browser, a loopback address) or
+        another device (its own browser, Row-Bot's one public HTTPS address)."""
+        from row_bot.application.client_account_oauth import Device
+
+        return Device(
+            on_this_computer=on_this_computer(await _context(request)),
+            public_origins=tuple(request.scope.get("row_bot_public_origins", ())),
+        )
+
     @router.get("/accounts/{account}/auth")
     async def account_auth_snapshot(account: str, request: Request) -> JSONResponse:
         await session(request)
         from row_bot.application.client_account_oauth import read_account_auth
 
-        result = await call(read_account_auth, account=account)
+        result = await call(
+            read_account_auth, account=account, device=await account_device(request)
+        )
         return await respond(request, dto.AccountAuthSnapshot, result)
 
     @router.post("/accounts/{account}/auth/commands")
@@ -5347,10 +5364,6 @@ def create_router(
             body.command_id
         ):
             raise ProtocolError("idempotency_mismatch", 409)
-        if body.action == "start":
-            # Google and X sign-in opens this computer's browser and returns to a
-            # loopback address on it, so it needs the desktop app here for now.
-            require_this_computer(await _context(request))
         from row_bot.application.client_account_oauth import execute_account_auth
 
         result = await call(
@@ -5363,8 +5376,38 @@ def create_router(
             confirmed=body.confirmed,
             credentials_json=body.credentials_json,
             validate=dispatch_validation(request, current),
+            device=await account_device(request),
         )
         return await respond(request, dto.AccountAuthReceipt, result)
+
+    @router.get("/accounts/{account}/auth/callback")
+    async def account_auth_callback(account: str, request: Request) -> Response:
+        """Google or X returns a browser here after a sign-in through Row-Bot's
+        public address. No session: only a waiting sign-in's one-time state is accepted."""
+        from row_bot.application.client_account_oauth import accept_callback
+        from row_bot.application.client_platform import ClientPlatformError
+
+        values = request.query_params
+        name = {"google": "Google", "x": "X"}.get(account, "the account")
+        try:
+            if any(len(values.getlist(key)) > 1 for key in ("state", "code", "error")):
+                raise ClientPlatformError("account_callback_invalid")
+            phase = await call(
+                accept_callback,
+                account=account,
+                state=values.get("state", ""),
+                code=values.get("code", ""),
+                error=values.get("error", ""),
+            )
+        except ClientPlatformError:
+            phase = "invalid"
+        message, status = {
+            "completed": (f"You're signed in to {name}. Return to Row-Bot; you can close this tab.", 200),
+            "cancelled": ("This sign-in was cancelled in Row-Bot. Start it again there if you need it.", 400),
+            "failed": (f"Signing in to {name} didn't finish. Your existing sign-in was kept. Return to Row-Bot and try again.", 400),
+        }.get(phase, ("This sign-in has expired or isn't valid. Return to Row-Bot and sign in again.", 400))
+        return Response(message, status_code=status, media_type="text/plain",
+            headers={**HEADERS, "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'"})
 
     @router.get("/accounts/{account}/auth/commands/{command_id}")
     async def account_auth_receipt(
@@ -6086,7 +6129,20 @@ def create_router(
 
     async def for_this_device(request: Request, snapshot: dict) -> dict:
         # The same settings on every device; only the screen actions say where
-        # they can run. A copy: a kept receipt is never changed.
+        # they can run, and the sign-in callbacks where this device's sign-in
+        # returns. A copy: a kept receipt is never changed.
+        accounts = snapshot.get("accounts")
+        if isinstance(accounts, dict):
+            from row_bot.application.client_account_oauth import sign_in_routes
+
+            routes = await call(sign_in_routes, await account_device(request))
+            accounts = dict(accounts)
+            for key, account in (("gmail", "google"), ("calendar", "google"), ("x", "x")):
+                callback = routes[account]["callback_url"]
+                # X keeps its loopback callback unless this device signs in through the public address.
+                if isinstance(accounts.get(key), dict) and (callback or account == "google"):
+                    accounts[key] = {**accounts[key], "callback_url": callback}
+            snapshot = {**snapshot, "accounts": accounts}
         system = snapshot.get("system")
         if on_this_computer(await _context(request)) or not isinstance(system, dict):
             return snapshot
