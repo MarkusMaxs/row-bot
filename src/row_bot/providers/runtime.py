@@ -973,6 +973,8 @@ def _create_chat_model(
         return CancellableChatAnthropic(
             model=model_name,
             api_key=api_key,
+            # Preserved-thinking controls and strip-and-retry: direct API only.
+            thinking_binding=True,
             **_reasoning_constructor_kwargs(reasoning_plan, provider="anthropic"),
         )
     if provider == "google":
