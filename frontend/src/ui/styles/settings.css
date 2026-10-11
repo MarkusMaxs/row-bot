@@ -2160,6 +2160,39 @@
 .document-uploads > .button {
   justify-self: start;
 }
+/* One list, one action (F26): each chosen file can be taken out; the model that
+   reads them sits beside "Add and process"; once added, one line says so. */
+.document-staged-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.document-staged-files li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.document-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.document-added {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+}
+.document-added > svg {
+  flex: none;
+  color: var(--status-success-text);
+}
 .document-queue {
   display: grid;
   gap: 6px;

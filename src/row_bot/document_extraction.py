@@ -548,6 +548,9 @@ def _commit_knowledge(
 ) -> int:
     import row_bot.knowledge_graph as kg
 
+    # Processing was approved with its embedding work: build an index the profile's saves deferred, so the
+    # batch's dedup can compare against existing knowledge instead of failing the document (B331).
+    kg.build_missing_index()
     with kg.projection_batch(drain_on_exit=False):
         return _commit_knowledge_rows(job, article, window_count=window_count, summary_count=summary_count)
 

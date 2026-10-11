@@ -2733,6 +2733,8 @@ class DocumentQueueItem(WireModel):
     error_code: str | None = Field(max_length=128)
     revision: KnowledgeRevision
     document_count: int | None = Field(default=None, ge=0, le=2**53 - 1)
+    # A batch's failed documents; one failure pauses the rest (B330).
+    failed_count: int | None = Field(default=None, ge=0, le=2**53 - 1)
 
 
 class DocumentQueuePage(WireModel):

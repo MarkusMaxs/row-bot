@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore, type ComponentProps } from 'react';
 import type { ClientController } from '../../api/controller';
 import {
   createDocumentUploadsSession,
@@ -109,10 +109,11 @@ export type DocumentUploadOwner = ReturnType<
 export function DocumentUploadPanel({
   owner,
   onStaged,
+  ...actions
 }: {
   owner: DocumentUploadOwner;
   onStaged?: (batchId: string) => void;
-}) {
+} & Omit<ComponentProps<typeof DocumentUploads>, 'session'>) {
   const state = useSyncExternalStore(
     owner.session.subscribe,
     owner.session.getSnapshot,
@@ -120,5 +121,5 @@ export function DocumentUploadPanel({
   useEffect(() => {
     owner.notifyStaged(onStaged);
   }, [owner, onStaged, state.receipt]);
-  return <DocumentUploads session={owner.session} />;
+  return <DocumentUploads session={owner.session} {...actions} />;
 }

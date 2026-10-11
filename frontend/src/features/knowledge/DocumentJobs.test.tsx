@@ -394,6 +394,28 @@ it('names each upload by its files and says why a document failed, in words', as
   ).toBeVisible();
 });
 
+it('says a failed document paused the rest of its batch, and what Process does (B330)', async () => {
+  const { session, transport } = fixture();
+  vi.mocked(transport.batches).mockResolvedValue(
+    page([
+      {
+        ...batch,
+        id: 'client_35720253abc',
+        name: 'Annual report.pdf',
+        document_count: 15,
+        status: 'paused',
+        pause_requested: true,
+        failed_count: 1,
+      },
+    ]),
+  );
+  await session.load();
+  render(<DocumentJobs session={session} onProcess={vi.fn()} />);
+  expect(
+    screen.getByText('Paused · 1 failed · Process goes on with the rest'),
+  ).toBeVisible();
+});
+
 it('reads the queue again by itself while documents are being added, and stops when they finish', async () => {
   vi.useFakeTimers();
   try {

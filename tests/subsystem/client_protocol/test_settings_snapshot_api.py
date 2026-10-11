@@ -582,6 +582,29 @@ def test_document_runtime_snapshot_is_passive_bounded_and_does_not_import_owners
     assert settings_snapshot._documents(tmp_path)["indexed_documents"] is None
 
 
+def test_searchable_documents_count_saved_records_not_only_the_old_marker_file(tmp_path):
+    """B329: documents processed today live in the document records; the header read only the old marker file."""
+    import sqlite3
+
+    from row_bot.application import settings_snapshot
+
+    _write(tmp_path / "processed_files.json", ["old.pdf", "report.pdf"])
+    database = tmp_path / "document_ingestion" / "jobs.db"
+    database.parent.mkdir(parents=True)
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE document_records (document_id TEXT, original_name TEXT)")
+        connection.execute("CREATE TABLE document_removals (target TEXT, result TEXT)")
+        connection.executemany("INSERT INTO document_records VALUES (?, ?)",
+                               [("d1", "report.pdf"), ("d2", "minutes.pdf"), ("d3", "removed.pdf")])
+        connection.execute("INSERT INTO document_removals VALUES ('d3', '{\"status\": \"complete\"}')")
+    connection.close()
+    before = _tree(tmp_path)
+
+    # Two records still saved, plus the one old marker no record replaced.
+    assert settings_snapshot._documents(tmp_path)["indexed_documents"] == 3
+    assert _tree(tmp_path) == before
+
+
 def test_review_save_receipt_and_retry_preserve_unrelated_values(api):
     client, headers, data, _ = api
     before = client.get(BASE, headers=headers).json()
