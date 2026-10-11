@@ -340,6 +340,11 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
             [sys.executable, "-m", "http.server", str(feed_port), "--bind", "127.0.0.1", "--directory", str(feed_dir)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        feed_ready = time.monotonic() + 60
+        while _get(f"http://127.0.0.1:{feed_port}/releases.json") != 200:
+            if time.monotonic() > feed_ready or server.poll() is not None:
+                raise AssertionError("the loopback feed did not start")
+            time.sleep(0.5)
         before_app = _fingerprint(version_root / "app")
         os.environ["ROW_BOT_UPDATE_FEED"] = f"http://127.0.0.1:{feed_port}/"
         launcher = Launcher(command, work / "data", work / "launcher.log")
@@ -350,6 +355,11 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
         assert snapshot["current_version"] == previous, snapshot
         started = time.monotonic()
         receipt = client.command(snapshot, "check")
+        for _ in range(5):
+            if receipt["status"] == "completed":
+                break
+            time.sleep(2)
+            receipt = client.command(client.updates(), "check")
         assert receipt["status"] == "completed", receipt
         assert receipt["snapshot"]["available"]["version"] == version, receipt["snapshot"]
 
