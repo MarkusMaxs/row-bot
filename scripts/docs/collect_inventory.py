@@ -717,6 +717,7 @@ def collect_channels() -> list[dict[str, Any]]:
         "base",
         "commands",
         "config",
+        "conversations",
         "media",
         "media_capture",
         "registry",

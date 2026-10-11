@@ -26,6 +26,7 @@ import re
 import secrets
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReactionTypeEmoji
@@ -44,6 +45,7 @@ from row_bot.channels import commands as ch_commands
 from row_bot.channels import runtime as ch_runtime
 from row_bot.channels.base import Channel, ChannelCapabilities, ConfigField
 from row_bot.channels.auth_store import get_channel_secret
+from row_bot.channels.media import AttachmentCoalescer, InboundAttachment
 from row_bot.channels.media_capture import grab_vision_capture as _grab_vision_capture
 from row_bot.channels.media_capture import grab_generated_image as _grab_generated_image
 from row_bot.channels.media_capture import grab_generated_video as _grab_generated_video
@@ -1923,6 +1925,129 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
 
 
+def _current_thread_config(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
+    """The chat's thread config, as ``_run_agent_for_message`` will use it."""
+    config = context.chat_data.get("thread_config")
+    if config is not None:
+        cached_tid = (config.get("configurable") or {}).get("thread_id", "")
+        if not cached_tid or not _thread_exists(cached_tid):
+            config = None
+            context.chat_data.pop("thread_config", None)
+    if config is None:
+        config = _get_or_create_thread(chat_id)
+        context.chat_data["thread_config"] = config
+    return config
+
+
+def _cache_telegram_image(thread_id: str, cache_name: str, data: bytes) -> str:
+    """Make an inbound photo available to the image tools of this conversation."""
+    try:
+        import row_bot.tools.image_gen_tool as _igt_mod
+
+        same_thread = (_igt_mod._image_cache_thread_id == thread_id)
+        if not same_thread:
+            _igt_mod._image_cache.clear()
+        _igt_mod._image_cache_thread_id = thread_id
+        _igt_mod._image_cache[cache_name] = bytes(data)
+    except Exception:
+        log.debug("Failed to cache inbound Telegram photo '%s'", cache_name, exc_info=True)
+    return cache_name
+
+
+# An album (media group) arrives as one update per item. Its items are read
+# together and answered with one agent turn.
+_ALBUM_SETTLE_S = 1.0
+
+
+@dataclass(frozen=True)
+class _AlbumItem:
+    attachment: InboundAttachment
+    caption: str
+    update: Any
+    context: Any
+
+
+_albums: AttachmentCoalescer[_AlbumItem] | None = None
+
+
+def _album_batches() -> AttachmentCoalescer[_AlbumItem]:
+    global _albums
+    if _albums is None:
+        _albums = AttachmentCoalescer(_run_album, settle_s=_ALBUM_SETTLE_S, name="telegram-album")
+    return _albums
+
+
+def _album_key(update: Update) -> str:
+    """The album an update belongs to, or ``""`` for a lone item."""
+    group_id = getattr(update.message, "media_group_id", None) if update.message else None
+    return f"{update.effective_chat.id}:{group_id}" if group_id else ""
+
+
+async def _add_to_album(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    key: str,
+    file_obj: Any,
+    *,
+    filename: str,
+    content_type: str,
+) -> None:
+    batches = _album_batches()
+    order = batches.begin(key)
+    try:
+        tg_file = await file_obj.get_file()
+        data = await tg_file.download_as_bytearray()
+    except Exception as exc:
+        batches.cancel(key)
+        log.error("Failed to download an album item: %s", exc)
+        await update.message.reply_text("⚠️ Could not download one of the attachments.")
+        return
+    batches.add(key, order, _AlbumItem(
+        attachment=InboundAttachment(filename=filename, data=bytes(data), content_type=content_type),
+        caption=(update.message.caption or "").strip(),
+        update=update,
+        context=context,
+    ))
+
+
+def _run_album(_key: str, items: list[_AlbumItem]) -> None:
+    loop = _bot_loop
+    if loop is None or not loop.is_running():
+        log.warning("A Telegram album arrived while the bot was stopping; it was not answered")
+        return
+    future = asyncio.run_coroutine_threadsafe(_answer_album(items), loop)
+
+    def _log_failure(done) -> None:
+        if not done.cancelled() and done.exception() is not None:
+            log.warning("A Telegram album could not be answered", exc_info=done.exception())
+
+    future.add_done_callback(_log_failure)
+
+
+async def _answer_album(items: list[_AlbumItem]) -> None:
+    """Read an album (vision pre-call per photo, transcription per audio) and
+    answer it with one agent turn."""
+    from row_bot.channels.media import build_attachment_turn
+
+    first = items[0]
+    update, context = first.update, first.context
+    config = _current_thread_config(update.effective_chat.id, context)
+    thread_id = (config.get("configurable") or {}).get("thread_id", "")
+    caption = "\n\n".join(dict.fromkeys(item.caption for item in items if item.caption))
+    turn = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: build_attachment_turn(
+            [item.attachment for item in items],
+            caption,
+            cache_image=lambda name, data: _cache_telegram_image(thread_id, name, data),
+        ),
+    )
+    if not turn.usable:
+        await update.message.reply_text("⚠️ Could not read those attachments.")
+        return
+    await _run_agent_for_message(update, context, turn.text)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Inbound media handlers (voice, photo, document)
 # ──────────────────────────────────────────────────────────────────────
@@ -1937,6 +2062,18 @@ async def _handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     voice = update.message.voice or update.message.audio
     if voice is None:
+        return
+
+    album = _album_key(update)
+    if album:
+        await _add_to_album(
+            update,
+            context,
+            album,
+            voice,
+            filename=getattr(voice, "file_name", "") or "audio.ogg",
+            content_type=getattr(voice, "mime_type", "") or "audio/ogg",
+        )
         return
 
     await _react(update.message, "🎤")
@@ -1986,19 +2123,19 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Take highest resolution
     photo = photos[-1]
+    cache_name = f"telegram_photo_{getattr(photo, 'file_unique_id', '') or 'image'}.jpg"
+
+    album = _album_key(update)
+    if album:
+        await _add_to_album(
+            update, context, album, photo, filename=cache_name, content_type="image/jpeg",
+        )
+        return
 
     # Resolve the same thread config that _run_agent_for_message will use so
     # the attachment cache stays scoped correctly per Telegram conversation.
     chat_id = update.effective_chat.id
-    config = context.chat_data.get("thread_config")
-    if config is not None:
-        cached_tid = (config.get("configurable") or {}).get("thread_id", "")
-        if not cached_tid or not _thread_exists(cached_tid):
-            config = None
-            context.chat_data.pop("thread_config", None)
-    if config is None:
-        config = _get_or_create_thread(chat_id)
-        context.chat_data["thread_config"] = config
+    config = _current_thread_config(chat_id, context)
     thread_id = (config.get("configurable") or {}).get("thread_id", "")
 
     try:
@@ -2012,17 +2149,7 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     caption = (update.message.caption or "").strip()
     question = caption if caption else "Describe this image in detail."
 
-    cache_name = f"telegram_photo_{getattr(photo, 'file_unique_id', '') or 'image'}.jpg"
-    try:
-        import row_bot.tools.image_gen_tool as _igt_mod
-
-        same_thread = (_igt_mod._image_cache_thread_id == thread_id)
-        if not same_thread:
-            _igt_mod._image_cache.clear()
-        _igt_mod._image_cache_thread_id = thread_id
-        _igt_mod._image_cache[cache_name] = bytes(data)
-    except Exception:
-        log.debug("Failed to cache inbound Telegram photo '%s'", cache_name, exc_info=True)
+    _cache_telegram_image(thread_id, cache_name, bytes(data))
 
     from row_bot.channels.media import analyze_image
     description = analyze_image(bytes(data), question=question)
@@ -2060,6 +2187,18 @@ async def _handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     filename = doc.file_name or "unknown_file"
+
+    album = _album_key(update)
+    if album:
+        await _add_to_album(
+            update,
+            context,
+            album,
+            doc,
+            filename=filename,
+            content_type=getattr(doc, "mime_type", "") or "",
+        )
+        return
 
     try:
         tg_file = await doc.get_file()
@@ -2154,6 +2293,8 @@ async def start_bot() -> bool:
     _app.add_handler(CommandHandler("start", _cmd_start))
     _app.add_handler(CommandHandler("help", _cmd_help))
     _app.add_handler(CommandHandler("newthread", _cmd_newthread))
+    # /new is the command every channel's /help lists (D6).
+    _app.add_handler(CommandHandler("new", _cmd_newthread))
     _app.add_handler(CommandHandler("model", _cmd_model))
     _app.add_handler(CommandHandler("approval", _cmd_approval))
     _app.add_handler(CommandHandler("reasoning", _cmd_reasoning))
