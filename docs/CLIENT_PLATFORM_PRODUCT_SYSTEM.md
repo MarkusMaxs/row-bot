@@ -504,7 +504,12 @@ WhatsApp shows "Waiting for a scan" and the live QR (on any signed-in device,
 to scan from another one) and Reset session asks first. A field supplied by the
 environment says so and has no Clear. Accounts: GitHub (CLI or token, Check),
 Google (Cloud project, consent screen, Desktop client, file, Authenticate), X
-(portal, callback address, keys, Authenticate). Plugins: the README as setup
+(portal, callback address, keys, Authenticate). On another device the sign-in
+opens the provider's page in that device's browser and returns through
+Row-Bot's public HTTPS address, with "Open … sign-in page" beside the waiting
+status; Google's client step then asks for a Web application client and shows
+the redirect URI to list with Copy, and X shows that device's callback. A
+device that can't sign in says why in the step. Plugins: the README as setup
 notes, declared sign-ins, settings, local test, turning it on, the changelog
 link; a worker plugin that can't load offers Prepare (its private
 environment). Install, update, prepare and uninstall show the server's review

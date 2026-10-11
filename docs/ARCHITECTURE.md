@@ -1185,7 +1185,7 @@ Row-Bot integrates with X API v2 through a native httpx-based client, grouped in
 - **Read operations** — search, read tweet, timeline, mentions, and user info
 - **Post operations** — post tweet, reply, quote, and delete tweet
 - **Engagement operations** — like, unlike, repost, unrepost, bookmark, and unbookmark
-- **OAuth 2.0 PKCE** — browser-based auth flow with a local callback server and refresh-token support
+- **OAuth 2.0 PKCE** — browser-based auth flow with refresh-token support: a local callback server in the desktop app, or Row-Bot's public callback from another device (see Access, "Google and X sign-in from any device")
 - **Rate-limit tracking** — per-endpoint rate information is recorded and surfaced in structured error responses
 - **Tier discovery** — X tier information is persisted and reused for rate-limit expectations
 - **Keychain token storage** — the X sign-in is kept only in the system keychain (`account_tokens.py`, which moves an earlier `x/token.json` there at start); `~/.row-bot/x/` keeps only tier metadata
@@ -1653,10 +1653,36 @@ initial presentation.
   that computer: the native bridge's `/native/*` routes and its folder and file
   picker, the OS terminal window, opening the file manager or an exported file,
   Computer Use's live picture and controls (and its Test and macOS privacy
-  panes), the Google and X browser sign-in (a loopback redirect on the host),
-  the GitHub CLI's console sign-in and a macOS update install (Finder). The
-  native routes keep their attestation checks; the others answer `desktop_only`
-  (409) elsewhere, and the client hides or explains those controls instead
+  panes), the GitHub CLI's console sign-in and a macOS update install
+  (Finder). The native routes keep their attestation checks; the others answer
+  `desktop_only` (409) elsewhere, and the client hides or explains those
+  controls instead
+- **Google and X sign-in from any device** —
+  `application/client_account_oauth.py` decides per request how a sign-in runs
+  (`sign_in` in the account snapshot, never part of its revision). The desktop
+  app on the host keeps the loopback flow: this computer's browser and a
+  loopback redirect. Any other signed-in device signs in through Row-Bot's one
+  approved public HTTPS origin, the same rule as the MCP callback: the start
+  returns the provider's page (`authorization_url`) for that device's browser,
+  and the provider sends it back to `GET /api/v1/accounts/{google,x}/auth/callback`.
+  That flow uses PKCE (S256) and a one-time 256-bit state bound to the
+  starting session (its validator runs again before the code is exchanged and
+  before saving), and expires after five minutes; tokens go to the keychain
+  only. Without exactly one such origin, another device gets
+  `account_callback_unavailable`. Google allows a Desktop app client loopback
+  redirects only, so signing in through the public address needs a Web
+  application client whose authorised redirect URIs list
+  `<origin>/api/v1/accounts/google/auth/callback`; importing one checks that
+  against the importing request's approved origin
+  (`account_redirect_mismatch` otherwise), and a Desktop app client reads as
+  `desktop_client` on other devices. X registers callbacks in its developer
+  portal; Settings shows each device the callback its sign-in returns to (X
+  accepts several). xAI's subscription sign-in keeps its loopback redirect:
+  it uses Row-Bot's one shared xAI client, whose redirect addresses only xAI
+  registers (`http://127.0.0.1:56121/callback`), and each installation's
+  public address differs. Another device already finishes it by pasting the
+  address its browser ends on into Connect with code; the flow's state and
+  PKCE verifier bind that code to the waiting sign-in
 - **Request context** — `access/request_context.py` canonicalizes host, origin,
   effective client, forwarding trust, route class, session identity, and
   presentation into one immutable context used by HTTP and WebSocket admission
@@ -1689,8 +1715,9 @@ initial presentation.
 - **Route policy** — public health/connect assets remain minimal, authenticated
   owner routes share one policy, access mutations require same origin, webhooks
   retain route-owned secrets (task webhooks their secret, `POST /sms` Twilio's
-  signature, `/plugin-webhooks/…` the plugin handler's own check, the MCP
-  sign-in callback its one-time OAuth state; none needs a session), and
+  signature, `/plugin-webhooks/…` the plugin handler's own check, the MCP,
+  Google and X sign-in callbacks their one-time OAuth state, with their query
+  kept out of access logs; none needs a session), and
   launcher operations remain direct-loopback only behind a
   separate ephemeral control secret
 - **Neutral connect flow** — unauthenticated pages disclose no instance name,
