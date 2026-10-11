@@ -270,7 +270,7 @@ xcrun clang \
     -fobjc-arc \
     -fblocks \
     -framework Cocoa \
-    -mmacosx-version-min=11.0 \
+    -mmacosx-version-min=14.0 \
     "$HOST_SOURCE" \
     -o "$MACOS_DIR/row-bot"
 
@@ -300,7 +300,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
+    <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSUIElement</key>
