@@ -43,7 +43,6 @@ def _dream_gates_open(monkeypatch):
     monkeypatch.setattr(dream_cycle, "_already_ran_today", lambda: False)
     monkeypatch.setattr(dream_cycle, "_in_dream_window", lambda: True)
     monkeypatch.setattr(dream_cycle, "_is_idle", lambda: True)
-    monkeypatch.setattr(dream_cycle, "_is_ollama_busy", lambda: False)
     return dream_cycle
 
 

@@ -513,9 +513,16 @@ DOCUMENT_EXTRACTION_PROMPT = DOC_EXTRACT_PROMPT
 # Dream Cycle prompts — used by dream_cycle.py for nightly knowledge refinement
 # ═════════════════════════════════════════════════════════════════════════════
 
+# The rules come before the entities and evidence in each, so consecutive
+# calls share a cacheable prefix.
+
 DREAM_MERGE_PROMPT = """\
-You are a knowledge-graph curator. Two entities of type "{entity_type}" \
-have been detected as near-duplicates and need to be merged into one.
+You are a knowledge-graph curator. Write a single, merged description that \
+preserves ALL information from BOTH descriptions. Do not lose any facts. Be \
+concise but complete.
+
+Two entities of type "{entity_type}" have been detected as near-duplicates \
+and need to be merged into one.
 
 Entity A — subject: "{subject_a}"
 Description: {description_a}
@@ -523,9 +530,7 @@ Description: {description_a}
 Entity B — subject: "{subject_b}"
 Description: {description_b}
 
-Write a single, merged description that preserves ALL information from \
-BOTH descriptions. Do not lose any facts. Be concise but complete. Write \
-in the same style as the descriptions above — factual, third-person, \
+Write in the same style as the descriptions above — factual, third-person, \
 knowledge-base style.
 
 Return ONLY the merged description text. No preamble, no explanation."""
@@ -534,16 +539,6 @@ Return ONLY the merged description text. No preamble, no explanation."""
 DREAM_ENRICH_PROMPT = """\
 You are a knowledge-graph curator. An entity has a thin description that \
 needs to be enriched using evidence from conversations.
-
-Entity type: {entity_type}
-Subject: "{subject}"
-Current description: {current_description}
-
-Known relationships:
-{relationships}
-
-Relevant conversation excerpts:
-{conversation_excerpts}
 
 Write an improved description that:
 1. Keeps ALL information from the current description (do not remove anything)
@@ -558,22 +553,21 @@ STRICT RULES (violations will corrupt the knowledge base):
 - Do NOT invent details like specific times, ages, locations, or skill levels not in the text
 - If unsure whether a detail applies to "{subject}" specifically, leave it out — being incomplete is better than being wrong
 
+Entity type: {entity_type}
+Subject: "{subject}"
+Current description: {current_description}
+
+Known relationships:
+{relationships}
+
+Relevant conversation excerpts:
+{conversation_excerpts}
+
 Return ONLY the enriched description text. No preamble, no explanation."""
 
 
 DREAM_INFER_PROMPT = """\
-You are a knowledge-graph curator with high standards. Two entities \
-co-occur in {co_occurrence_count} conversation(s) but have no edge in the \
-graph. Determine whether a SPECIFIC, FACTUAL relationship exists.
-
-Entity A — type: {type_a}, subject: "{subject_a}"
-Description: {description_a}
-
-Entity B — type: {type_b}, subject: "{subject_b}"
-Description: {description_b}
-
-Conversation excerpt where both appear:
-{conversation_excerpt}
+You are a knowledge-graph curator with high standards.
 
 RULES — read carefully:
 1. Provide brief evidence from the excerpt or entity descriptions that \
@@ -617,16 +611,24 @@ If there is NO clear, specific relationship, or you are unsure, or the only
 link is that both entities were discussed by the same user, return:
 {{"has_relation": false}}
 
+Two entities co-occur in {co_occurrence_count} conversation(s) but have no \
+edge in the graph. Determine whether a SPECIFIC, FACTUAL relationship exists.
+
+Entity A — type: {type_a}, subject: "{subject_a}"
+Description: {description_a}
+
+Entity B — type: {type_b}, subject: "{subject_b}"
+Description: {description_b}
+
+Conversation excerpt where both appear:
+{conversation_excerpt}
+
 Return ONLY the JSON object. No other text."""
 
 
 DREAM_INSIGHTS_PROMPT = """\
 You are {assistant_name}'s self-analysis engine. Your job is to examine a \
 snapshot of the system's recent activity and produce actionable insights.
-
-SYSTEM SNAPSHOT
-===============
-{snapshot}
 
 INSTRUCTIONS
 ============
@@ -704,6 +706,10 @@ Return a JSON array of objects, each with these fields:
 - skill_draft (object or null — only for skill_proposal)
 
 If there is nothing noteworthy, return an empty array: []
+
+SYSTEM SNAPSHOT
+===============
+{snapshot}
 
 Return ONLY the JSON array. No preamble, no explanation."""
 

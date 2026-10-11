@@ -19,6 +19,7 @@ calls (no agent overhead), conservative thresholds, batch-capped.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -139,61 +140,98 @@ def get_dream_status() -> dict:
     }
 
 
-# ── Rejection cache ─────────────────────────────────────────────────────────
+# ── Evidence cache ──────────────────────────────────────────────────────────
+#
+# A merge, enrichment or inference the model turned down is not asked again
+# while what it read is unchanged: each record keeps a hash of the exact prompt
+# (the entities' content and the conversation evidence).  New evidence, an
+# edited entity or a changed prompt asks again, and so does a record older than
+# _EVIDENCE_MAX_AGE_DAYS.  Insights keep the hash of the snapshot last read.
+# Kept in dream_rejections.json:
+#   {"version": 2, "merge": {pair: {"evidence", "at"}}, "enrich": {entity id: ...},
+#    "infer": {pair: ...}, "insights": {"evidence", "at"}}
+# Records from before (pair -> time only) are dropped: those pairs are asked once more.
 
-def _rejection_cache_ttl_days() -> int:
-    """Return rejection cache TTL scaled by graph size.
+_EVIDENCE_CACHE_VERSION = 2
+_EVIDENCE_KINDS = ("merge", "enrich", "infer")
+_EVIDENCE_MAX_AGE_DAYS = 30
 
-    Small graphs cycle through pairs faster so stale rejections should
-    expire sooner, giving the LLM another chance as context evolves.
-    """
-    try:
-        import row_bot.knowledge_graph as _kg
-        count = _kg.count_entities()
-    except Exception:
-        count = 0
-    if count < 200:
-        return 3
-    if count < 500:
-        return 5
-    return 7
 
-def _load_rejection_cache() -> dict[str, str]:
-    """Load pair rejection cache: {pair_key: iso_timestamp}."""
+def evidence_hash(text: str) -> str:
+    return hashlib.sha256(str(text).encode("utf-8", "surrogatepass")).hexdigest()[:32]
+
+
+def _pair_key(entity_a_id: str, entity_b_id: str) -> str:
+    return "|".join(sorted([str(entity_a_id), str(entity_b_id)]))
+
+
+def _valid_record(value) -> bool:
+    return isinstance(value, dict) and isinstance(value.get("evidence"), str) and isinstance(value.get("at"), str)
+
+
+def _load_rejection_cache() -> dict:
+    """The evidence cache, with an empty table per kind."""
+    raw: object = {}
     if _REJECTION_CACHE_FILE.exists():
         try:
-            return json.loads(_REJECTION_CACHE_FILE.read_text())
+            raw = json.loads(_REJECTION_CACHE_FILE.read_text())
         except Exception:
-            pass
-    return {}
+            raw = {}
+    cache: dict = {"version": _EVIDENCE_CACHE_VERSION, **{kind: {} for kind in _EVIDENCE_KINDS}}
+    if not isinstance(raw, dict) or raw.get("version") != _EVIDENCE_CACHE_VERSION:
+        return cache
+    for kind in _EVIDENCE_KINDS:
+        records = raw.get(kind)
+        if isinstance(records, dict):
+            cache[kind] = {str(key): record for key, record in records.items() if _valid_record(record)}
+    if _valid_record(raw.get("insights")):
+        cache["insights"] = raw["insights"]
+    return cache
 
 
-def _save_rejection_cache(cache: dict[str, str]) -> None:
+def _save_rejection_cache(cache: dict) -> None:
     _REJECTION_CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
 
-def _record_rejection(entity_a_id: str, entity_b_id: str) -> None:
-    """Record that a pair was rejected by the LLM."""
-    cache = _load_rejection_cache()
-    pair_key = "|".join(sorted([entity_a_id, entity_b_id]))
-    cache[pair_key] = datetime.now(timezone.utc).isoformat()
-    # Prune expired entries while we're here
-    ttl = _rejection_cache_ttl_days()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl)).isoformat()
-    cache = {k: v for k, v in cache.items() if v > cutoff}
-    _save_rejection_cache(cache)
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def _is_pair_recently_rejected(entity_a_id: str, entity_b_id: str) -> bool:
-    """Check if a pair was rejected within the cache window."""
+def _fresh(record: dict) -> bool:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_EVIDENCE_MAX_AGE_DAYS)).isoformat()
+    return str(record.get("at") or "") > cutoff
+
+
+def _record_rejection(kind: str, key: str, prompt: str) -> None:
+    """Remember that the model turned *key* down after reading *prompt*."""
     cache = _load_rejection_cache()
-    pair_key = "|".join(sorted([entity_a_id, entity_b_id]))
-    ts = cache.get(pair_key)
-    if not ts:
+    cache[kind][key] = {"evidence": evidence_hash(prompt), "at": _now_iso()}
+    for name in _EVIDENCE_KINDS:
+        cache[name] = {item: record for item, record in cache[name].items() if _fresh(record)}
+    try:
+        _save_rejection_cache(cache)
+    except OSError:
+        logger.debug("Could not save the Dream evidence cache", exc_info=True)
+
+
+def _rejected_with_same_evidence(kind: str, key: str, prompt: str, cache: dict | None = None) -> bool:
+    """Whether the model turned *key* down after reading this same *prompt*."""
+    record = (cache if cache is not None else _load_rejection_cache()).get(kind, {}).get(key)
+    return bool(record) and record["evidence"] == evidence_hash(prompt) and _fresh(record)
+
+
+def _answered(raw: str) -> bool:
+    """Whether a reply is a whole answer: plain text, or a JSON object that parses.
+
+    A JSON reply cut short by the output cap (or an empty one) is not, so the
+    candidate is asked again next cycle rather than remembered as turned down.
+    """
+    from row_bot.providers.background import parse_json_object
+
+    text = str(raw or "").strip()
+    if not text:
         return False
-    ttl = _rejection_cache_ttl_days()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=ttl)).isoformat()
-    return ts > cutoff
+    return not re.sub(r"^```(?:json)?\s*", "", text).startswith("{") or parse_json_object(text) is not None
 
 
 # ── Idle detection ───────────────────────────────────────────────────────────
@@ -233,35 +271,15 @@ def _already_ran_today() -> bool:
         return False
 
 
-def _is_ollama_busy() -> bool:
-    """Check if Ollama is currently processing a request.
-
-    Queries the ``/api/ps`` endpoint.  Returns True if any model is
-    currently loaded with active requests, meaning a user-facing task
-    is in progress and we should not compete for GPU.
-    """
-    try:
-        import urllib.request
-        from row_bot.models import _ollama_base_url
-        req = urllib.request.Request(f"{_ollama_base_url()}/api/ps", method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            import json as _json
-            data = _json.loads(resp.read())
-            models = data.get("models", [])
-            # A model is truly busy only when it has active slots in use.
-            # A model that is merely loaded/cached (size_vram > 0 but
-            # num_requests == 0) should not block the dream cycle.
-            return any(
-                m.get("num_requests", m.get("size_vram", 0)) > 0
-                for m in models
-            )
-    except Exception:
-        # Can't reach Ollama — not busy (or using cloud model)
-        return False
-
-
 def _should_dream() -> bool:
-    """All conditions met for a dream cycle?"""
+    """All conditions met for a dream cycle?
+
+    "Busy" is Row-Bot's own state: the idle check and the generations in
+    flight.  Ollama's ``/api/ps`` lists the models it keeps loaded (name,
+    size, ``size_vram``, ``expires_at``) with no count of requests in flight,
+    and a model stays loaded for its keep-alive after every reply, so a
+    loaded model says nothing about use.  Dream no longer asks it (F48).
+    """
     if not is_enabled():
         return False
     if _already_ran_today():
@@ -272,9 +290,6 @@ def _should_dream() -> bool:
         return False
     if not _model_chosen():
         logger.info("Dream cycle deferred — no model is chosen yet")
-        return False
-    if _is_ollama_busy():
-        logger.info("Dream cycle deferred — Ollama is busy processing a request")
         return False
     # Never run while any agent generation is in flight — a long dream
     # cycle competes with live requests for LLM bandwidth and can
@@ -372,10 +387,12 @@ def _find_merge_candidates(batch: list[dict], threshold: float) -> list[tuple[di
     """Find pairs of entities with high semantic similarity and same type.
 
     Returns list of (entity_a, entity_b, score) tuples, deduplicated so
-    each entity appears at most once (highest-scoring pair wins).
+    each entity appears at most once (highest-scoring pair wins).  A pair
+    whose merge the model turned down is skipped while both are unchanged.
     """
     import row_bot.knowledge_graph as kg
 
+    rejections = _load_rejection_cache()
     seen_ids: set[str] = set()
     candidates: list[tuple[dict, dict, float]] = []
 
@@ -417,6 +434,9 @@ def _find_merge_candidates(batch: list[dict], threshold: float) -> list[tuple[di
                     if score < 0.98:
                         continue
 
+            if _rejected_with_same_evidence("merge", _pair_key(eid, hid), _merge_prompt(entity, hit)[0], rejections):
+                continue
+
             candidates.append((entity, hit, score))
             seen_ids.add(eid)
             seen_ids.add(hid)
@@ -425,9 +445,8 @@ def _find_merge_candidates(batch: list[dict], threshold: float) -> list[tuple[di
     return candidates
 
 
-def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
-    """Merge two entities, keeping the older one. Returns merge log entry."""
-    import row_bot.knowledge_graph as kg
+def _merge_prompt(entity_a: dict, entity_b: dict) -> tuple[str, dict, dict]:
+    """The merge prompt, with the survivor (the older entity) and the duplicate."""
     from row_bot.prompts import DREAM_MERGE_PROMPT
 
     # Determine survivor (older by created_at)
@@ -438,7 +457,6 @@ def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
     else:
         survivor, duplicate = entity_b, entity_a
 
-    # LLM: synthesize best description from both
     prompt = DREAM_MERGE_PROMPT.format(
         entity_type=survivor.get("entity_type", ""),
         subject_a=survivor.get("subject", ""),
@@ -446,12 +464,24 @@ def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
         subject_b=duplicate.get("subject", ""),
         description_b=duplicate.get("description", ""),
     )
+    return prompt, survivor, duplicate
+
+
+def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
+    """Merge two entities, keeping the older one. Returns merge log entry."""
+    import row_bot.knowledge_graph as kg
+
+    # LLM: synthesize best description from both
+    prompt, survivor, duplicate = _merge_prompt(entity_a, entity_b)
 
     try:
         from row_bot.providers.background import text_field
 
-        merged_desc = text_field(_llm_call(prompt, answer=_description_answer()), "description")
+        raw = _llm_call(prompt, answer=_description_answer())
+        merged_desc = text_field(raw, "description")
         if not merged_desc or len(merged_desc) < 10:
+            if _answered(raw):
+                _record_rejection("merge", _pair_key(survivor["id"], duplicate["id"]), prompt)
             return None
     except Exception as exc:
         logger.warning("Dream merge LLM call failed: %s", exc)
@@ -638,7 +668,9 @@ def _prepare_enrichment_inputs(
         if entity["id"] not in merged_ids
     ]
     thin_entities = _find_thin_entities(surviving_entities, min_chars)
-    thin_entities.sort(key=lambda entity: entity.get("updated_at", ""))
+    # Entities whose enrichment the model turned down go last, so the others get their turn.
+    turned_down = _load_rejection_cache()["enrich"]
+    thin_entities.sort(key=lambda entity: (entity["id"] in turned_down, entity.get("updated_at", "")))
     other_subjects = _collect_other_subjects(None, surviving_entities)
     return thin_entities[:20], other_subjects
 
@@ -686,12 +718,8 @@ def _validate_enrichment(
     return True
 
 
-def _enrich_entity(
-    entity: dict,
-    excerpts: list[str],
-    other_subjects: set[str] | None = None,
-) -> dict | None:
-    """Enrich an entity's description using conversation context."""
+def _enrich_prompt(entity: dict, excerpts: list[str]) -> str:
+    """The enrichment prompt: the entity, its known relations and the conversation excerpts."""
     import row_bot.knowledge_graph as kg
     from row_bot.prompts import DREAM_ENRICH_PROMPT
 
@@ -707,7 +735,7 @@ def _enrich_entity(
     relationships_text = "\n".join(rel_lines) if rel_lines else "(none known)"
 
     context = "\n---\n".join(excerpts[:3])
-    prompt = DREAM_ENRICH_PROMPT.format(
+    return DREAM_ENRICH_PROMPT.format(
         entity_type=entity.get("entity_type", ""),
         subject=entity.get("subject", ""),
         current_description=entity.get("description", ""),
@@ -715,11 +743,32 @@ def _enrich_entity(
         conversation_excerpts=context,
     )
 
+
+def _enrich_entity(
+    entity: dict,
+    excerpts: list[str],
+    other_subjects: set[str] | None = None,
+) -> dict | None:
+    """Enrich an entity's description using conversation context.
+
+    A reply that fails a check below is remembered as turned down for this
+    prompt, so the same entity and evidence are not sent again.
+    """
+    import row_bot.knowledge_graph as kg
+
+    prompt = _enrich_prompt(entity, excerpts)
+
+    def turned_down() -> None:
+        _record_rejection("enrich", str(entity["id"]), prompt)
+
     try:
         from row_bot.providers.background import text_field
 
-        enriched = text_field(_llm_call(prompt, answer=_description_answer()), "description")
+        raw = _llm_call(prompt, answer=_description_answer())
+        enriched = text_field(raw, "description")
         if not enriched or len(enriched) < 10:
+            if _answered(raw):
+                turned_down()
             return None
     except Exception as exc:
         logger.warning("Dream enrich LLM call failed: %s", exc)
@@ -728,6 +777,7 @@ def _enrich_entity(
     # Safety: new description must be at least as long as the old one
     old_desc = entity.get("description", "") or ""
     if len(enriched) < len(old_desc):
+        turned_down()
         return None
 
     # Identity check: reject if the LLM returned the exact same text
@@ -736,11 +786,13 @@ def _enrich_entity(
             "Dream enrich skipped identity (no change): '%s' (%d chars)",
             entity.get("subject", ""), len(old_desc),
         )
+        turned_down()
         return None
 
     # Layer 2: Cross-entity contamination check (deterministic)
     if other_subjects is not None:
         if not _validate_enrichment(enriched, entity, other_subjects):
+            turned_down()
             return None
 
     # Layer 3: Fact-grounding verification — reject sentences that
@@ -776,6 +828,7 @@ def _enrich_entity(
             entity.get("subject", ""), len(ungrounded),
             "; ".join(ungrounded[:3]),
         )
+        turned_down()
         return None
 
     try:
@@ -885,6 +938,7 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
 
     # Build entity lookup by ID for quick access
     entity_by_id: dict[str, dict] = {e["id"]: e for e in batch}
+    rejections = _load_rejection_cache()
 
     # Sort by co-occurrence count descending (most evidence first)
     ranked_pairs = sorted(pair_conversations.items(), key=lambda x: len(x[1]), reverse=True)
@@ -902,10 +956,6 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
         ea = entity_by_id.get(ea_id)
         eb = entity_by_id.get(eb_id)
         if not ea or not eb:
-            continue
-
-        # Skip pairs recently rejected by LLM
-        if _is_pair_recently_rejected(ea_id, eb_id):
             continue
 
         # Pre-flight merge check: if A's description mentions B's subject
@@ -943,13 +993,19 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
         except Exception:
             continue
 
-        # Multi-excerpt evidence: join up to 3 best excerpts for rich context
+        # Multi-excerpt evidence: join up to 3 best excerpts for rich context.
+        # Ties go by text, so the same conversations give the same evidence.
         co_count = len(excerpts)
-        sorted_excerpts = sorted(excerpts, key=len, reverse=True)
+        sorted_excerpts = sorted(excerpts, key=lambda text: (len(text), text), reverse=True)
         if co_count >= 3:
             evidence = "\n\n---\n\n".join(sorted_excerpts[:3])
         else:
             evidence = sorted_excerpts[0]
+
+        # Skip a pair the model turned down after reading this same evidence
+        if _rejected_with_same_evidence("infer", _pair_key(ea_id, eb_id),
+                                        _infer_prompt(ea, eb, evidence, co_count), rejections):
+            continue
 
         pairs.append((ea, eb, evidence, co_count))
         seen_pairs.add(pair_key)
@@ -959,23 +1015,10 @@ def _find_cooccurring_pairs(batch: list[dict]) -> list[tuple[dict, dict, str, in
     return pairs
 
 
-def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
-                    confidence: float = 0.7, co_occurrence_count: int = 1) -> dict | None:
-    """Ask the LLM if two entities are related, given conversation evidence.
-
-    The LLM returns confidence, evidence quote, and directionality.
-    Vague relation types are rejected.  Confidence below 0.75 is rejected.
-    """
-    import row_bot.knowledge_graph as kg
+def _infer_prompt(entity_a: dict, entity_b: dict, excerpt: str, co_occurrence_count: int) -> str:
     from row_bot.prompts import DREAM_INFER_PROMPT
 
-    # Banned vague relation types that add noise to the graph
-    _BANNED_TYPES = {
-        "related_to", "associated_with", "connected_to", "linked_to",
-        "has_relation", "involves", "correlates_with",
-    }
-
-    prompt = DREAM_INFER_PROMPT.format(
+    return DREAM_INFER_PROMPT.format(
         type_a=entity_a.get("entity_type", ""),
         subject_a=entity_a.get("subject", ""),
         description_a=entity_a.get("description", ""),
@@ -985,6 +1028,41 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
         conversation_excerpt=excerpt[:1000],
         co_occurrence_count=co_occurrence_count,
     )
+
+
+def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
+                    confidence: float = 0.7, co_occurrence_count: int = 1) -> dict | None:
+    """Ask the LLM if two entities are related, given conversation evidence.
+
+    The LLM returns confidence, evidence quote, and directionality.
+    Vague relation types are rejected.  Confidence below 0.75 is rejected.
+    A reply that gives no relation is remembered as turned down for this
+    prompt; a failed call or a reply cut short is not.
+    """
+    import row_bot.knowledge_graph as kg
+
+    # Banned vague relation types that add noise to the graph
+    _BANNED_TYPES = {
+        "related_to", "associated_with", "connected_to", "linked_to",
+        "has_relation", "involves", "correlates_with",
+    }
+
+    # ── Tautology guard: reject if one subject is a substring of the other ──
+    # Checked before the call: it does not depend on the reply.
+    _subj_a_low = (entity_a.get("subject", "") or "").strip().lower()
+    _subj_b_low = (entity_b.get("subject", "") or "").strip().lower()
+    if _subj_a_low and _subj_b_low and len(_subj_a_low) > 2 and len(_subj_b_low) > 2:
+        if _subj_a_low in _subj_b_low or _subj_b_low in _subj_a_low:
+            logger.info(
+                "Dream infer rejected tautology: '%s' ↔ '%s' (substring match)",
+                entity_a.get("subject", ""), entity_b.get("subject", ""),
+            )
+            return None
+
+    prompt = _infer_prompt(entity_a, entity_b, excerpt, co_occurrence_count)
+
+    def turned_down() -> None:
+        _record_rejection("infer", _pair_key(entity_a["id"], entity_b["id"]), prompt)
 
     try:
         raw = _llm_call(prompt, answer=_infer_answer(), max_tokens=_INFER_MAX_TOKENS)
@@ -997,14 +1075,20 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
         import row_bot.knowledge_graph as _kg_parse
         _json_str = _kg_parse.extract_json_block(raw, "{")
         if not _json_str:
+            if _answered(raw):
+                turned_down()
             return None
         result = json.loads(_json_str)
         if not result.get("has_relation"):
+            turned_down()
             return None
         rel_type = result.get("relation_type", "").strip().lower().replace(" ", "_")
         if not rel_type:
+            turned_down()
             return None
     except (json.JSONDecodeError, AttributeError):
+        if _answered(raw):
+            turned_down()
         return None
 
     # ── Post-filter: reject vague relation types ─────────────────────
@@ -1013,18 +1097,8 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
             "Dream infer rejected vague type '%s' for %s → %s",
             rel_type, entity_a.get("subject", ""), entity_b.get("subject", ""),
         )
+        turned_down()
         return None
-
-    # ── Tautology guard: reject if one subject is a substring of the other ──
-    _subj_a_low = (entity_a.get("subject", "") or "").strip().lower()
-    _subj_b_low = (entity_b.get("subject", "") or "").strip().lower()
-    if _subj_a_low and _subj_b_low and len(_subj_a_low) > 2 and len(_subj_b_low) > 2:
-        if _subj_a_low in _subj_b_low or _subj_b_low in _subj_a_low:
-            logger.info(
-                "Dream infer rejected tautology: '%s' ↔ '%s' (substring match)",
-                entity_a.get("subject", ""), entity_b.get("subject", ""),
-            )
-            return None
 
     # ── Dynamic confidence from LLM ──────────────────────────────────
     llm_confidence = result.get("confidence")
@@ -1039,6 +1113,7 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
             "Dream infer rejected low confidence (%.2f) for %s → %s",
             final_confidence, entity_a.get("subject", ""), entity_b.get("subject", ""),
         )
+        turned_down()
         return None
 
     # ── Directionality from LLM ──────────────────────────────────────
@@ -1282,10 +1357,37 @@ def _collect_system_snapshot() -> str:
     return "\n\n".join(sections)
 
 
+def _insights_evidence(prompt: str) -> str:
+    """The hash of what the insights call reads, less the last cycle's summary line
+    (its time and duration differ every night)."""
+    return evidence_hash("\n".join(
+        line for line in prompt.splitlines() if not line.startswith("LAST DREAM CYCLE:")))
+
+
+def _remember_insights_evidence(evidence: str) -> None:
+    cache = _load_rejection_cache()
+    cache["insights"] = {"evidence": evidence, "at": _now_iso()}
+    try:
+        _save_rejection_cache(cache)
+    except OSError:
+        logger.debug("Could not save the Dream evidence cache", exc_info=True)
+
+
+def _prune_insights(insights, status) -> None:
+    """Insight maintenance, which needs no model."""
+    try:
+        pruned = insights.auto_prune()
+        if pruned:
+            status(f"Auto-pruned {pruned} stale insight(s)")
+    except Exception:
+        pass
+
+
 def _run_insights_phase(cycle_id: str, on_status=None) -> dict:
     """Phase 5: Analyze system state and generate insights.
 
-    Returns a dict with 'insights_added' and 'insights_merged' counts.
+    Returns a dict with 'insights_added' and 'insights_merged' counts, and
+    'skipped' when the snapshot is the one the last analysis read.
     """
     from row_bot.prompts import DREAM_INSIGHTS_PROMPT
     import row_bot.insights as insights
@@ -1317,6 +1419,15 @@ def _run_insights_phase(cycle_id: str, on_status=None) -> dict:
         assistant_name=name,
         snapshot=snapshot,
     )
+
+    # Nothing changed since the last analysis: the same snapshot gives the same insights.
+    evidence = _insights_evidence(prompt)
+    previous = _load_rejection_cache().get("insights")
+    if previous and previous["evidence"] == evidence and _fresh(previous):
+        result["skipped"] = True
+        _prune_insights(insights, _status)
+        _status("Insights phase: skipped, nothing changed since the last analysis")
+        return result
 
     # LLM call
     try:
@@ -1373,14 +1484,8 @@ def _run_insights_phase(cycle_id: str, on_status=None) -> dict:
         except Exception as exc:
             result["errors"].append(f"Insight store error: {exc}")
 
-    # Maintenance
-    try:
-        pruned = insights.auto_prune()
-        if pruned:
-            _status(f"Auto-pruned {pruned} stale insight(s)")
-    except Exception:
-        pass
-
+    _remember_insights_evidence(evidence)
+    _prune_insights(insights, _status)
     insights.set_last_analysis()
     _status(f"Insights phase: {result['insights_added']} new, {result['insights_merged']} merged")
     return result
@@ -1495,6 +1600,8 @@ def run_dream_cycle(on_status=None) -> dict:
             )
             if len(excerpts) < 2:
                 continue  # Need 2+ conversations as evidence
+            if _rejected_with_same_evidence("enrich", str(entity["id"]), _enrich_prompt(entity, excerpts)):
+                continue  # Turned down before, and nothing new to read
 
             try:
                 result = _enrich_entity(entity, excerpts, other_subjects)
@@ -1579,9 +1686,7 @@ def run_dream_cycle(on_status=None) -> dict:
                         f"(conf={result['confidence']:.2f}, "
                         f"co_occ={result.get('co_occurrences', '?')})"
                     )
-                else:
-                    # Cache rejection so we don't re-evaluate this pair
-                    _record_rejection(entity_a["id"], entity_b["id"])
+                # A pair the model turned down is remembered with its evidence (_infer_relation).
             except Exception as exc:
                 summary["errors"].append(f"Infer error: {exc}")
 

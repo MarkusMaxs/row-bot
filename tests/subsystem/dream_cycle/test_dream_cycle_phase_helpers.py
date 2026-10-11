@@ -116,7 +116,8 @@ def test_cooccurring_pairs_ignore_rejections_existing_edges_and_duplicate_subjec
     monkeypatch.setattr(threads, "_list_threads", lambda: [("t1", "one", "", ""), ("t2", "two", "", "")])
     monkeypatch.setattr(memory_extraction, "_get_thread_messages", lambda _tid: [{"role": "user", "content": "Alice Bob Carol"}])
     monkeypatch.setattr(memory_extraction, "_format_conversation", lambda messages: messages[0]["content"])
-    monkeypatch.setattr(dream_cycle, "_is_pair_recently_rejected", lambda a, b: "carol" in {a, b})
+    monkeypatch.setattr(dream_cycle, "_rejected_with_same_evidence",
+                        lambda kind, key, _prompt, _cache=None: kind == "infer" and "carol" in key)
     monkeypatch.setattr(
         kg,
         "get_relations",
