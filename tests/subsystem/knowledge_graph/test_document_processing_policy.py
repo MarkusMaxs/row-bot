@@ -93,6 +93,14 @@ def test_strict_factory_binds_credentials_endpoint_and_disables_environment(runt
         assert kwargs["http_client"].is_closed
 
 
+def test_openai_responses_document_calls_are_not_stored_at_openai(runtime, monkeypatch):
+    fake_openai(monkeypatch)
+    captured = runtime.capture_chat_runtime("model:openai:gpt-5.4")
+    with runtime.captured_chat_model(captured, validate=lambda: None) as model:
+        assert model._model.kwargs["use_responses_api"] is True
+        assert model._model.kwargs["store"] is False
+
+
 def test_revocation_after_construction_blocks_invoke(runtime, monkeypatch):
     fake_openai(monkeypatch)
     captured = runtime.capture_chat_runtime("model:openai:gpt-4o")

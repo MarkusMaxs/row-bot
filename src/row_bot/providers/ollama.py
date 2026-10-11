@@ -109,9 +109,13 @@ def probe_ollama_tool_round_trip(model_id: str, *, force: bool = False, timeout:
     }
     try:
         import httpx
-        from row_bot.models import _ollama_base_url
+        from row_bot.models import _ollama_base_url, ollama_chat_request_settings
 
         base_url = _ollama_base_url().rstrip("/")
+        # Probing the chat model must not reload it with another context size.
+        chat_settings = ollama_chat_request_settings(model_id) or {}
+        options = {"temperature": 0, **chat_settings.get("options", {})}
+        lifetime = {"keep_alive": chat_settings["keep_alive"]} if "keep_alive" in chat_settings else {}
         first = httpx.post(
             f"{base_url}/api/chat",
             json={
@@ -122,7 +126,8 @@ def probe_ollama_tool_round_trip(model_id: str, *, force: bool = False, timeout:
                 }],
                 "tools": [tool],
                 "stream": False,
-                "options": {"temperature": 0},
+                "options": options,
+                **lifetime,
             },
             timeout=timeout,
         )
@@ -150,7 +155,8 @@ def probe_ollama_tool_round_trip(model_id: str, *, force: bool = False, timeout:
                     {"role": "tool", "content": "{\"value\":\"ok\"}"},
                 ],
                 "stream": False,
-                "options": {"temperature": 0},
+                "options": options,
+                **lifetime,
             },
             timeout=timeout,
         )
