@@ -33,6 +33,10 @@ class WebSearchTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {"Tavily API Key": "TAVILY_API_KEY"}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {self.name}
+
     def execute(self, query: str) -> str:
         from tavily import TavilyClient
         from row_bot.api_keys import get_key

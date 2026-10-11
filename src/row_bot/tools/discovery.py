@@ -33,6 +33,9 @@ _external_discovery_invocation_var: contextvars.ContextVar[bool] = contextvars.C
 )
 
 BRIDGE_TOOL_NAMES = frozenset({"tool_search", "tool_invoke", "skill_search", "skill_load"})
+# Search results quote MCP, plugin and skill metadata written by third parties. A ``tool_invoke``
+# result is judged by its target's name instead.
+UNTRUSTED_BRIDGE_TOOL_NAMES = frozenset({"tool_search", "skill_search"})
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _WHITESPACE = re.compile(r"\s+")
 _SUSPICIOUS_DESCRIPTION = re.compile(

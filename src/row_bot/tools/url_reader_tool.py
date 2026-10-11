@@ -164,6 +164,10 @@ class URLReaderTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {"read_url"}
+
     def as_langchain_tools(self) -> list:
         return [
             StructuredTool.from_function(

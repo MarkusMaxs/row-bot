@@ -43,6 +43,10 @@ class ArxivTool(BaseTool):
     def required_api_keys(self) -> dict[str, str]:
         return {}
 
+    @property
+    def untrusted_tool_names(self) -> set[str]:
+        return {self.name}
+
     # ── Direct execute — bypasses get_retriever / ArxivRetriever ─────────
     def execute(self, query: str) -> str:
         import arxiv
