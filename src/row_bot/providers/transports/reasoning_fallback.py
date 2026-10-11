@@ -15,6 +15,7 @@ from row_bot.cancellation import current_cancellation_scope
 from row_bot.providers.reasoning import (
     ReasoningRequestPlan,
     queue_reasoning_notice,
+    remember_background_rejection,
     suppress_reasoning_override,
 )
 from row_bot.providers.transports.thinking_binding import is_thinking_binding_error
@@ -202,17 +203,24 @@ class ReasoningFallbackChatModel(BaseChatModel):
         self._fallback_succeeded()
 
     def _prepare_fallback(self, exc: BaseException) -> None:
-        thread_id = _active_thread_id()
-        suppress_reasoning_override(thread_id, self.plan.model_ref)
+        if self.plan.is_background:
+            # A background call lowered reasoning on its own: the conversation's
+            # setting stays as it is, and later background calls skip the lowering.
+            remember_background_rejection(self.plan.model_ref)
+        else:
+            suppress_reasoning_override(_active_thread_id(), self.plan.model_ref)
         logger.warning(
-            "reasoning_fallback: retrying provider default provider=%s model=%s status=%s class=%s",
+            "reasoning_fallback: retrying provider default provider=%s model=%s status=%s class=%s scope=%s",
             self.provider_id,
             self.plan.model_ref,
             _status_code(exc),
             type(exc).__name__,
+            self.plan.scope or "conversation",
         )
 
     def _fallback_succeeded(self) -> None:
+        if self.plan.is_background:
+            return
         thread_id = _active_thread_id()
         selected = self.plan.selection.label
         try:

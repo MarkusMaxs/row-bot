@@ -345,8 +345,18 @@ class _CapturedChatInvocation:
 
 
 @contextmanager
-def captured_chat_model(capture: CapturedChatRuntime, *, validate: Callable[[], None]) -> Iterator[Any]:
-    """Construct an uncached exact-account model for a synchronous admitted worker."""
+def captured_chat_model(
+    capture: CapturedChatRuntime,
+    *,
+    validate: Callable[[], None],
+    usage_purpose: str = "",
+    usage_thread_id: str = "",
+) -> Iterator[Any]:
+    """Construct an uncached exact-account model for a synchronous admitted worker.
+
+    ``usage_purpose`` tags its calls in the usage ledger (``document``) for
+    ``usage_thread_id``.
+    """
     if type(capture) is not CapturedChatRuntime:
         raise ValueError("document_provider_unavailable")
     capture = deepcopy(capture)
@@ -474,12 +484,14 @@ def captured_chat_model(capture: CapturedChatRuntime, *, validate: Callable[[], 
                 **_reasoning_constructor_kwargs(capture.reasoning_plan, provider="google"))
         else:
             raise ValueError("document_provider_capture_unsupported")
-        from row_bot.providers.usage_ledger import attach_usage_ledger
+        from row_bot.providers.usage_ledger import attach_usage_ledger, with_usage_purpose
 
         attach_usage_ledger(model, provider_id=provider, model_name=resolved.runtime_model)
+        invoked = (with_usage_purpose(model, usage_purpose, thread_id=usage_thread_id)
+                   if usage_purpose else model)
         validate()
         try:
-            yield _CapturedChatInvocation(model, validate)
+            yield _CapturedChatInvocation(invoked, validate)
         finally:
             if provider == "ollama":
                 client = getattr(getattr(model, "_client", None), "_client", None)

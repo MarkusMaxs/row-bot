@@ -140,13 +140,51 @@ or mutually exclusive statements about the same attribute)?
 If YES, reply with a single short sentence describing the conflict.
 If NO (they are compatible or additive), reply with exactly: NO"""
 
+_CONFLICT_FALLBACK = "The new information conflicts with what is already saved."
+
+
+def _contradiction_answer():
+    from row_bot.providers.background import structured_answer
+
+    return structured_answer("contradiction_check", {
+        "contradiction": {"type": "boolean",
+                          "description": "True when the two pieces of information contradict each other."},
+        "conflict": {"type": "string",
+                     "description": "One short sentence describing the conflict, or an empty string."},
+    })
+
+
+def _contradiction_verdict(raw) -> str | None:
+    """The conflict sentence, or None: from a schema reply, else from "NO" / a sentence."""
+    from row_bot.providers.background import parse_json_object
+
+    if isinstance(raw, list):
+        raw = " ".join(
+            b.get("text", "") if isinstance(b, dict) else str(b)
+            for b in raw
+        )
+    raw = str(raw or "").strip()
+    parsed = parse_json_object(raw)
+    if parsed is not None and "contradiction" in parsed:
+        flag = parsed.get("contradiction")
+        if not (flag is True or str(flag).strip().lower() in {"true", "yes"}):
+            return None
+        return str(parsed.get("conflict") or "").strip() or _CONFLICT_FALLBACK
+    if raw.upper().startswith("NO"):
+        return None
+    return raw
+
 
 def _check_contradiction(old_content: str, new_content: str, subject: str, *, invoke=None, validate=None) -> str | None:
-    """Return a conflict description if old and new content contradict, else None."""
+    """Return a conflict description if old and new content contradict, else None.
+
+    Without ``invoke`` this is a background call (WP C1): the running turn's
+    model (the default model outside a turn), the lowest reasoning effort and
+    a short output cap.
+    """
     try:
         if validate is not None:
             validate()
-        from row_bot.models import get_current_model, get_llm_for
         from langchain_core.messages import HumanMessage
 
         prompt = _CONTRADICTION_PROMPT.format(
@@ -157,20 +195,19 @@ def _check_contradiction(old_content: str, new_content: str, subject: str, *, in
         if invoke is not None:
             raw = invoke(prompt) or ""
         else:
-            llm = get_llm_for(get_current_model())
-            resp = llm.invoke([HumanMessage(content=prompt)])
-            raw = resp.content or ""
+            from row_bot.providers.background import active_turn_ids, invoke_background
+
+            thread_id, generation_id = active_turn_ids()
+            raw = invoke_background(
+                "contradiction",
+                [HumanMessage(content=prompt)],
+                answer=_contradiction_answer(),
+                thread_id=thread_id,
+                generation_id=generation_id,
+            )
         if validate is not None:
             validate()
-        if isinstance(raw, list):
-            raw = " ".join(
-                b.get("text", "") if isinstance(b, dict) else str(b)
-                for b in raw
-            )
-        raw = raw.strip()
-        if raw.upper().startswith("NO"):
-            return None
-        return raw
+        return _contradiction_verdict(raw)
     except Exception:
         if validate is not None or invoke is not None:
             raise

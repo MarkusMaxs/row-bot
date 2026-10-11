@@ -303,28 +303,67 @@ def _model_chosen() -> bool:
     return bool(str(get_current_model() or "").strip())
 
 
-def _llm_call(prompt: str) -> str:
-    """Make a direct LLM call. Returns raw response text."""
-    from row_bot.models import get_current_model, get_llm_for
-    from langchain_core.messages import HumanMessage
+def _llm_call(prompt: str, *, answer=None, max_tokens: int | None = None) -> str:
+    """Make one Dream Cycle call and return the reply text, thinking removed.
 
-    llm = get_llm_for(get_current_model())
-    response = llm.invoke([HumanMessage(content=prompt)])
-    raw = response.content or ""
-    if isinstance(raw, list):
-        parts = []
-        for block in raw:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-            elif isinstance(block, str):
-                parts.append(block)
-        raw = "\n".join(parts)
-    if not isinstance(raw, str):
-        raw = str(raw) if raw else ""
-    # Strip <think>...</think> blocks from reasoning models
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-    raw = re.sub(r"</?think>", "", raw).strip()
-    return raw
+    An unattended background call (WP C1): the default chat model at the
+    lowest reasoning effort, a bounded reply, and a JSON schema (``answer``)
+    where the provider takes one; callers keep their text parsers.
+    """
+    from langchain_core.messages import HumanMessage
+    from row_bot.providers.background import invoke_background
+
+    return invoke_background("dream", [HumanMessage(content=prompt)], answer=answer, max_tokens=max_tokens)
+
+
+# Reply shapes for the providers that take a JSON schema.
+_INFER_MAX_TOKENS = 512
+_INSIGHTS_MAX_TOKENS = 6144
+
+
+def _description_answer():
+    from row_bot.providers.background import structured_answer
+
+    return structured_answer("entity_description", {"description": {"type": "string"}})
+
+
+def _infer_answer():
+    from row_bot.providers.background import structured_answer
+
+    return structured_answer("relation_inference", {
+        "has_relation": {"type": "boolean"},
+        "relation_type": {"type": "string"},
+        "source": {"type": "string"},
+        "target": {"type": "string"},
+        "confidence": {"type": "number"},
+        "evidence": {"type": "string"},
+    })
+
+
+def _insights_answer():
+    from row_bot.providers.background import json_object, structured_answer
+
+    skill_draft = json_object({
+        "name": {"type": "string"},
+        "display_name": {"type": "string"},
+        "icon": {"type": "string"},
+        "description": {"type": "string"},
+        "instructions": {"type": "string"},
+    })
+    insight = json_object({
+        "category": {"type": "string", "enum": [
+            "error_pattern", "skill_proposal", "tool_config", "knowledge_quality",
+            "usage_pattern", "system_health"]},
+        "severity": {"type": "string", "enum": ["info", "warning", "critical"]},
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "suggestion": {"type": "string"},
+        "confidence": {"type": "number"},
+        "auto_fixable": {"type": "boolean"},
+        "skill_draft": {"anyOf": [skill_draft, {"type": "null"}]},
+    })
+    return structured_answer("dream_insights", {"insights": {"type": "array", "items": insight}})
 
 
 # ── OP1: Duplicate merge ────────────────────────────────────────────────────
@@ -409,7 +448,9 @@ def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
     )
 
     try:
-        merged_desc = _llm_call(prompt).strip()
+        from row_bot.providers.background import text_field
+
+        merged_desc = text_field(_llm_call(prompt, answer=_description_answer()), "description")
         if not merged_desc or len(merged_desc) < 10:
             return None
     except Exception as exc:
@@ -675,7 +716,9 @@ def _enrich_entity(
     )
 
     try:
-        enriched = _llm_call(prompt).strip()
+        from row_bot.providers.background import text_field
+
+        enriched = text_field(_llm_call(prompt, answer=_description_answer()), "description")
         if not enriched or len(enriched) < 10:
             return None
     except Exception as exc:
@@ -944,7 +987,7 @@ def _infer_relation(entity_a: dict, entity_b: dict, excerpt: str,
     )
 
     try:
-        raw = _llm_call(prompt)
+        raw = _llm_call(prompt, answer=_infer_answer(), max_tokens=_INFER_MAX_TOKENS)
     except Exception as exc:
         logger.warning("Dream infer LLM call failed: %s", exc)
         return None
@@ -1277,20 +1320,24 @@ def _run_insights_phase(cycle_id: str, on_status=None) -> dict:
 
     # LLM call
     try:
-        raw = _llm_call(prompt)
+        raw = _llm_call(prompt, answer=_insights_answer(), max_tokens=_INSIGHTS_MAX_TOKENS)
     except Exception as exc:
         result["errors"].append(f"Insights LLM call failed: {exc}")
         return result
 
     # Parse JSON array
     try:
-        # Try to extract JSON array from response
-        import row_bot.knowledge_graph as _kg_parse
-        json_str = _kg_parse.extract_json_block(raw, "[")
-        if not json_str:
-            # Fallback: try the whole response
-            json_str = raw.strip()
-        items = json.loads(json_str)
+        from row_bot.providers.background import list_field
+
+        items = list_field(raw, "insights")
+        if items is None:
+            # Try to extract JSON array from response
+            import row_bot.knowledge_graph as _kg_parse
+            json_str = _kg_parse.extract_json_block(raw, "[")
+            if not json_str:
+                # Fallback: try the whole response
+                json_str = raw.strip()
+            items = json.loads(json_str)
         if not isinstance(items, list):
             items = []
     except (json.JSONDecodeError, TypeError) as exc:

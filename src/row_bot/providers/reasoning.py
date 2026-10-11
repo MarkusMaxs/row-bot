@@ -166,25 +166,35 @@ class ReasoningSelection:
         )
 
 
+BACKGROUND_SCOPE = "background"
+
+
 @dataclass(frozen=True)
 class ReasoningRequestPlan:
     model_ref: str
     selection: ReasoningSelection = ReasoningSelection()
     capabilities: ReasoningCapabilities | None = None
+    # "background": chosen automatically for a background call, never the person's
+    # choice, so a rejection never resets or reports the conversation's setting.
+    scope: str = ""
 
     @property
     def is_default(self) -> bool:
         return self.selection.is_default
 
     @property
+    def is_background(self) -> bool:
+        return self.scope == BACKGROUND_SCOPE
+
+    @property
     def fingerprint(self) -> str:
         if self.is_default:
             return "reasoning:provider-default"
-        raw = json.dumps(
-            {"model_ref": self.model_ref, "selection": self.selection.to_json()},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        payload: dict[str, Any] = {"model_ref": self.model_ref, "selection": self.selection.to_json()}
+        if self.scope:
+            # A background plan may build different request fields for the same selection.
+            payload["scope"] = self.scope
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return "reasoning:" + sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -424,6 +434,19 @@ def consume_reasoning_notices(thread_id: str | None) -> list[dict[str, Any]]:
 
 def suppress_reasoning_override(thread_id: str | None, canonical_model_ref: str) -> None:
     _suppressed_overrides.add((str(thread_id or ""), canonical_model_ref))
+
+
+# Models whose provider refused a lowered background reasoning setting in this
+# process: later background calls use the provider default straight away.
+_background_rejections: set[str] = set()
+
+
+def remember_background_rejection(canonical_model_ref: str) -> None:
+    _background_rejections.add(str(canonical_model_ref or ""))
+
+
+def background_reasoning_rejected(canonical_model_ref: str) -> bool:
+    return str(canonical_model_ref or "") in _background_rejections
 
 
 def clear_reasoning_suppression(thread_id: str | None, canonical_model_ref: str) -> None:

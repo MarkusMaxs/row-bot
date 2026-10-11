@@ -1238,15 +1238,26 @@ def _verify_goal(
         )
 
 
-def _invoke_goal_verifier(goal: dict[str, Any], context: dict[str, Any]) -> Mapping[str, Any]:
-    """Run the default same-model verifier and return strict-ish JSON."""
-    from row_bot.models import get_current_model, get_llm, get_llm_for, is_cloud_model, is_model_local
+def _verifier_answer():
+    from row_bot.providers.background import structured_answer
 
-    model_ref = str(context.get("model_override") or get_current_model())
-    if model_ref and model_ref != get_current_model() and (is_model_local(model_ref) or is_cloud_model(model_ref)):
-        llm = get_llm_for(model_ref)
-    else:
-        llm = get_llm()
+    return structured_answer("goal_verdict", {
+        "progress": {"type": "string", "enum": ["progress", "no_progress", "done", "blocked"]},
+        "reason": {"type": "string"},
+        "failing_step": {"type": "string"},
+    })
+
+
+def _invoke_goal_verifier(goal: dict[str, Any], context: dict[str, Any]) -> Mapping[str, Any]:
+    """Run the same-model verifier and return strict-ish JSON.
+
+    A background call (WP C1): the turn's model, else the goal thread's model,
+    at the lowest reasoning effort with a bounded reply.
+    """
+    from row_bot.providers.background import invoke_background, thread_model_for
+
+    thread_id = str(goal.get("thread_id") or "")
+    model_ref = str(context.get("model_override") or "") or thread_model_for(thread_id)
     system = (
         "You are Row-Bot's goal verifier. Judge the latest turn against the objective "
         "and return strict JSON only with keys `progress` (progress: it moved closer; "
@@ -1269,13 +1280,16 @@ def _invoke_goal_verifier(goal: dict[str, Any], context: dict[str, Any]) -> Mapp
         "child_agent_dependencies": context.get("child_agent_dependencies") or [],
         "latest_assistant_response": context.get("assistant_text") or "",
     }
-    response = llm.invoke(
+    text = invoke_background(
+        "verifier",
         [
             {"role": "system", "content": system},
             {"role": "human", "content": json.dumps(payload, sort_keys=True)},
-        ]
+        ],
+        answer=_verifier_answer(),
+        thread_model=model_ref,
+        thread_id=thread_id,
     )
-    text = _content_to_text(getattr(response, "content", response))
     return _parse_verifier_json(text)
 
 
@@ -1338,20 +1352,6 @@ def _record_verifier_reason(goal_id: str, verdict: str, reason: str, *, progress
     finally:
         conn.close()
     return get_goal(goal_id) if changed else None
-
-
-def _content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text") or item.get("content") or ""))
-            else:
-                parts.append(str(item or ""))
-        return "".join(parts)
-    return str(content or "")
 
 
 def _canonical_blocker(value: Any) -> str:

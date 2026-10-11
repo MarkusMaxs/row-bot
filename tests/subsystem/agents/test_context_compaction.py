@@ -68,28 +68,38 @@ def test_summary_prompt_requires_exact_user_designated_opaque_identifiers() -> N
 
 
 def test_ollama_compactor_binds_output_limit_in_supported_options(monkeypatch):
+    from row_bot import models
+    from row_bot.providers import background
+    from row_bot.providers.reasoning import ReasoningCapabilities
+
     captured = {}
 
     class FakeOllama:
         num_ctx = 32_768
-        reasoning = True
+        reasoning = False
 
         def bind(self, **kwargs):
-            captured.update(kwargs)
+            captured["bound"] = kwargs
             return self
 
-    monkeypatch.setattr(agent, "_chat_only_llm", lambda _model_ref: FakeOllama())
+    def get_llm_for(ref, num_ctx=None, *, reasoning_plan=None):
+        captured.update(ref=ref, plan=reasoning_plan)
+        return FakeOllama()
+
+    monkeypatch.setattr(models, "get_llm_for", get_llm_for)
+    monkeypatch.setattr(background, "resolve_reasoning_capabilities_for_ref",
+                        lambda _ref: ReasoningCapabilities(can_disable=True, thinking_mode="toggle"))
 
     bound = agent._compaction_model(
-        replace(_inputs([]), provider_id="ollama"),
+        replace(_inputs([]), model_ref="model:ollama:qwen3:8b", provider_id="ollama"),
         512,
     )
 
     assert isinstance(bound, FakeOllama)
-    assert captured == {
-        "options": {"num_predict": 512, "num_ctx": 32_768},
-        "reasoning": False,
-    }
+    # The thread's own model, thinking off, its context allocation kept: nothing reloads.
+    assert captured["ref"] == "model:ollama:qwen3:8b"
+    assert captured["plan"].selection.kind == "off"
+    assert captured["bound"] == {"options": {"num_ctx": 32_768, "num_predict": 512}}
 
 
 def test_compaction_calls_are_counted_as_compaction_for_the_running_conversation(tmp_path, monkeypatch):
@@ -113,7 +123,7 @@ def test_compaction_calls_are_counted_as_compaction_for_the_running_conversation
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     model = attach_usage_ledger(Summarizer(), provider_id="openai", model_name="test")
-    monkeypatch.setattr(agent, "_chat_only_llm", lambda _model_ref: model)
+    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _ref, num_ctx=None, *, reasoning_plan=None: model)
     thread = agent._current_thread_id_var.set("thread-compacting")
     generation = agent._current_generation_id_var.set("gen-compacting")
     try:
