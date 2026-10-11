@@ -89,9 +89,9 @@ it('saves into the Exports folder in one click, then opens or shows it', async (
   expect(screen.queryByText(/Saved ·/)).toBeNull();
 });
 
-it('falls back to a download on a device that cannot save here', async () => {
-  const save = vi.fn().mockRejectedValue({ code: 'owner_local_only' });
-  const current = props({ save, reveal: vi.fn() });
+it('offers a download on a device other than the desktop app', async () => {
+  // Saving into Exports (then Open, Show in folder) is the desktop app's.
+  const current = props({ save: undefined, reveal: undefined });
   render(<ArtifactExports {...current} />);
   await exportAs('PDF');
   expect(screen.queryByText(/Saved/)).toBeNull();

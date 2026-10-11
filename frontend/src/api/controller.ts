@@ -2822,7 +2822,7 @@ export class ClientController {
   ) => this.query(() => this.transport.reviewChannel?.(body, signal));
   channelReceipt = (channel: string, command: string, signal?: AbortSignal) =>
     this.query(() => this.transport.channelReceipt?.(channel, command, signal));
-  /** WhatsApp's link code: the owner on this computer only (B139). */
+  /** WhatsApp's link code (B139), shown on any signed-in device to scan. */
   channelLink = (channel: string, signal?: AbortSignal) =>
     this.query(() => this.transport.channelLink?.(channel, signal));
   executeChannel = async (original: {
@@ -3125,7 +3125,7 @@ export class ClientController {
       this.browserCommandAttempts.delete(original.command_id);
     return result;
   };
-  /** The conversation's computer-use card; this computer's owner only. */
+  /** The conversation's computer-use card: this computer's own screen, so the desktop app here only. */
   computerUse = (conversation: string, signal?: AbortSignal) =>
     this.query(() => this.transport.computerUse?.(conversation, signal));
   computerUsePreview = (

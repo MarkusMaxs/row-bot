@@ -28,7 +28,7 @@ const active: TailscaleStatus = {
 };
 function fixture(): AccessTailscaleClient {
   return {
-    status: vi.fn().mockResolvedValue({ can_manage: true, status: null }),
+    status: vi.fn().mockResolvedValue({ status: null }),
     check: vi.fn().mockResolvedValue(ready),
     action: vi.fn().mockResolvedValue({
       success: true,
@@ -81,7 +81,6 @@ it('looks once when the connect flow opens and shares privately after one confir
 it('never probes from Advanced and stops a share Row-Bot made', async () => {
   const client = fixture();
   vi.mocked(client.status).mockResolvedValue({
-    can_manage: true,
     status: active,
   });
   show(client, 'line');
@@ -95,7 +94,6 @@ it('never probes from Advanced and stops a share Row-Bot made', async () => {
 it('shows Tailscale’s consent page and next steps for a route conflict (B138)', async () => {
   const client = fixture();
   vi.mocked(client.status).mockResolvedValue({
-    can_manage: true,
     status: {
       ...ready,
       state: 'consent_required',
@@ -108,7 +106,6 @@ it('shows Tailscale’s consent page and next steps for a route conflict (B138)'
   ).toHaveAttribute('href', 'https://login.tailscale.com/f/serve?node=example');
   view.unmount();
   vi.mocked(client.status).mockResolvedValue({
-    can_manage: true,
     status: { ...ready, state: 'route_conflict' },
   });
   show(client);
@@ -123,7 +120,6 @@ it('recovers an interrupted original change without resending it', async () => {
   sessionStorage.setItem('row-bot-tailscale-command', 'original-command');
   const client = fixture();
   vi.mocked(client.status).mockResolvedValue({
-    can_manage: true,
     status: ready,
   });
   show(client);
@@ -137,18 +133,20 @@ it('recovers an interrupted original change without resending it', async () => {
   expect(sessionStorage.getItem('row-bot-tailscale-command')).toBeNull();
 });
 
-it('denies remote owner changes in the view', async () => {
+it('asks first when the device stopping it reaches Row-Bot over the tailnet', async () => {
+  // Any signed-in device may stop it; this one would cut itself off.
   const client = fixture();
   vi.mocked(client.status).mockResolvedValue({
-    can_manage: false,
-    status: active,
+    status: { ...active, serve_url: window.location.origin },
   });
-  show(client);
-  expect(
-    await screen.findByText('Shared privately at machine.tail.test.'),
-  ).toBeInTheDocument();
-  expect(client.check).not.toHaveBeenCalled();
-  expect(
-    screen.queryByRole('button', { name: /Stop sharing/ }),
-  ).not.toBeInTheDocument();
+  show(client, 'line');
+  fireEvent.click(await screen.findByRole('button', { name: /Stop sharing/ }));
+  const dialog = await screen.findByRole('alertdialog', {
+    name: 'Stop the address this device uses?',
+  });
+  expect(client.action).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Stop sharing' }));
+  await waitFor(() =>
+    expect(client.action).toHaveBeenCalledWith('disable', expect.any(String)),
+  );
 });

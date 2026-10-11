@@ -394,29 +394,34 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           tone="2"
           bind={false}
           help={
-            available.verified_manifest
-              ? 'Release manifest includes an installer checksum.'
-              : 'No verified installer checksum is available.'
+            !available.verified_manifest
+              ? 'No verified installer checksum is available.'
+              : snapshot!.install_here
+                ? 'Release manifest includes an installer checksum.'
+                : 'Installing on a Mac opens Finder there, so it’s done in the Row-Bot desktop app on the Mac.'
           }
           control={
             <>
-              {available.verified_manifest && owner.startInstall && (
-                <Button
-                  variant="primary"
-                  aria-label={`Install version ${available.version}`}
-                  disabled={locked}
-                  onClick={() =>
-                    void startInstall({
-                      command_id: crypto.randomUUID(),
-                      expected_revision: snapshot!.revision,
-                      version: available.version,
-                    })
-                  }
-                >
-                  <Download size={14} aria-hidden />
-                  Install
-                </Button>
-              )}
+              {available.verified_manifest &&
+                owner.startInstall &&
+                // A Mac installs from Finder: the desktop app there does it.
+                snapshot!.install_here && (
+                  <Button
+                    variant="primary"
+                    aria-label={`Install version ${available.version}`}
+                    disabled={locked}
+                    onClick={() =>
+                      void startInstall({
+                        command_id: crypto.randomUUID(),
+                        expected_revision: snapshot!.revision,
+                        version: available.version,
+                      })
+                    }
+                  >
+                    <Download size={14} aria-hidden />
+                    Install
+                  </Button>
+                )}
               <IconButton
                 label={`Skip version ${available.version}`}
                 disabled={locked}

@@ -130,6 +130,16 @@ export function tailscaleWords(status: TailscaleStatus): {
   }
 }
 
+/** Whether this page was opened at `address` (a device on the tailnet). */
+function usesAddress(address: string | null | undefined): boolean {
+  if (!address) return false;
+  try {
+    return new URL(address).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Tailscale for Devices & remote access. In the connect flow (`option`) it
  * checks this computer's Tailscale once when opened (the local CLI; nothing
@@ -154,7 +164,6 @@ export default function AccessTailscale({
   const [status, setStatus] = useState<TailscaleStatus | null | undefined>(
     undefined,
   );
-  const [canManage, setCanManage] = useState(false);
   const [pending, setPending] = useState(retainedCommand);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -169,14 +178,8 @@ export default function AccessTailscale({
       (value) => {
         if (abort.signal.aborted) return;
         setStatus(value.status);
-        setCanManage(value.can_manage);
         // Opening the connect flow is the explicit step: look once.
-        if (
-          variant === 'option' &&
-          value.can_manage &&
-          !value.status &&
-          !probed.current
-        ) {
+        if (variant === 'option' && !value.status && !probed.current) {
           probed.current = true;
           void check();
         }
@@ -298,12 +301,31 @@ export default function AccessTailscale({
               Copy address
             </Button>
           )}
-          {canManage && !pending && (
-            <Button disabled={busy} onClick={() => void run('disable')}>
+          {!pending && (
+            <Button
+              disabled={busy}
+              onClick={(event) => {
+                // Any signed-in device may stop it; one that reaches Row-Bot
+                // over the tailnet would cut itself off, so it asks first.
+                if (!usesAddress(status?.serve_url)) return void run('disable');
+                overlay.open({
+                  kind: 'alert',
+                  returnFocusTo: event.currentTarget,
+                  title: 'Stop the address this device uses?',
+                  description:
+                    'This device reaches Row-Bot over your tailnet. Once sharing stops, it can’t connect there until sharing is turned on again.',
+                  confirmLabel: 'Stop sharing',
+                  onConfirm: () => {
+                    overlay.close();
+                    void run('disable');
+                  },
+                });
+              }}
+            >
               <Power size={16} aria-hidden /> Stop sharing
             </Button>
           )}
-          {canManage && recovery}
+          {recovery}
         </div>
         {notice && <p role="status">{notice}</p>}
         {error && <p role="alert">{error}</p>}
@@ -315,11 +337,7 @@ export default function AccessTailscale({
     <div className="access-option-detail" aria-busy={busy || undefined}>
       {status === undefined && !error && <Skeleton label="Reading Tailscale" />}
       {status === null && !busy && (
-        <p className="settings-help">
-          {canManage
-            ? 'Tailscale hasn’t been checked yet.'
-            : 'Tailscale is set up from the computer running Row-Bot.'}
-        </p>
+        <p className="settings-help">Tailscale hasn’t been checked yet.</p>
       )}
       {busy && !status && <p className="settings-help">Checking Tailscale…</p>}
       {words && (
@@ -330,51 +348,48 @@ export default function AccessTailscale({
       {words?.next}
       {notice && <p role="status">{notice}</p>}
       {error && <p role="alert">{error}</p>}
-      {canManage && (
-        <div className="button-row">
-          {status?.state === 'consent_required' && status.consent_url && (
-            <a
-              className="button primary"
-              href={status.consent_url}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Open Tailscale’s consent page{' '}
-              <ExternalLink size={14} aria-hidden />
-            </a>
-          )}
-          {status?.state === 'ready' && !pending && (
-            <Button
-              variant="primary"
-              disabled={busy}
-              onClick={(event) =>
-                overlay.open({
-                  kind: 'alert',
-                  returnFocusTo: event.currentTarget,
-                  title: 'Share Row-Bot privately on your tailnet?',
-                  description:
-                    'Devices signed in to your tailnet can open Row-Bot at this computer’s tailnet address, and each still needs a code from this page to sign in. This changes Tailscale’s settings on this computer; Tailscale may ask you to allow HTTPS once. Row-Bot restarts to use the new address.',
-                  confirmLabel: 'Share privately',
-                  onConfirm: () => {
-                    overlay.close();
-                    void run('enable');
-                  },
-                })
-              }
-            >
-              Share privately…
+      <div className="button-row">
+        {status?.state === 'consent_required' && status.consent_url && (
+          <a
+            className="button primary"
+            href={status.consent_url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open Tailscale’s consent page <ExternalLink size={14} aria-hidden />
+          </a>
+        )}
+        {status?.state === 'ready' && !pending && (
+          <Button
+            variant="primary"
+            disabled={busy}
+            onClick={(event) =>
+              overlay.open({
+                kind: 'alert',
+                returnFocusTo: event.currentTarget,
+                title: 'Share Row-Bot privately on your tailnet?',
+                description:
+                  'Devices signed in to your tailnet can open Row-Bot at this computer’s tailnet address, and each still needs a code from this page to sign in. This changes Tailscale’s settings on this computer; Tailscale may ask you to allow HTTPS once. Row-Bot restarts to use the new address.',
+                confirmLabel: 'Share privately',
+                onConfirm: () => {
+                  overlay.close();
+                  void run('enable');
+                },
+              })
+            }
+          >
+            Share privately…
+          </Button>
+        )}
+        {status?.state !== 'active_owned' &&
+          status?.state !== 'active_unowned' &&
+          status?.state !== 'ready' && (
+            <Button disabled={busy} onClick={() => void check()}>
+              <RefreshCw size={16} aria-hidden /> Check again
             </Button>
           )}
-          {status?.state !== 'active_owned' &&
-            status?.state !== 'active_unowned' &&
-            status?.state !== 'ready' && (
-              <Button disabled={busy} onClick={() => void check()}>
-                <RefreshCw size={16} aria-hidden /> Check again
-              </Button>
-            )}
-          {recovery}
-        </div>
-      )}
+        {recovery}
+      </div>
     </div>
   );
 }

@@ -193,7 +193,7 @@ export type ChannelSettingsProps = {
     command: ChannelCommand,
     review: ChannelReview,
   ) => Promise<ChannelReceipt>;
-  /** The link code of a channel linked by scanning (owner on this computer). */
+  /** The link code of a channel linked by scanning, on any signed-in device. */
   loadLink?: (channelId: string, signal: AbortSignal) => Promise<ChannelLink>;
   /** One channel only, open, as its app's settings (Apps › Telegram › Settings). */
   only?: string;
@@ -283,8 +283,8 @@ function savedLine(field: ChannelFieldStatus): string {
 }
 
 /**
- * WhatsApp's live link code (B139): the QR the bridge shows, read by the
- * owner on this computer only and refreshed while it waits for a scan.
+ * WhatsApp's live link code (B139): the QR the bridge shows, refreshed while
+ * it waits for a scan. Any signed-in device shows it; scan it from another.
  */
 function ChannelLinkCode({
   channel,
@@ -325,7 +325,7 @@ function ChannelLinkCode({
   if (!loadLink || unavailable)
     return (
       <p className="settings-help">
-        Open Settings on the computer running Row-Bot to see the code.
+        Row-Bot couldn’t read the code. Reset the session to try again.
       </p>
     );
   return code ? (

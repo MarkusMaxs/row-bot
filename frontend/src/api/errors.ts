@@ -438,6 +438,11 @@ const CATALOG: Record<string, Entry> = {
     'review',
   ],
   capability_unavailable: ["This isn't available on this device.", 'none'],
+  // A capability, not a permission: it happens on that computer's own screen.
+  desktop_only: [
+    'This happens on the computer Row-Bot runs on, so it’s done in the Row-Bot desktop app there.',
+    'none',
+  ],
   command_metadata_unavailable: [
     "Row-Bot couldn't read its list of recent actions. Try again.",
     'retry',
@@ -505,7 +510,6 @@ const CATALOG: Record<string, Entry> = {
     "This address isn't allowed to use Row-Bot. Open Row-Bot from its usual address.",
     'none',
   ],
-  owner_local_only: ['Only the computer running Row-Bot can do this.', 'none'],
   path_denied: ["Row-Bot isn't allowed to use that location.", 'review'],
   payload_too_large: ['That is larger than Row-Bot accepts.', 'none'],
   protocol_incompatible: [

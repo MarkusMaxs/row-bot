@@ -93,7 +93,7 @@ export type OverviewHomeProps = {
   loadTasks?: (signal: AbortSignal) => Promise<TaskSummaryPage>;
   /** Monitor's kept check results (B252); a red one needs you. */
   loadHealth?: (signal: AbortSignal) => Promise<SystemDiagnosis>;
-  /** Run every check now (the local owner's): a red check's "Check again". */
+  /** Run every check now: a red check's "Check again". */
   onRunDiagnosis?: () => Promise<SystemDiagnosis>;
   /** Every approval waiting for the person, the shell's shared read (B255). */
   loadApprovals?: (signal?: AbortSignal) => Promise<PendingApprovalPage>;
@@ -836,7 +836,6 @@ export default function OverviewHome({
   useEffect(() => {
     if (!loadInsights) return;
     const abort = new AbortController();
-    // Insights are the owner's on this computer; elsewhere the card stays out.
     loadInsights(abort.signal).then(
       (value) => {
         if (!abort.signal.aborted) setInsights(value);

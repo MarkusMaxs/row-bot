@@ -212,8 +212,9 @@ function ReconnectFix({
   return (
     <ConnectedAccountAuth account={fix.target} onChanged={onFixed}>
       {(auth) =>
-        // Sign-in runs on the computer Row-Bot runs on; elsewhere, its row.
-        auth.localOnly ? (
+        // Sign-in opens the browser on the computer Row-Bot runs on (the
+        // desktop app there); elsewhere, its row says so.
+        !auth.onThisComputer ? (
           <FixLink fix={{ ...fix, kind: 'open' }} look={look} />
         ) : (
           <>

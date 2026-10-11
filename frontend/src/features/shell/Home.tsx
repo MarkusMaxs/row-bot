@@ -574,22 +574,12 @@ export default function Home({
                 loadHealth={identity ? loadHealth : undefined}
                 loadApps={identity ? loadApps : undefined}
                 onOpenApp={openApp}
-                // Running every check is the local owner's.
-                onRunDiagnosis={
-                  state.handshake?.authentication_kind === 'local_owner'
-                    ? () => controller.systemDiagnosis()
-                    : undefined
-                }
+                onRunDiagnosis={() => controller.systemDiagnosis()}
                 loadApprovals={
                   identity ? controller.pendingApprovals : undefined
                 }
                 loadMemory={identity ? loadMemory : undefined}
-                // Insights are the owner's on this computer.
-                loadInsights={
-                  state.handshake?.authentication_kind === 'local_owner'
-                    ? loadInsights
-                    : undefined
-                }
+                loadInsights={loadInsights}
                 buddy={<BuddyPortrait />}
                 onAsk={onAsk}
                 asking={asking}

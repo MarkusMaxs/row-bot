@@ -59,7 +59,14 @@ function size(bytes: number) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-/** Settings › Data: Back up now, and Restore from backup on the next start. */
+/** A restore picks its file with the desktop app's own file picker. */
+const RESTORE_IN_DESKTOP_APP =
+  'Restoring picks the backup file in the Row-Bot desktop app on the computer Row-Bot runs on.';
+
+/**
+ * Settings › Data: Back up now, and Restore from backup on the next start,
+ * from any signed-in device.
+ */
 export function DataBackup({
   owner,
   canPick = true,
@@ -147,7 +154,7 @@ export function DataBackup({
     const picked = await owner.pick();
     if (!alive.current || picked === null) return;
     if (picked === 'unavailable') {
-      setError('Restoring needs the Row-Bot desktop app on this computer.');
+      setError(RESTORE_IN_DESKTOP_APP);
       return;
     }
     const receipt = await send('inspect_restore', { file_grant: picked });
@@ -162,13 +169,6 @@ export function DataBackup({
   }
 
   if (!state) return <p className="muted">Checking backups…</p>;
-  if (!state.local_owner)
-    return (
-      <p className="muted">
-        Backups are made and restored in the Row-Bot desktop app on this
-        computer.
-      </p>
-    );
 
   const pending = state.pending_restore;
   const result = state.restore_result;
@@ -240,16 +240,19 @@ export function DataBackup({
       {notice && (
         <p className="settings-saved-note" role="status">
           {notice}
-          {notice.startsWith('Saved') && state.last_backup_name && (
-            <Button
-              variant="ghost"
-              disabled={locked}
-              onClick={() => void send('reveal')}
-            >
-              <FolderOpen size={14} aria-hidden />
-              Show in folder
-            </Button>
-          )}
+          {notice.startsWith('Saved') &&
+            state.last_backup_name &&
+            // The file manager opens on the computer Row-Bot runs on.
+            state.reveal_available && (
+              <Button
+                variant="ghost"
+                disabled={locked}
+                onClick={() => void send('reveal')}
+              >
+                <FolderOpen size={14} aria-hidden />
+                Show in folder
+              </Button>
+            )}
         </p>
       )}
       <div className="settings-inline-row data-backup-row">
@@ -271,7 +274,7 @@ export function DataBackup({
               : 'Restore from backup…'}
           </Button>
         ) : (
-          <p className="muted">Open the Row-Bot desktop app to restore.</p>
+          <p className="muted">{RESTORE_IN_DESKTOP_APP}</p>
         )}
       </div>
       {review && (

@@ -125,6 +125,18 @@ export function useClientState() {
   return useSyncExternalStore(controller.subscribe, controller.getSnapshot);
 }
 
+/**
+ * This device is the Row-Bot desktop app on the computer Row-Bot runs on.
+ * It is a capability, not a permission: every signed-in device has the
+ * owner's full authority, and only what happens on that computer's own
+ * screen (a native picker, the file manager, its browser) needs it.
+ */
+export function useOnThisComputer(): boolean {
+  return useClientSelector(
+    (state) => state.handshake?.authentication_kind === 'local_owner',
+  );
+}
+
 /** Select stable store fields so unrelated token updates do not wake panels. */
 export function useClientSelector<T>(
   selector: (

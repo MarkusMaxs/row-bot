@@ -6,7 +6,10 @@ import { Button } from '../../ui/primitives';
 export type WebhookReach = {
   /** The public tunnel address, while the app is reachable from the internet. */
   publicBase: string | null;
-  /** Only the local owner on this computer can start or stop the tunnel. */
+  /**
+   * The tunnel's state was read, so it can be started or stopped here (from
+   * any signed-in device).
+   */
   canControl: boolean;
 };
 
@@ -204,7 +207,7 @@ export default function WebhookAddress({
                 Make reachable from the internet
               </Button>
             ) : (
-              "Only Row-Bot's owner on this computer can make it reachable."
+              'Row-Bot couldn’t read its public link, so it can’t change it here. Try Settings › Devices & remote access.'
             )}
           </p>
         ))}
