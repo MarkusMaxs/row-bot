@@ -105,8 +105,9 @@ slow first-run systems.
 
 The output is `dist/Row-Bot-X.Y.Z-Linux-x86_64.tar.gz` on x86_64 runners. It
 contains bundled Python, installed Python packages, app source, `bin/row-bot`, an
-`install.sh`, an `uninstall.sh`, a freedesktop `.desktop` file, icon files, and
-`install_info.json` for updater/dev-install detection.
+`install.sh`, an `uninstall.sh` (the three come from `installer/linux/`), a
+freedesktop `.desktop` file, icon files, `version.json`, and `install_info.json`
+(which 5.1's updater checks before it installs a tarball).
 
 Manual tarball install flow:
 
@@ -118,10 +119,20 @@ row-bot
 ```
 
 Linux installs to `~/.local/share/row-bot/releases/<version>`, updates
-`~/.local/share/row-bot/current`, creates `~/.local/bin/row-bot`, and installs the
+`~/.local/share/row-bot/current`, records the release in
+`~/.local/share/row-bot/state.json` (the release it replaces stays as `previous`;
+older releases are removed), creates `~/.local/bin/row-bot`, and installs the
 desktop entry/icon into user XDG locations. It launches in browser/no-tray mode
 by default. Native window and system tray support remain optional because Linux
 desktop environments require distro-specific GTK/Qt/AppIndicator dependencies.
+
+`bin/row-bot` starts the active release and starts it again, with the same
+arguments, when it exits with code 75 (so `row-bot serve --port N` comes back as
+`serve` on the same port). If a release that has not become ready since it was
+switched to fails to start twice in a row (or is not ready within 240 s), it goes
+back to the previous release. Under systemd (`INVOCATION_ID` set) it starts the
+app once and leaves restarts to the unit: use `Restart=always`, or
+`RestartForceExitStatus=75`.
 
 Provider secrets use the system keyring when Linux Secret Service/KWallet is
 available. Headless Linux and WSL installs without a keyring still start cleanly;
@@ -162,7 +173,10 @@ The installer bundles the embedded Python runtime, pre-installed Python packages
 4. **Node 24.15.0 and a built client** — run `npm --prefix frontend ci --ignore-scripts` and
    `npm --prefix frontend run build` first; the build script stages and verifies `frontend/dist`
 
-5. **Icon file** — `row-bot.ico` in the project root
+5. **Visual Studio Build Tools with the C++ x64 tools (MSVC)** — the build compiles `Row-Bot.exe`
+   from `installer/windows/row_bot_launcher.c` first; GitHub's Windows runners have them
+
+6. **Icon file** — `row-bot.ico` in the project root
    If you don't have one, remove the `SetupIconFile` and `IconFilename` lines in `row_bot_setup.iss`.
 
 ### Build Steps
@@ -173,12 +187,16 @@ The installer bundles the embedded Python runtime, pre-installed Python packages
 ```
 
 This will:
-1. Download the Python 3.13 embeddable package (~15 MB) and `get-pip.py` (~2.5 MB)
-2. Bundle tkinter and Tcl/Tk from the matching system Python and check that they import
-3. Install the locked packages from `requirements.txt` and verify the runtime dependencies
-4. Stage the React client from `frontend/dist` into a fresh folder and verify it strictly
-5. Install Playwright Chromium when it can (otherwise Browser Automation waits for the user's Install or Repair)
-6. Compile everything into `dist\Row-Bot-X.Y.Z-Windows-x64.exe`
+1. Build `Row-Bot.exe` (with its icon, version and manifest) with MSVC
+2. Download the Python 3.13 embeddable package (~15 MB) and `get-pip.py` (~2.5 MB)
+3. Bundle tkinter and Tcl/Tk from the matching system Python and check that they import
+4. Install the locked packages from `requirements.txt` and verify the runtime dependencies
+5. Stage the app payload (`scripts/app_payload_manifest.py --stage`) and the React client from
+   `frontend/dist` into `installer\build\app` and verify the client strictly
+6. Install Playwright Chromium when it can (otherwise Browser Automation waits for the user's Install or Repair)
+7. Compile deterministic bytecode for the app and the packages (`compileall -s installer\build
+   --invalidation-mode unchecked-hash`) and write `version.json`
+8. Compile everything into `dist\Row-Bot-X.Y.Z-Windows-x64.exe`
 
 #### Options
 
@@ -192,28 +210,32 @@ This will:
 
 ### What Gets Installed
 
-On the end user's machine:
+On the end user's machine, per user and without administrator rights (the layout
+contract is `src/row_bot/install_layout.py`):
 
 ```
-C:\Program Files\Row-Bot\              # Installation directory
-├── launch_row_bot.bat                  # Sets up the bundled runtime and starts launcher.py
-├── launch_row_bot.vbs                  # Hidden-console wrapper (shortcuts point here)
-├── python\                             # Embedded Python 3.13 runtime
-│   ├── python.exe
-│   ├── Lib\site-packages\              # Locked packages from requirements.txt
-│   ├── tcl\                            # Tcl/Tk for the splash screen and first-run chooser
-│   └── playwright-browsers\            # Bundled Chromium, when the build could install it
-└── app\
-    ├── app.py, launcher.py             # Thin root wrappers
-    ├── pyproject.toml, uv.lock, requirements.txt, row-bot.ico
-    ├── scripts\verify_runtime_dependencies.py
-    ├── src\row_bot\                    # The application package: FastAPI server, agents, tools,
-    │   │                               # providers, channels, MCP, plugins, Designer, Developer, ...
-    │   └── static\client-v2\           # The React client, built from frontend/ at package time
-    ├── static\                         # Vendored JS libraries, fonts, Buddy and Designer runtime assets
-    ├── sounds\                         # Notification sounds
-    ├── bundled_skills\                 # Built-in skills
-    └── tool_guides\                    # Auto-activation tool guides
+%LOCALAPPDATA%\Programs\Row-Bot\       # Install root
+├── Row-Bot.exe                         # Starts the active version; shortcuts point here
+├── state.json                          # Active and previous version, update and rollback state
+└── versions\
+    └── X.Y.Z\                          # One folder per version, never changed after install
+        ├── version.json                # Version, Python version and uv.lock hash
+        ├── python\                     # Embedded Python 3.13 runtime
+        │   ├── python.exe
+        │   ├── Lib\site-packages\      # Locked packages from requirements.txt, with .pyc
+        │   ├── tcl\                    # Tcl/Tk for the splash screen and first-run chooser
+        │   └── playwright-browsers\    # Bundled Chromium, when the build could install it
+        └── app\
+            ├── app.py, launcher.py     # Thin root wrappers
+            ├── pyproject.toml, uv.lock, requirements.txt, row-bot.ico
+            ├── scripts\verify_runtime_dependencies.py
+            ├── src\row_bot\            # The application package: FastAPI server, agents, tools,
+            │   │                       # providers, channels, MCP, plugins, Designer, Developer, ...
+            │   └── static\client-v2\   # The React client, built from frontend/ at package time
+            ├── static\                 # Vendored JS libraries, fonts, Buddy and Designer runtime assets
+            ├── sounds\                 # Notification sounds
+            ├── bundled_skills\         # Built-in skills
+            └── tool_guides\            # Auto-activation tool guides
 
 %USERPROFILE%\.row-bot\               # User data directory (auto-created at runtime)
 ├── threads.db                      # Conversation history & checkpoints
@@ -257,25 +279,45 @@ C:\Program Files\Row-Bot\              # Installation directory
 
 Ollama is installed system-wide via its official installer.
 
-> **Note:** User data is stored outside `Program Files` in `~/.row-bot/` to avoid write-permission issues. Override the location by setting the `ROW_BOT_DATA_DIR` environment variable.
+> **Note:** User data is stored in `~/.row-bot/`, never under the install root. Override the location by setting the `ROW_BOT_DATA_DIR` environment variable.
+
+`Row-Bot.exe` sets the environment Python needs (`PYTHONNOUSERSITE`,
+`PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, Tcl/Tk, Playwright, `PATH`,
+`ROW_BOT_INSTALL_ROOT`) and starts `versions\<active>\python\python.exe
+versions\<active>\app\launcher.py` with its own arguments in a hidden console.
+It starts it again when it exits with code 75. A version that has not become
+ready since it was switched to and fails to start twice in a row (or is not
+ready within 240 s) is replaced by the previous one, recorded as
+`last_rollback` in `state.json`. Its log is `~/.row-bot/launcher-host.log`.
+
 
 ### Install Flow
 
-The Inno Setup installer runs these steps:
+The Inno Setup installer has no wizard pages except its progress page:
 
-1. **Extract files** — embedded Python, pre-installed packages, app source, assets, and launch scripts
-2. **Create shortcuts** — Start Menu and optionally Desktop
-3. **Optionally launch Row-Bot**
+1. **Remove an install for all users** — a 5.x Row-Bot installed in `Program Files` is
+   uninstalled first, with one administrator prompt, so Apps & features never lists
+   Row-Bot twice. User data in `%USERPROFILE%\.row-bot` is kept.
+2. **Extract files** — `Row-Bot.exe` and `versions\X.Y.Z\{app,python,version.json}`.
+   Reinstalling a version replaces its folder whole. A running `Row-Bot.exe` is renamed
+   aside rather than replaced.
+3. **Record the install** — `state.json` makes X.Y.Z active and keeps the version it
+   replaces as `previous`; older versions are deleted.
+4. **Create shortcuts** — Start menu and desktop, both with the AppUserModelID
+   `ai.row-bot.desktop`.
+5. **Start Row-Bot** — also after `/SILENT` or `/VERYSILENT`, which 5.1's updater uses.
+   `/NOLAUNCH` skips it (the CI smokes use it).
 
-On repair/upgrade, Inno Setup deletes `{app}\python`, `{app}\app\src` and `{app}\app\static` before extraction, so no module a release removed stays behind. User data in `%USERPROFILE%\.row-bot` is not touched.
+Uninstall removes `%LOCALAPPDATA%\Programs\Row-Bot` only. User data in
+`%USERPROFILE%\.row-bot` is not touched.
 
 The app payload includes `pyproject.toml`, `uv.lock`, and generated `requirements.txt` so repair helpers and support diagnostics can identify the exact dependency set that produced the bundled runtime.
 
 ### End-User Experience
 
-1. Run `Row-Bot-X.Y.Z-Windows-x64.exe`
-2. Follow the wizard — the app payload is already bundled; optional model/runtime assets download only when a feature needs them
-3. Launch Row-Bot from Start Menu or Desktop shortcut
+1. Run `Row-Bot-X.Y.Z-Windows-x64.exe`; it installs without questions or administrator rights and starts Row-Bot — the app payload is already bundled; optional model/runtime assets download only when a feature needs them
+2. Later, launch Row-Bot from the Start menu or Desktop shortcut
+3. If a 5.x Row-Bot is installed for all users, Windows asks once for administrator approval to remove it
 4. The system tray icon appears; the React app opens on the first available local port, normally `http://localhost:8080/app-v2/`
 5. First launch asks **How should Row-Bot think?** — **On this computer** (an Ollama model), **With my subscription** (ChatGPT, Claude or Grok), or **With an API key** — and Setup Center lists what is left to set up. OpenAI-compatible endpoints such as LM Studio are added under Settings › Providers › Custom endpoints
 
@@ -336,4 +378,5 @@ The app payload includes `pyproject.toml`, `uv.lock`, and generated `requirement
 - **Optional native package recovery**: built-in TTS uses Kokoro ONNX and does not require TorchCodec. If a user-approved shell command installs a broken optional native package into the embedded Python runtime, startup diagnostics and the launcher log emit recovery hints, and repair/upgrade replaces the embedded runtime.
 - **Task DB recovery**: `launcher.py --reset-tasks-db` backs up `tasks.db`, `tasks.db-wal`, and `tasks.db-shm` under the resolved Row-Bot data directory, recreates a clean task schema, and prints the exact paths. `launcher.py --reset-db` backs up known local SQLite stores (`tasks.db`, `memory.db`, `threads.db` families). `launcher.py --restore-data [backup-dir]` restores known SQLite files from a recovery backup or from the latest backup when no directory is supplied.
 - **Launcher**: Uses `launcher.py` (system tray icon + native window + splash screen) instead of running the server directly. The tray icon shows app status (running/stopped) and provides graceful shutdown.
-- **Uninstall**: Registered with Windows Add/Remove Programs. The uninstaller removes the installation directory but does **not** delete user data in `~/.row-bot/` — users can remove it manually if desired.
+- **Uninstall**: Registered with Windows Apps & features for the current user. The uninstaller removes the install root (every version, `state.json` and `Row-Bot.exe`) but does **not** delete user data in `~/.row-bot/` — users can remove it manually if desired.
+- **macOS layout**: the app bundle's `Contents/Resources/{app,python}` is the seed version. Updates stage versions in `~/Library/Application Support/Row-Bot/versions/<version>` and name the active one in `state.json` there. The tray host uses the bundle when it is newer than the active version (a newer DMG dragged in) or when there is no valid `state.json`, applies the same relaunch and rollback rules as `Row-Bot.exe`, and offers to move itself to Applications when it runs from a download or a disk image.
