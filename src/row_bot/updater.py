@@ -327,7 +327,7 @@ def is_dev_install() -> bool:
     try:
         return not install_layout.detect().self_updating
     except Exception:
-        logger.debug("Could not read the install layout", exc_info=True)
+        logger.warning("Could not read the install layout; updates stay off", exc_info=True)
         return True
 
 

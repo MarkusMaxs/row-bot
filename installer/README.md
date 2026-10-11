@@ -128,11 +128,14 @@ desktop environments require distro-specific GTK/Qt/AppIndicator dependencies.
 
 `bin/row-bot` starts the active release and starts it again, with the same
 arguments, when it exits with code 75 (so `row-bot serve --port N` comes back as
-`serve` on the same port). If a release that has not become ready since it was
-switched to fails to start twice in a row (or is not ready within 240 s), it goes
-back to the previous release. Under systemd (`INVOCATION_ID` set) it starts the
-app once and leaves restarts to the unit: use `Restart=always`, or
-`RestartForceExitStatus=75`.
+`serve` on the same port); each relaunch runs the wrapper of the release
+`current` points at. If a release that has not become ready since it was
+switched to fails to start twice in a row, it goes back to the previous release
+(when that one can start). A slow start is never stopped: it counts as
+unverified until it answers `/readyz`. One wrapper supervises an install and
+data folder at a time (`flock`); another `row-bot` only shows the running app.
+Run by systemd as a unit's `ExecStart=` it starts the app once and leaves
+restarts to the unit: use `Restart=always`, or `RestartForceExitStatus=75`.
 
 Provider secrets use the system keyring when Linux Secret Service/KWallet is
 available. Headless Linux and WSL installs without a keyring still start cleanly;
@@ -286,9 +289,13 @@ Ollama is installed system-wide via its official installer.
 `ROW_BOT_INSTALL_ROOT`) and starts `versions\<active>\python\python.exe
 versions\<active>\app\launcher.py` with its own arguments in a hidden console.
 It starts it again when it exits with code 75. A version that has not become
-ready since it was switched to and fails to start twice in a row (or is not
-ready within 240 s) is replaced by the previous one, recorded as
-`last_rollback` in `state.json`. Its log is `~/.row-bot/launcher-host.log`.
+ready since it was switched to and fails to start twice in a row is replaced by
+the previous one (when that one can start), recorded as `last_rollback` in
+`state.json`. A slow start is never stopped; the Python launcher logs one that
+is not ready after 240 s and verifies it once it is. A second start while
+Row-Bot runs only shows it. The rules are shared with the macOS tray host and
+the Linux wrapper (`contracts/install-layout/launch-cases.json`). Its log is
+`~/.row-bot/launcher-host.log`.
 
 
 ### Install Flow
@@ -296,14 +303,17 @@ ready within 240 s) is replaced by the previous one, recorded as
 The Inno Setup installer has no wizard pages except its progress page:
 
 1. **Remove an install for all users** — a 5.x Row-Bot installed in `Program Files` is
-   uninstalled first, with one administrator prompt, so Apps & features never lists
-   Row-Bot twice. User data in `%USERPROFILE%\.row-bot` is kept.
+   uninstalled first, with one administrator prompt, so Apps & features does not list
+   Row-Bot twice. If the prompt is declined (or the user is not an administrator), the
+   per-user install goes ahead and `state.json` records `legacy_install_pending`, so the
+   app can offer to remove the old one later. User data in `%USERPROFILE%\.row-bot` is kept.
 2. **Extract files** — `Row-Bot.exe` and `versions\X.Y.Z\{app,python,version.json}`.
    Reinstalling a version replaces its folder whole. A running `Row-Bot.exe` is renamed
    aside rather than replaced.
 3. **Record the install** — `state.json` makes X.Y.Z active and keeps the version it
    replaces as `previous`; older versions are deleted.
-4. **Create shortcuts** — Start menu and desktop, both with the AppUserModelID
+4. **Create shortcuts** — Start menu, and desktop on the first install only (an upgrade
+   never brings back a desktop shortcut the user removed), both with the AppUserModelID
    `ai.row-bot.desktop`.
 5. **Start Row-Bot** — also after `/SILENT` or `/VERYSILENT`, which 5.1's updater uses.
    `/NOLAUNCH` skips it (the CI smokes use it).
@@ -317,7 +327,7 @@ The app payload includes `pyproject.toml`, `uv.lock`, and generated `requirement
 
 1. Run `Row-Bot-X.Y.Z-Windows-x64.exe`; it installs without questions or administrator rights and starts Row-Bot — the app payload is already bundled; optional model/runtime assets download only when a feature needs them
 2. Later, launch Row-Bot from the Start menu or Desktop shortcut
-3. If a 5.x Row-Bot is installed for all users, Windows asks once for administrator approval to remove it
+3. If a 5.x Row-Bot is installed for all users, Windows asks once for administrator approval to remove it; declining keeps it, and Row-Bot is installed for the user anyway
 4. The system tray icon appears; the React app opens on the first available local port, normally `http://localhost:8080/app-v2/`
 5. First launch asks **How should Row-Bot think?** — **On this computer** (an Ollama model), **With my subscription** (ChatGPT, Claude or Grok), or **With an API key** — and Setup Center lists what is left to set up. OpenAI-compatible endpoints such as LM Studio are added under Settings › Providers › Custom endpoints
 
