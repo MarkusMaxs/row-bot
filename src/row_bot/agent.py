@@ -2902,24 +2902,12 @@ def _turn_usage_tagged(runnable: Any, purpose: str) -> Any:
 
 
 def _compaction_model(inputs: PreparationInputs, output_tokens: int):
-    llm = _chat_only_llm(inputs.model_ref)
-    if inputs.provider_id == "google":
-        return llm.bind(max_output_tokens=output_tokens)
-    if inputs.provider_id == "ollama":
-        # ChatOllama forwards invocation kwargs to ``Client.chat``. Ollama
-        # generation controls belong in its options payload, while the
-        # already-resolved context allocation must remain intact.
-        options = {"num_predict": output_tokens}
-        num_ctx = int(getattr(llm, "num_ctx", 0) or 0)
-        if num_ctx > 0:
-            options["num_ctx"] = num_ctx
-        bind_kwargs: dict[str, Any] = {"options": options}
-        if getattr(llm, "reasoning", None) is not None:
-            # A bounded summary needs final structured text; otherwise a
-            # reasoning model can spend the entire allowance on hidden thought.
-            bind_kwargs["reasoning"] = False
-        return llm.bind(**bind_kwargs)
-    return llm.bind(max_tokens=output_tokens)
+    # The thread's own model at the lowest reasoning effort (WP C1): on Ollama
+    # the same model and context allocation, with thinking off, so nothing reloads.
+    # Reasoning that cannot be turned off gets room on top of the summary allowance.
+    from row_bot.providers.background import background_model_for
+
+    return background_model_for("compaction", thread_model=inputs.model_ref, max_tokens=output_tokens)
 
 
 def _validate_summary_text(text: str, output_tokens: int) -> str:

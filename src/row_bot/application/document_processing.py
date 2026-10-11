@@ -94,15 +94,20 @@ class DocumentProcessingPolicy:
         if embedding_owner is None:
             raise common._error("document_processing_policy_unavailable")
         from row_bot.providers.runtime import capture_chat_runtime
-        from row_bot.providers.reasoning import ReasoningCapabilities, ReasoningRequestPlan, ReasoningSelection
+        from row_bot.providers.reasoning import ReasoningCapabilities
+        from row_bot.providers.background import background_reasoning
         selection = context.get("model_override")
         if not isinstance(selection, str) or not selection.startswith("model:") or len(selection) > 512:
             raise common._error("document_processing_model_unavailable")
         snapshot = context.get("reasoning_snapshot")
         if not isinstance(snapshot, dict) or snapshot.get("model_ref") != selection:
             raise common._error("document_processing_reasoning_unavailable")
-        plan = ReasoningRequestPlan(selection, ReasoningSelection.from_json(snapshot.get("selection")),
-                                    ReasoningCapabilities.from_json(snapshot.get("capabilities")))
+        # The conversation's model at the lowest effort it supports (WP C1): the map,
+        # reduce and extract calls are background work, not the person's answer. The
+        # plan must not change during a job (it is part of the policy digest), so a
+        # refusal is handled per job below, not from the process-wide memory.
+        plan = background_reasoning(selection, ReasoningCapabilities.from_json(snapshot.get("capabilities")),
+                                    remembered_refusals=False).plan
         chat = capture_chat_runtime(selection, reasoning_plan=plan)
         embedding = embedding_owner.capture_embedding_runtime(embedding_owner.get_embedding_config())
         common._id(self.conversation_id)
@@ -155,13 +160,27 @@ class DocumentProcessingPolicy:
             embedding = stack.enter_context(captured_embedding_provider(captured.embedding, validate=validate))
             stack.enter_context(use_captured_embeddings(captured.embedding.config, embedding, validate))
             model = None
+            chat = captured.chat
             def invoke(prompt: str) -> str:
-                nonlocal model
+                nonlocal model, chat
                 validate()
                 if model is None:
-                    model = stack.enter_context(captured_chat_model(captured.chat, validate=validate))
+                    model = stack.enter_context(captured_chat_model(
+                        chat, validate=validate, usage_purpose="document", usage_thread_id=self.conversation_id))
                 from langchain_core.messages import HumanMessage
-                response = model.invoke([HumanMessage(content=prompt)])
+                try:
+                    response = model.invoke([HumanMessage(content=prompt)])
+                except Exception as exc:
+                    from row_bot.providers.transports.reasoning_fallback import should_retry_reasoning_error
+                    plan = chat.reasoning_plan
+                    if plan is None or plan.is_default or not should_retry_reasoning_error(exc):
+                        raise
+                    # The provider refused the lowered reasoning: its default, for the rest of the job.
+                    from dataclasses import replace
+                    chat = replace(chat, reasoning_plan=None)
+                    model = stack.enter_context(captured_chat_model(
+                        chat, validate=validate, usage_purpose="document", usage_thread_id=self.conversation_id))
+                    response = model.invoke([HumanMessage(content=prompt)])
                 validate()
                 return response.content
             yield DocumentWorkerPolicy(deepcopy(captured.embedding.config), embedding, invoke, validate, source_guards.append)

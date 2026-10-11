@@ -214,40 +214,51 @@ def _format_conversation(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _extraction_answer():
+    """The extraction reply as a JSON schema: entities and relations, as the prompt describes."""
+    from row_bot.memory import VALID_CATEGORIES
+    from row_bot.providers.background import json_object, structured_answer
+
+    entity = json_object({
+        "category": {"type": "string", "enum": sorted(VALID_CATEGORIES)},
+        "subject": {"type": "string"},
+        "content": {"type": "string"},
+        "aliases": {"type": "string", "description": "Other names, comma separated, or an empty string."},
+    })
+    relation = json_object({
+        "relation_type": {"type": "string"},
+        "source_subject": {"type": "string"},
+        "target_subject": {"type": "string"},
+        "confidence": {"type": "number"},
+    })
+    return structured_answer("memory_extraction", {
+        "memories": {"type": "array", "items": {"anyOf": [entity, relation]}},
+    })
+
+
 def _extract_from_conversation(conversation_text: str) -> list[dict]:
-    """Call the LLM to extract personal facts from a conversation."""
-    import re
+    """Call the LLM to extract personal facts from a conversation.
+
+    An unattended background call (WP C1): the default chat model at the
+    lowest reasoning effort, a bounded reply, a JSON schema where the provider
+    takes one, and the JSON-array parser for every other reply.
+    """
     try:
-        from row_bot.models import get_current_model, get_llm_for
         from langchain_core.messages import HumanMessage
+        from row_bot.providers.background import invoke_background, list_field
 
         prompt = EXTRACTION_PROMPT.format(conversation=conversation_text)
-        llm = get_llm_for(get_current_model())
-        response = llm.invoke([HumanMessage(content=prompt)])
-        raw = response.content or ""
-        if isinstance(raw, list):
-            text_parts = []
-            for block in raw:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif isinstance(block, str):
-                    text_parts.append(block)
-            raw = "\n".join(text_parts)
-        if not isinstance(raw, str):
-            raw = str(raw) if raw else ""
-        raw = raw.strip()
+        raw = invoke_background("extraction", [HumanMessage(content=prompt)], answer=_extraction_answer())
 
-        # Strip <think>...</think> blocks from reasoning models
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-        raw = re.sub(r"</?think>", "", raw).strip()
-
-        # Try to find JSON array in the response (bracket-counting
-        # handles nested arrays correctly, unlike greedy regex).
-        import row_bot.knowledge_graph as _kg_parse
-        _json_str = _kg_parse.extract_json_block(raw, "[")
-        if not _json_str:
-            return []
-        data = json.loads(_json_str)
+        data = list_field(raw, "memories")
+        if data is None:
+            # Try to find JSON array in the response (bracket-counting
+            # handles nested arrays correctly, unlike greedy regex).
+            import row_bot.knowledge_graph as _kg_parse
+            _json_str = _kg_parse.extract_json_block(raw, "[")
+            if not _json_str:
+                return []
+            data = json.loads(_json_str)
         if not isinstance(data, list):
             return []
         # Validate each entry
@@ -255,6 +266,8 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
         for entry in data:
             if not isinstance(entry, dict):
                 continue
+            # A schema reply fills every field; an empty one was not given.
+            entry = {key: value for key, value in entry.items() if value != ""}
             # Entity object: has category + subject + content
             if (
                 entry.get("category")
@@ -469,6 +482,8 @@ def _dedup_and_save(
                     # memory tool uses to prevent conflicting facts.
                     try:
                         from row_bot.tools.memory_tool import _check_contradiction
+                        # Without ``invoke`` this runs on the extraction worker,
+                        # outside any turn, so the check uses the default model (D1).
                         conflict = _check_contradiction(old_content, content, subject,
                             **strict, **({"invoke":invoke} if invoke is not None else {}))
                         if conflict:

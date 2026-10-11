@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import types
 
 import pytest
@@ -66,11 +65,13 @@ def test_json_and_compound_conditions(tmp_path, monkeypatch) -> None:
 def test_llm_condition_prompt_and_response_handling(tmp_path, monkeypatch) -> None:
     tasks = fresh_tasks_module(tmp_path, monkeypatch)
     captured: list[list] = []
-    fake_agent = types.ModuleType("row_bot.agent")
 
     class FakeChatModel:
         response: object = "Yes, definitely"
         error: Exception | None = None
+
+        def bind(self, **_kwargs):
+            return self
 
         def invoke(self, messages):
             captured.append(list(messages))
@@ -79,8 +80,8 @@ def test_llm_condition_prompt_and_response_handling(tmp_path, monkeypatch) -> No
             return types.SimpleNamespace(content=self.response)
 
     fake_chat = FakeChatModel()
-    fake_agent._chat_only_llm = lambda _model: fake_chat
-    monkeypatch.setitem(sys.modules, "row_bot.agent", fake_agent)
+    monkeypatch.setattr("row_bot.models.get_current_model", lambda: "model:fixture:conditions")
+    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model, **_kwargs: fake_chat)
 
     result = tasks.evaluate_condition(
         "llm:Is it good?",

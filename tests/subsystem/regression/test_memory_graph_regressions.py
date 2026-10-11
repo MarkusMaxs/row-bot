@@ -230,11 +230,14 @@ def test_extract_from_conversation_parses_json_filters_invalid_and_handles_failu
         )
 
     class FakeLLM:
+        def bind(self, **_kwargs):
+            return self
+
         def invoke(self, _messages):
             return FakeResponse()
 
     monkeypatch.setattr("row_bot.models.get_current_model", lambda: "fake-model")
-    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model: FakeLLM())
+    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model, **_kwargs: FakeLLM())
 
     extracted = memory_extraction._extract_from_conversation("User: Ada likes tests.")
 
@@ -244,10 +247,13 @@ def test_extract_from_conversation_parses_json_filters_invalid_and_handles_failu
     ]
 
     class BrokenLLM:
+        def bind(self, **_kwargs):
+            return self
+
         def invoke(self, _messages):
             raise RuntimeError("offline")
 
-    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model: BrokenLLM())
+    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _model, **_kwargs: BrokenLLM())
     assert memory_extraction._extract_from_conversation("User: no facts") == []
 
 

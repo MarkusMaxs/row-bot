@@ -4569,6 +4569,8 @@ def run_task_background(
                         "prev_output": last_response,
                         "step_outputs": step_outputs,
                         "task_id": task_id,
+                        "thread_id": thread_id,
+                        "model_override": task.get("model_override") or "",
                     }
                     result = evaluate_condition(cond_expr, cond_context)
                     target = step.get("if_true") if result else step.get("if_false")
@@ -7499,6 +7501,8 @@ def _run_subtask_sync(
                     "prev_output": last_output,
                     "step_outputs": step_outputs,
                     "task_id": child_task["id"],
+                    "thread_id": thread_id,
+                    "model_override": child_task.get("model_override") or "",
                 }
                 result = evaluate_condition(cond_expr, cond_ctx)
                 step_outputs[step_id] = str(result)
@@ -7785,16 +7789,31 @@ def _eval_json_condition(expr: str, prev_output: str, context: dict | None = Non
         "prev_output": str(data),
         "step_outputs": (context or {}).get("step_outputs", {}),
         "task_id": (context or {}).get("task_id", ""),
+        "thread_id": (context or {}).get("thread_id", ""),
+        "model_override": (context or {}).get("model_override", ""),
     }
     return evaluate_condition(op_and_val, sub_context)
 
 
+def _llm_condition_verdict(text: str) -> bool:
+    """Yes from a ``{"answer": "yes"}`` schema reply, else from a reply starting with "yes"."""
+    from row_bot.providers.background import parse_json_object
+
+    parsed = parse_json_object(text)
+    if parsed is not None and "answer" in parsed:
+        return str(parsed.get("answer") or "").strip().lower() == "yes"
+    return str(text or "").strip().lower().startswith("yes")
+
+
 def _eval_llm_condition(prompt: str, context: dict) -> bool:
-    """Use the LLM to evaluate a condition. Expects yes/no response."""
+    """Use the LLM to evaluate a condition. Expects yes/no response.
+
+    A background call (WP C1): the task's model override, else the workflow
+    thread's model, at the lowest reasoning effort with a few output tokens.
+    """
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from row_bot.agent import _chat_only_llm
-        from row_bot.models import get_current_model
+        from row_bot.providers.background import invoke_background, structured_answer, thread_model_for
 
         prev = context.get("prev_output", "")
         step_outputs = context.get("step_outputs", {})
@@ -7821,16 +7840,19 @@ def _eval_llm_condition(prompt: str, context: dict) -> bool:
             f"Question: {prompt}"
         )
         # This is a bounded classification call, not a full agent loop.
-        result = _chat_only_llm(get_current_model()).invoke(
+        thread_id = str(context.get("thread_id") or "")
+        answer = invoke_background(
+            "condition",
             [
                 SystemMessage(content="Answer only yes or no. Do not call tools."),
                 HumanMessage(content=full_prompt),
-            ]
+            ],
+            answer=structured_answer("condition", {"answer": {"type": "string", "enum": ["yes", "no"]}}),
+            task_model=str(context.get("model_override") or "") or None,
+            thread_model=thread_model_for(thread_id),
+            thread_id=thread_id,
         )
-        content = getattr(result, "content", result)
-        if content:
-            answer = str(content).strip().lower()
-            return answer.startswith("yes")
+        return _llm_condition_verdict(answer)
     except Exception as exc:
         logger.error("LLM condition evaluation failed: %s", exc)
     return False
