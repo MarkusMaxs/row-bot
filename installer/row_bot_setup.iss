@@ -253,8 +253,9 @@ begin
       'delete "HKLM\{#LegacyUninstallKey}" /f /reg:64', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if not Started then
   begin
-    Log(Format('Could not remove the earlier Row-Bot (%d: %s); installing for this user anyway',
-      [ResultCode, SysErrorMessage(ResultCode)]));
+    { A [Code] line must not start with "[": Inno Setup would read it as a section. }
+    Log(Format('Could not remove the earlier Row-Bot (%d: %s); installing for this user anyway', [ResultCode,
+      SysErrorMessage(ResultCode)]));
     Result := False;
     Exit;
   end;
