@@ -2012,7 +2012,9 @@ def _collect_agent_complete_input(state: dict) -> dict:
         try:
             from row_bot.skills import get_skills_prompt
 
-            active_tool_names = _current_effective_tool_parent_names_var.get()
+            active_tool_names = tuple(sorted(
+                set(_current_effective_tool_parent_names_var.get()) | _on_demand_parents_used(state["messages"])
+            ))
             tool_guides_text = get_skills_prompt(
                 [],
                 active_tool_names=active_tool_names,
@@ -4069,8 +4071,51 @@ def _collect_agent_tool_candidates(
     return eager_core, external, destructive_names
 
 
+# Small windows (F11): a first local turn on a 64k model spent half its window on tool schemas and guides.
+# There, rarely used built-in groups are offered through tool search instead of every turn (their approvals,
+# profile limits and guides unchanged), and Developer tools only when the conversation has a code folder.
+SMALL_CONTEXT_TOKENS = 65_536
+ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder"})
+_current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
+    "current_on_demand_tools", default={}
+)
+
+
+def _has_code_folder() -> bool:
+    """Whether this turn can use Developer tools: a captured code folder, or (outside a client turn) the
+    thread's workspace, as the Developer tools themselves resolve it."""
+    try:
+        from row_bot.conversation_resources import current_execution_context
+
+        resources = current_execution_context()
+        if resources is not None:
+            return any(item.kind == "workspace" for item in resources.bindings)
+        from row_bot.developer.tool_context import get_thread_id, get_workspace_id, infer_workspace_id_from_thread
+
+        return bool(get_workspace_id() or infer_workspace_id_from_thread(get_thread_id()))
+    except Exception:
+        return False
+
+
+def _on_demand_parents_used(messages: list[Any]) -> set[str]:
+    """Groups loaded on demand earlier in this conversation: their guide joins the prompt (F11)."""
+    on_demand = _current_on_demand_tools_var.get()
+    if not on_demand:
+        return set()
+    used: set[str] = set()
+    for message in messages:
+        for call in getattr(message, "tool_calls", None) or ():
+            name = str(call.get("name") or "")
+            if name == "tool_invoke":
+                name = str((call.get("args") or {}).get("name") or "")
+            if name in on_demand:
+                used.add(on_demand[name][0])
+    return used
+
+
 def _activate_agent_cache_metadata(cache_key: frozenset[str]) -> None:
     metadata = _agent_cache_metadata.get(cache_key, {})
+    _current_on_demand_tools_var.set(dict(metadata.get("on_demand_tools") or {}))
     _current_effective_tool_parent_names_var.set(tuple(metadata.get("tool_parents") or ()))
     _current_bound_tool_schema_tokens_var.set(int(metadata.get("bound_schema_tokens") or 0))
     _current_canonical_tools_var.set(tuple(metadata.get("canonical_tools") or ()))
@@ -4318,6 +4363,11 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     is_background = _background_workflow_var.get()
     approval_mode = get_approval_mode()
     effective_context = get_context_size(model_label)
+    small_window = 0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS and normalized_allowlist is None
+    has_code_folder = _has_code_folder()
+    if small_window and not has_code_folder and "developer" in enabled_tool_names:
+        # Developer tools work only on a code folder; one created mid-turn is used by the turn after.
+        enabled_tool_names = [name for name in enabled_tool_names if name != "developer"]
     eager_core_entries, external_entries, destructive_names = _collect_agent_tool_candidates(
         enabled_tool_names,
         allow_set,
@@ -4425,6 +4475,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         f"capabilities:{discovery_fingerprint}",
         f"skills:{skill_fingerprint}",
         f"apps:{sorted(app_scope.get('exclude_servers') or [])}:{sorted(app_scope.get('exclude_tools') or [])}",
+        f"small_window:{small_window}:{has_code_folder}",
     })
     # Designer tool schemas are scoped to the captured project, not whichever
     # project a client currently shows.
@@ -4574,7 +4625,14 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 else:
                     t._arun = _safe_async
 
-            if effective_loading_mode == "auto" and (external_tools or force_external_discovery):
+            # Wrapped already (approvals, profile limits, repeat guard), so tool search keeps every boundary.
+            on_demand_entries = [entry for entry in eager_core_entries
+                                 if small_window and entry["parent"] in ON_DEMAND_TOOL_GROUPS]
+            if on_demand_entries:
+                eager_core_entries = [entry for entry in eager_core_entries if entry not in on_demand_entries]
+                eager_core_tools = [entry["tool"] for entry in eager_core_entries]
+            on_demand_tools = [entry["tool"] for entry in on_demand_entries]
+            if on_demand_entries or (effective_loading_mode == "auto" and (external_tools or force_external_discovery)):
                 try:
                     from row_bot.tools.discovery import build_tool_discovery_tools
 
@@ -4584,7 +4642,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                             source=entry["source"],
                             parent=entry["parent"],
                         )
-                        for entry in external_entries
+                        for entry in on_demand_entries + (
+                            external_entries if effective_loading_mode == "auto" else [])
                     ]
                     bridges = list(build_tool_discovery_tools(
                         bridge_records,
@@ -4599,12 +4658,14 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                         raise RuntimeError("provider rejected an external discovery bridge")
                     _install_custom_tool_validation_repair(bridges, readiness.provider_id)
                     lc_tools = eager_core_tools + bridges
+                    if effective_loading_mode != "auto":
+                        lc_tools += external_tools
                 except Exception as exc:
                     logger.warning(
                         "External tool discovery assembly failed; using eager compatibility snapshot: %s",
                         type(exc).__name__,
                     )
-                    lc_tools = eager_core_tools + external_tools
+                    lc_tools = eager_core_tools + on_demand_tools + external_tools
 
             if skill_discovery_enabled:
                 try:
@@ -4658,7 +4719,13 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 version="v2",
             )
             _agent_cache[cache_key] = agent
+            bound_names = {str(getattr(tool, "name", "") or "") for tool in lc_tools}
             _agent_cache_metadata[cache_key] = {
+                "on_demand_tools": {
+                    str(getattr(entry["tool"], "name", "") or ""): (str(entry["parent"]), entry["tool"])
+                    for entry in on_demand_entries
+                    if str(getattr(entry["tool"], "name", "") or "") not in bound_names
+                },
                 "tool_parents": tuple(sorted(effective_parent_names)),
                 "bound_schema_tokens": estimate_bound_tool_schema_tokens(lc_tools),
                 "canonical_tools": tuple(convert_to_openai_tool(tool) for tool in lc_tools),
@@ -5190,6 +5257,11 @@ def _wrap_platform_tool_call(request: Any, execute: Any) -> Any:
     from row_bot.application.attachment_context import tool_attachment_scope
     from row_bot.runtime.executions import current_execution, generation_registry
     handle = current_execution()
+    if getattr(request, "tool", None) is None:
+        # A tool offered on demand, called by its own name instead of through tool_invoke (F11).
+        target = _current_on_demand_tools_var.get().get(str((request.tool_call or {}).get("name") or ""))
+        if target is not None:
+            request = request.override(tool=target[1])
     if handle is not None:
         generation_registry.check_dispatch(handle)
         handle.external_outcome = "uncertain"
