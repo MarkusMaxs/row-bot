@@ -95,6 +95,8 @@ jobs:
 
       - name: Smoke installed Windows package
         uses: ./.github/actions/smoke-windows-installer
+        with:
+          background-update: "true"
 
       - name: Upload Windows installer
         if: always()
@@ -143,6 +145,8 @@ jobs:
 
       - name: Smoke installed Linux package
         uses: ./.github/actions/smoke-linux-package
+        with:
+          background-update: "true"
 
       - name: Upload Linux package
         if: always()
@@ -202,6 +206,7 @@ jobs:
         with:
           app-path: /Applications/Row-Bot.app
           port: "8098"
+          background-update: "true"
 
       - name: Upload macOS package
         if: always()
