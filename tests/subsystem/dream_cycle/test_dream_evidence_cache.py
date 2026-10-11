@@ -83,6 +83,7 @@ def test_a_second_night_with_nothing_new_asks_the_model_nothing(dream, monkeypat
     assert "Allowed relation types" in prefix and '{"has_relation": false}' in prefix
     assert len(prefix) >= infer[0].index("Two entities co-occur")
 
+    threads._save_thread_meta("t1", "Renamed")  # lists it first: the same evidence in another order
     night_two = len(model.prompts)
     dream_cycle.run_dream_cycle()
     assert model.prompts[night_two:] == []

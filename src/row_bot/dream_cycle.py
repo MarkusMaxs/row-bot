@@ -734,7 +734,8 @@ def _enrich_prompt(entity: dict, excerpts: list[str]) -> str:
         pass
     relationships_text = "\n".join(rel_lines) if rel_lines else "(none known)"
 
-    context = "\n---\n".join(excerpts[:3])
+    # In a fixed order: a renamed conversation (listed first) is not new evidence.
+    context = "\n---\n".join(sorted(excerpts[:3]))
     return DREAM_ENRICH_PROMPT.format(
         entity_type=entity.get("entity_type", ""),
         subject=entity.get("subject", ""),
