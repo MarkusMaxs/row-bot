@@ -83,6 +83,17 @@ const github: GitHubAccessSnapshot = {
   remaining: 4000,
   retry_after_seconds: null,
 };
+/** How the server says this device signs in. */
+type Route = Pick<AccountAuthSnapshot, 'sign_in' | 'sign_in_blocker'>;
+const DESKTOP: Route = { sign_in: 'this_computer', sign_in_blocker: null };
+const NO_PUBLIC_ADDRESS: Route = {
+  sign_in: 'unavailable',
+  sign_in_blocker: 'public_address_required',
+};
+const PUBLIC_ADDRESS: Route = { sign_in: 'link', sign_in_blocker: null };
+const X_PAGE =
+  'https://x.com/i/oauth2/authorize?client_id=fixture&state=fixture-state';
+
 const auth = (
   account: 'google' | 'x',
   patch: Partial<AccountAuthSnapshot> = {},
@@ -93,6 +104,7 @@ const auth = (
   configured: true,
   state: account === 'google' ? 'expired' : 'not_authenticated',
   token_files: account === 'google' ? 2 : 0,
+  ...DESKTOP,
   ...patch,
 });
 
@@ -102,19 +114,20 @@ function page(
     undefined,
   /** The desktop app on the computer Row-Bot runs on, or another device. */
   here = true,
+  route: Route = here ? DESKTOP : NO_PUBLIC_ADDRESS,
 ) {
-  const controller = fakeController(here);
+  const controller = fakeController(here, route);
   prepare(controller);
   return mount(snapshot, controller);
 }
-function fakeController(here = true) {
+function fakeController(here = true, route: Route = DESKTOP) {
   const state = {
     handshake: { authentication_kind: here ? 'local_owner' : 'session' },
   };
   return {
     subscribe: () => () => undefined,
     getSnapshot: () => state,
-    accountAuth: vi.fn(async (account: 'google' | 'x') => auth(account)),
+    accountAuth: vi.fn(async (account: 'google' | 'x') => auth(account, route)),
     accountAuthCommand: vi.fn(
       async (
         account: 'google' | 'x',
@@ -126,7 +139,11 @@ function fakeController(here = true) {
         action: command.action,
         phase: command.action === 'start' ? 'running' : 'completed',
         message: 'Synthetic account result',
-        snapshot: auth(account),
+        snapshot: auth(account, route),
+        authorization_url:
+          command.action === 'start' && route.sign_in === 'link'
+            ? X_PAGE
+            : null,
       }),
     ),
     accountAuthReceipt: vi.fn(
@@ -140,7 +157,11 @@ function fakeController(here = true) {
         action: 'start',
         phase: 'completed',
         message: 'Synthetic sign-in complete',
-        snapshot: auth(account, { state: 'saved_unchecked', token_files: 1 }),
+        snapshot: auth(account, {
+          state: 'saved_unchecked',
+          token_files: 1,
+          ...route,
+        }),
       }),
     ),
     cancelAccountAuth: vi.fn(),
@@ -163,11 +184,12 @@ function mount(
     onSnapshot: vi.fn(),
     refreshSnapshot: vi.fn(() => new Promise<SettingsSnapshot>(() => {})),
   };
+  const platform = { openExternal: vi.fn(async () => null) };
   const view = render(
     <RuntimeContext.Provider
       value={{
         controller: controller as unknown as ClientController,
-        platform: {} as ClientPlatform,
+        platform: platform as unknown as ClientPlatform,
       }}
     >
       <MemoryRouter>
@@ -181,7 +203,7 @@ function mount(
       </MemoryRouter>
     </RuntimeContext.Provider>,
   );
-  return { controller, mutation, view };
+  return { controller, mutation, view, platform };
 }
 /** An account's row: its name, one status and its actions. */
 function row(name: string) {
@@ -327,9 +349,9 @@ it('reconnects an expired Google sign-in in the browser', async () => {
   );
 });
 
-it('another device checks and disconnects, and leaves the browser sign-in to the desktop app', async () => {
-  // Sign-in opens a browser on the computer Row-Bot runs on and returns to
-  // a loopback address there.
+it('another device without a public address checks and disconnects, and says how it could sign in', async () => {
+  // A sign-in returns to a loopback address on the computer Row-Bot runs on,
+  // or to Row-Bot's public HTTPS address, which isn't set up.
   const { controller } = page(accounts, undefined, false);
   fireEvent.click(await screen.findByRole('button', { name: 'Check Google' }));
   expect(controller.accountAuthCommand).toHaveBeenCalledWith(
@@ -342,7 +364,7 @@ it('another device checks and disconnects, and leaves the browser sign-in to the
   expect(
     (
       await screen.findAllByText(
-        /Signing in opens a browser on the computer Row-Bot runs on/,
+        /returns to Row-Bot’s public HTTPS address, and Row-Bot doesn’t have one yet/,
       )
     ).length,
   ).toBeGreaterThan(0);
@@ -353,6 +375,63 @@ it('another device checks and disconnects, and leaves the browser sign-in to the
     expect.anything(),
     expect.objectContaining({ action: 'start' }),
   );
+});
+
+it('another device signs in to X in its own browser through Row-Bot’s public address', async () => {
+  const callback =
+    'https://rowbot.example.test/api/v1/accounts/x/auth/callback';
+  const { controller, platform } = page(
+    { ...accounts, x: { ...accounts.x, callback_url: callback } },
+    (fake) =>
+      // Still waiting for X to send the browser back.
+      fake.accountAuthReceipt.mockImplementation(() => new Promise(() => {})),
+    false,
+    PUBLIC_ADDRESS,
+  );
+  // The callback this device's sign-in returns to, to register with X.
+  expect(screen.getByText(callback)).toBeVisible();
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect X' }));
+  expect(controller.accountAuthCommand).toHaveBeenCalledWith(
+    'x',
+    expect.objectContaining({ action: 'start' }),
+  );
+  await waitFor(() =>
+    expect(platform.openExternal).toHaveBeenCalledWith(X_PAGE),
+  );
+  // A link too, for a browser that blocked the page from opening.
+  expect(
+    screen.getByRole('link', { name: 'Open X’s sign-in page' }),
+  ).toHaveAttribute('href', X_PAGE);
+  expect(
+    screen.getByText(/Finish signing in to X in the page that opened/),
+  ).toBeVisible();
+});
+
+it('tells another device a Google Desktop app client can’t return to it, and which redirect to list', async () => {
+  const redirect =
+    'https://rowbot.example.test/api/v1/accounts/google/auth/callback';
+  page(
+    {
+      ...accounts,
+      gmail: { ...accounts.gmail, callback_url: redirect },
+      calendar: { ...accounts.calendar, callback_url: redirect },
+    },
+    undefined,
+    false,
+    { sign_in: 'unavailable', sign_in_blocker: 'desktop_client' },
+  );
+  expect(
+    (await screen.findAllByText(/Your Google client is a Desktop app/)).length,
+  ).toBeGreaterThan(0);
+  expect(
+    screen.getAllByText(/Create a client of type Web application/).length,
+  ).toBeGreaterThan(0);
+  expect(screen.getAllByText(redirect).length).toBeGreaterThan(0);
+  expect(
+    screen.getAllByRole('button', { name: 'Copy Google redirect URI' }).length,
+  ).toBeGreaterThan(0);
+  expect(screen.queryByText(/type Desktop app/)).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Reconnect Google' })).toBeNull();
 });
 
 it('recovers a retained sign-in without starting another one', async () => {

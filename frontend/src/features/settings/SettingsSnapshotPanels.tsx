@@ -65,10 +65,7 @@ import ConnectedDataBackup from './DataBackup';
 import ConnectedGitHubAccess, {
   type GitHubAccess,
 } from './GitHubAccessControls';
-import ConnectedAccountAuth, {
-  SIGN_IN_ON_THIS_COMPUTER,
-  type AccountAuth,
-} from './AccountAuthControls';
+import ConnectedAccountAuth, { type AccountAuth } from './AccountAuthControls';
 import { ConnectSheet, type ConnectStep } from './ConnectSheet';
 import { ACCOUNT_LINKS } from './connect-guides';
 import type {
@@ -4080,6 +4077,12 @@ function GoogleAccount({
   ]);
   const configured = gmail.configured || calendar.configured;
   const usable = auth && auth.snapshot;
+  // Row-Bot's public callback, when this device signs in through it: Google
+  // allows it only for a Web application client that lists it.
+  const redirect = gmail.callback_url ?? calendar.callback_url ?? null;
+  const wrongClient =
+    auth?.snapshot?.sign_in_blocker === 'desktop_client' ||
+    auth?.snapshot?.sign_in_blocker === 'redirect_not_listed';
   return (
     <AccountRow
       anchor="google"
@@ -4103,9 +4106,7 @@ function GoogleAccount({
             state={state}
             locked={auth.locked}
             onCheck={auth.check}
-            onReconnect={
-              configured && auth.onThisComputer ? auth.start : undefined
-            }
+            onReconnect={configured && auth.canSignIn ? auth.start : undefined}
             onDisconnect={auth.disconnect}
           />
         )
@@ -4144,22 +4145,33 @@ function GoogleAccount({
             label: 'Open Audience',
           },
         },
-        {
-          id: 'client',
-          text: 'Create a client of type Desktop app and download its file straight away: Google shows its secret only then. Choose that file under Google sign-in file; any file name works.',
-          link: {
-            href: ACCOUNT_LINKS.googleClient,
-            label: 'Create the client',
-          },
-          done: configured,
-        },
+        redirect
+          ? {
+              id: 'client',
+              text: 'Create a client of type Web application, add this address under Authorised redirect URIs, and download its file straight away: Google shows its secret only then. Choose that file under Google sign-in file; any file name works.',
+              link: {
+                href: ACCOUNT_LINKS.googleClient,
+                label: 'Create the client',
+              },
+              copy: { value: redirect, label: 'Google redirect URI' },
+              done: configured && !wrongClient,
+            }
+          : {
+              id: 'client',
+              text: 'Create a client of type Desktop app and download its file straight away: Google shows its secret only then. Choose that file under Google sign-in file; any file name works.',
+              link: {
+                href: ACCOUNT_LINKS.googleClient,
+                label: 'Create the client',
+              },
+              done: configured,
+            },
         {
           id: 'authenticate',
           text: 'Sign in to Google in your browser. While your Google app is in Testing, Google asks you to sign in again every 7 days; publishing it in Audience stops that, and Google then warns that the app is unverified, which is fine for your own use.',
           done: signedIn(state),
           children:
             usable &&
-            (auth.onThisComputer ? (
+            (auth.canSignIn ? (
               <div className="action-cluster">
                 <Button
                   variant="primary"
@@ -4171,7 +4183,7 @@ function GoogleAccount({
                 </Button>
               </div>
             ) : (
-              <p className="muted">{SIGN_IN_ON_THIS_COMPUTER}</p>
+              <p className="muted">{auth.blocked}</p>
             )),
         },
       ]}
@@ -4223,7 +4235,7 @@ function GoogleAccount({
       <SettingsItem
         sub
         label="Google sign-in file"
-        help="The Desktop app file from your Google Cloud project. Its location stays on this computer."
+        help="The client file from your Google Cloud project: a Desktop app, or a Web application to sign in from other devices. Its location stays on this computer."
         bind={false}
         control={
           <>
@@ -4277,7 +4289,7 @@ function XAccount({
             locked={auth.locked}
             onCheck={auth.check}
             onReconnect={
-              account.configured && auth.onThisComputer ? auth.start : undefined
+              account.configured && auth.canSignIn ? auth.start : undefined
             }
             onDisconnect={auth.disconnect}
           />
@@ -4297,7 +4309,9 @@ function XAccount({
           ? [
               {
                 id: 'callback',
-                text: 'Add this callback address to the app’s sign-in settings.',
+                // The address this device's sign-in returns to: on another
+                // device, Row-Bot's public one. X takes several, so both work.
+                text: 'Add this callback address to the app’s sign-in settings. Another device may show a different one; X accepts several, so add each one you sign in from.',
                 copy: {
                   value: account.callback_url,
                   label: 'X callback address',
@@ -4335,7 +4349,7 @@ function XAccount({
           done: signedIn(state),
           children:
             usable &&
-            (auth.onThisComputer ? (
+            (auth.canSignIn ? (
               <div className="action-cluster">
                 <Button
                   variant="primary"
@@ -4347,7 +4361,7 @@ function XAccount({
                 </Button>
               </div>
             ) : (
-              <p className="muted">{SIGN_IN_ON_THIS_COMPUTER}</p>
+              <p className="muted">{auth.blocked}</p>
             )),
         },
       ]}

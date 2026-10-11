@@ -221,6 +221,7 @@ function fakeController() {
       schema_version: 1,
       account,
       revision: 'a'.repeat(64),
+      sign_in: 'this_computer',
     })),
     accountAuthCommand: vi.fn(
       async (_account: string, command: { command_id: string }) => ({
@@ -234,6 +235,7 @@ function fakeController() {
           schema_version: 1,
           account: 'google',
           revision: 'b'.repeat(64),
+          sign_in: 'this_computer',
         },
       }),
     ),
@@ -1565,6 +1567,80 @@ it('renews an expired sign-in from its tile with the Accounts row action', async
     'google',
     expect.objectContaining({ action: 'start', account: 'google' }),
   );
+});
+
+const googleExpired = () =>
+  vi.fn(async () =>
+    diagnosis({
+      ...check('Gmail OAuth', 'warn', 'Token expired', 'Accounts'),
+      network: true,
+      fix: fix({
+        kind: 'reconnect_account',
+        href: '/settings/accounts#google',
+        target: 'google',
+        name: 'Google',
+      }),
+    }),
+  );
+
+it('renews a sign-in from another device in its own browser through Row-Bot’s public address', async () => {
+  const page =
+    'https://accounts.google.com/o/oauth2/auth?client_id=fixture&state=fixture-state';
+  runtime.controller.accountAuth.mockImplementation(
+    async (account: string) => ({
+      schema_version: 1,
+      account,
+      revision: 'a'.repeat(64),
+      sign_in: 'link',
+    }),
+  );
+  runtime.controller.accountAuthCommand.mockImplementation(
+    async (_account: string, command: { command_id: string }) => ({
+      schema_version: 1,
+      command_id: command.command_id,
+      account: 'google',
+      action: 'start',
+      phase: 'running',
+      message: 'Waiting for Google to send the browser back to Row-Bot.',
+      snapshot: {
+        schema_version: 1,
+        account: 'google',
+        revision: 'a'.repeat(64),
+        sign_in: 'link',
+      },
+      authorization_url: page,
+    }),
+  );
+  renderMonitor({ loadHealth: googleExpired() });
+  const reconnect = await screen.findByRole('button', {
+    name: 'Reconnect Google',
+  });
+  await waitFor(() => expect(reconnect).toBeEnabled());
+  fireEvent.click(reconnect);
+  expect(
+    await screen.findByRole('link', { name: 'Open Google’s sign-in page' }),
+  ).toHaveAttribute('href', page);
+  expect(
+    screen.getByText(/Finish signing in to Google in the page that opened/),
+  ).toBeVisible();
+});
+
+it('opens the account’s settings where this device can’t sign in', async () => {
+  runtime.controller.accountAuth.mockImplementation(
+    async (account: string) => ({
+      schema_version: 1,
+      account,
+      revision: 'a'.repeat(64),
+      sign_in: 'unavailable',
+      sign_in_blocker: 'public_address_required',
+    }),
+  );
+  renderMonitor({ loadHealth: googleExpired() });
+  expect(
+    await screen.findByRole('link', { name: 'Open Google settings' }),
+  ).toHaveAttribute('href', '/settings/accounts#google');
+  expect(screen.queryByRole('button', { name: 'Reconnect Google' })).toBeNull();
+  expect(runtime.controller.accountAuthCommand).not.toHaveBeenCalled();
 });
 
 it('lists what the indicator counts, each with only the fix it carries', () => {
