@@ -12,6 +12,14 @@ and serves it from a loopback feed, the way GitHub serves a release:
 - ``row-bot-update-N.json`` and a ``releases.json`` whose body carries the
   SHA-256 manifest block.
 
+With ``--parts DIR`` (release.yml) the release's own parts are served instead
+(``scripts/build_update_parts.py parts``): its code archive with only
+``row_bot.version`` changed to N, its assets archive and its lock export as
+they are, and a lock hash the install does not have. The engine must then
+download the code and the lock export but not the assets (the installed
+assets are the release's), and plan no library change (the lock export
+describes the installed runtime exactly).
+
 Then, through the installed native launcher with ``ROW_BOT_UPDATE_FEED`` (and
 its test-only opt-in ``ROW_BOT_UPDATE_FEED_TESTING=1``) set,
 it starts N-1 in desktop mode, checks for updates through the client API,
@@ -21,7 +29,7 @@ answers, is verified and reports the update. Finally it puts ``state.json``
 back and removes N.
 
     python scripts/smoke_background_update.py --root R --kind windows --port 8110 \\
-        --version-root R/versions/5.2.0 -- R/Row-Bot.exe --no-tray --no-open --no-splash --no-ollama --port 8110
+        --version-root R/versions/5.2.0 [--parts DIR] -- R/Row-Bot.exe --no-tray --no-open --no-splash --no-ollama --port 8110
 """
 
 from __future__ import annotations
@@ -168,6 +176,111 @@ def _toml_string(value: str) -> str:
     return json.dumps(value)
 
 
+_PLAN_WITH_THE_APP = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from packaging.markers import default_environment
+from packaging.tags import sys_tags
+from row_bot.updates.planner import installed_distributions, plan_runtime
+from row_bot.updates.stager import site_packages_relative
+python = sys.argv[2]
+site = python + "/" + site_packages_relative(__import__("pathlib").Path(python))
+plan = plan_runtime(open(sys.argv[3], encoding="utf-8").read(), environment=default_environment(),
+                    tags=list(sys_tags()), installed=installed_distributions(__import__("pathlib").Path(site)))
+print(json.dumps({"mode": plan.mode, "reason": plan.reason,
+                  "change": [f"{p.name} {p.version_from} -> {p.version_to}" for p in plan.change],
+                  "add": [f"{p.name} {p.version_to}" for p in plan.add],
+                  "remove": [f"{d.name} {d.version}" for d in plan.remove], "no_wheel": plan.no_wheel}))
+"""
+
+
+def _plan_with_the_app(version_root: Path, pylock: Path) -> dict:
+    """The installed app's own planner run against *pylock*, as the engine runs it."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "ROW_BOT_"))}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    out = subprocess.run(
+        [str(_python(version_root)), "-I", "-c", _PLAN_WITH_THE_APP, str(version_root / "app" / "src"),
+         str(version_root / "python"), str(pylock)],
+        check=True, capture_output=True, text=True, env=env,
+    ).stdout
+    return json.loads(out.strip().splitlines()[-1])
+
+
+def _code_with_version(archive: bytes, version: str) -> bytes:
+    """The release's code archive with only ``row_bot.version`` (and a marker) changed."""
+    files: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as tar:
+        for member in tar.getmembers():
+            if member.isfile():
+                files[member.name] = tar.extractfile(member).read()
+    assert "src/row_bot/version.py" in files and "launcher.py" in files, "not a code archive"
+    files["src/row_bot/version.py"] = (
+        '"""Single source of truth for the Row-Bot version number."""\n\n' f'__version__ = "{version}"\n'
+    ).encode()
+    files["UPDATE_REHEARSAL.txt"] = f"Staged by the background update rehearsal as {version}.\n".encode()
+    return _tar_xz(files)
+
+
+def build_feed_from_parts(version_root: Path, feed: Path, version: str, parts: Path) -> dict:
+    """Release *version* from a release's own parts (``build_update_parts.py parts``)."""
+    described = json.loads((parts / "parts.json").read_text(encoding="utf-8"))
+    pylock = (parts / described["lock"]["pylock"]["file"]).read_bytes()
+    planned = _plan_with_the_app(version_root, parts / described["lock"]["pylock"]["file"])
+    assert planned["mode"] == "reuse", (
+        "the release's lock export does not describe the installed runtime: " + json.dumps(planned, indent=2))
+    blobs = {
+        f"row-bot-code-{version}.tar.xz": _code_with_version((parts / described["code"]["file"]).read_bytes(), version),
+        f"row-bot-assets-{version}.tar.xz": (parts / described["assets"]["file"]).read_bytes(),
+        f"row-bot-pylock-{version}.toml": pylock,
+    }
+    previous = json.loads((version_root / "version.json").read_text(encoding="utf-8"))["version"]
+    manifest = {
+        "schema": 1,
+        "version": version,
+        "min_source_version": previous,
+        "code": _part(blobs, f"row-bot-code-{version}.tar.xz"),
+        "assets": {**_part(blobs, f"row-bot-assets-{version}.tar.xz"),
+                   "content_sha256": described["assets"]["content_sha256"]},
+        # A lock hash this install does not have, so the engine plans from the real export.
+        "lock": {"hash": "sha256:" + sha256(b"rehearsal " + pylock),
+                 "pylock": _part(blobs, f"row-bot-pylock-{version}.toml")},
+        "platforms": {_platform_key(): {"python": _run_python(version_root, "import platform; print(platform.python_version())"),
+                                        "installer": _installer_name(version)}},
+    }
+    _write_feed(feed, version, blobs, manifest)
+    return {"mode": "parts", "code_bytes": len(blobs[f"row-bot-code-{version}.tar.xz"]),
+            "assets_bytes": len(blobs[f"row-bot-assets-{version}.tar.xz"]),
+            "assets_file": f"row-bot-assets-{version}.tar.xz", "pylock_file": f"row-bot-pylock-{version}.toml",
+            "packages": planned["reason"]}
+
+
+def _part(blobs: dict[str, bytes], file: str) -> dict:
+    return {"file": file, "size": len(blobs[file]), "sha256": sha256(blobs[file])}
+
+
+def _write_feed(feed: Path, version: str, blobs: dict[str, bytes], manifest: dict) -> None:
+    blobs[f"row-bot-update-{version}.json"] = json.dumps(manifest, indent=2).encode()
+    blobs[_installer_name(version)] = b"not a real installer"
+    feed.mkdir(parents=True, exist_ok=True)
+    for file, data in blobs.items():
+        (feed / file).write_bytes(data)
+    body = (
+        f"Background update rehearsal {version}.\n\n<!-- row-bot-update-manifest -->\n```manifest\nschema: 1\nfiles:\n"
+        + "".join(f"  {file}: sha256={sha256(data)}\n" for file, data in sorted(blobs.items()))
+        + "```\n"
+    )
+    release = {
+        "tag_name": f"v{version}",
+        "prerelease": False,
+        "draft": False,
+        "published_at": "2026-10-11T12:00:00Z",
+        "html_url": f"https://github.com/siddsachar/row-bot/releases/tag/v{version}",
+        "body": body,
+        "assets": [{"name": file, "size": len(data), "browser_download_url": file} for file, data in blobs.items()],
+    }
+    (feed / "releases.json").write_text(json.dumps([release], indent=2), encoding="utf-8")
+
+
 def build_feed(version_root: Path, feed: Path, version: str, checkout: Path) -> dict:
     """The release files for *version*, made from the installed version."""
     app = version_root / "app"
@@ -217,43 +330,19 @@ def build_feed(version_root: Path, feed: Path, version: str, checkout: Path) -> 
         f"row-bot-assets-{version}.tar.xz": _tar_xz(assets),
         f"row-bot-pylock-{version}.toml": pylock,
     }
-
-    def part(file: str) -> dict:
-        return {"file": file, "size": len(blobs[file]), "sha256": sha256(blobs[file])}
-
     previous = json.loads((version_root / "version.json").read_text(encoding="utf-8"))["version"]
     manifest = {
         "schema": 1,
         "version": version,
         "min_source_version": previous,
-        "code": part(f"row-bot-code-{version}.tar.xz"),
-        "assets": {**part(f"row-bot-assets-{version}.tar.xz"), "content_sha256": _content_hash(assets)},
-        "lock": {"hash": "sha256:" + sha256(pylock), "pylock": part(f"row-bot-pylock-{version}.toml")},
+        "code": _part(blobs, f"row-bot-code-{version}.tar.xz"),
+        "assets": {**_part(blobs, f"row-bot-assets-{version}.tar.xz"), "content_sha256": _content_hash(assets)},
+        "lock": {"hash": "sha256:" + sha256(pylock), "pylock": _part(blobs, f"row-bot-pylock-{version}.toml")},
         "platforms": {_platform_key(): {"python": python_version, "installer": _installer_name(version)}},
     }
-    manifest_name = f"row-bot-update-{version}.json"
-    blobs[manifest_name] = json.dumps(manifest, indent=2).encode()
-    installer = _installer_name(version)
-    blobs[installer] = b"not a real installer"
-    feed.mkdir(parents=True, exist_ok=True)
-    for file, data in blobs.items():
-        (feed / file).write_bytes(data)
-    body = (
-        f"Background update rehearsal {version}.\n\n<!-- row-bot-update-manifest -->\n```manifest\nschema: 1\nfiles:\n"
-        + "".join(f"  {file}: sha256={sha256(data)}\n" for file, data in sorted(blobs.items()))
-        + "```\n"
-    )
-    release = {
-        "tag_name": f"v{version}",
-        "prerelease": False,
-        "draft": False,
-        "published_at": "2026-10-11T12:00:00Z",
-        "html_url": f"https://github.com/siddsachar/row-bot/releases/tag/v{version}",
-        "body": body,
-        "assets": [{"name": file, "size": len(data), "browser_download_url": file} for file, data in blobs.items()],
-    }
-    (feed / "releases.json").write_text(json.dumps([release], indent=2), encoding="utf-8")
-    return {"library": name, "from": installed, "to": other, "code_bytes": len(blobs[f"row-bot-code-{version}.tar.xz"]),
+    _write_feed(feed, version, blobs, manifest)
+    return {"mode": "made", "library": name, "from": installed, "to": other,
+            "code_bytes": len(blobs[f"row-bot-code-{version}.tar.xz"]),
             "assets_bytes": len(blobs[f"row-bot-assets-{version}.tar.xz"]), "wheel_bytes": int(wheel["size"])}
 
 
@@ -314,7 +403,8 @@ def _fingerprint(root: Path) -> dict[str, tuple[int, str]]:
     return out
 
 
-def run(root: Path, kind: str, version_root: Path, port: int, command: list[str], timeout: float) -> list[str]:
+def run(root: Path, kind: str, version_root: Path, port: int, command: list[str], timeout: float,
+        parts: Path | None = None) -> list[str]:
     results: list[str] = []
     checkout = Path(__file__).resolve().parents[1]
     original = _read_state(root) if (root / "state.json").exists() else None
@@ -334,13 +424,20 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
     try:
         if _port_open(port) or _port_open(feed_port):
             raise AssertionError(f"port {port} or {feed_port} is already in use")
-        built = build_feed(version_root, feed_dir, version, checkout)
-        results.append(f"feed: {previous} -> {version}; {built['library']} {built['from']} -> {built['to']}; "
-                       f"code {built['code_bytes']} B, assets {built['assets_bytes']} B, wheel {built['wheel_bytes']} B")
+        if parts is not None:
+            built = build_feed_from_parts(version_root, feed_dir, version, parts)
+            results.append(f"feed from the release's parts: {previous} -> {version}; code {built['code_bytes']} B, "
+                           f"assets {built['assets_bytes']} B; the lock export matches the runtime ({built['packages']})")
+        else:
+            built = build_feed(version_root, feed_dir, version, checkout)
+            results.append(f"feed: {previous} -> {version}; {built['library']} {built['from']} -> {built['to']}; "
+                           f"code {built['code_bytes']} B, assets {built['assets_bytes']} B, wheel {built['wheel_bytes']} B")
+        feed_log = (work / "feed-requests.log").open("w", encoding="utf-8")
         server = subprocess.Popen(  # noqa: S603 - this Python's http.server on loopback
             [sys.executable, "-m", "http.server", str(feed_port), "--bind", "127.0.0.1", "--directory", str(feed_dir)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=feed_log,
         )
+        feed_log.close()  # the server writes one line per request into it
         feed_ready = time.monotonic() + 60
         while _get(f"http://127.0.0.1:{feed_port}/releases.json") != 200:
             if time.monotonic() > feed_ready or server.poll() is not None:
@@ -374,11 +471,21 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
         _wait(f"{version} to be downloaded, staged and self-tested", prepared, 1800, launcher)
         staging_seconds = time.monotonic() - started
         metadata = json.loads((staged / "version.json").read_text(encoding="utf-8"))
-        assert metadata["source"] == "update" and metadata["runtime"] == "sync", metadata
         assert (staged / "app" / "UPDATE_REHEARSAL.txt").is_file()
-        assert (staged / "app" / "static" / "update-rehearsal.txt").is_file()
-        assert _run_python(staged, f"import importlib.metadata as m; print(m.version({built['library']!r}))") == built["to"]
-        assert _run_python(version_root, f"import importlib.metadata as m; print(m.version({built['library']!r}))") == built["from"]
+        if built["mode"] == "parts":
+            requests = (work / "feed-requests.log").read_text(encoding="utf-8", errors="replace")
+            # The installed assets are the release's: their content hash matched, so they were not downloaded.
+            assert metadata["source"] == "update" and metadata["parts"]["assets"] is None, metadata
+            assert f"GET /{built['assets_file']}" not in requests, requests
+            assert (staged / "app" / "static").is_dir()
+            # The lock export was downloaded and planned, and every library already matched it.
+            assert f"GET /{built['pylock_file']}" in requests, requests
+            assert metadata["runtime"] == "reuse", metadata
+        else:
+            assert metadata["source"] == "update" and metadata["runtime"] == "sync", metadata
+            assert (staged / "app" / "static" / "update-rehearsal.txt").is_file()
+            assert _run_python(staged, f"import importlib.metadata as m; print(m.version({built['library']!r}))") == built["to"]
+            assert _run_python(version_root, f"import importlib.metadata as m; print(m.version({built['library']!r}))") == built["from"]
         assert _fingerprint(version_root / "app") == before_app, "staging changed the running version's app/"
         state = _read_state(root)
         assert state["ready"]["version"] == version and state["active"] == previous, state
@@ -471,12 +578,13 @@ def main() -> int:
     parser.add_argument("--version-root", type=Path, required=True, help="The installed version's folder (app/, python/)")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--parts", type=Path, help="serve this release's own parts (build_update_parts.py parts)")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("give the native launcher command after --")
-    for line in run(args.root, args.kind, args.version_root, args.port, command, args.timeout):
+    for line in run(args.root, args.kind, args.version_root, args.port, command, args.timeout, args.parts):
         print(f"[PASS] {line}")
     return 0
 
