@@ -323,7 +323,11 @@ jobs:
           $ErrorActionPreference = "Stop"
           $iscc = @("C:\Program Files (x86)\Inno Setup 6\ISCC.exe", "C:\Program Files\Inno Setup 6\ISCC.exe") |
             Where-Object { Test-Path $_ } | Select-Object -First 1
-          (Get-Item $iscc).VersionInfo.ProductVersion | Set-Content -Path installer\build\inno-version.txt -Encoding ascii
+          $inno = (Get-Item $iscc).VersionInfo.ProductVersion
+          $inno | Set-Content -Path installer\build\inno-version.txt -Encoding ascii
+          # The signing machine needs this Inno Setup version (scripts/release_windows.ps1 checks it).
+          Write-Host "Inno Setup $inno"
+          "Inno Setup used for the installer stage: **$inno** (install the same on the signing machine)." >> $env:GITHUB_STEP_SUMMARY
           $tar = Join-Path $env:RUNNER_TEMP "windows-stage\Row-Bot-$env:ROW_BOT_VERSION-Windows-stage.tar"
           python scripts/windows_stage.py pack --root . --out $tar
           if ($LASTEXITCODE -ne 0) { throw "Packing the stage failed" }
