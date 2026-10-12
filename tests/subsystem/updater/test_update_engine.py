@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 import pytest
 
@@ -368,3 +369,156 @@ def test_linux_switch_moves_the_current_link(tmp_path):
     engine.start(release.files)
     engine.apply(when="now", force=True)
     assert install_layout.linux_current_version(layout.root) == "5.2.1"
+
+
+def _launcher_gives_up(layout) -> None:
+    """The native launcher's rule after the switched-to version fails to start twice."""
+    state = install_layout.read_state(layout.root)
+    state.unverified_launches = install_layout.MAX_UNVERIFIED_LAUNCHES
+    rolled, failed = install_layout.begin_launch(state)
+    assert failed is not None
+    install_layout.write_state(layout.root, rolled)
+
+
+def _saved_phase(layout) -> dict:
+    return json.loads((layout.root / ".updates" / "engine.json").read_text(encoding="utf-8"))
+
+
+def test_a_rollback_after_quitting_into_an_update_is_reported_once_and_held_back(tmp_path):
+    layout = make_install(tmp_path)
+    release = make_release()
+    engine = _engine(layout, FakeTransport(serve(release)))
+    engine.start(release.files)
+    engine.apply(when="on_quit")
+    # The launcher switches while Row-Bot quits; the engine never sees "applying".
+    assert switcher.apply_on_quit(layout) == "5.2.1"
+    state = install_layout.read_state(layout.root)
+    assert (state.extra["switched_from"], state.extra["switched_to"]) == ("5.2.0", "5.2.1")
+    assert state.extra["switched_at"]
+    _launcher_gives_up(layout)
+
+    after = _engine(layout, FakeTransport({}))
+    status = after.status()
+    assert (status.phase, status.version, status.error, status.retryable) == ("failed", "5.2.1", "rolled_back", False)
+    assert _saved_phase(layout)["phase"] == "failed"  # reconciled and saved, not only shown
+    assert switcher.held_back(layout) == ("5.2.1", "rolled_back")
+
+    # Seen (a new check acknowledges it): not reported again at the next start.
+    after.acknowledge()
+    assert _engine(layout, FakeTransport({})).status().phase == "idle"
+    # An explicit Download may still prepare it again.
+    again = _engine(layout, FakeTransport(serve(release)))
+    assert again.start(release.files) and again.status().phase == "ready"
+
+
+def test_after_repair_the_version_left_is_offered_again_without_downloading(tmp_path):
+    layout = make_install(tmp_path)
+    release = make_release()
+    _engine(layout, FakeTransport(serve(release))).start(release.files)
+    _engine(layout, FakeTransport({})).apply(when="now", force=True)
+    newer = InstallLayout(layout.kind, layout.root, "5.2.1", layout.versions_dir / "5.2.1")
+    _engine(newer, FakeTransport({})).rollback()  # Repair: back to 5.2.0
+    assert switcher.held_back(layout) == ("5.2.1", "repair")
+
+    nothing = FakeTransport({})
+    engine = _engine(layout, nothing)
+    assert engine.start(release.files) is True
+    status = engine.status()
+    assert (status.phase, status.version) == ("ready", "5.2.1")
+    assert "still installed" in (status.message or "")
+    assert nothing.requests == []  # not one byte downloaded
+    assert install_layout.read_state(layout.root).ready["version"] == "5.2.1"
+    engine.apply(when="now", force=True)
+    state = install_layout.read_state(layout.root)
+    assert (state.active, state.previous) == ("5.2.1", "5.2.0")
+
+
+def test_the_active_version_is_refused_before_anything_is_downloaded(tmp_path):
+    layout = make_install(tmp_path)
+    state = install_layout.read_state(layout.root)
+    state.active = "5.2.1"  # switched by another Row-Bot; this one still runs 5.2.0
+    install_layout.write_state(layout.root, state)
+    from tests.fixtures.updates import make_version
+
+    make_version(layout.versions_dir, "5.2.1", dists={"pip": "26.0"})
+    release = make_release()
+    transport = FakeTransport(serve(release))
+    engine = _engine(layout, transport)
+    assert engine.start(release.files) is False
+    assert (engine.status().phase, engine.status().error) == ("failed", "installed")
+    assert transport.requests == []
+
+
+def test_a_stale_applying_state_is_reset_and_saved(tmp_path):
+    layout = make_install(tmp_path)
+    work = layout.root / ".updates"
+    work.mkdir()
+    # Applying 5.2.1, but the install neither runs nor starts it (an installer
+    # put 5.2.0 back): nothing is being applied any more.
+    (work / "engine.json").write_text(
+        json.dumps({"schema": 1, "phase": "applying", "version": "5.2.1", "apply_when": "now"}), encoding="utf-8")
+    assert _engine(layout, FakeTransport({})).status().phase == "idle"
+    assert _saved_phase(layout)["phase"] == "idle"
+
+    # Applying the version that now runs: verified, and saved as such.
+    (work / "engine.json").write_text(
+        json.dumps({"schema": 1, "phase": "applying", "version": "5.2.0", "apply_when": "now"}), encoding="utf-8")
+    assert _engine(layout, FakeTransport({})).status().phase == "verified"
+    assert _saved_phase(layout)["phase"] == "verified"
+
+
+def test_an_interrupted_staging_is_left_alone_while_another_row_bot_holds_the_install(tmp_path):
+    layout = make_install(tmp_path)
+    work = layout.root / ".updates"
+    work.mkdir()
+    (work / "engine.json").write_text(json.dumps({"schema": 1, "phase": "staging", "version": "5.2.1"}), encoding="utf-8")
+    staging = layout.versions_dir / "5.2.1.staging"
+    (staging / "python").mkdir(parents=True)
+    other = switcher.InstallLock.for_install(layout.root)
+    assert other.acquire()
+    try:
+        assert _engine(layout, FakeTransport({})).status().phase == "idle"
+        assert staging.is_dir()  # the other Row-Bot may be staging it right now
+    finally:
+        other.release()
+
+
+def test_nothing_newer_is_prepared_while_an_update_is_ready(tmp_path):
+    layout = make_install(tmp_path)
+    first = make_release()
+    engine = _engine(layout, FakeTransport(serve(first)))
+    engine.start(first.files)
+    newer = make_release("5.2.2")
+    transport = FakeTransport(serve(newer))
+    engine = _engine(layout, transport)
+    assert engine.start(newer.files) is False
+    assert (engine.status().phase, engine.status().version) == ("ready", "5.2.1")
+    assert transport.requests == []
+
+
+def test_restart_now_waits_while_an_update_is_being_prepared(tmp_path):
+    layout = make_install(tmp_path)
+    release = make_release()
+    transport = FakeTransport(serve(release))
+    opened = threading.Event()
+    go_on = threading.Event()
+    original = transport.open
+
+    def slow_open(url, *, headers, timeout):
+        if "row-bot-code" in url:
+            opened.set()
+            go_on.wait(10)
+        return original(url, headers=headers, timeout=timeout)
+
+    transport.open = slow_open
+    engine = _engine(layout, transport, background=True)
+    assert engine.start(release.files)
+    assert opened.wait(10)
+    try:
+        with pytest.raises(EngineError) as refused:
+            engine.apply(when="now", force=True)
+        assert refused.value.code == "update_busy"
+    finally:
+        go_on.set()
+        engine.wait(30)
+    assert engine.status().phase == "ready"

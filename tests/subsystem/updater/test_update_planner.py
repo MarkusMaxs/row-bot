@@ -12,6 +12,7 @@ from row_bot.updates.planner import (
     plan_parts,
     plan_runtime,
     prune_paths,
+    safe_wheel_name,
 )
 from tests.fixtures.updates import make_release, wheel_name
 
@@ -101,6 +102,30 @@ def test_a_library_without_a_wheel_for_this_computer_means_the_full_runtime():
     assert plan.no_wheel == ["native 2.0"]
     # The Windows-only package is not wanted on Linux at all.
     assert all("windows" not in item for item in plan.no_wheel)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "../evil-1.0-py3-none-any.whl",
+        "sub/evil-1.0-py3-none-any.whl",
+        "sub\\evil-1.0-py3-none-any.whl",
+        "C:evil-1.0-py3-none-any.whl",
+        ".hidden-1.0-py3-none-any.whl",
+        "evil-1.0-py3-none-any.whl #comment",
+        "evil-1.0-py3-none-any.tar.gz",
+    ],
+)
+def test_a_wheel_name_that_is_not_a_plain_file_name_is_never_used(filename):
+    assert safe_wheel_name(filename) is False
+    pylock = "\n".join([
+        "[[packages]]", 'name = "evil"', 'version = "1.0"',
+        'wheels = [{ name = ' + json.dumps(filename) + ', url = "https://files.pythonhosted.org/evil.whl", '
+        'hashes = { sha256 = "' + "a" * 64 + '" } }]', "",
+    ])
+    plan = plan_runtime(pylock, environment={"sys_platform": "linux"}, tags=["py3-none-any"], installed={})
+    assert plan.mode == "full" and plan.no_wheel == ["evil 1.0"]
+    assert safe_wheel_name("evil-1.0-py3-none-any.whl") is True
 
 
 def test_the_best_wheel_for_this_interpreter_wins():

@@ -647,6 +647,10 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     }
     NSMutableDictionary *state = RowBotReadState();
     if (state) {
+        // As updates.switcher records a switch, so a rollback can be told apart.
+        state[@"switched_from"] = state[@"active"] ?: [NSNull null];
+        state[@"switched_to"] = ready;
+        state[@"switched_at"] = RowBotNowISO();
         state[@"previous"] = state[@"active"] ?: [NSNull null];
         state[@"active"] = ready;
         state[@"ready"] = [NSNull null];

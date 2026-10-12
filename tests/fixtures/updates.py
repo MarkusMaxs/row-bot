@@ -279,6 +279,8 @@ class FakeRunner:
     def __init__(self, *, fail: str | None = None, wheel_versions: Mapping[str, tuple[str, str]] | None = None) -> None:
         self.fail = fail
         self.commands: list[list[str]] = []
+        self.pip_lines: list[str] = []
+        self.pip_cwd: Path | None = None
         self.wheel_versions = dict(wheel_versions or {})
 
     def __call__(self, command, *, env, cwd, timeout, log):  # noqa: ANN001, ARG002
@@ -292,8 +294,11 @@ class FakeRunner:
             python = Path(command[0])
             root = python.parent if python.name == "python.exe" else python.parent.parent
             site = site_packages(root.parent)
-            for line in requirements.read_text(encoding="utf-8").splitlines():
-                wheel = Path(line.split(" --hash=")[0])
+            self.pip_cwd = Path(cwd) if cwd else None
+            self.pip_lines = requirements.read_text(encoding="utf-8").splitlines()
+            for line in self.pip_lines:
+                wheel = (self.pip_cwd or Path.cwd()) / line.split(" --hash=")[0]
+                assert wheel.is_file(), line  # pip resolves the line from its working folder
                 stem = wheel.name.split("-")
                 add_dist(site, stem[0].replace("_", "-"), stem[1])
         assert env.get("PYTHONNOUSERSITE") == "1"

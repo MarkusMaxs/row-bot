@@ -32,6 +32,16 @@ from row_bot.updates.manifest import Part, UpdateManifest
 
 #: Installed outside the lock by every build; never removed by a sync.
 KEEP_DISTS = frozenset({"pip", "setuptools", "wheel"})
+#: A wheel's file name is used as a path in the download folder: one plain
+#: name, no separators (packaging alone accepts a build tag like "1/../..").
+_WHEEL_FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.whl$")
+
+
+def safe_wheel_name(filename: str) -> bool:
+    """A wheel's file name from a lock is used as a path: a plain basename only."""
+    return bool(_WHEEL_FILE_NAME.fullmatch(filename)) and Path(filename).name == filename
+
+
 RuntimeMode = Literal["reuse", "sync", "full"]
 
 
@@ -194,6 +204,8 @@ def plan_runtime(
             if not isinstance(wheel, dict) or not isinstance(wheel.get("url"), str):
                 continue
             filename = str(wheel.get("name") or urllib.parse.unquote(wheel["url"].rsplit("/", 1)[-1]))
+            if not safe_wheel_name(filename):
+                continue
             ranks = [priority[tag] for tag in _wheel_tags(filename) if tag in priority]
             if not ranks:
                 continue
@@ -272,4 +284,5 @@ __all__ = [
     "plan_parts",
     "plan_runtime",
     "prune_paths",
+    "safe_wheel_name",
 ]

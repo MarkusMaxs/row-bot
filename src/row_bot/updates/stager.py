@@ -88,6 +88,48 @@ class CommandRunner(Protocol):
     ) -> int: ...
 
 
+class _ProcessTree:
+    """Everything a staging command starts, stopped together.
+
+    POSIX: the command leads its own process group. Windows: it runs in a
+    kill-on-close job, so its children also end if Row-Bot itself dies.
+    """
+
+    def __init__(self, process: subprocess.Popen) -> None:
+        self.process = process
+        self._job = None
+        if os.name == "nt":
+            try:
+                from row_bot.plugins.worker_ownership import WindowsJob
+
+                self._job = WindowsJob(process)
+            except Exception:  # noqa: BLE001 - fall back to killing the one process
+                logger.debug("No job object for a staging command", exc_info=True)
+
+    def kill(self) -> None:
+        if self._job is not None:
+            self._job.close()
+            self._job = None
+        elif os.name != "nt":
+            import signal
+
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if self.process.poll() is None:
+            self.process.kill()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def release(self) -> None:
+        if self._job is not None:
+            self._job.close()  # also ends anything the command left behind
+            self._job = None
+
+
 def run_command(
     command: Sequence[str],
     *,
@@ -110,20 +152,24 @@ def run_command(
             env=dict(env),
             cwd=str(cwd) if cwd else None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            start_new_session=os.name != "nt",
         )
+        tree = _ProcessTree(process)
         deadline = time.monotonic() + timeout
-        while True:
-            try:
-                return process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                pass
-            if (cancel is not None and cancel.is_set()) or time.monotonic() > deadline:
-                process.kill()
-                process.wait(timeout=10)
-                if cancel is not None and cancel.is_set():
-                    raise StageCancelled(" ".join(str(part) for part in command[:3]))
-                handle.write(b"\n[timed out]\n")
-                return -9
+        try:
+            while True:
+                try:
+                    return process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+                if (cancel is not None and cancel.is_set()) or time.monotonic() > deadline:
+                    tree.kill()
+                    if cancel is not None and cancel.is_set():
+                        raise StageCancelled(" ".join(str(part) for part in command[:3]))
+                    handle.write(b"\n[timed out]\n")
+                    return -9
+        finally:
+            tree.release()
 
 
 def python_executable(version_root: Path, system: str | None = None) -> Path:
@@ -290,12 +336,53 @@ def _remove_empty_parents(root: Path, entries: set[str]) -> None:
             current = current.parent
 
 
+MAX_ARCHIVE_MEMBERS = 50_000
+MAX_ARCHIVE_BYTES = 2 * 1024**3
+
+
+def _checked_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    """Only plain files and folders with clean relative names, within limits.
+
+    ``extractall(filter="data")`` is the second line: older runtimes (3.13.2 on
+    Windows) carry tarfile filter bypasses fixed later, so nothing that could
+    use one gets that far.
+    """
+    members: list[tarfile.TarInfo] = []
+    total = 0
+    for member in tar:
+        if len(members) >= MAX_ARCHIVE_MEMBERS:
+            raise StageError("unpack", "the archive has too many entries", retryable=False)
+        name = member.name
+        if not (member.isreg() or member.isdir()):
+            raise StageError("unpack", f"the archive holds a link or special file: {name!r}", retryable=False)
+        if member.isdir() and name in {".", "./"}:
+            continue  # the archive's own root
+        # "./app/x" (tar -C dir .) is the same as "app/x".
+        clean = name[2:] if name.startswith("./") else name
+        parts = clean.replace("\\", "/").split("/")
+        if (
+            not clean
+            or "\\" in name
+            or "\0" in name
+            or name.startswith("/")
+            or ":" in name
+            or any(part in {"..", "."} for part in parts)
+            or any(not part for part in parts[:-1])
+        ):
+            raise StageError("unpack", f"the archive holds an unsafe path: {name!r}", retryable=False)
+        total += max(0, member.size)
+        if total > MAX_ARCHIVE_BYTES:
+            raise StageError("unpack", "the archive is too large", retryable=False)
+        members.append(member)
+    return members
+
+
 def unpack(archive: Path, destination: Path) -> int:
-    """Extract a ``tar.xz``/``tar.gz`` part safely (``filter="data"``)."""
+    """Extract a ``tar.xz``/``tar.gz`` part: checked members, then ``filter="data"``."""
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:*") as tar:
-        members = tar.getmembers()
-        tar.extractall(destination, filter="data")
+        members = _checked_members(tar)
+        tar.extractall(destination, members=members, filter="data")
     return len(members)
 
 
@@ -452,12 +539,20 @@ class Stager:
         wheels: list[WheelPick] = inputs.runtime.wheels if inputs.runtime.mode == "sync" else []
         if not wheels:
             return
-        lines = []
+        paths: list[tuple[WheelPick, Path]] = []
         for pick in wheels:
             path = inputs.wheels.get(pick.name)
             if path is None or not Path(path).is_file():
                 raise StageError("libraries", f"{pick.filename} was not downloaded")
-            lines.append(f"{Path(path).resolve()} --hash=sha256:{pick.sha256}")
+            paths.append((pick, Path(path).resolve()))
+        # pip reads each line as a requirement: an absolute path with " #" in
+        # it (a Windows user name) would be cut at the comment. Paths relative
+        # to pip's working folder hold only the wheels' own (checked) names.
+        wheel_folder = Path(os.path.commonpath([str(path.parent) for _pick, path in paths]))
+        lines = [
+            f"./{path.relative_to(wheel_folder).as_posix()} --hash=sha256:{pick.sha256}"
+            for pick, path in paths
+        ]
         requirements = self.work_dir / "wheels.txt"
         requirements.write_text("\n".join(lines) + "\n", encoding="utf-8")
         python = python_executable(staging, self.system)
@@ -471,7 +566,7 @@ class Stager:
                 "--disable-pip-version-check", "--break-system-packages",
                 "-r", str(requirements),
             ],
-            env=env, cwd=self.work_dir, timeout=PIP_TIMEOUT, log=self.log,
+            env=env, cwd=wheel_folder, timeout=PIP_TIMEOUT, log=self.log,
         )
         if code != 0:
             raise StageError("libraries", f"pip install failed (exit {code})")

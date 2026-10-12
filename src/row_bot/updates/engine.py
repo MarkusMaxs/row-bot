@@ -55,12 +55,14 @@ from row_bot.updates.planner import (
     installed_distributions,
     plan_parts,
     plan_runtime,
+    safe_wheel_name,
 )
 from row_bot.updates.stager import (
     StageCancelled,
     StageError,
     StageInputs,
     Stager,
+    mark_ready,
     remove_tree,
     site_packages_relative,
 )
@@ -81,6 +83,7 @@ _MESSAGES = {
     "full_installer": "This update needs the full installer.",
     "disk": "There isn't enough free disk space to prepare the update.",
     "rolled_back": "The new version didn't start, so Row-Bot went back to the one that works.",
+    "installed": "That version is already installed.",
     "busy": "Another Row-Bot on this computer is preparing the update.",
     "clone": "Preparing the update failed while copying the runtime.",
     "libraries": "Preparing the update failed while installing its libraries.",
@@ -132,6 +135,8 @@ class EngineStatus:
     apply_when: ApplyWhen | None = None
     full_installer_url: str | None = None
     updated_at: str | None = None
+    #: ``last_rollback.at`` of the rollback already reported (shown once).
+    noted_rollback: str | None = None
     downloaded: int = 0
     total: int = 0
 
@@ -146,54 +151,7 @@ def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-class _InstallLock:
-    """One preparing Row-Bot per install, across processes."""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._handle = None
-
-    def acquire(self) -> bool:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+b")
-        try:
-            handle.seek(0, 2)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            handle.close()
-            return False
-        self._handle = handle
-        return True
-
-    def release(self) -> None:
-        handle, self._handle = self._handle, None
-        if handle is None:
-            return
-        try:
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except OSError:
-            pass
-        finally:
-            handle.close()
+_InstallLock = switcher.InstallLock
 
 
 def _current_lock_hash(version_root: Path) -> str | None:
@@ -276,7 +234,7 @@ class UpdateEngine:
             status.phase = phase
         version = data.get("version")
         status.version = version if install_layout.is_valid_version_name(version) else None
-        for key in ("step", "message", "error", "updated_at", "full_installer_url"):
+        for key in ("step", "message", "error", "updated_at", "full_installer_url", "noted_rollback"):
             value = data.get(key)
             setattr(status, key, str(value)[:512] if isinstance(value, str) else None)
         status.retryable = data.get("retryable") is True
@@ -321,7 +279,7 @@ class UpdateEngine:
         return status
 
     def _recover(self) -> EngineStatus:
-        """Reconcile what was saved with ``state.json`` after a (re)start."""
+        """Reconcile what was saved with ``state.json`` after a (re)start, and save it."""
         saved = self._load()
         state = install_layout.load_state(self.root, self.layout.kind)
         running = self.layout.version
@@ -330,19 +288,40 @@ class UpdateEngine:
         if saved.phase == "applying" and saved.version:
             if running == saved.version:
                 status = EngineStatus("verified", saved.version, message=f"Row-Bot is now {saved.version}.")
-            elif state is not None and state.last_rollback and state.last_rollback.get("from") == saved.version:
-                status = EngineStatus(
-                    "failed", saved.version, error="rolled_back", message=_MESSAGES["rolled_back"], retryable=False
-                )
             elif state is not None and state.active == saved.version:
                 status = replace(saved, message="Restart Row-Bot to finish updating.")
+            else:
+                # Neither running nor active: rolled back, or another version
+                # was installed by its installer. Nothing is being applied.
+                status = EngineStatus()
         elif saved.phase in {"downloading", "staging"}:
             # Interrupted: the downloads are kept and the next start resumes.
-            if saved.version:
-                staging = (self.layout.versions_dir or self.root) / f"{saved.version}.staging"
-                remove_tree(staging)
+            # Only with the install lock: another Row-Bot may be staging now.
+            if saved.version and self._install_lock.acquire():
+                try:
+                    remove_tree((self.layout.versions_dir or self.root) / f"{saved.version}.staging")
+                finally:
+                    self._install_lock.release()
             status = EngineStatus("idle", saved.version, message="Preparing the update was interrupted.")
-        if ready and status.phase not in {"applying", "verified"}:
+        # A rollback by the native launcher, however the version was switched
+        # to (Restart now, on quit, the tray, the macOS host): reported once.
+        rollback = state.last_rollback if state is not None else None
+        noted = saved.noted_rollback
+        if (
+            isinstance(rollback, dict)
+            and rollback.get("reason") != "repair"
+            and isinstance(rollback.get("at"), str)
+            and rollback.get("at") != saved.noted_rollback
+            and install_layout.is_valid_version_name(rollback.get("from"))
+            and rollback.get("from") != running
+        ):
+            noted = str(rollback["at"])[:64]
+            status = EngineStatus(
+                "failed", str(rollback["from"]), error="rolled_back", message=_MESSAGES["rolled_back"],
+                retryable=False,
+            )
+            logger.warning("Row-Bot %s did not start and the launcher went back to %s", rollback["from"], running)
+        if ready and status.phase not in {"applying", "verified"} and status.error != "rolled_back":
             status = replace(
                 status,
                 phase="ready",
@@ -354,7 +333,14 @@ class UpdateEngine:
             )
         elif status.phase == "ready" and not ready:
             status = EngineStatus()
+        status.noted_rollback = noted
         status.updated_at = saved.updated_at or _now_iso()
+        if status.persisted() != saved.persisted():
+            status.updated_at = _now_iso()
+            try:
+                self._save(status)
+            except OSError:
+                logger.debug("Could not save the reconciled update state", exc_info=True)
         if status.phase == "ready" and status.apply_when == "when_idle":
             self._status = status
             self._start_idle_watch()
@@ -373,15 +359,23 @@ class UpdateEngine:
             return preparing or self._status.phase == "applying"
 
     def acknowledge(self) -> None:
-        """A new check makes "verified" and an old failure history."""
+        """A new check makes "verified" and a reported rollback history."""
         with self._lock:
-            if self._status.phase == "verified":
-                self._set(phase="idle", message=None)
+            if self._status.phase == "verified" or (
+                self._status.phase == "failed" and self._status.error == "rolled_back"
+            ):
+                self._set(phase="idle", message=None, error=None)
 
     # ── preparing ───────────────────────────────────────────────────────
 
     def start(self, release: ReleaseFiles) -> bool:
-        """Download and stage *release* in the background. False if already running."""
+        """Download and stage *release* in the background. False if nothing started.
+
+        Nothing starts while another version is ready (restart into it first;
+        the next check offers the newer one), and nothing is downloaded for a
+        version that is already in this install: the active one is refused,
+        and ``previous`` (left with Repair) is offered as ready again as is.
+        """
         if not install_layout.is_valid_version_name(release.version):
             raise EngineError("update_unavailable")
         if install_layout.compare_versions(release.version, self.layout.version or "0") <= 0:
@@ -391,7 +385,19 @@ class UpdateEngine:
                 return False
             if self._status.phase == "applying":
                 return False
-            if self._status.phase == "ready" and self._status.version == release.version:
+            if switcher.ready_version(self.layout) is not None:
+                return False
+            state = install_layout.load_state(self.root, self.layout.kind)
+            if (
+                state is not None
+                and release.version == state.previous
+                and switcher.runnable_version(self.layout, release.version)
+            ):
+                return self._offer_existing(release.version)
+            if state is not None and release.version in {state.active, state.previous}:
+                # The stager never replaces these: say so before downloading anything.
+                self._set(phase="failed", version=release.version, step=None, error="installed",
+                          message=_MESSAGES["installed"], retryable=False)
                 return False
             self._cancel.clear()
             self._set(
@@ -406,6 +412,27 @@ class UpdateEngine:
                 self._worker.start()
                 return True
         self._run(release)
+        return True
+
+    def _offer_existing(self, version: str) -> bool:
+        """``previous`` is still installed and ran before: make it ready, no download."""
+        if not self._install_lock.acquire():
+            return False
+        try:
+            mark_ready(self.layout, version, staged_at=_now_iso())
+        finally:
+            self._install_lock.release()
+        self._set(phase="ready", version=version, step=None, error=None, retryable=False, apply_when=None,
+                  message=f"Row-Bot {version} is still installed; restart to go back to it.")
+        return True
+
+    def shutdown(self, timeout: float = 15.0) -> bool:
+        """Row-Bot is quitting: stop preparing (its commands too) and wait briefly."""
+        self._cancel.set()
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout)
+            return not worker.is_alive()
         return True
 
     def cancel(self) -> bool:
@@ -484,6 +511,8 @@ class UpdateEngine:
                 with self._lock:
                     self._status.total += runtime.wheel_bytes
                 for pick in runtime.wheels:
+                    if not safe_wheel_name(pick.filename):
+                        raise ManifestError(f"unsafe wheel file name {pick.filename!r}")
                     wheels[pick.name] = downloader.fetch(
                         pick.url, work / "wheels" / pick.filename,
                         sha256=pick.sha256, size=pick.size, progress=self._progress,
@@ -559,6 +588,9 @@ class UpdateEngine:
     # ── applying ────────────────────────────────────────────────────────
 
     def apply(self, *, when: ApplyWhen, force: bool = False, expected: str | None = None) -> EngineStatus:
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                raise EngineError("update_busy")
         version = switcher.ready_version(self.layout)
         if version is None:
             raise EngineError("update_not_ready")
