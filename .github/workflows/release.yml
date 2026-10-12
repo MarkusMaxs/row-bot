@@ -181,9 +181,11 @@ jobs:
           set -euo pipefail
           STAGE="$RUNNER_TEMP/stage/app"
           python scripts/app_payload_manifest.py --project-root . --stage "$STAGE"
-          python scripts/verify_client_assets.py --root frontend/dist
+          # The client checks import the server package: run them in the locked environment.
+          uv run --locked --no-dev python scripts/verify_client_assets.py --root frontend/dist
           node frontend/scripts/asset-manifest.mjs frontend/dist --package-dir "$STAGE/src/row_bot/static/client-v2"
-          python scripts/verify_client_assets.py --root "$STAGE/src/row_bot/static/client-v2" --compare frontend/dist --strict
+          uv run --locked --no-dev python scripts/verify_client_assets.py \
+            --root "$STAGE/src/row_bot/static/client-v2" --compare frontend/dist --strict
 
       - name: Build the code and assets archives and the lock export
         run: |
@@ -215,7 +217,7 @@ jobs:
             --out dist/update-parts/wheel-check.json "${args[@]}"
 
       - name: Summarize the update parts
-        if: always()
+        if: always() && hashFiles('dist/update-parts/parts.json') != ''
         run: |
           python - "$ROW_BOT_VERSION" >> "$GITHUB_STEP_SUMMARY" <<'PY'
           import json, sys
