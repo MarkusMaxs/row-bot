@@ -189,9 +189,12 @@ def test_a_cancelled_command_ends_with_its_whole_process_tree(tmp_path):
     thread = threading.Thread(target=run)
     thread.start()
     deadline = time.monotonic() + 30
-    while not marker.exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
-    grandchild = int(marker.read_text())
+    written = ""
+    while not written and time.monotonic() < deadline:
+        written = marker.read_text().strip() if marker.exists() else ""
+        if not written:
+            time.sleep(0.1)
+    grandchild = int(written)
     cancel.set()
     thread.join(30)
     assert isinstance(result[0], StageCancelled)
