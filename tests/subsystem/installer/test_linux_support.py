@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -31,28 +30,6 @@ REQUIRED_RUNTIME_PACKAGES = (
     "developer",
     "utils",
 )
-
-
-def _linux_launcher_template() -> str:
-    script = Path("installer/build_linux_app.sh").read_text(encoding="utf-8")
-    start = script.index("cat > \"$PACKAGE_ROOT/bin/row-bot\" <<'LAUNCHER'")
-    launcher_start = script.index("#!/usr/bin/env bash", start)
-    launcher_end = script.index("\nLAUNCHER", launcher_start)
-    return script[launcher_start:launcher_end]
-
-
-def _win_source_path(relative_path: str) -> str:
-    return "..\\" + relative_path.replace("/", "\\")
-
-
-def _windows_installer_sources() -> set[str]:
-    iss = Path("installer/row_bot_setup.iss").read_text(encoding="utf-8")
-    return set(re.findall(r'Source:\s+"([^"]+)"', iss))
-
-
-def _windows_source_covers_dir(sources: set[str], directory: str) -> bool:
-    prefix = _win_source_path(directory + "/")
-    return any(source.startswith(prefix) for source in sources)
 
 
 def test_linux_asset_selection(monkeypatch):
@@ -162,36 +139,44 @@ def test_app_payload_manifest_declares_required_runtime_payload():
         assert Path(relative_path).exists(), f"manifest path missing: {relative_path}"
 
 
-def test_windows_installer_payload_matches_app_manifest_contract():
-    manifest = app_payload_manifest.build_manifest(Path("."))
-    sources = _windows_installer_sources()
+def test_the_windows_payload_stage_holds_the_manifest_without_tests_or_caches(tmp_path):
+    project = tmp_path / "project"
+    files = {
+        "app.py": "", "launcher.py": "", "debug_tools.py": "", "pyproject.toml": "", "uv.lock": "",
+        "requirements.txt": "", "row-bot.ico": "", "scripts/verify_runtime_dependencies.py": "",
+        "scripts/other.py": "", "src/row_bot/__init__.py": "", "src/row_bot/tools/x.py": "",
+        "src/row_bot/__pycache__/x.cpython-313.pyc": "", "src/row_bot/tests/test_x.py": "",
+        "src/row_bot/static/client-v2/index.html": "", "src/row_bot/static/logo.svg": "",
+        "src/row_bot/ui.test.js": "", "src/row_bot/old.py.bak2": "", "static/app.js": "",
+        "static/__pycache__/x.pyc": "", "sounds/ding.wav": "", "bundled_skills/a/SKILL.md": "",
+        "tool_guides/b.md": "",
+    }
+    for relative, content in files.items():
+        (project / relative).parent.mkdir(parents=True, exist_ok=True)
+        (project / relative).write_text(content, encoding="utf-8")
 
-    expected_files = (
-        manifest["root_python_files"]
-        + manifest["root_files"]
-        + manifest["runtime_script_files"]
-    )
-    missing_files = [path for path in expected_files if _win_source_path(path) not in sources]
-    assert not missing_files, f"Windows installer is missing manifest files: {missing_files}"
+    stage = app_payload_manifest.stage_app_payload(project, tmp_path / "stage")
+    staged = {path.relative_to(stage).as_posix() for path in stage.rglob("*") if path.is_file()}
 
-    expected_dirs = manifest["payload_dirs"] + manifest["asset_dirs"]
-    missing_dirs = [path for path in expected_dirs if not _windows_source_covers_dir(sources, path)]
-    assert not missing_dirs, f"Windows installer is missing manifest directories: {missing_dirs}"
+    assert staged == {
+        "app.py", "launcher.py", "pyproject.toml", "uv.lock", "requirements.txt", "row-bot.ico",
+        "scripts/verify_runtime_dependencies.py", "src/row_bot/__init__.py", "src/row_bot/tools/x.py",
+        "src/row_bot/static/logo.svg", "static/app.js", "sounds/ding.wav", "bundled_skills/a/SKILL.md", "tool_guides/b.md",
+    }
+    with pytest.raises(FileExistsError):
+        app_payload_manifest.stage_app_payload(project, stage)
 
 
-def test_linux_install_marker_is_not_dev_install(monkeypatch, tmp_path):
-    app_root = tmp_path / "current" / "app"
+def test_an_xdg_release_is_not_a_dev_install(monkeypatch, tmp_path):
+    from row_bot import install_layout
+
+    app_root = tmp_path / "row-bot" / "releases" / "3.21.0" / "app"
     app_root.mkdir(parents=True)
-    marker = tmp_path / "current" / "install_info.json"
-    marker.write_text(json.dumps({
-        "platform": "linux",
-        "install_kind": "xdg-user-tarball",
-        "version": "3.21.0",
-    }), encoding="utf-8")
+    (app_root.parent / "python").mkdir()
+    found = install_layout.detect(app_root=app_root, environ={}, system="Linux")
+    monkeypatch.setattr(install_layout, "detect", lambda: found)
 
-    monkeypatch.setattr(updater.platform, "system", lambda: "Linux")
-
-    assert updater._linux_install_root(app_root) == tmp_path / "current"
+    assert updater.is_dev_install() is False
 
 
 def test_linux_safe_tar_extraction_rejects_traversal(tmp_path):
@@ -249,6 +234,8 @@ def test_linux_tarball_installs_into_xdg_tree(monkeypatch, tmp_path):
     assert launcher_path.is_symlink()
     assert (xdg / "row-bot" / "current").is_symlink()
     assert (xdg / "row-bot" / "releases" / "3.21.0" / "install_info.json").exists()
+    state = json.loads((xdg / "row-bot" / "state.json").read_text(encoding="utf-8"))
+    assert state["active"] == "3.21.0"
     desktop_text = (xdg / "applications" / "ai.row-bot.RowBot.desktop").read_text(encoding="utf-8")
     assert f"Exec={launcher_path}" in desktop_text
 
@@ -288,72 +275,8 @@ def test_linux_root_build_wrapper_delegates_to_installer_script():
     assert 'exec "$SCRIPT_DIR/installer/build_linux_app.sh" "$@"' in script
 
 
-@pytest.mark.slow
-def test_linux_launcher_resolves_installed_symlink_chain(tmp_path):
-    if os.name == "nt":
-        pytest.skip("POSIX symlink execution is covered by Linux CI")
-    bash = shutil.which("bash")
-    if not bash:
-        pytest.skip("bash is required to execute the generated launcher")
-
-    home = tmp_path / "home"
-    release_root = home / ".local" / "share" / "row-bot" / "releases" / "3.21.0"
-    bin_home = home / ".local" / "bin"
-    app_dir = release_root / "app"
-    python_dir = release_root / "python" / "bin"
-    (release_root / "bin").mkdir(parents=True)
-    app_dir.mkdir(parents=True)
-    python_dir.mkdir(parents=True)
-    bin_home.mkdir(parents=True)
-
-    launcher = release_root / "bin" / "row-bot"
-    launcher.write_text(_linux_launcher_template(), encoding="utf-8")
-    launcher.chmod(0o755)
-    fake_python = python_dir / "python3"
-    fake_python.write_text(
-        "#!/usr/bin/env bash\n"
-        "printf 'cwd=%s\\n' \"$PWD\"\n"
-        "printf 'install_root=%s\\n' \"${ROW_BOT_INSTALL_ROOT:-}\"\n"
-        "printf 'args=%s\\n' \"$*\"\n",
-        encoding="utf-8",
-    )
-    fake_python.chmod(0o755)
-    (app_dir / "launcher.py").write_text("# fake launcher\n", encoding="utf-8")
-
-    current = home / ".local" / "share" / "row-bot" / "current"
-    current.symlink_to(Path("releases") / "3.21.0", target_is_directory=True)
-    user_launcher = bin_home / "row-bot"
-    user_launcher.symlink_to(current / "bin" / "row-bot")
-
-    result = subprocess.run(
-        [str(user_launcher), "--server", "--no-open"],
-        env={**os.environ, "HOME": str(home), "ROW_BOT_DATA_DIR": str(home / ".row-bot")},
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=20,
-    )
-
-    assert f"cwd={app_dir}" in result.stdout
-    assert f"install_root={release_root}" in result.stdout
-    assert "args=launcher.py --server --no-open" in result.stdout
-
-    default_result = subprocess.run(
-        [str(user_launcher)],
-        env={**os.environ, "HOME": str(home), "ROW_BOT_DATA_DIR": str(home / ".row-bot")},
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=20,
-    )
-
-    assert "args=launcher.py --browser --no-tray" in default_result.stdout
-
-
 def _linux_uninstaller() -> str:
-    script = Path("installer/build_linux_app.sh").read_text(encoding="utf-8")
-    start = script.index("<<'UNINSTALL'\n") + len("<<'UNINSTALL'\n")
-    return script[start:script.index("\nUNINSTALL\n", start)] + "\n"
+    return Path("installer/linux/uninstall.sh").read_text(encoding="utf-8")
 
 
 # Never on Windows: bash there can be WSL's, which ignores this env and would act on a real home.

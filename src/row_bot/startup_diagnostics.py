@@ -11,6 +11,7 @@ import importlib
 import importlib.util
 import logging
 import sys
+import sysconfig
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -106,15 +107,15 @@ def preflight_optional_native_packages(
 
 
 def _install_root_hint() -> str:
-    import os
+    from row_bot import install_layout
 
-    root = os.environ.get("ROW_BOT_INSTALL_ROOT")
-    if root:
-        return root
     try:
-        return str(Path(sys.executable).resolve().parents[2])
+        layout = install_layout.detect()
     except Exception:
         return ""
+    if layout.root is None:
+        return layout.kind.value
+    return f"{layout.root} ({layout.kind.value}, version {layout.version}{', seed' if layout.seed else ''})"
 
 
 def _clear_partial_import(package: str) -> None:
@@ -126,7 +127,7 @@ def _clear_partial_import(package: str) -> None:
 
 def _recovery_hint(package: str) -> str:
     if package == "torchcodec":
-        site_packages = Path(sys.executable).resolve().parent / "Lib" / "site-packages"
+        site_packages = Path(sysconfig.get_paths()["purelib"])
         return (
             f"{APP_DISPLAY_NAME} does not require TorchCodec for built-in TTS. Close {APP_DISPLAY_NAME} and run "
             f'"{sys.executable}" -m pip uninstall -y torchcodec. '
