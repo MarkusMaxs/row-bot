@@ -383,6 +383,8 @@ def test_a_page_read_back_is_stamped_by_its_saved_outputs_source(monkeypatch, tm
     from row_bot import tool_outputs
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    # As in _read_back: name the conversation the stored page's source is looked up in.
+    monkeypatch.setattr(tool_outputs, "current_thread_id", lambda: "untrusted-stored")
     text = "".join(f"Line {index:05d} of the saved output. {INJECTION}\n" for index in range(400))
     shortened = tool_outputs.bounded(text, tool_name=source, max_chars=5_000, thread_id="untrusted-stored",
                                      external=source.startswith("mcp_"))
