@@ -176,8 +176,8 @@ def test_assemble_refuses_a_changed_part_and_a_missing_platform(tmp_path, app, p
 
     with pytest.raises(parts.PartsError, match="no build describes macos-arm64"):
         parts.assemble(out, [windows], tmp_path / "release", require=["windows-x86_64", "macos-arm64"])
-    with pytest.raises(parts.PartsError, match="runs Python 3.13.2, but the wheel check planned for 3.12.13"):
-        parts.assemble(out, [windows], tmp_path / "release", wheel_report={"targets": {"windows-x86_64": "3.12.13"}})
+    with pytest.raises(parts.PartsError, match="runs Python 3.13.2, but the wheel check planned for 3.13.3"):
+        parts.assemble(out, [windows], tmp_path / "release", wheel_report={"targets": {"windows-x86_64": "3.13.3"}})
     (out / parts.code_name(VERSION)).write_bytes(b"other")
     with pytest.raises(parts.PartsError, match="does not match parts.json"):
         parts.assemble(out, [windows], tmp_path / "release")
@@ -224,6 +224,16 @@ def test_a_changed_library_without_a_wheel_needs_the_full_installer(tmp_path) ->
     assert parts.main(command) == 1
     assert parts.main([*command, "--acknowledge"]) == 0
     assert json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))["acknowledged"] is True
+
+
+def test_a_new_python_needs_the_full_installer_too() -> None:
+    previous = {"windows-x86_64": {"python": "3.13.2"}, "macos-arm64": {"python": "3.12.12"}}
+
+    report = parts.wheel_check(PYLOCK, {"v5.2.0": PYLOCK}, TARGETS, {"v5.2.0": previous})
+
+    assert report["no_wheel"] == {}
+    assert report["python_changes"] == {"macos-arm64 from v5.2.0": "3.12.12 -> 3.12.13"}
+    assert report["needs_full_installer"] is True
 
 
 def test_libraries_with_wheels_or_for_other_platforms_update_in_the_background() -> None:

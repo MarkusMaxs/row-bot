@@ -72,7 +72,7 @@ on:
         type: boolean
         default: true
       acknowledge_full_installer:
-        description: A changed library has no wheel for a platform, so this update needs the full installer (D16); the release notes say so
+        description: A changed library has no wheel for a platform, or a Python changed, so this update needs the full installer (D15, D16); the release notes say so
         type: boolean
         default: false
       notarize_wait_minutes:
@@ -207,6 +207,10 @@ jobs:
           for tag in $(python scripts/build_update_parts.py previous-tags --version "$ROW_BOT_VERSION"); do
             git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$tag:refs/tags/$tag"
             args+=(--previous-ref "$tag")
+            # Its Pythons, from its update description (releases before 5.2 have none).
+            if gh release download "$tag" -p "row-bot-update-*.json" -D "$RUNNER_TEMP/previous-$tag" 2>/dev/null; then
+              args+=(--previous-update-json "$tag=$(ls "$RUNNER_TEMP/previous-$tag"/row-bot-update-*.json)")
+            fi
           done
           if [ "$ACKNOWLEDGE" = "true" ]; then args+=(--acknowledge); fi
           python scripts/build_update_parts.py wheel-check \
@@ -236,9 +240,11 @@ jobs:
               for label, item in report["platforms"].items():
                   print(f"- {label}: {item['mode']} ({len(item['change'])} changed, {len(item['add'])} added, "
                         f"{len(item['remove'])} removed)")
+              for label, change in report.get("python_changes", {}).items():
+                  print(f"- {label}: Python {change}")
               if report["needs_full_installer"]:
-                  print("\n**This update needs the full installer** (a changed library has no wheel); "
-                        f"acknowledged: {report['acknowledged']}.")
+                  print("\n**This update needs the full installer** (a changed library has no wheel, or a Python "
+                        f"changed); acknowledged: {report['acknowledged']}.")
           PY
 
       - name: Upload the update parts

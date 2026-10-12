@@ -340,9 +340,11 @@ def assemble(
     missing = [key for key in require if key not in platforms]
     if missing:
         raise PartsError(f"no build describes {', '.join(missing)}")
+    # The client compares the exact Python version (a different one needs the
+    # full installer), so the builds must run the Pythons the check planned for.
     for key, planned in ((wheel_report or {}).get("targets") or {}).items():
         built = platforms.get(key, {}).get("python")
-        if built and built.split(".")[:2] != str(planned).split(".")[:2]:
+        if built and built != str(planned):
             raise PartsError(f"the {key} build runs Python {built}, but the wheel check planned for {planned}")
     description: dict[str, Any] = {"schema": SCHEMA, "version": version}
     if min_source_version:
@@ -423,17 +425,26 @@ def _installed_from_pylock(text: str, env: Mapping[str, str]) -> dict[str, Any]:
 
 
 def wheel_check(
-    new_pylock: str, previous: Mapping[str, str], targets: Mapping[str, str]
+    new_pylock: str, previous: Mapping[str, str], targets: Mapping[str, str],
+    previous_pythons: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     """What the client's planner would do on each platform, from each previous lock.
 
     *previous* maps a label (a release tag) to that release's lock export, and
     *targets* a platform key to its Python version. A changed or added library
-    without a wheel for a platform sends everyone there to the full installer.
+    without a wheel for a platform sends everyone there to the full installer,
+    and so does a different Python: *previous_pythons* maps a label to the
+    ``platforms`` of that release's update description, where it has one.
     """
     from row_bot.updates.planner import plan_runtime
 
-    report: dict[str, Any] = {"previous": sorted(previous), "targets": dict(targets), "platforms": {}, "no_wheel": {}}
+    report: dict[str, Any] = {"previous": sorted(previous), "targets": dict(targets), "platforms": {}, "no_wheel": {},
+                              "python_changes": {}}
+    for label, platforms in sorted((previous_pythons or {}).items()):
+        for key, python in sorted(targets.items()):
+            before = (platforms.get(key) or {}).get("python")
+            if before and before != python:
+                report["python_changes"][f"{key} from {label}"] = f"{before} -> {python}"
     for key, python in sorted(targets.items()):
         env, found = target_environment(key, python)
         for label, text in sorted(previous.items()):
@@ -449,7 +460,7 @@ def wheel_check(
             }
             if plan.no_wheel:
                 report["no_wheel"][f"{key} from {label}"] = list(plan.no_wheel)
-    report["needs_full_installer"] = bool(report["no_wheel"])
+    report["needs_full_installer"] = bool(report["no_wheel"] or report["python_changes"])
     return report
 
 
@@ -624,6 +635,8 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--pylock", type=Path, required=True)
     check.add_argument("--previous-ref", action="append", default=[], help="a git tag or commit to compare with")
     check.add_argument("--previous-pylock", action="append", default=[], help="LABEL=FILE")
+    check.add_argument("--previous-update-json", action="append", default=[],
+                       help="LABEL=FILE: an earlier release's row-bot-update-<v>.json, for its Pythons")
     check.add_argument("--target", action="append", default=[], help="KEY:PYTHON, e.g. windows-x86_64:3.13")
     check.add_argument("--acknowledge", action="store_true", help="the release notes say it needs the full installer")
     check.add_argument("--project-root", type=Path, default=_REPO_ROOT)
@@ -672,7 +685,11 @@ def main(argv: list[str] | None = None) -> int:
             for item in args.previous_pylock:
                 label, _, file = item.partition("=")
                 previous[label] = Path(file).read_text(encoding="utf-8")
-            report = wheel_check(args.pylock.read_text(encoding="utf-8"), previous, _targets(args.target))
+            pythons = {}
+            for item in args.previous_update_json:
+                label, _, file = item.partition("=")
+                pythons[label] = json.loads(Path(file).read_text(encoding="utf-8")).get("platforms") or {}
+            report = wheel_check(args.pylock.read_text(encoding="utf-8"), previous, _targets(args.target), pythons)
             report["acknowledged"] = bool(args.acknowledge)
             if args.out:
                 args.out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
@@ -683,8 +700,10 @@ def main(argv: list[str] | None = None) -> int:
                       f"{len(item['remove'])} removed")
             for label, names in report["no_wheel"].items():
                 print(f"::warning::{label}: no wheel for {', '.join(names)}")
+            for label, change in report["python_changes"].items():
+                print(f"::warning::{label}: Python {change}")
             if report["needs_full_installer"] and not args.acknowledge:
-                print("::error::A library without a wheel changed: this update needs the full installer. "
+                print("::error::A library without a wheel changed, or a Python: this update needs the full installer. "
                       "Run the release again with acknowledge_full_installer=true; the release notes then say so.")
                 return 1
         elif args.command == "previous-tags":

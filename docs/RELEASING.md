@@ -264,7 +264,7 @@ GitHub Actions.
    ```
 
    It finds the release run (or pass `-RunId <release run ID>`), downloads the
-   stage, signs `Row-Bot.exe` (`signtool sign /sha1 <thumbprint> /fd SHA256
+   stage (kept for 30 days after the run), signs `Row-Bot.exe` (`signtool sign /sha1 <thumbprint> /fd SHA256
    /tr http://time.certum.pl /td SHA256`), runs ISCC, signs the installer,
    verifies both signatures and uploads the installer to the draft. It then
    checks the release: every installer and update part is there and agrees
