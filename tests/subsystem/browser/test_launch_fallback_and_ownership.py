@@ -213,3 +213,25 @@ def test_close_stops_context_and_playwright_on_the_owner_thread(monkeypatch) -> 
         ("context", "row-bot-pw"),
         ("playwright", "row-bot-pw"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("folder", "relative", "channel"),
+    [
+        ("LOCALAPPDATA", ("Google", "Chrome", "Application", "chrome.exe"), "chrome"),
+        ("ProgramFiles", ("Google", "Chrome", "Application", "chrome.exe"), "chrome"),
+        ("ProgramFiles(x86)", ("Microsoft", "Edge", "Application", "msedge.exe"), "msedge"),
+    ],
+    ids=["per-user-chrome", "chrome", "edge"],
+)
+def test_installed_browsers_are_found_wherever_windows_keeps_programs(monkeypatch, tmp_path, folder, relative, channel):
+    for name in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+        (tmp_path / name).mkdir()
+        monkeypatch.setenv(name, str(tmp_path / name))
+    executable = tmp_path.joinpath(folder, *relative)
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"")
+    monkeypatch.delenv("ROW_BOT_BROWSER_CHANNEL", raising=False)
+    monkeypatch.setattr(service_module.platform, "system", lambda: "Windows")
+
+    assert service_module._installed_channel() == channel

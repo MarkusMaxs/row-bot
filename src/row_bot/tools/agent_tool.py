@@ -122,9 +122,9 @@ def _fence_child_text(text: str) -> str:
     text = str(text or "")
     if not text:
         return ""
-    from row_bot.agent import _wrap_untrusted_tool_content
+    from row_bot import external_content
 
-    return _wrap_untrusted_tool_content("child_agent", text)
+    return external_content.wrap("child_agent", text)
 
 
 def _public_events(events: list[dict[str, Any]], run: dict[str, Any] | None) -> list[dict[str, Any]]:

@@ -278,7 +278,7 @@ class BlobReader:
             return None
         fields = self.fields(
             self.end(class_position),
-            {"id", "content", "tool_calls", "tool_call_id", "additional_kwargs"},
+            {"id", "content", "tool_calls", "tool_call_id", "additional_kwargs", "artifact"},
         )
         identity = self.text(fields["id"]) if "id" in fields else ""
         if not identity:
@@ -312,6 +312,9 @@ class BlobReader:
         media_error = ""
         note = ""
         approval_id = ""
+        chart_position, chart_label = None, ""
+        if name == "ToolMessage" and "artifact" in fields:
+            chart_position, chart_label = self.chart_artifact(fields["artifact"])
         if "additional_kwargs" in fields:
             metadata = self.fields(
                 fields["additional_kwargs"],
@@ -359,7 +362,42 @@ class BlobReader:
                 "tool_calls_position": fields.get("tool_calls"), "tool_ids_lazy": tool_ids_lazy,
                 "tool_call_id": self.text(fields["tool_call_id"]) if "tool_call_id" in fields else "",
                 "attachments": attachments, "media": media, "media_error": media_error, "note": note,
-                "approval_id": approval_id}
+                "approval_id": approval_id, "chart_position": chart_position, "chart_label": chart_label}
+
+    def chart_artifact(self, position: int) -> tuple[int | None, str]:
+        """Where a tool result's chart figure is, and its label, when its artifact holds one (WP D2).
+
+        The figure is read only when a row is projected, within that row's bound.
+        """
+        from row_bot.rendered_results import CHART_ARTIFACT_KEY, LABEL_CHARS
+
+        holder = self.fields(position, {CHART_ARTIFACT_KEY})
+        if CHART_ARTIFACT_KEY not in holder:
+            return None, ""
+        chart = self.fields(holder[CHART_ARTIFACT_KEY], {"figure", "label"})
+        if "figure" not in chart or self.node(chart["figure"]).kind != "str":
+            return None, ""
+        label = self.text(chart["label"], 4 * LABEL_CHARS)[:LABEL_CHARS] if "label" in chart else ""
+        return chart["figure"], label
+
+    def _chart_text(self, record: dict, room: int) -> str:
+        """A chart kept in a result's artifact, as the chart text the transcript projection reads.
+
+        Empty when the result has none or it doesn't fit in *room* bytes of the row, as a chart
+        too large for its row never showed.
+        """
+        position = record.get("chart_position")
+        if position is None or room <= 0:
+            return ""
+        from row_bot.application.transcript_blocks import MAX_CHART_JSON_CHARS
+        from row_bot.rendered_results import CHART_MARKER
+
+        figure = self.text(position, min(room, MAX_CHART_JSON_CHARS))
+        if not figure:
+            return ""
+        label = record.get("chart_label") or ""
+        text = f"{CHART_MARKER}{figure}\n\n{label}" if label else f"{CHART_MARKER}{figure}"
+        return text if len(json.dumps(text, ensure_ascii=False).encode("utf-8")) + 32 <= room else ""
 
     def _json_string(self, position: int) -> Iterator[bytes]:
         node = self.node(position)
@@ -507,7 +545,8 @@ class BlobReader:
                     "content_ref": identity,
                 }
             content.extend(chunk)
-        row["blocks"] = [*json.loads(content), *attachments]
+        chart = self._chart_text(record, maximum - len(content))
+        row["blocks"] = [*([{"type": "text", "text": chart}] if chart else []), *json.loads(content), *attachments]
         return row
 
 

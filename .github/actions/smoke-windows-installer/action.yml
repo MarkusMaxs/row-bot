@@ -1,11 +1,14 @@
 name: Smoke the Windows installer
 description: >-
-  Silently install dist/Row-Bot-*-Windows-*.exe into a temporary folder, verify the
-  installed runtime and client assets, and start the installed launcher. Shared by
-  release.yml and installer-verify.yml.
+  Silently install dist/Row-Bot-*-Windows-*.exe per user (no administrator
+  rights) into %LOCALAPPDATA%\Programs\Row-Bot, check the versions\<version>
+  layout and state.json, verify the installed runtime and client assets, start
+  the app through Row-Bot.exe, check its relaunch and rollback rules, and check
+  that a silent install starts Row-Bot. Shared by release.yml and
+  installer-verify.yml.
 inputs:
   port:
-    description: Loopback port for the launcher smoke
+    description: Loopback port for the launcher smoke; the layout smoke uses the next one
     required: false
     default: "8094"
 runs:
@@ -21,34 +24,36 @@ runs:
         if (-not $installer) {
           throw "Windows installer artifact not found under dist"
         }
-
-        $installDir = Join-Path $env:RUNNER_TEMP "Row-Bot"
+        $version = (Select-String -Path installer\row_bot_setup.iss -Pattern '#define\s+MyAppVersion\s+"([^"]+)"').Matches[0].Groups[1].Value
+        $root = Join-Path $env:LOCALAPPDATA "Programs\Row-Bot"
         $installLog = Join-Path $env:RUNNER_TEMP "row-bot-install.log"
-        if (Test-Path $installDir) {
-          Remove-Item -LiteralPath $installDir -Recurse -Force
+        if (Test-Path $root) {
+          throw "A per-user Row-Bot is already installed at $root"
         }
+        # A 5.x install for all users left its Apps & features entry (its folder
+        # is gone here). The per-user installer removes it with one elevation so
+        # Row-Bot is never listed twice.
+        $legacyKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
+        New-Item -Path $legacyKey -Force | Out-Null
+        New-ItemProperty -Path $legacyKey -Name DisplayName -Value "Row-Bot" -Force | Out-Null
+        New-ItemProperty -Path $legacyKey -Name UninstallString -Value '"C:\Program Files\Row-Bot\unins000.exe"' -Force | Out-Null
 
-        $installerArgs = @(
-          "/VERYSILENT",
-          "/SUPPRESSMSGBOXES",
-          "/NORESTART",
-          "/DIR=$installDir",
-          "/LOG=$installLog"
-        )
-        $installerProcess = Start-Process `
-          -FilePath $installer.FullName `
-          -ArgumentList $installerArgs `
-          -Wait `
-          -PassThru `
-          -WindowStyle Hidden
+        # Per user and silent; /NOLAUNCH because the smokes start Row-Bot themselves.
+        $installerProcess = Start-Process -FilePath $installer.FullName -Wait -PassThru -WindowStyle Hidden `
+          -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOLAUNCH", "/LOG=$installLog")
         if ($installerProcess.ExitCode -ne 0) {
           Get-Content $installLog -ErrorAction SilentlyContinue
           throw "Installer exited with code $($installerProcess.ExitCode)"
         }
 
-        $pythonExe = Join-Path $installDir "python\python.exe"
-        $appDir = Join-Path $installDir "app"
+        # The layout: Row-Bot.exe and state.json at the root, one folder per version.
+        $versionDir = Join-Path $root "versions\$version"
+        $pythonExe = Join-Path $versionDir "python\python.exe"
+        $appDir = Join-Path $versionDir "app"
         foreach ($required in @(
+          (Join-Path $root "Row-Bot.exe"),
+          (Join-Path $root "state.json"),
+          (Join-Path $versionDir "version.json"),
           $pythonExe,
           (Join-Path $appDir "launcher.py"),
           (Join-Path $appDir "scripts\verify_runtime_dependencies.py")
@@ -57,14 +62,34 @@ runs:
             throw "Expected installed file missing: $required"
           }
         }
+        foreach ($gone in @("launch_row_bot.vbs", "launch_row_bot.bat", "python", "app")) {
+          if (Test-Path (Join-Path $root $gone)) { throw "The old layout's $gone is still installed" }
+        }
+        $state = Get-Content (Join-Path $root "state.json") -Raw | ConvertFrom-Json
+        if ($state.active -ne $version -or $state.pending_verification -or $state.legacy_install_pending) {
+          throw "state.json does not name $version as the active, verified version: $($state | ConvertTo-Json -Compress)"
+        }
+        $startMenuShortcut = Join-Path ([Environment]::GetFolderPath("Programs")) "Row-Bot.lnk"
+        $desktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "Row-Bot.lnk"
+        foreach ($shortcut in @($startMenuShortcut, $desktopShortcut)) {
+          if (!(Test-Path $shortcut)) { throw "The first install did not create $shortcut" }
+        }
+        $uninstallKey = "Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
+        if (!(Test-Path "HKCU:\$uninstallKey")) { throw "No per-user Apps & features entry" }
+        if (Test-Path "HKLM:\$uninstallKey") { throw "A per-machine Apps & features entry exists" }
+        # Shipped bytecode is hash-based and never checked against the source (flags = 1).
+        $pyc = Get-ChildItem -Path (Join-Path $appDir "src\row_bot\__pycache__") -Filter "install_layout.*.pyc" | Select-Object -First 1
+        if (-not $pyc) { throw "The app ships no compiled bytecode" }
+        $flags = [BitConverter]::ToUInt32([IO.File]::ReadAllBytes($pyc.FullName), 4)
+        if ($flags -ne 1) { throw "$($pyc.Name) is not unchecked-hash bytecode (flags $flags)" }
+        Write-Host "Installed $version per user at $root"
 
         $env:PYTHONNOUSERSITE = "1"
         $env:PYTHONIOENCODING = "utf-8"
-        $env:TCL_LIBRARY = Join-Path $installDir "python\tcl\tcl8.6"
-        $env:TK_LIBRARY = Join-Path $installDir "python\tcl\tk8.6"
-        $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $installDir "python\playwright-browsers"
-        $env:PATH = (Join-Path $installDir "python\Scripts") + ";" + (Join-Path $installDir "python") + ";" + $env:PATH
-
+        $env:PYTHONDONTWRITEBYTECODE = "1"
+        $env:TCL_LIBRARY = Join-Path $versionDir "python\tcl\tcl8.6"
+        $env:TK_LIBRARY = Join-Path $versionDir "python\tcl\tk8.6"
+        $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $versionDir "python\playwright-browsers"
         & $pythonExe (Join-Path $appDir "scripts\verify_runtime_dependencies.py") all
         if ($LASTEXITCODE -ne 0) {
           throw "Installed runtime verifier failed with code $LASTEXITCODE"
@@ -74,13 +99,82 @@ runs:
           --root (Join-Path $appDir "src\row_bot\static\client-v2") `
           --compare (Join-Path $env:GITHUB_WORKSPACE "frontend\dist") --strict
         if ($LASTEXITCODE -ne 0) { throw "Installed client asset validation failed." }
+        foreach ($name in @("TCL_LIBRARY", "TK_LIBRARY", "PLAYWRIGHT_BROWSERS_PATH", "PYTHONDONTWRITEBYTECODE")) {
+          Remove-Item "Env:$name"
+        }
 
-        # The launcher issues its own launch secret, so the smoke uses the public
+        # Start the app the way the shortcut does, through Row-Bot.exe. The
+        # launcher issues its own launch secret, so the smoke uses the public
         # probes; ending the smoke ends the launcher's server too (B203).
+        $launcher = Join-Path $root "Row-Bot.exe"
         python scripts/smoke_app.py `
           --port $env:SMOKE_PORT `
           --timeout 180 `
           --public-probes `
-          --cwd "$appDir" `
-          -- "$pythonExe" launcher.py --server --no-open --no-splash --no-ollama --port $env:SMOKE_PORT
+          --cwd "$root" `
+          -- "$launcher" --server --no-open --no-splash --no-ollama --port $env:SMOKE_PORT
         if ($LASTEXITCODE -ne 0) { throw "Installed launcher smoke failed." }
+
+        # Row-Bot.exe relaunches on exit code 75 and follows the shared launch cases.
+        $layoutPort = [int]$env:SMOKE_PORT + 1
+        python scripts/smoke_install_layout.py --root "$root" --kind windows --port $layoutPort `
+          -- "$launcher" --server --no-open --no-splash --no-ollama --port $layoutPort
+        if ($LASTEXITCODE -ne 0) { throw "Installed launcher layout smoke failed." }
+
+        # Without /NOLAUNCH even a silent install starts Row-Bot (the 5.1 updater
+        # runs the installer silently). Reinstall this version and look for it.
+        # An upgrade or reinstall never brings back a desktop shortcut the user removed.
+        Remove-Item -LiteralPath $desktopShortcut
+        $env:ROW_BOT_DATA_DIR = Join-Path $env:RUNNER_TEMP "row-bot-after-install"
+        # Start-Process -Wait would also wait for Row-Bot, which Setup starts and leaves running.
+        $setup = [System.Diagnostics.Process]::Start($installer.FullName, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART `"/LOG=$installLog`"")
+        $setup.WaitForExit()
+        if ($setup.ExitCode -ne 0) { throw "Reinstall exited with code $($setup.ExitCode)" }
+        $deadline = (Get-Date).AddSeconds(180)
+        $healthy = $null
+        while (-not $healthy -and (Get-Date) -lt $deadline) {
+          foreach ($port in 8080..8129) {
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 "http://127.0.0.1:$port/healthz"
+              if ($response.StatusCode -eq 200) { $healthy = $port; break }
+            } catch { }
+          }
+          if (-not $healthy) { Start-Sleep -Seconds 2 }
+        }
+        $started = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) })
+        Write-Host "Processes started from the install: $(($started | ForEach-Object { $_.Name }) -join ', ')"
+        foreach ($process in $started) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
+        Remove-Item Env:ROW_BOT_DATA_DIR
+        if (-not ($started | Where-Object { $_.Name -eq "Row-Bot.exe" })) { throw "The silent install did not start Row-Bot.exe" }
+        if (-not $healthy) { throw "Row-Bot started after the silent install never answered /healthz" }
+        Write-Host "The silent install started Row-Bot; it answered on port $healthy"
+        if (Test-Path $desktopShortcut) { throw "The reinstall brought back the desktop shortcut" }
+        if (!(Test-Path $startMenuShortcut)) { throw "The reinstall removed the Start menu shortcut" }
+
+    - name: Uninstall the Windows package
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $root = Join-Path $env:LOCALAPPDATA "Programs\Row-Bot"
+        # Uninstall removes the install root only, never the user's data.
+        $profileMarker = Join-Path $env:USERPROFILE ".row-bot\uninstall-smoke-marker.txt"
+        New-Item -ItemType Directory -Force -Path (Split-Path $profileMarker) | Out-Null
+        Set-Content -Path $profileMarker -Value "kept"
+        $uninstaller = Get-ChildItem -Path $root -Filter "unins*.exe" | Select-Object -First 1
+        if (-not $uninstaller) { throw "No uninstaller in $root" }
+        $process = Start-Process -FilePath $uninstaller.FullName -Wait -PassThru -WindowStyle Hidden `
+          -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+        if ($process.ExitCode -ne 0) { throw "Uninstaller exited with code $($process.ExitCode)" }
+        $deadline = (Get-Date).AddSeconds(120)
+        while ((Test-Path $root) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+        if (Test-Path $root) {
+          Get-ChildItem -Path $root -Recurse -Force | Select-Object -First 20 | ForEach-Object { $_.FullName }
+          throw "The uninstaller left $root behind"
+        }
+        $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
+        if (Test-Path $uninstallKey) { throw "The Apps & features entry is still there" }
+        if (!(Test-Path $profileMarker) -or (Get-Content $profileMarker) -ne "kept") {
+          throw "Uninstall touched the user's data folder"
+        }
+        Remove-Item -LiteralPath $profileMarker
+        Write-Host "Uninstalled; $root is gone and the data folder is untouched"

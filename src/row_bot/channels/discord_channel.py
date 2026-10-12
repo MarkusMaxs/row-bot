@@ -34,6 +34,7 @@ from row_bot.channels.base import Channel, ChannelCapabilities, ConfigField
 from row_bot.channels.auth_store import get_channel_secret
 from row_bot.channels import commands as ch_commands
 from row_bot.channels import auth as ch_auth
+from row_bot.channels import conversations as ch_conversations
 from row_bot.channels import runtime as ch_runtime
 from row_bot.channels.streaming import (
     ChannelDeliveryResult,
@@ -42,7 +43,6 @@ from row_bot.channels.streaming import (
     ChannelStreamConsumer,
     consume_channel_producer,
 )
-from row_bot.threads import _save_thread_meta
 
 log = logging.getLogger("row_bot.discord")
 
@@ -97,54 +97,143 @@ def is_running() -> bool:
 # ──────────────────────────────────────────────────────────────────────
 # Thread management
 # ──────────────────────────────────────────────────────────────────────
+# In a server, each Discord thread is its own Row-Bot conversation. A mention
+# in a channel starts one: Row-Bot opens a thread from the message and replies
+# there. Where it can't (no permission, or a channel type without threads), the
+# channel keeps one rolling conversation that /new moves to a fresh one. A DM
+# has one rolling conversation too.
+_DEFAULT_CONVERSATION_NAME = "🎮 Discord conversation"
+_THREAD_NAME_LIMIT = 90  # Discord allows 100
+_thread_fallback_logged: set[int] = set()
+_thread_creation_failed: set[int] = set()
+
+
 def _make_thread_id(channel_id: int | str) -> str:
     return f"discord_{channel_id}"
 
 
-def _get_or_create_thread(channel_id: int | str) -> str:
-    thread_id = _make_thread_id(channel_id)
-    try:
-        from row_bot.tasks import record_thread_channel_ref
+def _conversation(
+    channel_id: int | str,
+    *,
+    name: str = _DEFAULT_CONVERSATION_NAME,
+) -> ch_conversations.ChannelConversation:
+    return ch_conversations.ChannelConversation(
+        channel="discord",
+        key=str(channel_id),
+        default_thread_id=_make_thread_id(channel_id),
+        name=name,
+        target=str(channel_id),
+    )
 
-        record_thread_channel_ref(
-            thread_id,
-            channel="discord",
-            target=channel_id,
-            external_conversation_id=str(channel_id),
-        )
-    except Exception:
-        log.debug("Discord thread channel ref skipped", exc_info=True)
-    _save_thread_meta(
-        thread_id,
-        "🎮 Discord conversation",
-        seed_default_skills=True,
-        allow_recreate=True,
-    )  # creates or bumps updated_at
-    return thread_id
+
+def _get_or_create_thread(channel_id: int | str, *, name: str = _DEFAULT_CONVERSATION_NAME) -> str:
+    """Return the Row-Bot thread for a DM, a Discord thread, or a channel without threads."""
+    return ch_conversations.current_thread(_conversation(channel_id, name=name))
 
 
 def _new_thread(channel_id: int | str) -> str:
-    import time
-    suffix = str(int(time.time()))
-    thread_id = f"discord_{channel_id}_{suffix}"
-    try:
-        from row_bot.tasks import record_thread_channel_ref
+    """Move a DM, a Discord thread or a channel to a fresh Row-Bot conversation."""
+    return ch_conversations.start_new_thread(_conversation(channel_id))
 
-        record_thread_channel_ref(
-            thread_id,
-            channel="discord",
-            target=channel_id,
-            external_conversation_id=str(channel_id),
-        )
+
+def _channel_kind(channel) -> str:
+    """``"dm"``, ``"thread"`` or ``"guild"`` (a server channel)."""
+    try:
+        import discord
     except Exception:
-        log.debug("Discord thread channel ref skipped", exc_info=True)
-    _save_thread_meta(
-        thread_id,
-        "Discord conversation",
-        seed_default_skills=True,
-        allow_recreate=True,
+        return "guild"
+    channel_type = getattr(channel, "type", None)
+    if isinstance(channel, discord.DMChannel) or channel_type == discord.ChannelType.private:
+        return "dm"
+    thread_types = {
+        discord.ChannelType.public_thread,
+        discord.ChannelType.private_thread,
+        discord.ChannelType.news_thread,
+    }
+    if isinstance(channel, discord.Thread) or channel_type in thread_types:
+        return "thread"
+    return "guild"
+
+
+def _conversation_name(channel, text: str = "") -> str:
+    if _channel_kind(channel) == "thread":
+        label = str(getattr(channel, "name", "") or "").strip() or ch_conversations.first_words(text)
+        if label:
+            return f"🎮 Discord – {label}"
+    return _DEFAULT_CONVERSATION_NAME
+
+
+def _thread_title(text: str) -> str:
+    words = ch_conversations.first_words(text, limit=_THREAD_NAME_LIMIT)
+    return words or "Row-Bot conversation"
+
+
+def _can_start_threads(channel) -> bool:
+    """Whether a server channel takes threads and Row-Bot may start them there."""
+    try:
+        import discord
+
+        if getattr(channel, "type", None) not in {discord.ChannelType.text, discord.ChannelType.news}:
+            return False
+    except Exception:
+        return False
+    permissions_for = getattr(channel, "permissions_for", None)
+    me = getattr(getattr(channel, "guild", None), "me", None)
+    if me is None or not callable(permissions_for):
+        return True  # unknown: try, and fall back if Discord refuses
+    try:
+        permissions = permissions_for(me)
+    except Exception:
+        return True
+    return bool(getattr(permissions, "create_public_threads", True)) and bool(
+        getattr(permissions, "send_messages_in_threads", True)
     )
-    return thread_id
+
+
+async def _conversation_channel(message, text: str):
+    """Where a message's conversation lives.
+
+    A mention in a server channel opens a Discord thread from the message when
+    it can; otherwise (and in a DM or a thread) it is the message's channel.
+    """
+    channel = message.channel
+    if _channel_kind(channel) != "guild":
+        return channel
+    channel_id = int(getattr(channel, "id", 0) or 0)
+    if channel_id in _thread_creation_failed:
+        reason = "Discord refused before"
+    elif not _can_start_threads(channel):
+        reason = "no permission to start threads, or the channel has none"
+    else:
+        try:
+            return await message.create_thread(name=_thread_title(text))
+        except Exception as exc:
+            _thread_creation_failed.add(channel_id)
+            reason = type(exc).__name__
+    if channel_id not in _thread_fallback_logged:
+        _thread_fallback_logged.add(channel_id)
+        log.info(
+            "Discord channel %s keeps one rolling conversation (%s); /new starts a fresh one",
+            channel_id,
+            reason,
+        )
+    return channel
+
+
+def _drop_discord_interrupts(channel_id: int) -> None:
+    """Forget the approvals a conversation was waiting on once /new leaves it."""
+    with _pending_lock:
+        keys = [
+            key for key, pending in _pending_interrupts.items()
+            if int(pending.get("channel_id") or 0) == int(channel_id)
+        ]
+        for key in keys:
+            _pending_interrupts.pop(key, None)
+            if _interrupt_by_channel.get(int(channel_id)) == key:
+                _interrupt_by_channel.pop(int(channel_id), None)
+            for msg_id, mapped_key in list(_interrupt_by_message.items()):
+                if mapped_key == key:
+                    _interrupt_by_message.pop(msg_id, None)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -804,20 +893,30 @@ def _schedule_coro(coro):
     raise RuntimeError("Discord bot loop not running")
 
 
+async def _resolve_send_channel(channel_or_user_id: int):
+    """The channel, Discord thread or DM an id names (a user id opens their DM)."""
+    channel = _client.get_channel(channel_or_user_id)
+    if channel is not None:
+        return channel
+    try:
+        user = await _client.fetch_user(channel_or_user_id)
+        return await user.create_dm()
+    except Exception:
+        pass
+    try:
+        # A Discord thread Row-Bot hasn't seen since it started.
+        return await _client.fetch_channel(channel_or_user_id)
+    except Exception:
+        raise RuntimeError(f"Cannot find Discord channel {channel_or_user_id}")
+
+
 def send_outbound(channel_id: int, text: str) -> None:
-    """Send a text message to a Discord channel/DM."""
+    """Send a text message to a Discord channel, thread or DM."""
     if not _running or _client is None:
         raise RuntimeError("Discord bot is not running")
 
     async def _send():
-        channel = _client.get_channel(channel_id)
-        if channel is None:
-            # Try fetching DM channel
-            try:
-                user = await _client.fetch_user(channel_id)
-                channel = await user.create_dm()
-            except Exception:
-                raise RuntimeError(f"Cannot find Discord channel {channel_id}")
+        channel = await _resolve_send_channel(channel_id)
 
         parts = _split_message(text)
         for part in parts:
@@ -854,10 +953,7 @@ def send_photo(channel_id: int, file_path: str,
 
     async def _send():
         import discord
-        channel = _client.get_channel(channel_id)
-        if channel is None:
-            user = await _client.fetch_user(channel_id)
-            channel = await user.create_dm()
+        channel = await _resolve_send_channel(channel_id)
 
         f = discord.File(file_path, filename=Path(file_path).name)
         await channel.send(content=caption or "", file=f)
@@ -1009,6 +1105,391 @@ def _is_authorised(user_id: int) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Inbound message handling
+# ──────────────────────────────────────────────────────────────────────
+async def _on_discord_message(client, message) -> None:
+    """Route a Discord message: a DM, a mention, or a reply in a thread Row-Bot is part of."""
+    # Ignore bot's own messages
+    if message.author == client.user:
+        return
+
+    kind = _channel_kind(message.channel)
+    # Handle DMs
+    if kind == "dm":
+        await _process_message(client, message)
+        return
+
+    # Handle mentions in servers
+    if client.user in message.mentions:
+        await _process_message(client, message, is_mention=True)
+        return
+
+    # A reply in a Discord thread that is a Row-Bot conversation continues it
+    # without a mention; other people talking there are left alone.
+    if (
+        kind == "thread"
+        and not getattr(message.author, "bot", False)
+        and ch_conversations.known_thread("discord", str(message.channel.id))
+        and _is_authorised(message.author.id)
+    ):
+        await _process_message(client, message)
+
+
+async def _send_captured_media(channel, images: list[bytes], video_paths: list[str]) -> None:
+    try:
+        import discord
+    except Exception:
+        return
+    for img_bytes in images:
+        try:
+            import io
+            f = discord.File(io.BytesIO(img_bytes), filename="image.png")
+            await channel.send(file=f)
+        except Exception as exc:
+            log.warning("Failed to send Discord image: %s", exc)
+    for vpath in video_paths:
+        try:
+            f = discord.File(vpath, filename="video.mp4")
+            await channel.send(file=f)
+        except Exception as exc:
+            log.warning("Failed to send Discord video: %s", exc)
+
+
+async def _attachment_turn_text(message, caption: str, channel) -> str | None:
+    """All of a message's attachments as one user message, or ``None`` when unreadable.
+
+    Each image still gets its vision pre-call and each voice note its
+    transcription; their text results go into one agent turn.
+    """
+    from row_bot.channels.media import InboundAttachment, build_attachment_turn
+
+    attachments: list[InboundAttachment] = []
+    for attachment in message.attachments:
+        filename = attachment.filename
+        try:
+            file_data = await attachment.read()
+        except Exception as exc:
+            log.warning("Failed to download Discord attachment %s: %s",
+                         filename, exc)
+            continue
+        attachments.append(InboundAttachment(
+            filename=filename,
+            data=file_data,
+            content_type=attachment.content_type or "",
+        ))
+    if not attachments:
+        return None
+    turn = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: build_attachment_turn(attachments, caption)
+    )
+    if not turn.usable:
+        await channel.send("⚠️ I couldn't read that attachment.")
+        return None
+    return turn.text
+
+
+async def _process_message(client, message, is_mention: bool = False) -> None:
+    user_id = message.author.id
+    channel_id = message.channel.id
+    text = message.content.strip()
+
+    # Strip bot mention
+    if is_mention and client.user:
+        text = text.replace(f"<@{client.user.id}>", "").replace(f"<@!{client.user.id}>", "").strip()
+
+    if not text and not message.attachments:
+        return
+
+    # Auth check
+    if not _is_authorised(user_id):
+        if text and ch_auth.verify_pairing_code("discord", str(user_id), text):
+            await message.channel.send(
+                "✅ Paired successfully! You can now chat with Row-Bot."
+            )
+            return
+        await message.channel.send(
+            "🔒 Not authorised. Send your pairing code to get started."
+        )
+        return
+
+    from row_bot.channels.base import record_activity
+    record_activity("discord")
+
+    # The conversation's channel: in a server, a mention opens a Discord
+    # thread for it, so it is only worked out once something needs it.
+    conversation: dict[str, Any] = {}
+
+    async def _conversation_here():
+        if "channel" not in conversation:
+            conversation["channel"] = await _conversation_channel(message, text)
+        return conversation["channel"]
+
+    # Slash command dispatch
+    if text:
+        needs_conversation = (
+            ch_commands.is_thread_scoped_command(text)
+            or ch_commands.command_token(text) in ch_commands.NEW_COMMAND_TOKENS
+        )
+        command_channel = await _conversation_here() if needs_conversation else message.channel
+        _cmd_thread_id = (
+            _get_or_create_thread(command_channel.id, name=_conversation_name(command_channel, text))
+            if ch_commands.is_thread_scoped_command(text)
+            else None
+        )
+        goal_start = ch_runtime.prepare_channel_goal_start(text, _cmd_thread_id)
+        if goal_start is not None and _cmd_thread_id:
+            config = {"configurable": {"thread_id": _cmd_thread_id}}
+            _goal_run_turn, _goal_send_text = _discord_goal_callbacks(command_channel)
+
+            await _send_discord_safe_text(command_channel, ch_runtime.format_goal_started_ack(goal_start))
+            result = await ch_runtime.run_channel_goal_async(
+                channel_name="discord",
+                thread_id=_cmd_thread_id,
+                config=config,
+                first_prompt=goal_start.prompt,
+                run_turn=_goal_run_turn,
+                send_text=_goal_send_text,
+            )
+            if result.interrupt_data:
+                await _send_discord_interrupt_approval_card(
+                    command_channel,
+                    result.interrupt_data,
+                    config,
+                )
+            return
+
+        def _new_conversation() -> str | None:
+            _new_thread(command_channel.id)
+            _drop_discord_interrupts(int(command_channel.id))
+            if command_channel is not message.channel:
+                return "🆕 Started a new conversation. Reply in this thread to continue it."
+            if _channel_kind(command_channel) == "thread":
+                return (
+                    "🆕 This thread now continues in a new conversation. "
+                    "The earlier one stays in Row-Bot."
+                )
+            return None
+
+        cmd_response = ch_commands.dispatch(
+            "discord",
+            text,
+            thread_id=_cmd_thread_id,
+            new_conversation=_new_conversation if needs_conversation else None,
+        )
+        if cmd_response is not None:
+            await command_channel.send(cmd_response)
+            return
+
+    # Attachments (images, files, audio) become one turn with the message's text
+    name_text = text
+    if message.attachments:
+        attachment_text = await _attachment_turn_text(message, text, await _conversation_here())
+        if attachment_text is None:
+            return
+        text = attachment_text
+
+    # Check pending task approvals first (background workflows)
+    from row_bot.channels import approval as approval_helpers
+    with _pending_lock:
+        _msg_key = _task_approval_by_channel.get(channel_id)
+        task_approval = _pending_task_approvals.get(_msg_key) if _msg_key else None
+    if task_approval:
+        decision = approval_helpers.is_approval_text(text)
+        if decision is None:
+            await message.channel.send(
+                "There's a pending approval - use the buttons, "
+                "or reply yes/no."
+            )
+            return
+        if decision is not None:
+            with _pending_lock:
+                _pending_task_approvals.pop(_msg_key, None)
+                _task_approval_by_channel.pop(channel_id, None)
+            try:
+                from row_bot.tasks import respond_to_approval
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: respond_to_approval(
+                        task_approval["resume_token"], decision,
+                        note=f"{'Approved' if decision else 'Denied'} via Discord",
+                        source="discord",
+                    ),
+                )
+                action = "✅ Approved" if decision else "❌ Denied"
+                if result:
+                    await message.channel.send(
+                        f"{action} — {task_approval['task_name']}")
+                else:
+                    await message.channel.send(
+                        "⚠️ Could not process approval — it may have expired.")
+            except Exception as exc:
+                log.error("Task approval error: %s", exc)
+                await message.channel.send(
+                    f"⚠️ Error processing approval: {exc}")
+            return
+
+    # Check pending live-chat interrupts
+    interrupt = _peek_discord_interrupt(channel_id)
+
+    if interrupt:
+        decision = approval_helpers.is_approval_text(text)
+        if decision is None:
+            await message.channel.send(
+                "There's a pending approval - please use the approval "
+                "buttons or reply yes/no first."
+            )
+            return
+        interrupt = _pop_discord_interrupt(channel_id=channel_id)
+        if interrupt is None:
+            await message.channel.send("This approval is no longer pending.")
+            return
+        approved = bool(decision)
+        config = interrupt.get("config", {})
+        interrupt_ids = approval_helpers.extract_interrupt_ids(
+            interrupt.get("data")
+        )
+        ch_runtime.resolve_goal_approval_for_config(config, approved)
+
+        answer, new_interrupt, captured, vid_paths, delivery = await _stream_agent_resume_to_discord(
+            message.channel,
+            config,
+            approved,
+            interrupt_ids=interrupt_ids,
+        )
+        if answer and not delivery.delivered and not delivery.uncertain:
+            await _send_discord_safe_text(message.channel, answer)
+        await _send_captured_media(message.channel, captured, vid_paths)
+        if new_interrupt:
+            await _send_discord_interrupt_approval_card(
+                message.channel,
+                new_interrupt,
+                config,
+            )
+        elif answer and not ch_runtime.channel_turn_is_suspended(answer):
+            thread_id = ch_runtime.thread_id_from_config(config)
+            if thread_id:
+                _goal_run_turn, _goal_send_text = _discord_goal_callbacks(message.channel)
+
+                goal_result = await ch_runtime.continue_channel_goal_after_turn_async(
+                    channel_name="discord",
+                    thread_id=thread_id,
+                    config=config,
+                    assistant_text=answer,
+                    interrupt_data=None,
+                    run_turn=_goal_run_turn,
+                    send_text=_goal_send_text,
+                )
+                if goal_result.interrupt_data:
+                    await _send_discord_interrupt_approval_card(
+                        message.channel,
+                        goal_result.interrupt_data,
+                        config,
+                    )
+        return
+
+    # Normal message
+    channel = await _conversation_here()
+    thread_id = _get_or_create_thread(channel.id, name=_conversation_name(channel, name_text))
+    config = {"configurable": {"thread_id": thread_id}}
+
+    # Add reaction to show processing + typing indicator
+    try:
+        await message.add_reaction("👀")
+    except Exception:
+        pass
+    try:
+        await channel.trigger_typing()
+    except Exception:
+        pass
+
+    try:
+        answer, interrupt_data, captured_images, captured_video_paths, delivery = await _stream_agent_turn_to_discord(
+            channel,
+            text,
+            config,
+        )
+    except Exception as exc:
+        log.error("Agent error for channel %s: %s", channel_id, exc)
+        from row_bot.channels.thread_repair import is_corrupt_thread_error
+        if is_corrupt_thread_error(exc):
+            try:
+                from row_bot.agent import repair_orphaned_tool_calls
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None, repair_orphaned_tool_calls, None, config
+                )
+                log.info("Repaired orphaned tool calls for %s, retrying", channel_id)
+                answer, interrupt_data, captured_images, captured_video_paths = await loop.run_in_executor(
+                    None, _run_agent_sync, text, config
+                )
+                delivery = ChannelDeliveryResult(
+                    delivered=False,
+                    streamed=False,
+                    finalized=False,
+                    fallback_sent=False,
+                    transport="discord:repair",
+                    final_text=answer,
+                    error="repair retry used non-streaming fallback",
+                )
+            except Exception as retry_exc:
+                log.error("Retry after repair failed: %s", retry_exc)
+                # The stuck conversation stays in Row-Bot; this chat moves on.
+                _new_thread(channel.id)
+                try:
+                    await message.remove_reaction("👀", client.user)
+                    await message.add_reaction("💔")
+                except Exception:
+                    pass
+                await channel.send(
+                    "⚠️ The previous conversation had a stuck tool call "
+                    "and couldn't be repaired.\n"
+                    "🆕 I've started a fresh thread — please resend your message.")
+                return
+        else:
+            try:
+                await message.remove_reaction("👀", client.user)
+                await message.add_reaction("💔")
+            except Exception:
+                pass
+            await channel.send(f"⚠️ Error: {exc}")
+            return
+
+    # Update reaction
+    try:
+        await message.remove_reaction("👀", client.user)
+        await message.add_reaction("👍")
+    except Exception:
+        pass
+
+    # Extract YouTube URLs for separate messages (auto-preview)
+    from row_bot.channels import extract_youtube_urls
+    if ch_runtime.channel_turn_is_suspended(answer):
+        return
+    clean_answer, yt_urls = extract_youtube_urls(answer) if answer else ("", [])
+
+    # If streaming/final delivery covered the response, skip re-sending.
+    if delivery.delivered and not interrupt_data:
+        for url in yt_urls:
+            await channel.send(url)
+        await _send_captured_media(channel, captured_images, captured_video_paths)
+    else:
+        if clean_answer and not delivery.uncertain:
+            for part in _split_message(clean_answer):
+                await channel.send(part)
+        for url in yt_urls:
+            await channel.send(url)
+        await _send_captured_media(channel, captured_images, captured_video_paths)
+
+    # Store interrupt
+    if interrupt_data:
+        await _send_discord_interrupt_approval_card(
+            channel,
+            interrupt_data,
+            config,
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Bot lifecycle
 # ──────────────────────────────────────────────────────────────────────
 async def start_bot() -> bool:
@@ -1034,6 +1515,9 @@ async def start_bot() -> bool:
         intents.reactions = True
 
         client = discord.Client(intents=intents)
+        # A permission granted since the last start gets a fresh try.
+        _thread_creation_failed.clear()
+        _thread_fallback_logged.clear()
 
         @client.event
         async def on_ready():
@@ -1043,400 +1527,7 @@ async def start_bot() -> bool:
 
         @client.event
         async def on_message(message):
-            # Ignore bot's own messages
-            if message.author == client.user:
-                return
-
-            # Handle DMs
-            if isinstance(message.channel, discord.DMChannel):
-                await _process_message(message)
-                return
-
-            # Handle mentions in servers
-            if client.user in message.mentions:
-                await _process_message(message, is_mention=True)
-
-        async def _process_message(message, is_mention: bool = False):
-            user_id = message.author.id
-            channel_id = message.channel.id
-            text = message.content.strip()
-
-            # Strip bot mention
-            if is_mention and client.user:
-                text = text.replace(f"<@{client.user.id}>", "").strip()
-
-            if not text and not message.attachments:
-                return
-
-            # Auth check
-            if not _is_authorised(user_id):
-                if text and ch_auth.verify_pairing_code("discord", str(user_id), text):
-                    await message.channel.send(
-                        "✅ Paired successfully! You can now chat with Row-Bot."
-                    )
-                    return
-                await message.channel.send(
-                    "🔒 Not authorised. Send your pairing code to get started."
-                )
-                return
-
-            from row_bot.channels.base import record_activity
-            record_activity("discord")
-
-            # Slash command dispatch
-            if text:
-                _cmd_thread_id = (
-                    _get_or_create_thread(channel_id)
-                    if ch_commands.is_thread_scoped_command(text)
-                    else None
-                )
-                goal_start = ch_runtime.prepare_channel_goal_start(text, _cmd_thread_id)
-                if goal_start is not None and _cmd_thread_id:
-                    config = {"configurable": {"thread_id": _cmd_thread_id}}
-                    _goal_run_turn, _goal_send_text = _discord_goal_callbacks(message.channel)
-
-                    await _send_discord_safe_text(message.channel, ch_runtime.format_goal_started_ack(goal_start))
-                    result = await ch_runtime.run_channel_goal_async(
-                        channel_name="discord",
-                        thread_id=_cmd_thread_id,
-                        config=config,
-                        first_prompt=goal_start.prompt,
-                        run_turn=_goal_run_turn,
-                        send_text=_goal_send_text,
-                    )
-                    if result.interrupt_data:
-                        await _send_discord_interrupt_approval_card(
-                            message.channel,
-                            result.interrupt_data,
-                            config,
-                        )
-                    return
-                cmd_response = ch_commands.dispatch(
-                    "discord",
-                    text,
-                    thread_id=_cmd_thread_id,
-                )
-                if cmd_response is not None:
-                    await message.channel.send(cmd_response)
-                    return
-
-            # Handle attachments (images, files, audio)
-            if message.attachments:
-                await _handle_attachments(message, text)
-                return
-
-            # Check pending task approvals first (background workflows)
-            from row_bot.channels import approval as approval_helpers
-            with _pending_lock:
-                _msg_key = _task_approval_by_channel.get(channel_id)
-                task_approval = _pending_task_approvals.get(_msg_key) if _msg_key else None
-            if task_approval:
-                decision = approval_helpers.is_approval_text(text)
-                if decision is None:
-                    await message.channel.send(
-                        "There's a pending approval - use the buttons, "
-                        "or reply yes/no."
-                    )
-                    return
-                if decision is not None:
-                    with _pending_lock:
-                        _pending_task_approvals.pop(_msg_key, None)
-                        _task_approval_by_channel.pop(channel_id, None)
-                    try:
-                        from row_bot.tasks import respond_to_approval
-                        result = await asyncio.get_event_loop().run_in_executor(
-                            None,
-                            lambda: respond_to_approval(
-                                task_approval["resume_token"], decision,
-                                note=f"{'Approved' if decision else 'Denied'} via Discord",
-                                source="discord",
-                            ),
-                        )
-                        action = "✅ Approved" if decision else "❌ Denied"
-                        if result:
-                            await message.channel.send(
-                                f"{action} — {task_approval['task_name']}")
-                        else:
-                            await message.channel.send(
-                                "⚠️ Could not process approval — it may have expired.")
-                    except Exception as exc:
-                        log.error("Task approval error: %s", exc)
-                        await message.channel.send(
-                            f"⚠️ Error processing approval: {exc}")
-                    return
-
-            # Check pending live-chat interrupts
-            interrupt = _peek_discord_interrupt(channel_id)
-
-            if interrupt:
-                decision = approval_helpers.is_approval_text(text)
-                if decision is None:
-                    await message.channel.send(
-                        "There's a pending approval - please use the approval "
-                        "buttons or reply yes/no first."
-                    )
-                    return
-                interrupt = _pop_discord_interrupt(channel_id=channel_id)
-                if interrupt is None:
-                    await message.channel.send("This approval is no longer pending.")
-                    return
-                approved = bool(decision)
-                config = interrupt.get("config", {})
-                interrupt_ids = approval_helpers.extract_interrupt_ids(
-                    interrupt.get("data")
-                )
-                ch_runtime.resolve_goal_approval_for_config(config, approved)
-
-                answer, new_interrupt, captured, vid_paths, delivery = await _stream_agent_resume_to_discord(
-                    message.channel,
-                    config,
-                    approved,
-                    interrupt_ids=interrupt_ids,
-                )
-                if answer and not delivery.delivered and not delivery.uncertain:
-                    await _send_discord_safe_text(message.channel, answer)
-                for img_bytes in captured:
-                    try:
-                        import io
-                        f = discord.File(io.BytesIO(img_bytes), filename="image.png")
-                        await message.channel.send(file=f)
-                    except Exception as exc:
-                        log.warning("Failed to send Discord image: %s", exc)
-                for vpath in vid_paths:
-                    try:
-                        f = discord.File(vpath, filename="video.mp4")
-                        await message.channel.send(file=f)
-                    except Exception as exc:
-                        log.warning("Failed to send Discord video: %s", exc)
-                if new_interrupt:
-                    await _send_discord_interrupt_approval_card(
-                        message.channel,
-                        new_interrupt,
-                        config,
-                    )
-                elif answer and not ch_runtime.channel_turn_is_suspended(answer):
-                    thread_id = ch_runtime.thread_id_from_config(config)
-                    if thread_id:
-                        _goal_run_turn, _goal_send_text = _discord_goal_callbacks(message.channel)
-
-                        goal_result = await ch_runtime.continue_channel_goal_after_turn_async(
-                            channel_name="discord",
-                            thread_id=thread_id,
-                            config=config,
-                            assistant_text=answer,
-                            interrupt_data=None,
-                            run_turn=_goal_run_turn,
-                            send_text=_goal_send_text,
-                        )
-                        if goal_result.interrupt_data:
-                            await _send_discord_interrupt_approval_card(
-                                message.channel,
-                                goal_result.interrupt_data,
-                                config,
-                            )
-                return
-
-            # Normal message
-            thread_id = _get_or_create_thread(channel_id)
-            config = {"configurable": {"thread_id": thread_id}}
-
-            # Add reaction to show processing + typing indicator
-            try:
-                await message.add_reaction("👀")
-            except Exception:
-                pass
-            try:
-                await message.channel.trigger_typing()
-            except Exception:
-                pass
-
-            try:
-                answer, interrupt_data, captured_images, captured_video_paths, delivery = await _stream_agent_turn_to_discord(
-                    message.channel,
-                    text,
-                    config,
-                )
-            except Exception as exc:
-                log.error("Agent error for channel %s: %s", channel_id, exc)
-                from row_bot.channels.thread_repair import is_corrupt_thread_error
-                if is_corrupt_thread_error(exc):
-                    try:
-                        from row_bot.agent import repair_orphaned_tool_calls
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None, repair_orphaned_tool_calls, None, config
-                        )
-                        log.info("Repaired orphaned tool calls for %s, retrying", channel_id)
-                        answer, interrupt_data, captured_images, captured_video_paths = await loop.run_in_executor(
-                            None, _run_agent_sync, text, config
-                        )
-                        delivery = ChannelDeliveryResult(
-                            delivered=False,
-                            streamed=False,
-                            finalized=False,
-                            fallback_sent=False,
-                            transport="discord:repair",
-                            final_text=answer,
-                            error="repair retry used non-streaming fallback",
-                        )
-                    except Exception as retry_exc:
-                        log.error("Retry after repair failed: %s", retry_exc)
-                        _new_thread(channel_id)
-                        try:
-                            await message.remove_reaction("👀", client.user)
-                            await message.add_reaction("💔")
-                        except Exception:
-                            pass
-                        await message.channel.send(
-                            "⚠️ The previous conversation had a stuck tool call "
-                            "and couldn't be repaired.\n"
-                            "🆕 I've started a fresh thread — please resend your message.")
-                        return
-                else:
-                    try:
-                        await message.remove_reaction("👀", client.user)
-                        await message.add_reaction("💔")
-                    except Exception:
-                        pass
-                    await message.channel.send(f"⚠️ Error: {exc}")
-                    return
-
-            # Update reaction
-            try:
-                await message.remove_reaction("👀", client.user)
-                await message.add_reaction("👍")
-            except Exception:
-                pass
-
-            # Extract YouTube URLs for separate messages (auto-preview)
-            from row_bot.channels import extract_youtube_urls
-            if ch_runtime.channel_turn_is_suspended(answer):
-                return
-            clean_answer, yt_urls = extract_youtube_urls(answer) if answer else ("", [])
-
-            # If streaming/final delivery covered the response, skip re-sending.
-            if delivery.delivered and not interrupt_data:
-                for url in yt_urls:
-                    await message.channel.send(url)
-                for img_bytes in captured_images:
-                    try:
-                        import io
-                        f = discord.File(io.BytesIO(img_bytes), filename="image.png")
-                        await message.channel.send(file=f)
-                    except Exception as exc:
-                        log.warning("Failed to send Discord image: %s", exc)
-                for vpath in captured_video_paths:
-                    try:
-                        f = discord.File(vpath, filename="video.mp4")
-                        await message.channel.send(file=f)
-                    except Exception as exc:
-                        log.warning("Failed to send Discord video: %s", exc)
-            else:
-                if clean_answer and not delivery.uncertain:
-                    for part in _split_message(clean_answer):
-                        await message.channel.send(part)
-                for url in yt_urls:
-                    await message.channel.send(url)
-                for img_bytes in captured_images:
-                    try:
-                        import io
-                        f = discord.File(io.BytesIO(img_bytes), filename="image.png")
-                        await message.channel.send(file=f)
-                    except Exception as exc:
-                        log.warning("Failed to send Discord image: %s", exc)
-                for vpath in captured_video_paths:
-                    try:
-                        f = discord.File(vpath, filename="video.mp4")
-                        await message.channel.send(file=f)
-                    except Exception as exc:
-                        log.warning("Failed to send Discord video: %s", exc)
-
-            # Store interrupt
-            if interrupt_data:
-                await _send_discord_interrupt_approval_card(
-                    message.channel,
-                    interrupt_data,
-                    config,
-                )
-
-        async def _handle_attachments(message, caption: str):
-            """Process file attachments."""
-            from row_bot.channels.media import (
-                transcribe_audio, analyze_image, save_inbound_file,
-                extract_document_text, copy_to_workspace,
-            )
-
-            channel_id = message.channel.id
-            thread_id = _get_or_create_thread(channel_id)
-            config = {"configurable": {"thread_id": thread_id}}
-
-            for attachment in message.attachments:
-                content_type = attachment.content_type or ""
-                filename = attachment.filename
-
-                try:
-                    file_data = await attachment.read()
-                except Exception as exc:
-                    log.warning("Failed to download Discord attachment %s: %s",
-                                 filename, exc)
-                    continue
-
-                if content_type.startswith("audio/"):
-                    ext = Path(filename).suffix or ".ogg"
-                    transcript = transcribe_audio(file_data, ext)
-                    if transcript:
-                        user_text = f"[Voice message transcription]: {transcript}"
-                        if caption:
-                            user_text += f"\n\nCaption: {caption}"
-                        answer, _, _ = await asyncio.get_event_loop().run_in_executor(
-                            None, _run_agent_sync, user_text, config
-                        )
-                        if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                            for part in _split_message(answer):
-                                await message.channel.send(part)
-
-                elif content_type.startswith("image/"):
-                    analysis = analyze_image(file_data,
-                                              caption or "Describe this image")
-                    if analysis:
-                        user_text = f"[Image analysis]: {analysis}"
-                        if caption:
-                            user_text += f"\n\nUser said: {caption}"
-                        answer, _, _ = await asyncio.get_event_loop().run_in_executor(
-                            None, _run_agent_sync, user_text, config
-                        )
-                        if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                            for part in _split_message(answer):
-                                await message.channel.send(part)
-
-                else:
-                    saved = save_inbound_file(file_data, filename)
-                    extracted = extract_document_text(file_data, filename)
-                    ws_rel = copy_to_workspace(saved)
-
-                    parts = [f"[User sent a file: {filename}]"]
-                    if ws_rel:
-                        parts.append(f"Workspace path: {ws_rel}")
-                    else:
-                        parts.append(f"Saved to: {saved}")
-                    if extracted:
-                        parts.append(
-                            f"\n--- File content ---\n{extracted}"
-                            f"\n--- End of file ---")
-                    else:
-                        parts.append(
-                            "(Could not extract text — file may be "
-                            "image-based or unsupported format)")
-                    if caption:
-                        parts.append(f"\nUser's message: {caption}")
-
-                    user_text = "\n".join(parts)
-                    answer, _, _ = await asyncio.get_event_loop().run_in_executor(
-                        None, _run_agent_sync, user_text, config
-                    )
-                    if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                        for part in _split_message(answer):
-                            await message.channel.send(part)
+            await _on_discord_message(client, message)
 
         # Run bot in background thread
         _client = client
@@ -1548,10 +1639,15 @@ class DiscordChannel(Channel):
             "3. Enable **Privileged Gateway Intents**: `MESSAGE CONTENT`\n"
             "4. **OAuth2 → URL Generator** → scopes: `bot` → "
             "permissions: Send Messages, Attach Files, "
-            "Read Message History, Add Reactions\n"
+            "Read Message History, Add Reactions, "
+            "Create Public Threads, Send Messages in Threads\n"
             "5. Use the URL to invite the bot to your server\n"
             "6. Paste the **Bot Token** below and click **Save**\n"
-            "7. Click **▶️ Start Bot**"
+            "7. Click **▶️ Start Bot**\n\n"
+            "In a server, mention the bot to start a conversation: it opens a "
+            "thread for it, and replies there continue it. Without the thread "
+            "permissions, a channel keeps one conversation; send `/new` to "
+            "start a fresh one. A DM is one conversation too."
         )
 
     @property
@@ -1649,8 +1745,9 @@ class DiscordChannel(Channel):
                 raise RuntimeError("Discord bot is not running")
 
             async def _send():
-                user = await _client.fetch_user(int(target))
-                channel = await user.create_dm()
+                # A user id opens their DM; a conversation's channel or
+                # Discord thread (a parent thread's target) is used as is.
+                channel = await _resolve_send_channel(int(target))
                 view = _make_discord_task_approval_view()
                 kwargs = {"view": view} if view is not None else {}
                 sent = await channel.send(rich_text, **kwargs)

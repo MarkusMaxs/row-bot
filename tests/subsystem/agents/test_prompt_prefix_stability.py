@@ -627,18 +627,6 @@ SCENARIOS: dict[str, Callable[[Harness], list[tuple[dict, dict]]]] = {
 # that fixes a case removes its entry here; strict xfail fails the run if a fixed case stays marked.
 ALL_SHAPES = "*"
 KNOWN_BREAKS: dict[str, dict[str, str]] = {
-    "turn_masks_old_tool_output": {
-        ALL_SHAPES: "fixed by WP A4: rolling 5-turn masking rewrites an old tool result (F19)",
-    },
-    "iteration_shrinks_tool_outputs": {
-        ALL_SHAPES: "fixed by WP A4: proportional shrink rewrites every earlier tool result (F20)",
-    },
-    "iteration_stubs_old_browser_snapshot": {
-        ALL_SHAPES: "fixed by WP A4: browser stubbing rewrites an earlier snapshot (F21)",
-    },
-    "iteration_dedups_repeated_tool_output": {
-        ALL_SHAPES: "fixed by WP A4: dedup rewrites the earlier copy of a repeated result (F21)",
-    },
     "turn_media_request_changes_tools": {
         ALL_SHAPES: "fixed by WP A5: a media keyword changes the bound tool set for one turn (F38)",
     },

@@ -4,7 +4,9 @@ The agent calls ``create_chart`` with a structured specification (chart type,
 column names, optional parameters).  The tool loads the data from a
 workspace file or a cached attachment, builds a Plotly figure, and returns
 its JSON representation wrapped in a ``__CHART__`` marker so the UI layer
-can render it inline.
+can render it inline. When the result is created, the figure moves to the
+client and the model reads a short summary of the chart instead
+(``row_bot.rendered_results``).
 """
 
 from __future__ import annotations
@@ -488,9 +490,9 @@ def _create_chart(
 
     # Serialize the figure as JSON and wrap in marker
     fig_json = fig.to_json()
-    chart_info = f"{chart_type} chart of {data_source}"
-    if title:
-        chart_info = title
+    # Named by its title; inline data is not repeated back.
+    source = "inline data" if _looks_like_inline_data(data_source) else data_source
+    chart_info = title or (fig.layout.title.text or "") or f"{chart_type} chart of {source}"
 
     result = f"{_CHART_MARKER}{fig_json}\n\nChart created: {chart_info} ({len(df):,} data points)"
 

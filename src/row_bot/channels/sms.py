@@ -35,8 +35,8 @@ from row_bot.channels.auth_store import get_channel_secret
 from row_bot.channels import commands as ch_commands
 from row_bot.channels import auth as ch_auth
 from row_bot.channels import config as ch_config
+from row_bot.channels import conversations as ch_conversations
 from row_bot.channels import runtime as ch_runtime
-from row_bot.threads import _save_thread_meta
 
 log = logging.getLogger("row_bot.sms")
 
@@ -149,52 +149,37 @@ def _make_thread_id(phone: str) -> str:
     return f"sms_{safe}"
 
 
-def _get_or_create_thread(phone: str) -> str:
-    thread_id = _make_thread_id(phone)
-    try:
-        from row_bot.tasks import record_thread_channel_ref
+def _conversation(phone: str) -> ch_conversations.ChannelConversation:
+    # One rolling conversation per contact; /new moves it to a fresh one (D6).
+    return ch_conversations.ChannelConversation(
+        channel="sms",
+        key=str(phone),
+        default_thread_id=_make_thread_id(phone),
+        name=f"📱 SMS – {phone}",
+        target=str(phone),
+    )
 
-        record_thread_channel_ref(
-            thread_id,
-            channel="sms",
-            target=phone,
-            external_conversation_id=str(phone),
-        )
-    except Exception:
-        log.debug("SMS thread channel ref skipped", exc_info=True)
-    name = f"📱 SMS – {phone}"
-    _save_thread_meta(
-        thread_id,
-        name,
-        seed_default_skills=True,
-        allow_recreate=True,
-    )  # creates or bumps updated_at
-    return thread_id
+
+def _get_or_create_thread(phone: str) -> str:
+    """Return the contact's current conversation, starting one if needed."""
+    return ch_conversations.current_thread(_conversation(phone))
 
 
 def _new_thread(phone: str) -> str:
-    """Force-create a new thread for this phone number."""
-    import time as _time
-    suffix = str(int(_time.time()))
-    thread_id = f"sms_{phone.replace('+', '').replace('-', '')}_{suffix}"
-    try:
-        from row_bot.tasks import record_thread_channel_ref
+    """Move this contact to a fresh conversation; the earlier one stays in Row-Bot."""
+    return ch_conversations.start_new_thread(_conversation(phone))
 
-        record_thread_channel_ref(
-            thread_id,
-            channel="sms",
-            target=phone,
-            external_conversation_id=str(phone),
-        )
-    except Exception:
-        log.debug("SMS thread channel ref skipped", exc_info=True)
-    _save_thread_meta(
-        thread_id,
-        f"📱 SMS – {phone}",
-        seed_default_skills=True,
-        allow_recreate=True,
-    )
-    return thread_id
+
+def _new_conversation_for(phone: str):
+    """``/new`` for one contact: a fresh conversation, and no approval left waiting."""
+
+    def _new_conversation() -> str | None:
+        _new_thread(phone)
+        with _pending_lock:
+            _pending_interrupts.pop(phone, None)
+        return None
+
+    return _new_conversation
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -509,7 +494,12 @@ async def _handle_inbound_sms(request) -> Any:
             detail = approval_helpers.format_interrupt_text(result.interrupt_data)
             _send_reply(from_number, detail + "\nReply YES or NO.")
         return Response("<Response/>", media_type=_XML)
-    cmd_response = ch_commands.dispatch("sms", body, thread_id=_cmd_thread_id)
+    cmd_response = ch_commands.dispatch(
+        "sms",
+        body,
+        thread_id=_cmd_thread_id,
+        new_conversation=_new_conversation_for(from_number),
+    )
     if cmd_response is not None:
         _send_reply(from_number, cmd_response)
         return Response("<Response/>", media_type=_XML)

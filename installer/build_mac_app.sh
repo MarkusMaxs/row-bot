@@ -18,6 +18,9 @@
 # =============================================================================
 
 set -euo pipefail
+# Nothing run during the build writes timestamp .pyc files into the bundle; the
+# deterministic ones are compiled once the bundle is complete, before signing.
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -129,7 +132,7 @@ fi
 
 info "[2/6] Installing locked Python packages from requirements.txt..."
 "$PYTHON_PREFIX/bin/python3" -m pip install --upgrade pip setuptools wheel --quiet 2>&1 | tail -1 || true
-"$PYTHON_PREFIX/bin/python3" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet 2>&1 | tail -5
+"$PYTHON_PREFIX/bin/python3" -m pip install --no-compile -r "$PROJECT_DIR/requirements.txt" --quiet 2>&1 | tail -5
 "$PYTHON_PREFIX/bin/python3" "$PROJECT_DIR/scripts/verify_runtime_dependencies.py" all
 "$PYTHON_PREFIX/bin/python3" "$PROJECT_DIR/scripts/verify_client_assets.py" --root "$CLIENT_BUILD"
 ok "Python packages installed"
@@ -267,7 +270,7 @@ xcrun clang \
     -fobjc-arc \
     -fblocks \
     -framework Cocoa \
-    -mmacosx-version-min=11.0 \
+    -mmacosx-version-min=14.0 \
     "$HOST_SOURCE" \
     -o "$MACOS_DIR/row-bot"
 
@@ -297,7 +300,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
+    <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSUIElement</key>
@@ -364,8 +367,23 @@ fi
 BUNDLE_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)
 ok "Bundle size: $BUNDLE_SIZE"
 
+# The bundle is the seed version; staged versions share files with it through
+# clones, so nothing in it changes after install: ship .pyc that need no rewrite
+# (unchecked-hash) and do not depend on the build folder (-s). The tray host
+# sets PYTHONDONTWRITEBYTECODE.
+info "Compiling deterministic bytecode..."
+"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$RESOURCES" \
+    --invalidation-mode unchecked-hash "$APP_SRC"
+# Some packages ship sources that never compile (templates, old test data).
+"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$RESOURCES" \
+    --invalidation-mode unchecked-hash "$PYTHON_PREFIX/lib" >/dev/null || \
+    warn "Some library files did not compile; they run from source"
+"$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/install_layout.py" version-json \
+    --version "$VERSION" --python "$PYTHON_VERSION" --lock "$PROJECT_DIR/uv.lock" --out "$RESOURCES/version.json"
+ok "Bytecode compiled"
+
 info "Verifying assembled app runtime dependencies..."
-ROW_BOT_INSTALL_ROOT="$RESOURCES" PYTHONNOUSERSITE=1 \
+PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 \
     "$PYTHON_PREFIX/bin/python3" "$APP_SRC/scripts/verify_runtime_dependencies.py" all
 ok "Assembled app runtime dependencies verified"
 "$PYTHON_PREFIX/bin/python3" "$PROJECT_DIR/scripts/verify_client_assets.py" \

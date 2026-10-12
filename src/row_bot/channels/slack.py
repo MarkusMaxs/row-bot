@@ -39,6 +39,7 @@ from row_bot.channels.base import Channel, ChannelCapabilities, ConfigField
 from row_bot.channels.auth_store import get_channel_secret
 from row_bot.channels import commands as ch_commands
 from row_bot.channels import auth as ch_auth
+from row_bot.channels import conversations as ch_conversations
 from row_bot.channels import runtime as ch_runtime
 from row_bot.channels.streaming import (
     ChannelDeliveryResult,
@@ -50,7 +51,6 @@ from row_bot.channels.streaming import (
     consume_channel_producer,
     default_split_text,
 )
-from row_bot.threads import _save_thread_meta
 
 log = logging.getLogger("row_bot.slack")
 
@@ -142,59 +142,88 @@ def is_running() -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Thread management
+# Thread management (decision D6)
 # ──────────────────────────────────────────────────────────────────────
-def _make_thread_id(channel_id: str) -> str:
+# In a channel, each Slack thread is its own Row-Bot conversation, keyed by
+# (channel, thread_ts): a mention outside a thread starts one, and Row-Bot
+# replies under that message, so the message's ts becomes the thread_ts. A DM
+# keeps one rolling conversation, and /new moves it to a fresh one.
+_THREAD_TS_RE = _re.compile(r"^\d+\.\d+$")
+
+
+def _make_thread_id(channel_id: str, thread_ts: str | None = None) -> str:
+    if thread_ts:
+        return f"slack_{channel_id}_{str(thread_ts).replace('.', '_')}"
     return f"slack_{channel_id}"
 
 
-def _get_or_create_thread(channel_id: str) -> str:
-    """Return the Row-Bot thread ID for a Slack channel/DM, creating if needed."""
-    thread_id = _make_thread_id(channel_id)
+def _is_dm_channel(channel_id: str, channel_type: str = "") -> bool:
+    if channel_type:
+        return channel_type == "im"
+    return str(channel_id or "").startswith("D")
+
+
+def _slack_target(channel_id: str, thread_ts: str | None = None) -> str:
+    """A delivery target: the channel, plus the Slack thread for a channel conversation."""
+    return f"{channel_id}:{thread_ts}" if thread_ts else str(channel_id)
+
+
+def _split_slack_target(target: str | int) -> tuple[str, str | None]:
+    """``"C123:1700000000.000100"`` → ``("C123", "1700000000.000100")``; a plain id has no thread."""
+    text = str(target or "").strip()
+    channel_id, separator, thread_ts = text.rpartition(":")
+    if separator and channel_id and _THREAD_TS_RE.match(thread_ts):
+        return channel_id, thread_ts
+    return text, None
+
+
+def _conversation_thread_ts(event: dict) -> str | None:
+    """The Slack thread a channel conversation lives in; ``None`` in a DM."""
+    if _is_dm_channel(str(event.get("channel") or ""), str(event.get("channel_type") or "")):
+        return None
+    return str(event.get("thread_ts") or event.get("ts") or "") or None
+
+
+def _conversation(
+    channel_id: str,
+    thread_ts: str | None = None,
+    *,
+    first_text: str = "",
+) -> ch_conversations.ChannelConversation:
     name = f"💬 Slack – {channel_id}"
-    _save_thread_meta(
-        thread_id,
-        name,
-        seed_default_skills=True,
-        allow_recreate=True,
-    )  # creates or bumps updated_at
-    try:
-        from row_bot.tasks import record_thread_channel_ref
-
-        record_thread_channel_ref(
-            thread_id,
-            channel="slack",
-            target=channel_id,
-            external_conversation_id=str(channel_id),
-        )
-    except Exception:
-        log.debug("Slack thread channel ref skipped", exc_info=True)
-    return thread_id
-
-
-def _new_thread(channel_id: str) -> str:
-    """Force-create a new thread for this DM."""
-    import time
-    suffix = str(int(time.time()))
-    thread_id = f"slack_{channel_id}_{suffix}"
-    try:
-        from row_bot.tasks import record_thread_channel_ref
-
-        record_thread_channel_ref(
-            thread_id,
-            channel="slack",
-            target=channel_id,
-            external_conversation_id=str(channel_id),
-        )
-    except Exception:
-        log.debug("Slack thread channel ref skipped", exc_info=True)
-    _save_thread_meta(
-        thread_id,
-        f"💬 Slack – {channel_id}",
-        seed_default_skills=True,
-        allow_recreate=True,
+    if thread_ts:
+        words = ch_conversations.first_words(first_text)
+        if words:
+            name = f"💬 Slack – {words}"
+    target = _slack_target(channel_id, thread_ts)
+    return ch_conversations.ChannelConversation(
+        channel="slack",
+        key=target,
+        default_thread_id=_make_thread_id(channel_id, thread_ts),
+        name=name,
+        target=target,
     )
-    return thread_id
+
+
+def _get_or_create_thread(
+    channel_id: str,
+    thread_ts: str | None = None,
+    *,
+    first_text: str = "",
+) -> str:
+    """Return the Row-Bot thread for a DM, or for a Slack thread in a channel."""
+    return ch_conversations.current_thread(
+        _conversation(channel_id, thread_ts, first_text=first_text)
+    )
+
+
+def _new_thread(channel_id: str, thread_ts: str | None = None) -> str:
+    """Move a DM, or a Slack thread, to a fresh Row-Bot conversation."""
+    return ch_conversations.start_new_thread(_conversation(channel_id, thread_ts))
+
+
+def _mentions_bot(text: str) -> bool:
+    return bool(_bot_user_id) and f"<@{_bot_user_id}>" in str(text or "")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -624,12 +653,21 @@ def _schedule_coro(coro):
 
 
 def send_outbound(channel_id: str, text: str) -> None:
-    """Send a text message to a Slack channel/DM."""
+    """Send a text message to a Slack channel/DM, or into a Slack thread.
+
+    *channel_id* may name a thread as ``"C123:1700000000.000100"`` (the target
+    a channel conversation records), so late messages land in that thread.
+    """
     if not _running or _app is None:
         raise RuntimeError("Slack bot is not running")
+    channel, thread_ts = _split_slack_target(channel_id)
 
     async def _send():
-        await _app.client.chat_postMessage(channel=channel_id, text=text)
+        await _app.client.chat_postMessage(
+            channel=channel,
+            text=text,
+            **({"thread_ts": thread_ts} if thread_ts else {}),
+        )
 
     fut = _schedule_coro(_send())
     fut.result(timeout=30)
@@ -664,9 +702,12 @@ def _send_and_capture_channel(target: str, text: str,
     """
     if not _running or _app is None:
         raise RuntimeError("Slack bot is not running")
+    channel, thread_ts = _split_slack_target(target)
 
     async def _send():
-        kwargs: dict[str, Any] = {"channel": target, "text": text}
+        kwargs: dict[str, Any] = {"channel": channel, "text": text}
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
         if blocks:
             kwargs["blocks"] = blocks
         resp = await _app.client.chat_postMessage(**kwargs)
@@ -678,16 +719,18 @@ def _send_and_capture_channel(target: str, text: str,
 
 def send_photo(channel_id: str, file_path: str,
                caption: str | None = None) -> None:
-    """Upload and send a photo to a Slack channel/DM."""
+    """Upload and send a photo to a Slack channel/DM, or into a Slack thread."""
     if not _running or _app is None:
         raise RuntimeError("Slack bot is not running")
+    channel, thread_ts = _split_slack_target(channel_id)
 
     async def _send():
         await _app.client.files_upload_v2(
-            channel=channel_id,
+            channel=channel,
             file=file_path,
             title=caption or Path(file_path).name,
             initial_comment=caption or "",
+            **({"thread_ts": thread_ts} if thread_ts else {}),
         )
 
     fut = _schedule_coro(_send())
@@ -906,7 +949,9 @@ def _pop_slack_interrupt(
     channel_id: str,
     thread_ts: str | None = None,
     message_ts: str | None = None,
+    exact: bool = False,
 ) -> dict | None:
+    """Take a pending approval. ``exact`` keeps a channel's other threads out of it."""
     with _pending_lock:
         context_key = None
         if message_ts:
@@ -915,7 +960,7 @@ def _pop_slack_interrupt(
             exact_key = _slack_interrupt_context_key(channel_id, thread_ts)
             if exact_key in _pending_interrupts:
                 context_key = exact_key
-        if context_key is None:
+        if context_key is None and not exact:
             context_key = _interrupt_by_channel.get(str(channel_id))
         if context_key is None:
             return None
@@ -932,14 +977,40 @@ def _peek_slack_interrupt(
     *,
     channel_id: str,
     thread_ts: str | None = None,
+    exact: bool = False,
 ) -> dict | None:
+    """A pending approval for this place. In a channel each Slack thread has its own
+    (``exact``); in a DM a reply anywhere answers the DM's latest one."""
     with _pending_lock:
         exact_key = _slack_interrupt_context_key(channel_id, thread_ts)
         pending = _pending_interrupts.get(exact_key)
-        if pending is not None:
+        if pending is not None or exact:
             return pending
         context_key = _interrupt_by_channel.get(str(channel_id))
         return _pending_interrupts.get(context_key) if context_key else None
+
+
+def _drop_slack_interrupts(channel_id: str, thread_ts: str | None = None) -> None:
+    """Forget the approvals a conversation was waiting on once /new leaves it.
+
+    A Slack thread drops its own; a DM drops every one it has.
+    """
+    with _pending_lock:
+        if thread_ts:
+            keys = [_slack_interrupt_context_key(channel_id, thread_ts)]
+        else:
+            keys = [
+                key for key, pending in _pending_interrupts.items()
+                if str(pending.get("channel_id") or "") == str(channel_id)
+            ]
+        for key in keys:
+            if _pending_interrupts.pop(key, None) is None:
+                continue
+            if _interrupt_by_channel.get(str(channel_id)) == key:
+                _interrupt_by_channel.pop(str(channel_id), None)
+            for msg_ts, mapped_key in list(_interrupt_by_message.items()):
+                if mapped_key == key:
+                    _interrupt_by_message.pop(msg_ts, None)
 
 
 async def _send_slack_interrupt_approval_card(
@@ -985,6 +1056,48 @@ async def _send_slack_interrupt_approval_card(
         return None
 
 
+async def _upload_captured_media(
+    client,
+    channel_id: str,
+    images: list[bytes],
+    video_paths: list[str],
+    *,
+    thread_ts: str | None = None,
+    image_title: str = "🖼️ Image",
+    video_title: str = "🎬 Video",
+) -> None:
+    """Upload a turn's images and videos; into the Slack thread for a channel conversation."""
+    thread_kwargs = {"thread_ts": thread_ts} if thread_ts else {}
+    for img_bytes in images:
+        try:
+            import io
+            await client.files_upload_v2(
+                channel=channel_id,
+                file=io.BytesIO(img_bytes),
+                filename="image.png",
+                title=image_title,
+                **thread_kwargs,
+            )
+        except Exception as exc:
+            log.warning("Failed to send Slack image: %s", exc)
+    for vpath in video_paths:
+        try:
+            await client.files_upload_v2(
+                channel=channel_id,
+                file=vpath,
+                filename="video.mp4",
+                title=video_title,
+                **thread_kwargs,
+            )
+        except Exception as exc:
+            log.warning("Failed to send Slack video: %s", exc)
+
+
+def _media_thread_ts(channel_id: str, thread_ts: str | None) -> str | None:
+    """Media joins the Slack thread of a channel conversation; a DM keeps it at the top."""
+    return None if _is_dm_channel(channel_id) else thread_ts
+
+
 def _slack_goal_callbacks(client, say, *, channel_id: str, thread_ts: str | None = None):
     state: dict[str, ChannelDeliveryResult | None] = {"delivery": None}
 
@@ -997,27 +1110,13 @@ def _slack_goal_callbacks(client, say, *, channel_id: str, thread_ts: str | None
             thread_ts=thread_ts,
         )
         state["delivery"] = delivery
-        for img_bytes in captured_images:
-            try:
-                import io
-                await client.files_upload_v2(
-                    channel=channel_id,
-                    file=io.BytesIO(img_bytes),
-                    filename="image.png",
-                    title="🖼️ Image",
-                )
-            except Exception as exc:
-                log.warning("Failed to send Slack image: %s", exc)
-        for vpath in captured_video_paths:
-            try:
-                await client.files_upload_v2(
-                    channel=channel_id,
-                    file=vpath,
-                    filename="video.mp4",
-                    title="🎬 Video",
-                )
-            except Exception as exc:
-                log.warning("Failed to send Slack video: %s", exc)
+        await _upload_captured_media(
+            client,
+            channel_id,
+            captured_images,
+            captured_video_paths,
+            thread_ts=_media_thread_ts(channel_id, thread_ts),
+        )
         return answer, interrupt_data
 
     async def _goal_send_text(message: str) -> None:
@@ -1038,8 +1137,21 @@ def _slack_goal_callbacks(client, say, *, channel_id: str, thread_ts: str | None
 # ──────────────────────────────────────────────────────────────────────
 # Inbound message handling
 # ──────────────────────────────────────────────────────────────────────
-async def _handle_dm(event: dict, say, client) -> None:
-    """Handle a direct message to the bot."""
+async def _handle_dm(
+    event: dict,
+    say,
+    client,
+    *,
+    from_attachments: bool = False,
+    name_text: str | None = None,
+) -> None:
+    """Handle a message for Row-Bot: a DM, a mention, or a thread reply.
+
+    A DM has one rolling conversation; in a channel, each Slack thread is its
+    own (decision D6). ``from_attachments`` marks text built from a message's
+    files, which is never read as a command; ``name_text`` is what names a
+    conversation it starts.
+    """
     global _pending_interrupts
 
     user_id = event.get("user", "")
@@ -1053,87 +1165,111 @@ async def _handle_dm(event: dict, say, client) -> None:
     if not text:
         return
 
+    # A channel conversation lives in its Slack thread; a DM's replies stay
+    # where they always were.
+    conv_ts = _conversation_thread_ts(event)
+    reply_kwargs: dict[str, Any] = {"channel": channel_id}
+    if conv_ts:
+        reply_kwargs["thread_ts"] = conv_ts
+    first_text = text if name_text is None else name_text
+
     # Auth check — approve via DM pairing or user_id config
     if not _is_authorised(user_id):
         # Check if it's a pairing code
         if ch_auth.verify_pairing_code("slack", user_id, text):
             await say("✅ Paired successfully! You can now chat with Row-Bot.",
-                       channel=channel_id)
+                       **reply_kwargs)
             return
         await say("🔒 Not authorised. Send your pairing code to get started.",
-                   channel=channel_id)
+                   **reply_kwargs)
         return
 
     from row_bot.channels.base import record_activity
     record_activity("slack")
 
     # Slash command dispatch
-    _cmd_thread_id = (
-        _get_or_create_thread(channel_id)
-        if ch_commands.is_thread_scoped_command(text)
-        else None
-    )
-    goal_start = ch_runtime.prepare_channel_goal_start(text, _cmd_thread_id)
-    if goal_start is not None and _cmd_thread_id:
-        config = {"configurable": {"thread_id": _cmd_thread_id}}
-        thread_ts = event.get("thread_ts") or event.get("ts")
-        _goal_run_turn, _goal_send_text = _slack_goal_callbacks(
-            client,
-            say,
-            channel_id=channel_id,
-            thread_ts=thread_ts,
+    if not from_attachments:
+        _cmd_thread_id = (
+            _get_or_create_thread(channel_id, conv_ts, first_text=first_text)
+            if ch_commands.is_thread_scoped_command(text)
+            else None
         )
-
-        await _send_slack_safe_text(
-            say,
-            channel_id,
-            ch_runtime.format_goal_started_ack(goal_start),
-            thread_ts=thread_ts,
-        )
-        result = await ch_runtime.run_channel_goal_async(
-            channel_name="slack",
-            thread_id=_cmd_thread_id,
-            config=config,
-            first_prompt=goal_start.prompt,
-            run_turn=_goal_run_turn,
-            send_text=_goal_send_text,
-        )
-        if result.interrupt_data:
-            await _send_slack_interrupt_approval_card(
+        goal_start = ch_runtime.prepare_channel_goal_start(text, _cmd_thread_id)
+        if goal_start is not None and _cmd_thread_id:
+            config = {"configurable": {"thread_id": _cmd_thread_id}}
+            thread_ts = event.get("thread_ts") or event.get("ts")
+            _goal_run_turn, _goal_send_text = _slack_goal_callbacks(
                 client,
                 say,
                 channel_id=channel_id,
-                interrupt_data=result.interrupt_data,
-                config=config,
                 thread_ts=thread_ts,
             )
-        return
-    cmd_response = ch_commands.dispatch("slack", text, thread_id=_cmd_thread_id)
-    if cmd_response is not None:
-        await say(_md_to_mrkdwn(cmd_response), channel=channel_id)
-        return
 
-    # Handle /new specially — update thread
-    if text.lower().startswith("/new"):
-        _new_thread(channel_id)
+            await _send_slack_safe_text(
+                say,
+                channel_id,
+                ch_runtime.format_goal_started_ack(goal_start),
+                thread_ts=thread_ts,
+            )
+            result = await ch_runtime.run_channel_goal_async(
+                channel_name="slack",
+                thread_id=_cmd_thread_id,
+                config=config,
+                first_prompt=goal_start.prompt,
+                run_turn=_goal_run_turn,
+                send_text=_goal_send_text,
+            )
+            if result.interrupt_data:
+                await _send_slack_interrupt_approval_card(
+                    client,
+                    say,
+                    channel_id=channel_id,
+                    interrupt_data=result.interrupt_data,
+                    config=config,
+                    thread_ts=thread_ts,
+                )
+            return
+
+        def _new_conversation() -> str | None:
+            _new_thread(channel_id, conv_ts)
+            _drop_slack_interrupts(channel_id, conv_ts)
+            if conv_ts is None:
+                return None
+            if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
+                return (
+                    "🆕 This thread now continues in a new conversation. "
+                    "The earlier one stays in Row-Bot."
+                )
+            return "🆕 Started a new conversation. Reply in this thread to continue it."
+
+        cmd_response = ch_commands.dispatch(
+            "slack",
+            text,
+            thread_id=_cmd_thread_id,
+            new_conversation=_new_conversation,
+        )
+        if cmd_response is not None:
+            await say(_md_to_mrkdwn(cmd_response), **reply_kwargs)
+            return
 
     # Check pending task approvals first (background workflows)
     from row_bot.channels import approval as approval_helpers
+    approval_key = _slack_target(channel_id, conv_ts)
     with _pending_lock:
-        _ts_key = _approval_by_channel.get(channel_id)
+        _ts_key = _approval_by_channel.get(approval_key)
         task_approval = _pending_task_approvals.get(_ts_key) if _ts_key else None
     if task_approval:
         decision = approval_helpers.is_approval_text(text)
         if decision is None:
             await say(
                 "There's a pending approval - use the buttons, or reply yes/no.",
-                channel=channel_id,
+                **reply_kwargs,
             )
             return
         if decision is not None:
             with _pending_lock:
                 _pending_task_approvals.pop(_ts_key, None)
-                _approval_by_channel.pop(channel_id, None)
+                _approval_by_channel.pop(approval_key, None)
             try:
                 from row_bot.tasks import respond_to_approval
                 loop = asyncio.get_event_loop()
@@ -1156,24 +1292,26 @@ async def _handle_dm(event: dict, say, client) -> None:
                             )
                         except Exception:
                             await say(f"{action} — {task_approval['task_name']}",
-                                      channel=channel_id)
+                                      **reply_kwargs)
                     else:
                         await say(f"{action} — {task_approval['task_name']}",
-                                  channel=channel_id)
+                                  **reply_kwargs)
                 else:
                     await say("⚠️ Could not process approval — it may have expired.",
-                              channel=channel_id)
+                              **reply_kwargs)
             except Exception as exc:
                 log.error("Task approval error: %s", exc)
                 await say(f"⚠️ Error processing approval: {exc}",
-                          channel=channel_id)
+                          **reply_kwargs)
             return
 
-    # Check pending live-chat interrupts
+    # Check pending live-chat interrupts. In a channel only this Slack
+    # thread's own approval counts; another thread's is not answered here.
     incoming_thread_ts = event.get("thread_ts") or event.get("ts")
     interrupt = _peek_slack_interrupt(
         channel_id=channel_id,
         thread_ts=incoming_thread_ts,
+        exact=conv_ts is not None,
     )
 
     if interrupt:
@@ -1189,9 +1327,10 @@ async def _handle_dm(event: dict, say, client) -> None:
         interrupt = _pop_slack_interrupt(
             channel_id=channel_id,
             thread_ts=interrupt.get("thread_ts") or incoming_thread_ts,
+            exact=conv_ts is not None,
         )
         if interrupt is None:
-            await say("This approval is no longer pending.", channel=channel_id)
+            await say("This approval is no longer pending.", **reply_kwargs)
             return
         approved = bool(decision)
         config = interrupt.get("config", {})
@@ -1211,27 +1350,13 @@ async def _handle_dm(event: dict, say, client) -> None:
         )
         if answer and not delivery.delivered and not delivery.uncertain:
             await _send_slack_safe_text(say, channel_id, answer, thread_ts=thread_ts)
-        for img_bytes in captured:
-            try:
-                import io
-                await _app.client.files_upload_v2(
-                    channel=channel_id,
-                    file=io.BytesIO(img_bytes),
-                    filename="image.png",
-                    title="🖼️ Image",
-                )
-            except Exception as exc:
-                log.warning("Failed to send Slack image: %s", exc)
-        for vpath in captured_vids:
-            try:
-                await _app.client.files_upload_v2(
-                    channel=channel_id,
-                    file=vpath,
-                    filename="video.mp4",
-                    title="🎬 Video",
-                )
-            except Exception as exc:
-                log.warning("Failed to send Slack video: %s", exc)
+        await _upload_captured_media(
+            client,
+            channel_id,
+            captured,
+            captured_vids,
+            thread_ts=_media_thread_ts(channel_id, thread_ts),
+        )
         if new_interrupt:
             await _send_slack_interrupt_approval_card(
                 client,
@@ -1272,11 +1397,13 @@ async def _handle_dm(event: dict, say, client) -> None:
         return
 
     # Normal message — run agent
-    thread_id = _get_or_create_thread(channel_id)
+    thread_id = _get_or_create_thread(channel_id, conv_ts, first_text=first_text)
     config = {"configurable": {"thread_id": thread_id}}
 
     # Add typing reaction
     ts = event.get("ts", "")
+    reply_ts = event.get("thread_ts") or ts
+    media_ts = _media_thread_ts(channel_id, reply_ts)
     try:
         if ts:
             await client.reactions_add(channel=channel_id, name="eyes",
@@ -1290,7 +1417,7 @@ async def _handle_dm(event: dict, say, client) -> None:
             channel_id,
             text,
             config,
-            thread_ts=event.get("thread_ts") or ts,
+            thread_ts=reply_ts,
         )
 
     except Exception as exc:
@@ -1319,7 +1446,9 @@ async def _handle_dm(event: dict, say, client) -> None:
                 )
             except Exception as retry_exc:
                 log.error("Retry after repair failed: %s", retry_exc)
-                _new_thread(channel_id)
+                # The stuck conversation stays in Row-Bot; this DM or Slack
+                # thread moves to a fresh one, so the next message works.
+                _new_thread(channel_id, conv_ts)
                 try:
                     if ts:
                         await client.reactions_remove(channel=channel_id,
@@ -1331,7 +1460,7 @@ async def _handle_dm(event: dict, say, client) -> None:
                 await say("⚠️ The previous conversation had a stuck tool call "
                           "and couldn't be repaired.\n"
                           "🆕 I've started a fresh thread — please resend your message.",
-                          channel=channel_id)
+                          **reply_kwargs)
                 return
             # Repair succeeded — send answer normally
             try:
@@ -1343,28 +1472,10 @@ async def _handle_dm(event: dict, say, client) -> None:
             except Exception:
                 pass
             if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                await say(_md_to_mrkdwn(answer), channel=channel_id)
-            for img_bytes in captured_images:
-                try:
-                    import io
-                    await _app.client.files_upload_v2(
-                        channel=channel_id,
-                        file=io.BytesIO(img_bytes),
-                        filename="image.png",
-                        title="🖼️ Image",
-                    )
-                except Exception as img_exc:
-                    log.warning("Failed to send Slack image: %s", img_exc)
-            for vpath in captured_video_paths:
-                try:
-                    await _app.client.files_upload_v2(
-                        channel=channel_id,
-                        file=vpath,
-                        filename="video.mp4",
-                        title="🎬 Video",
-                    )
-                except Exception as vid_exc:
-                    log.warning("Failed to send Slack video: %s", vid_exc)
+                await say(_md_to_mrkdwn(answer), **reply_kwargs)
+            await _upload_captured_media(
+                client, channel_id, captured_images, captured_video_paths, thread_ts=media_ts,
+            )
             if interrupt_data:
                 await _send_slack_interrupt_approval_card(
                     client,
@@ -1372,7 +1483,7 @@ async def _handle_dm(event: dict, say, client) -> None:
                     channel_id=channel_id,
                     interrupt_data=interrupt_data,
                     config=config,
-                    thread_ts=event.get("thread_ts") or ts,
+                    thread_ts=reply_ts,
                 )
             return
         else:
@@ -1384,7 +1495,7 @@ async def _handle_dm(event: dict, say, client) -> None:
                                                 name="x", timestamp=ts)
             except Exception:
                 pass
-            await say(f"⚠️ Error: {exc}", channel=channel_id)
+            await say(f"⚠️ Error: {exc}", **reply_kwargs)
             return
 
     # Success — update reaction
@@ -1406,57 +1517,20 @@ async def _handle_dm(event: dict, say, client) -> None:
     # If streaming/final delivery covered the response, just send images/URLs.
     if delivery.delivered and not interrupt_data:
         for url in yt_urls:
-            await say(url, channel=channel_id)
-        for img_bytes in captured_images:
-            try:
-                import io
-                await _app.client.files_upload_v2(
-                    channel=channel_id,
-                    file=io.BytesIO(img_bytes),
-                    filename="image.png",
-                    title="🖼️ Image",
-                )
-            except Exception as exc:
-                log.warning("Failed to send Slack image: %s", exc)
-        for vpath in captured_video_paths:
-            try:
-                await _app.client.files_upload_v2(
-                    channel=channel_id,
-                    file=vpath,
-                    filename="video.mp4",
-                    title="🎬 Video",
-                )
-            except Exception as exc:
-                log.warning("Failed to send Slack video: %s", exc)
+            await say(url, **reply_kwargs)
+        await _upload_captured_media(
+            client, channel_id, captured_images, captured_video_paths, thread_ts=media_ts,
+        )
         return
 
     if clean_answer and not delivery.uncertain:
-        await say(_md_to_mrkdwn(clean_answer), channel=channel_id)
+        await say(_md_to_mrkdwn(clean_answer), **reply_kwargs)
     for url in yt_urls:
-        await say(url, channel=channel_id)
+        await say(url, **reply_kwargs)
 
-    for img_bytes in captured_images:
-        try:
-            import io
-            await _app.client.files_upload_v2(
-                channel=channel_id,
-                file=io.BytesIO(img_bytes),
-                filename="image.png",
-                title="🖼️ Image",
-            )
-        except Exception as exc:
-            log.warning("Failed to send Slack image: %s", exc)
-
-    for vpath in captured_video_paths:
-        try:
-            await _app.client.files_upload_v2(
-                channel=channel_id,
-                file=vpath,
-                filename="video.mp4",
-                title="🎬 Video",
-            )
-        except Exception as exc:
-            log.warning("Failed to send Slack video: %s", exc)
+    await _upload_captured_media(
+        client, channel_id, captured_images, captured_video_paths, thread_ts=media_ts,
+    )
 
     if interrupt_data:
         await _send_slack_interrupt_approval_card(
@@ -1465,7 +1539,7 @@ async def _handle_dm(event: dict, say, client) -> None:
             channel_id=channel_id,
             interrupt_data=interrupt_data,
             config=config,
-            thread_ts=event.get("thread_ts") or ts,
+            thread_ts=reply_ts,
         )
 
 
@@ -1493,7 +1567,9 @@ async def _handle_approval_button(body: dict, client, *, approved: bool) -> None
     with _pending_lock:
         info = _pending_task_approvals.pop(msg_ts, None)
         if info:
-            _approval_by_channel.pop(info.get("dm_channel_id", ""), None)
+            _approval_by_channel.pop(
+                info.get("lookup_key") or info.get("dm_channel_id", ""), None,
+            )
 
     if info is None:
         # Already handled (e.g. via text reply or another channel)
@@ -1536,6 +1612,7 @@ async def _handle_approval_button(body: dict, client, *, approved: bool) -> None
                 await client.chat_postMessage(
                     channel=channel_id,
                     text="⚠️ Could not process approval — it may have expired.",
+                    **({"thread_ts": info["thread_ts"]} if info.get("thread_ts") else {}),
                 )
             except Exception:
                 pass
@@ -1544,6 +1621,7 @@ async def _handle_approval_button(body: dict, client, *, approved: bool) -> None
         try:
             await client.chat_postMessage(
                 channel=channel_id, text=f"⚠️ Error: {exc}",
+                **({"thread_ts": info["thread_ts"]} if info.get("thread_ts") else {}),
             )
         except Exception:
             pass
@@ -1628,30 +1706,17 @@ async def _handle_interrupt_button(body: dict, client, *, approved: bool) -> Non
     if answer and not delivery.delivered and not delivery.uncertain:
         await _post_slack_safe_text(client, channel_id, answer, thread_ts=thread_ts)
 
-    for img_bytes in captured_images:
-        try:
-            import io
-
-            await client.files_upload_v2(
-                channel=channel_id,
-                file=io.BytesIO(img_bytes),
-                filename="image.png",
-                title="Image",
-            )
-        except Exception as exc:
-            log.warning("Failed to send Slack image: %s", exc)
-    for vpath in captured_video_paths:
-        try:
-            await client.files_upload_v2(
-                channel=channel_id,
-                file=vpath,
-                filename="video.mp4",
-                title="Video",
-            )
-        except Exception as exc:
-            log.warning("Failed to send Slack video: %s", exc)
-
     resume_thread_ts = str(pending.get("thread_ts") or thread_ts or "") or None
+    await _upload_captured_media(
+        client,
+        channel_id,
+        captured_images,
+        captured_video_paths,
+        thread_ts=_media_thread_ts(channel_id, resume_thread_ts),
+        image_title="Image",
+        video_title="Video",
+    )
+
     if new_interrupt:
         await _send_slack_interrupt_approval_card(
             client,
@@ -1691,23 +1756,79 @@ async def _handle_interrupt_button(body: dict, client, *, approved: bool) -> Non
             )
 
 
+async def _route_message_event(event: dict, say, client) -> None:
+    """Route a Slack ``message`` event.
+
+    - A DM always reaches Row-Bot.
+    - In a channel, a mention arrives as ``app_mention`` instead. A reply that
+      doesn't mention Row-Bot continues a Slack thread Row-Bot is already part
+      of (Slack sends these only with the optional ``message.channels`` /
+      ``message.groups`` events); anything else in a channel isn't for Row-Bot.
+    """
+    subtype = event.get("subtype", "")
+    # Skip message_changed, message_deleted, etc.
+    if subtype and subtype not in ("file_share",):
+        return
+    user_id = str(event.get("user") or "")
+    if event.get("bot_id") or (user_id and user_id == _bot_user_id):
+        return
+    channel_id = str(event.get("channel") or "")
+    if not _is_dm_channel(channel_id, str(event.get("channel_type") or "")):
+        thread_ts = str(event.get("thread_ts") or "")
+        if not thread_ts or _mentions_bot(event.get("text", "")):
+            return
+        if not ch_conversations.known_thread("slack", _slack_target(channel_id, thread_ts)):
+            return
+        if not _is_authorised(user_id):
+            return  # someone else talking in the thread
+    if subtype == "file_share" or event.get("files"):
+        await _handle_file(event, say, client)
+    else:
+        await _handle_dm(event, say, client)
+
+
 async def _handle_mention(event: dict, say, client) -> None:
-    """Handle @mention of the bot in a channel."""
-    # Strip the mention prefix and treat like a DM
+    """Handle @mention of the bot in a channel.
+
+    Outside a Slack thread the mention starts a new conversation, and Row-Bot
+    replies in a thread under it; inside a thread it continues that thread's.
+    """
     text = event.get("text", "")
     # Remove <@BOT_ID> mentions
     if _bot_user_id:
-        import re
-        text = re.sub(rf"<@{_bot_user_id}>", "", text).strip()
+        text = _re.sub(rf"<@{_bot_user_id}>", "", text).strip()
 
     # Create a synthetic event with cleaned text
     clean_event = dict(event)
     clean_event["text"] = text
+    if clean_event.get("files"):
+        await _handle_file(clean_event, say, client)
+        return
     await _handle_dm(clean_event, say, client)
 
 
+async def _download_slack_file(client, file_info: dict, url: str) -> bytes:
+    await client.api_call(
+        "files.info",
+        params={"file": file_info["id"]}
+    )
+    import httpx
+    async with httpx.AsyncClient() as http:
+        dl_resp = await http.get(
+            url,
+            headers={"Authorization": f"Bearer {_get_bot_token()}"},
+        )
+        dl_resp.raise_for_status()
+        return dl_resp.content
+
+
 async def _handle_file(event: dict, say, client) -> None:
-    """Handle file uploads (images, documents, voice memos)."""
+    """Handle a message with files (images, documents, voice memos).
+
+    Every file of the message goes into one agent turn: each image still gets
+    its vision pre-call and each voice memo its transcription, and their text
+    results join the message's own words.
+    """
     user_id = event.get("user", "")
     channel_id = event.get("channel", "")
 
@@ -1721,11 +1842,9 @@ async def _handle_file(event: dict, say, client) -> None:
     if not files:
         return
 
-    from row_bot.channels.media import (
-        transcribe_audio, analyze_image, save_inbound_file,
-        extract_document_text, copy_to_workspace,
-    )
+    from row_bot.channels.media import InboundAttachment, build_attachment_turn
 
+    attachments: list[InboundAttachment] = []
     for file_info in files:
         mimetype = file_info.get("mimetype", "")
         filename = file_info.get("name", "file")
@@ -1736,81 +1855,36 @@ async def _handle_file(event: dict, say, client) -> None:
 
         # Download the file
         try:
-            await client.api_call(
-                "files.info",
-                params={"file": file_info["id"]}
-            )
-            import httpx
-            async with httpx.AsyncClient() as http:
-                dl_resp = await http.get(
-                    url,
-                    headers={"Authorization": f"Bearer {_get_bot_token()}"},
-                )
-                dl_resp.raise_for_status()
-                file_data = dl_resp.content
+            file_data = await _download_slack_file(client, file_info, url)
         except Exception as exc:
             log.warning("Failed to download Slack file %s: %s", filename, exc)
             continue
+        attachments.append(
+            InboundAttachment(filename=filename, data=file_data, content_type=mimetype)
+        )
+    if not attachments:
+        return
 
-        caption = event.get("text", "").strip()
-        thread_id = _get_or_create_thread(channel_id)
-        config = {"configurable": {"thread_id": thread_id}}
-
-        if mimetype.startswith("audio/"):
-            ext = Path(filename).suffix or ".ogg"
-            transcript = transcribe_audio(file_data, ext)
-            if transcript:
-                user_text = f"[Voice message transcription]: {transcript}"
-                if caption:
-                    user_text += f"\n\nCaption: {caption}"
-                loop = asyncio.get_event_loop()
-                answer, _, _, _ = await loop.run_in_executor(
-                    None, _run_agent_sync, user_text, config
-                )
-                if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                    await say(_md_to_mrkdwn(answer), channel=channel_id)
-
-        elif mimetype.startswith("image/"):
-            analysis = analyze_image(file_data, caption or "Describe this image")
-            if analysis:
-                user_text = f"[Image analysis]: {analysis}"
-                if caption:
-                    user_text += f"\n\nUser said: {caption}"
-                loop = asyncio.get_event_loop()
-                answer, _, _, _ = await loop.run_in_executor(
-                    None, _run_agent_sync, user_text, config
-                )
-                if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                    await say(_md_to_mrkdwn(answer), channel=channel_id)
-
-        else:
-            saved = save_inbound_file(file_data, filename)
-            extracted = extract_document_text(file_data, filename)
-            ws_rel = copy_to_workspace(saved)
-
-            parts = [f"[User sent a file: {filename}]"]
-            if ws_rel:
-                parts.append(f"Workspace path: {ws_rel}")
-            else:
-                parts.append(f"Saved to: {saved}")
-            if extracted:
-                parts.append(
-                    f"\n--- File content ---\n{extracted}"
-                    f"\n--- End of file ---")
-            else:
-                parts.append(
-                    "(Could not extract text — file may be "
-                    "image-based or unsupported format)")
-            if caption:
-                parts.append(f"\nUser's message: {caption}")
-
-            user_text = "\n".join(parts)
-            loop = asyncio.get_event_loop()
-            answer, _, _, _ = await loop.run_in_executor(
-                None, _run_agent_sync, user_text, config
-            )
-            if answer and not ch_runtime.channel_turn_is_suspended(answer):
-                await say(_md_to_mrkdwn(answer), channel=channel_id)
+    caption = event.get("text", "").strip()
+    loop = asyncio.get_event_loop()
+    turn = await loop.run_in_executor(
+        None, lambda: build_attachment_turn(attachments, caption)
+    )
+    if not turn.usable:
+        conv_ts = _conversation_thread_ts(event)
+        await say(
+            "⚠️ I couldn't read that attachment.",
+            channel=channel_id,
+            **({"thread_ts": conv_ts} if conv_ts else {}),
+        )
+        return
+    await _handle_dm(
+        {**event, "text": turn.text},
+        say,
+        client,
+        from_attachments=True,
+        name_text=caption,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1876,18 +1950,7 @@ async def start_bot() -> bool:
         # Register event handlers
         @_app.event("message")
         async def _on_message(event, say, client):
-            # Only handle DMs (im) and file shares
-            channel_type = event.get("channel_type", "")
-            subtype = event.get("subtype", "")
-
-            # Skip message_changed, message_deleted, etc.
-            if subtype and subtype not in ("file_share",):
-                return
-
-            if subtype == "file_share" or event.get("files"):
-                await _handle_file(event, say, client)
-            elif channel_type == "im":
-                await _handle_dm(event, say, client)
+            await _route_message_event(event, say, client)
 
         @_app.event("app_mention")
         async def _on_mention(event, say, client):
@@ -1983,7 +2046,13 @@ class SlackChannel(Channel):
             "from the messages tab\"*\n"
             "6. Install to workspace, copy **Bot Token** (`xoxb-…`) "
             "and **App Token** (`xapp-…`)\n"
-            "7. Paste both below and click **Save**, then **▶️ Start Bot**"
+            "7. Paste both below and click **Save**, then **▶️ Start Bot**\n\n"
+            "In a channel, each Slack thread is its own conversation: mention "
+            "the bot to start one, and mention it in the thread to continue. "
+            "To continue a thread without mentioning the bot, also add the "
+            "`channels:history` scope and the `message.channels` event "
+            "(`groups:history` and `message.groups` for private channels). "
+            "A DM is one conversation; send `/new` to start a fresh one."
         )
 
     @property
@@ -2120,15 +2189,21 @@ class SlackChannel(Channel):
             dm_channel_id, msg_ts = _send_and_capture_channel(
                 str(target), fallback_text, blocks=blocks,
             )
+            # A channel conversation's approval waits in its Slack thread, and
+            # a yes/no reply is read there; a DM's anywhere in the DM.
+            _channel, thread_ts = _split_slack_target(target)
+            lookup_key = _slack_target(dm_channel_id, thread_ts)
             import time as _time
             with _pending_lock:
                 _pending_task_approvals[msg_ts] = {
                     "resume_token": resume_token,
                     "task_name": task_name,
                     "dm_channel_id": dm_channel_id,
+                    "thread_ts": thread_ts,
+                    "lookup_key": lookup_key,
                     "_ts": _time.time(),
                 }
-                _approval_by_channel[dm_channel_id] = msg_ts
+                _approval_by_channel[lookup_key] = msg_ts
             return msg_ts
         except Exception as exc:
             log.warning("Failed to send Slack approval: %s", exc)
@@ -2141,7 +2216,9 @@ class SlackChannel(Channel):
         with _pending_lock:
             info = _pending_task_approvals.pop(message_ref, None)
             if info:
-                _approval_by_channel.pop(info.get("dm_channel_id", ""), None)
+                _approval_by_channel.pop(
+                    info.get("lookup_key") or info.get("dm_channel_id", ""), None,
+                )
         action = "Approved ✅" if status == "approved" else "Denied ❌"
         task_name = info["task_name"] if info else "Task"
         msg = f"{action} — {task_name}"
@@ -2157,7 +2234,7 @@ class SlackChannel(Channel):
         # Fallback: send a new message
         if dm_channel:
             try:
-                send_outbound(dm_channel, msg)
+                send_outbound(_slack_target(dm_channel, info.get("thread_ts")), msg)
             except Exception:
                 pass
 

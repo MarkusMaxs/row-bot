@@ -693,8 +693,9 @@ class McpClientFoundationTests(unittest.TestCase):
                 "name": "mcp_playwright_mcp_browser_snapshot",
                 "args": {},
             }]))
+            # Real snapshots are a few thousand tokens: enough that old ones are stubbed in one batch.
             messages.append(ToolMessage(
-                content=f"URL: https://example.test/{index}\nTitle: Page {index}\n" + ("item\n" * 200),
+                content=f"URL: https://example.test/{index}\nTitle: Page {index}\n" + ("item\n" * 3000),
                 name="mcp_playwright_mcp_browser_snapshot",
                 tool_call_id=f"call-{index}",
             ))
