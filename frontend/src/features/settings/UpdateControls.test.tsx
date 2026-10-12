@@ -44,6 +44,8 @@ const snapshot: UpdateSnapshot = {
   legacy_install: false,
   host: null,
   active_work: [],
+  held_back: null,
+  feed_url: null,
 };
 
 const release: NonNullable<UpdateSnapshot['available']> = {
@@ -469,8 +471,9 @@ it('shows the host’s status and sends requests when the host applies updates',
 });
 
 it('offers to remove an earlier all-users install once', async () => {
+  // Windows' prompt waits for the person: the server answers "requested".
   const send = vi.fn(async (command: UpdateCommand) =>
-    receipt(command, { ...snapshot, legacy_install: true }),
+    receipt(command, { ...snapshot, legacy_install: true }, 'requested'),
   );
   show(
     vi.fn(async () => ({ ...snapshot, legacy_install: true })),
@@ -508,4 +511,71 @@ it('explains a container that no host updater reports for', async () => {
   expect(await screen.findByText(/pull a newer image/)).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Pause updates' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
+});
+
+it('reports an update that did not start once and downloads it again only when asked', async () => {
+  const rolledBack: UpdateSnapshot = {
+    ...snapshot,
+    available: release,
+    held_back: { version: '2.0.0', reason: 'rolled_back' },
+    engine: {
+      ...engine,
+      phase: 'failed',
+      version: '2.0.0',
+      error: 'rolled_back',
+      message:
+        'The new version didn’t start, so Row-Bot went back to the one that works.',
+    },
+  };
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, {
+      ...rolledBack,
+      engine: { ...engine, phase: 'downloading', version: '2.0.0' },
+    }),
+  );
+  show(
+    vi.fn(async () => rolledBack),
+    send,
+  );
+  expect(await screen.findByText('Version 2.0.0 didn’t start')).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'Try again' }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Download version 2.0.0 again' }),
+  );
+  await waitFor(() =>
+    expect(send).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'download', version: '2.0.0' }),
+    ),
+  );
+});
+
+it('says why a version Row-Bot went back from is not downloaded by itself', async () => {
+  show(
+    vi.fn(async () => ({
+      ...snapshot,
+      available: release,
+      held_back: { version: '2.0.0', reason: 'repair' as const },
+    })),
+  );
+  expect(
+    await screen.findByText(
+      'You went back from this version with Repair, so it won’t download by itself.',
+    ),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('button', { name: 'Download version 2.0.0' }),
+  ).toBeVisible();
+});
+
+it('shows when updates come from a test feed instead of GitHub', async () => {
+  show(
+    vi.fn(async () => ({ ...snapshot, feed_url: 'http://127.0.0.1:8765/' })),
+  );
+  expect(
+    await screen.findByText(
+      'Testing: updates come from http://127.0.0.1:8765/, not GitHub',
+    ),
+  ).toBeVisible();
 });

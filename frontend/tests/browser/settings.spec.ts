@@ -2411,6 +2411,8 @@ test('A ready update says Restart to update and restarts from Settings', async (
     legacy_install: false,
     host: null,
     active_work: [],
+    held_back: null,
+    feed_url: null,
   };
   const commands: Array<Record<string, unknown>> = [];
   await page.route('**/api/v1/monitor/attention', (route) =>

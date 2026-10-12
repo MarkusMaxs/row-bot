@@ -2068,7 +2068,7 @@ class UpdateEngineView(WireModel):
     step: str | None = Field(max_length=64)
     message: str | None = Field(max_length=512)
     # failed: download, integrity, manifest, full_installer, disk,
-    # rolled_back, busy, or the staging step that failed.
+    # rolled_back, installed, busy, or the staging step that failed.
     error: str | None = Field(max_length=64)
     retryable: bool
     apply_when: Literal["now", "when_idle", "on_quit"] | None
@@ -2093,6 +2093,13 @@ class UpdateHostView(WireModel):
     updated_at: str | None = Field(max_length=64)
     # A request Row-Bot left that the host has not acted on yet.
     request: UpdateHostRequest | None
+
+
+class UpdateHeldBack(WireModel):
+    """The version Row-Bot went back from; it is not prepared again by itself."""
+    version: str = Field(max_length=64)
+    # rolled_back: it did not start; repair: the person went back with Repair.
+    reason: Literal["rolled_back", "repair"]
 
 
 class UpdateSnapshot(WireModel):
@@ -2122,6 +2129,9 @@ class UpdateSnapshot(WireModel):
     host: UpdateHostView | None
     # While an update is ready: what restarting now would interrupt.
     active_work: list[Annotated[str, StringConstraints(max_length=120)]] = Field(max_length=8)
+    held_back: UpdateHeldBack | None
+    # Testing only: a loopback feed replaces GitHub (ROW_BOT_UPDATE_FEED).
+    feed_url: str | None = Field(max_length=256)
 
 
 class UpdateCommand(WireModel):

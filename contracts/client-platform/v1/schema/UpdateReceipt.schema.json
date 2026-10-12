@@ -126,6 +126,31 @@
       "title": "UpdateEngineView",
       "type": "object"
     },
+    "UpdateHeldBack": {
+      "additionalProperties": false,
+      "description": "The version Row-Bot went back from; it is not prepared again by itself.",
+      "properties": {
+        "reason": {
+          "enum": [
+            "rolled_back",
+            "repair"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 64,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "reason"
+      ],
+      "title": "UpdateHeldBack",
+      "type": "object"
+    },
     "UpdateHostRequest": {
       "additionalProperties": false,
       "properties": {
@@ -365,6 +390,28 @@
         "engine": {
           "$ref": "#/$defs/UpdateEngineView"
         },
+        "feed_url": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Feed Url"
+        },
+        "held_back": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpdateHeldBack"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "host": {
           "anyOf": [
             {
@@ -461,7 +508,9 @@
         "previous_version",
         "legacy_install",
         "host",
-        "active_work"
+        "active_work",
+        "held_back",
+        "feed_url"
       ],
       "title": "UpdateSnapshot",
       "type": "object"

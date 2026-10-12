@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from threading import RLock
+import logging
+from threading import RLock, Thread
 from typing import Any
 from uuid import UUID
 
 from row_bot.application.client_platform import ClientPlatformError
+
+logger = logging.getLogger(__name__)
 
 _LOCK = RLock()
 _RECEIPTS: dict[str, dict[str, Any]] = {}
@@ -58,6 +61,7 @@ def _engine_view(updater: Any, mode: str) -> dict[str, Any]:
         phase = "checking"
     url = status.full_installer_url or ""
     return {
+        "_raw_phase": status.phase,
         "phase": phase,
         "version": (status.version or None) and status.version[:64],
         "step": (status.step or None) and status.step[:64],
@@ -118,6 +122,19 @@ def _host_view(mode: str) -> dict[str, Any] | None:
     }
 
 
+def _held_back(mode: str) -> dict[str, str] | None:
+    """The version Row-Bot went back from; it is offered, but not prepared by itself."""
+    if mode != "self":
+        return None
+    try:
+        from row_bot.updates.switcher import held_back
+
+        held = held_back(_layout())
+    except Exception:
+        return None
+    return {"version": held[0][:64], "reason": held[1]} if held else None
+
+
 def read_updates() -> dict[str, Any]:
     """Read cached release state; never check, download, or install on render."""
     updater = _owner()
@@ -155,10 +172,16 @@ def read_updates() -> dict[str, Any]:
             "previous_version": _previous_version(mode),
             "legacy_install": _legacy_install(mode),
             "host": _host_view(mode),
+            "held_back": _held_back(mode),
+            # A loopback test feed instead of GitHub (ROW_BOT_UPDATE_FEED): shown.
+            "feed_url": ((updater.feed_url() or "")[:256] or None) if mode == "self" else None,
         }
-        # Progress and running work change by the second; a command is bound
-        # to everything else the person saw.
-        bound = {**values, "engine": {k: v for k, v in engine.items() if k not in {"downloaded", "total"}}}
+        # Progress, the current step, its message and the derived "checking"
+        # change by the second; a command is bound to everything else the
+        # person saw (so Cancel works from a one-second-old snapshot).
+        raw_phase = engine.pop("_raw_phase")
+        bound_engine = {k: v for k, v in engine.items() if k not in {"downloaded", "total", "step", "message"}}
+        bound = {**values, "engine": {**bound_engine, "phase": raw_phase}}
         revision = hashlib.sha256(
             json.dumps(bound, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -239,14 +262,27 @@ def _run_self(
             engine.rollback()
             return "completed"
         if action == "remove_legacy":
-            from row_bot.updates import legacy
-
+            # TODO(#416): when the update routes stop requiring the desktop app
+            # on this computer, this one action must stay this-computer-only
+            # (require_this_computer): it raises Windows' elevation prompt on
+            # this computer's screen.
             if not before["legacy_install"]:
                 raise ClientPlatformError("update_changed")
-            return "completed" if legacy.start_removal(_layout()) else "failed"
+            # The prompt blocks until the person answers: never under _LOCK.
+            Thread(target=_remove_legacy, name="row-bot-remove-legacy", daemon=True).start()
+            return "requested"
     except EngineError as exc:
         raise ClientPlatformError(exc.code if exc.code in _ENGINE_ERRORS else "update_unavailable") from None
     raise ClientPlatformError("invalid_update_command")
+
+
+def _remove_legacy() -> None:
+    from row_bot.updates import legacy
+
+    try:
+        legacy.start_removal(_layout())
+    except Exception:
+        logger.warning("Removing the earlier Row-Bot failed", exc_info=True)
 
 
 def execute_update_choice(

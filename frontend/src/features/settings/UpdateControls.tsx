@@ -101,6 +101,8 @@ function githubUrl(value: string | null | undefined) {
 
 function noticeFor(receipt: UpdateReceipt, command: UpdateCommand) {
   const next = receipt.snapshot;
+  if (command.action === 'remove_legacy' && receipt.status === 'requested')
+    return 'Approve the Windows prompt to remove the earlier Row-Bot.';
   if (receipt.status === 'requested')
     return 'Sent to the host. It applies the request on its own schedule.';
   if (receipt.status === 'failed')
@@ -398,12 +400,22 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           engine.error === 'full_installer'
             ? githubUrl(engine.full_installer_url)
             : '';
+        // It didn't start, so the launcher went back: offered again only
+        // when the person asks for it.
+        const again =
+          engine.error === 'rolled_back' &&
+          available?.version === version &&
+          available.verified_manifest;
         return (
           <SettingsItem
             label={
               engine.error === 'full_installer'
                 ? `Version ${version} needs the full installer`
-                : `Version ${version} could not be prepared`
+                : engine.error === 'rolled_back'
+                  ? `Version ${version} didn’t start`
+                  : engine.error === 'installed'
+                    ? `Version ${version} is already installed`
+                    : `Version ${version} could not be prepared`
             }
             icon={<TriangleAlert size={16} aria-hidden />}
             tone="2"
@@ -434,6 +446,16 @@ export function UpdateControls({ owner }: { owner: Owner }) {
                     onClick={() => send('retry', version)}
                   >
                     Try again
+                  </Button>
+                )}
+                {again && (
+                  <Button
+                    aria-label={`Download version ${version} again`}
+                    disabled={locked}
+                    onClick={() => send('download', version)}
+                  >
+                    <Download size={14} aria-hidden />
+                    Download again
                   </Button>
                 )}
               </>
@@ -532,6 +554,10 @@ export function UpdateControls({ owner }: { owner: Owner }) {
       </SettingsItem>
     ) : null;
 
+  const heldBack =
+    available && snapshot?.held_back?.version === available.version
+      ? snapshot.held_back
+      : null;
   const offered =
     available &&
     self &&
@@ -587,27 +613,35 @@ export function UpdateControls({ owner }: { owner: Owner }) {
             )
           }
           status={
-            skipped.length && self
-              ? skipped.map((version) => (
-                  // The server reports only the skip holding back the
-                  // release on offer (B261).
-                  <StatusLine
-                    key={version}
-                    action={
-                      <Button
-                        variant="ghost"
-                        className="settings-link"
-                        disabled={locked}
-                        onClick={() => send('clear_skipped')}
-                      >
-                        Show it again
-                      </Button>
-                    }
-                  >
-                    You skipped {version}
+            snapshot.feed_url || (skipped.length && self) ? (
+              <>
+                {snapshot.feed_url && (
+                  <StatusLine tone="warning">
+                    Testing: updates come from {snapshot.feed_url}, not GitHub
                   </StatusLine>
-                ))
-              : undefined
+                )}
+                {self &&
+                  skipped.map((version) => (
+                    // The server reports only the skip holding back the
+                    // release on offer (B261).
+                    <StatusLine
+                      key={version}
+                      action={
+                        <Button
+                          variant="ghost"
+                          className="settings-link"
+                          disabled={locked}
+                          onClick={() => send('clear_skipped')}
+                        >
+                          Show it again
+                        </Button>
+                      }
+                    >
+                      You skipped {version}
+                    </StatusLine>
+                  ))}
+              </>
+            ) : undefined
           }
           control={
             snapshot.mode === 'unavailable' ? undefined : (
@@ -643,9 +677,13 @@ export function UpdateControls({ owner }: { owner: Owner }) {
           help={
             !available.verified_manifest
               ? 'No verified release checksum is available, so it can’t be downloaded.'
-              : snapshot!.auto_download
-                ? 'It downloads in the background. Only what changed is downloaded.'
-                : 'Download it in the background; nothing changes until Row-Bot restarts.'
+              : heldBack?.reason === 'rolled_back'
+                ? 'It didn’t start last time, so Row-Bot went back. It won’t download by itself; download it again only if you want to retry.'
+                : heldBack
+                  ? 'You went back from this version with Repair, so it won’t download by itself.'
+                  : snapshot!.auto_download
+                    ? 'It downloads in the background. Only what changed is downloaded.'
+                    : 'Download it in the background; nothing changes until Row-Bot restarts.'
           }
           control={
             <>

@@ -306,3 +306,99 @@ def test_attention_says_restart_to_update_once_an_update_is_ready(tmp_path, monk
     engine.state = EngineStatus("ready", "99.0.0")
     assert read_attention(include_update=True)["update"] == {"version": "99.0.0", "ready": True}
     assert read_attention(include_update=False)["update"] is None
+
+
+def test_a_command_stays_bound_while_the_step_its_message_and_checking_change(tmp_path, monkeypatch):
+    updater, engine, _layout = _updater(tmp_path, monkeypatch)
+    engine.state = EngineStatus("staging", "99.0.0", step="clone", message="Copying the runtime")
+    first = client_updates.read_updates()
+    engine.state = EngineStatus("staging", "99.0.0", step="libraries", message="Installing libraries",
+                                downloaded=9, total=10)
+    assert client_updates.read_updates()["revision"] == first["revision"]
+    assert _send("cancel", first)["status"] == "completed"  # a second-old snapshot still works
+
+    engine.state = EngineStatus()
+    idle = client_updates.read_updates()
+    monkeypatch.setattr(updater, "is_checking", lambda: True)
+    checking = client_updates.read_updates()
+    assert checking["engine"]["phase"] == "checking"
+    assert checking["revision"] == idle["revision"]
+    # A real change of phase still changes the revision.
+    engine.state = EngineStatus("ready", "99.0.0")
+    assert client_updates.read_updates()["revision"] != idle["revision"]
+
+
+def test_settings_shows_a_held_back_version_and_a_test_feed(tmp_path, monkeypatch):
+    updater, _engine, layout = _updater(tmp_path, monkeypatch)
+    snapshot = client_updates.read_updates()
+    assert snapshot["held_back"] is None and snapshot["feed_url"] is None
+    state = install_layout.read_state(layout.root)
+    state.last_rollback = {"from": "1.1.0", "to": "1.0.0", "at": "2026-10-11T12:00:00Z",
+                           "reason": "2 launches in a row did not become ready"}
+    install_layout.write_state(layout.root, state)
+    monkeypatch.setenv(updater.UPDATE_FEED_ENV, "http://127.0.0.1:8765")
+    monkeypatch.setenv(updater.UPDATE_FEED_TESTING_ENV, "1")
+    snapshot = client_updates.read_updates()
+    assert snapshot["held_back"] == {"version": "1.1.0", "reason": "rolled_back"}
+    assert snapshot["feed_url"] == "http://127.0.0.1:8765/"
+    state.last_rollback["reason"] = "repair"
+    install_layout.write_state(layout.root, state)
+    assert client_updates.read_updates()["held_back"]["reason"] == "repair"
+
+
+def test_removing_the_old_install_is_requested_and_never_blocks_settings(tmp_path, monkeypatch):
+    import threading
+
+    from row_bot.updates import legacy
+
+    _updater_, _engine, layout = _updater(tmp_path, monkeypatch)
+    state = install_layout.read_state(layout.root)
+    state.extra[legacy.STATE_KEY] = {"detected_at": "2026-10-11T12:00:00Z"}
+    install_layout.write_state(layout.root, state)
+    monkeypatch.setattr(legacy, "legacy_install_present", lambda: True)
+    prompt_open = threading.Event()
+    answered = threading.Event()
+
+    def windows_prompt(_layout):
+        prompt_open.set()
+        answered.wait(10)  # Windows' elevation prompt waits for the person
+        return True
+
+    monkeypatch.setattr(legacy, "start_removal", windows_prompt)
+    snapshot = client_updates.read_updates()
+    assert snapshot["legacy_install"] is True
+    try:
+        assert _send("remove_legacy", snapshot)["status"] == "requested"
+        assert prompt_open.wait(10)
+        # While the prompt is open, Settings still reads and other commands run.
+        assert client_updates.read_updates()["legacy_install"] is True
+        assert _send("set_auto_check", client_updates.read_updates(), enabled=False)["status"] == "completed"
+    finally:
+        answered.set()
+
+
+def test_the_launchers_restart_to_update_needs_its_launch_secret(monkeypatch):
+    import importlib
+
+    from starlette.applications import Starlette
+    from starlette.testclient import TestClient
+
+    app_module = importlib.import_module("row_bot.app")
+    secret = "s" * 40
+    calls: list[bool] = []
+    monkeypatch.setattr(client_updates, "apply_for_launcher", lambda: calls.append(True) or {"status": "restarting"})
+    local = Starlette()
+    local.add_route("/api/launcher-apply-update", app_module._launcher_apply_update_handler, methods=["POST"])
+    client = TestClient(local)
+    url = "/api/launcher-apply-update"
+
+    monkeypatch.delenv(app_module.LAUNCH_SECRET_ENV, raising=False)
+    assert client.post(url, headers={"Authorization": "Bearer "}).status_code == 403
+    monkeypatch.setenv(app_module.LAUNCH_SECRET_ENV, secret)
+    assert client.post(url).status_code == 403
+    assert client.post(url, headers={"Authorization": "Bearer wrong"}).status_code == 403
+    assert client.post(url, headers={"Authorization": f"Bearer {secret[:-1]}"}).status_code == 403
+    assert calls == []
+    answer = client.post(url, headers={"Authorization": f"Bearer {secret}"})
+    assert answer.status_code == 200 and answer.json() == {"status": "restarting"}
+    assert calls == [True]
