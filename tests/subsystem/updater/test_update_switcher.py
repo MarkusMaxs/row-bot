@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -168,3 +169,202 @@ def test_macos_repair_can_go_back_to_the_app_bundle(tmp_path):
     assert switcher.runnable_version(running, "5.1.0") is False
     assert switcher.rollback(running) == "5.2.0"
     assert install_layout.read_state(root).active == "5.2.0"
+
+
+def test_the_tray_never_bypasses_the_apps_restart_guard(tmp_path, monkeypatch):
+    """Only a dead server (or nothing listening) lets the tray switch by itself."""
+    import row_bot.launcher as launcher
+
+    layout = _ready(tmp_path)
+    monkeypatch.setattr(install_layout, "detect", lambda **_kwargs: layout)
+    events = []
+    tray = launcher.RowBotTray.__new__(launcher.RowBotTray)
+    tray._port = 1
+    tray._server = SimpleNamespace(is_alive=True)
+    tray._icon = SimpleNamespace(notify=lambda message: events.append(message))
+    tray._on_quit = lambda *, exit_code=0: events.append(exit_code)
+
+    # The app answered with an error, a timeout or something unexpected.
+    monkeypatch.setattr(launcher, "_request_update_apply", lambda _port, _server: "unavailable")
+    tray._restart_to_update()
+    assert len(events) == 1 and "can't restart to update right now" in events[0]
+    assert install_layout.read_state(layout.root).active == "5.2.0"
+
+    events.clear()
+    monkeypatch.setattr(launcher, "_request_update_apply", lambda _port, _server: "unreachable")
+    tray._restart_to_update()
+    assert events == [install_layout.RELAUNCH_EXIT_CODE]
+    assert install_layout.read_state(layout.root).active == "5.2.1"
+
+
+def test_asking_the_app_to_restart_tells_refused_from_unanswered(monkeypatch):
+    import urllib.error
+
+    import row_bot.launcher as launcher
+
+    server = SimpleNamespace(_launch_environment={launcher.LAUNCH_SECRET_ENV: "s" * 40})
+    sent = []
+
+    class Answer:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self, _limit):
+            return self.body
+
+    def answering(outcome):
+        class _Opener:
+            def open(self, request, timeout):  # noqa: ARG002
+                sent.append((request.full_url, request.get_header("Authorization")))
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return Answer(outcome)
+
+        return lambda *_handlers: _Opener()
+
+    cases = [
+        (b'{"status": "restarting"}', "restarting"),
+        (b'{"status": "deferred", "work": ["x"]}', "deferred"),
+        (b'{"status": "whatever"}', "unavailable"),
+        (b"not json", "unavailable"),
+        (urllib.error.URLError(ConnectionRefusedError()), "unreachable"),
+        (ConnectionRefusedError(), "unreachable"),
+        (urllib.error.URLError(TimeoutError()), "unavailable"),
+        (TimeoutError(), "unavailable"),
+        (urllib.error.HTTPError("http://127.0.0.1:1/", 503, "busy", {}, None), "unavailable"),
+    ]
+    for outcome, expected in cases:
+        monkeypatch.setattr(launcher.urllib.request, "build_opener", answering(outcome))
+        assert launcher._request_update_apply(8080, server) == expected, outcome
+    assert {url for url, _auth in sent} == {"http://127.0.0.1:8080/api/launcher-apply-update"}
+    assert {auth for _url, auth in sent} == {"Bearer " + "s" * 40}
+
+
+def test_external_mode_leaves_a_ready_version_to_the_host(tmp_path, monkeypatch):
+    import row_bot.launcher as launcher
+
+    layout = _ready(tmp_path)
+    monkeypatch.setattr(install_layout, "detect", lambda **_kwargs: layout)
+    monkeypatch.setenv("ROW_BOT_UPDATES", "external")
+    assert launcher._ready_update_version() is None
+    assert launcher._switch_to_ready_update() is False
+    assert switcher.apply_on_quit(layout) is None
+    assert switcher.switch_to_ready_locked(layout) is None
+    assert install_layout.read_state(layout.root).active == "5.2.0"
+    monkeypatch.delenv("ROW_BOT_UPDATES")
+    assert launcher._ready_update_version() == "5.2.1"
+
+
+def test_switching_waits_for_another_row_bot_preparing_the_install(tmp_path):
+    layout = _ready(tmp_path)
+    other = switcher.InstallLock.for_install(layout.root)
+    assert other.acquire()
+    try:
+        assert switcher.apply_on_quit(layout) is None
+        assert install_layout.read_state(layout.root).active == "5.2.0"
+    finally:
+        other.release()
+    assert switcher.apply_on_quit(layout) == "5.2.1"
+
+
+class _Key:
+    def __init__(self, values):
+        self.values = values
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _fake_winreg(entries: dict, opened: list):
+    """A stand-in ``winreg``: *entries* maps (hive, view) to the key's values."""
+    module = SimpleNamespace(
+        HKEY_LOCAL_MACHINE="HKLM", HKEY_CURRENT_USER="HKCU", KEY_READ=1, KEY_WOW64_64KEY=0x100,
+        KEY_WOW64_32KEY=0x200,
+    )
+
+    def open_key(hive, path, _reserved, access):
+        view = "64" if access & 0x100 else "32"
+        opened.append((hive, view))
+        values = entries.get((hive, view))
+        if values is None or path != legacy.LEGACY_UNINSTALL_KEY:
+            raise OSError("no such key")
+        return _Key(values)
+
+    def query_value(key, name):
+        if name not in key.values:
+            raise OSError("no such value")
+        return key.values[name], 1
+
+    module.OpenKey = open_key
+    module.QueryValueEx = query_value
+    return module
+
+
+def _legacy_recorded(tmp_path):
+    layout = make_install(tmp_path, kind=install_layout.InstallKind.WINDOWS)
+    state = install_layout.read_state(layout.root)
+    state.extra[legacy.STATE_KEY] = {"detected_at": "2026-10-11T12:00:00Z"}
+    install_layout.write_state(layout.root, state)
+    return layout
+
+
+def test_removing_the_old_install_runs_its_own_uninstaller_with_fixed_arguments(tmp_path, monkeypatch):
+    layout = _legacy_recorded(tmp_path)
+    folder = tmp_path / "Program Files" / "Row-Bot"
+    folder.mkdir(parents=True)
+    uninstaller = folder / "unins000.exe"
+    uninstaller.write_bytes(b"MZ")
+    opened, started = [], []
+    entry = {"UninstallString": f'"{uninstaller}" /SILENT /LOG="evil"', "InstallLocation": str(folder)}
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg({("HKLM", "32"): entry}, opened))
+    monkeypatch.setattr(legacy, "_is_windows", lambda: True)
+    monkeypatch.setattr(legacy, "_shell_execute", lambda program, arguments: started.append((program, arguments)) or 42)
+
+    assert legacy.start_removal(layout) is True
+    # The quoted path (with a space) is the program; the registry's arguments are not used.
+    assert started == [(str(uninstaller), "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART")]
+    assert {hive for hive, _view in opened} == {"HKLM"}
+
+    # Uninstaller gone but the program still there: nothing is run or deleted.
+    uninstaller.unlink()
+    started.clear()
+    assert legacy.start_removal(layout) is False
+    assert started == []
+
+    # Both gone: only the leftover entry is deleted, in the view that holds it.
+    folder.rmdir()
+    assert legacy.start_removal(layout) is True
+    program, arguments = started[0]
+    assert program.lower().endswith("reg.exe")
+    assert arguments == f'delete "HKLM\\{legacy.LEGACY_UNINSTALL_KEY}" /f /reg:32'
+
+
+def test_an_old_install_known_only_to_the_current_user_is_never_removed(tmp_path, monkeypatch):
+    layout = _legacy_recorded(tmp_path)
+    started, opened = [], []
+    entry = {"UninstallString": str(tmp_path / "unins000.exe")}
+    (tmp_path / "unins000.exe").write_bytes(b"MZ")
+    monkeypatch.setitem(sys.modules, "winreg", _fake_winreg({("HKCU", "64"): entry}, opened))
+    monkeypatch.setattr(legacy, "_is_windows", lambda: True)
+    monkeypatch.setattr(legacy, "_shell_execute", lambda program, arguments: started.append(program) or 42)
+
+    assert legacy.legacy_install_present() is False
+    assert legacy.start_removal(layout) is False
+    assert started == [] and {hive for hive, _view in opened} == {"HKLM"}
+    assert legacy.STATE_KEY not in install_layout.read_state(layout.root).extra  # nothing left to offer
+
+    # Not Windows: the registry is never read.
+    other = _legacy_recorded(tmp_path / "again")
+    monkeypatch.setattr(legacy, "_is_windows", lambda: False)
+    opened.clear()
+    assert legacy.start_removal(other) is False
+    assert opened == [] and started == []

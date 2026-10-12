@@ -3086,15 +3086,20 @@ class RowBotTray:
         ).start()
 
     def _restart_to_update(self) -> None:
-        answer = _request_update_apply(self._port, self._server) if self._server.is_alive else None
+        answer = _request_update_apply(self._port, self._server) if self._server.is_alive else "unreachable"
+        notify = getattr(self._icon, "notify", None)
         if answer == "deferred":
-            notify = getattr(self._icon, "notify", None)
             if callable(notify):
                 notify(f"{APP_DISPLAY_NAME} will restart to update when its current work finishes.")
             return
         if answer == "restarting":
             return
-        # The app could not take the request: switch here and restart.
+        if answer != "unreachable":
+            # The app answered (busy, or not ready): its restart guard decides.
+            if callable(notify):
+                notify(f"{APP_DISPLAY_NAME} can't restart to update right now. Try again from Settings.")
+            return
+        # The app's server is gone: nothing can be interrupted, switch here.
         if _switch_to_ready_update():
             self._on_quit(exit_code=install_layout.RELAUNCH_EXIT_CODE)
 
@@ -3847,7 +3852,10 @@ def _ready_update_version() -> str | None:
     """The staged update waiting in this install's state.json, if any."""
     try:
         from row_bot.updates import switcher
+        from row_bot.updates.external import external_mode
 
+        if external_mode():
+            return None  # the host applies updates (D11)
         return switcher.ready_version(install_layout.detect())
     except Exception:
         logger.debug("Could not read the install's ready update", exc_info=True)
@@ -3858,8 +3866,7 @@ def _switch_to_ready_update() -> bool:
     try:
         from row_bot.updates import switcher
 
-        switcher.switch_to_ready(install_layout.detect())
-        return True
+        return switcher.switch_to_ready_locked(install_layout.detect()) is not None
     except Exception:
         logger.warning("Could not switch to the ready update", exc_info=True)
         return False
@@ -3878,8 +3885,13 @@ def _apply_ready_update_on_quit() -> None:
         logger.info("%s %s starts next time", APP_DISPLAY_NAME, applied)
 
 
-def _request_update_apply(port: int, server: "_RowBotProcess") -> str | None:
-    """Ask the app to restart into its ready update: restarting, deferred or None."""
+def _request_update_apply(port: int, server: "_RowBotProcess") -> str:
+    """Ask the app to restart into its ready update.
+
+    ``restarting`` or ``deferred`` as the app answers; ``unreachable`` only
+    when nothing listens (connection refused); ``unavailable`` for any other
+    answer, error or timeout, so the launcher never bypasses the app's guard.
+    """
     secret = server._launch_environment.get(LAUNCH_SECRET_ENV, "")
     request = urllib.request.Request(
         f"http://127.0.0.1:{int(port)}/api/launcher-apply-update",
@@ -3887,13 +3899,21 @@ def _request_update_apply(port: int, server: "_RowBotProcess") -> str | None:
         method="POST",
         headers={"Authorization": f"Bearer {secret}"},
     )
+    # Loopback with the launch secret: never through a configured proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with opener.open(request, timeout=10) as response:
             answer = json.loads(response.read(4096).decode("utf-8"))
-    except (OSError, ValueError, urllib.error.URLError, TimeoutError):
-        return None
+    except urllib.error.HTTPError:
+        return "unavailable"
+    except urllib.error.URLError as error:
+        return "unreachable" if isinstance(error.reason, ConnectionRefusedError) else "unavailable"
+    except ConnectionRefusedError:
+        return "unreachable"
+    except (OSError, ValueError, TimeoutError):
+        return "unavailable"
     status = answer.get("status") if isinstance(answer, dict) else None
-    return status if status in {"restarting", "deferred"} else None
+    return status if status in {"restarting", "deferred"} else "unavailable"
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

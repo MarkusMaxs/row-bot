@@ -5,6 +5,11 @@ was declined, the installer records ``legacy_install_pending`` in
 ``state.json`` and Settings offers the removal once more, with the same
 uninstaller and the same prompt. Nothing here runs without that explicit
 action, and the prompt itself is Windows' own.
+
+Only ``HKEY_LOCAL_MACHINE`` is read (both registry views): that entry can only
+be written by an administrator, so its ``UninstallString`` is trusted as much
+as the old install itself. The uninstaller always gets the same fixed
+arguments.
 """
 
 from __future__ import annotations
@@ -23,30 +28,43 @@ STATE_KEY = "legacy_install_pending"
 LEGACY_UNINSTALL_KEY = (
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
 )
-_UNINSTALL_ARGUMENTS = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+UNINSTALL_ARGUMENTS = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
 
 
-def _registry_value(name: str) -> tuple[bool, str]:
-    """Whether the per-machine entry exists, and one of its values."""
-    if os.name != "nt":
-        return False, ""
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _registry_entry() -> dict[str, object] | None:
+    """The per-machine uninstall entry: its values and which registry view held it."""
+    if not _is_windows():
+        return None
     import winreg
 
-    for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+    for view, label in ((winreg.KEY_WOW64_64KEY, "64"), (winreg.KEY_WOW64_32KEY, "32")):
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, LEGACY_UNINSTALL_KEY, 0, winreg.KEY_READ | view) as key:
-                try:
-                    value, _kind = winreg.QueryValueEx(key, name)
-                except OSError:
-                    value = ""
-                return True, str(value or "")
+                values: dict[str, object] = {"view": label}
+                for name in ("UninstallString", "InstallLocation", "Inno Setup: App Path"):
+                    try:
+                        values[name], _kind = winreg.QueryValueEx(key, name)
+                    except OSError:
+                        values[name] = ""
+                return values
         except OSError:
             continue
-    return False, ""
+    return None
+
+
+def _shell_execute(program: str, arguments: str) -> int:
+    """ShellExecuteW "runas": Windows shows its elevation prompt. > 32 means started."""
+    import ctypes
+
+    return int(ctypes.windll.shell32.ShellExecuteW(None, "runas", program, arguments, None, 0))
 
 
 def legacy_install_present() -> bool:
-    return _registry_value("UninstallString")[0]
+    return _registry_entry() is not None
 
 
 def recorded(layout: InstallLayout) -> bool:
@@ -70,45 +88,57 @@ def clear(layout: InstallLayout) -> None:
         install_layout.write_state(layout.root, state)
 
 
-def _uninstaller() -> str:
-    _present, value = _registry_value("UninstallString")
-    value = value.strip()
+def uninstaller_path(uninstall_string: str) -> str:
+    """The program of an ``UninstallString`` (quoted or not), without its arguments."""
+    value = (uninstall_string or "").strip()
     if value.startswith('"'):
         try:
-            value = shlex.split(value, posix=False)[0].strip('"')
+            return shlex.split(value, posix=False)[0].strip('"')
         except ValueError:
-            value = value.strip('"')
+            return value.strip('"').split('"', 1)[0]
     return value
 
 
 def start_removal(layout: InstallLayout) -> bool:
-    """Start the old uninstaller elevated (Windows asks the person). True if started."""
-    if os.name != "nt" or not recorded(layout):
+    """Start the old uninstaller elevated (Windows asks the person). True if started.
+
+    Blocks while Windows shows its prompt, so callers run it off any lock.
+    """
+    if not _is_windows() or not recorded(layout):
         return False
-    if not legacy_install_present():
+    entry = _registry_entry()
+    if entry is None:
         clear(layout)
         return False
-    import ctypes
-
-    uninstaller = _uninstaller()
+    uninstaller = uninstaller_path(str(entry.get("UninstallString") or ""))
     if uninstaller and Path(uninstaller).is_file():
-        program, arguments = uninstaller, _UNINSTALL_ARGUMENTS
+        program, arguments = uninstaller, UNINSTALL_ARGUMENTS
     else:
+        folder = str(entry.get("InstallLocation") or entry.get("Inno Setup: App Path") or "").strip()
+        if not folder and uninstaller:
+            folder = str(Path(uninstaller).parent)
+        if folder and Path(folder).exists():
+            # The uninstaller is missing but the program is still there:
+            # deleting the entry would hide it. Leave it to Windows Settings.
+            logger.warning("The earlier Row-Bot's uninstaller is missing but %s is still there", folder)
+            return False
         # Its folder is gone already: only the Apps & features entry is left.
         program = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "reg.exe")
-        arguments = f'delete "HKLM\\{LEGACY_UNINSTALL_KEY}" /f /reg:64'
-    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", program, arguments, None, 0)
-    started = int(result) > 32
-    logger.info("Removal of the earlier Row-Bot %s (%s)", "started" if started else "was not started", int(result))
+        arguments = f'delete "HKLM\\{LEGACY_UNINSTALL_KEY}" /f /reg:{entry.get("view") or "64"}'
+    result = _shell_execute(program, arguments)
+    started = result > 32
+    logger.info("Removal of the earlier Row-Bot %s (%s)", "started" if started else "was not started", result)
     return started
 
 
 __all__ = [
     "LEGACY_UNINSTALL_KEY",
     "STATE_KEY",
+    "UNINSTALL_ARGUMENTS",
     "clear",
     "legacy_install_present",
     "pending",
     "recorded",
     "start_removal",
+    "uninstaller_path",
 ]
