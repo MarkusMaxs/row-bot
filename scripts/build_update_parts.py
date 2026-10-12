@@ -20,6 +20,8 @@ built client). Subcommands:
 ``previous-tags``     the published releases the lock is compared with
 ``verify-release``    every file a release needs is there and agrees with the update JSON
 ``release-notes``     the draft release's title and notes from RELEASE_NOTES.md
+``container-digests`` ``row-bot-container-<v>.json``: the image digests Docker and cloud
+                      installs pull by (D12), written by container.yml after publishing
 
 Run with the repository's Python; only ``wheel-check`` needs ``packaging``.
 """
@@ -313,8 +315,13 @@ def _verify_part(folder: Path, part: Mapping[str, Any]) -> None:
 def assemble(
     parts_dir: Path, platform_files: Iterable[Path], out: Path, *,
     min_source_version: str | None = None, require: Iterable[str] = (),
+    wheel_report: Mapping[str, Any] | None = None,
 ) -> Path:
-    """``row-bot-update-<v>.json``, checked with the client's own parser."""
+    """``row-bot-update-<v>.json``, checked with the client's own parser.
+
+    With the wheel check's report, each build's Python must be the one the
+    check planned for (the same major and minor version).
+    """
     parts_dir = Path(parts_dir)
     parts = json.loads((parts_dir / "parts.json").read_text(encoding="utf-8"))
     version = _check_version(parts["version"])
@@ -333,6 +340,10 @@ def assemble(
     missing = [key for key in require if key not in platforms]
     if missing:
         raise PartsError(f"no build describes {', '.join(missing)}")
+    for key, planned in ((wheel_report or {}).get("targets") or {}).items():
+        built = platforms.get(key, {}).get("python")
+        if built and built.split(".")[:2] != str(planned).split(".")[:2]:
+            raise PartsError(f"the {key} build runs Python {built}, but the wheel check planned for {planned}")
     description: dict[str, Any] = {"schema": SCHEMA, "version": version}
     if min_source_version:
         description["min_source_version"] = min_source_version
@@ -422,7 +433,7 @@ def wheel_check(
     """
     from row_bot.updates.planner import plan_runtime
 
-    report: dict[str, Any] = {"previous": sorted(previous), "platforms": {}, "no_wheel": {}}
+    report: dict[str, Any] = {"previous": sorted(previous), "targets": dict(targets), "platforms": {}, "no_wheel": {}}
     for key, python in sorted(targets.items()):
         env, found = target_environment(key, python)
         for label, text in sorted(previous.items()):
@@ -551,6 +562,26 @@ def notes_say_full_installer(body: str) -> bool:
     return FULL_INSTALLER_SENTENCE.lower() in (body or "").lower()
 
 
+# ── container digests (D12) ─────────────────────────────────────────────────
+
+CONTAINER_PLATFORMS = ("linux/amd64", "linux/arm64")
+
+
+def container_digests(version: str, image: str, manifest_digest: str, platforms: Mapping[str, str]) -> dict[str, Any]:
+    """What a Docker or cloud install pulls: the multi-arch index and each platform's image, by digest."""
+    _check_version(version)
+    if not re.fullmatch(r"[a-z0-9.-]+(?::\d+)?/[a-z0-9._/-]+", image):
+        raise PartsError(f"{image!r} is not an image name")
+    digests = {"manifest": manifest_digest, **platforms}
+    for label, digest in digests.items():
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise PartsError(f"{label}: {digest!r} is not a sha256 digest")
+    if sorted(platforms) != sorted(CONTAINER_PLATFORMS):
+        raise PartsError(f"expected digests for {', '.join(CONTAINER_PLATFORMS)}")
+    return {"schema": SCHEMA, "version": version, "image": image, "tag": version, "manifest_digest": manifest_digest,
+            "platforms": {key: platforms[key] for key in CONTAINER_PLATFORMS}}
+
+
 # ── command line ────────────────────────────────────────────────────────────
 
 
@@ -586,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--platform", type=Path, action="append", default=[])
     build.add_argument("--require", action="append", default=[])
     build.add_argument("--min-source-version")
+    build.add_argument("--wheel-check", type=Path, help="the wheel check's report: builds must run its Pythons")
     build.add_argument("--out", type=Path, required=True)
 
     check = commands.add_parser("wheel-check", help="D16: changed libraries without wheels")
@@ -612,6 +644,13 @@ def main(argv: list[str] | None = None) -> int:
     notes.add_argument("--title-out", type=Path, required=True)
     notes.add_argument("--body-out", type=Path, required=True)
 
+    container = commands.add_parser("container-digests", help="row-bot-container-<v>.json (D12)")
+    container.add_argument("--version", required=True)
+    container.add_argument("--image", required=True)
+    container.add_argument("--manifest-digest", required=True)
+    container.add_argument("--platform", action="append", default=[], help="PLATFORM=DIGEST, e.g. linux/amd64=sha256:...")
+    container.add_argument("--out-dir", type=Path, required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "parts":
@@ -624,8 +663,9 @@ def main(argv: list[str] | None = None) -> int:
             args.out.write_text(json.dumps(entry, indent=2) + "\n", encoding="utf-8", newline="\n")
             print(json.dumps(entry))
         elif args.command == "assemble":
+            report = json.loads(args.wheel_check.read_text(encoding="utf-8")) if args.wheel_check else None
             target = assemble(args.parts, args.platform, args.out, min_source_version=args.min_source_version,
-                              require=args.require)
+                              require=args.require, wheel_report=report)
             print(target.read_text(encoding="utf-8"))
         elif args.command == "wheel-check":
             previous = {ref: export_pylock_at(ref, args.project_root) for ref in args.previous_ref}
@@ -663,6 +703,13 @@ def main(argv: list[str] | None = None) -> int:
             if problems:
                 return 1
             print(f"{args.version}: all {len(listing)} release files are present and agree with the update description")
+        elif args.command == "container-digests":
+            platforms = dict(item.split("=", 1) for item in args.platform)
+            described = container_digests(args.version, args.image, args.manifest_digest, platforms)
+            args.out_dir.mkdir(parents=True, exist_ok=True)
+            target = args.out_dir / container_name(args.version)
+            target.write_text(json.dumps(described, indent=2) + "\n", encoding="utf-8", newline="\n")
+            print(target.read_text(encoding="utf-8"))
         elif args.command == "release-notes":
             report = json.loads(args.wheel_check.read_text(encoding="utf-8")) if args.wheel_check else None
             title, body = release_notes(args.version, args.notes.read_text(encoding="utf-8"), report)

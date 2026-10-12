@@ -176,6 +176,8 @@ def test_assemble_refuses_a_changed_part_and_a_missing_platform(tmp_path, app, p
 
     with pytest.raises(parts.PartsError, match="no build describes macos-arm64"):
         parts.assemble(out, [windows], tmp_path / "release", require=["windows-x86_64", "macos-arm64"])
+    with pytest.raises(parts.PartsError, match="runs Python 3.13.2, but the wheel check planned for 3.12.13"):
+        parts.assemble(out, [windows], tmp_path / "release", wheel_report={"targets": {"windows-x86_64": "3.12.13"}})
     (out / parts.code_name(VERSION)).write_bytes(b"other")
     with pytest.raises(parts.PartsError, match="does not match parts.json"):
         parts.assemble(out, [windows], tmp_path / "release")
@@ -310,3 +312,16 @@ def test_the_draft_notes_are_the_version_section_and_say_when_the_full_installer
     assert parts.notes_say_full_installer(body)
     assert body.startswith("## v5.2.1 - Faster Updates\n\nUpdates are smaller.\n\n**This update needs the full installer.**")
 
+
+def test_container_digests_name_the_index_and_each_platform(tmp_path) -> None:
+    amd, arm, index = "sha256:" + "a" * 64, "sha256:" + "b" * 64, "sha256:" + "c" * 64
+    command = ["container-digests", "--version", VERSION, "--image", "ghcr.io/siddsachar/row-bot",
+               "--manifest-digest", index, "--platform", f"linux/amd64={amd}", "--out-dir", str(tmp_path)]
+
+    assert parts.main(command) == 1  # linux/arm64 is missing
+    assert parts.main([*command, "--platform", f"linux/arm64={arm}"]) == 0
+    described = json.loads((tmp_path / f"row-bot-container-{VERSION}.json").read_text(encoding="utf-8"))
+    assert described == {"schema": 1, "version": VERSION, "image": "ghcr.io/siddsachar/row-bot", "tag": VERSION,
+                         "manifest_digest": index, "platforms": {"linux/amd64": amd, "linux/arm64": arm}}
+    with pytest.raises(parts.PartsError, match="not a sha256 digest"):
+        parts.container_digests(VERSION, "ghcr.io/siddsachar/row-bot", "latest", {"linux/amd64": amd, "linux/arm64": arm})
