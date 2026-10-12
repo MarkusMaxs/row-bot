@@ -109,7 +109,7 @@ def installer_name(key: str, version: str) -> str:
 
 
 def release_file_names(version: str, platforms: Iterable[str] = REQUIRED_PLATFORMS) -> list[str]:
-    """Every file a release must carry before it is published."""
+    """Every file a release must carry before it is published, and nothing else may."""
     return [
         *(installer_name(key, version) for key in platforms),
         code_name(version),
@@ -515,11 +515,15 @@ def verify_release(
     """Problems that stop a release from being published (empty when it can be).
 
     *listing* is every release file as ``{"name", "size", "sha256"}``; the
-    update description must name exactly those parts and installers.
+    update description must name exactly those parts and installers, and the
+    release carries nothing else (the SHA-256 block vouches for every file, and
+    a stray installer could match the 5.1 updater's patterns).
     """
     _check_version(version)
     files = {str(item["name"]): item for item in listing}
-    problems = [f"{name} is missing" for name in release_file_names(version, platforms) if name not in files]
+    expected = release_file_names(version, platforms)
+    problems = [f"{name} is missing" for name in expected if name not in files]
+    problems += [f"{name} is not a file of release {version}" for name in sorted(files) if name not in expected]
     try:
         described = update_manifest.parse_manifest(update_json, expected_version=version)
     except update_manifest.ManifestError as exc:

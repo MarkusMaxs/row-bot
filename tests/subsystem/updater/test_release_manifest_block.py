@@ -116,3 +116,17 @@ def test_container_adds_its_digest_file_to_the_published_block(monkeypatch, rele
 
     assert _run(monkeypatch, api, "--add", "--files", str(release_files[CONTAINER])) == 0
     assert updater.parse_manifest(api.body) == {EXE: "a" * 64, CONTAINER: block.sha256_of(release_files[CONTAINER])}
+
+
+def test_the_backstop_never_vouches_for_a_stray_file(monkeypatch, release_files, tmp_path, capsys) -> None:
+    stray = tmp_path / "Row-Bot-5.2.0-Windows-arm64.exe"
+    stray.write_bytes(b"not ours")
+    api = FakeReleaseApi(NOTES)
+
+    assert _run(monkeypatch, api, "--backstop", "--only-release-files", "--files", str(release_files[EXE]),
+                str(stray)) == 1
+    assert api.patches == []
+    assert "Row-Bot-5.2.0-Windows-arm64.exe" in capsys.readouterr().out
+    assert _run(monkeypatch, api, "--backstop", "--only-release-files", "--files",
+                *map(str, release_files.values())) == 0
+

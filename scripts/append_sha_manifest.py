@@ -27,6 +27,10 @@ Modes:
     ``update-manifest.yml``: write the block when there is none and add files
     it does not list, but never change a listed hash. A listed file whose
     bytes differ fails instead, so a correct block is never overwritten.
+``--only-release-files``
+    Refuse a file that is not one of the release's own
+    (``build_update_parts.release_file_names`` plus the container digests):
+    the block must never vouch for a stray upload.
 
 Every mode rewrites only the block and leaves the rest of the body alone, and
 running it twice gives the same body.
@@ -43,7 +47,7 @@ import sys
 import urllib.request
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-for _path in (_REPO_ROOT, _REPO_ROOT / "src"):
+for _path in (_REPO_ROOT, _REPO_ROOT / "src", _REPO_ROOT / "scripts"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
@@ -59,6 +63,14 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,159}$")
 
 class ManifestConflict(Exception):
     """A listed file's hash differs from the file now in the release."""
+
+
+def unexpected_files(version: str, names: list[str]) -> list[str]:
+    """Names that are not one of release *version*'s own files."""
+    import build_update_parts as parts
+
+    allowed = {*parts.release_file_names(version), parts.container_name(version)}
+    return sorted(name for name in names if name not in allowed)
 
 
 def sha256_of(path: pathlib.Path) -> str:
@@ -174,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--add", action="store_true", help="add or update these files, keep the other lines")
     mode.add_argument("--backstop", action="store_true", help="fill a missing block, never change a listed hash")
+    parser.add_argument("--only-release-files", action="store_true",
+                        help="refuse a file that is not one of the release's own")
     parser.add_argument("--listing", help="offline: JSON list of {name, size, sha256}")
     parser.add_argument("--body-file", help="offline: the current release body")
     parser.add_argument("--write-body", help="offline: where to write the new body")
@@ -196,6 +210,11 @@ def main(argv: list[str] | None = None) -> int:
     if not file_hashes:
         print("error: no files to hash", file=sys.stderr)
         return 2
+    if args.only_release_files:
+        stray = unexpected_files(args.tag.lstrip("v"), list(file_hashes))
+        if stray:
+            print(f"::error::not files of {args.tag}, so the block will not list them: {', '.join(stray)}")
+            return 1
 
     # Fetch release (published releases only: a draft's block is written offline)
     tag = args.tag.lstrip("v")

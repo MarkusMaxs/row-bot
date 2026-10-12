@@ -183,7 +183,9 @@ def test_assemble_refuses_a_changed_part_and_a_missing_platform(tmp_path, app, p
         parts.assemble(out, [windows], tmp_path / "release")
 
 
-def test_installer_names_are_the_ones_the_5_1_updater_downloads() -> None:
+def test_installer_names_match_the_updaters_installer_patterns() -> None:
+    # The patterns are unchanged since 5.1; installer-verify checks 5.1.0's own
+    # updater against a release's files (scripts/bridge_51.py asset-names).
     assert updater._WIN_ASSET_RE.match(parts.installer_name("windows-x86_64", "5.2.0-beta.1"))
     assert updater._MAC_ARM_ASSET_RE.match(parts.installer_name("macos-arm64", "5.2.0-beta.1"))
     assert updater._LINUX_X64_ASSET_RE.match(parts.installer_name("linux-x86_64", "5.2.0-beta.1"))
@@ -307,6 +309,10 @@ def test_a_complete_release_passes_the_publish_gate(tmp_path, app, project) -> N
     changed = [{**item, "sha256": "f" * 64} if item["name"] == parts.code_name(VERSION) else item for item in listing]
     assert parts.verify_release(VERSION, changed, update_json.read_bytes()) == [
         f"{parts.code_name(VERSION)} differs from the update description"]
+    # The block would vouch for a stray file, and 5.1 could pick a stray installer.
+    stray = [*listing, {"name": f"Row-Bot-{VERSION}-Windows-arm64.exe", "size": 1, "sha256": "e" * 64}]
+    assert parts.verify_release(VERSION, stray, update_json.read_bytes()) == [
+        f"Row-Bot-{VERSION}-Windows-arm64.exe is not a file of release {VERSION}"]
 
 
 def test_the_draft_notes_are_the_version_section_and_say_when_the_full_installer_is_needed() -> None:

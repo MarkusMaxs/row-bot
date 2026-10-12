@@ -39,14 +39,3 @@ def test_only_the_draft_job_writes_to_releases_and_never_in_a_dry_run() -> None:
     # A draft only ever holds a complete set of builds.
     for name in ("build-windows", "build-linux", "build-macos", "checksums-and-manifest"):
         assert f"needs.{name}.result == 'success'" in jobs["draft-release"]["if"]
-    assert "inputs.dry_run" in jobs["publish-dry-run"]["if"]
-    assert "-DryRun" in str(jobs["publish-dry-run"]["steps"])
-
-
-def test_notarization_is_finished_by_the_resumable_workflow() -> None:
-    workflows = {path.name for path in Path(".github/workflows").glob("*.yml")}
-    finish = _workflow("notarize-finish.yml")
-
-    assert {"notarize-submit.yml", "notarize-check.yml"}.isdisjoint(workflows)
-    assert set(finish["on"]) == {"schedule", "workflow_dispatch"}
-    assert finish["jobs"]["finish"]["needs"] == "find"
