@@ -204,12 +204,21 @@ jobs:
           set -euo pipefail
           python -m pip install --quiet "packaging==26.2"
           args=()
-          for tag in $(python scripts/build_update_parts.py previous-tags --version "$ROW_BOT_VERSION"); do
+          # A failure to read what to compare with fails the check; it never passes it.
+          tags="$(python scripts/build_update_parts.py previous-tags --version "$ROW_BOT_VERSION")" || {
+            echo "::error::could not list the earlier releases to compare the lock with"; exit 1; }
+          for tag in $tags; do
             git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$tag:refs/tags/$tag"
             args+=(--previous-ref "$tag")
-            # Its Pythons, from its update description (releases before 5.2 have none).
-            if gh release download "$tag" -p "row-bot-update-*.json" -D "$RUNNER_TEMP/previous-$tag" 2>/dev/null; then
-              args+=(--previous-update-json "$tag=$(ls "$RUNNER_TEMP/previous-$tag"/row-bot-update-*.json)")
+            # Its Pythons, from its update description; releases before 5.2 have none.
+            name="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("row-bot-update-"))')" || {
+              echo "::error::could not read the files of $tag"; exit 1; }
+            if [ -n "$name" ]; then
+              gh release download "$tag" -p "$name" -D "$RUNNER_TEMP/previous-$tag" || {
+                echo "::error::could not download $name of $tag"; exit 1; }
+              args+=(--previous-update-json "$tag=$RUNNER_TEMP/previous-$tag/$name")
+            else
+              echo "$tag has no update description (released before 5.2): only its lock is compared"
             fi
           done
           if [ "$ACKNOWLEDGE" = "true" ]; then args+=(--acknowledge); fi
@@ -421,6 +430,11 @@ jobs:
       DRY_RUN: ${{ inputs.dry_run }}
 
     steps:
+      # Notarization waits end 20 minutes before the job's 180, so the pending
+      # state is always uploaded (scripts/macos_notarize.py finish --until).
+      - name: Note when the job started
+        run: echo "NOTARIZE_UNTIL=$(( $(date +%s) + 160 * 60 ))" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
 
       - name: Build local client assets
@@ -495,28 +509,44 @@ jobs:
         run: |
           set -euo pipefail
           args=(--state "$RUNNER_TEMP/notarization/notarization.json" --app "$APP_PATH"
-                --dmg "dist/Row-Bot-$ROW_BOT_VERSION-macOS-arm64.dmg" --minutes "${WAIT_MINUTES:-45}")
+                --dmg "dist/Row-Bot-$ROW_BOT_VERSION-macOS-arm64.dmg" --minutes "${WAIT_MINUTES:-45}"
+                --until "$NOTARIZE_UNTIL")
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           python -u scripts/macos_notarize.py finish "${args[@]}"
 
       - name: Gatekeeper accepts what ships
         if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
+        env:
+          READINESS: ${{ steps.notarize.outputs.readiness }}
         run: |
           set -euo pipefail
           spctl --assess --type execute -vv "$APP_PATH"
           DMG="dist/Row-Bot-$ROW_BOT_VERSION-macOS-arm64.dmg"
-          codesign --verify --strict "$DMG"
-          if [ "${{ steps.notarize.outputs.readiness }}" = "ready" ]; then
+          notarized=false
+          if [ "$READINESS" = "ready" ]; then
+            notarized=true
             spctl --assess --type open --context context:primary-signature -vv "$DMG"
           fi
+          python -u scripts/macos_notarize.py verify-dmg --dmg "$DMG" --version "$ROW_BOT_VERSION" --notarized "$notarized"
           du -h "$DMG"
 
       - name: macOS notarization summary
+        id: summary
         if: always()
         run: |
           if [ -f "$RUNNER_TEMP/notarization/notarization.json" ]; then
             python -u scripts/macos_notarize.py summary --state "$RUNNER_TEMP/notarization/notarization.json"
           fi
+
+      # Also after a failed step: whatever Apple still checks goes to notarize-finish.yml.
+      - name: Gather the pending notarization
+        if: always() && steps.summary.outputs.readiness == 'pending'
+        run: |
+          N="$RUNNER_TEMP/notarization"
+          if python3 -c 'import json, sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("dmg") or {}).get("submission_id") else 1)' "$N/notarization.json"; then
+            for dmg in dist/Row-Bot-*-macOS-*.dmg; do [ -e "$dmg" ] && mv -n "$dmg" "$N/"; done
+          fi
+          ls -la "$N"
 
       - name: Upload the macOS DMG
         if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
@@ -526,11 +556,13 @@ jobs:
           path: dist/Row-Bot-*-macOS-*.dmg
           retention-days: 90
 
+      # Named with this run's id: notarize-finish.yml attaches the DMG only for
+      # the newest release run of the tag's current commit.
       - name: Upload the pending notarization for notarize-finish.yml
-        if: steps.notarize.outputs.readiness == 'pending'
+        if: always() && steps.summary.outputs.readiness == 'pending'
         uses: actions/upload-artifact@v7
         with:
-          name: macos-notarization-pending-${{ env.ROW_BOT_VERSION }}${{ inputs.dry_run && '-dry-run' || '' }}
+          name: macos-notarization-pending-${{ env.ROW_BOT_VERSION }}-r${{ github.run_id }}${{ inputs.dry_run && '-dry-run' || '' }}
           path: ${{ runner.temp }}/notarization/
           retention-days: 14
 
@@ -652,6 +684,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      actions: read  # notarize-finish.yml's record of a DMG it attached for this run
 
     steps:
       - uses: actions/checkout@v7
@@ -671,33 +704,59 @@ jobs:
           name: Row-Bot-update-parts
           path: update-parts
 
+      # The draft holds this run's files only: an earlier run's files are removed,
+      # so nothing of a moved tag or an older build is ever published.
       - name: Create or refresh the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: v${{ env.ROW_BOT_VERSION }}
+          DMG: Row-Bot-${{ env.ROW_BOT_VERSION }}-macOS-arm64.dmg
         run: |
           set -euo pipefail
           cp update-parts/row-bot-*.tar.xz update-parts/row-bot-pylock-*.toml files/
           python scripts/build_update_parts.py release-notes --version "$ROW_BOT_VERSION" --notes RELEASE_NOTES.md \
             --wheel-check update-parts/wheel-check.json --title-out title.txt --body-out notes.md
-          draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
-          if [ "$draft" = "false" ]; then
-            echo "::error::$TAG is already published. A published release is never changed; release a new version."
+          # An API error fails here; only an answer without the tag means "no release yet".
+          releases="$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name == \"$TAG\") | {id, draft}]")"
+          count="$(jq length <<<"$releases")"
+          if [ "$count" -gt 1 ]; then
+            echo "::error::$count releases are tagged $TAG: delete the extra drafts, then run this job again"
             exit 1
-          fi
-          if [ "$draft" = "none" ]; then
+          elif [ "$count" -eq 1 ]; then
+            if [ "$(jq -r '.[0].draft' <<<"$releases")" != "true" ]; then
+              echo "::error::$TAG is already published. A published release is never changed; release a new version."
+              exit 1
+            fi
+            release_id="$(jq -r '.[0].id' <<<"$releases")"
+          else
             flags=(--draft --verify-tag --title "$(cat title.txt)" --notes-file notes.md)
             case "$ROW_BOT_VERSION" in *-*) flags+=(--prerelease) ;; esac
             gh release create "$TAG" "${flags[@]}"
+            release_id="$(gh api "repos/$GH_REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id")"
           fi
           gh release upload "$TAG" files/* --clobber
+          # A DMG notarize-finish.yml attached for this very run (a re-run of this job) stays.
+          keep=""
+          record="macos-dmg-record-$GITHUB_RUN_ID"
+          record_run="$(gh api "repos/$GH_REPO/actions/artifacts?name=$record" --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')"
+          if [ -n "$record_run" ]; then
+            gh run download "$record_run" -n "$record" -D record
+            keep="sha256:$(jq -r .sha256 record/*.json)"
+          fi
+          gh api "repos/$GH_REPO/releases/$release_id/assets?per_page=100" --jq '.[] | "\(.id) \(.name) \(.digest)"' |
+          while read -r asset_id name digest; do
+            if [ -e "files/$name" ]; then continue; fi
+            if [ "$name" = "$DMG" ] && [ -n "$keep" ] && [ "$digest" = "$keep" ]; then continue; fi
+            echo "Removing $name from the draft: this run did not build it"
+            gh api -X DELETE "repos/$GH_REPO/releases/assets/$asset_id"
+          done
           {
             echo "### Draft release $TAG"
             echo ""
             ls -1 files | sed 's/^/- /'
             echo ""
-            if [ -e "files/Row-Bot-$ROW_BOT_VERSION-macOS-arm64.dmg" ]; then
+            if [ -e "files/$DMG" ] || [ -n "$keep" ]; then
               echo "macOS is ready: the stapled DMG is on the draft."
             else
               echo "macOS is not ready yet: notarize-finish.yml attaches the stapled DMG when Apple is done."
