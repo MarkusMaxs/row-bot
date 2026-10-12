@@ -618,6 +618,7 @@ jobs:
       - name: Build SHA256 manifest
         run: |
           set -euo pipefail
+          mkdir -p release-artifacts
           cp update-parts/row-bot-*.tar.xz update-parts/row-bot-pylock-*.toml update/row-bot-update-*.json release-artifacts/
           (cd release-artifacts && find . -type f -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #') \
             | tee release-artifact-sha256.txt
