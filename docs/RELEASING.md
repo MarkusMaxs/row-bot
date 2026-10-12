@@ -188,8 +188,9 @@ the updater trusts only files listed there.
   signs both files in that session.
 - **GitHub CLI** logged in with write access to the repository (`gh auth login`).
 - **Python 3.11 or newer** on `PATH` (`python` or `py -3`); no packages needed.
-- About 8 GB free in `%LOCALAPPDATA%\Row-Bot-Release` (the installer stage is
-  3.2 GB unpacked).
+- About 8 GB free in `%LOCALAPPDATA%\rbr` (the installer stage is 3.3 GB
+  unpacked; the folder name is short because the stage's deepest paths are as
+  long as an installed version's).
 
 Windows signing never moves to CI (D4): do not add Certum credentials to
 GitHub Actions.

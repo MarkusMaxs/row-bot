@@ -177,14 +177,14 @@ if (-not $Repository) { $Repository = if ($env:GH_REPO) { $env:GH_REPO } else { 
 $Python = Find-Python
 $IsccPath = Find-Tool $Iscc @("C:\Program Files (x86)\Inno Setup 6\ISCC.exe", "C:\Program Files\Inno Setup 6\ISCC.exe") "iscc.exe"
 if (-not $IsccPath) { throw "Inno Setup 6 (ISCC.exe) is required: https://jrsoftware.org/isdl.php" }
-$Tar = Join-Path $env:SystemRoot "System32\tar.exe"
 $SignToolPath = $null
 if (-not $DryRun) {
     $SignToolPath = Find-SignTool
     if (-not $SignToolPath) { throw "signtool.exe is required (Windows SDK, Signing Tools for Desktop Apps)" }
 }
 if (-not $WorkDir) {
-    $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $env:LOCALAPPDATA "Row-Bot-Release" }
+    # Short: the stage's deepest paths are as long as an installed version's.
+    $base = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $env:LOCALAPPDATA "rbr" }
     $WorkDir = Join-Path $base $Version
 }
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -218,14 +218,16 @@ if (-not $DryRun) {
 # ── 1. The installer stage ──────────────────────────────────────────────────
 
 Write-Step "1. The Windows installer stage"
-$Stage = Join-Path $WorkDir "stage"
+$Stage = Join-Path $WorkDir "s"
 $IssFile = Join-Path $Stage "installer\row_bot_setup.iss"
-if (-not (Test-Path $IssFile)) {
-    $download = Save-Artifact "Row-Bot-Windows-stage" (Join-Path $WorkDir "stage-download")
+if (-not (Test-Path (Join-Path $Stage "installer\build\stage.json"))) {
+    $download = Save-Artifact "Row-Bot-Windows-stage" (Join-Path $WorkDir "download")
     $tarFile = Get-ChildItem -Path $download -Filter "*.tar" | Select-Object -First 1
     if (-not $tarFile) { throw "The Row-Bot-Windows-stage artifact holds no .tar" }
-    New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-    Invoke-Native -File $Tar -Arguments @("-xf", $tarFile.FullName, "-C", $Stage)
+    if (Test-Path $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
+    # Unpacked and counted against the file list packed with it.
+    Invoke-Python @((Join-Path $ScriptRoot "windows_stage.py"), "unpack", "--archive", $tarFile.FullName, "--out", $Stage) |
+        ForEach-Object { Write-Note "Stage: $_" }
     Remove-Item -LiteralPath $download -Recurse -Force
 }
 $stageVersion = (Get-Content (Join-Path $Stage "installer\build\version.json") -Raw | ConvertFrom-Json).version

@@ -64,7 +64,7 @@ jobs:
         run: |
           args=(--repository "$GITHUB_REPOSITORY")
           if [ -n "$RUN_ID" ]; then args+=(--run-id "$RUN_ID"); fi
-          python3 scripts/macos_notarize.py find-pending "${args[@]}"
+          python3 -u scripts/macos_notarize.py find-pending "${args[@]}"
 
   finish:
     needs: find
@@ -123,7 +123,7 @@ jobs:
           args=(--state "$N/notarization.json" --app "$N/app/Row-Bot.app"
                 --dmg "$N/Row-Bot-$VERSION-macOS-arm64.dmg" --minutes "${WAIT_MINUTES:-30}")
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
-          python scripts/macos_notarize.py finish "${args[@]}"
+          python -u scripts/macos_notarize.py finish "${args[@]}"
           echo "stage_after=$(stage)" >> "$GITHUB_OUTPUT"
 
       - name: Gatekeeper accepts what ships
@@ -132,7 +132,7 @@ jobs:
 
       - name: macOS notarization summary
         if: always()
-        run: python scripts/macos_notarize.py summary --state "$RUNNER_TEMP/notarization/notarization.json"
+        run: python -u scripts/macos_notarize.py summary --state "$RUNNER_TEMP/notarization/notarization.json"
 
       - name: Upload the macOS DMG
         if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
