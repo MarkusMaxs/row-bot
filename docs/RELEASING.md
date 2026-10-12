@@ -29,12 +29,15 @@ Row-Bot uses semantic versioning:
   macOS and the browser smoke on Firefox and WebKit.
 - **Release** (`release.yml`): the `release-gate` job checks the lock files,
   checks that the requested version matches `src/row_bot/version.py` and
-  `installer/row_bot_setup.iss`, and refuses a commit without a green
-  `CI / ci-ok`. It runs the nightly suite once only if that commit has no green
-  nightly run. Nothing else is re-tested; each build install-smokes its own
-  package.
+  `installer/row_bot_setup.iss`, refuses a run that is not from the tag
+  `vX.Y.Z`, and refuses a commit without a green `CI / ci-ok`. It runs the
+  nightly suite once only if that commit has no green nightly run. Nothing else
+  is re-tested; each build install-smokes its own package and rehearses a
+  background update from the release's own update parts.
 - **Installer Verify** (`installer-verify.yml`): the unsigned dry run of all
-  three packages for any branch, with the same install smokes as a release.
+  three packages for any branch, with the same install smokes as a release, a
+  background update rehearsal, and the 5.1 bridge: each package installed over
+  the real 5.1.0 release the way 5.1's updater installs it.
 
 Every packaging job builds the React client first (`.github/actions/build-client`,
 Node 24.15.0, `npm ci --ignore-scripts`), and the build scripts stage it into
@@ -141,6 +144,58 @@ Node 24.15.0, `npm ci --ignore-scripts`), and the build scripts stage it into
 
 ## Build and publish
 
+A release is built in CI from its tag and ends as a draft GitHub release with
+every file except the Windows installer. One local command on the Windows
+signing machine then signs and packs Windows, writes the SHA-256 block and
+publishes. Nothing is visible to users until that command publishes.
+
+| Step | Where | What |
+|---|---|---|
+| 1. Tag | your checkout | `vX.Y.Z` on the merge commit |
+| 2. Build | `release.yml` | installers, update parts, `row-bot-update-X.Y.Z.json`, macOS notarized and stapled, the draft release |
+| 3. macOS, if Apple was slow | `notarize-finish.yml` | finishes the notarization and attaches the stapled DMG to the draft |
+| 4. Windows and publish | `scripts/release_windows.ps1` | signs `Row-Bot.exe`, packs and signs the installer, uploads it, writes the SHA-256 block, publishes after you confirm |
+| 5. After publishing | `update-manifest.yml`, `container.yml` | the block is checked (never overwritten); the container images and their digests file |
+
+### What a release publishes
+
+| File | What it is for |
+|---|---|
+| `Row-Bot-X.Y.Z-Windows-x64.exe` | first install, and the update path from 5.1 (its updater runs it silently) |
+| `Row-Bot-X.Y.Z-macOS-arm64.dmg` | first install (signed, notarized and stapled; so is the app inside) |
+| `Row-Bot-X.Y.Z-Linux-x86_64.tar.gz` | first install and the one-line installer |
+| `row-bot-code-X.Y.Z.tar.xz` | background updates: the app without `static/` and `sounds/` |
+| `row-bot-assets-X.Y.Z.tar.xz` | background updates: `static/` and `sounds/`, downloaded only when they changed |
+| `row-bot-pylock-X.Y.Z.toml` | background updates: the `uv.lock` export the client plans libraries from |
+| `row-bot-update-X.Y.Z.json` | what the release offers a background update (`row_bot.updates.manifest`) |
+| `row-bot-container-X.Y.Z.json` | the container image digests Docker and cloud installs pull by (added by `container.yml` after publishing) |
+
+The update parts are built once, from the same staged payload the installers
+ship (`scripts/build_update_parts.py`): LF line endings, no bytecode, sorted
+tar members without times or owners. The release body's
+`<!-- row-bot-update-manifest -->` block lists the SHA-256 of every file;
+the updater trusts only files listed there.
+
+### Prerequisites on the Windows signing machine
+
+- **Inno Setup 6** (`ISCC.exe`): https://jrsoftware.org/isdl.php. Keep it at the
+  version CI uses (Chocolatey's `innosetup`); the script warns when they differ.
+- **Windows SDK `signtool.exe`**: the "Windows SDK Signing Tools for Desktop Apps"
+  component (the script finds the newest under `Windows Kits\10\bin`).
+- **SimplySign Desktop** with the Certum code signing certificate
+  (thumbprint `2341B4B36A21DF948E538A88BB194FAE4D1CAE51`). The script asks you
+  to log in (the code from the phone app) once, before the first signature, and
+  signs both files in that session.
+- **GitHub CLI** logged in with write access to the repository (`gh auth login`).
+- **Python 3.11 or newer** on `PATH` (`python` or `py -3`); no packages needed.
+- About 8 GB free in `%LOCALAPPDATA%\Row-Bot-Release` (the installer stage is
+  3.2 GB unpacked).
+
+Windows signing never moves to CI (D4): do not add Certum credentials to
+GitHub Actions.
+
+### Steps
+
 1. Tag the merge commit:
 
    ```bash
@@ -150,79 +205,131 @@ Node 24.15.0, `npm ci --ignore-scripts`), and the build scripts stage it into
    git push origin vX.Y.Z
    ```
 
-2. Run GitHub Actions -> `Release - Build & Sign Installers` from the tag:
+2. Run the release from the tag:
 
    ```bash
    gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z
    ```
 
-   It produces the workflow artifacts `Row-Bot-Windows` (unsigned
-   `Row-Bot-X.Y.Z-Windows-x64.exe`), `Row-Bot-Linux`
-   (`Row-Bot-X.Y.Z-Linux-x86_64.tar.gz`), `Row-Bot-macOS` (signed
-   `Row-Bot-X.Y.Z-macOS-arm64.dmg`), `Row-Bot-macOS-pkg`, and
-   `Row-Bot-release-sha256` (the checksums of everything built). Final release
-   assets are uploaded manually after signing and smoke testing. Keep the run
-   ID for notarization.
-3. Download the Windows setup exe from the workflow artifact and sign it
-   locally with the Certum certificate. Windows signing is intentionally not
-   done in CI:
+   - `build-parts` builds the update parts and compares the lock with the
+     newest earlier release and the newest earlier stable one. If a changed
+     library has no wheel for a supported platform, background updates cannot
+     prepare it and everyone on that platform gets "Download the full
+     installer" (D16). The job then fails; run the release again with
+     `-f acknowledge_full_installer=true`, and the draft's notes say "This
+     update needs the full installer".
+   - Each build install-smokes its package and rehearses a background update
+     from this release's own parts (the code archive with only the version
+     changed, the assets archive and the lock export as they are). It fails if
+     the installed assets differ from the assets archive or the lock export
+     does not describe the installed runtime.
+   - Windows uploads the installer stage (`Row-Bot-Windows-stage`: `python\`,
+     the app, `version.json`, `Row-Bot.exe` and the Inno Setup script) and an
+     unsigned installer, which was the one smoke-tested.
+   - macOS submits the signed app to Apple as soon as it is built
+     (`notarytool submit --no-wait`), smokes it while Apple checks it, staples
+     it, builds and signs the DMG from it, then notarizes and staples the DMG.
+     Each wait is bounded by `notarize_wait_minutes` (45). The run summary shows
+     the submission ids and their state.
+   - `checksums-and-manifest` assembles `row-bot-update-X.Y.Z.json`, checks it
+     with the client's own parser, and records the checksums of every file.
+   - `draft-release` creates the draft `vX.Y.Z` (title and notes from the
+     version's section of `RELEASE_NOTES.md`; a pre-release for `-beta`/`-rc`)
+     and attaches every file except the Windows installer. The DMG is attached
+     only once it is stapled.
+
+3. If macOS was still with Apple when the release finished, its job succeeded
+   with a warning and uploaded `macos-notarization-pending-X.Y.Z`.
+   `notarize-finish.yml` picks it up within the hour (or now:
+   `gh workflow run notarize-finish.yml -f run_id=<release run ID>`), staples,
+   finishes the DMG and attaches it to the draft. **macOS is ready when the DMG
+   is on the draft**; nothing else attaches one. If Apple rejects a submission,
+   the job prints Apple's log: fix the build and run the release again.
+
+4. Review the draft (notes, files) and smoke-test the files on clean or
+   representative machines, as before: Windows from the unsigned
+   `Row-Bot-Windows-unsigned` artifact or after step 5, the stapled DMG
+   (Gatekeeper first launch of a downloaded copy), and the Linux tarball
+   (`./install.sh`, `~/.local/bin/row-bot`, `~/.local/bin/row-bot serve --port 8092`
+   with `/healthz` and `/readyz`). Include repair/upgrade over an existing
+   install, the packaged recovery commands (`--reset-tasks-db`, `--reset-db`,
+   `--restore-data` against a disposable data directory), Computer Use setup on
+   Windows and macOS, and one xAI image generation with a disposable account.
+
+5. On the Windows signing machine, from a checkout of `main` (or the tag):
 
    ```powershell
-   $signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
-   $exe = "dist\Row-Bot-X.Y.Z-Windows-x64.exe"
-   & $signtool sign /sha1 2341B4B36A21DF948E538A88BB194FAE4D1CAE51 /fd SHA256 /tr http://time.certum.pl /td SHA256 /d "Row-Bot" /du "https://row-bot.ai" $exe
-   & $signtool verify /pa /v $exe
+   .\scripts\release_windows.ps1 -Version X.Y.Z
    ```
 
-4. Notarize the macOS DMG manually, after testing the signed DMG:
-   - `gh workflow run notarize-submit.yml -f build_run_id=<release run ID>`;
-     copy the Apple submission ID from its log.
-   - `gh workflow run notarize-check.yml -f submission_id=<ID> -f build_run_id=<release run ID>`;
-     re-run it until Apple reports `Accepted`, then download the
-     `Row-Bot-macOS-stapled` artifact. Only the stapled DMG is a release asset.
-5. Download the Linux `Row-Bot-X.Y.Z-Linux-x86_64.tar.gz` artifact, extract it on
-   a clean Linux VM, run `./install.sh`, and confirm `~/.local/bin/row-bot` opens
-   the React client in the browser and `~/.local/bin/row-bot serve --port 8092`
-   answers `/healthz` and `/readyz`.
-6. Create a draft GitHub Release for the tag and upload the signed exe, the
-   stapled DMG, and the Linux tarball. Use the notes from `RELEASE_NOTES.md`;
-   remove any unsigned, unstapled, or wrong-version asset.
-7. Smoke-test the final Windows, macOS, and Linux assets on clean or
-   representative machines. For Windows, include repair/upgrade over an
-   existing install and confirm the bundled `python\`, `app\src\` and
-   `app\static\` folders are replaced while Row-Bot user data is preserved. If a
-   broken optional package such as TorchCodec was present in the old embedded
-   runtime, confirm it is removed or the startup log contains a clear recovery
-   hint. Also run the packaged launcher recovery commands against a disposable
-   data directory: `--reset-tasks-db`, `--reset-db`, and `--restore-data`.
-   Confirm they print the resolved data paths and that task DB reset backs up
-   `tasks.db`, `tasks.db-wal`, and `tasks.db-shm`.
-   On Windows and macOS, also exercise Computer Use setup, telemetry consent,
-   pinned-runtime verification, one target-window action, Stop, Take over, and
-   permission recovery. Confirm screenshots and typed content do not appear in
-   logs. On Linux, confirm Computer Use reports unsupported without attempting
-   a driver download. With a disposable xAI API account, refresh the live image
-   catalog and run one supported image generation; confirm an endpoint-rejected
-   optional quality value is retried once without that field while timeouts and
-   other failures do not submit a duplicate generation.
-8. Publish the GitHub Release.
-9. Confirm the automation that publishing starts:
-   - `.github/workflows/update-manifest.yml` appends the
-     `<!-- row-bot-update-manifest -->` SHA256 block for the Windows exe, macOS
-     DMG and Linux tarball to the release body. If an asset is missing, attach
-     it and re-run `gh workflow run update-manifest.yml -f tag=vX.Y.Z`.
-   - `.github/workflows/container.yml` builds and smokes native `linux/amd64`
-     and `linux/arm64` images, publishes the versioned multi-arch manifest to
-     `ghcr.io/siddsachar/row-bot:X.Y.Z`, and updates `latest` for a stable
-     release. Inspect the workflow summary for the release, architecture, and
-     manifest digests; pull and smoke both platforms from a logged-out GHCR
-     client to confirm the package is public.
-10. Move the landing page to the new release, now that its assets exist: the
-    download links in `docs/site.js`, the version and `softwareVersion` in
-    `docs/index.html`, and `tests/docs/test_landing_page.py`, then publish the
-    docs site.
-11. Test the packaged updater from the previous stable version on each
-    platform.
+   It finds the release run (or pass `-RunId <release run ID>`), downloads the
+   stage, signs `Row-Bot.exe` (`signtool sign /sha1 <thumbprint> /fd SHA256
+   /tr http://time.certum.pl /td SHA256`), runs ISCC, signs the installer,
+   verifies both signatures and uploads the installer to the draft. It then
+   checks the release: every installer and update part is there and agrees
+   with `row-bot-update-X.Y.Z.json`, the files CI attached are the ones it
+   built, the stapled DMG is on the draft, and the notes say when the full
+   installer is needed. It writes the SHA-256 block over all final files into
+   the draft and asks you to type `publish X.Y.Z`. It refuses to publish while
+   macOS is not stapled or a file is missing. Every step can be run again:
+   signed files and a built installer are kept, so a SimplySign session that
+   ended halfway only needs a new login and the same command.
+
+6. After publishing:
+   - `update-manifest.yml` checks the block. It is a backstop: it writes a
+     block when there is none and adds files the block does not list, but it
+     never changes a listed hash; a listed file whose bytes changed fails the
+     run instead.
+   - `container.yml` builds and smokes native `linux/amd64` and `linux/arm64`
+     images, publishes the versioned multi-arch manifest to
+     `ghcr.io/siddsachar/row-bot:X.Y.Z` (and `latest` for a stable release),
+     then attaches `row-bot-container-X.Y.Z.json` (the index digest and each
+     platform's image digest) and adds it to the block (D12). Pull and smoke
+     both platforms from a logged-out GHCR client to confirm the package is
+     public.
+7. Move the landing page to the new release, now that its assets exist: the
+   download links in `docs/site.js`, the version and `softwareVersion` in
+   `docs/index.html`, and `tests/docs/test_landing_page.py`, then publish the
+   docs site.
+8. Test the packaged updater from the previous version on each platform: a
+   5.2 install prepares the update in the background and offers "Restart to
+   update"; a 5.1 install downloads and runs the full installer (Windows and
+   Linux) or opens the DMG (macOS).
+
+### Dry run
+
+Everything above except publishing, on any branch, with no tag:
+
+```bash
+gh workflow run release.yml --ref <branch> -f version=<src/row_bot/version.py> -f dry_run=true
+```
+
+It builds all three packages and the update parts, runs every smoke and
+background update rehearsal, notarizes and staples the app once (the DMG is
+signed but not submitted: one submission per dry run), and runs
+`scripts/release_windows.ps1 -DryRun` on Windows: the stage is downloaded and
+packed by ISCC, the release is checked and the SHA-256 block is printed, with
+no signing, upload or publishing. The same works locally:
+`.\scripts\release_windows.ps1 -Version <version> -RunId <dry run ID> -DryRun`.
+
+### Pulling a bad release
+
+A published release never changes: its update description and parts are what
+installs have verified and staged, and the backstop refuses a block whose files
+changed. Do not re-upload a file under the same name. Instead:
+
+1. Publish a fixed version (`X.Y.Z+1`) as soon as possible. Installs on the bad
+   version update to it the normal way.
+2. Until then, stop new installs from taking the bad release: mark it a
+   pre-release (`gh release edit vX.Y.Z --prerelease --latest=false`), so the
+   stable channel goes back to the previous stable release, or delete a beta
+   release outright. Installs that have not prepared it yet no longer see it.
+3. Installs already on the bad version are never moved back automatically:
+   Row-Bot never downgrades. People can use Settings › Updates › Repair ("Go
+   back to the previous version", which is still on disk), or install the
+   previous release's installer. Say so in the bad release's notes.
+4. Docker and cloud installs pull by digest: point them at the previous
+   release's `row-bot-container-<v>.json`.
 
 ## 5.0.0 Upgrade Note
 
@@ -311,9 +418,12 @@ or first-run package initialization, increase the wait with
 The tarball installs under `~/.local/share/row-bot/releases/<version>`, updates
 `~/.local/share/row-bot/current`, creates `~/.local/bin/row-bot`, and installs a
 freedesktop `.desktop` file plus icon into user XDG locations. In-app updates
-download the next Linux tarball, verify SHA256 through the release manifest,
-install the new release under the same user-owned tree, flip the `current`
-symlink, and restart through `~/.local/bin/row-bot`.
+prepare the next release in the background from its update parts (the code
+archive, the assets archive when it changed, and the changed libraries) in
+`releases/<version>`, verified against the release manifest, then switch
+`current` when Row-Bot restarts. Row-Bot 5.1 instead downloads the next
+tarball and installs it itself, so the tarball keeps `install_info.json`,
+`bin/row-bot`, `app/` and `python/bin/python3` (installer-verify checks it).
 
 Manual Linux smoke matrix before publishing:
 
