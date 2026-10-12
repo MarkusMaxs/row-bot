@@ -178,8 +178,10 @@ the updater trusts only files listed there.
 
 ### Prerequisites on the Windows signing machine
 
-- **Inno Setup 6** (`ISCC.exe`): https://jrsoftware.org/isdl.php. Keep it at the
-  version CI uses (Chocolatey's `innosetup`); the script warns when they differ.
+- **Inno Setup 6** (`ISCC.exe`): https://jrsoftware.org/isdl.php, at the version
+  CI used (Chocolatey's `innosetup`; the stage records it). The script refuses
+  another version, because CI smoke-tested an installer packed by that one;
+  `-AllowInnoMismatch` overrides it.
 - **Windows SDK `signtool.exe`**: the "Windows SDK Signing Tools for Desktop Apps"
   component (the script finds the newest under `Windows Kits\10\bin`).
 - **SimplySign Desktop** with the Certum code signing certificate
@@ -188,7 +190,7 @@ the updater trusts only files listed there.
   signs both files in that session.
 - **GitHub CLI** logged in with write access to the repository (`gh auth login`).
 - **Python 3.11 or newer** on `PATH` (`python` or `py -3`); no packages needed.
-- About 8 GB free in `%LOCALAPPDATA%\rbr` (the installer stage is 3.3 GB
+- About 8 GB free in `%LOCALAPPDATA%\rbr\<run id>` (the installer stage is 3.3 GB
   unpacked; the folder name is short because the stage's deepest paths are as
   long as an installed version's).
 
@@ -237,15 +239,26 @@ GitHub Actions.
    - `draft-release` creates the draft `vX.Y.Z` (title and notes from the
      version's section of `RELEASE_NOTES.md`; a pre-release for `-beta`/`-rc`)
      and attaches every file except the Windows installer. The DMG is attached
-     only once it is stapled.
+     only once it is stapled. Running the release again for the same tag
+     reuses the draft and removes every file this run did not build, so an
+     earlier run's files (a moved tag, an older build) are never published.
 
 3. If macOS was still with Apple when the release finished, its job succeeded
-   with a warning and uploaded `macos-notarization-pending-X.Y.Z`.
+   with a warning and uploaded `macos-notarization-pending-X.Y.Z-r<run id>`.
    `notarize-finish.yml` picks it up within the hour (or now:
-   `gh workflow run notarize-finish.yml -f run_id=<release run ID>`), staples,
-   finishes the DMG and attaches it to the draft. **macOS is ready when the DMG
-   is on the draft**; nothing else attaches one. If Apple rejects a submission,
-   the job prints Apple's log: fix the build and run the release again.
+   `gh workflow run notarize-finish.yml -f run_id=<release run ID>`; a
+   dispatched run has its own concurrency group, so a scheduled scan never
+   replaces it), staples, finishes the DMG, checks it (stapled, team
+   33PQRTZLNW, the app's version) and attaches it to the draft, with a record
+   of its SHA-256 for step 5. **macOS is ready when the DMG is on the draft.**
+   - It attaches a DMG only for the newest successful release run of the
+     tag's current commit, only while the release is a draft, and never over
+     a DMG already there.
+   - Anything that can never be attached (the release was published or
+     deleted, the tag moved, a newer run exists, Apple rejected the
+     submission) deletes the pending artifact instead of coming back every
+     hour; the run summary says why. If Apple rejected it, the job prints
+     Apple's log: fix the build and run the release again.
 
 4. Review the draft (notes, files) and smoke-test the files on clean or
    representative machines, as before: Windows from the unsigned
@@ -263,24 +276,38 @@ GitHub Actions.
    .\scripts\release_windows.ps1 -Version X.Y.Z
    ```
 
-   It finds the release run (or pass `-RunId <release run ID>`), downloads the
-   stage (kept for 30 days after the run), signs `Row-Bot.exe` (`signtool sign /sha1 <thumbprint> /fd SHA256
-   /tr http://time.certum.pl /td SHA256`), runs ISCC, signs the installer,
-   verifies both signatures and uploads the installer to the draft. It then
-   checks the release: every installer and update part is there and agrees
-   with `row-bot-update-X.Y.Z.json`, the files CI attached are the ones it
-   built, the stapled DMG is on the draft, and the notes say when the full
-   installer is needed. It writes the SHA-256 block over all final files into
-   the draft and asks you to type `publish X.Y.Z`. It refuses to publish while
-   macOS is not stapled or a file is missing. Every step can be run again:
-   signed files and a built installer are kept, so a SimplySign session that
-   ended halfway only needs a new login and the same command.
+   - **The run.** It takes the newest successful release run of the tag (or
+     `-RunId <release run ID>`) and refuses it unless it built the tag's
+     current commit.
+   - **The stage.** It downloads the stage (kept for 30 days after the run).
+     A stage it unpacked before is reused only for the same run and commit,
+     after recounting its files.
+   - **Signing and packing.** It signs `Row-Bot.exe` (`signtool sign /sha1
+     <thumbprint> /fd SHA256 /tr http://time.certum.pl /td SHA256`), runs ISCC,
+     signs the installer and verifies both signatures.
+   - **Checks.** Every file on the draft must be one this run built: CI's
+     checksum, or notarize-finish's record for a DMG it attached later.
+     Nothing else may be on the draft. Every installer and update part must
+     be there and agree with `row-bot-update-X.Y.Z.json`. The stapled DMG must
+     be on the draft. The notes must say when the full installer is needed.
+   - **Upload and block.** It uploads the installer and writes the SHA-256
+     block over all final files into the draft. It prints the signed
+     installer's SHA-256.
+   - **Publish.** It asks you to type `publish X.Y.Z`. With
+     `-PauseBeforePublish` it first waits while you install the draft's
+     installer on a test machine. After you confirm, it checks that the draft
+     still holds exactly the files the block lists, publishes the release by
+     its id, and checks again.
+   - **Refusals and re-runs.** It refuses to publish while macOS is not
+     stapled or a file is missing, foreign or changed. Every step can be run
+     again: signed files and a built installer are kept, so a SimplySign
+     session that ended halfway only needs a new login and the same command.
 
 6. After publishing:
    - `update-manifest.yml` checks the block. It is a backstop: it writes a
      block when there is none and adds files the block does not list, but it
-     never changes a listed hash; a listed file whose bytes changed fails the
-     run instead.
+     never changes a listed hash (a listed file whose bytes changed fails the
+     run instead) and never lists a file that is not one of the release's own.
    - `container.yml` builds and smokes native `linux/amd64` and `linux/arm64`
      images, publishes the versioned multi-arch manifest to
      `ghcr.io/siddsachar/row-bot:X.Y.Z` (and `latest` for a stable release),
