@@ -83,7 +83,10 @@ _RELEASES_LATEST_URL = APP_RELEASES_LATEST_URL
 _RELEASES_URL = APP_RELEASES_URL
 #: A loopback release feed for rehearsing an update before it is published
 #: (``http://127.0.0.1:<port>/`` serving ``releases.json`` and the files).
+#: It replaces GitHub as the trust root, so it also needs the test-only
+#: opt-in below; Settings and the log say when it is in use.
 UPDATE_FEED_ENV = "ROW_BOT_UPDATE_FEED"
+UPDATE_FEED_TESTING_ENV = "ROW_BOT_UPDATE_FEED_TESTING"
 
 _USER_AGENT = UPDATER_USER_AGENT
 _HTTP_TIMEOUT = 15
@@ -370,11 +373,16 @@ def get_engine() -> Any:
             from row_bot.updates.downloader import HttpsTransport, loopback_feed_origin
             from row_bot.updates.engine import UpdateEngine
 
-            origin = loopback_feed_origin(os.environ.get(UPDATE_FEED_ENV))
+            feed = feed_url()
+            origin = loopback_feed_origin(feed) if feed else None
             try:
                 _engine = UpdateEngine(
                     install_layout.detect(),
-                    transport=HttpsTransport(extra_origins=[origin] if origin else []),
+                    transport=HttpsTransport(
+                        extra_origins=[origin] if origin else [],
+                        # A rehearsal feed is loopback: never through a proxy.
+                        proxies=not origin,
+                    ),
                     on_change=_notify,
                 )
             except Exception:
@@ -403,14 +411,35 @@ def release_files(info: UpdateInfo) -> Any:
     )
 
 
+def held_back_update() -> Optional[tuple[str, str]]:
+    """The version Row-Bot went back from (rolled back or Repair), and why."""
+    if update_mode() != "self":
+        return None
+    try:
+        from row_bot.updates.switcher import held_back
+
+        return held_back(install_layout.detect())
+    except Exception:
+        logger.debug("Could not read the install's rollback", exc_info=True)
+        return None
+
+
 def start_background_update(*, explicit: bool = False) -> bool:
-    """Prepare the release on offer, if the preferences and the engine allow it."""
+    """Prepare the release on offer, if the preferences and the engine allow it.
+
+    Never by itself for the version Row-Bot went back from: it did not start,
+    or the person chose to leave it. Only an explicit Download prepares it.
+    """
     engine = get_engine()
     st = get_update_state()
     info = st.available
     if engine is None or info is None:
         return False
     if not explicit and not st.auto_download:
+        return False
+    held = held_back_update()
+    if not explicit and held is not None and held[0] == info.version:
+        logger.info("Not preparing %s by itself: Row-Bot went back from it (%s)", info.version, held[1])
         return False
     status = engine.status()
     if status.phase in {"downloading", "staging", "applying"}:
@@ -598,21 +627,45 @@ def _http_get(url: str, *, accept: str = "application/vnd.github+json") -> Optio
         return None
 
 
-def _feed_url() -> Optional[str]:
+_feed_warned: set[str] = set()
+
+
+def feed_url() -> Optional[str]:
+    """The loopback rehearsal feed in use instead of GitHub, if any (testing only)."""
     from row_bot.updates.downloader import loopback_feed_origin
 
     feed = os.environ.get(UPDATE_FEED_ENV, "").strip()
-    if not feed or loopback_feed_origin(feed) is None:
+    if not feed:
         return None
-    return feed if feed.endswith("/") else feed + "/"
+    if os.environ.get(UPDATE_FEED_TESTING_ENV, "").strip() != "1" or loopback_feed_origin(feed) is None:
+        if feed not in _feed_warned:
+            _feed_warned.add(feed)
+            logger.warning("Ignoring %s: it needs %s=1 and a loopback http address", UPDATE_FEED_ENV,
+                           UPDATE_FEED_TESTING_ENV)
+        return None
+    feed = feed if feed.endswith("/") else feed + "/"
+    if feed not in _feed_warned:
+        _feed_warned.add(feed)
+        logger.warning("Updates come from the test feed %s, not GitHub (%s)", feed, UPDATE_FEED_ENV)
+    return feed
 
 
 def _fetch_feed_releases(feed: str) -> Optional[list[dict[str, Any]]]:
-    """Releases from a loopback rehearsal feed (no token is ever sent to it)."""
+    """Releases from a loopback rehearsal feed (no token, no proxy, checked redirects)."""
+    from row_bot.updates.downloader import DownloadError, HttpsTransport, loopback_feed_origin
+
+    origin = loopback_feed_origin(feed)
+    if origin is None:
+        return None
     try:
-        with urllib.request.urlopen(feed + "releases.json", timeout=_HTTP_TIMEOUT) as resp:  # noqa: S310 - loopback only
-            payload = json.loads(resp.read(4 * 1024 * 1024).decode("utf-8"))
-    except (OSError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+        response = HttpsTransport(extra_origins=[origin], proxies=False).open(
+            feed + "releases.json", headers={"Accept": "application/json"}, timeout=_HTTP_TIMEOUT
+        )
+        try:
+            payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8"))
+        finally:
+            response.close()
+    except (DownloadError, OSError, ValueError) as exc:
         logger.debug("Update feed unavailable: %s", exc)
         return None
     if not isinstance(payload, list):
@@ -623,7 +676,7 @@ def _fetch_feed_releases(feed: str) -> Optional[list[dict[str, Any]]]:
 def _fetch_releases_payload(channel: str) -> Optional[list[dict[str, Any]]]:
     """Fetch the relevant release(s) for *channel*. Returns a list so the
     caller can iterate (stable → length 1, beta → up to 10)."""
-    feed = _feed_url()
+    feed = feed_url()
     if feed:
         return _fetch_feed_releases(feed)
     if channel == "stable":
@@ -689,7 +742,7 @@ def check_for_updates(*, force: bool = False) -> Optional[UpdateInfo]:
         _notify()
         return st.available
 
-    base = _feed_url()
+    base = feed_url()
     newest: Optional[UpdateInfo] = None
     for r in releases:
         info = _parse_release(r, st.channel, base=base)
@@ -779,6 +832,19 @@ def start_update_scheduler() -> None:
 
 def stop_update_scheduler() -> None:
     _scheduler_stop.set()
+
+
+def shutdown_background_update(timeout: float = 15.0) -> bool:
+    """Row-Bot is stopping: end the scheduler and stop preparing an update."""
+    _scheduler_stop.set()
+    engine = _engine
+    if engine is None:
+        return True
+    try:
+        return bool(engine.shutdown(timeout))
+    except Exception:
+        logger.debug("Stopping the update engine failed", exc_info=True)
+        return False
 
 
 # ════════════════════════════════════════════════════════════════════════════

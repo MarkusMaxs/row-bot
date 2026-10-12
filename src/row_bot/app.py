@@ -1084,6 +1084,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
     # where running work has not stopped yet (B104).
     from row_bot.tunnel import close_tunnels_on_exit
     await asyncio.to_thread(close_tunnels_on_exit, reason)
+    # Preparing an update runs pip, compileall and self-tests: stop them with
+    # the app so nothing keeps writing into the staging folder.
+    _updater = sys.modules.get("row_bot.updater")
+    if _updater is not None:
+        try:
+            await asyncio.to_thread(_updater.shutdown_background_update, 15.0)
+        except Exception:
+            logger.debug("Stopping the background updater failed", exc_info=True)
     from row_bot.application.lifecycle import application_lifecycle
     runtime_shutdown = await application_lifecycle.shutdown()
     if runtime_shutdown["status"] != "quiesced":

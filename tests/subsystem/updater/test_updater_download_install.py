@@ -82,7 +82,7 @@ def test_a_release_carries_its_verified_update_description_and_files(updater):
     assert unlisted.update_manifest_url == "" and unlisted.update_manifest_sha256 == ""
 
 
-def test_a_rehearsal_feed_lists_its_files_relative_to_itself(updater, monkeypatch):
+def test_a_rehearsal_feed_needs_the_testing_opt_in_and_lists_files_relative_to_itself(updater, monkeypatch):
     monkeypatch.setenv(updater.UPDATE_FEED_ENV, "http://127.0.0.1:8765")
     monkeypatch.setattr(updater, "__version__", "5.2.0")
     requested: list[str] = []
@@ -92,13 +92,47 @@ def test_a_rehearsal_feed_lists_its_files_relative_to_itself(updater, monkeypatc
         return [_release("5.2.1", relative=True)]
 
     monkeypatch.setattr(updater, "_fetch_feed_releases", fake_feed)
+    # Without the test-only opt-in the feed is ignored and GitHub is asked.
+    monkeypatch.delenv(updater.UPDATE_FEED_TESTING_ENV, raising=False)
+    assert updater.feed_url() is None
+    monkeypatch.setattr(updater, "_http_get", lambda *_a, **_k: None)
+    updater.check_for_updates(force=True)
+    assert requested == []
+
+    monkeypatch.setenv(updater.UPDATE_FEED_TESTING_ENV, "1")
     monkeypatch.setattr(updater, "_http_get", lambda *_a, **_k: pytest.fail("a feed never asks GitHub"))
     info = updater.check_for_updates(force=True)
     assert requested == ["http://127.0.0.1:8765/"]
     assert info.update_manifest_url == "http://127.0.0.1:8765/row-bot-update-5.2.1.json"
     # Anything but a loopback HTTP feed is ignored.
     monkeypatch.setenv(updater.UPDATE_FEED_ENV, "http://example.com/feed/")
-    assert updater._feed_url() is None
+    assert updater.feed_url() is None
+
+
+def test_the_feed_is_read_without_proxies_and_never_redirected_away(updater, monkeypatch):
+    """The feed opener is the checked transport with the environment's proxies off."""
+    import http.server
+    import threading
+
+    class Away(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return None
+
+        def do_GET(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", "https://evil.example/releases.json")
+            self.end_headers()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Away)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+        monkeypatch.setenv("http_proxy", "http://proxy.invalid:3128")
+        feed = f"http://127.0.0.1:{server.server_address[1]}/"
+        assert updater._fetch_feed_releases(feed) is None  # the redirect was refused, no proxy used
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_background_preparation_follows_the_download_preference(updater, monkeypatch):
@@ -126,6 +160,32 @@ def test_background_preparation_follows_the_download_preference(updater, monkeyp
 
     with pytest.raises(ValueError):
         updater.set_preference("auto_install", True)
+
+
+def test_the_version_row_bot_went_back_from_is_only_prepared_when_asked(updater, monkeypatch, tmp_path):
+    from row_bot import install_layout
+    from tests.fixtures.updates import make_install
+
+    layout = make_install(tmp_path / "app")
+    state = install_layout.read_state(layout.root)
+    state.last_rollback = {"from": "5.2.1", "to": "5.2.0", "at": "2026-10-11T12:00:00Z",
+                           "reason": "2 launches in a row did not become ready"}
+    install_layout.write_state(layout.root, state)
+    monkeypatch.setattr(install_layout, "detect", lambda **_kwargs: layout)
+    monkeypatch.setattr(updater, "is_dev_install", lambda: False)
+    engine = _Engine()
+    monkeypatch.setattr(updater, "get_engine", lambda: engine)
+    updater.get_update_state().available = updater._parse_release(_release("5.2.1"), "stable")
+    updater.set_preference("auto_download", True)
+
+    assert updater.held_back_update() == ("5.2.1", "rolled_back")
+    assert updater.start_background_update() is False
+    assert engine.started == []
+    assert updater.start_background_update(explicit=True) is True  # Download again
+    assert engine.started == ["5.2.1"]
+    # A newer release is prepared as usual.
+    updater.get_update_state().available = updater._parse_release(_release("5.2.2"), "stable")
+    assert updater.start_background_update() is True
 
 
 def test_a_release_without_a_background_update_offers_the_full_installer(updater, monkeypatch):

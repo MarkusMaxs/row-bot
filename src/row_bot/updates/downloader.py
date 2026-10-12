@@ -12,8 +12,9 @@ Every file the engine fetches is named, with its SHA-256, by the release
 - report progress and stop between reads when cancelled.
 
 A test or a release rehearsal can point the updater at a loopback feed
-(``ROW_BOT_UPDATE_FEED=http://127.0.0.1:<port>/``); that one origin is then
-allowed over plain HTTP. Nothing else is.
+(``ROW_BOT_UPDATE_FEED=http://127.0.0.1:<port>/`` with the test-only
+``ROW_BOT_UPDATE_FEED_TESTING=1``); that one origin is then allowed over plain
+HTTP, without a proxy. Nothing else is.
 """
 
 from __future__ import annotations
@@ -117,14 +118,20 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
 class HttpsTransport:
     """``urllib`` with the allow-list applied to the URL and every redirect."""
 
-    def __init__(self, *, extra_origins: Iterable[tuple[str, str, int | None]] = ()) -> None:
+    def __init__(
+        self,
+        *,
+        extra_origins: Iterable[tuple[str, str, int | None]] = (),
+        proxies: bool = True,
+    ) -> None:
         self._extra = tuple(extra_origins)
-        self._opener = urllib.request.build_opener(
-            _CheckedRedirects(self._extra),
-            # No proxy handler from the environment is dropped on purpose:
-            # corporate proxies keep working; the allow-list still applies to
-            # every URL urllib is asked to open.
-        )
+        handlers: list[urllib.request.BaseHandler] = [_CheckedRedirects(self._extra)]
+        if not proxies:
+            # A loopback rehearsal feed never goes through a proxy.
+            handlers.append(urllib.request.ProxyHandler({}))
+        # Otherwise the environment's proxies apply (corporate networks keep
+        # working); the allow-list still checks every URL and redirect.
+        self._opener = urllib.request.build_opener(*handlers)
 
     def open(self, url: str, *, headers: Mapping[str, str], timeout: float) -> Response:
         check_url(url, extra_origins=self._extra)

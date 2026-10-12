@@ -12,7 +12,8 @@ and serves it from a loopback feed, the way GitHub serves a release:
 - ``row-bot-update-N.json`` and a ``releases.json`` whose body carries the
   SHA-256 manifest block.
 
-Then, through the installed native launcher with ``ROW_BOT_UPDATE_FEED`` set,
+Then, through the installed native launcher with ``ROW_BOT_UPDATE_FEED`` (and
+its test-only opt-in ``ROW_BOT_UPDATE_FEED_TESTING=1``) set,
 it starts N-1 in desktop mode, checks for updates through the client API,
 waits until the engine has downloaded, staged and self-tested N, checks that
 nothing of N-1 changed, restarts into N with "Restart now", and checks that N
@@ -347,6 +348,7 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
             time.sleep(0.5)
         before_app = _fingerprint(version_root / "app")
         os.environ["ROW_BOT_UPDATE_FEED"] = f"http://127.0.0.1:{feed_port}/"
+        os.environ["ROW_BOT_UPDATE_FEED_TESTING"] = "1"
         launcher = Launcher(command, work / "data", work / "launcher.log")
         _wait("/readyz", lambda: _get(f"http://127.0.0.1:{port}/readyz") == 200, timeout, launcher)
         client = Client(port)
@@ -436,6 +438,7 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
             server.terminate()
             server.wait(timeout=10)
         os.environ.pop("ROW_BOT_UPDATE_FEED", None)
+        os.environ.pop("ROW_BOT_UPDATE_FEED_TESTING", None)
         if original is not None:
             _write_state(root, original)
         else:
