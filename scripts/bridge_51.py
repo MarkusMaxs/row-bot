@@ -6,26 +6,29 @@ Linux tarball itself. installer-verify proves the new packages work that way,
 starting from the real 5.1.0 release.
 
 ``asset-names``
-    Runs 5.1's actual ``updater._parse_release`` (from ``git archive v5.1.0
-    src``) against every file a new release publishes and checks it picks this
-    platform's installer. The legacy source runs in its own process (it is also
-    called ``row_bot``) and needs ``packaging``.
+    Runs 5.1's actual ``updater._parse_release`` (its source fetched from the
+    ``v5.1.0`` tag) against every file a new release publishes and checks it
+    picks this platform's installer. The legacy source runs in its own process
+    (it is also called ``row_bot``) and needs ``packaging``.
 ``download``
     Downloads one file of a published release with ``gh`` and checks it against
     that release's SHA-256 manifest block, as 5.1 would.
 
-    python scripts/bridge_51.py asset-names --version 5.2.0 --legacy-src /tmp/v5.1.0/src
+    python scripts/bridge_51.py asset-names --version 5.2.0 [--legacy-tag v5.1.0 | --legacy-src DIR]
     python scripts/bridge_51.py download --tag v5.1.0 --name Row-Bot-5.1.0-Linux-x86_64.tar.gz --out /tmp/v5.1.0
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import platform
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -43,6 +46,17 @@ release = {"tag_name": "v" + sys.argv[2], "body": "", "prerelease": False, "publ
 info = updater._parse_release(release, "stable")
 print(json.dumps({"asset": info.asset_name if info else None, "version": info.version if info else None}))
 """
+
+
+def legacy_source(tag: str, out: Path) -> Path:
+    """The ``src`` folder of an earlier release, from its tag (fetched shallowly)."""
+    subprocess.run(["git", "fetch", "--quiet", "--no-tags", "--depth=1", "origin", f"+refs/tags/{tag}:refs/tags/{tag}"],
+                   check=True)
+    archive = subprocess.run(["git", "archive", "--format=tar", tag, "src/row_bot"], check=True,
+                             capture_output=True).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(out, filter="data")
+    return out / "src"
 
 
 def asset_names(version: str, legacy_src: Path) -> int:
@@ -86,7 +100,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     names = commands.add_parser("asset-names")
     names.add_argument("--version", required=True)
-    names.add_argument("--legacy-src", type=Path, required=True)
+    names.add_argument("--legacy-tag", default="v5.1.0", help="the release whose updater is checked")
+    names.add_argument("--legacy-src", type=Path, help="its src folder, instead of fetching the tag")
     fetch = commands.add_parser("download")
     fetch.add_argument("--tag", required=True)
     fetch.add_argument("--name", required=True)
@@ -94,7 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     args = parser.parse_args(argv)
     if args.command == "asset-names":
-        return asset_names(args.version, args.legacy_src)
+        if args.legacy_src:
+            return asset_names(args.version, args.legacy_src)
+        with tempfile.TemporaryDirectory(prefix="row-bot-legacy-") as folder:
+            return asset_names(args.version, legacy_source(args.legacy_tag, Path(folder)))
     return download(args.tag, args.name, args.out, args.repository)
 
 

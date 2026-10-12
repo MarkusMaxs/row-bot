@@ -268,11 +268,9 @@ jobs:
         if: ${{ inputs.bridge }}
         run: |
           set -euo pipefail
-          git fetch --quiet --no-tags --depth=1 origin "+refs/tags/v5.1.0:refs/tags/v5.1.0"
-          mkdir -p "$RUNNER_TEMP/v5.1.0-src" && git archive v5.1.0 src/row_bot | tar -x -C "$RUNNER_TEMP/v5.1.0-src"
           python -m pip install --quiet "packaging==26.2"
           VERSION="$(plutil -extract CFBundleShortVersionString raw installer/build/mac/Row-Bot.app/Contents/Info.plist)"
-          python scripts/bridge_51.py asset-names --version "$VERSION" --legacy-src "$RUNNER_TEMP/v5.1.0-src/src"
+          python scripts/bridge_51.py asset-names --version "$VERSION"
 
       # Over a 5.1.0 bundle when bridging: the user drags the new app over the old one.
       - name: Install macOS package
@@ -364,11 +362,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --quiet --no-tags --depth=1 origin "+refs/tags/v5.1.0:refs/tags/v5.1.0"
-          mkdir -p "$RUNNER_TEMP/v5.1.0-src" && git archive v5.1.0 src/row_bot | tar -x -C "$RUNNER_TEMP/v5.1.0-src"
           python -m pip install --quiet "packaging==26.2"
           VERSION="$(ls dist/Row-Bot-*-Windows-x64.exe | sed -E 's#.*/Row-Bot-(.+)-Windows-x64\.exe#\1#')"
-          python scripts/bridge_51.py asset-names --version "$VERSION" --legacy-src "$RUNNER_TEMP/v5.1.0-src/src"
+          python scripts/bridge_51.py asset-names --version "$VERSION"
 
       - name: Install Row-Bot 5.1.0 for all users, as 5.1 users have it
         env:
@@ -516,11 +512,9 @@ jobs:
       - name: 5.1's updater still finds the new tarball
         run: |
           set -euo pipefail
-          git fetch --quiet --no-tags --depth=1 origin "+refs/tags/v5.1.0:refs/tags/v5.1.0"
-          mkdir -p "$RUNNER_TEMP/v5.1.0-src" && git archive v5.1.0 src/row_bot | tar -x -C "$RUNNER_TEMP/v5.1.0-src"
           python -m pip install --quiet "packaging==26.2"
           VERSION="$(ls dist/Row-Bot-*-Linux-x86_64.tar.gz | sed -E 's#.*/Row-Bot-(.+)-Linux-x86_64\.tar\.gz#\1#')"
-          python scripts/bridge_51.py asset-names --version "$VERSION" --legacy-src "$RUNNER_TEMP/v5.1.0-src/src"
+          python scripts/bridge_51.py asset-names --version "$VERSION"
 
       - name: The new tarball still has what 5.1's installer requires
         run: |
