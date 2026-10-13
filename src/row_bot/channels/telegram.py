@@ -2048,6 +2048,41 @@ async def _answer_album(items: list[_AlbumItem]) -> None:
     await _run_agent_for_message(update, context, turn.text)
 
 
+async def _single_attachment_turn(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    attachment: InboundAttachment,
+    *,
+    unreadable: str,
+) -> Any | None:
+    """Read a lone photo, document or voice note into one turn.
+
+    It uses the attachment block the desktop client sends (shown as badges in
+    the app), as albums and the other channels do. Vision and transcription
+    run off the bot's loop. Returns None, having told the person, when nothing
+    could be read.
+    """
+    from row_bot.channels.media import build_attachment_turn
+
+    # The same conversation _run_agent_for_message uses, so the image tools'
+    # cache stays scoped to it.
+    config = _current_thread_config(update.effective_chat.id, context)
+    thread_id = (config.get("configurable") or {}).get("thread_id", "")
+    caption = (update.message.caption or "").strip()
+    turn = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: build_attachment_turn(
+            [attachment],
+            caption,
+            cache_image=lambda name, data: _cache_telegram_image(thread_id, name, data),
+        ),
+    )
+    if not turn.usable:
+        await update.message.reply_text(unreadable)
+        return None
+    return turn
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Inbound media handlers (voice, photo, document)
 # ──────────────────────────────────────────────────────────────────────
@@ -2099,14 +2134,20 @@ async def _handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         ext = ".ogg"  # Telegram default
 
-    from row_bot.channels.media import transcribe_audio
-    text = transcribe_audio(bytes(data), file_ext=ext)
-    if not text:
-        await update.message.reply_text("⚠️ Could not transcribe your voice note.")
+    # The extension tells the transcriber which decoder to use.
+    filename = getattr(voice, "file_name", "") or f"voice{ext}"
+    turn = await _single_attachment_turn(
+        update,
+        context,
+        InboundAttachment(filename=filename, data=bytes(data), content_type=mime or "audio/ogg"),
+        unreadable="⚠️ Could not transcribe your voice note.",
+    )
+    if turn is None:
         return
 
-    await update.message.reply_text(f"🎤 _{text}_", parse_mode="Markdown")
-    await _run_agent_for_message(update, context, text)
+    if turn.transcripts:
+        await update.message.reply_text(f"🎤 _{turn.transcripts[0]}_", parse_mode="Markdown")
+    await _run_agent_for_message(update, context, turn.text)
 
 
 async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2132,12 +2173,6 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    # Resolve the same thread config that _run_agent_for_message will use so
-    # the attachment cache stays scoped correctly per Telegram conversation.
-    chat_id = update.effective_chat.id
-    config = _current_thread_config(chat_id, context)
-    thread_id = (config.get("configurable") or {}).get("thread_id", "")
-
     try:
         tg_file = await photo.get_file()
         data = await tg_file.download_as_bytearray()
@@ -2146,32 +2181,14 @@ async def _handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("⚠️ Could not download the photo.")
         return
 
-    caption = (update.message.caption or "").strip()
-    question = caption if caption else "Describe this image in detail."
-
-    _cache_telegram_image(thread_id, cache_name, bytes(data))
-
-    from row_bot.channels.media import analyze_image
-    description = analyze_image(bytes(data), question=question)
-
-    if not description:
-        await update.message.reply_text("⚠️ Could not analyse the photo.")
-        return
-
-    # Build context for the agent
-    if caption:
-        agent_text = (
-            f"[Attached image: {cache_name} — ALREADY ANALYZED, do NOT call analyze_image]\n"
-            f"{description}\n\n"
-            f"User said: {caption}"
-        )
-    else:
-        agent_text = (
-            f"[Attached image: {cache_name} — ALREADY ANALYZED, do NOT call analyze_image]\n"
-            f"{description}"
-        )
-
-    await _run_agent_for_message(update, context, agent_text)
+    turn = await _single_attachment_turn(
+        update,
+        context,
+        InboundAttachment(filename=cache_name, data=bytes(data), content_type="image/jpeg"),
+        unreadable="⚠️ Could not analyse the photo.",
+    )
+    if turn is not None:
+        await _run_agent_for_message(update, context, turn.text)
 
 
 async def _handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2208,33 +2225,15 @@ async def _handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("⚠️ Could not download the document.")
         return
 
-    raw_bytes = bytes(data)
-
-    from row_bot.channels.media import save_inbound_file, extract_document_text, copy_to_workspace
-    saved_path = save_inbound_file(raw_bytes, filename)
-
-    # Extract text content so the agent can work with it directly
-    extracted = extract_document_text(raw_bytes, filename)
-
-    # Copy into workspace so agent can re-read via filesystem tool
-    ws_rel = copy_to_workspace(saved_path)
-
-    caption = (update.message.caption or "").strip()
-
-    # Build rich context for the agent
-    parts = [f"[User sent a file: {filename}]"]
-    if ws_rel:
-        parts.append(f"Workspace path: {ws_rel}")
-    else:
-        parts.append(f"Saved to: {saved_path}")
-    if extracted:
-        parts.append(f"\n--- File content ---\n{extracted}\n--- End of file ---")
-    else:
-        parts.append("(Could not extract text — file may be image-based or unsupported format)")
-    if caption:
-        parts.append(f"\nUser's message: {caption}")
-
-    await _run_agent_for_message(update, context, "\n".join(parts))
+    # Saved, its text extracted and copied to the workspace, as in an album.
+    turn = await _single_attachment_turn(
+        update,
+        context,
+        InboundAttachment(filename=filename, data=bytes(data), content_type=getattr(doc, "mime_type", "") or ""),
+        unreadable="⚠️ Could not read the document.",
+    )
+    if turn is not None:
+        await _run_agent_for_message(update, context, turn.text)
 
 
 # ──────────────────────────────────────────────────────────────────────

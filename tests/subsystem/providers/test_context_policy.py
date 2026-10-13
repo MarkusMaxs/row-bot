@@ -486,6 +486,32 @@ def test_capacity_tables_and_catalogs_are_provider_qualified(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("provider", "model", "window"),
+    [
+        ("anthropic", "claude-opus-5-5", 1_000_000),
+        ("anthropic", "claude-opus-5", 1_000_000),
+        ("anthropic", "claude-sonnet-5-5", 1_000_000),
+        ("anthropic", "claude-sonnet-5", 1_000_000),
+        ("anthropic", "claude-haiku-5-5", 1_000_000),
+        ("anthropic", "claude-fable-5-1", 1_000_000),
+        ("anthropic", "claude-fable-5", 1_000_000),
+        ("anthropic", "claude-mythos-5-1", 1_000_000),
+        ("claude_subscription", "claude-opus-5-5", 1_000_000),
+        ("anthropic", "claude-haiku-4-5", 200_000),
+    ],
+)
+def test_claude_5_generation_windows_hold_without_a_live_catalog(monkeypatch, provider, model, window):
+    import row_bot.models as models
+
+    monkeypatch.setattr(models, "_cloud_context_override", None)
+    monkeypatch.setattr(models, "_cloud_model_cache", {})
+    monkeypatch.setattr(models, "_context_catalog", {})
+
+    # Without these rows the 200K Claude catch-all applied to every 5-generation model.
+    assert models._catalog_or_heuristic(provider, model) == window
+
+
+@pytest.mark.parametrize(
     ("old_local", "old_cloud", "local_mode", "cloud_override"),
     [
         (32_768, 131_072, "auto", None),

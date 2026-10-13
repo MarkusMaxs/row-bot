@@ -96,7 +96,7 @@ def test_ollama_cloud_keeps_the_done_payload_counts(monkeypatch, ledger):
     last = chunks[-1].message
     assert last.usage_metadata == {"input_tokens": 640, "output_tokens": 88, "total_tokens": 728}
     assert last.response_metadata["prompt_eval_count"] == 640
-    assert "done_reason" not in last.response_metadata
+    assert last.response_metadata["done_reason"] == "stop"  # why it stopped, for the cut-short notice (F17)
     assert _ledger_counts(ledger) == [("ollama_cloud", 640, None, 88, None)]
 
 
