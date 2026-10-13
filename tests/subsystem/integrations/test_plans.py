@@ -197,11 +197,7 @@ def test_browser_sign_in_pauses_and_resumes_after_the_callback(item, owner, monk
     assert plans.read_plan(context(), plan_id)["pause"] == "resume"
 
 
-def test_package_adds_need_this_computer_and_presets_never_unlock_risky_tools():
-    row = facts.finish(facts.entry("plugin", "hermes:x", "X", installed=False, lifecycle="available"))
-    plan = plans.compute(row, {"kind": "plugin", "reference": "hermes:x"})
-    with pytest.raises(plans.PlanError, match="owner_local_only"):
-        plans.start(context(local_owner=False), row, {"kind": "plugin", "reference": "hermes:x"}, digest=plan["digest"])
+def test_presets_never_unlock_risky_tools():
     for effect in ("mutation", "interaction", "unknown"):
         assert presets.tool_state("full", {"effect": effect, "destructive": True}) == "ask"
     assert presets.tool_state("full", {"effect": "unknown"}) == "ask"
@@ -380,11 +376,8 @@ def test_node_and_package_preparation_run_in_the_background_and_resume(item, own
     assert [s["runtime"]["id"] for s in plan["steps"] if s["type"] == "runtime"] == ["node", "npm_package"]
     assert plan["consent"]["downloads"] == ["Node.js", "npm package"]
     runtimes, plan_id = FakeRuntimes(), str(uuid4())
-    remote = context(runtimes=runtimes, read_policy=lambda operation: {})
-    with pytest.raises(plans.PlanError, match="owner_local_only"):
-        api.start_plan(remote, plan_id=str(uuid4()), item_id=item, digest=plan["digest"])
-    assert runtimes.started == [] and prepared == [], "packages are prepared only from this computer"
-    ctx = context(runtimes=runtimes, read_policy=lambda operation: {}, local_owner=True)
+    # Any of the owner's signed-in devices: there is no separate local tier.
+    ctx = context(runtimes=runtimes, read_policy=lambda operation: {})
     running = api.start_plan(ctx, plan_id=plan_id, item_id=item, digest=plan["digest"])
     assert running["state"] == "running" and runtimes.started == ["mcp.runtime.resolve"]
     assert plans.read_plan(ctx, plan_id)["state"] == "running", "a read never starts the next stage"
@@ -396,7 +389,7 @@ def test_node_and_package_preparation_run_in_the_background_and_resume(item, own
     review_pause = plans.resume(ctx, plan_id)  # The exact package and its checksum, before anything is laid out.
     assert review_pause["pause"] == "digest_changed" and prepared == []
     assert next(s for s in review_pause["steps"] if s["id"] == "runtime1")["review"]["digest"] == "sha256:lock"
-    paused = plans.resume(context(runtimes=runtimes, read_policy=lambda operation: {}, local_owner=True,
+    paused = plans.resume(context(runtimes=runtimes, read_policy=lambda operation: {},
                                   review_digest="sha256:lock"), plan_id)
     assert paused["pause"] == "access" and len(prepared) == 1
     assert runtimes.started == ["mcp.runtime.resolve", "mcp.runtime.install"]

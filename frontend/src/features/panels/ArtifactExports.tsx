@@ -31,8 +31,9 @@ export type ArtifactExportsProps = {
   ) => Promise<ArtifactExportResult>;
   download: (exportId: string) => Promise<void>;
   /**
-   * Save a copy into the workspace's Exports folder (this computer's owner
-   * only); refused elsewhere, where the export downloads instead.
+   * Save a copy into the workspace's Exports folder, then offer Open and Show
+   * in folder: given in the desktop app on the computer Row-Bot runs on.
+   * Without it the export downloads.
    */
   save?: (exportId: string) => Promise<ArtifactSavedExport>;
   reveal?: (exportId: string, action: 'open' | 'show') => Promise<boolean>;
@@ -162,14 +163,8 @@ export default function ArtifactExports(props: ArtifactExportsProps) {
         throw { code: 'export_incomplete' };
       setResult(next);
       if (!props.save) return;
-      try {
-        const copy = await props.save(next.export_id);
-        if (scope.current.resourceId === resourceId) setSaved(copy);
-      } catch (reason) {
-        // Another device can't save here: the export downloads instead.
-        if (!['owner_local_only', 'action_denied'].includes(codeOf(reason)))
-          throw reason;
-      }
+      const copy = await props.save(next.export_id);
+      if (scope.current.resourceId === resourceId) setSaved(copy);
     });
   }
 

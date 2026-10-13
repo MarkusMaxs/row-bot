@@ -1044,7 +1044,6 @@ def test_reviewed_main_tunnel_persists_restart_choice_and_reports_webhook_url(
     tunnel = response.json()["snapshot"]["system"]["tunnel"]
     assert tunnel["main_app_enabled"] is True
     assert tunnel["main_app_url"] == "https://synthetic.ngrok.example"
-    assert tunnel["local_owner_control_available"] is True
     assert (
         json.loads((data / "channels_config.json").read_text())["tunnel"][
             "tunnel_main_app"
@@ -1171,15 +1170,8 @@ def test_main_tunnel_save_failure_closes_only_newly_opened_tunnel(
     assert receipt.status_code == 200 and receipt.json() == result.json()
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["tunnel.start_main", "computer_use.check", "computer_use.disclosure_acknowledged"],
-)
-def test_remote_settings_hide_webhook_url_and_deny_local_system_actions(
-    tmp_path, monkeypatch, field
-):
+def _remote_system(tmp_path, monkeypatch):
     from row_bot.tunnel import tunnel_manager
-    from tests.subsystem.client_protocol.test_protocol_security import client_app
 
     data = tmp_path / "remote-tunnel"
     data.mkdir()
@@ -1188,21 +1180,46 @@ def test_remote_settings_hide_webhook_url_and_deny_local_system_actions(
     monkeypatch.setattr(
         tunnel_manager, "get_url", lambda port: "https://synthetic.ngrok.example"
     )
+
+
+def _remote_command(remote, headers, handshake, request):
+    command_id = str(uuid4())
+    return remote.post(
+        BASE + "/commands",
+        headers={**headers, "Idempotency-Key": command_id},
+        json={
+            "command_id": command_id,
+            "client_session_id": handshake["client_session_id"],
+            "type": "settings.update",
+            "payload": {**request, "action_digest": "a" * 64, "review_id": "b" * 64},
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["tunnel.start_main", "computer_use.check", "computer_use.disclosure_acknowledged"],
+)
+def test_every_signed_in_device_sees_the_public_link_and_reviews_system_actions(
+    tmp_path, monkeypatch, field
+):
+    """One owner: a paired phone or a server session has the same Settings."""
+    from tests.subsystem.client_protocol.test_protocol_security import client_app
+
+    _remote_system(tmp_path, monkeypatch)
     local, _, _ = client_app()
-    remote, _, _ = client_app(remote=True)
+    remote, _, active = client_app(remote=True)
     with local, remote:
         _, local_headers = bootstrap(local)
-        remote_handshake, remote_headers = bootstrap(remote)
+        _, remote_headers = bootstrap(remote)
         local_response = local.get(BASE, headers=local_headers)
         remote_response = remote.get(BASE, headers=remote_headers)
         assert local_response.status_code == remote_response.status_code == 200
-        local_tunnel = local_response.json()["system"]["tunnel"]
-        remote_tunnel = remote_response.json()["system"]["tunnel"]
-        assert local_tunnel["main_app_url"] == "https://synthetic.ngrok.example"
-        assert local_tunnel["main_app_enabled"] is True
-        assert local_tunnel["local_owner_control_available"] is True
-        assert remote_tunnel["main_app_url"] is None
-        assert remote_tunnel["local_owner_control_available"] is False
+        local_system = local_response.json()["system"]
+        remote_system = remote_response.json()["system"]
+        assert local_system["tunnel"] == remote_system["tunnel"]
+        assert remote_system["tunnel"]["main_app_url"] == "https://synthetic.ngrok.example"
+        assert remote_system["tunnel"]["main_app_enabled"] is True
         request = {
             "settings_revision": remote_response.json()["revision"],
             "page": "system",
@@ -1210,25 +1227,43 @@ def test_remote_settings_hide_webhook_url_and_deny_local_system_actions(
             "value": True,
         }
         review = remote.post(BASE + "/review", headers=remote_headers, json=request)
-        assert review.status_code == 403
-        assert review.json()["code"] == "action_denied"
-        command_id = str(uuid4())
-        command = remote.post(
-            BASE + "/commands",
-            headers={**remote_headers, "Idempotency-Key": command_id},
-            json={
-                "command_id": command_id,
-                "client_session_id": remote_handshake["client_session_id"],
-                "type": "settings.update",
-                "payload": {
-                    **request,
-                    "action_digest": "a" * 64,
-                    "review_id": "b" * 64,
-                },
-            },
-        )
-        assert command.status_code == 403
-        assert command.json()["code"] == "action_denied"
+        assert review.status_code == 200, review.text
+        assert review.json()["field"] == field
+        active["value"] = False
+        assert remote.post(BASE + "/review", headers=remote_headers, json=request).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["computer_use.test", "computer_use.open_accessibility", "computer_use.open_screen_recording"],
+)
+def test_computer_use_screen_actions_stay_with_the_desktop_app_on_this_computer(
+    tmp_path, monkeypatch, field
+):
+    """Testing opens Calculator, and the other two open macOS System Settings, on
+    this computer's own screen: a capability of the desktop app here."""
+    from tests.subsystem.client_protocol.test_protocol_security import client_app
+
+    _remote_system(tmp_path, monkeypatch)
+    local, _, _ = client_app()
+    remote, _, _ = client_app(remote=True)
+    with local, remote:
+        _, local_headers = bootstrap(local)
+        remote_handshake, remote_headers = bootstrap(remote)
+        local_snapshot = local.get(BASE, headers=local_headers).json()
+        remote_snapshot = remote.get(BASE, headers=remote_headers).json()
+        assert local_snapshot["system"]["computer_use"]["screen_actions_available"] is True
+        assert remote_snapshot["system"]["computer_use"]["screen_actions_available"] is False
+        request = {
+            "settings_revision": remote_snapshot["revision"],
+            "page": "system",
+            "field": field,
+            "value": True,
+        }
+        review = remote.post(BASE + "/review", headers=remote_headers, json=request)
+        assert review.status_code == 409 and review.json()["code"] == "desktop_only"
+        command = _remote_command(remote, remote_headers, remote_handshake, request)
+        assert command.status_code == 409 and command.json()["code"] == "desktop_only"
 
 
 @pytest.mark.parametrize(

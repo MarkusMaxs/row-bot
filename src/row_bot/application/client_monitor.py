@@ -2,7 +2,7 @@
 
 The projection reads canonical persisted status without importing background
 workers, starting work, creating directories, or returning filesystem paths.
-Raw logs remain a separately authorized local-owner read.
+Raw logs remain a separate, explicit read.
 """
 
 from __future__ import annotations

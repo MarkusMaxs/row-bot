@@ -25,7 +25,7 @@ type Owner = {
   review: (body: MigrationApplyReviewRequest) => Promise<MigrationApplyReview>;
   apply: (body: MigrationApplyCommand) => Promise<MigrationApplyReceipt>;
   receipt: (commandId: string) => Promise<MigrationApplyReceipt>;
-  /** Which old apps are in their usual folders (this computer only). */
+  /** Which old apps are in their usual folders on the computer Row-Bot runs on. */
   sources?: () => Promise<MigrationSources>;
   /** Browse for the old app's folder in the desktop app (a one-use grant). */
   pick?: () => Promise<string | null>;

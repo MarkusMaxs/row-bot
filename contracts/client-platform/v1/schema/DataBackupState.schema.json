@@ -215,7 +215,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "Settings \u203a Data: backups and restores for the local owner (decision 21).",
+  "description": "Settings \u203a Data: backups and restores, from any signed-in device (decision 21).",
   "properties": {
     "folder": {
       "anyOf": [
@@ -267,10 +267,6 @@
       "default": null,
       "title": "Last Backup Name"
     },
-    "local_owner": {
-      "title": "Local Owner",
-      "type": "boolean"
-    },
     "pending_restore": {
       "anyOf": [
         {
@@ -292,10 +288,14 @@
         }
       ],
       "default": null
+    },
+    "reveal_available": {
+      "title": "Reveal Available",
+      "type": "boolean"
     }
   },
   "required": [
-    "local_owner"
+    "reveal_available"
   ],
   "title": "DataBackupState",
   "type": "object"

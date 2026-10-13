@@ -750,7 +750,9 @@ class SettingsRuntimeToggleSnapshot(SettingsToggleSnapshot):
 
 
 class SettingsComputerUseSnapshot(SettingsRuntimeToggleSnapshot):
-    local_owner_control_available: bool
+    # Test and the macOS privacy panes open on this computer's screen: only the
+    # desktop app on this computer offers them (a capability, not a permission).
+    screen_actions_available: bool
     platform: Literal["windows", "macos", "unsupported"]
     disclosure_acknowledged: bool
     system_binary_configured: bool
@@ -777,7 +779,6 @@ class SettingsTunnelSnapshot(WireModel):
     last_error: str | None = Field(default=None, max_length=500)
     main_app_enabled: bool
     main_app_url: str | None = Field(max_length=512)
-    local_owner_control_available: bool
 
 
 class SettingsRemoteAccessSnapshot(WireModel):
@@ -2072,6 +2073,9 @@ class UpdateSnapshot(WireModel):
     )
     available: UpdateRelease | None
     dev_install: bool
+    # This device can start an install. A macOS install opens a disk image in
+    # Finder, so there only the desktop app on the Mac can.
+    install_here: bool
 
 
 class UpdateCommand(WireModel):
@@ -3646,8 +3650,9 @@ class DataRestoreResult(WireModel):
 
 
 class DataBackupState(WireModel):
-    """Settings › Data: backups and restores for the local owner (decision 21)."""
-    local_owner: bool
+    """Settings › Data: backups and restores, from any signed-in device (decision 21)."""
+    # Show in folder opens the file manager on this computer's screen.
+    reveal_available: bool
     last_backup_at: str | None = Field(default=None, max_length=40)
     last_backup_name: str | None = Field(default=None, max_length=260)
     folder: str | None = Field(default=None, max_length=300)

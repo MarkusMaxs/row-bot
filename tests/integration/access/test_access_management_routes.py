@@ -327,34 +327,41 @@ def test_failed_origin_save_leaves_the_live_host_policy_alone(
     )
 
 
-def test_remote_owner_cannot_change_route_settings(tmp_path, monkeypatch) -> None:
+def test_a_signed_in_device_changes_route_settings_and_a_signed_out_one_cannot(
+    tmp_path, monkeypatch
+) -> None:
+    """One owner: a paired device has the same Remote Access settings."""
+    from row_bot.access import launcher_control
+    from row_bot.access.access_routes import AccessRouteConfigStore
+    from row_bot.access.runtime_policy import RuntimeAccessPolicy
+
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    monkeypatch.delenv("ROW_BOT_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setattr(
+        launcher_control,
+        "request_launcher_restart",
+        lambda: type("Result", (), {"accepted": False})(),
+    )
     client, service, registration = _application(tmp_path)
+    client.app.state.row_bot_access_runtime_policy = RuntimeAccessPolicy(registration.config)
     cookie, _device, _session = _session_cookie(service, registration, name="Remote")
     headers = {"cookie": cookie, "origin": "http://localhost:8080"}
-    assert (
-        client.post(
-            "/api/access/routes/listen",
-            json={
-                "expected_mode": "local_only",
-                "listen_mode": "local_network",
-            },
-            headers=headers,
-        ).status_code
-        == 403
-    )
-    assert (
-        client.post(
-            "/api/access/routes/origins",
-            json={
-                "action": "add",
-                "origin": "https://example.test",
-                "expected_origins": [],
-            },
-            headers=headers,
-        ).status_code
-        == 403
-    )
+    listen = {"expected_mode": "local_only", "listen_mode": "local_network"}
+    origin = {"action": "add", "origin": "https://example.test", "expected_origins": []}
+    assert client.post("/api/access/routes/listen", json=listen,
+                       headers={"origin": "http://localhost:8080"}).status_code in {401, 403}
+    assert client.post("/api/access/routes/origins", json=origin,
+                       headers={"origin": "http://localhost:8080"}).status_code in {401, 403}
+    assert AccessRouteConfigStore().load_or_default().configured_origins == ()
+    changed = client.post("/api/access/routes/listen", json=listen, headers=headers)
+    added = client.post("/api/access/routes/origins", json=origin, headers=headers)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["listen_mode"] == "local_network"
+    assert added.status_code == 200, added.text
+    assert added.json()["configured_origins"] == ["https://example.test"]
+    # Still a same-origin change, from any device.
+    assert client.post("/api/access/routes/origins", json=origin,
+                       headers={"cookie": cookie, "origin": "http://other.invalid"}).status_code == 403
 
 
 def test_tailscale_is_passive_until_explicit_check_and_deduplicates_apply(
@@ -506,33 +513,34 @@ def test_tailscale_change_restarts_the_app_only_after_it_succeeds(
     assert fake.applied == (0 if outcome == "plan_refused" else 1)
 
 
-def test_remote_owner_cannot_probe_or_change_tailscale(tmp_path, monkeypatch) -> None:
+def test_a_signed_in_device_checks_tailscale_only_when_asked(tmp_path, monkeypatch) -> None:
+    """One owner: a paired device checks and changes Tailscale too; reading the
+    status never probes, and a signed-out request never reaches it."""
+    from row_bot.access.tailscale import TailscaleState, TailscaleStatus
+
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
 
     class FakeTailscale:
-        def detect(self, *, port):
-            raise AssertionError("should not probe")
+        detect_count = 0
 
-    client, service, registration = _application(
-        tmp_path, tailscale_controller=FakeTailscale()
-    )
+        def detect(self, *, port):
+            self.detect_count += 1
+            return TailscaleStatus(state=TailscaleState.READY, detail="Ready")
+
+    fake = FakeTailscale()
+    client, service, registration = _application(tmp_path, tailscale_controller=fake)
     cookie, _device, _session = _session_cookie(service, registration, name="Remote")
     headers = {"cookie": cookie, "origin": "http://localhost:8080"}
-    assert client.get("/api/access/tailscale", headers=headers).status_code == 200
-    assert (
-        client.post("/api/access/tailscale/check", headers=headers).status_code == 403
-    )
-    assert (
-        client.post(
-            "/api/access/tailscale/actions",
-            json={
-                "action": "enable",
-                "command_id": "command-remote",
-            },
-            headers=headers,
-        ).status_code
-        == 403
-    )
+    read = client.get("/api/access/tailscale", headers=headers)
+    assert read.status_code == 200 and "can_manage" not in read.json()
+    assert fake.detect_count == 0
+    assert client.post("/api/access/tailscale/check",
+                       headers={"origin": "http://localhost:8080"}).status_code in {401, 403}
+    assert fake.detect_count == 0
+    checked = client.post("/api/access/tailscale/check", headers=headers)
+    assert checked.status_code == 200, checked.text
+    assert checked.json()["status"]["state"] == "ready"
+    assert fake.detect_count == 1
 
 
 def test_remote_owner_can_list_status_invitations_devices_and_sessions(

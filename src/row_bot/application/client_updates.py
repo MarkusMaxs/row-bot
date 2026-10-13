@@ -1,9 +1,10 @@
-"""Explicit updater checks and preferences for the local owner client."""
+"""Explicit updater checks, preferences and installs for any signed-in device."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import platform
 from threading import RLock
 from threading import Thread
 from typing import Any, Callable
@@ -22,6 +23,16 @@ def _owner():
     from row_bot import updater
 
     return updater
+
+
+def install_needs_this_computer() -> bool:
+    """macOS installs from a disk image someone opens in Finder on the Mac.
+
+    Windows and Linux installs run unattended and restart Row-Bot, so another
+    device can start one; on macOS that would leave Row-Bot closed until
+    someone at the Mac finished it.
+    """
+    return platform.system() == "Darwin"
 
 
 def read_updates() -> dict[str, Any]:

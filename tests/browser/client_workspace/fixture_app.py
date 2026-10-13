@@ -1344,7 +1344,8 @@ def p4_document_processing(x_fixture_token: str = Header(default="")) -> dict:
         validate()
         yield embedding_providers._CapturedEmbeddings(SyntheticEmbeddings(), validate)
     @contextmanager
-    def chat(capture, *, validate):
+    def chat(capture, *, validate, usage_purpose='', usage_thread_id=''):
+        # The real owner's signature: the usage-ledger tags (B1) are accepted and unused.
         validate()
         def invoke(messages):
             validate()

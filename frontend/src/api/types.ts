@@ -308,7 +308,7 @@ export interface ClientTransport {
     body: Wire.ArtifactExportReveal,
     signal?: AbortSignal,
   ): Promise<Wire.ArtifactExportRevealResult>;
-  /** Local owner: write a conversation export into Exports (B238). */
+  /** Write a conversation export into Exports when the desktop app can't show its Save dialog (B238). */
   saveAttachmentExport?(
     reference: string,
     signal?: AbortSignal,

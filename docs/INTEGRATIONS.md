@@ -212,9 +212,10 @@ The domain package composes the owners above; it never replaces them.
     wake other connections that are marked on.
   - Changing access only applies a preset; it never turns a connection on. Servers
     whose tools must be chosen one by one cannot take a preset.
-  - Anything that puts code on this computer (adding, updating or removing a plugin
+  - Anything that puts code on the host (adding, updating or removing a plugin
     package, an npm, PyPI, container or bundle package, a Hermes recipe or a Registry
-    bundle) needs the owner at this computer (`owner_local_only`).
+    bundle) takes the same consent from any of the owner's signed-in devices; a
+    plan started on one device can be read or finished on another.
   - The runner records each owner command before sending it, so a retry replays or
     reconciles it.
   - A plan pauses only for a browser sign-in, a missing input, access to newly

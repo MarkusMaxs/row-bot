@@ -25,9 +25,10 @@ import zipfile
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from typing import Iterable
 
 from row_bot import profile_restore
-from row_bot.profile_restore import SECRET_ENTRIES, SECRET_NAMES, kept_in_place
+from row_bot.profile_restore import SECRET_ENTRIES, SECRET_NAMES, is_outside, kept_in_place, outside_profile
 
 FORMAT = "row-bot-backup"
 FORMAT_VERSION = 1
@@ -70,11 +71,11 @@ def _app_version() -> str:
     return __version__
 
 
-def _files(data_dir: Path) -> list[Path]:
+def _files(data_dir: Path, outside: dict) -> list[Path]:
     """Every file a backup holds, in a stable order."""
     chosen: list[Path] = []
     for entry in sorted(data_dir.iterdir(), key=lambda item: item.name):
-        if kept_in_place(entry.name) or entry.is_symlink():
+        if kept_in_place(entry.name) or entry.is_symlink() or is_outside((entry.name,), outside):
             continue
         if entry.is_file():
             if not SECRET_NAMES.fullmatch(entry.name):
@@ -86,6 +87,8 @@ def _files(data_dir: Path) -> list[Path]:
             relative = path.relative_to(data_dir)
             if any(SECRET_NAMES.fullmatch(part) for part in relative.parts):
                 continue
+            if is_outside(relative.parts, outside):
+                continue  # the workspace and this backup's own folder, when they sit in the data folder
             if any(part.endswith(("-wal", "-shm")) for part in relative.parts):
                 continue
             if relative.parts[0] == "media" and _UPLOAD_STAGING.fullmatch(path.name):
@@ -170,10 +173,17 @@ def backup_state(data_dir: Path) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def create_backup(data_dir: Path, destination: Path, *, now: datetime | None = None) -> dict:
-    """Write one archive of the profile into ``destination`` and return its facts."""
+def create_backup(data_dir: Path, destination: Path, *, now: datetime | None = None,
+                  outside: Iterable[Path] = ()) -> dict:
+    """Write one archive of the profile into ``destination`` and return its facts.
+
+    ``outside`` names folders that are not the profile (the workspace). When
+    one of them, or ``destination`` itself, sits in the data folder it is
+    left out, so a backup never holds itself or an earlier backup.
+    """
     moment = now or datetime.now()
     destination.mkdir(parents=True, exist_ok=True)
+    kept = outside_profile(data_dir, (destination, *outside))
     stem = f"Row-Bot backup {moment:%Y-%m-%d %H%M}"
     target = destination / f"{stem}.zip"
     counter = 2
@@ -190,7 +200,7 @@ def create_backup(data_dir: Path, destination: Path, *, now: datetime | None = N
         with tempfile.TemporaryDirectory() as scratch, zipfile.ZipFile(
             partial, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
         ) as archive:
-            for path in _files(data_dir):
+            for path in _files(data_dir, kept):
                 arcname = path.relative_to(data_dir).as_posix()
                 if path.suffix in {".db", ".sqlite", ".sqlite3"}:
                     copy = Path(scratch) / f"{files}.db"
@@ -302,9 +312,15 @@ def inspect_backup(archive: Path, *, app_version: str | None = None) -> dict:
 
 
 def stage_restore(archive: Path, data_dir: Path, *, source_name: str,
-                  app_version: str | None = None) -> dict:
-    """Unpack a validated archive for the next start; the profile is untouched."""
+                  app_version: str | None = None, outside: Iterable[Path] = ()) -> dict:
+    """Unpack a validated archive for the next start; the profile is untouched.
+
+    What isn't the profile (``outside``: the workspace and the backups folder,
+    and a container home's hidden files) is recorded so the restore leaves it
+    where it is, and is never unpacked from an older archive that held it.
+    """
     info = inspect_backup(archive, app_version=app_version)
+    kept = outside_profile(data_dir, outside)
     profile_restore.cancel(data_dir)
     staged = data_dir / profile_restore.PENDING_DIR / "files"
     staged.mkdir(parents=True)
@@ -315,6 +331,8 @@ def stage_restore(archive: Path, data_dir: Path, *, source_name: str,
                     continue
                 if kept_in_place(PurePosixPath(member.filename).parts[0]):
                     continue  # machine-local: never restored (B181)
+                if is_outside(PurePosixPath(member.filename).parts, kept):
+                    continue  # not the profile: an older backup that held it
                 target = staged.joinpath(*PurePosixPath(member.filename).parts)
                 if not target.resolve().is_relative_to(staged.resolve()):
                     raise BackupError("backup_invalid")
@@ -329,6 +347,7 @@ def stage_restore(archive: Path, data_dir: Path, *, source_name: str,
         "created_at": info["created_at"],
         "source_name": source_name[:200],
         "sign_in_again": info["sign_in_again"],
+        "outside_profile": kept,
     }
     (data_dir / profile_restore.PENDING_MARKER).write_text(json.dumps(marker, indent=2), encoding="utf-8")
     return {**info, "staged": True}

@@ -200,6 +200,12 @@ beforeEach(() => {
     update: null,
   });
   mock.controller.savedTasks.mockResolvedValue(taskPage());
+  mock.controller.insights.mockResolvedValue({
+    schema_version: 1,
+    revision: 'i',
+    curator_report: null,
+    items: [],
+  });
   mock.controller.monitorLogs.mockResolvedValue(monitorSnapshot.logs);
   mock.controller.systemHealth.mockResolvedValue({
     schema_version: 1,
@@ -402,23 +408,12 @@ it('opens New design and New code folder setup, and a new workflow’s editor', 
   expect(location()).toBe('/?tab=workflows');
 });
 
-it('reads Insights for Overview only where this device may', async () => {
-  mock.controller.insights.mockResolvedValue({
-    schema_version: 1,
-    revision: 'i',
-    curator_report: null,
-    items: [],
-  });
-  const { unmount } = show();
-  await waitFor(() =>
-    expect(mock.controller.savedTasks).toHaveBeenCalledTimes(1),
-  );
-  expect(mock.controller.insights).not.toHaveBeenCalled();
-  unmount();
+it('reads Insights for Overview on any signed-in device', async () => {
+  // A paired phone or a browser on another computer: the owner's full authority.
   mock.state.handshake = {
     instance_id: 'server-b',
     client_session_id: 'session-b',
-    authentication_kind: 'local_owner',
+    authentication_kind: 'session',
   };
   show();
   await waitFor(() => expect(mock.controller.insights).toHaveBeenCalledOnce());

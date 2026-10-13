@@ -55,8 +55,10 @@ function page(
   github: Partial<Accounts['github']>,
   access: Partial<GitHubAccessSnapshot> = {},
   prepare: (controller: ReturnType<typeof fake>) => void = () => undefined,
+  /** The desktop app on the computer Row-Bot runs on, or another device. */
+  here = true,
 ) {
-  const controller = fake({ ...snapshot, ...access });
+  const controller = fake({ ...snapshot, ...access }, here);
   prepare(controller);
   const mutation: SettingsMutationIO = {
     revision: 'settings-a',
@@ -88,8 +90,13 @@ function page(
   );
   return { controller, mutation };
 }
-function fake(current: GitHubAccessSnapshot) {
+function fake(current: GitHubAccessSnapshot, here = true) {
+  const state = {
+    handshake: { authentication_kind: here ? 'local_owner' : 'session' },
+  };
   return {
+    subscribe: () => () => undefined,
+    getSnapshot: () => state,
     githubAccess: vi.fn(async () => current),
     githubAccessCommand: vi.fn(async (command: GitHubAccessCommand) => ({
       schema_version: 1 as const,
@@ -210,12 +217,29 @@ it('recovers a pending action without launching it again', async () => {
   expect(controller.githubAccessCommand).not.toHaveBeenCalled();
 });
 
-it('shows the local owner boundary without account actions', async () => {
-  page({ configured: true, authentication_state: 'connected' }, {}, (fake) =>
-    fake.githubAccess.mockRejectedValueOnce({ code: 'action_denied' }),
+it('another device checks GitHub and uses a token, not the CLI sign-in', async () => {
+  // The CLI sign-in opens a console on the computer Row-Bot runs on.
+  const { controller } = page(
+    { configured: true, authentication_state: 'invalid' },
+    { credential_source: 'github_cli', state: 'invalid_token' },
+    undefined,
+    false,
+  );
+  expect(within(githubRow()).getByText('Needs reconnecting')).toBeVisible();
+  fireEvent.click(
+    await within(githubRow()).findByRole('button', { name: 'Check GitHub' }),
+  );
+  expect(controller.githubAccessCommand).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'check' }),
   );
   expect(
-    await screen.findByText(/available on the local owner device/),
+    within(githubRow()).queryByRole('button', { name: 'Reconnect GitHub' }),
+  ).toBeNull();
+  expect(
+    screen.queryByRole('button', { name: 'Sign in with the GitHub CLI' }),
+  ).toBeNull();
+  expect(
+    screen.getByRole('button', { name: 'Add GitHub token' }),
   ).toBeVisible();
-  expect(screen.queryByRole('button', { name: 'Check GitHub' })).toBeNull();
+  expect(screen.queryByText(/local owner/)).toBeNull();
 });

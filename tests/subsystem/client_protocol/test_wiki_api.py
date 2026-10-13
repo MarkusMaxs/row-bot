@@ -134,13 +134,15 @@ def test_a_vault_picked_in_the_desktop_window_is_claimed_once_as_a_folder_grant(
         assert other.status_code != 200
 
 
-def test_remote_authenticated_owner_cannot_open_a_desktop_folder():
+def test_opening_the_vault_folder_is_the_desktop_apps_on_this_computer():
+    """The file manager opens on this computer's screen: another device gets a
+    capability error, not an authority refusal."""
     client, _service, _active = client_app(remote=True)
     with client:
         _handshake, headers = bootstrap(client)
         response = client.post("/api/v1/settings/wiki/open-folder", headers=headers)
-    assert response.status_code == 403
-    assert response.json()["code"] == "action_denied"
+    assert response.status_code == 409
+    assert response.json()["code"] == "desktop_only"
 
 
 def test_articles_open_without_import_or_path_disclosure(api, monkeypatch):

@@ -132,7 +132,7 @@ export default function AccessConnect({
   tailscale?: AccessTailscaleClient;
   /** The public link's state, from the settings snapshot. */
   tunnel?: Tunnel;
-  /** Starts the saved public link; rendered for the owner on this computer. */
+  /** Starts the saved public link. */
   startPublic?: ReactNode;
   writeClipboard?: ClientPlatform['writeClipboard'];
   /** A device connected or was renamed: read the device list again. */
@@ -557,21 +557,15 @@ export default function AccessConnect({
                     <p className="settings-help">
                       Row-Bot only listens on this computer now.
                     </p>
-                    {network.can_manage_routes ? (
-                      <div className="button-row">
-                        <Button
-                          variant="primary"
-                          disabled={busy}
-                          onClick={allowNetwork}
-                        >
-                          Allow on my network…
-                        </Button>
-                      </div>
-                    ) : (
-                      <p className="settings-help">
-                        The owner can allow it on the computer running Row-Bot.
-                      </p>
-                    )}
+                    <div className="button-row">
+                      <Button
+                        variant="primary"
+                        disabled={busy}
+                        onClick={allowNetwork}
+                      >
+                        Allow on my network…
+                      </Button>
+                    </div>
                   </div>
                 ) : network?.listening_on_network === false ? (
                   // B184: the saved mode says network, the launch says no.
@@ -630,24 +624,16 @@ export default function AccessConnect({
                 ) : (
                   <div className="access-option-detail">
                     <p className="settings-help">{tunnelWords}</p>
-                    {tunnel?.credential.configured &&
-                    tunnel.local_owner_control_available
-                      ? startPublic
-                      : tunnel && !tunnel.credential.configured
-                        ? tunnel.local_owner_control_available && (
-                            <p className="settings-help">
-                              <AppLink to="/settings/access#tunnel">
-                                Add your ngrok token under Advanced
-                              </AppLink>
-                              , then come back here.
-                            </p>
-                          )
-                        : null}
-                    {tunnel && !tunnel.local_owner_control_available && (
+                    {tunnel?.credential.configured ? (
+                      startPublic
+                    ) : tunnel ? (
                       <p className="settings-help">
-                        The owner can start it on the computer running Row-Bot.
+                        <AppLink to="/settings/access#tunnel">
+                          Add your ngrok token under Advanced
+                        </AppLink>
+                        , then come back here.
                       </p>
-                    )}
+                    ) : null}
                   </div>
                 ))}
               {choice === 'other' && otherRoute && (

@@ -97,7 +97,7 @@ def declared_server(owner):
 
 
 def context(**fields):
-    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=True, **fields)
+    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, **fields)
 
 
 def test_a_key_goes_only_to_the_keychain_and_a_setting_to_the_configuration(declared_server):

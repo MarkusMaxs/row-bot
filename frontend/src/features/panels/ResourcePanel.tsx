@@ -6,7 +6,11 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { useClientSelector, useRuntime } from '../../runtime';
+import {
+  useClientSelector,
+  useOnThisComputer,
+  useRuntime,
+} from '../../runtime';
 import { Disclosure, EmptyState, Skeleton } from '../../ui/primitives';
 import { useNotify } from '../../ui/overlays';
 import WorkspaceProcesses from './WorkspaceProcesses';
@@ -432,6 +436,9 @@ function ResourcePanel({
   const workspace = useClientSelector((state) => state.workspace);
   const selected = useClientSelector((state) => state.selectedConversationId);
   const loading = useClientSelector((state) => state.loadingConversation);
+  // Saving into Exports, then Open and Show in folder, is for the desktop app
+  // on the computer Row-Bot runs on; other devices download the export.
+  const onThisComputer = useOnThisComputer();
   if (import.meta.env.VITE_ENABLE_FIXTURES === '1')
     resourcePanelMetrics.renders++;
   useEffect(() => {
@@ -604,8 +611,8 @@ function ResourcePanel({
       edit={api.edit}
       createExport={api.exports.create}
       downloadExport={api.exports.download}
-      saveExport={api.exports.save}
-      revealExport={api.exports.reveal}
+      saveExport={onThisComputer ? api.exports.save : undefined}
+      revealExport={onThisComputer ? api.exports.reveal : undefined}
       sharing={api.sharing}
       presentation={api.presentation}
       lifecycle={api.lifecycle}

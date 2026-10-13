@@ -83,7 +83,7 @@ def hosted(owner, monkeypatch):
 
 
 def context(redirect_uri=CALLBACK, **fields):
-    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=True,
+    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None,
                          redirect_uri=redirect_uri, **fields)
 
 

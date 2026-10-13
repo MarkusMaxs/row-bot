@@ -139,7 +139,6 @@ export type AccessRouteSettings = {
   listening_on_network?: boolean;
   configured_origins: string[];
   managed_externally: boolean;
-  can_manage_routes: boolean;
 };
 
 export type AccessInvitation = {
@@ -196,9 +195,7 @@ export type TailscaleReceipt = {
   restart_required?: boolean;
 };
 export interface AccessTailscaleClient {
-  status(
-    signal?: AbortSignal,
-  ): Promise<{ can_manage: boolean; status: TailscaleStatus | null }>;
+  status(signal?: AbortSignal): Promise<{ status: TailscaleStatus | null }>;
   check(): Promise<TailscaleStatus>;
   action(
     action: 'enable' | 'disable',
@@ -251,12 +248,9 @@ export const accessTailscaleClient: AccessTailscaleClient = {
       method: 'GET',
       signal,
     });
-    if (
-      typeof value.can_manage !== 'boolean' ||
-      (value.status !== null && !validTailscaleStatus(value.status))
-    )
+    if (value.status !== null && !validTailscaleStatus(value.status))
       throw { code: 'dependency_unavailable' };
-    return { can_manage: value.can_manage, status: value.status };
+    return { status: value.status };
   },
   async check() {
     const value = await request('/api/access/tailscale/check', {
@@ -345,8 +339,7 @@ export const accessInvitationClient: AccessInvitationClient = {
       !value.configured_origins.every(
         (origin) => typeof origin === 'string' && origin.length <= 2048,
       ) ||
-      typeof value.managed_externally !== 'boolean' ||
-      typeof value.can_manage_routes !== 'boolean'
+      typeof value.managed_externally !== 'boolean'
     )
       throw { code: 'dependency_unavailable' };
     return {
@@ -357,7 +350,6 @@ export const accessInvitationClient: AccessInvitationClient = {
           : undefined,
       configured_origins: value.configured_origins,
       managed_externally: value.managed_externally,
-      can_manage_routes: value.can_manage_routes,
     };
   },
   async invitations(signal) {

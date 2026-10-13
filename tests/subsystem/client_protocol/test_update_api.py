@@ -116,7 +116,7 @@ def test_settings_channel_save_refreshes_the_shared_updater_owner(tmp_path, monk
     assert client_updates.read_updates()["channel"] == "beta"
 
 
-def test_update_api_requires_direct_owner_and_command_identity(tmp_path, monkeypatch):
+def test_update_api_serves_every_signed_in_device_and_requires_command_identity(tmp_path, monkeypatch):
     updater = _updater(tmp_path, monkeypatch)
     calls = []
 
@@ -126,12 +126,14 @@ def test_update_api_requires_direct_owner_and_command_identity(tmp_path, monkeyp
 
     monkeypatch.setattr(updater, "check_for_updates", fake_check)
     local, _, _ = client_app()
-    remote, _, _ = client_app(remote=True)
+    remote, _, active = client_app(remote=True)
     with local, remote:
         _, headers = bootstrap(local)
         _, remote_headers = bootstrap(remote)
-        assert remote.get("/api/v1/system/updates", headers=remote_headers).status_code == 403
+        elsewhere = remote.get("/api/v1/system/updates", headers=remote_headers)
+        assert elsewhere.status_code == 200, elsewhere.text
         first = local.get("/api/v1/system/updates", headers=headers)
+        assert elsewhere.json()["revision"] == first.json()["revision"]
         assert first.status_code == 200, first.text
         browser_get = local.get(
             "/api/v1/system/updates",
@@ -146,11 +148,14 @@ def test_update_api_requires_direct_owner_and_command_identity(tmp_path, monkeyp
         command_id = str(uuid4())
         body = {"command_id": command_id, "expected_revision": first.json()["revision"],
                 "action": "check", "version": ""}
-        assert remote.post("/api/v1/system/updates/commands", headers={**remote_headers, "Idempotency-Key": command_id}, json=body).status_code == 403
-        assert local.post("/api/v1/system/updates/commands", headers=headers, json=body).status_code == 409
-        result = local.post("/api/v1/system/updates/commands", headers={**headers, "Idempotency-Key": command_id}, json=body)
+        assert remote.post("/api/v1/system/updates/commands", headers=remote_headers, json=body).status_code == 409
+        result = remote.post("/api/v1/system/updates/commands", headers={**remote_headers, "Idempotency-Key": command_id}, json=body)
+        active["value"] = False
+        signed_out = remote.post("/api/v1/system/updates/commands",
+                                 headers={**remote_headers, "Idempotency-Key": str(uuid4())}, json=body)
     assert result.status_code == 200, result.text
     assert result.json()["status"] == "completed"
+    assert signed_out.status_code == 401
     assert calls == [True]
 
 
@@ -264,26 +269,50 @@ def test_install_revalidates_owner_before_handoff(tmp_path, monkeypatch):
     assert installs == []
 
 
-def test_install_api_blocks_remote_owner_and_returns_fake_handoff(tmp_path, monkeypatch):
+def test_another_device_installs_an_update_and_reads_its_own_progress(tmp_path, monkeypatch):
+    """Windows and Linux installs run unattended, so any signed-in device starts one."""
     updater = _updater(tmp_path, monkeypatch)
     updater.get_update_state().available = _release(updater)
     done = Event()
     monkeypatch.setattr(updater, "download_update", lambda info, *, progress: tmp_path / "fixture.exe")
     monkeypatch.setattr(updater, "install_and_restart", lambda path: done.set())
+    monkeypatch.setattr(client_updates, "install_needs_this_computer", lambda: False)
     local, _, _ = client_app()
     remote, _, _ = client_app(remote=True)
     with local, remote:
         _, headers = bootstrap(local)
         _, remote_headers = bootstrap(remote)
-        first = local.get("/api/v1/system/updates", headers=headers)
+        first = remote.get("/api/v1/system/updates", headers=remote_headers)
+        assert first.json()["install_here"] is True
         command_id = str(uuid4())
         body = {"command_id": command_id, "expected_revision": first.json()["revision"], "version": "99.0.0"}
-        denied = remote.post("/api/v1/system/updates/installs", headers={**remote_headers, "Idempotency-Key": command_id}, json=body)
-        assert denied.status_code == 403
-        started = local.post("/api/v1/system/updates/installs", headers={**headers, "Idempotency-Key": command_id}, json=body)
+        started = remote.post("/api/v1/system/updates/installs", headers={**remote_headers, "Idempotency-Key": command_id}, json=body)
         assert started.status_code == 200, started.text
         assert done.wait(5)
-        status = local.get(f"/api/v1/system/updates/installs/{command_id}", headers=headers)
+        status = remote.get(f"/api/v1/system/updates/installs/{command_id}", headers=remote_headers)
         assert status.status_code == 200, status.text
         assert status.json()["phase"] == "handoff"
-        assert remote.get(f"/api/v1/system/updates/installs/{command_id}", headers=remote_headers).status_code == 403
+        # The receipt belongs to the session that started it.
+        assert local.get(f"/api/v1/system/updates/installs/{command_id}", headers=headers).status_code != 200
+
+
+def test_a_mac_install_stays_with_the_desktop_app_on_the_mac(tmp_path, monkeypatch):
+    """macOS installs from a disk image opened in Finder: started elsewhere, Row-Bot would close for good."""
+    updater = _updater(tmp_path, monkeypatch)
+    updater.get_update_state().available = _release(updater)
+    installs = []
+    monkeypatch.setattr(updater, "download_update", lambda info, *, progress: installs.append(info) or tmp_path / "x.dmg")
+    monkeypatch.setattr(client_updates, "install_needs_this_computer", lambda: True)
+    local, _, _ = client_app()
+    remote, _, _ = client_app(remote=True)
+    with local, remote:
+        _, headers = bootstrap(local)
+        _, remote_headers = bootstrap(remote)
+        here = local.get("/api/v1/system/updates", headers=headers).json()
+        elsewhere = remote.get("/api/v1/system/updates", headers=remote_headers).json()
+        command_id = str(uuid4())
+        body = {"command_id": command_id, "expected_revision": elsewhere["revision"], "version": "99.0.0"}
+        refused = remote.post("/api/v1/system/updates/installs", headers={**remote_headers, "Idempotency-Key": command_id}, json=body)
+    assert here["install_here"] is True and elsewhere["install_here"] is False
+    assert refused.status_code == 409 and refused.json()["code"] == "desktop_only"
+    assert installs == []

@@ -62,7 +62,6 @@ function fixture() {
       listen_mode: 'local_network' as const,
       configured_origins: [],
       managed_externally: false,
-      can_manage_routes: true,
     })),
     invitations: vi.fn(async () => minted.map((item) => ({ ...item }))),
     create: vi.fn(async (routeId: string) => {
@@ -93,7 +92,7 @@ function fixture() {
     })),
   };
   const tailscale: AccessTailscaleClient = {
-    status: vi.fn(async () => ({ can_manage: true, status: null })),
+    status: vi.fn(async () => ({ status: null })),
     check: vi.fn(),
     action: vi.fn(),
     receipt: vi.fn(),

@@ -1,7 +1,9 @@
-"""Conversation exports saved into Exports on this computer (B238).
+"""Conversation exports saved into the workspace's Exports folder (B238).
 
-When the desktop window cannot show its Save dialog, the local owner's export
-is written by the server into the workspace folder's Exports folder.
+When the desktop window cannot show its Save dialog, the export is written by
+the server into the workspace folder's Exports folder. Any signed-in device
+may save one there; Show in folder opens the file manager on the computer
+Row-Bot runs on, so only the desktop app there offers it.
 """
 
 # ruff: noqa: F401, F811 -- imported pytest fixtures are requested by name.
@@ -15,9 +17,10 @@ from row_bot.application import export_folder
 from tests.subsystem.client_protocol.test_protocol_application import (
     _client,
     _command,
+    _remote_client,
     service,
 )
-from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
+from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 
 pytestmark = pytest.mark.subsystem
 
@@ -67,14 +70,28 @@ def test_the_local_owner_saves_an_export_into_exports_and_shows_it(service, work
         assert shown == [saved]
 
 
-def test_a_remote_session_cannot_save_or_show_files_here():
-    client, _service, _active = client_app(remote=True)
-    with client:
-        _handshake, headers = bootstrap(client)
-        for path, body in (("/api/v1/attachments/c:00000000-0000-4000-8000-000000000000/save", {}),
-                           ("/api/v1/exports/reveal", {"file_name": "export.md"})):
-            response = client.post(path, headers=headers, json=body)
-            assert response.status_code == 403 and response.json()["code"] == "owner_local_only"
+def test_another_device_saves_into_exports_but_the_file_manager_stays_on_that_computer(
+        service, workspace, monkeypatch):
+    from row_bot.application.attachments import register_attachment
+
+    shown = []
+    monkeypatch.setattr(export_folder, "_show_in_folder", shown.append)
+    remote, active = _remote_client(service)
+    with remote as client:
+        _, headers = bootstrap(client)
+        created = _command(client, headers, "conversation.create", {"title": "Export elsewhere"})
+        assert created.status_code == 200, created.text
+        attachment = register_attachment(created.json()["conversation_id"], "con.md", b"# Export\n")
+        saved = client.post(f"/api/v1/attachments/{attachment['attachment_ref']}/save", headers=headers, json={})
+        assert saved.status_code == 200, saved.text
+        assert saved.json() == {"file_name": "export-con.md", "folder": "Row-Bot › Exports"}
+        assert (workspace / "Exports" / "export-con.md").read_bytes() == b"# Export\n"
+        reveal = client.post("/api/v1/exports/reveal", headers=headers, json={"file_name": "export-con.md"})
+        assert reveal.status_code == 409 and reveal.json()["code"] == "desktop_only"
+        active["value"] = False
+        signed_out = client.post(f"/api/v1/attachments/{attachment['attachment_ref']}/save", headers=headers, json={})
+        assert signed_out.status_code == 401
+    assert shown == []
 
 
 def test_export_names_are_made_safe_and_stay_inside_exports(workspace):

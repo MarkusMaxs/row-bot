@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.platform, pytest.mark.mcp_transport]
 
 
 def context(**fields):
-    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=True, **fields)
+    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, **fields)
 
 
 @pytest.fixture
@@ -227,18 +227,11 @@ def test_a_hermes_recipe_is_read_after_consent_and_shown_before_it_is_saved(owne
     reference = {"kind": "hermes_mcp", "name": "notes", "pin": "e" * 40}
     plan = plans.compute(row, reference)
     assert plan["supported"] and not reads  # Nothing is read until the person agrees.
-    with pytest.raises(plans.PlanError, match="owner_local_only"):  # Its package is set up on this computer only.
-        plans.start(plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=False),
-                    row, reference, digest=plan["digest"], plan_id=str(uuid4()))
-    assert not reads
     plan_id = str(uuid4())
     paused = plans.start(context(), row, reference, digest=plan["digest"], plan_id=plan_id)
     review = next(s for s in paused["steps"] if s["type"] == "consent")["review"]
     assert paused["pause"] == "digest_changed" and review["lines"] == ["Connects to https://mcp.notes.example.test/mcp."]
     assert not config.read_saved_configuration().document["servers"].get("notes")  # Shown before anything is saved.
-    with pytest.raises(plans.PlanError, match="owner_local_only"):  # Continuing is agreeing too: only here.
-        plans.resume(plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=False,
-                                   review_digest=review["digest"]), plan_id)
     done = plans.resume(context(review_digest=review["digest"]), plan_id)
     assert done["pause"] == "access", done
     assert config.read_saved_configuration().document["servers"]["notes"]["source"]["pin"] == "e" * 40

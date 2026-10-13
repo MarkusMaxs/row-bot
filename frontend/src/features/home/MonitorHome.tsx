@@ -146,7 +146,7 @@ export type MonitorHomeProps = {
   attention?: readonly AttentionProblem[];
   /** A fix changed something (a channel restarted): re-read the problems. */
   onFixed?: () => void;
-  /** Up to 200 redacted entries for the console (local owner only). */
+  /** Up to 200 redacted entries for the console. */
   loadLogs?: (signal?: AbortSignal) => Promise<MonitorLogs>;
   loadTasks?: () => Promise<TaskSummaryPage>;
   writeClipboard?: ClientPlatform['writeClipboard'];
@@ -466,8 +466,8 @@ function LogConsole({
   if (!logs.authorized || logs.availability === 'unavailable')
     return (
       <InlineEmpty>
-        Logs are available only to the local owner in the native application. No
-        log contents or private filesystem paths are exposed to this client.
+        Logs aren’t available right now. Row-Bot shows no log contents or
+        private file paths until they are.
       </InlineEmpty>
     );
   if (logs.availability === 'missing')

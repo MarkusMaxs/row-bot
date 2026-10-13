@@ -322,3 +322,84 @@ def test_a_file_that_cant_be_read_is_named_instead_of_failing_the_backup(tmp_pat
         assert "media/c/photo.png" in archive.namelist()
     assert result["skipped"] == manifest["skipped"] == ["media/c/locked.png"]
     assert result["files"] == 1
+
+
+def _container(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    """A container's layout: the home is the data folder, so the workspace sits inside it."""
+    data = tmp_path / "data"
+    data.mkdir()
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(data))
+    _db(data / "threads.db", ["CREATE TABLE threads(id TEXT, title TEXT)",
+                               "INSERT INTO threads VALUES ('t1', 'Kept conversation')"])
+    (data / "tools_config.json").write_text(json.dumps({"enabled": ["web_search"]}), encoding="utf-8")
+    workspace = data / "Documents" / "Row-Bot"
+    (workspace / "Drafts").mkdir(parents=True)
+    (workspace / "Drafts" / "notes.md").write_text("my notes", encoding="utf-8")
+    (workspace / "Backups").mkdir()
+    (workspace / "Backups" / "Row-Bot backup 2026-10-01 0900.zip").write_bytes(b"an earlier backup")
+    (data / ".ssh").mkdir()
+    (data / ".ssh" / "id_ed25519").write_text("SYNTHETIC-PRIVATE-KEY", encoding="utf-8")
+    (data / ".gitconfig").write_text("[user]\n", encoding="utf-8")
+    return data, workspace
+
+
+@pytest.mark.platform
+def test_a_container_backup_never_holds_itself_the_workspace_or_the_homes_own_files(tmp_path, monkeypatch):
+    data, workspace = _container(tmp_path, monkeypatch)
+    result = backup.create_backup(data, workspace / "Backups", now=datetime(2026, 10, 11, 9, 0),
+                                  outside=(workspace,))
+    with zipfile.ZipFile(result["path"]) as archive:
+        names = set(archive.namelist())
+    assert names == {"threads.db", "tools_config.json", backup.MANIFEST}
+    assert result["files"] == 2
+    assert "SYNTHETIC-PRIVATE-KEY" not in _archive_text(Path(result["path"]))
+
+
+@pytest.mark.platform
+def test_a_container_restore_leaves_the_workspace_and_the_homes_own_files_where_they_are(tmp_path, monkeypatch):
+    data, workspace = _container(tmp_path, monkeypatch)
+    # An archive an earlier version wrote in a container: it held the workspace and the home's files.
+    archive = _zip(tmp_path / "older.zip", {
+        backup.MANIFEST: _manifest(),
+        "tools_config.json": json.dumps({"enabled": ["restored"]}),
+        "Documents/Row-Bot/Drafts/notes.md": "old notes",
+        ".ssh/id_ed25519": "OLD-KEY",
+    })
+    backup.stage_restore(archive, data, source_name="older.zip", app_version="4.9.1", outside=(workspace,))
+    staged = data / profile_restore.PENDING_DIR / "files"
+    assert sorted(path.name for path in staged.rglob("*") if path.is_file()) == ["tools_config.json"]
+
+    applied = profile_restore.apply_pending(data, now=datetime(2026, 10, 11, 9, 30))
+
+    assert applied["status"] == "applied"
+    assert json.loads((data / "tools_config.json").read_text(encoding="utf-8")) == {"enabled": ["restored"]}
+    assert (workspace / "Drafts" / "notes.md").read_text(encoding="utf-8") == "my notes"
+    assert (workspace / "Backups" / "Row-Bot backup 2026-10-01 0900.zip").read_bytes() == b"an earlier backup"
+    assert (data / ".ssh" / "id_ed25519").read_text(encoding="utf-8") == "SYNTHETIC-PRIVATE-KEY"
+    aside = data / applied["kept_aside"]
+    assert _rows(aside / "threads.db", "SELECT title FROM threads") == [("Kept conversation",)]
+    assert not (aside / "Documents" / "Row-Bot").exists() and not (aside / ".ssh").exists()
+    assert not [path for path in data.iterdir() if path.name.startswith(profile_restore.PARKED_PREFIX)]
+
+
+@pytest.mark.platform
+def test_a_failed_container_restore_puts_the_workspace_back_too(tmp_path, monkeypatch):
+    data, workspace = _container(tmp_path, monkeypatch)
+    archive = _zip(tmp_path / "backup.zip", {backup.MANIFEST: _manifest(), "tools_config.json": "{}"})
+    backup.stage_restore(archive, data, source_name="backup.zip", app_version="4.9.1", outside=(workspace,))
+    real_move = profile_restore.shutil.move
+
+    def flaky(src, dst):
+        if ".restore-pending" in str(src):
+            raise PermissionError("file in use")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(profile_restore.shutil, "move", flaky)
+    outcome = profile_restore.apply_pending(data, now=datetime(2026, 10, 11, 9, 45))
+
+    assert outcome["status"] == "failed"
+    assert (workspace / "Drafts" / "notes.md").read_text(encoding="utf-8") == "my notes"
+    assert json.loads((data / "tools_config.json").read_text(encoding="utf-8")) == {"enabled": ["web_search"]}
+    assert not [path for path in data.iterdir()
+                if path.name.startswith((profile_restore.PARKED_PREFIX, profile_restore.ASIDE_PREFIX))]

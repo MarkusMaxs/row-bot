@@ -69,7 +69,6 @@ export default function AccessNetwork({
     ) : (
       <Skeleton label="Loading network settings" />
     );
-  const manage = settings.can_manage_routes;
   return (
     <div className="access-network stack" data-setting-anchor="remote-access">
       <Field
@@ -79,7 +78,7 @@ export default function AccessNetwork({
       >
         <Select
           value={settings.listen_mode}
-          disabled={!manage || busy}
+          disabled={busy}
           onChange={(event) => {
             const next = event.target
               .value as AccessRouteSettings['listen_mode'];
@@ -128,22 +127,37 @@ export default function AccessNetwork({
             {settings.configured_origins.map((origin) => (
               <li key={origin}>
                 <span className="settings-break-word">{origin}</span>
-                {manage && !settings.managed_externally && (
+                {!settings.managed_externally && (
                   <Button
                     iconOnly
                     variant="ghost"
                     aria-label={`Remove ${origin}`}
                     title="Remove"
                     disabled={busy}
-                    onClick={() =>
-                      void perform(() =>
-                        client.changeOrigin(
-                          'remove',
-                          origin,
-                          settings.configured_origins,
-                        ),
-                      )
-                    }
+                    onClick={(event) => {
+                      const remove = () =>
+                        void perform(() =>
+                          client.changeOrigin(
+                            'remove',
+                            origin,
+                            settings.configured_origins,
+                          ),
+                        );
+                      // Any signed-in device may change these; one that uses
+                      // this address would cut itself off, so it asks first.
+                      if (origin !== window.location.origin) return remove();
+                      overlay.open({
+                        kind: 'alert',
+                        returnFocusTo: event.currentTarget,
+                        title: 'Remove the address this device uses?',
+                        description: `This device reaches Row-Bot at ${origin}. Once it’s removed, this device can’t connect there until the address is added again.`,
+                        confirmLabel: 'Remove',
+                        onConfirm: () => {
+                          overlay.close();
+                          remove();
+                        },
+                      });
+                    }}
                   >
                     <X size={16} aria-hidden />
                   </Button>
@@ -158,7 +172,7 @@ export default function AccessNetwork({
           <p className="settings-help">
             Set by this server’s deployment configuration.
           </p>
-        ) : manage ? (
+        ) : (
           <form
             className="access-address-add"
             onSubmit={(event) => {
@@ -190,13 +204,8 @@ export default function AccessNetwork({
               <Plus size={16} aria-hidden /> Add
             </Button>
           </form>
-        ) : null}
+        )}
       </div>
-      {!manage && (
-        <p className="settings-help">
-          Only Row-Bot’s owner on the computer running it can change these.
-        </p>
-      )}
       {notice && <p role="status">{notice}</p>}
       {error && <p role="alert">{error}</p>}
     </div>

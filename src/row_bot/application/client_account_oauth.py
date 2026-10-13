@@ -1,4 +1,9 @@
-"""Explicit local-owner Google and X account setup over existing OAuth owners."""
+"""Explicit Google and X account setup over existing OAuth owners.
+
+Any signed-in device may import credentials, check or disconnect. Starting a
+sign-in opens this computer's browser and waits on a loopback address, so the
+route keeps that one step to the desktop app on this computer.
+"""
 
 from __future__ import annotations
 

@@ -128,7 +128,7 @@ const snapshot = {
       available: true,
       enabled: false,
       runtime_state: 'cached_unknown',
-      local_owner_control_available: true,
+      screen_actions_available: true,
       platform: 'windows' as const,
       disclosure_acknowledged: true,
       system_binary_configured: false,
@@ -153,7 +153,6 @@ const snapshot = {
       active_count: null,
       main_app_enabled: false,
       main_app_url: null,
-      local_owner_control_available: true,
     },
     remote_access: {
       listen_mode: 'local_only',
@@ -833,7 +832,7 @@ it('runs Computer Use diagnostics only after the explicit click', async () => {
   ).toBeVisible();
 });
 
-it('shows Computer Use status without host actions in a remote session', () => {
+it('sets up Computer Use from another device, leaving its screen actions to the desktop app', () => {
   mutation.page = 'system';
   render(
     <SystemSnapshotPanel
@@ -841,20 +840,36 @@ it('shows Computer Use status without host actions in a remote session', () => {
         ...snapshot.system,
         computer_use: {
           ...snapshot.system.computer_use,
-          local_owner_control_available: false,
+          platform: 'macos',
+          runtime_state: 'ready',
+          screen_actions_available: false,
         },
       }}
       mutation={mutation}
     />,
   );
   openSetup();
-  expect(screen.getByText('Host setup is local only')).toBeVisible();
+  // Every signed-in device has the owner's authority over its setup.
   expect(
-    screen.queryByRole('button', { name: 'Check Computer Use setup' }),
-  ).toBeNull();
+    screen.getByRole('switch', { name: 'Computer Use (Beta)' }),
+  ).toBeVisible();
   expect(
-    screen.queryByRole('button', { name: 'Install Computer Use runtime' }),
+    screen.getByRole('button', { name: 'Check Computer Use setup' }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('button', { name: 'Install Computer Use runtime' }),
+  ).toBeVisible();
+  // Testing and the macOS panes happen on that computer's own screen.
+  expect(
+    screen.getByText(
+      /Testing and the macOS privacy settings open on the computer Row-Bot runs on/,
+    ),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'Test with Calculator' }),
   ).toBeNull();
+  expect(screen.queryByText('macOS permission recovery')).toBeNull();
+  expect(screen.queryByText('Host setup is local only')).toBeNull();
   expect(mutation.review).not.toHaveBeenCalled();
 });
 
@@ -1062,7 +1077,7 @@ it('shows a running public link in one line with its address, Copy and Stop (row
   expect(mutation.review).not.toHaveBeenCalled();
 });
 
-it('shows the public link to other devices without its controls', () => {
+it('asks before stopping the public link, which a device using it would lose', async () => {
   mutation.page = 'system';
   render(
     <SystemSnapshotPanel
@@ -1070,24 +1085,34 @@ it('shows the public link to other devices without its controls', () => {
         ...snapshot.system,
         tunnel: {
           ...snapshot.system.tunnel,
+          runtime_state: 'active',
+          active_count: 1,
           main_app_enabled: true,
-          main_app_url: null,
-          local_owner_control_available: false,
+          main_app_url: 'https://synthetic.ngrok.example',
         },
       }}
       mutation={mutation}
       part="access"
     />,
   );
+  fireEvent.click(screen.getByRole('button', { name: 'Stop public link' }));
+  expect(mutation.review).not.toHaveBeenCalled();
   expect(
-    screen.getByText(
-      'Only Row-Bot’s owner on the computer running it can start or stop the public link.',
+    screen.getByText(/this one too if it does, lose their connection/),
+  ).toBeVisible();
+  fireEvent.click(
+    screen.getAllByRole('button', { name: 'Stop public link' }).at(-1)!,
+  );
+  await waitFor(() =>
+    expect(mutation.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ field: 'tunnel.stop_main' }),
+      expect.anything(),
+      expect.any(String),
     ),
-  ).toBeInTheDocument();
+  );
   expect(
-    screen.queryByRole('button', { name: 'Start public link' }),
+    screen.queryByText(/Only Row-Bot’s owner on the computer running it/),
   ).toBeNull();
-  expect(screen.queryByText(/api\/webhook/)).toBeNull();
 });
 
 it('shows the real tunnel state and a failed start in words (B106)', () => {
@@ -1551,7 +1576,10 @@ it('updates the Accounts header after Check without reloading the page (B263)', 
     state: 'saved_unchecked',
     token_files: account === 'google' ? 2 : 1,
   });
+  const state = { handshake: { authentication_kind: 'local_owner' } };
   const controller = {
+    subscribe: () => () => undefined,
+    getSnapshot: () => state,
     accountAuth: vi.fn(async (account: 'google' | 'x') => auth(account)),
     accountAuthCommand: vi.fn(
       async (_account: 'google' | 'x', command: AccountAuthCommand) => ({

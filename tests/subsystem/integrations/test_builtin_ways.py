@@ -136,7 +136,7 @@ def test_the_github_account_token_and_githubs_hosted_connection_never_share_a_cr
     read = []
     original = api_keys.get_key
     monkeypatch.setattr(api_keys, "get_key", lambda name: read.append(name) or original(name))
-    context = plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None, local_owner=True,
+    context = plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None,
                             inputs={"token": "connection-token-2222", "read_only": "true"})
     paused = api.start_plan(context, plan_id=str(uuid4()), item_id="mcp:curated:github-hosted", digest=plan["digest"])
     assert paused["pause"] == "access", paused
