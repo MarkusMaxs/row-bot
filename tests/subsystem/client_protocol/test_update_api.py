@@ -388,6 +388,47 @@ def test_removing_the_old_install_is_requested_and_never_blocks_settings(tmp_pat
         answered.set()
 
 
+def test_removing_the_old_install_is_only_sent_from_this_computer(tmp_path, monkeypatch):
+    """Windows' administrator prompt appears on this computer's screen (#416)."""
+    import threading
+
+    from row_bot.updates import legacy
+
+    _updater(tmp_path, monkeypatch)
+    layout = make_install(tmp_path / "windows", "1.0.0", kind=install_layout.InstallKind.WINDOWS)
+    monkeypatch.setattr(client_updates, "_layout", lambda: layout)
+    state = install_layout.read_state(layout.root)
+    state.extra[legacy.STATE_KEY] = {"detected_at": "2026-10-11T12:00:00Z"}
+    install_layout.write_state(layout.root, state)
+    monkeypatch.setattr(legacy, "legacy_install_present", lambda: True)
+    started = threading.Event()
+    monkeypatch.setattr(legacy, "start_removal", lambda _layout: started.set() or True)
+    local, _, _ = client_app()
+    remote, _, _ = client_app(remote=True)
+    with local, remote:
+        _, headers = bootstrap(local)
+        _, remote_headers = bootstrap(remote)
+        snapshot = remote.get("/api/v1/system/updates", headers=remote_headers).json()
+        assert snapshot["legacy_install"] is True  # every device sees it is there
+
+        def remove(client, request_headers):
+            command_id = str(uuid4())
+            return client.post(
+                "/api/v1/system/updates/commands",
+                headers={**request_headers, "Idempotency-Key": command_id},
+                json={"command_id": command_id, "expected_revision": snapshot["revision"],
+                      "action": "remove_legacy", "version": ""},
+            )
+
+        elsewhere = remove(remote, remote_headers)
+        assert elsewhere.status_code == 409 and elsewhere.json()["code"] == "desktop_only"
+        assert not started.is_set()
+        here = remove(local, headers)
+        assert here.status_code == 200, here.text
+        assert here.json()["status"] == "requested"
+    assert started.wait(10)
+
+
 def test_the_launchers_restart_to_update_needs_its_launch_secret(monkeypatch):
     import importlib
 

@@ -262,10 +262,9 @@ def _run_self(
             engine.rollback()
             return "completed"
         if action == "remove_legacy":
-            # TODO(#416): when the update routes stop requiring the desktop app
-            # on this computer, this one action must stay this-computer-only
-            # (require_this_computer): it raises Windows' elevation prompt on
-            # this computer's screen.
+            # Only the desktop app on this computer sends it (the route's
+            # require_this_computer): Windows' elevation prompt appears on this
+            # computer's screen.
             if not before["legacy_install"]:
                 raise ClientPlatformError("update_changed")
             # The prompt blocks until the person answers: never under _LOCK.

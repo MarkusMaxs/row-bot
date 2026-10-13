@@ -20,7 +20,7 @@ import type {
   UpdateSnapshot,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { useRuntime } from '../../runtime';
+import { useOnThisComputer, useRuntime } from '../../runtime';
 import { Button, Disclosure, IconButton, Toggle } from '../../ui/primitives';
 import { ModalTask } from '../../ui/overlays';
 import { absoluteTime, relativeTime } from '../../ui/format';
@@ -143,7 +143,14 @@ function noticeFor(receipt: UpdateReceipt, command: UpdateCommand) {
   }
 }
 
-export function UpdateControls({ owner }: { owner: Owner }) {
+export function UpdateControls({
+  owner,
+  onThisComputer = true,
+}: {
+  owner: Owner;
+  /** The desktop app on the computer Row-Bot runs on (#416). */
+  onThisComputer?: boolean;
+}) {
   const [snapshot, setSnapshot] = useState<UpdateSnapshot | null>(null);
   const [pending, setPending] = useState<UpdateCommand | null>(savedPending);
   const [loading, setLoading] = useState(true);
@@ -790,15 +797,22 @@ export function UpdateControls({ owner }: { owner: Owner }) {
         <SettingsItem
           label="An earlier Row-Bot is still installed for all users"
           icon={<ShieldAlert size={16} aria-hidden />}
-          help="Removing it needs administrator approval. Your data is kept."
+          help={
+            onThisComputer
+              ? 'Removing it needs administrator approval. Your data is kept.'
+              : 'Removing it asks for administrator approval on the computer Row-Bot runs on, so it’s done in the Row-Bot desktop app there.'
+          }
           control={
-            <Button
-              aria-label="Remove the old Row-Bot"
-              disabled={locked}
-              onClick={() => send('remove_legacy')}
-            >
-              Remove the old Row-Bot
-            </Button>
+            // Windows' prompt appears on that computer's own screen.
+            onThisComputer ? (
+              <Button
+                aria-label="Remove the old Row-Bot"
+                disabled={locked}
+                onClick={() => send('remove_legacy')}
+              >
+                Remove the old Row-Bot
+              </Button>
+            ) : undefined
           }
         />
       )}
@@ -869,9 +883,12 @@ export function UpdateControls({ owner }: { owner: Owner }) {
 
 export default function ConnectedUpdateControls() {
   const { controller } = useRuntime();
+  const onThisComputer = useOnThisComputer();
   const owner = useRef<Owner>({
     load: (signal) => controller.updates(signal),
     send: (command) => controller.updateCommand(command),
   });
-  return <UpdateControls owner={owner.current} />;
+  return (
+    <UpdateControls owner={owner.current} onThisComputer={onThisComputer} />
+  );
 }

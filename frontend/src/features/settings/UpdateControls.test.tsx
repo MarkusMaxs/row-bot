@@ -579,3 +579,23 @@ it('shows when updates come from a test feed instead of GitHub', async () => {
     ),
   ).toBeVisible();
 });
+
+it('leaves removing the earlier install to the desktop app on that computer', async () => {
+  const send = vi.fn();
+  render(
+    <UpdateControls
+      owner={{
+        load: async () => ({ ...snapshot, legacy_install: true }),
+        send,
+      }}
+      onThisComputer={false}
+    />,
+  );
+  expect(
+    await screen.findByText(/so it’s done in the Row-Bot desktop app there/),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'Remove the old Row-Bot' }),
+  ).toBeNull();
+  expect(send).not.toHaveBeenCalled();
+});
