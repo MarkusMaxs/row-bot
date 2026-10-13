@@ -1,26 +1,37 @@
 # =============================================================================
-# release.yml - Build Row-Bot installers
+# release.yml - Build a Row-Bot release (docs/RELEASING.md)
 #
-# Triggers:
-#   - Manual workflow_dispatch: builds the Windows installer, the Linux tarball,
-#     and the signed macOS app/pkg/dmg (from the release tag; see docs/RELEASING.md)
+# A release runs from its tag and ends with a draft GitHub release:
+#   gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z
+# A dry run builds any branch the same way and publishes nothing (no tag, no
+# draft, one notarization submission):
+#   gh workflow run release.yml --ref <branch> -f version=<version.py> -f dry_run=true
 #
 # Jobs:
-#   release-gate  - version and lock checks; refuses a commit without a green
-#                   CI run (CI / ci-ok) and reports whether a nightly run passed
-#   nightly       - the nightly suite, only when that commit has no green nightly
-#   build-windows - self-contained unsigned .exe (Inno Setup), install-smoked
-#   build-macos   - signed .app/.pkg/.dmg (manual notarization later), app smoked
-#   build-linux   - self-contained XDG user-install tarball, install-smoked
-#   checksums-and-manifest - publish artifact hashes for release review
+#   release-gate   version and lock checks; a release runs from its tag and only
+#                  for a commit with a green CI / ci-ok (a dry run skips these)
+#   nightly        the nightly suite, only when that commit has no green nightly
+#   build-parts    the update parts, built once from the installers' payload:
+#                  code and assets archives and the lock export; the check for
+#                  changed libraries without wheels (D16)
+#   build-windows  the installer stage plus an unsigned installer, install-smoked
+#                  with a background update from the release's own parts. The
+#                  stage is signed and packed locally: scripts/release_windows.ps1
+#   build-linux    the tarball, install-smoked the same way
+#   build-macos    the signed app, submitted to Apple at once and smoked while
+#                  Apple checks it; then stapled, put in a DMG that is signed,
+#                  notarized and stapled. A notarization still running at the
+#                  end is finished by notarize-finish.yml
+#   checksums-and-manifest  row-bot-update-<v>.json and the checksums of all files
+#   draft-release  (not in a dry run) the draft release with every file but the
+#                  Windows installer; the DMG only once it is stapled
+#   publish-dry-run (dry run only) scripts/release_windows.ps1 -DryRun on
+#                  Windows: everything the local publish step does except signing,
+#                  uploading and publishing
 #
 # A release never re-runs the pull-request tests: the commit already passed them.
 #
-# Notarization is handled by two separate manual workflows:
-#   notarize-submit.yml  - submit DMG to Apple (after testing)
-#   notarize-check.yml   - check status, staple when accepted
-#
-# Required secrets (set in repo Settings - Secrets - Actions):
+# Secrets (repo Settings - Secrets - Actions), read only by build-macos:
 #   APPLE_APPLICATION_P12   Base64 of Developer ID Application .p12
 #   APPLE_INSTALLER_P12     Base64 of Developer ID Installer .p12
 #   APPLE_P12_PASSWORD      Fallback password for .p12 files
@@ -30,12 +41,12 @@
 #   APPLE_APP_PASSWORD      App-specific password (appleid.apple.com)
 #   APPLE_TEAM_ID           Apple Developer Team ID
 #
-# Windows signing (Certum) is intentionally local-only on the maintainer's
-# Windows machine. Do not add Certum credentials to GitHub Actions unless that
-# policy changes deliberately.
+# Windows signing (Certum SimplySign) is local-only on the maintainer's Windows
+# machine (D4). Never add Certum credentials to GitHub Actions.
 # =============================================================================
 
 name: Release - Build & Sign Installers
+run-name: Release ${{ inputs.version }}${{ inputs.dry_run && ' (dry run)' || '' }}
 
 on:
   workflow_dispatch:
@@ -44,8 +55,12 @@ on:
         description: Version to build. Must match src/row_bot/version.py and installer/row_bot_setup.iss.
         type: string
         default: "5.1.0"
+      dry_run:
+        description: Build everything without publishing (any branch; no draft release; the app is notarized once)
+        type: boolean
+        default: false
       build_windows:
-        description: Build the Windows installer
+        description: Build the Windows installer stage
         type: boolean
         default: true
       build_linux:
@@ -53,13 +68,17 @@ on:
         type: boolean
         default: true
       build_macos:
-        description: Build the signed macOS app/pkg/dmg
+        description: Build, sign and notarize the macOS app and DMG
         type: boolean
         default: true
-      publish_draft_release:
-        description: Reserved for a later publish job; this workflow currently uploads artifacts only.
+      acknowledge_full_installer:
+        description: A changed library has no wheel for a platform, or a Python changed, so this update needs the full installer (D15, D16); the release notes say so
         type: boolean
         default: false
+      notarize_wait_minutes:
+        description: How long each wait for Apple's notarization may take before notarize-finish.yml takes over
+        type: string
+        default: "45"
 
 permissions:
   contents: read
@@ -73,10 +92,13 @@ concurrency:
 env:
   ROW_BOT_VERSION: ${{ inputs.version || '5.1.0' }}
   WINDOWS_PYTHON_VERSION: "3.13.2"
+  # python-build-standalone in installer/build_mac_app.sh and build_linux_app.sh;
+  # the wheel check plans for it and checksums-and-manifest checks the builds agree.
+  UNIX_PYTHON_VERSION: "3.12.13"
 
 jobs:
   # ---------------------------------------------------------------------------
-  #  Release only a commit CI has already passed (no re-testing here)
+  #  Release only a commit CI has already passed, from its tag (no re-testing)
   # ---------------------------------------------------------------------------
   release-gate:
     runs-on: ubuntu-latest
@@ -106,13 +128,17 @@ jobs:
           uv lock --check
           python scripts/export_locked_requirements.py --check
 
-      - name: Version matches and CI passed on this commit
+      - name: Version matches; a release runs from its tag and CI passed on it
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ inputs.version || '5.1.0' }}
-        run: python scripts/release_gate.py --version "$RELEASE_VERSION" --sha "$GITHUB_SHA"
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(--version "$RELEASE_VERSION" --sha "$GITHUB_SHA" --ref "$GITHUB_REF")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python scripts/release_gate.py "${args[@]}"
 
   # ---------------------------------------------------------------------------
   #  The nightly suite (full deterministic suite on Linux, Windows and macOS,
@@ -125,14 +151,128 @@ jobs:
     uses: ./.github/workflows/nightly.yml
 
   # ---------------------------------------------------------------------------
-  #  Build Windows installer (.exe) - self-contained
+  #  The update parts, once for every platform (D15, D16, D17)
+  # ---------------------------------------------------------------------------
+  build-parts:
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build local client assets
+        uses: ./.github/actions/build-client
+
+      - uses: actions/setup-python@v6
+        id: python
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ">=0.7,<1.0"
+          python-version: ${{ steps.python.outputs.python-path }}
+
+      # The same payload the installers ship: scripts/app_payload_manifest.py
+      # plus the built client, checked as strictly as the builds check it.
+      - name: Stage the app payload
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/stage/app"
+          python scripts/app_payload_manifest.py --project-root . --stage "$STAGE"
+          # The client checks import the server package: run them in the locked environment.
+          uv run --locked --no-dev python scripts/verify_client_assets.py --root frontend/dist
+          node frontend/scripts/asset-manifest.mjs frontend/dist --package-dir "$STAGE/src/row_bot/static/client-v2"
+          uv run --locked --no-dev python scripts/verify_client_assets.py \
+            --root "$STAGE/src/row_bot/static/client-v2" --compare frontend/dist --strict
+
+      - name: Build the code and assets archives and the lock export
+        run: |
+          python scripts/build_update_parts.py parts --app "$RUNNER_TEMP/stage/app" \
+            --version "$ROW_BOT_VERSION" --out dist/update-parts
+
+      # D16: a changed library without a wheel sends everyone on that platform
+      # to the full installer. Compared with the newest earlier release and the
+      # newest earlier stable one.
+      - name: Check changed libraries for wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ACKNOWLEDGE: ${{ inputs.acknowledge_full_installer }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet "packaging==26.2"
+          args=()
+          # A failure to read what to compare with fails the check; it never passes it.
+          tags="$(python scripts/build_update_parts.py previous-tags --version "$ROW_BOT_VERSION")" || {
+            echo "::error::could not list the earlier releases to compare the lock with"; exit 1; }
+          for tag in $tags; do
+            git fetch --quiet --no-tags --depth=1 origin "+refs/tags/$tag:refs/tags/$tag"
+            args+=(--previous-ref "$tag")
+            # Its Pythons, from its update description; releases before 5.2 have none.
+            name="$(gh release view "$tag" --json assets --jq '.assets[].name | select(startswith("row-bot-update-"))')" || {
+              echo "::error::could not read the files of $tag"; exit 1; }
+            if [ -n "$name" ]; then
+              gh release download "$tag" -p "$name" -D "$RUNNER_TEMP/previous-$tag" || {
+                echo "::error::could not download $name of $tag"; exit 1; }
+              args+=(--previous-update-json "$tag=$RUNNER_TEMP/previous-$tag/$name")
+            else
+              echo "$tag has no update description (released before 5.2): only its lock is compared"
+            fi
+          done
+          if [ "$ACKNOWLEDGE" = "true" ]; then args+=(--acknowledge); fi
+          python scripts/build_update_parts.py wheel-check \
+            --pylock "dist/update-parts/row-bot-pylock-$ROW_BOT_VERSION.toml" \
+            --target "windows-x86_64:$WINDOWS_PYTHON_VERSION" \
+            --target "macos-arm64:$UNIX_PYTHON_VERSION" \
+            --target "linux-x86_64:$UNIX_PYTHON_VERSION" \
+            --out dist/update-parts/wheel-check.json "${args[@]}"
+
+      - name: Summarize the update parts
+        if: always() && hashFiles('dist/update-parts/parts.json') != ''
+        run: |
+          python - "$ROW_BOT_VERSION" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          from pathlib import Path
+          parts = Path("dist/update-parts")
+          described = json.loads((parts / "parts.json").read_text())
+          print(f"### Update parts of {sys.argv[1]}\n\n| File | Size | SHA-256 |\n|---|---|---|")
+          for part in (described["code"], described["assets"], described["lock"]["pylock"]):
+              print(f"| {part['file']} | {part['size']:,} | `{part['sha256'][:16]}…` |")
+          print(f"\n{described['files']['code']} code files, {described['files']['assets']} asset files, "
+                f"{described['files']['packages']} locked packages.")
+          check = parts / "wheel-check.json"
+          if check.exists():
+              report = json.loads(check.read_text())
+              print(f"\nLibraries compared with: {', '.join(report['previous']) or 'no earlier release'}.")
+              for label, item in report["platforms"].items():
+                  print(f"- {label}: {item['mode']} ({len(item['change'])} changed, {len(item['add'])} added, "
+                        f"{len(item['remove'])} removed)")
+              for label, change in report.get("python_changes", {}).items():
+                  print(f"- {label}: Python {change}")
+              if report["needs_full_installer"]:
+                  print("\n**This update needs the full installer** (a changed library has no wheel, or a Python "
+                        f"changed); acknowledged: {report['acknowledged']}.")
+          PY
+
+      - name: Upload the update parts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-update-parts
+          path: dist/update-parts/
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  #  Windows: the installer stage (signed and packed locally) and an unsigned
+  #  installer for the smoke
   # ---------------------------------------------------------------------------
   build-windows:
-    if: ${{ always() && needs.release-gate.result == 'success' && (needs.nightly.result == 'success' || needs.nightly.result == 'skipped') && inputs.build_windows }}
-    needs: [release-gate, nightly]
+    if: ${{ always() && needs.release-gate.result == 'success' && (needs.nightly.result == 'success' || needs.nightly.result == 'skipped') && needs.build-parts.result == 'success' && inputs.build_windows }}
+    needs: [release-gate, nightly, build-parts]
     runs-on: windows-latest
-    # The smoke installs, reinstalls and uninstalls the package (about 15 minutes).
-    timeout-minutes: 90
+    # The smoke installs, rehearses an update, reinstalls and uninstalls.
+    timeout-minutes: 120
 
     steps:
       # Payload text files ship with LF line endings, as on macOS and Linux (D17).
@@ -157,26 +297,69 @@ jobs:
           Write-Host "Building Windows installer..."
           .\installer\build_installer.ps1 -PythonVersion "${{ env.WINDOWS_PYTHON_VERSION }}"
 
+      - name: Describe the Windows build
+        run: >-
+          python scripts/build_update_parts.py describe-platform
+          --python installer\build\python\python.exe --version $env:ROW_BOT_VERSION
+          --installer-dir dist --out dist\platform\windows-x86_64.json
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-update-parts
+          path: ${{ runner.temp }}\update-parts
+
       - name: Smoke the installed Windows package
         uses: ./.github/actions/smoke-windows-installer
+        with:
+          background-update: "true"
+          update-parts: ${{ runner.temp }}\update-parts
 
-      # Windows code signing intentionally disabled.
-      # The official Windows installer is signed locally by the maintainer with
-      # Certum/SimplySign, verified with signtool, then uploaded to the release.
+      # Row-Bot.exe must be signed before Inno Setup packs it, so the release
+      # ships the stage: scripts/release_windows.ps1 signs Row-Bot.exe with
+      # Certum, runs ISCC on the same script and signs the installer (D4).
+      - name: Pack the installer stage for local signing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $iscc = @("C:\Program Files (x86)\Inno Setup 6\ISCC.exe", "C:\Program Files\Inno Setup 6\ISCC.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          $inno = (Get-Item $iscc).VersionInfo.ProductVersion
+          $inno | Set-Content -Path installer\build\inno-version.txt -Encoding ascii
+          # The signing machine needs this Inno Setup version (scripts/release_windows.ps1 checks it).
+          Write-Host "Inno Setup $inno"
+          "Inno Setup used for the installer stage: **$inno** (install the same on the signing machine)." >> $env:GITHUB_STEP_SUMMARY
+          $tar = Join-Path $env:RUNNER_TEMP "windows-stage\Row-Bot-$env:ROW_BOT_VERSION-Windows-stage.tar"
+          python scripts/windows_stage.py pack --root . --out $tar
+          if ($LASTEXITCODE -ne 0) { throw "Packing the stage failed" }
+          "{0:N0} bytes" -f (Get-Item $tar).Length
 
-      - name: Upload Windows installer
+      - name: Upload the Windows installer stage
         uses: actions/upload-artifact@v7
         with:
-          name: Row-Bot-Windows
+          name: Row-Bot-Windows-stage
+          path: ${{ runner.temp }}\windows-stage\*.tar
+          retention-days: 30
+
+      - name: Upload the unsigned Windows installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-Windows-unsigned
           path: dist/Row-Bot-*-Windows-*.exe
+          retention-days: 30
+
+      - name: Upload the Windows build description
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-platform-windows
+          path: dist/platform/windows-x86_64.json
           retention-days: 90
 
   # ---------------------------------------------------------------------------
   #  Build Linux tarball - self-contained, browser/no-tray baseline
   # ---------------------------------------------------------------------------
   build-linux:
-    if: ${{ always() && needs.release-gate.result == 'success' && (needs.nightly.result == 'success' || needs.nightly.result == 'skipped') && inputs.build_linux }}
-    needs: [release-gate, nightly]
+    if: ${{ always() && needs.release-gate.result == 'success' && (needs.nightly.result == 'success' || needs.nightly.result == 'skipped') && needs.build-parts.result == 'success' && inputs.build_linux }}
+    needs: [release-gate, nightly, build-parts]
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -203,10 +386,23 @@ jobs:
           chmod +x installer/build_linux_app.sh
           ./installer/build_linux_app.sh "$ROW_BOT_VERSION"
 
+      - name: Describe the Linux build
+        run: |
+          PYTHON="$(find installer/build/linux -maxdepth 4 -path '*/python/bin/python3' | head -n 1)"
+          python scripts/build_update_parts.py describe-platform --python "$PYTHON" --version "$ROW_BOT_VERSION" \
+            --installer-dir dist --out dist/platform/linux-x86_64.json
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-update-parts
+          path: ${{ runner.temp }}/update-parts
+
       - name: Smoke Linux package
         uses: ./.github/actions/smoke-linux-package
         with:
           port: "8090"
+          background-update: "true"
+          update-parts: ${{ runner.temp }}/update-parts
 
       - name: Upload Linux package
         uses: actions/upload-artifact@v7
@@ -215,181 +411,52 @@ jobs:
           path: dist/Row-Bot-*-Linux-*.tar.gz
           retention-days: 90
 
+      - name: Upload the Linux build description
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-platform-linux
+          path: dist/platform/linux-x86_64.json
+          retention-days: 90
+
   # ---------------------------------------------------------------------------
-  #  Build macOS installers (.pkg + .dmg) - signed, manual notarization later
+  #  macOS: signed app, notarized while the smoke runs; stapled DMG (D3)
   # ---------------------------------------------------------------------------
   build-macos:
-    if: ${{ always() && needs.release-gate.result == 'success' && (needs.nightly.result == 'success' || needs.nightly.result == 'skipped') && inputs.build_macos }}
-    needs: [release-gate, nightly]
+    if: ${{ always() && needs.release-gate.result == 'success' && (needs.nightly.result == 'success' || needs.nightly.result == 'skipped') && needs.build-parts.result == 'success' && inputs.build_macos }}
+    needs: [release-gate, nightly, build-parts]
     runs-on: macos-latest
     timeout-minutes: 180
 
     env:
       CODESIGN_IDENTITY: "Developer ID Application: Siddharth Sachar (33PQRTZLNW)"
       PKG_SIGN_IDENTITY: "Developer ID Installer: Siddharth Sachar (33PQRTZLNW)"
+      APP_PATH: installer/build/mac/Row-Bot.app
+      DRY_RUN: ${{ inputs.dry_run }}
 
     steps:
+      # Notarization waits end 20 minutes before the job's 180, so the pending
+      # state is always uploaded (scripts/macos_notarize.py finish --until).
+      - name: Note when the job started
+        run: echo "NOTARIZE_UNTIL=$(( $(date +%s) + 160 * 60 ))" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v7
 
       - name: Build local client assets
         uses: ./.github/actions/build-client
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       # Import Apple certificates into a temporary keychain.
       - name: Import Apple certificates
-        env:
-          APPLICATION_P12: ${{ secrets.APPLE_APPLICATION_P12 }}
-          INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }}
-          P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
-          APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_APPLICATION_P12_PASSWORD }}
-          INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          fail() {
-            echo "::error::$1"
-            exit 1
-          }
-
-          decode_b64_to_file() {
-            local secret_value="$1"
-            local out_file="$2"
-            local label="$3"
-            if [ -z "$secret_value" ]; then
-              fail "$label secret is empty or missing"
-            fi
-            if ! printf '%s' "$secret_value" | base64 --decode > "$out_file" 2>"$RUNNER_TEMP/${label}.decode.err"; then
-              echo "base64 decode stderr for $label:"
-              cat "$RUNNER_TEMP/${label}.decode.err" || true
-              fail "$label is not valid base64 (expected raw base64 of .p12 bytes)"
-            fi
-            if [ ! -s "$out_file" ]; then
-              fail "$label decoded to an empty file"
-            fi
-          }
-
-          verify_pkcs12_password() {
-            local p12_file="$1"
-            local password="$2"
-            local label="$3"
-            if [ -z "$password" ]; then
-              fail "No password provided for $label (.p12 import requires its export password)"
-            fi
-            if ! openssl pkcs12 -in "$p12_file" -noout -info -passin pass:"$password" >"$RUNNER_TEMP/${label}.openssl.out" 2>"$RUNNER_TEMP/${label}.openssl.err"; then
-              echo "openssl stderr for $label:"
-              sed -n '1,80p' "$RUNNER_TEMP/${label}.openssl.err" || true
-              fail "$label failed PKCS12 validation; likely wrong password for this specific .p12 or corrupted secret data"
-            fi
-          }
-
-          reencode_pkcs12_for_macos() {
-            local in_file="$1"
-            local out_file="$2"
-            local password="$3"
-            local label="$4"
-            local pem_file="$RUNNER_TEMP/${label}.repack.pem"
-            # Step 1: extract cert+private key from source PKCS12
-            if ! openssl pkcs12 -in "$in_file" -passin pass:"$password" \
-                 -nodes -out "$pem_file" >"$RUNNER_TEMP/${label}.repack.out" 2>"$RUNNER_TEMP/${label}.repack.err"; then
-              echo "openssl repack stderr for $label:"
-              sed -n '1,120p' "$RUNNER_TEMP/${label}.repack.err" || true
-              fail "$label could not be decoded for repack"
-            fi
-            # Step 2: re-export with legacy-compatible PBE/MAC expected by macOS tooling
-            if ! openssl pkcs12 -export -in "$pem_file" \
-                 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
-                 -passout pass:"$password" -out "$out_file" >>"$RUNNER_TEMP/${label}.repack.out" 2>>"$RUNNER_TEMP/${label}.repack.err"; then
-              echo "openssl repack stderr for $label:"
-              sed -n '1,120p' "$RUNNER_TEMP/${label}.repack.err" || true
-              fail "$label could not be repacked into macOS-compatible PKCS12"
-            fi
-          }
-
-          import_pkcs12() {
-            local p12_file="$1"
-            local password="$2"
-            local label="$3"
-            shift 3
-            local trusted_apps=("$@")
-            local cmd=(security import "$p12_file" -k "$KEYCHAIN_PATH" -f pkcs12 -P "$password")
-            for app in "${trusted_apps[@]}"; do
-              cmd+=( -T "$app" )
-            done
-            if ! "${cmd[@]}" >"$RUNNER_TEMP/${label}.security_import.out" 2>"$RUNNER_TEMP/${label}.security_import.err"; then
-              if grep -qi "already exists in the keychain" "$RUNNER_TEMP/${label}.security_import.err"; then
-                echo "::warning::$label already exists in keychain, continuing"
-                return 0
-              fi
-              echo "security import stderr for $label:"
-              sed -n '1,120p' "$RUNNER_TEMP/${label}.security_import.err" || true
-              fail "$label failed during security import"
-            fi
-          }
-
-          # Create a temporary keychain for this build
-          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
-          APP_P12_PASSWORD="${APPLICATION_P12_PASSWORD:-$P12_PASSWORD}"
-          INST_P12_PASSWORD="${INSTALLER_P12_PASSWORD:-$P12_PASSWORD}"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import Developer ID Application certificate
-          decode_b64_to_file "$APPLICATION_P12" "$RUNNER_TEMP/app.p12" "APPLE_APPLICATION_P12"
-          verify_pkcs12_password "$RUNNER_TEMP/app.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12"
-          reencode_pkcs12_for_macos "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/app.macos.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12"
-          import_pkcs12 "$RUNNER_TEMP/app.macos.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12" /usr/bin/codesign
-
-          # Import Developer ID Installer certificate
-          decode_b64_to_file "$INSTALLER_P12" "$RUNNER_TEMP/inst.p12" "APPLE_INSTALLER_P12"
-          verify_pkcs12_password "$RUNNER_TEMP/inst.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12"
-          reencode_pkcs12_for_macos "$RUNNER_TEMP/inst.p12" "$RUNNER_TEMP/inst.macos.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12"
-          import_pkcs12 "$RUNNER_TEMP/inst.macos.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12" /usr/bin/codesign /usr/bin/productbuild
-
-          # Import Apple Developer ID intermediate certificate (G2)
-          curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
-               -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
-          if ! security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" \
-               >"$RUNNER_TEMP/DeveloperIDG2CA.import.out" 2>"$RUNNER_TEMP/DeveloperIDG2CA.import.err"; then
-            if grep -qi "already exists in the keychain" "$RUNNER_TEMP/DeveloperIDG2CA.import.err"; then
-              echo "::warning::DeveloperIDG2CA certificate already exists in keychain, continuing"
-            else
-              echo "security import stderr for DeveloperIDG2CA:"
-              sed -n '1,120p' "$RUNNER_TEMP/DeveloperIDG2CA.import.err" || true
-              fail "DeveloperIDG2CA import failed"
-            fi
-          fi
-
-          # Allow codesign to access the imported private keys
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Add temp keychain to the search list
-          security list-keychains -d user -s "$KEYCHAIN_PATH" \
-            $(security default-keychain -d user | tr -d '"')
-
-          # Clean up temporary artifacts from disk
-          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/inst.p12" \
-                "$RUNNER_TEMP/app.macos.p12" "$RUNNER_TEMP/inst.macos.p12" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.decode.err" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.decode.err" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.openssl.out" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.openssl.err" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.out" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.err" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.out" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.err" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.pem" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.out" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.err" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.pem" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.out" \
-                "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.err" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.out" \
-                "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.err" \
-                "$RUNNER_TEMP/DeveloperIDG2CA.import.out" \
-                "$RUNNER_TEMP/DeveloperIDG2CA.import.err"
+        uses: ./.github/actions/import-apple-certificates
+        with:
+          application-p12: ${{ secrets.APPLE_APPLICATION_P12 }}
+          installer-p12: ${{ secrets.APPLE_INSTALLER_P12 }}
+          p12-password: ${{ secrets.APPLE_P12_PASSWORD }}
+          application-p12-password: ${{ secrets.APPLE_APPLICATION_P12_PASSWORD }}
+          installer-p12-password: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }}
 
       # Build the self-contained .app and .pkg.
       - name: Build, sign, and package
@@ -397,51 +464,119 @@ jobs:
           chmod +x installer/build_mac_app.sh
           ./installer/build_mac_app.sh "$ROW_BOT_VERSION"
 
-      - name: Prepare signed DMG and app zip
+      - name: Describe the macOS build
+        run: |
+          python scripts/build_update_parts.py describe-platform \
+            --python "$APP_PATH/Contents/Resources/python/bin/python3" --version "$ROW_BOT_VERSION" \
+            --out dist/platform/macos-arm64.json
+
+      # Apple checks the app while the smoke runs.
+      - name: Submit the app for notarization
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          NOTARY="$RUNNER_TEMP/notarization"
+          mkdir -p "$NOTARY"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY/Row-Bot.app.zip"
+          args=(--state "$NOTARY/notarization.json" --label app --file "$NOTARY/Row-Bot.app.zip" --version "$ROW_BOT_VERSION")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python -u scripts/macos_notarize.py submit "${args[@]}"
 
-          VERSION="$ROW_BOT_VERSION"
-          ARCH="$(uname -m)"
-          APP_PATH="installer/build/mac/Row-Bot.app"
-          DMG_PATH="dist/Row-Bot-${VERSION}-macOS-${ARCH}.dmg"
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-update-parts
+          path: ${{ runner.temp }}/update-parts
 
-          if [ ! -d "$APP_PATH" ]; then
-            echo "::error::Expected app bundle not found at $APP_PATH"
-            exit 1
-          fi
-
-          echo "Building DMG from app bundle..."
-          DMG_STAGING="$RUNNER_TEMP/dmg-root"
-          rm -rf "$DMG_STAGING"
-          mkdir -p "$DMG_STAGING"
-          cp -R "$APP_PATH" "$DMG_STAGING/Row-Bot.app"
-          ln -s /Applications "$DMG_STAGING/Applications"
-
-          hdiutil create -volname "Row-Bot" -srcfolder "$DMG_STAGING" \
-            -format UDZO -ov "$DMG_PATH"
-
-          echo "Signing DMG with: $CODESIGN_IDENTITY"
-          codesign --force --timestamp --options runtime \
-                   --sign "$CODESIGN_IDENTITY" "$DMG_PATH"
-          codesign --verify --strict "$DMG_PATH"
-
-          echo "DMG size (bytes):"
-          stat -f%z "$DMG_PATH"
-          echo "DMG size (human):"
-          du -h "$DMG_PATH"
-
-      # After the DMG and pkg exist, so running the app can't touch what ships.
+      # Running the app writes nothing into the bundle (the smoke checks it,
+      # and the signature is verified again below).
       - name: Smoke the signed macOS app
         uses: ./.github/actions/smoke-macos-app
         with:
           app-path: ${{ github.workspace }}/installer/build/mac/Row-Bot.app
+          background-update: "true"
+          update-parts: ${{ runner.temp }}/update-parts
 
-      - name: Upload signed macOS DMG
+      - name: The signature is intact after the smoke
+        run: codesign --verify --deep --strict "$APP_PATH"
+
+      # Bounded waits; whatever is still pending is uploaded for notarize-finish.yml.
+      - name: Staple the app, build the DMG, notarize and staple it
+        id: notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WAIT_MINUTES: ${{ inputs.notarize_wait_minutes }}
+        run: |
+          set -euo pipefail
+          args=(--state "$RUNNER_TEMP/notarization/notarization.json" --app "$APP_PATH"
+                --dmg "dist/Row-Bot-$ROW_BOT_VERSION-macOS-arm64.dmg" --minutes "${WAIT_MINUTES:-45}"
+                --until "$NOTARIZE_UNTIL")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python -u scripts/macos_notarize.py finish "${args[@]}"
+
+      - name: Gatekeeper accepts what ships
+        if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
+        env:
+          READINESS: ${{ steps.notarize.outputs.readiness }}
+        run: |
+          set -euo pipefail
+          spctl --assess --type execute -vv "$APP_PATH"
+          DMG="dist/Row-Bot-$ROW_BOT_VERSION-macOS-arm64.dmg"
+          notarized=false
+          if [ "$READINESS" = "ready" ]; then
+            notarized=true
+            spctl --assess --type open --context context:primary-signature -vv "$DMG"
+          fi
+          python -u scripts/macos_notarize.py verify-dmg --dmg "$DMG" --version "$ROW_BOT_VERSION" --notarized "$notarized"
+          du -h "$DMG"
+
+      - name: macOS notarization summary
+        id: summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/notarization/notarization.json" ]; then
+            python -u scripts/macos_notarize.py summary --state "$RUNNER_TEMP/notarization/notarization.json"
+          fi
+
+      # Also after a failed step: whatever Apple still checks goes to notarize-finish.yml.
+      - name: Gather the pending notarization
+        if: always() && steps.summary.outputs.readiness == 'pending'
+        run: |
+          N="$RUNNER_TEMP/notarization"
+          if python3 -c 'import json, sys; sys.exit(0 if (json.load(open(sys.argv[1])).get("dmg") or {}).get("submission_id") else 1)' "$N/notarization.json"; then
+            for dmg in dist/Row-Bot-*-macOS-*.dmg; do [ -e "$dmg" ] && mv -n "$dmg" "$N/"; done
+          fi
+          ls -la "$N"
+
+      - name: Upload the macOS DMG
+        if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
         uses: actions/upload-artifact@v7
         with:
           name: Row-Bot-macOS
           path: dist/Row-Bot-*-macOS-*.dmg
+          retention-days: 90
+
+      # Named with this run's id: notarize-finish.yml attaches the DMG only for
+      # the newest release run of the tag's current commit.
+      - name: Upload the pending notarization for notarize-finish.yml
+        if: always() && steps.summary.outputs.readiness == 'pending'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-notarization-pending-${{ env.ROW_BOT_VERSION }}-r${{ github.run_id }}${{ inputs.dry_run && '-dry-run' || '' }}
+          path: ${{ runner.temp }}/notarization/
+          retention-days: 14
+
+      - name: Upload the notarization state
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-macOS-notarization
+          path: ${{ runner.temp }}/notarization/notarization.json
+          if-no-files-found: ignore
           retention-days: 90
 
       - name: Upload signed macOS PKG
@@ -451,32 +586,90 @@ jobs:
           path: dist/Row-Bot-*-macOS-*.pkg
           retention-days: 90
 
+      - name: Upload the macOS build description
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-platform-macos
+          path: dist/platform/macos-arm64.json
+          retention-days: 90
+
   # ---------------------------------------------------------------------------
-  #  Publish artifact checksums for release review
+  #  The update description and the checksums of everything built
   # ---------------------------------------------------------------------------
   checksums-and-manifest:
-    if: ${{ always() && !cancelled() }}
-    needs: [build-windows, build-linux, build-macos]
+    if: ${{ always() && !cancelled() && needs.build-parts.result == 'success' }}
+    needs: [build-parts, build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-update-parts
+          path: update-parts
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: Row-Bot-platform-*
+          path: platforms
+          merge-multiple: true
+
+      # The client's own parser checks it (scripts/build_update_parts.py assemble).
+      - name: Assemble row-bot-update-${{ env.ROW_BOT_VERSION }}.json
+        env:
+          WINDOWS: ${{ needs.build-windows.result }}
+          LINUX: ${{ needs.build-linux.result }}
+          MACOS: ${{ needs.build-macos.result }}
+        run: |
+          set -euo pipefail
+          args=()
+          for file in platforms/*.json; do args+=(--platform "$file"); done
+          if [ "$WINDOWS" = "success" ]; then args+=(--require windows-x86_64); fi
+          if [ "$LINUX" = "success" ]; then args+=(--require linux-x86_64); fi
+          if [ "$MACOS" = "success" ]; then args+=(--require macos-arm64); fi
+          python scripts/build_update_parts.py assemble --parts update-parts --out update \
+            --wheel-check update-parts/wheel-check.json "${args[@]}"
+
+      - name: Upload the update description
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-update
+          path: update/row-bot-update-*.json
+          retention-days: 90
+
       - uses: actions/download-artifact@v8
         with:
           path: release-artifacts
+          pattern: "{Row-Bot-Windows-unsigned,Row-Bot-Linux,Row-Bot-macOS}"
           merge-multiple: true
 
+      # Checksums of everything built: the publish step compares the draft's
+      # files with them.
       - name: Build SHA256 manifest
         run: |
           set -euo pipefail
-          if ! find release-artifacts -type f | grep -q .; then
-            echo "::error::No release artifacts were downloaded"
-            exit 1
-          fi
-          find release-artifacts -type f -print0 \
-            | sort -z \
-            | xargs -0 sha256sum \
+          mkdir -p release-artifacts
+          cp update-parts/row-bot-*.tar.xz update-parts/row-bot-pylock-*.toml update/row-bot-update-*.json release-artifacts/
+          (cd release-artifacts && find . -type f -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #') \
             | tee release-artifact-sha256.txt
+          {
+            echo "### Release files of $ROW_BOT_VERSION"
+            echo ""
+            echo "| File | Size | SHA-256 |"
+            echo "|---|---|---|"
+            (cd release-artifacts && for file in *; do
+              echo "| $file | $(stat -c %s "$file") | \`$(sha256sum "$file" | cut -c1-16)…\` |"
+            done)
+            echo ""
+            echo "The Windows installer here is unsigned: the published one is built and signed locally"
+            echo "by \`scripts/release_windows.ps1\`, which also writes the SHA-256 block and publishes."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release checksum manifest
         uses: actions/upload-artifact@v7
@@ -484,3 +677,128 @@ jobs:
           name: Row-Bot-release-sha256
           path: release-artifact-sha256.txt
           retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  #  The draft release: every file but the Windows installer (never in a dry run)
+  # ---------------------------------------------------------------------------
+  draft-release:
+    if: ${{ always() && !cancelled() && !inputs.dry_run && needs.checksums-and-manifest.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' }}
+    needs: [checksums-and-manifest, build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read  # notarize-finish.yml's record of a DMG it attached for this run
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: files
+          pattern: "{Row-Bot-Linux,Row-Bot-macOS,Row-Bot-update}"
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-update-parts
+          path: update-parts
+
+      # The draft holds this run's files only: an earlier run's files are removed,
+      # so nothing of a moved tag or an older build is ever published.
+      - name: Create or refresh the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ env.ROW_BOT_VERSION }}
+          DMG: Row-Bot-${{ env.ROW_BOT_VERSION }}-macOS-arm64.dmg
+        run: |
+          set -euo pipefail
+          cp update-parts/row-bot-*.tar.xz update-parts/row-bot-pylock-*.toml files/
+          python scripts/build_update_parts.py release-notes --version "$ROW_BOT_VERSION" --notes RELEASE_NOTES.md \
+            --wheel-check update-parts/wheel-check.json --title-out title.txt --body-out notes.md
+          # An API error fails here; only an answer without the tag means "no release yet".
+          releases="$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name == \"$TAG\") | {id, draft}]")"
+          count="$(jq length <<<"$releases")"
+          if [ "$count" -gt 1 ]; then
+            echo "::error::$count releases are tagged $TAG: delete the extra drafts, then run this job again"
+            exit 1
+          elif [ "$count" -eq 1 ]; then
+            if [ "$(jq -r '.[0].draft' <<<"$releases")" != "true" ]; then
+              echo "::error::$TAG is already published. A published release is never changed; release a new version."
+              exit 1
+            fi
+            release_id="$(jq -r '.[0].id' <<<"$releases")"
+          else
+            flags=(--draft --verify-tag --title "$(cat title.txt)" --notes-file notes.md)
+            case "$ROW_BOT_VERSION" in *-*) flags+=(--prerelease) ;; esac
+            gh release create "$TAG" "${flags[@]}"
+            release_id="$(gh api "repos/$GH_REPO/releases?per_page=100" --jq ".[] | select(.tag_name == \"$TAG\") | .id")"
+          fi
+          gh release upload "$TAG" files/* --clobber
+          # A DMG notarize-finish.yml attached for this very run (a re-run of this job) stays.
+          keep=""
+          record="macos-dmg-record-$GITHUB_RUN_ID"
+          record_run="$(gh api "repos/$GH_REPO/actions/artifacts?name=$record" --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty')"
+          if [ -n "$record_run" ]; then
+            gh run download "$record_run" -n "$record" -D record
+            keep="sha256:$(jq -r .sha256 record/*.json)"
+          fi
+          gh api "repos/$GH_REPO/releases/$release_id/assets?per_page=100" --jq '.[] | "\(.id) \(.name) \(.digest)"' |
+          while read -r asset_id name digest; do
+            if [ -e "files/$name" ]; then continue; fi
+            if [ "$name" = "$DMG" ] && [ -n "$keep" ] && [ "$digest" = "$keep" ]; then continue; fi
+            echo "Removing $name from the draft: this run did not build it"
+            gh api -X DELETE "repos/$GH_REPO/releases/assets/$asset_id"
+          done
+          {
+            echo "### Draft release $TAG"
+            echo ""
+            ls -1 files | sed 's/^/- /'
+            echo ""
+            if [ -e "files/$DMG" ] || [ -n "$keep" ]; then
+              echo "macOS is ready: the stapled DMG is on the draft."
+            else
+              echo "macOS is not ready yet: notarize-finish.yml attaches the stapled DMG when Apple is done."
+            fi
+            echo ""
+            echo "Next, on the Windows signing machine: \`scripts/release_windows.ps1 -Version $ROW_BOT_VERSION -RunId $GITHUB_RUN_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  #  Dry run of the local publish step on Windows (everything but signing,
+  #  uploading and publishing)
+  # ---------------------------------------------------------------------------
+  publish-dry-run:
+    if: ${{ always() && !cancelled() && inputs.dry_run && needs.checksums-and-manifest.result == 'success' && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' }}
+    needs: [checksums-and-manifest, build-windows, build-linux, build-macos]
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Check out with LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.WINDOWS_PYTHON_VERSION }}
+
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+
+      - name: scripts/release_windows.ps1 -DryRun
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          .\scripts\release_windows.ps1 -Version $env:ROW_BOT_VERSION -RunId ${{ github.run_id }}
+          -DryRun -WorkDir (Join-Path $env:RUNNER_TEMP "release")

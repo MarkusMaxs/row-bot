@@ -52,6 +52,35 @@ def test_candidate_records_exact_python_package_and_chromium_revision(tmp_path) 
     assert runtime.check_managed_browser_runtime(tmp_path, contract=CONTRACT).ready
 
 
+def test_install_action_puts_chromium_in_the_data_folder_never_a_version_folder(
+    tmp_path, monkeypatch, reload_for_data_dir
+) -> None:
+    # A packaged install bundles no Chromium: the native launchers point Playwright
+    # at <data dir>/playwright-browsers, and Settings' Install action (browser.install)
+    # is the only thing that downloads one. Version folders are never written.
+    data = tmp_path / "data"
+    version = tmp_path / "Row-Bot" / "versions" / "5.2.0"
+    (version / "python").mkdir(parents=True)
+    (requirements,) = reload_for_data_dir(data, "row_bot.mcp_client.config", "row_bot.mcp_client.requirements")[1:]
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(data / "playwright-browsers"))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(runtime, "installed_playwright_contract", lambda: CONTRACT)
+    monkeypatch.setattr(runtime, "_default_runner", _successful_runner(commands))  # the faked download
+    monkeypatch.setattr(runtime, "_default_smoke", lambda executable, browsers: None)
+    assert runtime.check_managed_browser_runtime().code == "missing"
+
+    result = requirements.install_managed_runtime("playwright-chrome")
+
+    assert result.ok, result.message
+    assert commands == [[sys.executable, "-m", "playwright", "install", "chromium"]]
+    readiness = runtime.check_managed_browser_runtime()
+    assert readiness.ready
+    managed = (data / "runtimes" / "playwright-chrome").resolve()
+    assert Path(readiness.executable_path).resolve().is_relative_to(managed)
+    assert Path(readiness.browsers_dir).resolve().is_relative_to(managed)
+    assert not any((version / "python").iterdir())
+
+
 def test_failed_candidate_preserves_previous_known_good_manifest(tmp_path) -> None:
     commands: list[list[str]] = []
     first = runtime.install_managed_browser_runtime(

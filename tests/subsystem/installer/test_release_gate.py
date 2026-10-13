@@ -50,12 +50,12 @@ def repository(tmp_path):
     return tmp_path
 
 
-def _run(repository, monkeypatch, github, version="4.10.0"):
+def _run(repository, monkeypatch, github, version="4.10.0", *extra, ref="refs/tags/v4.10.0"):
     output = repository / "github-output.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     monkeypatch.setenv("GH_REPO", "owner/row-bot")
     monkeypatch.setattr(gate.subprocess, "run", github)
-    code = gate.main(["--version", version, "--sha", SHA, "--root", str(repository)])
+    code = gate.main(["--version", version, "--sha", SHA, "--root", str(repository), "--ref", ref, *extra])
     return code, output.read_text(encoding="utf-8") if output.exists() else ""
 
 
@@ -90,3 +90,30 @@ def test_a_version_that_does_not_match_the_source_is_refused(repository, monkeyp
 
     assert _run(repository, monkeypatch, github, version="4.10.1")[0] == 1
     assert github.calls == []
+
+
+def test_a_release_that_does_not_run_from_its_tag_is_refused(repository, monkeypatch, capsys) -> None:
+    github = FakeGitHub(ci_ok=["success"], nightly_green=1)
+
+    code, output = _run(repository, monkeypatch, github, ref="refs/heads/main")
+
+    assert code == 1
+    assert "runs from its tag" in capsys.readouterr().out
+    assert github.calls == [] and output == ""
+
+
+def test_a_dry_run_builds_any_branch_without_the_publishing_checks(repository, monkeypatch) -> None:
+    github = FakeGitHub(ci_ok=[], nightly_green=0)
+
+    code, output = _run(repository, monkeypatch, github, "4.10.0", "--dry-run", ref="refs/heads/feature")
+
+    assert code == 0
+    # The nightly suite is not run for a dry run, and GitHub is not asked about CI.
+    assert output.strip() == "nightly_green=true"
+    assert github.calls == []
+
+
+def test_a_dry_run_still_needs_the_source_version(repository, monkeypatch) -> None:
+    code, _ = _run(repository, monkeypatch, FakeGitHub(ci_ok=[], nightly_green=0), "4.10.1", "--dry-run")
+
+    assert code == 1

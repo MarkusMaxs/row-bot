@@ -28,8 +28,7 @@ SECRET_READERS = {
     ("container.yml", "release-manifest"),
     ("labels.yml", "sync"),
     ("live-e2e.yml", "live-eval"),
-    ("notarize-check.yml", "check"),
-    ("notarize-submit.yml", "submit"),
+    ("notarize-finish.yml", "finish"),
     ("release.yml", "build-macos"),
     ("update-manifest.yml", "manifest"),
 }

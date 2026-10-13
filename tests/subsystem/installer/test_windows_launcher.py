@@ -89,10 +89,24 @@ class FakeInstall:
         root.mkdir(parents=True)
         shutil.copy2(exe, root / "Row-Bot.exe")
 
-    def version(self, name: str, *codes: int, runnable: bool = True) -> Path:
+    @property
+    def data(self) -> Path:
+        return self.root.parent / "data"
+
+    def version(self, name: str, *codes: int, runnable: bool = True, bundled_browsers: bool = False) -> Path:
         folder = self.root / "versions" / name
         (folder / "app").mkdir(parents=True)
-        if runnable:
+        if bundled_browsers:
+            # A folder of its own (a junction would point into the real Python): a
+            # virtual environment's launcher next to its pyvenv.cfg runs the base Python.
+            venv = self.root.parent / "venv"
+            if not venv.exists():
+                subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True,
+                               capture_output=True)
+            (folder / "python" / "playwright-browsers").mkdir(parents=True)
+            shutil.copy2(venv / "Scripts" / "python.exe", folder / "python" / "python.exe")
+            shutil.copy2(venv / "pyvenv.cfg", folder / "python" / "pyvenv.cfg")
+        elif runnable:
             subprocess.run(["cmd", "/c", "mklink", "/J", str(folder / "python"), str(Path(sys.base_prefix))],
                            check=True, capture_output=True)
         (folder / "app" / "launcher.py").write_text(FAKE_LAUNCHER, encoding="utf-8")
@@ -100,7 +114,7 @@ class FakeInstall:
         return folder
 
     def run(self, *args: str) -> subprocess.CompletedProcess[str]:
-        env = {**os.environ, "FAKE_RUNS": str(self.runs), "ROW_BOT_DATA_DIR": str(self.root.parent / "data")}
+        env = {**os.environ, "FAKE_RUNS": str(self.runs), "ROW_BOT_DATA_DIR": str(self.data)}
         return subprocess.run([str(self.root / "Row-Bot.exe"), *args], env=env, capture_output=True, text=True,
                               timeout=120, check=False)
 
@@ -115,7 +129,7 @@ class FakeInstall:
     def close(self) -> None:
         for folder in (self.root / "versions").glob("*"):
             link = folder / "python"
-            if link.exists():
+            if link.is_junction():
                 os.rmdir(link)  # the junction, never the Python it points at
 
 
@@ -144,9 +158,25 @@ def test_it_starts_the_active_version_with_the_launch_environment_and_relaunches
             "PYTHONNOUSERSITE": "1",
             "PYTHONIOENCODING": "utf-8",
             "TCL_LIBRARY": str(good / "python" / "tcl" / "tcl8.6"),
-            "PLAYWRIGHT_BROWSERS_PATH": str(good / "python" / "playwright-browsers"),
+            # No Chromium in the version folder: Playwright's browsers live in the
+            # data folder, which updates never replace and Row-Bot.exe creates.
+            "PLAYWRIGHT_BROWSERS_PATH": str(install.data / "playwright-browsers"),
         }
+    assert (install.data / "playwright-browsers").is_dir()
+    assert not (good / "python" / "playwright-browsers").exists()
     assert layout.read_state(install.root).extra == {"kept": {"nested": ["}", 1]}}
+
+
+def test_a_version_that_bundles_chromium_keeps_using_its_own_copy(install):
+    older = install.version("5.2.0", 0, bundled_browsers=True)
+    layout.write_state(install.root, layout.InstallState(active="5.2.0"))
+
+    result = install.run("--server")
+
+    assert result.returncode == 0, result.stderr
+    [launch] = install.launches()
+    assert launch["env"]["PLAYWRIGHT_BROWSERS_PATH"] == str(older / "python" / "playwright-browsers")
+    assert not (install.data / "playwright-browsers").exists()
 
 
 def _named(value):

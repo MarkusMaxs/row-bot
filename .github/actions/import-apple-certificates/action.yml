@@ -1,0 +1,184 @@
+name: Import Apple signing certificates
+description: >-
+  Import the Developer ID Application and Installer certificates into a
+  temporary keychain for codesign, productbuild and notarytool, with Apple's
+  Developer ID intermediate. Shared by release.yml and notarize-finish.yml; the
+  calling job passes the secrets in and is the only one that reads them.
+inputs:
+  application-p12:
+    description: Base64 of the Developer ID Application .p12
+    required: true
+  installer-p12:
+    description: Base64 of the Developer ID Installer .p12
+    required: true
+  p12-password:
+    description: Fallback password for both .p12 files
+    required: false
+    default: ""
+  application-p12-password:
+    description: Password of the application .p12, if it has its own
+    required: false
+    default: ""
+  installer-p12-password:
+    description: Password of the installer .p12, if it has its own
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Import Apple certificates
+      shell: bash
+      env:
+        APPLICATION_P12: ${{ inputs.application-p12 }}
+        INSTALLER_P12: ${{ inputs.installer-p12 }}
+        P12_PASSWORD: ${{ inputs.p12-password }}
+        APPLICATION_P12_PASSWORD: ${{ inputs.application-p12-password }}
+        INSTALLER_P12_PASSWORD: ${{ inputs.installer-p12-password }}
+      run: |
+        set -euo pipefail
+
+        fail() {
+          echo "::error::$1"
+          exit 1
+        }
+
+        decode_b64_to_file() {
+          local secret_value="$1"
+          local out_file="$2"
+          local label="$3"
+          if [ -z "$secret_value" ]; then
+            fail "$label secret is empty or missing"
+          fi
+          if ! printf '%s' "$secret_value" | base64 --decode > "$out_file" 2>"$RUNNER_TEMP/${label}.decode.err"; then
+            echo "base64 decode stderr for $label:"
+            cat "$RUNNER_TEMP/${label}.decode.err" || true
+            fail "$label is not valid base64 (expected raw base64 of .p12 bytes)"
+          fi
+          if [ ! -s "$out_file" ]; then
+            fail "$label decoded to an empty file"
+          fi
+        }
+
+        verify_pkcs12_password() {
+          local p12_file="$1"
+          local password="$2"
+          local label="$3"
+          if [ -z "$password" ]; then
+            fail "No password provided for $label (.p12 import requires its export password)"
+          fi
+          if ! openssl pkcs12 -in "$p12_file" -noout -info -passin pass:"$password" >"$RUNNER_TEMP/${label}.openssl.out" 2>"$RUNNER_TEMP/${label}.openssl.err"; then
+            echo "openssl stderr for $label:"
+            sed -n '1,80p' "$RUNNER_TEMP/${label}.openssl.err" || true
+            fail "$label failed PKCS12 validation; likely wrong password for this specific .p12 or corrupted secret data"
+          fi
+        }
+
+        reencode_pkcs12_for_macos() {
+          local in_file="$1"
+          local out_file="$2"
+          local password="$3"
+          local label="$4"
+          local pem_file="$RUNNER_TEMP/${label}.repack.pem"
+          # Step 1: extract cert+private key from source PKCS12
+          if ! openssl pkcs12 -in "$in_file" -passin pass:"$password" \
+               -nodes -out "$pem_file" >"$RUNNER_TEMP/${label}.repack.out" 2>"$RUNNER_TEMP/${label}.repack.err"; then
+            echo "openssl repack stderr for $label:"
+            sed -n '1,120p' "$RUNNER_TEMP/${label}.repack.err" || true
+            fail "$label could not be decoded for repack"
+          fi
+          # Step 2: re-export with legacy-compatible PBE/MAC expected by macOS tooling
+          if ! openssl pkcs12 -export -in "$pem_file" \
+               -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+               -passout pass:"$password" -out "$out_file" >>"$RUNNER_TEMP/${label}.repack.out" 2>>"$RUNNER_TEMP/${label}.repack.err"; then
+            echo "openssl repack stderr for $label:"
+            sed -n '1,120p' "$RUNNER_TEMP/${label}.repack.err" || true
+            fail "$label could not be repacked into macOS-compatible PKCS12"
+          fi
+        }
+
+        import_pkcs12() {
+          local p12_file="$1"
+          local password="$2"
+          local label="$3"
+          shift 3
+          local trusted_apps=("$@")
+          local cmd=(security import "$p12_file" -k "$KEYCHAIN_PATH" -f pkcs12 -P "$password")
+          for app in "${trusted_apps[@]}"; do
+            cmd+=( -T "$app" )
+          done
+          if ! "${cmd[@]}" >"$RUNNER_TEMP/${label}.security_import.out" 2>"$RUNNER_TEMP/${label}.security_import.err"; then
+            if grep -qi "already exists in the keychain" "$RUNNER_TEMP/${label}.security_import.err"; then
+              echo "::warning::$label already exists in keychain, continuing"
+              return 0
+            fi
+            echo "security import stderr for $label:"
+            sed -n '1,120p' "$RUNNER_TEMP/${label}.security_import.err" || true
+            fail "$label failed during security import"
+          fi
+        }
+
+        # Create a temporary keychain for this build
+        KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+        KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+        APP_P12_PASSWORD="${APPLICATION_P12_PASSWORD:-$P12_PASSWORD}"
+        INST_P12_PASSWORD="${INSTALLER_P12_PASSWORD:-$P12_PASSWORD}"
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Import Developer ID Application certificate
+        decode_b64_to_file "$APPLICATION_P12" "$RUNNER_TEMP/app.p12" "APPLE_APPLICATION_P12"
+        verify_pkcs12_password "$RUNNER_TEMP/app.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12"
+        reencode_pkcs12_for_macos "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/app.macos.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12"
+        import_pkcs12 "$RUNNER_TEMP/app.macos.p12" "$APP_P12_PASSWORD" "APPLE_APPLICATION_P12" /usr/bin/codesign
+
+        # Import Developer ID Installer certificate
+        decode_b64_to_file "$INSTALLER_P12" "$RUNNER_TEMP/inst.p12" "APPLE_INSTALLER_P12"
+        verify_pkcs12_password "$RUNNER_TEMP/inst.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12"
+        reencode_pkcs12_for_macos "$RUNNER_TEMP/inst.p12" "$RUNNER_TEMP/inst.macos.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12"
+        import_pkcs12 "$RUNNER_TEMP/inst.macos.p12" "$INST_P12_PASSWORD" "APPLE_INSTALLER_P12" /usr/bin/codesign /usr/bin/productbuild
+
+        # Import Apple Developer ID intermediate certificate (G2)
+        curl -sL "https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer" \
+             -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+        if ! security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" \
+             >"$RUNNER_TEMP/DeveloperIDG2CA.import.out" 2>"$RUNNER_TEMP/DeveloperIDG2CA.import.err"; then
+          if grep -qi "already exists in the keychain" "$RUNNER_TEMP/DeveloperIDG2CA.import.err"; then
+            echo "::warning::DeveloperIDG2CA certificate already exists in keychain, continuing"
+          else
+            echo "security import stderr for DeveloperIDG2CA:"
+            sed -n '1,120p' "$RUNNER_TEMP/DeveloperIDG2CA.import.err" || true
+            fail "DeveloperIDG2CA import failed"
+          fi
+        fi
+
+        # Allow codesign to access the imported private keys
+        security set-key-partition-list -S apple-tool:,apple:,codesign: \
+          -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Add temp keychain to the search list
+        security list-keychains -d user -s "$KEYCHAIN_PATH" \
+          $(security default-keychain -d user | tr -d '"')
+
+        # Clean up temporary artifacts from disk
+        rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/inst.p12" \
+              "$RUNNER_TEMP/app.macos.p12" "$RUNNER_TEMP/inst.macos.p12" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.decode.err" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.decode.err" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.openssl.out" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.openssl.err" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.out" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.openssl.err" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.out" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.err" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.repack.pem" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.out" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.err" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.repack.pem" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.out" \
+              "$RUNNER_TEMP/APPLE_APPLICATION_P12.security_import.err" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.out" \
+              "$RUNNER_TEMP/APPLE_INSTALLER_P12.security_import.err" \
+              "$RUNNER_TEMP/DeveloperIDG2CA.import.out" \
+              "$RUNNER_TEMP/DeveloperIDG2CA.import.err"

@@ -15,6 +15,10 @@ on:
         description: Build and smoke the unsigned macOS app/pkg
         type: boolean
         default: true
+      bridge:
+        description: Also update from the real 5.1.0 release the way 5.1 does (the 5.1 bridge)
+        type: boolean
+        default: true
   # nightly.yml: the Linux package daily, Windows and macOS weekly.
   workflow_call:
     inputs:
@@ -25,6 +29,9 @@ on:
         type: boolean
         default: false
       macos:
+        type: boolean
+        default: false
+      bridge:
         type: boolean
         default: false
 
@@ -77,6 +84,24 @@ jobs:
         with:
           python-version: ${{ env.WINDOWS_PYTHON_VERSION }}
 
+      # The 5.1 bridge installs a newer version over 5.1.0, as a release does.
+      # Before the 5.2 version bump the checkout still says 5.1.0, so the bridge
+      # builds are labelled 5.2.0-alpha.1 (every version file, scripts/cut_release.py).
+      - name: A version newer than 5.1.0 for the 5.1 bridge
+        if: ${{ inputs.bridge }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, "src")
+          from row_bot.install_layout import compare_versions
+          current = re.search(r'__version__ = "([^"]+)"', Path("src/row_bot/version.py").read_text(encoding="utf-8")).group(1)
+          if compare_versions(current, "5.1.0") <= 0:
+              subprocess.run([sys.executable, "scripts/cut_release.py", "5.2.0-alpha.1"], check=True)
+              print(f"{current} is not newer than 5.1.0: the bridge build is 5.2.0-alpha.1")
+          PY
+
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
 
@@ -92,6 +117,19 @@ jobs:
         run: |
           python -m pip install --quiet "pytest==9.1.1"
           python -m pytest tests/subsystem/installer/test_windows_launcher.py --noconftest -p no:cacheprovider -q
+
+      # Chromium is not bundled; Browser Automation's Install action puts it in the
+      # data folder, never in a version folder (which updates share and never write).
+      - name: Check that Chromium stays out of the version folder
+        shell: pwsh
+        run: |
+          if (Test-Path installer\build\python\playwright-browsers) { throw "Playwright Chromium is bundled in the version folder" }
+          $env:ROW_BOT_DATA_DIR = Join-Path $env:RUNNER_TEMP "row-bot-browser-probe"
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          & installer\build\python\python.exe -c "import os; from pathlib import Path; from row_bot.browser.runtime import runtime_root, check_managed_browser_runtime; root = runtime_root().resolve(); data = Path(os.environ['ROW_BOT_DATA_DIR']).resolve(); assert root.is_relative_to(data), root; print('Install target:', root, '- now:', check_managed_browser_runtime().code)"
+          if ($LASTEXITCODE -ne 0) { throw "Browser Automation's Install action does not target the data folder" }
+          $exe = Get-ChildItem dist -Filter "Row-Bot-*-Windows-*.exe" | Select-Object -First 1
+          Write-Host "Installer $($exe.Name): $($exe.Length) bytes"
 
       - name: Smoke installed Windows package
         uses: ./.github/actions/smoke-windows-installer
@@ -138,6 +176,24 @@ jobs:
       - name: Validate Linux installer scripts
         run: bash -n build_linux_app.sh installer/build_linux_app.sh installer/install-linux.sh
 
+      # The 5.1 bridge installs a newer version over 5.1.0, as a release does.
+      # Before the 5.2 version bump the checkout still says 5.1.0, so the bridge
+      # builds are labelled 5.2.0-alpha.1 (every version file, scripts/cut_release.py).
+      - name: A version newer than 5.1.0 for the 5.1 bridge
+        if: ${{ inputs.bridge }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, "src")
+          from row_bot.install_layout import compare_versions
+          current = re.search(r'__version__ = "([^"]+)"', Path("src/row_bot/version.py").read_text(encoding="utf-8")).group(1)
+          if compare_versions(current, "5.1.0") <= 0:
+              subprocess.run([sys.executable, "scripts/cut_release.py", "5.2.0-alpha.1"], check=True)
+              print(f"{current} is not newer than 5.1.0: the bridge build is 5.2.0-alpha.1")
+          PY
+
       - name: Build Linux package
         run: |
           chmod +x installer/build_linux_app.sh
@@ -183,6 +239,40 @@ jobs:
         with:
           app-path: ${{ github.workspace }}/installer/build/mac/Row-Bot.app
 
+      - name: Install Row-Bot 5.1.0 the way 5.1 users have it (5.1 bridge)
+        if: ${{ inputs.bridge }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/bridge_51.py download --tag v5.1.0 --name Row-Bot-5.1.0-macOS-arm64.dmg --out "$RUNNER_TEMP/v5.1.0"
+          MOUNT="$RUNNER_TEMP/v5.1.0-volume"
+          mkdir -p "$MOUNT"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$RUNNER_TEMP/v5.1.0/Row-Bot-5.1.0-macOS-arm64.dmg"
+          sudo rm -rf /Applications/Row-Bot.app
+          sudo ditto "$MOUNT/Row-Bot.app" /Applications/Row-Bot.app
+          hdiutil detach "$MOUNT"
+          test "$(plutil -extract CFBundleShortVersionString raw /Applications/Row-Bot.app/Contents/Info.plist)" = "5.1.0"
+          # 5.1.0 runs once with the default data folder, as it did for its users.
+          RESOURCES=/Applications/Row-Bot.app/Contents/Resources
+          python3 scripts/smoke_app.py --port 8096 --timeout 180 --public-probes --data-dir "$HOME/.row-bot" \
+            --cwd "$RESOURCES/app" -- "$RESOURCES/python/bin/python3" launcher.py --server --no-open --no-splash --no-ollama --port 8096
+          echo kept > "$HOME/.row-bot/bridge-marker.txt"
+          # Logs, locks, SQLite's journals and the launcher's run file come and go; the rest is the user's data.
+          (cd "$HOME/.row-bot" && find . -type f ! -name '*.log*' ! -name '*.lock' ! -name '*-wal' ! -name '*-shm' ! -name '*-journal' \
+            ! -name 'launcher_state.json' ! -name '*.pid' | sort) > "$RUNNER_TEMP/data-before.txt"
+          cat "$RUNNER_TEMP/data-before.txt"
+          wc -l < "$RUNNER_TEMP/data-before.txt"
+
+      - name: 5.1's updater still finds the new DMG (5.1 bridge)
+        if: ${{ inputs.bridge }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet "packaging==26.2"
+          VERSION="$(plutil -extract CFBundleShortVersionString raw installer/build/mac/Row-Bot.app/Contents/Info.plist)"
+          python scripts/bridge_51.py asset-names --version "$VERSION"
+
+      # Over a 5.1.0 bundle when bridging: the user drags the new app over the old one.
       - name: Install macOS package
         run: |
           set -euo pipefail
@@ -208,6 +298,33 @@ jobs:
           port: "8098"
           background-update: "true"
 
+      # After 5.1.0 the install root holds no state.json: the bundle (the seed)
+      # starts, with the data 5.1.0 left.
+      - name: The new bundle starts from its seed after 5.1.0 (5.1 bridge)
+        if: ${{ inputs.bridge }}
+        run: |
+          set -euo pipefail
+          ROOT="$HOME/Library/Application Support/Row-Bot"
+          ls -la "$ROOT" 2>/dev/null || echo "No $ROOT yet (5.1.0 never wrote one)"
+          APP_EXEC=/Applications/Row-Bot.app/Contents/MacOS/row-bot
+          "$APP_EXEC" -- --server --no-open --no-splash --no-ollama --port 8099 > "$RUNNER_TEMP/seed-start.log" 2>&1 &
+          HOST=$!
+          for _ in $(seq 1 90); do curl -fsS http://127.0.0.1:8099/healthz >/dev/null 2>&1 && break; sleep 2; done
+          status=0
+          curl -fsS http://127.0.0.1:8099/healthz || status=1
+          ps -axo command | grep -F "/Applications/Row-Bot.app/Contents/Resources/python/bin/python" | grep -v grep || status=1
+          kill -TERM "$HOST" || true
+          wait "$HOST" || true
+          pkill -f "/Applications/Row-Bot.app/Contents" || true
+          cat "$RUNNER_TEMP/seed-start.log" | tail -40
+          test "$status" = 0
+          if [ -f "$ROOT/state.json" ]; then cat "$ROOT/state.json"; fi
+          test "$(cat "$HOME/.row-bot/bridge-marker.txt")" = kept
+          while IFS= read -r file; do
+            test -e "$HOME/.row-bot/$file" || { echo "::error::5.1.0's $file is gone"; exit 1; }
+          done < "$RUNNER_TEMP/data-before.txt"
+          echo "The new bundle started from its seed; 5.1.0's data is intact"
+
       - name: Upload macOS package
         if: always()
         uses: actions/upload-artifact@v7
@@ -215,3 +332,265 @@ jobs:
           name: Row-Bot-macOS-verified
           path: dist/Row-Bot-*-macOS-*.pkg
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  #  The 5.1 bridge on Windows: 5.1.0 installed for all users, then the new
+  #  per-user installer run the way 5.1's update_handoff runs it
+  # ---------------------------------------------------------------------------
+  bridge-windows:
+    name: 5.1 bridge (Windows)
+    if: ${{ inputs.bridge && inputs.windows }}
+    needs: verify-windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out with LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.WINDOWS_PYTHON_VERSION }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-Windows-verified
+          path: dist
+
+      - name: 5.1's updater still finds the new installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet "packaging==26.2"
+          VERSION="$(ls dist/Row-Bot-*-Windows-x64.exe | sed -E 's#.*/Row-Bot-(.+)-Windows-x64\.exe#\1#')"
+          python scripts/bridge_51.py asset-names --version "$VERSION"
+
+      - name: Install Row-Bot 5.1.0 for all users, as 5.1 users have it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          python scripts/bridge_51.py download --tag v5.1.0 --name Row-Bot-5.1.0-Windows-x64.exe --out "$env:RUNNER_TEMP\v5.1.0"
+          if ($LASTEXITCODE -ne 0) { throw "Could not download Row-Bot 5.1.0" }
+          $log = Join-Path $env:RUNNER_TEMP "row-bot-5.1.0-install.log"
+          $setup = Start-Process -FilePath "$env:RUNNER_TEMP\v5.1.0\Row-Bot-5.1.0-Windows-x64.exe" -Wait -PassThru `
+            -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=$log")
+          if ($setup.ExitCode -ne 0) { Get-Content $log -Tail 60; throw "The 5.1.0 installer exited with $($setup.ExitCode)" }
+          $legacy = "C:\Program Files\Row-Bot"
+          foreach ($file in @("python\python.exe", "app\launcher.py", "unins000.exe")) {
+            if (!(Test-Path (Join-Path $legacy $file))) { throw "5.1.0 has no $file" }
+          }
+          if (!(Test-Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1")) {
+            throw "5.1.0 has no all-users Apps & features entry"
+          }
+          # 5.1.0 runs once with the default data folder, as it did for its users.
+          $data = Join-Path $env:USERPROFILE ".row-bot"
+          python scripts/smoke_app.py --port 8120 --timeout 180 --public-probes --data-dir "$data" `
+            --cwd "$legacy\app" -- "$legacy\python\python.exe" launcher.py --server --no-open --no-splash --no-ollama --port 8120
+          if ($LASTEXITCODE -ne 0) { throw "Row-Bot 5.1.0 did not start" }
+          Set-Content -Path (Join-Path $data "bridge-marker.txt") -Value "kept"
+          $files = Get-ChildItem -Path $data -Recurse -File |
+            Where-Object { $_.Name -notmatch '\.log|\.lock$|-wal$|-shm$|-journal$|^launcher_state\.json$|\.pid$' } |
+            ForEach-Object { $_.FullName.Substring($data.Length + 1) }
+          $files | Set-Content (Join-Path $env:RUNNER_TEMP "data-before.txt")
+          $files | ForEach-Object { Write-Host "   $_" }
+          Write-Host "Row-Bot 5.1.0 is installed for all users; its data folder holds $($files.Count) files"
+
+      # update_handoff.py in 5.1 starts the downloaded installer exactly so.
+      - name: Update the way 5.1's updater does
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem -Path dist -Filter "Row-Bot-*-Windows-*.exe" | Select-Object -First 1
+          $log = Join-Path $env:RUNNER_TEMP "row-bot-bridge-install.log"
+          # Process.Start: Start-Process -Wait would also wait for the Row-Bot that Setup starts.
+          $setup = [System.Diagnostics.Process]::Start($installer.FullName, "/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS `"/LOG=$log`"")
+          if (-not $setup.WaitForExit(1800000)) { throw "The installer did not finish in 30 minutes" }
+          if ($setup.ExitCode -ne 0) { Get-Content $log -Tail 80; throw "The installer exited with $($setup.ExitCode)" }
+          Select-String -Path $log -Pattern "installed for all users|earlier Row-Bot|install_layout|Recorded" | ForEach-Object { $_.Line }
+
+      - name: Row-Bot is installed per user, the all-users copy is gone, and it started
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem -Path dist -Filter "Row-Bot-*-Windows-*.exe" | Select-Object -First 1
+          $version = [regex]::Match($installer.Name, '^Row-Bot-(.+)-Windows-x64\.exe$').Groups[1].Value
+          $root = Join-Path $env:LOCALAPPDATA "Programs\Row-Bot"
+          foreach ($file in @("Row-Bot.exe", "state.json", "versions\$version\python\python.exe", "versions\$version\app\launcher.py")) {
+            if (!(Test-Path (Join-Path $root $file))) { throw "The per-user install has no $file" }
+          }
+          $state = Get-Content (Join-Path $root "state.json") -Raw | ConvertFrom-Json
+          if ($state.active -ne $version) { throw "state.json names $($state.active), not $version" }
+          if ($state.PSObject.Properties["legacy_install_pending"] -and $state.legacy_install_pending) {
+            throw "The installer could not remove the all-users 5.1.0"
+          }
+          # The 5.1.0 uninstaller hands over to a copy of itself: give it a moment.
+          $legacy = "C:\Program Files\Row-Bot"
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Test-Path $legacy) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path $legacy) { Get-ChildItem $legacy -Recurse | Select-Object -First 20 | ForEach-Object FullName; throw "$legacy is still there" }
+          $key = "Software\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1"
+          if ((Test-Path "HKLM:\$key") -or (Test-Path "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}_is1")) {
+            throw "The all-users Apps & features entry is still there"
+          }
+          if (!(Test-Path "HKCU:\$key")) { throw "No per-user Apps & features entry" }
+          $programs = [Environment]::GetFolderPath("Programs")
+          if (!(Test-Path (Join-Path $programs "Row-Bot.lnk"))) { throw "No per-user Start menu shortcut" }
+          $common = [Environment]::GetFolderPath("CommonPrograms")
+          $old = @(Get-ChildItem -Path $common -Recurse -Filter "Row-Bot*.lnk" -ErrorAction SilentlyContinue)
+          if ($old.Count -gt 0) { throw "5.1.0's all-users shortcuts are still there: $($old.FullName -join ', ')" }
+          # Setup starts Row-Bot when it is done, also after /SILENT.
+          $deadline = (Get-Date).AddSeconds(240)
+          $healthy = $null
+          while (-not $healthy -and (Get-Date) -lt $deadline) {
+            foreach ($port in 8080..8129) {
+              try {
+                if ((Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 "http://127.0.0.1:$port/healthz").StatusCode -eq 200) { $healthy = $port; break }
+              } catch { }
+            }
+            if (-not $healthy) { Start-Sleep -Seconds 2 }
+          }
+          $started = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) })
+          Write-Host "Running from the per-user install: $(($started | ForEach-Object { $_.Name }) -join ', ')"
+          if (-not ($started | Where-Object { $_.Name -eq "Row-Bot.exe" })) { throw "Setup did not start Row-Bot.exe" }
+          if (-not $healthy) { throw "Row-Bot did not answer /healthz after the update" }
+          $verified = $false
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not $verified -and (Get-Date) -lt $deadline) {
+            $state = Get-Content (Join-Path $root "state.json") -Raw | ConvertFrom-Json
+            $verified = -not $state.pending_verification
+            if (-not $verified) { Start-Sleep -Seconds 2 }
+          }
+          foreach ($process in $started) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
+          Write-Host "Row-Bot $version answered on port $healthy, started by Setup from $root"
+
+      - name: The data 5.1.0 left is untouched
+        run: |
+          $ErrorActionPreference = "Stop"
+          $data = Join-Path $env:USERPROFILE ".row-bot"
+          if ((Get-Content (Join-Path $data "bridge-marker.txt")) -ne "kept") { throw "The marker in the data folder changed" }
+          $missing = @(Get-Content (Join-Path $env:RUNNER_TEMP "data-before.txt") | Where-Object { !(Test-Path (Join-Path $data $_)) })
+          if ($missing.Count -gt 0) { throw "Files 5.1.0 left in the data folder are gone: $($missing -join ', ')" }
+          Write-Host "Every file 5.1.0 left in $data is still there"
+
+      - name: Upload the bridge install logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-Windows-bridge-logs
+          path: |
+            ${{ runner.temp }}\row-bot-5.1.0-install.log
+            ${{ runner.temp }}\row-bot-bridge-install.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  #  The 5.1 bridge on Linux: 5.1.0's own updater installs the new tarball
+  # ---------------------------------------------------------------------------
+  bridge-linux:
+    name: 5.1 bridge (Linux)
+    if: ${{ inputs.bridge && inputs.linux }}
+    needs: verify-linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglib2.0-0 libxcb-cursor0 libportaudio2
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Row-Bot-Linux-verified
+          path: dist
+
+      - name: 5.1's updater still finds the new tarball
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet "packaging==26.2"
+          VERSION="$(ls dist/Row-Bot-*-Linux-x86_64.tar.gz | sed -E 's#.*/Row-Bot-(.+)-Linux-x86_64\.tar\.gz#\1#')"
+          python scripts/bridge_51.py asset-names --version "$VERSION"
+
+      - name: The new tarball still has what 5.1's installer requires
+        run: |
+          set -euo pipefail
+          NEW="$(ls dist/Row-Bot-*-Linux-x86_64.tar.gz)"
+          tar -tzf "$NEW" > "$RUNNER_TEMP/members.txt"
+          for member in install_info.json bin/row-bot app/launcher.py python/bin/python3; do
+            grep -Eq "^[^/]+/$member$" "$RUNNER_TEMP/members.txt" || { echo "::error::$NEW has no $member"; exit 1; }
+          done
+          tar -xzf "$NEW" --wildcards -O '*/install_info.json' | python3 -c 'import json, sys; info = json.load(sys.stdin); assert (info["platform"], info["install_kind"]) == ("linux", "xdg-user-tarball"), info; print(info)'
+
+      - name: Install Row-Bot 5.1.0 and run it once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python scripts/bridge_51.py download --tag v5.1.0 --name Row-Bot-5.1.0-Linux-x86_64.tar.gz --out "$RUNNER_TEMP/v5.1.0"
+          export HOME="$RUNNER_TEMP/bridge-home" XDG_DATA_HOME="$RUNNER_TEMP/bridge-xdg"
+          mkdir -p "$HOME" "$XDG_DATA_HOME" "$RUNNER_TEMP/v5.1.0/package"
+          tar -xzf "$RUNNER_TEMP/v5.1.0/Row-Bot-5.1.0-Linux-x86_64.tar.gz" -C "$RUNNER_TEMP/v5.1.0/package"
+          bash "$RUNNER_TEMP/v5.1.0/package/Row-Bot-5.1.0-Linux-x86_64/install.sh"
+          ROOT="$XDG_DATA_HOME/row-bot"
+          test "$(readlink "$ROOT/current")" = "releases/5.1.0"
+          python3 scripts/smoke_app.py --port 8130 --timeout 180 --public-probes --data-dir "$HOME/.row-bot" \
+            --cwd "$ROOT/current/app" -- "$HOME/.local/bin/row-bot" --no-ollama serve --port 8130
+          echo kept > "$HOME/.row-bot/bridge-marker.txt"
+          # Logs, locks, SQLite's journals and the launcher's run file come and go; the rest is the user's data.
+          (cd "$HOME/.row-bot" && find . -type f ! -name '*.log*' ! -name '*.lock' ! -name '*-wal' ! -name '*-shm' ! -name '*-journal' \
+            ! -name 'launcher_state.json' ! -name '*.pid' | sort) > "$RUNNER_TEMP/data-before.txt"
+          cat "$RUNNER_TEMP/data-before.txt"
+          echo "5.1.0 installed at $ROOT; its data folder holds $(wc -l < "$RUNNER_TEMP/data-before.txt") files"
+
+      # 5.1's in-app update: _install_linux_tarball from the installed 5.1.0 code,
+      # run by 5.1.0's own Python, as its updater runs it.
+      - name: Update with 5.1.0's own installer code
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/bridge-home" XDG_DATA_HOME="$RUNNER_TEMP/bridge-xdg"
+          ROOT="$XDG_DATA_HOME/row-bot"
+          NEW="$(ls "$GITHUB_WORKSPACE"/dist/Row-Bot-*-Linux-x86_64.tar.gz)"
+          cd "$RUNNER_TEMP"
+          PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 "$ROOT/releases/5.1.0/python/bin/python3" - "$ROOT/releases/5.1.0/app" "$NEW" <<'PY'
+          import sys
+          from pathlib import Path
+          app = Path(sys.argv[1])
+          sys.path[:0] = [str(app), str(app / "src")]
+          from row_bot.updater import _install_linux_tarball
+          from row_bot.version import __version__
+          print(f"Row-Bot {__version__} installs {Path(sys.argv[2]).name}: launcher {_install_linux_tarball(Path(sys.argv[2]))}")
+          PY
+
+      - name: The new release runs, writes state.json and keeps serve mode
+        run: |
+          set -euo pipefail
+          export HOME="$RUNNER_TEMP/bridge-home" XDG_DATA_HOME="$RUNNER_TEMP/bridge-xdg"
+          ROOT="$XDG_DATA_HOME/row-bot"
+          VERSION="$(ls dist/Row-Bot-*-Linux-x86_64.tar.gz | sed -E 's#.*/Row-Bot-(.+)-Linux-x86_64\.tar\.gz#\1#')"
+          test "$(readlink "$ROOT/current")" = "releases/$VERSION"
+          test -d "$ROOT/releases/5.1.0"
+          test "$(readlink -f "$HOME/.local/bin/row-bot")" = "$(readlink -f "$ROOT/current/bin/row-bot")"
+          test ! -e "$ROOT/state.json" || { echo "::error::state.json before the first start"; cat "$ROOT/state.json"; exit 1; }
+          # 5.1 relaunches the new release with no arguments (desktop mode).
+          python3 scripts/smoke_app.py --port 8131 --timeout 180 --public-probes --data-dir "$HOME/.row-bot" \
+            --cwd "$ROOT/current/app" -- "$HOME/.local/bin/row-bot" --no-open --no-ollama --port 8131
+          python3 - "$ROOT/state.json" "$VERSION" <<'PY'
+          import json, sys
+          state = json.load(open(sys.argv[1]))
+          assert state["active"] == sys.argv[2], state
+          print("state.json after the first start:", state)
+          PY
+          # A relaunch keeps `serve` and its port; two failed starts roll back.
+          python3 scripts/smoke_install_layout.py --root "$ROOT" --kind linux --port 8132 \
+            -- "$HOME/.local/bin/row-bot" --no-ollama serve --port 8132
+          test "$(cat "$HOME/.row-bot/bridge-marker.txt")" = kept
+          while IFS= read -r file; do
+            test -e "$HOME/.row-bot/$file" || { echo "::error::5.1.0's $file is gone"; exit 1; }
+          done < "$RUNNER_TEMP/data-before.txt"
+          echo "Row-Bot $VERSION runs after 5.1.0 installed it; 5.1.0's data is intact"
+
