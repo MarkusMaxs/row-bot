@@ -8,7 +8,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
@@ -142,6 +142,35 @@ def collect_enabled_skill_records(*, load_manual: bool = True) -> list[SkillReco
     return resolve_skill_aliases(records)
 
 
+def tool_skill_records(active_tool_names: Sequence[str], *, guides: bool = False) -> list[SkillRecord]:
+    """Skills tied to bound tools that load on request rather than ride in every prompt (WP A5).
+
+    The tool-linked skills that are off by default (the Developer workflows) are offered while their
+    tools are bound; with *guides* (a small context window, where guides are an index), the tool
+    guides of the bound tools can be read in full the same way.
+    """
+    import row_bot.skills as skills
+
+    found = list(skills.get_on_demand_tool_skills(active_tool_names))
+    if guides:
+        found.extend(skills.active_tool_guides(active_tool_names))
+    return [
+        SkillRecord(
+            canonical_id=str(skill.name),
+            alias=None,
+            display_name=normalize_catalog_text(str(skill.display_name)),
+            icon=str(skill.icon or "✨"),
+            description=normalize_catalog_text(str(skill.description or ""), description=True)[:180],
+            tags=tuple(str(tag) for tag in (skill.tags or [])),
+            activation=dict(skill.activation or {}),
+            instructions=str(skill.instructions or ""),
+            source="manual" if skill.on_demand else "guide",
+            root=Path(skill.path) if skill.path else None,
+        )
+        for skill in found
+    ]
+
+
 def resolve_skill_record_name(
     records: Sequence[SkillRecord],
     name: str,
@@ -262,16 +291,30 @@ def build_skill_discovery_tools(
     context_tokens: int,
     active_skill_ids: Sequence[str] = (),
     child_boundaries: bool = False,
+    current_active_ids: Callable[[], Iterable[str]] | None = None,
 ) -> tuple[StructuredTool, StructuredTool]:
-    """Build search/load tools over one frozen authorized enabled-skill snapshot."""
+    """Build search/load tools over one frozen authorized enabled-skill snapshot.
+
+    The catalog in skill_search's description lists every authorized skill, active or not, so it
+    never changes when a skill is loaded or mentioned (WP A5). Which skills are active is decided
+    when a tool is called: *current_active_ids* says so then, else *active_skill_ids* stands.
+    """
 
     frozen_records = tuple(records)
-    active = {str(skill_id) for skill_id in active_skill_ids}
-    searchable_records = tuple(record for record in frozen_records if record.canonical_id not in active)
-    documents = tuple(record.search_document() for record in searchable_records)
+    static_active = frozenset(str(skill_id) for skill_id in active_skill_ids)
+
+    def _active() -> frozenset[str]:
+        if current_active_ids is None:
+            return static_active
+        try:
+            return frozenset(str(skill_id) for skill_id in current_active_ids())
+        except Exception:
+            logger.debug("Active skills could not be read; none are treated as active", exc_info=True)
+            return frozenset()
+
+    documents = tuple(record.search_document() for record in frozen_records)
     records_by_id = {record.canonical_id: record for record in frozen_records}
-    searchable_by_id = {record.canonical_id: record for record in searchable_records}
-    manifest = render_capability_manifest(searchable_records, context_tokens=context_tokens)
+    manifest = render_capability_manifest(frozen_records, context_tokens=context_tokens)
     fallback_thread_id = str(thread_id or "").strip()[:512]
 
     def _search(query: str, limit: int = 3) -> str:
@@ -281,7 +324,10 @@ def build_skill_discovery_tools(
                 "ok": False,
                 "error": {"code": "invalid_query", "message": "query must not be empty"},
             })
-        matches = search_capabilities(documents, query_text, limit=limit)
+        active = _active()
+        # Skills already in use are not offered again.
+        searchable = tuple(document for document in documents if document.canonical_id not in active)
+        matches = search_capabilities(searchable, query_text, limit=limit)
         return _json_result({
             "ok": True,
             "query": query_text,
@@ -295,7 +341,7 @@ def build_skill_discovery_tools(
                     "tags": list(record.tags),
                 }
                 for document in matches
-                for record in (searchable_by_id[document.canonical_id],)
+                for record in (records_by_id[document.canonical_id],)
             ],
         })
 
@@ -334,7 +380,7 @@ def build_skill_discovery_tools(
         except Exception:
             implicit_for_task = set()
         deliver_instructions = False
-        if record.canonical_id in active and record.canonical_id not in implicit_for_task:
+        if record.canonical_id in _active() and record.canonical_id not in implicit_for_task:
             # Already active for this conversation: its instructions are in the prompt already.
             newly_active, evicted = False, None
         else:

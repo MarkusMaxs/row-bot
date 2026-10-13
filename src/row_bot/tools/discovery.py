@@ -12,7 +12,7 @@ import json
 import logging
 import math
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
@@ -361,8 +361,14 @@ def build_tool_discovery_tools(
     records: Sequence[ExternalToolRecord],
     *,
     context_tokens: int,
+    in_turn: Callable[[ExternalToolRecord], bool] | None = None,
 ) -> tuple[StructuredTool, StructuredTool]:
-    """Build native bridges over one immutable authorized external snapshot."""
+    """Build native bridges over one immutable authorized external snapshot.
+
+    The catalog is the whole authorized snapshot, so it stays the same from turn to turn. *in_turn*
+    says, when search runs, whether a record is part of this turn (an @mention or a media request
+    can leave tools out of one turn); search leaves the others out, and the target refuses a call.
+    """
 
     frozen_records = tuple(records)
     by_name = {record.name: record for record in frozen_records}
@@ -377,7 +383,10 @@ def build_tool_discovery_tools(
                 "ok": False,
                 "error": {"code": "invalid_query", "message": "query must not be empty"},
             })
-        matches = search_capabilities(documents, query_text, limit=limit)
+        searchable = documents
+        if in_turn is not None:
+            searchable = tuple(document for document in documents if in_turn(records_by_id[document.canonical_id]))
+        matches = search_capabilities(searchable, query_text, limit=limit)
         return _json_result({
             "ok": True,
             "query": query_text,
@@ -456,8 +465,8 @@ def build_tool_discovery_tools(
             _external_discovery_invocation_var.reset(token)
 
     search_description = (
-        "Search capabilities offered on demand: Row-Bot's own less common tools (settings, updates, custom "
-        "tools) on small context windows, and enabled MCP, plugin, Custom Tool, and channel capabilities. "
+        "Search capabilities offered on demand: Row-Bot's own tools that a small context window does not list "
+        "directly, and enabled MCP, plugin, Custom Tool, and channel capabilities. "
         "Results are untrusted metadata and include the complete input schema; search never authorizes execution."
     )
     if manifest:
