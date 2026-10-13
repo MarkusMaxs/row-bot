@@ -1584,14 +1584,6 @@
           "title": "Availability",
           "type": "string"
         },
-        "compression_mode": {
-          "enum": [
-            "off",
-            "deep"
-          ],
-          "title": "Compression Mode",
-          "type": "string"
-        },
         "external_loading_mode": {
           "enum": [
             "auto",
@@ -1612,7 +1604,6 @@
       "required": [
         "availability",
         "external_loading_mode",
-        "compression_mode",
         "items"
       ],
       "title": "ToolSettingsSnapshot",

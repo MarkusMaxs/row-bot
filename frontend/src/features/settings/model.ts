@@ -71,7 +71,7 @@ export const settingsKeywords: Record<SettingsLeafId, string> = {
   documents: 'files upload pdf library embedding index search model',
   tracker: 'habits tracking health',
   tools:
-    'utilities built-in search web research compression custom tools api key tavily wolfram',
+    'utilities built-in search web research custom tools api key tavily wolfram',
   skills: 'skill library slash commands instructions clawhub create import',
   apps: 'integrations mcp plugins packages connectors servers marketplace discover connect catalogs runtimes accounts github google gmail calendar x twitter oauth channels telegram discord slack sms whatsapp messaging',
   system:
@@ -437,12 +437,6 @@ export const settingsRows: SettingsRow[] = [
     anchor: 'capability-loading',
     label: 'How tools are offered',
     keywords: 'capability loading external tools apps plugins',
-  },
-  {
-    leaf: 'tools',
-    anchor: 'retrieval-compression',
-    label: 'Trim search results',
-    keywords: 'retrieval compression',
   },
   {
     leaf: 'tools',
