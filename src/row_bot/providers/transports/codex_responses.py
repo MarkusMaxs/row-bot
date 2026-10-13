@@ -137,7 +137,7 @@ class ChatCodexResponses(BaseChatModel):
             if scope is not None and scope.is_cancelled():
                 return
             event_type = event.get("type")
-            if event_type == "response.completed":
+            if event_type in _FINAL_RESPONSE_EVENTS:
                 completed[:] = [event]
                 continue
             if event_type in {"response.output_item.added", "response.function_call_arguments.delta"}:
@@ -736,29 +736,41 @@ def _final_usage_chunk(
     response_metadata: dict[str, Any],
     additional_kwargs: dict[str, Any] | None = None,
 ) -> ChatGenerationChunk:
-    """The closing chunk: the usage ``response.completed`` reported, and the reasoning to replay."""
+    """The closing chunk: the usage the final response event reported, why it ended, and the reasoning to replay."""
     usage_metadata = usage_metadata_from_provider_usage(response_metadata.get("token_usage"))
+    # An incomplete response (the output limit) says so, for the cut-short notice (F17).
+    final_metadata = {key: response_metadata[key] for key in ("status", "incomplete_details") if key in response_metadata}
     if usage_metadata is None:
         return ChatGenerationChunk(message=AIMessageChunk(
             content="", chunk_position="last", additional_kwargs=dict(additional_kwargs or {}),
+            response_metadata=final_metadata,
         ))
     return ChatGenerationChunk(message=AIMessageChunk(
         content="",
         chunk_position="last",
         additional_kwargs=dict(additional_kwargs or {}),
         usage_metadata=usage_metadata,
-        response_metadata={"token_usage": response_metadata["token_usage"]},
+        response_metadata={"token_usage": response_metadata["token_usage"], **final_metadata},
     ))
+
+
+# The Responses stream ends with ``response.completed``, or ``response.incomplete``
+# when the output limit (or a content filter) stopped it.
+_FINAL_RESPONSE_EVENTS = frozenset({"response.completed", "response.incomplete"})
 
 
 def _response_metadata_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     for event in reversed(events):
-        if event.get("type") != "response.completed":
+        if event.get("type") not in _FINAL_RESPONSE_EVENTS:
             continue
         response = event.get("response") if isinstance(event.get("response"), dict) else {}
         metadata: dict[str, Any] = {"response_id": response.get("id") or ""}
         usage = response.get("usage")
         if isinstance(usage, dict):
             metadata["token_usage"] = dict(usage)
+        if isinstance(response.get("status"), str):
+            metadata["status"] = response["status"]
+        if isinstance(response.get("incomplete_details"), dict):
+            metadata["incomplete_details"] = dict(response["incomplete_details"])
         return metadata
     return {}

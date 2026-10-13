@@ -541,25 +541,26 @@ def test_ollama_analysis_flags_reloads_context_changes_and_keep_alive(monkeypatc
 
 
 def test_a_task_runs_through_the_agent_and_records_ledger_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
     from tests.e2e.live_eval import runner
     from tests.e2e.live_eval.runner import BudgetGate, LogTally, Runtime, run_tasks
 
+    # The runner imports row_bot.agent when it runs, so patch the module it will get now,
+    # not the one this file bound at collection (an earlier test may have re-bound it).
+    live_agent = importlib.import_module("row_bot.agent")
     data_dir = tmp_path / "data"
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
     calls: list[str] = []
-    # Patch the module the runner imports at call time. Tests that pop and re-import row_bot.agent can
-    # leave another copy there than the one imported at collection (seen on Linux CI workers).
-    import row_bot.agent as running_agent
 
     def fake_stream_agent(prompt, tool_names, config):
         calls.append(prompt)
         _record_usage(data_dir, monkeypatch, input_tokens=3_000, cache_read_tokens=2_400, output_tokens=12)
-        yield ("tool_call", running_agent.ToolCallPayload("Calculator", raw_name="calculate",
-                                                          args={"expression": "17**3+289"}))
+        yield ("tool_call", live_agent.ToolCallPayload("Calculator", raw_name="calculate", args={"expression": "17**3+289"}))
         yield ("tool_done", {"raw_name": "calculate", "content": "5202"})
         yield ("done", "5202")
 
-    monkeypatch.setattr(running_agent, "stream_agent", fake_stream_agent)
+    monkeypatch.setattr(live_agent, "stream_agent", fake_stream_agent)
     monkeypatch.setattr(Runtime, "_new_thread", lambda self, task: "le_thread")
     monkeypatch.setattr("row_bot.tools.registry.set_tool_config", lambda *args: None)
     caps = Caps(None, 1_000_000)

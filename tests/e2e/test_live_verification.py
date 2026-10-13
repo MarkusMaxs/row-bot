@@ -579,7 +579,7 @@ def test_f17_output_limit_detected(live: LiveSession) -> None:
     """Spec: wp-A3-handoff F17; the stop field each provider reports and whether the truncation notice fires."""
     from langchain_core.messages import HumanMessage
 
-    import row_bot.agent as agent
+    from row_bot.providers.stop_reason import stop_reason, stopped_at_output_limit
 
     states = _available()
     if not states:
@@ -591,9 +591,9 @@ def test_f17_output_limit_detected(live: LiveSession) -> None:
         try:
             reply = _stream(_capped(pid, _model(pid, state.model)), [HumanMessage(content="Write a 300-word story about a lighthouse.")])
             metadata = dict(getattr(reply, "response_metadata", None) or {})
-            field_name = next((name for name in ("stop_reason", "finish_reason", "done_reason") if metadata.get(name)), "")
-            value = metadata.get(field_name) if field_name else None
-            observed = {"field": field_name, "value": value, "notice_fires": value in agent._OUTPUT_LIMIT_STOP_REASONS}
+            field_name = next((name for name in ("stop_reason", "done_reason", "finish_reason", "status") if metadata.get(name)), "")
+            value = stop_reason(metadata)
+            observed = {"field": field_name, "value": value, "notice_fires": stopped_at_output_limit(value)}
         except Exception as exc:
             observed = {"error": f"{type(exc).__name__}: {exc}"[:300]}
         if pid == "anthropic" and not observed.get("notice_fires"):

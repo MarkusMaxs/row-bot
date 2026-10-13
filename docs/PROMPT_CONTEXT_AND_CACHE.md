@@ -19,6 +19,8 @@ tools, skills, plugins, the Designer project's mode or the thread's profile
 change. All of them may be marked cacheable.
 
 - `agent.root`: identity line and agent guidelines from the ReAct system prompt.
+  On a window of 32K or less its TASKS and MEMORY parts move to
+  `skills.tool_guides` (see Tool set).
 - `agent.turn_context`: what the turn context is, and that only Row-Bot writes
   it (see Authority).
 - `agent.profile`: active thread Agent Profile instructions. A child Agent gets
@@ -38,7 +40,11 @@ change. All of them may be marked cacheable.
 - `background.override`: static background-workflow override.
 - `background.persistent_thread`: persistent-thread note for tasks that keep
   their thread.
-- `skills.tool_guides`: automatic tool guide instructions for enabled tools.
+- `skills.tool_guides`: automatic tool guide instructions for the tool groups
+  bound. A tool-linked skill marked `enabled_by_default: false` (the Developer
+  workflows) is not a guide: it loads with `skill_load` while its tools are
+  bound. On a window of 32K or less this section is one line per guide plus the
+  TASKS and MEMORY guidance (see Tool set).
 - `skills.manual`: the skills the conversation keeps: the profile's skills, the
   thread override and pinned skills.
 - `chat_only.root`: Chat Only identity, behavior rules, and profile context.
@@ -69,8 +75,9 @@ text is a `<row_bot_turn_context>…</row_bot_turn_context>` block:
   reject two user messages in a row. A context that follows anything else
   (an event, a tool result) is a user message of its own.
 - **What.** The current date and time (minute resolution, with the UTC offset
-  and the time in UTC), the approval mode, the tool groups available, tools
-  and apps that are off, Row-Bot's live state (model, providers, channels, MCP,
+  and the time in UTC), the approval mode, the tool groups available, what
+  this turn leaves out (`NOT IN THIS TURN`, see Tool set), tools and apps that
+  are off, Row-Bot's live state (model, providers, channels, MCP,
   Designer, Dream Cycle, update), the active Designer project's values (name,
   canvas, brand and CSS variables, brief, references, pages, recent manual
   edits, canvas rules), skills for this message, skills switched off after
@@ -285,8 +292,67 @@ request that carried cache instructions is retried once without them. No other
   request goes out without it.
 
 **Truncation.** An Agent reply that stopped at the output token limit gets the
-"cut short" notice. That covers OpenAI-style `finish_reason: "length"`, Ollama
-`done_reason: "length"` and Anthropic `stop_reason: "max_tokens"`.
+"cut short" notice. `providers/stop_reason.py` reads why a reply stopped from
+every provider shape: OpenAI-style `finish_reason: "length"`, Ollama
+`done_reason: "length"`, Anthropic `stop_reason: "max_tokens"`, Gemini
+`finish_reason: "MAX_TOKENS"`, and, for Responses APIs (OpenAI, Codex, xAI
+OAuth), `status: "incomplete"` with `incomplete_details.reason:
+"max_output_tokens"`. Row-Bot's own transports (Codex, xAI OAuth, Ollama Cloud
+and the OpenAI-compatible routes, including Anthropic-shaped ones) end their
+stream with that reason.
+
+## Tool set
+
+A conversation binds the same tools on every turn (`agent.get_agent_graph`), so
+the tools block at the start of every request stays byte-stable. Nothing a
+message says changes it.
+
+- **One turn's scope is enforced when a tool is called.** A message that
+  @mentions apps narrows its turn to them; a request for one kind of media
+  leaves the other media tools out (`conversation_creation.media_left_out`); a
+  workflow step that names its apps uses only those. That scope
+  (`integrations.scope`, the turn's `app_scope`) never removes a bound tool:
+  `agent._turn_scope_refusal` refuses a call to a tool outside it, before any
+  approval card or effect, with a `BLOCKED: … is not part of this turn` result
+  that says what to do. `tool_search` leaves those tools out of its results,
+  and `tool_invoke` reaches the same refusal. The turn context lists what the
+  turn leaves out. A continued turn and the agents it starts keep its scope.
+- **Apps switched off in a chat are not bound.** They are a setting of the
+  conversation (`off_servers` and `off_tools` in the scope).
+- **`skill_search` lists every authorized skill**, active or not. Which skills
+  a turn loaded with `skill_load` or mentioned with `/skill` is read when
+  `skill_search` or `skill_load` runs, never built into the bound tools.
+- **External tools come in a fixed order.** MCP tools are sorted by server,
+  then tool name, whatever order the servers connected in.
+- **X is asked once per sign-in.** A check that cannot reach X keeps the X
+  tools bound (the call itself reports the failure); only X refusing the
+  sign-in leaves them out, until a new sign-in.
+- **Developer tools come with a code folder.** Without one every Developer
+  tool fails, so none of them (nor the Developer guide) is bound. The setup
+  tools stay, and the runtime guidance says a code folder brings the Developer
+  tools. Binding a folder adds them from the next turn.
+
+The tool list is rebuilt only on a real configuration change, which costs one
+cache reset each: an MCP server connecting or disconnecting, tool settings or a
+tool switched on or off, an app switched off or on in the chat, the model or
+its window, the approval mode, the agent profile, or a code folder or design
+bound to the conversation.
+
+**Small-context profile.** A model whose effective window is 32K or less (any
+provider: local Ollama, a custom endpoint, or a model capped that low) gets a
+smaller fixed envelope, so it can run Agent mode:
+
+- the core tools are bound: files, shell, web search and `read_url`, memory,
+  tasks (Developer's in a code folder), with the bridges (`tool_search`,
+  `tool_invoke`, `skill_search`, `skill_load`, `read_tool_output`). Every other
+  tool, and every external tool, is offered through `tool_search` and can be
+  called by its own name or through `tool_invoke`, with the same approvals;
+- tool guides are one line each, and each reads in full through `skill_load`;
+- the TASKS and MEMORY guidance is sent only when those tools are bound;
+- recall shows at most three memories in its smallest block, and the
+  self-knowledge blocks (static and live state) are left out.
+
+Larger windows keep the prompt as described above.
 
 ## Tool schemas and results
 
@@ -347,6 +413,13 @@ an exact prefix of the next one (`cache_control` ignored) across iterations and
 turns. Cases that still break are strict xfails naming the work package that
 fixes them. At DEBUG, the `row_bot.prompt_prefix_diff` logger names the first
 section or message that changed between consecutive requests in a thread.
+
+`tests/subsystem/agents/test_stable_tool_set.py` covers the tool set: the graph
+and its tools byte-stable across media, @app and /skill turns, a rebuild only on
+a configuration change, the call-time refusal before any approval (the security
+contract), and Developer tools with a code folder.
+`tests/subsystem/agents/test_small_context_profile.py` shows a 32K local model
+getting an Agent request under its usable input, and the profile's envelope.
 
 `tests/subsystem/agents/test_turn_context.py` covers the turn context: built
 once per turn, persisted through a real graph, diff-only, a full snapshot after

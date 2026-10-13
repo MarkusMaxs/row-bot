@@ -1362,9 +1362,6 @@ def _tools(
     loading_mode = _text(global_config.get("external_tool_loading_mode") or "auto", 16)
     if loading_mode not in {"auto", "eager"}:
         loading_mode = "auto"
-    compression = _text(global_config.get("compression_mode") or "off", 16)
-    if compression not in {"off", "deep"}:
-        compression = "off"
     items = []
     for tool_id, fallback_label in _SEARCH_TOOL_PRESENTATION.items():
         record = registered.get(tool_id, {})
@@ -1389,7 +1386,6 @@ def _tools(
     return {
         "availability": "available",
         "external_loading_mode": loading_mode,
-        "compression_mode": compression,
         "items": items,
     }
 
@@ -1676,7 +1672,6 @@ SETTING_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "tools": {
         "external_loading_mode": "auto",
-        "compression_mode": "off",
     },
     "preferences": {
         "identity.name": "Row-Bot",

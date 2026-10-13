@@ -138,7 +138,12 @@ def turn_scope(conversation_id: str, text: str, allow: list[str] | tuple[str, ..
                previous: dict | None = None) -> dict | None:
     """What one turn leaves out: apps switched off in this chat and, when the message mentions
     apps, every other app; plus the skills it mentions, loaded for this turn only. ``previous``
-    (the turn being continued) can only narrow it further. None: nothing to narrow."""
+    (the turn being continued) can only narrow it further. None: nothing to narrow.
+
+    ``off_servers`` and ``off_tools`` are the part that comes from this chat's switches: a setting
+    of the conversation, so those tools are not bound at all. The rest of what a turn leaves out
+    stays bound, and a call to it is refused for that turn (WP A5: the tool list, and with it the
+    cached start of every request, stays the same from turn to turn)."""
     from row_bot.threads import get_thread_apps_off
     off = set(get_thread_apps_off(conversation_id))
     items = _items()
@@ -154,6 +159,7 @@ def turn_scope(conversation_id: str, text: str, allow: list[str] | tuple[str, ..
     left_out = [item for item in items if item["id"] in off or (focus and item["id"] not in focus)]
     servers = {item["server"] for item in left_out if item.get("server")}
     parents = {tool for item in left_out for tool in item.get("tools") or []}
+    switched_off = [item for item in items if item["id"] in off]
     skills = _mentioned(text, _skill_names(), "/") if text else []
     previous = previous or {}
     servers |= {str(name) for name in previous.get("exclude_servers") or []}
@@ -161,7 +167,22 @@ def turn_scope(conversation_id: str, text: str, allow: list[str] | tuple[str, ..
     tools = sorted(parents | {str(name) for name in previous.get("exclude_tools") or []})
     if not (servers or skills or tools):
         return None
-    return {"exclude_servers": sorted(servers), "exclude_tools": tools, "focus": focus, "skills": skills}
+    found = {"exclude_servers": sorted(servers), "exclude_tools": tools, "focus": focus, "skills": skills}
+    if switched_off:
+        found["off_servers"] = sorted({item["server"] for item in switched_off if item.get("server")})
+        found["off_tools"] = sorted({tool for item in switched_off for tool in item.get("tools") or []})
+    return found
+
+
+def with_tools_left_out(scope: dict | None, tool_groups: list[str] | tuple[str, ...]) -> dict | None:
+    """*scope* (from turn_scope, or None) also leaving these tool groups out of the turn, as a media
+    request does for the media family it doesn't ask for. Only ever narrows."""
+    groups = {str(name) for name in tool_groups or () if str(name)}
+    if not groups:
+        return scope
+    found = dict(scope or {"exclude_servers": [], "exclude_tools": [], "focus": [], "skills": []})
+    found["exclude_tools"] = sorted({str(name) for name in found.get("exclude_tools") or []} | groups)
+    return found
 
 
 def step_scope(item_ids: list[str] | tuple[str, ...] | None) -> dict | None:

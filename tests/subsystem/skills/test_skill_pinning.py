@@ -200,15 +200,20 @@ def test_custom_tool_builder_uses_tool_guide_not_manual_skill(tmp_path, monkeypa
 def test_developer_guidance_is_tool_bound_not_extra_manual_injection(tmp_path, monkeypatch):
     skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
     skills.load_skills()
+    from row_bot.skill_discovery import tool_skill_records
 
     regular_prompt = skills.get_skills_prompt([], active_tool_names=[])
     developer_prompt = skills.get_skills_prompt([], active_tool_names=["developer"])
 
-    assert "Developer Coding" not in regular_prompt
-    assert developer_prompt.count("# Developer Coding") == 1
-    assert developer_prompt.count("# Developer Review") == 1
-    assert developer_prompt.count("# Developer PR Prep") == 1
-    assert developer_prompt.count("# Developer Custom Tools") == 1
+    # F34: the Developer workflows are tool-linked skills that are off by default. They are offered
+    # to skill_load while Developer tools are bound, and never injected as tool guides.
+    for heading in ("# Developer Coding", "# Developer Review", "# Developer PR Prep", "# Developer Custom Tools"):
+        assert heading not in regular_prompt and heading not in developer_prompt
+    assert developer_prompt.count("# Developer Tool Guide") == 1
+    offered = {record.canonical_id for record in tool_skill_records(["developer"])}
+    assert offered == {"developer_coding", "developer_review", "developer_pr_prep", "developer_custom_tools"}
+    assert tool_skill_records([]) == []
+    assert {skill.name for skill in skills.get_manual_skills()}.isdisjoint(offered)  # Not a manual skill to pin.
 
 
 def test_row_bot_status_skill_query_reports_pins_and_surface_defaults(tmp_path, monkeypatch):

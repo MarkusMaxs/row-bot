@@ -69,7 +69,12 @@ def test_the_menu_lists_every_ready_built_in_way_and_says_why_some_have_no_switc
 
 def test_a_switch_leaves_an_app_out_of_this_chat_only(apps):
     apps.off.append("mcp:notion")
-    assert scope.turn_scope("chat", "Find the roadmap", None)["exclude_servers"] == ["Notion"]
+    found = scope.turn_scope("chat", "Find the roadmap", None)
+    assert found["exclude_servers"] == ["Notion"]
+    assert found["off_servers"] == ["Notion"]  # A setting of the chat: its tools are not bound (WP A5).
+    mentioned = scope.turn_scope("chat", "@Linear what's open?", None)
+    assert mentioned["off_servers"] == ["Notion"]  # A mention narrows the turn only: the rest stays bound.
+    assert set(mentioned["exclude_servers"]) == {"Notion", "Sentry", "plugin_kit_figma"}
     assert next(a for a in scope.chat_apps("chat") if a["name"] == "Notion")["on"] is False
 
 
@@ -136,7 +141,9 @@ def test_a_mentioned_skill_loads_for_that_turn_only_and_only_if_the_profile_allo
     assert agent._resolve_active_skill_records(authorized) == []
 
 
-def test_tools_of_apps_left_out_are_never_bound_and_kept_ones_still_ask_first(monkeypatch):
+def test_apps_left_out_of_a_turn_stay_bound_but_are_refused_and_kept_ones_still_ask_first(monkeypatch):
+    """WP A5: a message's @mentions narrow its turn when a tool is called, so the conversation binds the
+    same tools every turn; apps switched off in the chat are not bound at all."""
     agent = _prepare_graph(monkeypatch)
     agent._approval_mode_var.set("approve")
     tools = {name: _lc_tool(name) for name in ("mcp_notion_search", "mcp_notion_delete_page", "mcp_linear_list_issues")}
@@ -152,16 +159,25 @@ def test_tools_of_apps_left_out_are_never_bound_and_kept_ones_still_ask_first(mo
     monkeypatch.setattr(plugin_registry, "get_langchain_tools", lambda allow_names=None: [])
     monkeypatch.setattr(plugin_registry, "get_destructive_names", lambda allow_names=None: set())
 
+    unscoped = agent.get_agent_graph(["mcp"])
     agent._current_app_scope_var.set({"exclude_servers": ["Linear"], "exclude_tools": [], "focus": [], "skills": []})
-    bound = _bound_tools(agent.get_agent_graph(["mcp"]))
-    assert "mcp_linear_list_issues" not in bound
-    assert {"mcp_notion_search", "mcp_notion_delete_page"} <= set(bound)
+    graph = agent.get_agent_graph(["mcp"])
+    assert graph is unscoped  # The same tools, so the same graph and the same cached prompt start.
+    bound = _bound_tools(graph)
+    assert set(tools) <= set(bound)
     assert hasattr(bound["mcp_notion_delete_page"].func, "__wrapped__")  # Still behind the approval gate.
+    refused = bound["mcp_linear_list_issues"].invoke({"query": "mine"})
+    assert refused.startswith("BLOCKED: mcp_linear_list_issues is not part of this turn")
+    assert bound["mcp_notion_search"].invoke({"query": "roadmap"}) == "mcp_notion_search:roadmap"
 
-    agent._current_app_scope_var.set({"exclude_servers": ["Notion", "Linear"], "exclude_tools": [], "focus": [], "skills": []})
-    assert agent.get_agent_graph(["mcp"]).tools == []  # Every app left out: none of their tools is bound.
+    # Switched off in this chat: a setting of the conversation, so none of their tools is bound.
+    agent._current_app_scope_var.set({"exclude_servers": ["Notion", "Linear"], "exclude_tools": [], "focus": [],
+                                      "skills": [], "off_servers": ["Notion", "Linear"], "off_tools": []})
+    assert agent.get_agent_graph(["mcp"]).tools == []
     agent._current_app_scope_var.set(None)
     assert set(tools) <= set(_bound_tools(agent.get_agent_graph(["mcp"])))  # Unscoped turns are unchanged.
+    assert _bound_tools(agent.get_agent_graph(["mcp"]))["mcp_linear_list_issues"].invoke({"query": "x"}) == (
+        "mcp_linear_list_issues:x")
 
 
 def test_the_status_check_says_why_an_app_is_left_out_of_this_turn(apps, monkeypatch):
@@ -444,5 +460,16 @@ def test_an_app_left_out_takes_a_tool_name_it_shares_with_another_app_with_it(mo
     monkeypatch.setattr(runtime, "_issued", {name: ("acme", "files_list")})
     entry = {"tool": SimpleNamespace(name=name), "source": "mcp", "parent": "mcp"}
     for left_out in ("acme", "acme files"):
-        assert agent._apply_app_scope([], [entry], {"exclude_servers": [left_out]}) == ([], [])
-    assert agent._apply_app_scope([], [entry], {"exclude_servers": ["other"]}) == ([], [entry])
+        # Switched off in the chat: never bound. Left out of one turn: bound, and a call is refused.
+        assert agent._apply_app_scope([], [entry], {"off_servers": [left_out]}) == ([], [])
+        token = agent._current_app_scope_var.set({"exclude_servers": [left_out]})
+        try:
+            assert agent._turn_scope_refusal(name, source="mcp", parent="mcp") is not None
+        finally:
+            agent._current_app_scope_var.reset(token)
+    assert agent._apply_app_scope([], [entry], {"off_servers": ["other"]}) == ([], [entry])
+    token = agent._current_app_scope_var.set({"exclude_servers": ["other"]})
+    try:
+        assert agent._turn_scope_refusal(name, source="mcp", parent="mcp") is None
+    finally:
+        agent._current_app_scope_var.reset(token)

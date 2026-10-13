@@ -5097,23 +5097,6 @@ export function ToolConfigurationSnapshot({
         </p>
       </Section>
       <Section
-        title="Trim search results"
-        description="Keep only the parts of search results that matter before the model reads them."
-        icon={Search}
-        anchor="retrieval-compression"
-      >
-        <SelectSetting
-          mutation={mutation}
-          field="compression_mode"
-          label="Trimming"
-          value={snapshot.compression_mode}
-          options={[
-            { value: 'off', label: 'Off (default)' },
-            { value: 'deep', label: 'On: slower, uses extra model calls' },
-          ]}
-        />
-      </Section>
-      <Section
         title="Search & Knowledge Tools"
         description="Research tools the assistant can use. Some need a key."
         icon={BookOpen}

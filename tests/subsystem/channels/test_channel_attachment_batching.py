@@ -265,3 +265,117 @@ def test_a_telegram_photo_in_an_album_waits_for_the_rest(store, monkeypatch) -> 
     assert key == "77:g1"
     assert item.attachment == InboundAttachment("telegram_photo_u1.jpg", b"pixels", "image/jpeg")
     assert item.caption == "look"
+
+
+# ── A lone Telegram attachment uses the same attachment block (E1a decision 6) ──
+
+
+class _TelegramMessage:
+    def __init__(self, *, caption: str = "", **media: Any) -> None:
+        self.caption = caption
+        self.media_group_id = None
+        self.replies: list[str] = []
+        self.photo = media.get("photo")
+        self.voice = media.get("voice")
+        self.audio = None
+        self.document = media.get("document")
+
+    async def reply_text(self, text: str, **_kwargs: Any) -> None:
+        self.replies.append(text)
+
+
+class _TelegramFile:
+    def __init__(self, data: bytes, **fields: Any) -> None:
+        self._data = data
+        for key, value in fields.items():
+            setattr(self, key, value)
+
+    async def get_file(self) -> "_TelegramFile":
+        return self
+
+    async def download_as_bytearray(self) -> bytearray:
+        return bytearray(self._data)
+
+
+def _single(monkeypatch, message: _TelegramMessage) -> tuple[Any, list[str]]:
+    from row_bot.channels import telegram
+
+    texts: list[str] = []
+
+    async def run_agent(_update, _context, text: str) -> None:
+        texts.append(text)
+
+    async def react(*_args: Any) -> None:
+        return None
+
+    monkeypatch.setattr(telegram, "_is_authorised", lambda _update: True)
+    monkeypatch.setattr(telegram, "_run_agent_for_message", run_agent)
+    monkeypatch.setattr(telegram, "_react", react)
+    update = SimpleNamespace(effective_chat=SimpleNamespace(id=77), message=message)
+    return update, texts
+
+
+def test_a_lone_telegram_photo_is_the_attachment_block_after_the_caption(store, readers, monkeypatch) -> None:
+    import row_bot.tools.image_gen_tool as image_tools
+    from row_bot.channels import telegram
+    from row_bot.message_projection import strip_file_context
+
+    message = _TelegramMessage(caption="what breed?", photo=[_TelegramFile(b"cat", file_unique_id="u1")])
+    update, texts = _single(monkeypatch, message)
+
+    asyncio.run(telegram._handle_photo(update, SimpleNamespace(chat_data={})))
+
+    (text,) = texts
+    assert text.startswith(
+        "what breed?\n\n<row_bot_attachment_context>\n"
+        "[Attached image: telegram_photo_u1.jpg — ALREADY ANALYZED, do NOT call analyze_image]\na picture of cat"
+    )
+    assert "User said:" not in text
+    assert readers["vision"] == [(b"cat", "what breed?")]
+    assert image_tools._image_cache == {"telegram_photo_u1.jpg": b"cat"}
+    # The app shows the photo as a badge with the person's words, as for the desktop client.
+    assert strip_file_context(text) == "📎 telegram_photo_u1.jpg\n\nwhat breed?"
+
+
+def test_a_lone_telegram_document_is_the_attachment_block(store, readers, monkeypatch) -> None:
+    from row_bot.channels import media, telegram
+
+    monkeypatch.setattr(media, "extract_document_text", lambda data, _name, **_kw: data.decode())
+    message = _TelegramMessage(
+        caption="summarise this",
+        document=_TelegramFile(b"plain text body", file_name="notes.txt", mime_type="text/plain"),
+    )
+    update, texts = _single(monkeypatch, message)
+
+    asyncio.run(telegram._handle_document(update, SimpleNamespace(chat_data={})))
+
+    (text,) = texts
+    assert text.startswith("summarise this\n\n<row_bot_attachment_context>\n[Attached file: notes.txt]\n")
+    assert "Workspace path: Received Files/notes.txt" in text and "plain text body" in text
+    assert "[User sent a file:" not in text and "User's message:" not in text
+    assert readers["saved"] == ["notes.txt"]
+
+
+def test_a_lone_telegram_voice_note_is_its_transcription_and_echoed(store, readers, monkeypatch) -> None:
+    from row_bot.channels import telegram
+
+    message = _TelegramMessage(voice=_TelegramFile(b"hello there", mime_type="audio/ogg"))
+    update, texts = _single(monkeypatch, message)
+
+    asyncio.run(telegram._handle_voice(update, SimpleNamespace(chat_data={})))
+
+    assert texts == ["[Voice message transcription]: spoken hello there"]
+    assert message.replies == ["🎤 _spoken hello there_"]
+
+
+def test_an_unreadable_lone_telegram_attachment_starts_no_turn(store, readers, monkeypatch) -> None:
+    from row_bot.channels import media, telegram
+
+    monkeypatch.setattr(media, "transcribe_audio", lambda _data, _ext: "")
+    message = _TelegramMessage(voice=_TelegramFile(b"noise", mime_type="audio/ogg"))
+    update, texts = _single(monkeypatch, message)
+
+    asyncio.run(telegram._handle_voice(update, SimpleNamespace(chat_data={})))
+
+    assert texts == []
+    assert message.replies == ["⚠️ Could not transcribe your voice note."]

@@ -23,6 +23,7 @@ from row_bot.prompt_cache import (
 )
 from row_bot.providers.capabilities import PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES, prompt_cache_route
 from row_bot import prompt_prefix_diff
+from row_bot.providers.stop_reason import stop_reason as provider_stop_reason, stopped_at_output_limit
 from row_bot.providers.usage_ledger import with_usage_purpose
 from row_bot import external_content as _external_content
 from row_bot import history_hygiene
@@ -658,48 +659,6 @@ def _normalize_provider_facing_messages(
     return normalized
 
 
-# ── Contextual compression: extract only query-relevant content per doc ──────
-_compressor = None
-
-def _get_compressor():
-    """Return a compressor based on the configured mode (deep / off).
-
-    * **deep** — ``LLMChainExtractor``.  K extra LLM calls per tool
-      invocation; highest relevance.  Respects ``_model_override_var``.
-    * **off** (default) — no compression; ``_pre_model_trim()`` handles
-      context overflow by proportionally shrinking tool outputs.
-    """
-    global _compressor
-    from row_bot.tools.registry import get_global_config
-    mode = get_global_config("compression_mode", "off")
-
-    if mode != "deep":
-        _compressor = None
-        return None
-
-    # mode == "deep" — LLMChainExtractor behaviour
-    from langchain_classic.retrievers.document_compressors import LLMChainExtractor
-
-    _ov = _model_override_var.get() or ""
-    if _ov and _ov != get_current_model() and (is_model_local(_ov) or is_cloud_model(_ov)):
-        _compressor = LLMChainExtractor.from_llm(get_llm_for(_ov))
-    else:
-        _compressor = LLMChainExtractor.from_llm(get_llm())
-    return _compressor
-
-def _compressed(base_retriever):
-    """Wrap any retriever with contextual compression.  Public so tool
-    modules can call ``from agent import _compressed``."""
-    comp = _get_compressor()
-    if comp is None:
-        return base_retriever
-    from langchain_classic.retrievers import ContextualCompressionRetriever
-
-    return ContextualCompressionRetriever(
-        base_compressor=comp,
-        base_retriever=base_retriever,
-    )
-
 # ── Import tools package (triggers auto-registration of all tools) ───────────
 import row_bot.tools as tools  # noqa: E402,F401 — registration side effect
 from row_bot.tools import registry as tool_registry  # noqa: E402
@@ -1306,6 +1265,12 @@ def _setup_guidance(tool_names: list[str]) -> str:
         from row_bot.tools.conversation_setup_tool import GUIDANCE
 
         parts.append(GUIDANCE)
+        if "developer" in tool_names:
+            # Developer tools are bound only with a code folder (WP A5); the model can still offer one.
+            parts.append(
+                "CODE TOOLS: the Developer tools (read, search, edit, test, git) come with a code folder. "
+                "For coding help, use or create one as above."
+            )
     if "row_bot_status" in tool_names:
         parts.append(
             "TOOLS THAT ARE OFF: the turn context lists them. If the request needs one of them, call "
@@ -1338,16 +1303,41 @@ def _runtime_turn_fields(tool_names: list[str]) -> list:
     """The runtime-mode values of the turn context: approval mode, tool groups, what is off."""
     from row_bot.turn_context import ContextField
 
-    if tool_names:
-        preview = ", ".join(tool_names[:16])
-        if len(tool_names) > 16:
-            preview += f", and {len(tool_names) - 16} more"
+    # What this turn leaves out: the conversation binds the same tools every turn (so its prompt
+    # stays cacheable), and a message's @mentions or media request narrow the turn when a tool is
+    # called (_turn_scope_refusal). Apps switched off in the chat are not bound at all.
+    scope = _current_app_scope_var.get(None) or {}
+    excluded_groups = {str(name) for name in scope.get("exclude_tools") or []}
+    unbound_groups = {str(name) for name in scope.get("off_tools") or []}
+    left_out = [name for name in tool_names if name in excluded_groups and name not in unbound_groups]
+    left_out += sorted({str(name) for name in scope.get("exclude_servers") or []}
+                       - {str(name) for name in scope.get("off_servers") or []})
+    # Groups the conversation's tools come from, bound or offered on demand (Developer needs a code
+    # folder, Designer a design); without a built tool list every enabled group is named.
+    offered = set(_current_effective_tool_parent_names_var.get()) | {
+        str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
+    in_turn = [name for name in tool_names
+               if name not in excluded_groups and (not offered or name in offered)]
+    if in_turn:
+        preview = ", ".join(in_turn[:16])
+        if len(in_turn) > 16:
+            preview += f", and {len(in_turn) - 16} more"
         tool_line = f"Available tool groups for this turn include: {preview}."
     else:
         tool_line = "No user-facing tools are enabled for this turn."
+    scope_line = ""
+    if left_out:
+        shown = ", ".join(left_out[:16]) + (f", and {len(left_out) - 16} more" if len(left_out) > 16 else "")
+        scope_line = (
+            f"NOT IN THIS TURN: {shown}. This turn is kept to other tools or apps (the message @mentions "
+            "apps or asks for one kind of media, or a workflow step names its apps): their tools stay "
+            "listed, but a call to one is refused. Use the tools in scope, or tell the person what you "
+            "would need."
+        )
     fields = [
         ContextField("approval", f"Approval mode for action-capable tools: {get_approval_mode()}."),
         ContextField("tools", tool_line),
+        ContextField("turn_scope", scope_line, "NOT IN THIS TURN: nothing; every tool listed can be used."),
     ]
     off: list[str] = []
     switched_off: list[str] = []
@@ -1420,7 +1410,29 @@ def _interactive_progress_contract(runtime_surface: str) -> str:
             "edits may notify the user."
         )
     return "\n".join(parts)
-_CUSTOM_ENDPOINT_COMPACT_CONTEXT_LIMIT = 32_768
+
+
+# ── Small-context profile (WP A5, F43) ───────────────────────────────────────
+# A model whose effective window is 32K or less (a local Ollama model, a custom endpoint, or any
+# model capped that low) could not run Agent mode: every tool schema and guide left no room for the
+# conversation. On such a window the request carries the core tools (files, shell, web, memory,
+# tasks; Developer's in a code folder) and the bridges, with every other tool offered through
+# tool_search / tool_invoke; tool guides as a one-line index (read in full with skill_load); the
+# TASKS and MEMORY guidance only when those tools are bound; a smaller recall; and no self-knowledge
+# blocks. Larger windows keep today's prompt.
+SMALL_PROFILE_TOKENS = 32_768
+SMALL_PROFILE_CORE_GROUPS = frozenset({
+    "filesystem", "shell", "web_search", "duckduckgo", "url_reader", "memory", "task", "developer",
+})
+_SMALL_PROFILE_RECALL_WINDOW = 13_000  # memory_policy's smallest recall block (400 tokens)
+_SMALL_PROFILE_RECALL_MEMORIES = 3
+
+
+def _small_context_profile(context_size: int) -> bool:
+    """Whether a window this size gets the small-context profile (any provider)."""
+    return 0 < int(context_size or 0) <= SMALL_PROFILE_TOKENS
+
+
 _CUSTOM_ENDPOINT_MIN_TOOL_RESERVE_TOKENS = 6_000
 _CUSTOM_ENDPOINT_MAX_TOOL_RESERVE_RATIO = 0.60
 _CUSTOM_ENDPOINT_INJECTION_RESERVE_TOKENS = 4_000
@@ -1440,10 +1452,6 @@ def _active_provider_id() -> str:
 
 def _active_custom_openai_provider() -> bool:
     return _active_provider_id().startswith("custom_openai_")
-
-
-def _custom_endpoint_compact_agent_context(context_size: int) -> bool:
-    return _active_custom_openai_provider() and context_size <= _CUSTOM_ENDPOINT_COMPACT_CONTEXT_LIMIT
 
 
 def _agent_history_budget_tokens(context_size: int) -> int:
@@ -1963,6 +1971,10 @@ def _turn_recall(messages: list, max_tokens: int) -> tuple[list[dict], Any]:
     thread_id = _current_thread_id_var.get() or ""
     recall_started = time.perf_counter()
     context_window = max(1, int(max_tokens / 0.85))
+    small_profile = _small_context_profile(get_context_size())
+    if small_profile:
+        # A small window gets the smallest recall block, and at most three memories (WP A5).
+        context_window = min(context_window, _SMALL_PROFILE_RECALL_WINDOW)
     recall_model_ref = _active_model_override.get() or get_current_model()
     recall_provider_id = ""
     try:
@@ -1987,6 +1999,9 @@ def _turn_recall(messages: list, max_tokens: int) -> tuple[list[dict], Any]:
         return format_recall_block(memories, context_window=context_window)
 
     selected = list(decision.selected) if decision.allowed and decision.selected else []
+    if small_profile and len(selected) > _SMALL_PROFILE_RECALL_MEMORIES:
+        selected = selected[:_SMALL_PROFILE_RECALL_MEMORIES]
+        decision.selected = list(selected)  # Only the memories shown are reinforced and traced.
     block_chars = 0
     decision.trace["memory_recall.format_ms"] = 0.0
     decision.trace["memory_recall.touch_ms"] = 0.0
@@ -2037,12 +2052,13 @@ def _gather_turn_context_values(messages: list, *, shown_skill_ids: frozenset[st
 
     context_size = get_context_size()
     max_tokens = _agent_history_budget_tokens(context_size)
-    compact_custom_endpoint = _custom_endpoint_compact_agent_context(context_size)
+    small_profile = _small_context_profile(context_size)
     now = _datetime.now().astimezone()
     fields = list(_runtime_turn_fields(_current_tool_group_names()))
 
-    # Row-Bot's live state: model, providers, channels, MCP, Designer, Dream Cycle, update.
-    if not compact_custom_endpoint:
+    # Row-Bot's live state: model, providers, channels, MCP, Designer, Dream Cycle, update. Left out
+    # on a small window, where the turn context has to stay short (row_bot_status answers the same).
+    if not small_profile:
         try:
             from row_bot.self_knowledge import build_dynamic_self_knowledge_block
 
@@ -2073,46 +2089,45 @@ def _gather_turn_context_values(messages: list, *, shown_skill_ids: frozenset[st
     ])
 
     skills: list = []
-    if not compact_custom_endpoint:
-        try:
-            stable_records, turn_records = _split_active_skill_records()
-            mentioned = {str(name) for name in (_current_app_scope_var.get(None) or {}).get("skills") or []}
-            skills = [
-                SkillEntry(
-                    skill_id=record.canonical_id,
-                    heading=_skill_heading(record),
-                    body=str(record.instructions or ""),
-                    mentioned=record.canonical_id in mentioned,
+    try:
+        stable_records, turn_records = _split_active_skill_records()
+        mentioned = {str(name) for name in (_current_app_scope_var.get(None) or {}).get("skills") or []}
+        skills = [
+            SkillEntry(
+                skill_id=record.canonical_id,
+                heading=_skill_heading(record),
+                body=str(record.instructions or ""),
+                mentioned=record.canonical_id in mentioned,
+            )
+            for record in turn_records
+        ]
+        thread_id = _current_thread_id_var.get() or ""
+        manual_names = [
+            record.canonical_id
+            for record in [*stable_records, *turn_records]
+            if record.source == "manual"
+        ]
+        if thread_id and manual_names:
+            from row_bot.skills_activation import record_usage
+
+            # Once per turn, not once per model call (F6b).
+            record_usage(thread_id, manual_names, source="agent")
+        off_text = ""
+        if thread_id and shown_skill_ids:
+            from row_bot.skills_activation import get_thread_activation_state
+
+            disabled = {str(name) for name in get_thread_activation_state(thread_id).get("disabled", [])}
+            names = {record.canonical_id: _skill_heading(record)
+                     for record in (_current_authorized_skill_records_var.get() or ())}
+            off = sorted(names.get(skill_id, skill_id) for skill_id in shown_skill_ids & disabled)
+            if off:
+                off_text = (
+                    f"SKILLS SWITCHED OFF IN THIS CHAT: {', '.join(off)}. "
+                    "Stop following their instructions shown earlier."
                 )
-                for record in turn_records
-            ]
-            thread_id = _current_thread_id_var.get() or ""
-            manual_names = [
-                record.canonical_id
-                for record in [*stable_records, *turn_records]
-                if record.source == "manual"
-            ]
-            if thread_id and manual_names:
-                from row_bot.skills_activation import record_usage
-
-                # Once per turn, not once per model call (F6b).
-                record_usage(thread_id, manual_names, source="agent")
-            off_text = ""
-            if thread_id and shown_skill_ids:
-                from row_bot.skills_activation import get_thread_activation_state
-
-                disabled = {str(name) for name in get_thread_activation_state(thread_id).get("disabled", [])}
-                names = {record.canonical_id: _skill_heading(record)
-                         for record in (_current_authorized_skill_records_var.get() or ())}
-                off = sorted(names.get(skill_id, skill_id) for skill_id in shown_skill_ids & disabled)
-                if off:
-                    off_text = (
-                        f"SKILLS SWITCHED OFF IN THIS CHAT: {', '.join(off)}. "
-                        "Stop following their instructions shown earlier."
-                    )
-            fields.append(ContextField("skills_off", off_text))
-        except Exception:
-            logger.debug("Turn skills skipped (non-fatal)", exc_info=True)
+        fields.append(ContextField("skills_off", off_text))
+    except Exception:
+        logger.debug("Turn skills skipped (non-fatal)", exc_info=True)
 
     memories: list[dict] = []
     recall_block = None
@@ -2569,6 +2584,37 @@ def _apply_history_hygiene(
     return [replacements.get(id(message), message) for message in trimmed]
 
 
+def _root_system_prompt(small_profile: bool) -> str:
+    """The root system prompt; a small window leaves its TASKS and MEMORY parts to the guides."""
+    if not small_profile:
+        return get_agent_system_prompt()
+    try:
+        accepts = "small_context" in inspect.signature(get_agent_system_prompt).parameters
+    except (TypeError, ValueError):
+        accepts = False
+    # A stand-in without the keyword (tests) is used as it is.
+    return get_agent_system_prompt(small_context=True) if accepts else get_agent_system_prompt()
+
+
+def _small_profile_tool_guides() -> str:
+    """The tool guides on a small window (WP A5): one line per guide, read in full with skill_load
+    where the skill bridges are bound; the TASKS and MEMORY guidance in full when those tools are
+    bound. It names every tool group the conversation offers, bound or on demand, so it never
+    changes when a group is first used."""
+    from row_bot.prompts import ROOT_TOOL_GUIDES
+    from row_bot.skills import get_tool_guide_index
+
+    bound = set(_current_effective_tool_parent_names_var.get())
+    offered = bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
+    loadable = any(getattr(record, "source", "") == "guide"
+                   for record in (_current_authorized_skill_records_var.get() or ()))
+    parts = [text for parent, text in ROOT_TOOL_GUIDES if parent in bound]
+    index = get_tool_guide_index(sorted(offered), loadable=loadable)
+    if index:
+        parts.append(index)
+    return "\n\n".join(parts)
+
+
 def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: bool = False) -> dict:
     """Collect the complete provider-facing Agent input without hard trimming.
 
@@ -2581,12 +2627,12 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
     _thread_id = _current_thread_id_var.get() or None
     context_size = get_context_size()
     max_tokens = _agent_history_budget_tokens(context_size)
-    compact_custom_endpoint = _custom_endpoint_compact_agent_context(context_size)
+    small_profile = _small_context_profile(context_size)
     # This turn's context (built once per turn; _pre_model_trim also persists it), then the
     # turn-context tag neutralized everywhere Row-Bot did not write it.
     history, _created = _with_turn_context(list(state["messages"]), budget)
     visible = _neutralize_foreign_turn_context_tags(history)
-    messages = [SystemMessage(content=get_agent_system_prompt()), *visible]
+    messages = [SystemMessage(content=_root_system_prompt(small_profile)), *visible]
 
     trimmed = list(messages)
 
@@ -2710,8 +2756,8 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
     if _section is not None:
         _stable_injection_sections.append(_section)
 
-    # Self-knowledge (its live state is a turn-context value)
-    if not compact_custom_endpoint:
+    # Self-knowledge (its live state is a turn-context value); not on a small window (WP A5)
+    if not small_profile:
         try:
             from row_bot.self_knowledge import build_static_self_knowledge_block
 
@@ -2763,11 +2809,11 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
                 _stable_injection_sections.append(_section)
 
     # Skill instructions
-    if compact_custom_endpoint:
-        logger.debug("Skill injection skipped for compact custom endpoint context")
-    else:
-        tool_guides_text = ""
-        try:
+    tool_guides_text = ""
+    try:
+        if small_profile:
+            tool_guides_text = _small_profile_tool_guides()
+        else:
             from row_bot.skills import get_skills_prompt
 
             active_tool_names = tuple(sorted(
@@ -2777,32 +2823,32 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
                 [],
                 active_tool_names=active_tool_names,
             )
-        except Exception as exc:
-            logger.debug("Tool-guide injection skipped (non-fatal): %s", exc)
+    except Exception as exc:
+        logger.debug("Tool-guide injection skipped (non-fatal): %s", exc)
+    _section = stable_section(
+        "skills.tool_guides",
+        tool_guides_text,
+        source="skills",
+    )
+    if _section is not None:
+        _stable_injection_sections.append(_section)
+
+    try:
+        from row_bot.skill_discovery import render_active_skills_prompt
+
+        # Skills the conversation keeps (profile, thread override, pinned). A skill loaded with
+        # skill_load arrives in its tool result and a /skill mention in the turn context, so
+        # neither rewrites this section mid-conversation (F5).
+        stable_records, _turn_records = _split_active_skill_records()
         _section = stable_section(
-            "skills.tool_guides",
-            tool_guides_text,
+            "skills.manual",
+            render_active_skills_prompt(stable_records),
             source="skills",
         )
         if _section is not None:
             _stable_injection_sections.append(_section)
-
-        try:
-            from row_bot.skill_discovery import render_active_skills_prompt
-
-            # Skills the conversation keeps (profile, thread override, pinned). A skill loaded with
-            # skill_load arrives in its tool result and a /skill mention in the turn context, so
-            # neither rewrites this section mid-conversation (F5).
-            stable_records, _turn_records = _split_active_skill_records()
-            _section = stable_section(
-                "skills.manual",
-                render_active_skills_prompt(stable_records),
-                source="skills",
-            )
-            if _section is not None:
-                _stable_injection_sections.append(_section)
-        except Exception as exc:
-            logger.debug("Skill injection skipped (non-fatal): %s", exc)
+    except Exception as exc:
+        logger.debug("Skill injection skipped (non-fatal): %s", exc)
 
     # Batch-insert all injections at insert_idx
     _injection_sections = _stable_injection_sections
@@ -5193,7 +5239,8 @@ def _collect_agent_tool_candidates(
 
 # Small windows (F11): a first local turn on a 64k model spent half its window on tool schemas and guides.
 # There, rarely used built-in groups are offered through tool search instead of every turn (their approvals,
-# profile limits and guides unchanged), and Developer tools only when the conversation has a code folder.
+# profile limits and guides unchanged). On every window, Developer tools come with a code folder (WP A5):
+# without one each of them fails, and their 22 schemas and guide went with every call of every chat.
 SMALL_CONTEXT_TOKENS = 65_536
 ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder"})
 _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
@@ -5325,10 +5372,20 @@ def _resolve_active_skill_records(authorized_records: tuple, *, include_turn_sco
     return ordered
 
 
-def _build_runtime_skill_snapshot() -> tuple[tuple, tuple[str, ...], bool, str]:
-    """Return frozen authorized records, active ids, bridge policy, and fingerprint."""
+def _build_runtime_skill_snapshot(
+    tool_parents: tuple[str, ...] = (), *, guides: bool = False,
+) -> tuple[tuple, tuple[str, ...], bool, str]:
+    """Return frozen authorized records, the active ids the conversation keeps, bridge policy, and
+    fingerprint.
 
-    from row_bot.skill_discovery import collect_enabled_skill_records, skill_snapshot_fingerprint
+    Nothing here depends on the turn (WP A5): which skills a turn loaded with skill_load or mentioned
+    with /skill is decided when skill_search and skill_load run, so skill_search's catalog, and the
+    graph, stay the same from turn to turn. *tool_parents* are the tool groups the conversation
+    offers: their on-demand tool skills (the Developer workflows) are authorized too, and with
+    *guides* (a small window, where tool guides are an index) their tool guides.
+    """
+
+    from row_bot.skill_discovery import collect_enabled_skill_records, skill_snapshot_fingerprint, tool_skill_records
     from row_bot.skills_activation import is_smart_off
 
     all_records = tuple(collect_enabled_skill_records())
@@ -5355,7 +5412,18 @@ def _build_runtime_skill_snapshot() -> tuple[tuple, tuple[str, ...], bool, str]:
     else:
         authorized = all_records
 
-    active_records = _resolve_active_skill_records(authorized)
+    if tool_parents and not background:
+        known = {record.canonical_id for record in authorized}
+        try:
+            authorized = authorized + tuple(
+                record for record in tool_skill_records(sorted(tool_parents), guides=guides)
+                if record.canonical_id not in known
+            )
+        except Exception:
+            logger.debug("Tool-linked skills skipped (non-fatal)", exc_info=True)
+
+    # Kept by the conversation (profile, thread override, pinned): never a turn's loads or mentions.
+    active_records = _resolve_active_skill_records(authorized, include_turn_scoped=False)
     active_ids = tuple(record.canonical_id for record in active_records)
     smart_off = is_smart_off(_current_thread_id_var.get("") or "default")
     discoverable = bool(
@@ -5375,6 +5443,15 @@ def _build_runtime_skill_snapshot() -> tuple[tuple, tuple[str, ...], bool, str]:
         },
     )
     return authorized, active_ids, discoverable, fingerprint
+
+
+def _call_with_tool_parents(snapshot: Any, tool_parents: tuple[str, ...], *, guides: bool) -> Any:
+    """Call the skill snapshot with the offered tool groups; a stand-in without them (tests) too."""
+    try:
+        accepts = bool(inspect.signature(snapshot).parameters)
+    except (TypeError, ValueError):
+        accepts = False
+    return snapshot(tool_parents, guides=guides) if accepts else snapshot()
 
 
 def _dispatch_profile_snapshot() -> dict:
@@ -5403,6 +5480,10 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
 
     def refusal(function, args, kwargs):
         try:
+            # This turn's scope first: a call it leaves out never reaches an approval.
+            out_of_turn = _turn_scope_refusal(tool.name, source=source, parent=parent)
+            if out_of_turn is not None:
+                return out_of_turn
             profile = _dispatch_profile_snapshot()
             allowlist = (_current_tool_allowlist_var.get(())
                          if _current_tool_allowlist_active_var.get(False) else None)
@@ -5438,24 +5519,60 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
     return tool.model_copy(update=updates)
 
 
+def _tool_left_out(name: str, source: str, parent: str, servers: set[str], parents: set[str]) -> bool:
+    """Whether a tool belongs to an app or tool group that is left out (see integrations.scope)."""
+    if parent in parents:
+        return True
+    if not servers:
+        return False
+    if source == "mcp":
+        from row_bot.mcp_client import runtime as mcp_runtime
+        # A name two apps share goes when either is left out: narrowing never widens.
+        return bool(mcp_runtime.servers_for_tool(name) & servers)
+    return ":mcp:" in source and source.rsplit(":mcp:", 1)[1] in servers
+
+
 def _apply_app_scope(core: list[dict], external: list[dict], scope: dict) -> tuple[list[dict], list[dict]]:
-    """Leave out the tools of apps this turn doesn't use. Only removes: the profile's ceiling
-    and every approval stay as they are."""
-    servers = {str(name) for name in scope.get("exclude_servers") or []}
-    parents = {str(name) for name in scope.get("exclude_tools") or []}
+    """Leave out the tools of apps switched off in this chat: a setting of the conversation, so its
+    tools are not bound at all. What one message leaves out (its @mentions, a media request, a
+    workflow step's apps) is not removed here: the conversation keeps binding the same tools, and
+    ``_turn_scope_refusal`` refuses a call outside the turn. Only removes: the profile's ceiling and
+    every approval stay as they are."""
+    servers = {str(name) for name in scope.get("off_servers") or []}
+    parents = {str(name) for name in scope.get("off_tools") or []}
     if not (servers or parents):
         return core, external
 
     def kept(entry: dict) -> bool:
-        if entry["parent"] in parents:
-            return False
-        source = str(entry.get("source") or "")
-        if source == "mcp":
-            from row_bot.mcp_client import runtime as mcp_runtime
-            # A name two apps share goes when either is left out: narrowing never widens.
-            return not mcp_runtime.servers_for_tool(str(getattr(entry["tool"], "name", "") or "")) & servers
-        return not (":mcp:" in source and source.rsplit(":mcp:", 1)[1] in servers)
+        return not _tool_left_out(str(getattr(entry["tool"], "name", "") or ""), str(entry.get("source") or ""),
+                                  str(entry["parent"]), servers, parents)
     return [entry for entry in core if kept(entry)], [entry for entry in external if kept(entry)]
+
+
+TURN_SCOPE_REFUSAL = (
+    "BLOCKED: {name} is not part of this turn. This turn is kept to other tools or apps (the message "
+    "@mentions apps or asks for one kind of media, or a workflow step names its apps); the turn context "
+    "lists what is left out. Use the tools in scope, or tell the person what you would need (for "
+    "example, to @mention that app or ask for it in a new message)."
+)
+
+
+def _turn_scope_refusal(name: str, *, source: str, parent: str) -> str | None:
+    """The refusal for a call this turn leaves out, or None (call-time scoping, WP A5).
+
+    A conversation binds the same tools on every turn, so its prompt stays cacheable; what one turn
+    leaves out (integrations.scope: an @mention narrows to the apps it names, a media request to one
+    media family, a workflow step to its apps) is enforced here, when the tool is called, before any
+    approval or effect.
+    """
+    scope = _current_app_scope_var.get(None) or {}
+    servers = {str(item) for item in scope.get("exclude_servers") or []}
+    parents = {str(item) for item in scope.get("exclude_tools") or []}
+    if not (servers or parents):
+        return None
+    if _tool_left_out(name, source, parent, servers, parents):
+        return TURN_SCOPE_REFUSAL.format(name=name)
+    return None
 
 
 def get_agent_graph(enabled_tool_names: list[str] | None = None,
@@ -5508,14 +5625,20 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     approval_mode = get_approval_mode()
     effective_context = get_context_size(model_label)
     small_window = 0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS and normalized_allowlist is None
+    # 32K or less: core tools bound, the rest through tool search (WP A5, F43).
+    small_profile = _small_context_profile(effective_context)
+    defer_to_core = small_profile and normalized_allowlist is None
     has_code_folder = _has_code_folder()
-    if small_window and not has_code_folder and "developer" in enabled_tool_names:
-        # Developer tools work only on a code folder; one created mid-turn is used by the turn after.
+    if not has_code_folder and "developer" in enabled_tool_names:
+        # Developer tools work only on a code folder (F34); one bound mid-turn is used by the turn after,
+        # a configuration change like any other (one new tool list).
         enabled_tool_names = [name for name in enabled_tool_names if name != "developer"]
     eager_core_entries, external_entries, destructive_names = _collect_agent_tool_candidates(
         enabled_tool_names,
         allow_set,
     )
+    # Only apps switched off in this chat leave the tool list; what one turn leaves out is refused
+    # when called (_turn_scope_refusal), so the tool list is the same on every turn (WP A5).
     app_scope = _current_app_scope_var.get(None) or {}
     eager_core_entries, external_entries = _apply_app_scope(eager_core_entries, external_entries, app_scope)
     # App tools that ask even under Allow all: each one its app's access says to ask about (a routine change
@@ -5582,7 +5705,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     # Workflows discover external tools as chats do: an app with many tools (Notion's 46 carry about 220 KB of
     # schemas) would otherwise go with every model call of a step. Gates are applied to each tool before it is
     # bridged, so approvals are the same either way.
-    effective_loading_mode = "auto" if force_external_discovery else loading_mode
+    effective_loading_mode = "auto" if force_external_discovery or defer_to_core else loading_mode
     discovery_fingerprint = capability_fingerprint(
         external_records,
         mode=effective_loading_mode,
@@ -5598,12 +5721,13 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             "forced_resume": force_external_discovery,
         },
     )
+    offered_parents = tuple(sorted({str(entry["parent"]) for entry in eager_core_entries}))
     (
         authorized_skill_records,
         active_skill_ids,
         skill_discovery_enabled,
         skill_fingerprint,
-    ) = _build_runtime_skill_snapshot()
+    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=small_profile)
     cache_key = frozenset(enabled_tool_names) | frozenset({
         f"ctx:{effective_context}",
         f"model:{model_label}",
@@ -5618,8 +5742,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         f"external_resume:{force_external_discovery}",
         f"capabilities:{discovery_fingerprint}",
         f"skills:{skill_fingerprint}",
-        f"apps:{sorted(app_scope.get('exclude_servers') or [])}:{sorted(app_scope.get('exclude_tools') or [])}",
-        f"small_window:{small_window}:{has_code_folder}",
+        f"apps_off:{sorted(app_scope.get('off_servers') or [])}:{sorted(app_scope.get('off_tools') or [])}",
+        f"small_window:{small_window}:{small_profile}:{defer_to_core}:{has_code_folder}",
     })
     # Designer tool schemas are scoped to the captured project, not whichever
     # project a client currently shows.
@@ -5770,8 +5894,11 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     t._arun = _safe_async
 
             # Wrapped already (approvals, profile limits, repeat guard), so tool search keeps every boundary.
-            on_demand_entries = [entry for entry in eager_core_entries
-                                 if small_window and entry["parent"] in ON_DEMAND_TOOL_GROUPS]
+            on_demand_entries = [
+                entry for entry in eager_core_entries
+                if (small_window and entry["parent"] in ON_DEMAND_TOOL_GROUPS)
+                or (defer_to_core and entry["parent"] not in SMALL_PROFILE_CORE_GROUPS)
+            ]
             if on_demand_entries:
                 eager_core_entries = [entry for entry in eager_core_entries if entry not in on_demand_entries]
                 eager_core_tools = [entry["tool"] for entry in eager_core_entries]
@@ -5792,6 +5919,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     bridges = list(build_tool_discovery_tools(
                         bridge_records,
                         context_tokens=effective_context,
+                        in_turn=lambda record: _turn_scope_refusal(
+                            record.name, source=record.source, parent=record.parent) is None,
                     ))
                     bridges = _apply_provider_tool_schema_compatibility(
                         bridges,
@@ -5823,6 +5952,11 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                             context_tokens=effective_context,
                             active_skill_ids=active_skill_ids,
                             child_boundaries=str(_current_runtime_surface_var.get("") or "").startswith("agent_child"),
+                            # Which skills are active is read when the tool runs (this turn's loads
+                            # and /skill mentions), never baked into the bound tools.
+                            current_active_ids=lambda records=tuple(authorized_skill_records): [
+                                record.canonical_id for record in _resolve_active_skill_records(records)
+                            ],
                         ))
                         skill_bridges = _apply_provider_tool_schema_compatibility(
                             skill_bridges,
@@ -7919,11 +8053,6 @@ def _log_stream_completion(
         logger.info("stream completion diagnostics=%s", diagnostics)
 
 
-# Stop reasons that mean the reply hit the output token limit: OpenAI-style finish_reason and
-# Ollama done_reason "length", and Anthropic stop_reason "max_tokens" (F17).
-_OUTPUT_LIMIT_STOP_REASONS = frozenset({"length", "max_tokens"})
-
-
 def _stream_graph(agent, input_data, config: dict,
                   *, stop_event: threading.Event | None = None,
                   phase_timings: dict[str, Any] | None = None):
@@ -8222,14 +8351,8 @@ def _stream_graph(agent, input_data, config: dict,
             )
             if _prompt_cache_usage:
                 provider_call.update(_prompt_cache_usage)
-            _fr = _rm.get("finish_reason")
-            if _fr:
-                _finish_reason = _fr
-            _dr = _rm.get("done_reason")
-            if _dr:
-                _finish_reason = _dr
-            # Anthropic says why it stopped in stop_reason (F17).
-            _sr = _rm.get("stop_reason")
+            # Why the provider stopped, read from any provider's shape (F17).
+            _sr = provider_stop_reason(_rm)
             if _sr:
                 _finish_reason = _sr
 
@@ -8567,7 +8690,7 @@ def _stream_graph(agent, input_data, config: dict,
 
     # Warn if the model stopped due to output token limit
     visible_answer = _joined_visible_answer(full_answer)
-    if _finish_reason in _OUTPUT_LIMIT_STOP_REASONS and visible_answer:
+    if stopped_at_output_limit(_finish_reason) and visible_answer:
         logger.warning("Model output truncated (finish_reason=%s) — "
                        "response was cut short by the provider's output token limit", _finish_reason)
         full_answer.append(

@@ -41,6 +41,9 @@ def _stream(response_metadata: dict) -> list:
         {"stop_reason": "max_tokens", "stop_sequence": None},  # Anthropic, streamed message_delta
         {"finish_reason": "length"},  # OpenAI-style
         {"done_reason": "length"},  # Ollama
+        {"finish_reason": "MAX_TOKENS", "model_name": "gemini-fixture", "safety_ratings": []},  # Gemini
+        # Responses APIs (OpenAI, Codex, xAI OAuth): no stop reason, an incomplete status instead.
+        {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "model_name": "gpt-fixture"},
     ],
 )
 def test_a_reply_that_hit_the_output_limit_tells_the_person(response_metadata):
@@ -53,7 +56,13 @@ def test_a_reply_that_hit_the_output_limit_tells_the_person(response_metadata):
 
 @pytest.mark.parametrize(
     "response_metadata",
-    [{"stop_reason": "end_turn", "stop_sequence": None}, {"finish_reason": "stop"}],
+    [
+        {"stop_reason": "end_turn", "stop_sequence": None},
+        {"finish_reason": "stop"},
+        {"finish_reason": "STOP", "model_name": "gemini-fixture"},
+        {"status": "completed", "model_name": "gpt-fixture"},
+        {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+    ],
 )
 def test_a_reply_that_finished_normally_has_no_notice(response_metadata):
     events = _stream(response_metadata)

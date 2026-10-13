@@ -25,7 +25,8 @@ def strip_file_context(content: str) -> str:
             after_colon = scoped.split(": ", 1)[1] if ": " in scoped else scoped
             fname = after_colon.split("]")[0].strip()
             if "ALREADY ANALYZED" in fname:
-                fname = fname.split("ALREADY ANALYZED", 1)[0].strip()
+                # "name — ALREADY ANALYZED, ...": the dash goes with the note.
+                fname = fname.split("ALREADY ANALYZED", 1)[0].strip().removesuffix(" —").strip()
             for marker in (" — ", " - ", ","):
                 if marker in fname:
                     fname = fname.split(marker, 1)[0].strip()
@@ -49,7 +50,7 @@ def strip_file_context(content: str) -> str:
             fname = after_colon.split("]")[0].strip()
             # Drop analysis metadata so badges show only the filename.
             if "ALREADY ANALYZED" in fname:
-                fname = fname.split("ALREADY ANALYZED", 1)[0].strip()
+                fname = fname.split("ALREADY ANALYZED", 1)[0].strip().removesuffix(" —").strip()
             for marker in (" — ", " - ", ","):
                 if marker in fname:
                     fname = fname.split(marker, 1)[0].strip()

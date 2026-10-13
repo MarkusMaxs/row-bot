@@ -235,15 +235,18 @@ def test_failed_context_keeps_saved_work_for_explicit_repair(projection_stack, m
 
 
 @pytest.mark.slow
-def test_ordinary_writes_keep_only_selected_and_previous_owned_generations(projection_stack, monkeypatch):
+def test_ordinary_writes_keep_only_selected_previous_and_their_base_generations(projection_stack, monkeypatch):
     kg, embedding, _fingerprint, _config = projection_stack
     monkeypatch.setattr(kg, "_skip_reindex", False)
     for number in range(50):
         add(kg, f"Ordinary fact {number}")
     directories = list((kg._VECTOR_DIR / "generations").iterdir())
-    assert len(directories) == 2
+    # The first save is complete; each later one is a delta over it holding the rows since.
+    assert len(directories) == 3
     import json
-    assert sorted(len(json.loads((path / "manifest.json").read_text())["ids"]) for path in directories) == [49, 50]
+    assert sorted(len(json.loads((path / "manifest.json").read_text())["ids"]) for path in directories) == [1, 48, 49]
+    metadata, _directory = kg._load_vector_generation(kg._projection_state())
+    assert len(metadata["ids"]) == 50
     assert sum(map(len, embedding.batches)) == 50
     assert kg.memory_vector_status()["retirement_pending"] == 0
 

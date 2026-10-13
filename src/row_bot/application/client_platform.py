@@ -1300,6 +1300,16 @@ class ClientPlatformService:
             if previous or get_thread_apps_off(conversation_id):
                 raise ClientPlatformError("dependency_unavailable") from None  # Never widen what this chat switched off.
             narrowed = None
+        if not resume:
+            # A request for one kind of media leaves the other media tools out of its turn. They stay
+            # bound (the tool list is the same every turn); a call to one is refused (WP A5). A
+            # continued turn keeps this through its accepted scope.
+            from row_bot.application.conversation_creation import media_left_out
+            from row_bot.integrations.scope import with_tools_left_out
+            from row_bot.tools import registry as media_tools_registry
+            narrowed = with_tools_left_out(narrowed, media_left_out(
+                text, [tool.name for tool in media_tools_registry.get_enabled_tools()],
+                has_design=any(binding.kind == "artifact" for binding in captured_bindings)))
         if narrowed is not None:
             config["configurable"]["app_scope"] = narrowed
         from row_bot.application.reasoning_controls import freeze_reasoning, restore_resume_reasoning
@@ -1348,13 +1358,8 @@ class ClientPlatformService:
                         files.append({"name": metadata["name"], "data": data})
                 from row_bot.agent import stream_agent, resume_stream_agent
                 from row_bot.tools import registry as tool_registry
+                # Every enabled tool, every turn: what this message leaves out is in its app scope.
                 enabled = [tool.name for tool in tool_registry.get_enabled_tools()]
-                if not resume:
-                    from row_bot.application.conversation_creation import media_tool_selection
-                    enabled = media_tool_selection(
-                        text, enabled,
-                        has_design=any(binding.kind == "artifact" for binding in captured_bindings),
-                    )
                 from row_bot.conversation_resources import execution_context
                 from row_bot.application.conversation_writer import writer_run
                 from row_bot.application.attachment_context import prepared_attachments
