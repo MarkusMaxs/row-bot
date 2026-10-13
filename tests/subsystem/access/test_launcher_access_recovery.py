@@ -50,6 +50,23 @@ def test_reset_all_local_databases_backs_up_access_sqlite_family(
     assert access_db == get_access_db_path()
 
 
+def test_restore_data_brings_back_the_usage_ledger(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(launcher, "_timestamp", lambda: "20261013-200000")
+    source = tmp_path / "recovery" / "profile-backup"
+    source.mkdir(parents=True)
+    for suffix in ("", "-wal", "-shm"):
+        (source / f"usage.db{suffix}").write_text(f"backup{suffix}", encoding="utf-8")
+    (tmp_path / "usage.db").write_text("current", encoding="utf-8")
+
+    assert launcher._restore_data("profile-backup") == 0
+
+    for suffix in ("", "-wal", "-shm"):
+        assert (tmp_path / f"usage.db{suffix}").read_text(encoding="utf-8") == f"backup{suffix}"
+    pre_restore = tmp_path / "recovery" / "pre-restore-20261013-200000"
+    assert (pre_restore / "usage.db").read_text(encoding="utf-8") == "current"
+
+
 def test_restore_data_restores_access_sqlite_family_and_preserves_current_copy(
     tmp_path,
     monkeypatch,
