@@ -177,6 +177,11 @@ jobs:
       packages: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      manifest_digest: ${{ steps.digests.outputs.manifest }}
+      amd64_digest: ${{ steps.digests.outputs.amd64 }}
+      arm64_digest: ${{ steps.digests.outputs.arm64 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -243,6 +248,7 @@ jobs:
             "${IMAGE_NAME}:${{ steps.release.outputs.version }}-arm64"
 
       - name: Inspect published manifest and summarize digests
+        id: digests
         shell: bash
         run: |
           set -euo pipefail
@@ -260,6 +266,11 @@ jobs:
           test -n "$amd64_digest"
           test -n "$arm64_digest"
           {
+            echo "manifest=$release_digest"
+            echo "amd64=$amd64_digest"
+            echo "arm64=$arm64_digest"
+          } >> "$GITHUB_OUTPUT"
+          {
             echo "## Row-Bot container release"
             echo ""
             echo "- Version: \`$version\`"
@@ -268,3 +279,39 @@ jobs:
             echo "- linux/amd64 digest: \`$amd64_digest\`"
             echo "- linux/arm64 digest: \`$arm64_digest\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Docker and cloud installs pull by digest, from a release file the SHA-256
+  # block covers (D12). Runs after publishing, so it adds its file to the block.
+  release-digests:
+    if: ${{ github.event_name == 'release' }}
+    needs: release-manifest
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Attach row-bot-container-${{ needs.release-manifest.outputs.version }}.json and list it in the SHA-256 block
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ needs.release-manifest.outputs.version }}
+          MANIFEST_DIGEST: ${{ needs.release-manifest.outputs.manifest_digest }}
+          AMD64_DIGEST: ${{ needs.release-manifest.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ needs.release-manifest.outputs.arm64_digest }}
+        run: |
+          set -euo pipefail
+          python scripts/build_update_parts.py container-digests --version "$VERSION" --image "$IMAGE_NAME" \
+            --manifest-digest "$MANIFEST_DIGEST" --platform "linux/amd64=$AMD64_DIGEST" \
+            --platform "linux/arm64=$ARM64_DIGEST" --out-dir "$RUNNER_TEMP/digests"
+          file="$RUNNER_TEMP/digests/row-bot-container-$VERSION.json"
+          gh release upload "$TAG" "$file" --clobber
+          python scripts/append_sha_manifest.py --tag "$TAG" --add --files "$file"
+

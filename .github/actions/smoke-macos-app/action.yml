@@ -16,6 +16,10 @@ inputs:
     description: Also rehearse a real background update to a next version served from a loopback feed (installer-verify)
     required: false
     default: "false"
+  update-parts:
+    description: With background-update, serve this folder's release parts (build_update_parts.py parts) instead of parts made from the install (release.yml)
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -25,6 +29,7 @@ runs:
         APP_PATH: ${{ inputs.app-path }}
         SMOKE_PORT: ${{ inputs.port }}
         BACKGROUND_UPDATE: ${{ inputs.background-update }}
+        UPDATE_PARTS: ${{ inputs.update-parts }}
       run: |
         set -euo pipefail
         resolve_bundle_python() {
@@ -91,7 +96,7 @@ runs:
           # bundle (the seed), then Restart now through the tray host.
           UPDATE_PORT="$((SMOKE_PORT + 2))"
           python3 scripts/smoke_background_update.py --root "$ROW_BOT_INSTALL_ROOT" --kind macos --port "$UPDATE_PORT" \
-            --version-root "$RESOURCES" \
+            --version-root "$RESOURCES" ${UPDATE_PARTS:+--parts "$UPDATE_PARTS"} \
             -- "$APP_EXEC" -- --no-tray --no-open --no-splash --no-ollama --port "$UPDATE_PORT"
         fi
         if [ -n "$(find "$APP_PATH" -newer "$RUNNER_TEMP/row-bot-smoke-started" -name '*.pyc' -print -quit)" ]; then

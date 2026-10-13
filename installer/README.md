@@ -15,16 +15,20 @@ uv run python scripts/run_test_matrix.py installer-contracts
 uv run python scripts/run_test_matrix.py platform
 ```
 
-Actual package builds and installed-app smoke checks are manual release work.
-Use the GitHub `Release - Build & Sign Installers` workflow for release
-candidates and `Installer Verify` when you want to smoke platform packages
-without publishing. Those workflows build the Windows, Linux, and macOS
-artifacts, launch the installed app with isolated data dirs, and upload
-checksums/manifests for review.
+Actual package builds and installed-app smoke checks run in GitHub Actions.
+Use the `Release - Build & Sign Installers` workflow for releases (from the
+tag, or `dry_run: true` on any branch) and `Installer Verify` when you want to
+smoke platform packages without publishing. Both build the Windows, Linux, and
+macOS packages, launch the installed app with isolated data dirs, and rehearse
+a background update; Installer Verify also installs each package over the real
+5.1.0 release the way 5.1's updater does (the 5.1 bridge). The release also
+builds the update parts (`scripts/build_update_parts.py`) and notarizes and
+staples macOS automatically.
 
-Windows code signing remains local-only unless the project signing policy
-changes. macOS notarization remains an explicit manual workflow after the
-signed artifact has been reviewed.
+Windows code signing stays local-only: CI uploads the installer stage, and
+`scripts/release_windows.ps1` signs `Row-Bot.exe`, packs and signs the
+installer with Certum on the maintainer's machine, and publishes (see
+[RELEASING.md](../docs/RELEASING.md)).
 
 ## Linux Tarball
 
@@ -203,6 +207,12 @@ This will:
    (`unchecked-hash`, recorded relative to `installer\build`) for the app and for the runtime
    modules `verify_runtime_dependencies.py all` imports, and write `version.json`
 8. Compile everything into `dist\Row-Bot-X.Y.Z-Windows-x64.exe`
+
+For a release, `Row-Bot.exe` has to be signed before Inno Setup packs it. CI
+therefore keeps the stage (`installer\build\{python,app,Row-Bot.exe,version.json}`
+and `row_bot_setup.iss`) as the `Row-Bot-Windows-stage` artifact, and
+`scripts/release_windows.ps1` signs `Row-Bot.exe`, runs ISCC on that stage
+and signs the installer locally.
 
 #### Options
 
