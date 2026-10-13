@@ -277,11 +277,7 @@ def test_a_rolled_back_update_is_reported_after_the_restart(tmp_path):
     engine.start(release.files)
     engine.apply(when="now", force=True)
     # The native launcher gave up on 5.2.1 after two failed starts.
-    state = install_layout.read_state(layout.root)
-    state.unverified_launches = install_layout.MAX_UNVERIFIED_LAUNCHES
-    rolled, failed = install_layout.begin_launch(state)
-    assert failed == "5.2.1"
-    install_layout.write_state(layout.root, rolled)
+    _launcher_gives_up(layout)
 
     again = _engine(layout, FakeTransport({}))
     status = again.status()
@@ -372,12 +368,19 @@ def test_linux_switch_moves_the_current_link(tmp_path):
 
 
 def _launcher_gives_up(layout) -> None:
-    """The native launcher's rule after the switched-to version fails to start twice."""
-    state = install_layout.read_state(layout.root)
+    """The launcher's start after the switched-to version failed to start twice.
+
+    ``install_layout begin-launch`` is what the Linux wrapper runs (the Windows
+    launcher and the macOS host apply the same rule): back to ``previous``,
+    and on Linux the ``current`` link moves back too.
+    """
+    state = install_layout.load_state(layout.root, layout.kind)
     state.unverified_launches = install_layout.MAX_UNVERIFIED_LAUNCHES
-    rolled, failed = install_layout.begin_launch(state)
-    assert failed is not None
-    install_layout.write_state(layout.root, rolled)
+    install_layout.write_state(layout.root, state)
+    command = ["begin-launch", "--root", str(layout.root), "--kind", layout.kind.value]
+    assert install_layout.main(command) == 0
+    after = install_layout.load_state(layout.root, layout.kind)
+    assert after.active == layout.version and after.last_rollback["from"] != layout.version
 
 
 def _saved_phase(layout) -> dict:

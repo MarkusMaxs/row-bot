@@ -351,11 +351,22 @@ def test_removing_the_old_install_is_requested_and_never_blocks_settings(tmp_pat
 
     from row_bot.updates import legacy
 
-    _updater_, _engine, layout = _updater(tmp_path, monkeypatch)
+    _updater(tmp_path, monkeypatch)
+    # The earlier all-users install exists only on Windows: a per-user Windows
+    # install that recorded it, and its registry entry (faked) still present.
+    monkeypatch.setattr(legacy, "legacy_install_present", lambda: True)
+    for kind in (install_layout.InstallKind.LINUX, install_layout.InstallKind.MACOS):
+        other = make_install(tmp_path / kind.value, "1.0.0", kind=kind)
+        state = install_layout.read_state(other.root)
+        state.extra[legacy.STATE_KEY] = {"detected_at": "2026-10-11T12:00:00Z"}
+        install_layout.write_state(other.root, state)
+        monkeypatch.setattr(client_updates, "_layout", lambda other=other: other)
+        assert client_updates.read_updates()["legacy_install"] is False  # never offered off Windows
+    layout = make_install(tmp_path / "windows", "1.0.0", kind=install_layout.InstallKind.WINDOWS)
+    monkeypatch.setattr(client_updates, "_layout", lambda: layout)
     state = install_layout.read_state(layout.root)
     state.extra[legacy.STATE_KEY] = {"detected_at": "2026-10-11T12:00:00Z"}
     install_layout.write_state(layout.root, state)
-    monkeypatch.setattr(legacy, "legacy_install_present", lambda: True)
     prompt_open = threading.Event()
     answered = threading.Event()
 
