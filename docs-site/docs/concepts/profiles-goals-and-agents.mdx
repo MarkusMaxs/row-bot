@@ -23,7 +23,7 @@ Delegation capacity is bounded. Each new run snapshots the application-wide work
 
 ## Status And Hand-Offs
 
-An active goal can accumulate progress across turns, with no turn limit unless you set one. After each turn Row-Bot judges whether the goal made progress, is done, or is blocked; two turns without progress, or the same step failing three times, pause it with the reason so you can decide. Completion should mean the finish condition and required checks are satisfied. A block should identify a real impasse, not merely unfinished work. Stopping an agent ends that run without deleting the parent thread, goal history, or already-recorded evidence.
+An active goal can accumulate progress across turns, with no turn limit unless you set one. After each turn Row-Bot judges whether the goal made progress, is done, or is blocked; two turns without progress, the same step failing three times, or two progress checks in a row that couldn't run, pause it with the reason so you can decide. A goal doesn't continue by itself after Row-Bot closes and opens again: it comes back paused, and you resume it. Completion should mean the finish condition and required checks are satisfied. A block should identify a real impasse, not merely unfinished work. Stopping an agent ends that run without deleting the parent thread, goal history, or already-recorded evidence.
 
 The work-round budget is checked at model, tool, and resume boundaries so a restart cannot reset it. Repeated no-progress states are blocked and then terminated cleanly, and every terminal path writes one durable final status and reason.
 
