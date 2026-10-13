@@ -120,7 +120,7 @@ def test_same_count_foreign_coverage_does_not_pass_readiness(projection_stack):
     assert not kg.memory_vector_status()["ready"]
 
 
-def test_recall_keeps_coverage_and_a_property_change_needs_new_vectors(projection_stack):
+def test_recall_and_a_property_change_keep_coverage_and_a_content_change_needs_new_vectors(projection_stack):
     kg, embedding, _fingerprint, _config = projection_stack
     entity = add(kg)
     kg.rebuild_index()
@@ -129,7 +129,12 @@ def test_recall_keeps_coverage_and_a_property_change_needs_new_vectors(projectio
     assert kg.memory_vector_status()["ready"]
     kg._upsert_index(entity["id"])
     assert len(embedding.batches) == count
+    # Properties (provenance, status, review flags, edit stamps) are not embedded (F54).
     kg.update_entity(entity["id"], entity["description"], properties={"meaningful": "changed"})
+    assert kg.memory_vector_status()["ready"]
+    kg.rebuild_index()
+    assert len(embedding.batches) == count
+    kg.update_entity(entity["id"], "A changed meaning needs a new vector.")
     assert not kg.memory_vector_status()["ready"]
     kg.rebuild_index()
     assert len(embedding.batches) == count + 1

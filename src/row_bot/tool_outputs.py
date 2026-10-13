@@ -332,8 +332,8 @@ def cap_tool_message(message: Any, *, thread_id: str | None = None, source: str 
 
     if isinstance(content, str):
         capped = cap(content)
-        return message if capped is content else message.model_copy(update={"content": capped})
-    if isinstance(content, list):
+        message = message if capped is content else message.model_copy(update={"content": capped})
+    elif isinstance(content, list):
         changed = False
         blocks: list[Any] = []
         for block in content:
@@ -346,8 +346,37 @@ def cap_tool_message(message: Any, *, thread_id: str | None = None, source: str 
                 new = block
             changed = changed or new is not block
             blocks.append(new)
-        return message.model_copy(update={"content": blocks}) if changed else message
+        message = message.model_copy(update={"content": blocks}) if changed else message
+    if getattr(message, "status", "success") != "error" and _is_mcp_error_result(source, message.content):
+        # The provider gets the error flag (Claude's is_error), and an error is not a result the
+        # finalization fallback answers from.
+        message = message.model_copy(update={"status": "error"})
     return message
+
+
+_APPROVAL_LINE = re.compile(r"\AApproval: [^\n]*\n?")
+
+
+def _is_mcp_error_result(source: str, content: Any) -> bool:
+    """Whether a result is an MCP tool's error: its server marked it ``isError``, which leads the
+    text with ``ERROR_PREFIX``. Only a name this MCP runtime issued counts, never a look-alike."""
+    if not source.startswith("mcp_"):
+        return False
+    runtime = sys.modules.get("row_bot.mcp_client.runtime")
+    if runtime is None:
+        return False  # Nothing has run an MCP tool in this process.
+    if isinstance(content, list):
+        content = next((block.get("text") for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"), "")
+    from row_bot.mcp_client.results import ERROR_PREFIX
+
+    # The approval line Row-Bot adds is not the app's.
+    if not _APPROVAL_LINE.sub("", str(content or ""), count=1).startswith(ERROR_PREFIX):
+        return False
+    try:
+        return bool(runtime.servers_for_tool(source))
+    except Exception:
+        return False
 
 
 # ── Paging ──────────────────────────────────────────────────────────────────

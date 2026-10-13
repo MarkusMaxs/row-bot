@@ -23,6 +23,7 @@ from row_bot.prompt_cache import (
 )
 from row_bot.providers.capabilities import PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES, prompt_cache_route
 from row_bot import prompt_prefix_diff
+from row_bot.providers.stop_reason import stop_reason as provider_stop_reason, stopped_at_output_limit
 from row_bot.providers.usage_ledger import with_usage_purpose
 from row_bot import external_content as _external_content
 from row_bot import history_hygiene
@@ -657,48 +658,6 @@ def _normalize_provider_facing_messages(
         )
     return normalized
 
-
-# ── Contextual compression: extract only query-relevant content per doc ──────
-_compressor = None
-
-def _get_compressor():
-    """Return a compressor based on the configured mode (deep / off).
-
-    * **deep** — ``LLMChainExtractor``.  K extra LLM calls per tool
-      invocation; highest relevance.  Respects ``_model_override_var``.
-    * **off** (default) — no compression; ``_pre_model_trim()`` handles
-      context overflow by proportionally shrinking tool outputs.
-    """
-    global _compressor
-    from row_bot.tools.registry import get_global_config
-    mode = get_global_config("compression_mode", "off")
-
-    if mode != "deep":
-        _compressor = None
-        return None
-
-    # mode == "deep" — LLMChainExtractor behaviour
-    from langchain_classic.retrievers.document_compressors import LLMChainExtractor
-
-    _ov = _model_override_var.get() or ""
-    if _ov and _ov != get_current_model() and (is_model_local(_ov) or is_cloud_model(_ov)):
-        _compressor = LLMChainExtractor.from_llm(get_llm_for(_ov))
-    else:
-        _compressor = LLMChainExtractor.from_llm(get_llm())
-    return _compressor
-
-def _compressed(base_retriever):
-    """Wrap any retriever with contextual compression.  Public so tool
-    modules can call ``from agent import _compressed``."""
-    comp = _get_compressor()
-    if comp is None:
-        return base_retriever
-    from langchain_classic.retrievers import ContextualCompressionRetriever
-
-    return ContextualCompressionRetriever(
-        base_compressor=comp,
-        base_retriever=base_retriever,
-    )
 
 # ── Import tools package (triggers auto-registration of all tools) ───────────
 import row_bot.tools as tools  # noqa: E402,F401 — registration side effect
@@ -7919,11 +7878,6 @@ def _log_stream_completion(
         logger.info("stream completion diagnostics=%s", diagnostics)
 
 
-# Stop reasons that mean the reply hit the output token limit: OpenAI-style finish_reason and
-# Ollama done_reason "length", and Anthropic stop_reason "max_tokens" (F17).
-_OUTPUT_LIMIT_STOP_REASONS = frozenset({"length", "max_tokens"})
-
-
 def _stream_graph(agent, input_data, config: dict,
                   *, stop_event: threading.Event | None = None,
                   phase_timings: dict[str, Any] | None = None):
@@ -8222,14 +8176,8 @@ def _stream_graph(agent, input_data, config: dict,
             )
             if _prompt_cache_usage:
                 provider_call.update(_prompt_cache_usage)
-            _fr = _rm.get("finish_reason")
-            if _fr:
-                _finish_reason = _fr
-            _dr = _rm.get("done_reason")
-            if _dr:
-                _finish_reason = _dr
-            # Anthropic says why it stopped in stop_reason (F17).
-            _sr = _rm.get("stop_reason")
+            # Why the provider stopped, read from any provider's shape (F17).
+            _sr = provider_stop_reason(_rm)
             if _sr:
                 _finish_reason = _sr
 
@@ -8567,7 +8515,7 @@ def _stream_graph(agent, input_data, config: dict,
 
     # Warn if the model stopped due to output token limit
     visible_answer = _joined_visible_answer(full_answer)
-    if _finish_reason in _OUTPUT_LIMIT_STOP_REASONS and visible_answer:
+    if stopped_at_output_limit(_finish_reason) and visible_answer:
         logger.warning("Model output truncated (finish_reason=%s) — "
                        "response was cut short by the provider's output token limit", _finish_reason)
         full_answer.append(

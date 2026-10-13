@@ -120,12 +120,12 @@ class ChatOllamaCloud(BaseChatModel):
                 final_usage = {
                     key: value
                     for key, value in _response_metadata(payload).items()
-                    if key in {"prompt_eval_count", "eval_count", "token_usage"}
+                    if key in {"prompt_eval_count", "eval_count", "token_usage", "done_reason"}
                 }
                 break
         if scope is not None and scope.is_cancelled():
             return
-        # The ``done`` payload carries the counts; the closing chunk keeps them.
+        # The ``done`` payload carries the counts and why it stopped (F17); the closing chunk keeps them.
         yield ChatGenerationChunk(message=AIMessageChunk(
             content="",
             chunk_position="last",

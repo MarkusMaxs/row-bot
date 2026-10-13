@@ -49,6 +49,12 @@ _EXACT_CONTEXT_LIMITS: dict[str, tuple[tuple[str, int], ...]] = {
     ("chatgpt-",        128_000),   # chatgpt- aliases        — 128K
     ),
     "anthropic": (
+    # Claude 5 generation (5 and 5.x): 1M for every family, Haiku included.
+    ("claude-opus-5",  1_000_000),  # Opus 5 / 5.5            — 1M
+    ("claude-sonnet-5",1_000_000),  # Sonnet 5 / 5.5          — 1M
+    ("claude-haiku-5", 1_000_000),  # Haiku 5.5               — 1M
+    ("claude-fable-5", 1_000_000),  # Fable 5 / 5.1           — 1M
+    ("claude-mythos-5",1_000_000),  # Mythos 5 / 5.1          — 1M
     ("claude-opus-4",  1_000_000),  # Opus 4.x                — 1M
     ("claude-sonnet-4",1_000_000),  # Sonnet 4.x              — 1M
     ("claude-haiku-4",   200_000),  # Haiku 4.x               — 200K
