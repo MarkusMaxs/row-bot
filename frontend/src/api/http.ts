@@ -228,20 +228,6 @@ export class HttpTransport implements ClientTransport {
   updateCommand(command: wire.UpdateCommand, signal?: AbortSignal) {
     return wire.sendUpdateCommand(this.base, this.session(), command, signal);
   }
-  startUpdateInstall(command: wire.UpdateInstallCommand, signal?: AbortSignal) {
-    return wire.startUpdateInstall(this.base, this.session(), command, signal);
-  }
-  updateInstall(commandId: string, signal?: AbortSignal) {
-    return wire.getUpdateInstall(this.base, this.session(), commandId, signal);
-  }
-  cancelUpdateInstall(commandId: string, signal?: AbortSignal) {
-    return wire.cancelUpdateInstall(
-      this.base,
-      this.session(),
-      commandId,
-      signal,
-    );
-  }
   migrationSources(signal?: AbortSignal) {
     return wire.getMigrationSources(this.base, this.session(), signal);
   }

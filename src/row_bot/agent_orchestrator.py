@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import logging
+import contextlib
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -97,6 +98,8 @@ _PERMANENT_MARKERS = (
 )
 _SERVICE_LOCK = threading.RLock()
 _DELIVERY_RECONCILE_ADMISSION = threading.BoundedSemaphore(1)
+_DELIVERIES_IN_FLIGHT = 0
+_DELIVERIES_IN_FLIGHT_LOCK = threading.Lock()
 _SYNTHESIS_THREADS: dict[str, threading.Thread] = {}
 _PARENT_THREADS: dict[str, threading.Thread] = {}
 _SYNTHESIS_EXECUTOR: Callable[[dict[str, Any], str], str] | None = None
@@ -3270,6 +3273,24 @@ def _default_delivery_executor(
     )
 
 
+@contextlib.contextmanager
+def _delivery_in_flight():
+    global _DELIVERIES_IN_FLIGHT
+    with _DELIVERIES_IN_FLIGHT_LOCK:
+        _DELIVERIES_IN_FLIGHT += 1
+    try:
+        yield
+    finally:
+        with _DELIVERIES_IN_FLIGHT_LOCK:
+            _DELIVERIES_IN_FLIGHT -= 1
+
+
+def deliveries_in_flight() -> bool:
+    """True while a reply is being sent to a channel (the update restart guard)."""
+    with _DELIVERIES_IN_FLIGHT_LOCK:
+        return _DELIVERIES_IN_FLIGHT > 0
+
+
 def _deliver_once(
     orchestration: dict[str, Any],
     *,
@@ -3322,7 +3343,8 @@ def _deliver_once(
         return bool(row and row["delivery_status"] == "delivered")
     attempt = int(row["attempt_count"])
     try:
-        delivered = bool(executor(orchestration, kind, text, key))
+        with _delivery_in_flight():
+            delivered = bool(executor(orchestration, kind, text, key))
         status = "delivered" if delivered else "failed"
         error = "" if delivered else "Delivery executor returned false."
         if not delivered and executor is _default_delivery_executor:

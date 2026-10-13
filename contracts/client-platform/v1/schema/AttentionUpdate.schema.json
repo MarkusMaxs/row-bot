@@ -1,6 +1,11 @@
 {
   "additionalProperties": false,
   "properties": {
+    "ready": {
+      "default": false,
+      "title": "Ready",
+      "type": "boolean"
+    },
     "version": {
       "maxLength": 64,
       "minLength": 1,

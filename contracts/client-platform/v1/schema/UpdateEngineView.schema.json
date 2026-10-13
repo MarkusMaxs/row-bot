@@ -1,0 +1,126 @@
+{
+  "additionalProperties": false,
+  "description": "The background updater: preparing, ready, applying, or why it stopped.",
+  "properties": {
+    "apply_when": {
+      "anyOf": [
+        {
+          "enum": [
+            "now",
+            "when_idle",
+            "on_quit"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Apply When"
+    },
+    "downloaded": {
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "title": "Downloaded",
+      "type": "integer"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Error"
+    },
+    "full_installer_url": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Full Installer Url"
+    },
+    "message": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Message"
+    },
+    "phase": {
+      "enum": [
+        "idle",
+        "checking",
+        "downloading",
+        "staging",
+        "ready",
+        "applying",
+        "verified",
+        "failed"
+      ],
+      "title": "Phase",
+      "type": "string"
+    },
+    "retryable": {
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "step": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Step"
+    },
+    "total": {
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "title": "Total",
+      "type": "integer"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Version"
+    }
+  },
+  "required": [
+    "phase",
+    "version",
+    "step",
+    "message",
+    "error",
+    "retryable",
+    "apply_when",
+    "full_installer_url",
+    "downloaded",
+    "total"
+  ],
+  "title": "UpdateEngineView",
+  "type": "object"
+}

@@ -1,7 +1,12 @@
 import { useEffect, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import * as Popover from '@radix-ui/react-popover';
-import { ArrowUpCircle, ShieldAlert, TriangleAlert } from 'lucide-react';
+import {
+  ArrowUpCircle,
+  RefreshCw,
+  ShieldAlert,
+  TriangleAlert,
+} from 'lucide-react';
 import type { AttentionSnapshot, PendingApprovalPage } from '../../api/types';
 import { Hint } from '../../ui/primitives';
 import { PendingApprovalList } from './InPlaceApproval';
@@ -48,7 +53,8 @@ export function updateReminderPending(version: string, now = Date.now()) {
  * One sidebar-footer indicator (NiceGUI parity rows 12 and 13). It appears
  * only when something needs attention: waiting approvals open a small list
  * with Approve / Deny in place (B255), problems open Monitor, an update
- * opens Updates. Quiet when everything is healthy; no permanent health dot.
+ * opens Updates ("Restart to update" once it is downloaded and ready). Quiet
+ * when everything is healthy; no permanent health dot.
  */
 export default function AttentionIndicator({
   load,
@@ -175,21 +181,27 @@ export default function AttentionIndicator({
   const to = problems.length ? '/?tab=monitor' : '/settings/updates';
   const words = problems.length
     ? `${problems.length} ${problems.length === 1 ? 'thing needs' : 'things need'} attention`
-    : `Update to ${update!.version} available`;
+    : update!.ready
+      ? 'Restart to update'
+      : `Update to ${update!.version} available`;
   const detail = problems.length
     ? problems.map((problem) => problem.title).join(' · ')
-    : 'Open Updates to install it or be reminded later.';
+    : update!.ready
+      ? `Version ${update!.version} is ready. Restart to install it, or it installs when you quit.`
+      : 'Open Updates to install it or be reminded later.';
   return (
     <Hint label={detail}>
       <Link
         className={`nav-attention${compact ? ' is-compact button ghost icon-button icon-action icon-action-md' : ''}`}
         data-tone={problems.length ? 'warning' : 'info'}
         to={to}
-        aria-label={`${words}. ${problems.length ? 'Open Monitor' : 'Open Updates'}`}
+        aria-label={`${words}${update?.ready && !problems.length ? ` to ${update.version}` : ''}. ${problems.length ? 'Open Monitor' : 'Open Updates'}`}
         onClick={onNavigate?.(to)}
       >
         {problems.length ? (
           <TriangleAlert size={compact ? 18 : 15} aria-hidden />
+        ) : update!.ready ? (
+          <RefreshCw size={compact ? 18 : 15} aria-hidden />
         ) : (
           <ArrowUpCircle size={compact ? 18 : 15} aria-hidden />
         )}

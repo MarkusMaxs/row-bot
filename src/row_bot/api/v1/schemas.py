@@ -2059,6 +2059,49 @@ class UpdateRelease(WireModel):
     verified_manifest: bool
 
 
+class UpdateEngineView(WireModel):
+    """The background updater: preparing, ready, applying, or why it stopped."""
+    phase: Literal["idle", "checking", "downloading", "staging", "ready", "applying", "verified", "failed"]
+    version: str | None = Field(max_length=64)
+    # downloading: manifest, code, libraries; staging: clone, libraries,
+    # unpack, compile, self_test, finish.
+    step: str | None = Field(max_length=64)
+    message: str | None = Field(max_length=512)
+    # failed: download, integrity, manifest, full_installer, disk,
+    # rolled_back, installed, busy, or the staging step that failed.
+    error: str | None = Field(max_length=64)
+    retryable: bool
+    apply_when: Literal["now", "when_idle", "on_quit"] | None
+    # error "full_installer": where to get it (an https GitHub release URL).
+    full_installer_url: str | None = Field(max_length=2048)
+    downloaded: int = Field(ge=0, le=1_000_000_000_000)
+    total: int = Field(ge=0, le=1_000_000_000_000)
+
+
+class UpdateHostRequest(WireModel):
+    action: Literal["check", "update_now", "skip", "pause", "resume"]
+    requested_at: str | None = Field(max_length=64)
+
+
+class UpdateHostView(WireModel):
+    """ROW_BOT_UPDATES=external: what the host that applies updates reports."""
+    state: Literal["unknown", "idle", "checking", "downloading", "ready", "applying", "failed", "paused"]
+    current_version: str | None = Field(max_length=64)
+    available_version: str | None = Field(max_length=64)
+    message: str | None = Field(max_length=300)
+    notes_url: str | None = Field(max_length=2048)
+    updated_at: str | None = Field(max_length=64)
+    # A request Row-Bot left that the host has not acted on yet.
+    request: UpdateHostRequest | None
+
+
+class UpdateHeldBack(WireModel):
+    """The version Row-Bot went back from; it is not prepared again by itself."""
+    version: str = Field(max_length=64)
+    # rolled_back: it did not start; repair: the person went back with Repair.
+    reason: Literal["rolled_back", "repair"]
+
+
 class UpdateSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -2072,39 +2115,46 @@ class UpdateSnapshot(WireModel):
     )
     available: UpdateRelease | None
     dev_install: bool
-    # This device can start an install. A macOS install opens a disk image in
-    # Finder, so there only the desktop app on the Mac can.
-    install_here: bool
+    # self: this install updates itself; external: its host does (D11);
+    # unavailable: a source checkout or an unrecognised folder.
+    mode: Literal["self", "external", "unavailable"]
+    auto_check: bool
+    # Download and prepare a found release in the background (D2).
+    auto_download: bool
+    engine: UpdateEngineView
+    # Repair goes back to this version.
+    previous_version: str | None = Field(max_length=64)
+    # Windows: the earlier all-users Row-Bot is still installed.
+    legacy_install: bool
+    host: UpdateHostView | None
+    # While an update is ready: what restarting now would interrupt.
+    active_work: list[Annotated[str, StringConstraints(max_length=120)]] = Field(max_length=8)
+    held_back: UpdateHeldBack | None
+    # Testing only: a loopback feed replaces GitHub (ROW_BOT_UPDATE_FEED).
+    feed_url: str | None = Field(max_length=256)
 
 
 class UpdateCommand(WireModel):
     command_id: UUID
     expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    action: Literal["check", "skip", "clear_skipped"]
+    action: Literal[
+        "check", "skip", "clear_skipped", "download", "cancel", "retry", "apply",
+        "rollback", "set_auto_check", "set_auto_download", "remove_legacy", "pause", "resume",
+    ]
     version: str = Field(default="", max_length=64)
+    # apply: now (refused while work runs unless force), when_idle or on_quit.
+    when: Literal["now", "when_idle", "on_quit"] | None = None
+    force: bool = False
+    # set_auto_check / set_auto_download.
+    enabled: bool | None = None
 
 
 class UpdateReceipt(WireModel):
     schema_version: Literal[1]
     command_id: UUID
-    status: Literal["completed", "failed"]
+    # requested: passed to the host that applies updates.
+    status: Literal["completed", "failed", "requested"]
     snapshot: UpdateSnapshot
-
-
-class UpdateInstallCommand(WireModel):
-    command_id: UUID
-    expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    version: str = Field(max_length=64)
-
-
-class UpdateInstallStatus(WireModel):
-    schema_version: Literal[1]
-    command_id: UUID
-    version: str = Field(max_length=64)
-    phase: Literal["downloading", "cancel_requested", "cancelled", "failed", "handoff"]
-    downloaded: int = Field(ge=0, le=1_000_000_000_000)
-    total: int = Field(ge=0, le=1_000_000_000_000)
-    message: str = Field(max_length=256)
 
 
 class MigrationScanRequest(WireModel):
@@ -4026,6 +4076,8 @@ class AttentionProblem(WireModel):
 
 class AttentionUpdate(WireModel):
     version: str = Field(min_length=1, max_length=64)
+    # Prepared in the background: restarting installs it.
+    ready: bool = False
 
 
 class AttentionSnapshot(WireModel):

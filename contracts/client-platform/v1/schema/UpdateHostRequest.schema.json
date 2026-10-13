@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "check",
+        "update_now",
+        "skip",
+        "pause",
+        "resume"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "requested_at": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Requested At"
+    }
+  },
+  "required": [
+    "action",
+    "requested_at"
+  ],
+  "title": "UpdateHostRequest",
+  "type": "object"
+}

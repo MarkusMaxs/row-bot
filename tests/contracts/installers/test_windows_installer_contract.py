@@ -106,6 +106,7 @@ def test_a_reinstall_replaces_the_version_folder_and_nothing_outside_the_install
 
     assert "{app}\\versions\\{#MyAppVersion}" in install_delete
     assert "{app}\\versions" in uninstall_delete
+    assert "{app}\\.updates" in uninstall_delete
     for path in install_delete + uninstall_delete:
         # User data lives in %USERPROFILE%\.row-bot, never under {app}.
         assert path == "{app}" or path.startswith("{app}\\"), path

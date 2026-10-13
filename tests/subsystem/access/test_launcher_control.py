@@ -13,6 +13,7 @@ from row_bot.access.launcher_control import (
     LauncherControlServer,
     LauncherControlStatus,
     _is_loopback,
+    request_launcher_relaunch,
     request_launcher_restart,
     request_open_window,
 )
@@ -187,3 +188,37 @@ def test_launcher_control_loopback_check_is_exact() -> None:
     assert _is_loopback("::ffff:127.0.0.1")
     assert not _is_loopback("192.168.1.8")
     assert not _is_loopback("localhost")
+
+
+def test_relaunch_needs_the_launch_secret_and_only_relaunches() -> None:
+    """An update switch asks the launcher to quit with code 75 (and nothing else)."""
+    relaunched = threading.Event()
+    restarted = threading.Event()
+    server = LauncherControlServer(
+        restarted.set,
+        relaunch_launcher=relaunched.set,
+        open_window=lambda: True,
+        secret="r" * 43,
+    )
+    port = server.start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as with_open_token:
+            _post(port, server.open_token, "c" * 24, "/v1/relaunch")
+        assert with_open_token.value.code == 403
+        result = request_launcher_relaunch(
+            environ={LAUNCH_SECRET_ENV: server.secret, LAUNCHER_CONTROL_PORT_ENV: str(port)}
+        )
+        assert result.accepted
+        assert relaunched.wait(2)
+        assert not restarted.is_set()
+    finally:
+        server.stop()
+    no_route = LauncherControlServer(lambda: None, secret="q" * 43)
+    port = no_route.start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as missing:
+            _post(port, no_route.secret, "d" * 24, "/v1/relaunch")
+        assert missing.value.code == 404
+    finally:
+        no_route.stop()
+    assert request_launcher_relaunch(environ={}).accepted is False

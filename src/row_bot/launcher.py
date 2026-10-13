@@ -651,6 +651,8 @@ class _TrayMenuEntry:
     callback: Callable[..., None] | None = None
     default: bool = False
     separator: bool = False
+    # Shown only while this returns True (pystray re-reads it on update_menu()).
+    visible: Callable[[], bool] | None = None
 
 
 def _tray_separator() -> _TrayMenuEntry:
@@ -661,6 +663,11 @@ def _build_tray_menu_entries(tray: "RowBotTray") -> tuple[_TrayMenuEntry, ...]:
     return (
         _TrayMenuEntry(f"Open {APP_DISPLAY_NAME}", tray._on_open, default=True),
         _TrayMenuEntry("Open in Browser", tray._on_open_browser),
+        _TrayMenuEntry(
+            "Restart to Update",
+            tray._on_restart_to_update,
+            visible=tray._update_ready_visible,
+        ),
         _tray_separator(),
         _TrayMenuEntry("Show Buddy", tray._on_show_buddy),
         _TrayMenuEntry("Hide Buddy", tray._on_hide_buddy),
@@ -691,14 +698,25 @@ class _PystrayTrayBackend:
             if entry.separator:
                 items.append(self._pystray.Menu.SEPARATOR)
             elif entry.callback is not None:
+                shown = entry.visible
                 items.append(
                     self._pystray.MenuItem(
                         entry.label,
                         entry.callback,
                         default=entry.default,
+                        visible=(lambda _item, shown=shown: shown()) if shown else True,
                     )
                 )
         return self._pystray.Menu(*items)
+
+    def update_menu(self) -> None:
+        self._icon.update_menu()
+
+    def notify(self, message: str) -> None:
+        try:
+            self._icon.notify(message, APP_DISPLAY_NAME)
+        except Exception:
+            logger.debug("Tray notification unavailable", exc_info=True)
 
     @property
     def icon(self):
@@ -829,6 +847,9 @@ class _MacStatusItemBackend:
         if hasattr(menu, "setAutoenablesItems_"):
             menu.setAutoenablesItems_(False)
         for entry in menu_entries:
+            if entry.visible is not None:
+                # Installed macOS apps use the native tray host's menu instead.
+                continue
             if entry.separator:
                 item = self._AppKit.NSMenuItem.separatorItem()
             else:
@@ -2820,6 +2841,7 @@ class RowBotTray:
         self._window_control_port: int | None = None
         self._stop_event = threading.Event()
         self._quitting = False
+        self._update_ready: str | None = None
 
         self._icon = _create_tray_backend(_build_tray_menu_entries(self))
 
@@ -2845,6 +2867,7 @@ class RowBotTray:
             self._restart_child_from_control,
             shutdown_launcher=self._on_quit,
             open_window=self._open_for_second_start,
+            relaunch_launcher=quit_for_relaunch,
         )
         control.start()
         self._launcher_control = control
@@ -3040,6 +3063,46 @@ class RowBotTray:
         else:
             logger.info("Buddy overlay was not open")
 
+    def _update_ready_visible(self) -> bool:
+        return bool(self._update_ready)
+
+    def _refresh_update_ready(self) -> None:
+        """Show "Restart to Update" while a staged version waits (state.json)."""
+        ready = _ready_update_version() if self._owns_server else None
+        if ready == self._update_ready:
+            return
+        self._update_ready = ready
+        update_menu = getattr(self._icon, "update_menu", None)
+        if callable(update_menu):
+            try:
+                update_menu()
+            except Exception:
+                logger.debug("Could not refresh the tray menu", exc_info=True)
+
+    def _on_restart_to_update(self, icon=None, item=None) -> None:  # noqa: ARG002
+        """Ask the app to apply the ready update (it waits for running work)."""
+        threading.Thread(
+            target=self._restart_to_update, daemon=True, name="row-bot-restart-to-update"
+        ).start()
+
+    def _restart_to_update(self) -> None:
+        answer = _request_update_apply(self._port, self._server) if self._server.is_alive else "unreachable"
+        notify = getattr(self._icon, "notify", None)
+        if answer == "deferred":
+            if callable(notify):
+                notify(f"{APP_DISPLAY_NAME} will restart to update when its current work finishes.")
+            return
+        if answer == "restarting":
+            return
+        if answer != "unreachable":
+            # The app answered (busy, or not ready): its restart guard decides.
+            if callable(notify):
+                notify(f"{APP_DISPLAY_NAME} can't restart to update right now. Try again from Settings.")
+            return
+        # The app's server is gone: nothing can be interrupted, switch here.
+        if _switch_to_ready_update():
+            self._on_quit(exit_code=install_layout.RELAUNCH_EXIT_CODE)
+
     def _on_quit(self, icon=None, item=None, *, exit_code: int = 0) -> None:  # noqa: ARG002
         logger.info("Quit requested%s", f" (exit code {exit_code})" if exit_code else "")
         if self._quitting:
@@ -3067,6 +3130,7 @@ class RowBotTray:
                     self._window_proc = None
                 if self._owns_server:
                     self._server.stop()
+                    _apply_ready_update_on_quit()
                 if self._launcher_control is not None:
                     self._launcher_control.stop()
                 _clear_launcher_state()
@@ -3095,6 +3159,7 @@ class RowBotTray:
         _POLL_INTERVAL = 3.0  # seconds
         _crash_logged = False
         while not self._stop_event.is_set():
+            self._refresh_update_ready()
             if self._owns_server and self._server.is_alive:
                 self._icon.icon = _get_icon("running")
                 self._icon.title = f"{APP_DISPLAY_NAME} — running"
@@ -3382,6 +3447,7 @@ def _run_direct(args: argparse.Namespace) -> None:
         launcher_control = LauncherControlServer(
             _restart_direct_child,
             open_window=None if (args.server or args.no_open) else _show_again,
+            relaunch_launcher=quit_for_relaunch,
         )
         launcher_control.start()
         _set_process_launch_environment(server, launcher_control.child_environment())
@@ -3541,6 +3607,7 @@ def _run_direct(args: argparse.Namespace) -> None:
                 )
             if launcher_control is not None:
                 launcher_control.stop()
+            _apply_ready_update_on_quit()
 
 
 def _timestamp() -> str:
@@ -3781,16 +3848,74 @@ def quit_for_relaunch() -> None:
         tray._on_quit(exit_code=install_layout.RELAUNCH_EXIT_CODE)
 
 
-def quit_for_update() -> None:
-    """Best-effort shutdown hook used by updater.install_and_restart."""
-    global _ACTIVE_TRAY
-    if _ACTIVE_TRAY is not None:
-        try:
-            _ACTIVE_TRAY._on_quit()
-            return
-        except Exception:
-            pass
-    os._exit(0)
+def _ready_update_version() -> str | None:
+    """The staged update waiting in this install's state.json, if any."""
+    try:
+        from row_bot.updates import switcher
+        from row_bot.updates.external import external_mode
+
+        if external_mode():
+            return None  # the host applies updates (D11)
+        return switcher.ready_version(install_layout.detect())
+    except Exception:
+        logger.debug("Could not read the install's ready update", exc_info=True)
+        return None
+
+
+def _switch_to_ready_update() -> bool:
+    try:
+        from row_bot.updates import switcher
+
+        # The tray relaunches right away (exit 75): a restart Row-Bot made (D4).
+        layout = install_layout.detect()
+        return switcher.switch_to_ready_locked(layout, restart_reason="update") is not None
+    except Exception:
+        logger.warning("Could not switch to the ready update", exc_info=True)
+        return False
+
+
+def _apply_ready_update_on_quit() -> None:
+    """Quitting applies a ready update: the next start runs the new version."""
+    try:
+        from row_bot.updates import switcher
+
+        applied = switcher.apply_on_quit()
+    except Exception:
+        logger.debug("Could not apply the ready update on quit", exc_info=True)
+        return
+    if applied:
+        logger.info("%s %s starts next time", APP_DISPLAY_NAME, applied)
+
+
+def _request_update_apply(port: int, server: "_RowBotProcess") -> str:
+    """Ask the app to restart into its ready update.
+
+    ``restarting`` or ``deferred`` as the app answers; ``unreachable`` only
+    when nothing listens (connection refused); ``unavailable`` for any other
+    answer, error or timeout, so the launcher never bypasses the app's guard.
+    """
+    secret = server._launch_environment.get(LAUNCH_SECRET_ENV, "")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{int(port)}/api/launcher-apply-update",
+        data=b"",
+        method="POST",
+        headers={"Authorization": f"Bearer {secret}"},
+    )
+    # Loopback with the launch secret: never through a configured proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=10) as response:
+            answer = json.loads(response.read(4096).decode("utf-8"))
+    except urllib.error.HTTPError:
+        return "unavailable"
+    except urllib.error.URLError as error:
+        return "unreachable" if isinstance(error.reason, ConnectionRefusedError) else "unavailable"
+    except ConnectionRefusedError:
+        return "unreachable"
+    except (OSError, ValueError, TimeoutError):
+        return "unavailable"
+    status = answer.get("status") if isinstance(answer, dict) else None
+    return status if status in {"restarting", "deferred"} else "unavailable"
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

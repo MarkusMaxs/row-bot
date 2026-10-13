@@ -54,9 +54,9 @@ read_terminal: 411
 read_tool_output: 456
 read_url: 678
 row_bot_apply_proposal: 424
-row_bot_check_for_updates: 356
+row_bot_check_for_updates: 366
 row_bot_create_skill: 1008
-row_bot_install_update: 464
+row_bot_install_update: 455
 row_bot_patch_skill: 678
 row_bot_reject_proposal: 495
 row_bot_review_skill_library: 422
@@ -92,4 +92,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (94 tools): 63913
+TOTAL (94 tools): 63914
