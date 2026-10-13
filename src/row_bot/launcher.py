@@ -3647,6 +3647,9 @@ def _restore_data(selector: str | None = None) -> int:
         "mobile.db",
         "mobile.db-wal",
         "mobile.db-shm",
+        "usage.db",
+        "usage.db-wal",
+        "usage.db-shm",
     ):
         src = source_dir / name
         if not src.exists():

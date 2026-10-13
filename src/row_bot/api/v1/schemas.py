@@ -968,7 +968,6 @@ class ToolSettingsItem(WireModel):
 class ToolSettingsSnapshot(WireModel):
     availability: Literal["available", "unavailable"]
     external_loading_mode: Literal["auto", "eager"]
-    compression_mode: Literal["off", "deep"]
     items: list[ToolSettingsItem] = Field(max_length=32)
 
 

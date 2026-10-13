@@ -238,7 +238,6 @@ const snapshot = {
   tools: {
     availability: 'available',
     external_loading_mode: 'auto',
-    compression_mode: 'off',
     items: [
       {
         tool_id: 'web_search',
