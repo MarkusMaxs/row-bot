@@ -137,7 +137,6 @@ def test_dream_cycle_waits_for_a_model(no_model, monkeypatch):
     for name in ("is_enabled", "_in_dream_window", "_is_idle"):
         monkeypatch.setattr(dream_cycle, name, lambda: True)
     monkeypatch.setattr(dream_cycle, "_already_ran_today", lambda: False)
-    monkeypatch.setattr(dream_cycle, "_is_ollama_busy", lambda: False)
     assert dream_cycle._should_dream() is False
 
     journal: list[dict] = []

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
 import pathlib
 import subprocess
+from typing import Literal
 
 from langchain_core.tools import StructuredTool
 from langgraph.types import interrupt
@@ -24,7 +24,7 @@ from row_bot.developer.git import (
 )
 from row_bot.developer.github import create_pull_request, push_current_branch
 from row_bot.developer.sandbox import ApprovalDecision, decide_action
-from row_bot.developer.review import get_file_diff, list_changed_files
+from row_bot.developer.review import get_file_diff, get_file_diff_stats, list_changed_files
 from row_bot.developer.runtime import detect_project_commands, run_workspace_command, run_workspace_shell_command
 from row_bot.developer.sandbox_runtime import (
     apply_patch_in_docker_sandbox,
@@ -36,6 +36,14 @@ from row_bot.developer.sandbox_runtime import (
 from row_bot.developer.storage import get_workspace
 from row_bot.developer.tool_context import get_thread_id, get_workspace_id, infer_workspace_id_from_thread
 from row_bot.developer.todos import list_todos, replace_todos_from_labels, set_todo_status
+from row_bot.tool_outputs import (
+    COMMAND_OUTPUT_CHARS,
+    PAGE_CHARS,
+    PAGE_LINES,
+    bounded,
+    compact_json,
+    page_lines,
+)
 from row_bot.tools import registry
 from row_bot.tools.base import BaseTool
 
@@ -127,20 +135,23 @@ def _list_files(path: str = ".", limit: int = 80) -> str:
 
 class _ReadFileInput(BaseModel):
     path: str = Field(description="Workspace-relative text file path.")
-    max_chars: int = Field(default=20000, description="Maximum characters to return.")
+    offset: int = Field(default=1, description="First line to read (1-based).")
+    limit: int = Field(default=PAGE_LINES, description="Most lines to read.")
 
 
-def _read_file(path: str, max_chars: int = 20000) -> str:
+def _read_file(path: str, offset: int = 1, limit: int = PAGE_LINES) -> str:
     _workspace, root = _active_workspace()
     target = _inside(root, path)
     if not target.is_file():
         return f"File not found: {path}"
-    text = target.read_text(encoding="utf-8", errors="replace")
-    revision = hashlib.sha256(target.read_bytes()).hexdigest()
-    limit = max(1000, min(max_chars, 100_000))
-    if len(text) > limit:
-        return f"SHA256: {revision}\n" + text[:limit] + "\n...[file truncated]"
-    return f"SHA256: {revision}\n" + text
+    data = target.read_bytes()
+    text = data.decode("utf-8", errors="replace")
+    revision = hashlib.sha256(data).hexdigest()
+    # The SHA256 is of the whole file, on every page: developer_write_file checks it.
+    page, footer = page_lines(
+        text, offset=offset, limit=limit, max_chars=PAGE_CHARS, tool_name="developer_read_file"
+    )
+    return f"SHA256: {revision}\n" + page + (f"\n{footer}" if footer else "")
 
 
 class _SearchInput(BaseModel):
@@ -153,7 +164,9 @@ def _search(query: str, glob: str = "", limit: int = 80) -> str:
     _workspace, root = _active_workspace()
     if not str(query or "").strip():
         return "Enter a non-empty search query."
-    args = ["rg", "--line-number", "--no-heading", "--color=never", "--hidden"]
+    # A minified line would otherwise fill the result; show a preview of it instead.
+    args = ["rg", "--line-number", "--no-heading", "--color=never", "--hidden",
+            f"--max-columns={_SEARCH_LINE_CHARS}", "--max-columns-preview"]
     for ignored in [".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "dist", "build"]:
         args.extend(["--glob", f"!{ignored}/**"])
     if glob:
@@ -174,7 +187,7 @@ def _search(query: str, glob: str = "", limit: int = 80) -> str:
             try:
                 for idx, line in enumerate(file.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                     if lowered in line.lower():
-                        matches.append(f"{rel}:{idx}:{line}")
+                        matches.append(f"{rel}:{idx}:{_search_preview(line)}")
                         if len(matches) >= limit:
                             break
             except Exception:
@@ -188,31 +201,61 @@ def _search(query: str, glob: str = "", limit: int = 80) -> str:
     return "\n".join(rows)
 
 
+_SEARCH_LINE_CHARS = 300
+
+
+def _search_preview(line: str) -> str:
+    if len(line) <= _SEARCH_LINE_CHARS:
+        return line
+    return line[:_SEARCH_LINE_CHARS] + f" [... {len(line) - _SEARCH_LINE_CHARS} more characters]"
+
+
 def _git_status() -> str:
     workspace, _root = _active_workspace()
     status = get_git_status(workspace.path)
-    return json.dumps(status.__dict__, indent=2)
+    return compact_json(status.__dict__)
 
 
 class _DiffInput(BaseModel):
-    path: str = Field(default="", description="Optional workspace-relative file path. Leave empty for changed file summary.")
+    path: str = Field(default="", description="Workspace-relative file path. Leave empty for the changed files with line counts.")
+    offset: int = Field(default=1, description="First line of the file's diff to show (1-based).")
+    limit: int = Field(default=PAGE_LINES, description="Most diff lines to show.")
 
 
-def _diff(path: str = "") -> str:
+_DIFF_SUMMARY_FILES = 300
+_DIFF_READ_LIMIT = 20_000_000  # Whole diffs are paged here; this only guards memory.
+
+
+def _diff(path: str = "", offset: int = 1, limit: int = PAGE_LINES) -> str:
     workspace, _root = _active_workspace()
     if path:
-        diff = get_file_diff(workspace.path, path)
-        return diff or "No textual diff available."
+        diff = get_file_diff(workspace.path, path, limit=_DIFF_READ_LIMIT)
+        if not diff:
+            return "No textual diff available."
+        added, removed = get_file_diff_stats(workspace.path, path)
+        page, footer = page_lines(
+            diff, offset=offset, limit=limit, max_chars=PAGE_CHARS, tool_name="developer_get_diff"
+        )
+        return f"{path}: +{added} -{removed}\n{page}" + (f"\n{footer}" if footer else "")
     changed = list_changed_files(workspace.path)
     if not changed:
         return "No changed files detected."
-    return "\n".join(f"- {item.status} {item.path}" for item in changed)
+    rows = []
+    for item in changed[:_DIFF_SUMMARY_FILES]:
+        added, removed = get_file_diff_stats(workspace.path, item.path)
+        rows.append(f"- {item.status} {item.path} (+{added} -{removed})")
+    if len(changed) > _DIFF_SUMMARY_FILES:
+        rows.append(f"... and {len(changed) - _DIFF_SUMMARY_FILES} more changed files")
+    rows.append("Pass a path to see that file's diff.")
+    return "\n".join(rows)
 
 
 class _TodoInput(BaseModel):
     labels: list[str] = Field(default_factory=list, description="Todo labels to replace the current plan with.")
     todo_id: str = Field(default="", description="Existing todo id to update.")
-    status: str = Field(default="", description="New status: pending, in_progress, completed, or blocked.")
+    status: Literal["", "pending", "in_progress", "completed", "blocked"] = Field(
+        default="", description="New status for todo_id."
+    )
 
 
 def _update_todos(labels: list[str] | None = None, todo_id: str = "", status: str = "") -> str:
@@ -225,7 +268,7 @@ def _update_todos(labels: list[str] | None = None, todo_id: str = "", status: st
         todos = set_todo_status(thread_id, todo_id, status)  # type: ignore[arg-type]
     else:
         todos = list_todos(thread_id)
-    return json.dumps([todo.__dict__ for todo in todos], indent=2)
+    return compact_json([todo.__dict__ for todo in todos])
 
 
 class _RunDetectedInput(BaseModel):
@@ -261,7 +304,37 @@ def _run_detected(command: str) -> str:
         if not approval:
             return "Command cancelled by user."
         result = run(True)
-    return json.dumps(result.__dict__, indent=2, default=str)
+    return _command_text(result, tool_name="developer_run_detected_test")
+
+
+def _command_text(result, *, tool_name: str) -> str:
+    """A command result as plain text: stdout and stderr verbatim, empty fields left out."""
+    lines = [f"$ {result.command}"]
+    status = "not run" if result.returncode is None else f"exit code {result.returncode}"
+    details = [status]
+    if result.cwd:
+        details.append(f"cwd {result.cwd}")
+    if result.execution_mode and result.execution_mode != "local":
+        details.append(f"{result.execution_mode}" + (f" ({result.sandbox_backend})" if result.sandbox_backend else ""))
+    if result.process_id:
+        details.append(f"process {result.process_id}")
+    if result.code:
+        details.append(f"code {result.code}")
+    lines.append(" · ".join(details))
+    decision = result.decision
+    if decision is not None and (result.returncode is None or decision.decision != "allow"):
+        lines.append(f"policy: {decision.decision}" + (f" — {decision.reason}" if decision.reason else ""))
+    if result.changed_files:
+        lines.append("changed files: " + ", ".join(result.changed_files))
+    if result.sandbox_pending_change_id:
+        lines.append(f"sandbox pending change: {result.sandbox_pending_change_id}")
+    output = []
+    if result.stdout:
+        output.append("stdout:\n" + result.stdout.rstrip("\n"))
+    if result.stderr:
+        output.append("stderr:\n" + result.stderr.rstrip("\n"))
+    body = bounded("\n".join(output), tool_name=tool_name, max_chars=COMMAND_OUTPUT_CHARS)
+    return "\n".join(lines) + (f"\n{body}" if body else "")
 
 
 class _RunCommandInput(BaseModel):
@@ -304,7 +377,7 @@ def _run_command(command: str, timeout: int = 120, approval_reason: str = "") ->
             timeout=max(5, min(int(timeout or 120), 600)),
             confirmed=True,
         )
-    return json.dumps(result.__dict__, indent=2, default=str)
+    return _command_text(result, tool_name="developer_run_command")
 
 
 class _GitBranchInput(BaseModel):
@@ -324,7 +397,7 @@ def _create_branch(branch_name: str) -> str:
         if not approval:
             return decision.reason
     status = create_branch(workspace.path, branch_name)
-    return json.dumps(status.__dict__, indent=2)
+    return compact_json(status.__dict__)
 
 
 def _switch_branch(branch_name: str) -> str:
@@ -340,7 +413,7 @@ def _switch_branch(branch_name: str) -> str:
         if not approval:
             return decision.reason
     status = switch_branch(workspace.path, branch_name)
-    return json.dumps(status.__dict__, indent=2)
+    return compact_json(status.__dict__)
 
 
 class _GitCommitInput(BaseModel):
@@ -362,7 +435,7 @@ def _commit_changes(message: str, paths: list[str] | None = None) -> str:
             return decision.reason
         decision = ApprovalDecision("allow", "User explicitly approved this commit.")
     status = commit_changes(workspace.path, message, paths or None)
-    return json.dumps({"decision": decision.__dict__, "status": status.__dict__}, indent=2)
+    return compact_json({"decision": decision.__dict__, "status": status.__dict__})
 
 
 def _push_current_branch() -> str:
@@ -378,7 +451,7 @@ def _push_current_branch() -> str:
         if not approval:
             return "Push cancelled by user."
         result = push_current_branch(workspace.path, _active_approval_mode(), confirmed=True)
-    return json.dumps(result.__dict__, indent=2, default=str)
+    return compact_json(result.__dict__)
 
 
 class _PullRequestInput(BaseModel):
@@ -413,13 +486,13 @@ def _create_pull_request(title: str = "", body: str = "", draft: bool = True) ->
         )
     if result.ran and not result.ok and "push" in result.stderr.lower():
         return "GitHub needs the branch first: push it with developer_push_current_branch, then open the pull request."
-    return json.dumps({
+    return compact_json({
         "ok": result.ok,
         "url": result.url,
         "draft": draft,
         "title": title,
         "error": "" if result.ok else (result.stderr.strip()[-2000:] or "The pull request was not created."),
-    }, indent=2)
+    })
 
 
 class _GitFastForwardInput(BaseModel):
@@ -439,7 +512,7 @@ def _fast_forward_merge(branch_name: str) -> str:
         if not approval:
             return decision.reason
     status = fast_forward_merge(workspace.path, branch_name)
-    return json.dumps(status.__dict__, indent=2)
+    return compact_json(status.__dict__)
 
 
 class _ImportSandboxInput(BaseModel):
@@ -728,7 +801,7 @@ def _list_agent_changes() -> str:
     rows = change_ledger.list_change_sets(workspace_id=workspace.id, thread_id=get_thread_id())
     if not rows:
         return "No agent-owned change sets recorded for this Developer thread."
-    return json.dumps([
+    return compact_json([
         {
             "id": item.id,
             "summary": item.summary,
@@ -736,7 +809,7 @@ def _list_agent_changes() -> str:
             "created_at": item.created_at,
         }
         for item in rows[:20]
-    ], indent=2)
+    ])
 
 
 def _changes_workspace(func):
@@ -790,7 +863,7 @@ class DeveloperTool(BaseTool):
         return [
             StructuredTool.from_function(func=_workspace_info, name="developer_workspace_info", description="Return the active Developer workspace, path, branch, dirty state, remote, and approval mode."),
             StructuredTool.from_function(func=_list_files, name="developer_list_files", description="List files under the active Developer workspace. Paths must be workspace-relative.", args_schema=_ListFilesInput),
-            StructuredTool.from_function(func=_read_file, name="developer_read_file", description="Read a workspace-relative text file from the active Developer workspace.", args_schema=_ReadFileInput),
+            StructuredTool.from_function(func=_read_file, name="developer_read_file", description="Read a workspace-relative text file from the active Developer workspace, a page of lines at a time; the result starts with the file's SHA256.", args_schema=_ReadFileInput),
             StructuredTool.from_function(func=_search, name="developer_search", description="Search text in the active Developer workspace using a safe workspace-scoped search.", args_schema=_SearchInput),
             StructuredTool.from_function(func=_git_status, name="developer_git_status", description="Return structured Git state for the active Developer workspace."),
             StructuredTool.from_function(func=changes(_create_branch), name="developer_create_branch", description="Create a Git branch in the active Developer workspace using the thread approval mode.", args_schema=_GitBranchInput),
@@ -799,7 +872,7 @@ class DeveloperTool(BaseTool):
             StructuredTool.from_function(func=changes(_push_current_branch), name="developer_push_current_branch", description="Push the current branch to origin using the thread approval mode."),
             StructuredTool.from_function(func=_create_pull_request, name="developer_create_pull_request", description="Open a GitHub pull request for the current branch once it is pushed. Runs the GitHub CLI on this computer, never in the sandbox, and asks first by the thread approval mode. Draft by default; leave title and body empty to describe the branch's own commits and files.", args_schema=_PullRequestInput),
             StructuredTool.from_function(func=changes(_fast_forward_merge), name="developer_fast_forward_merge", description="Fast-forward merge another branch into the current branch using the thread approval mode.", args_schema=_GitFastForwardInput),
-            StructuredTool.from_function(func=_diff, name="developer_get_diff", description="Return changed file summary or one file diff for the active Developer workspace.", args_schema=_DiffInput),
+            StructuredTool.from_function(func=_diff, name="developer_get_diff", description="List changed files with added/removed line counts, or show one file's diff in pages.", args_schema=_DiffInput),
             StructuredTool.from_function(func=_update_todos, name="developer_update_todos", description="Create or update the visible Developer todo plan for this code thread. Keep it current: mark an item in_progress when you start it and completed when it is done, including work a helper agent finished, before you end your turn.", args_schema=_TodoInput),
             StructuredTool.from_function(func=changes(_run_detected), name="developer_run_detected_test", description="Run a command from the detected Developer test/lint/typecheck command list.", args_schema=_RunDetectedInput),
             StructuredTool.from_function(func=changes(_run_command), name="developer_run_command", description="Run a shell command in the active Developer workspace after policy checks and record file side effects.", args_schema=_RunCommandInput),

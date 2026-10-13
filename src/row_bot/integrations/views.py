@@ -203,14 +203,28 @@ def _step(conversation_id: str, call_id: str) -> tuple[dict, str | None]:
     return {"id": call["id"], "name": name, "args": args if isinstance(args, dict) else {}}, result
 
 
-def _result(text: str | None) -> dict | None:
-    """The tool's result as its view expects it, from what the chat kept (the agent's text form)."""
+def _result(text: str | None, conversation_id: str = "") -> dict | None:
+    """The tool's result as its view expects it, from what the chat kept (the agent's text form).
+
+    A result shortened for the model is read whole from the conversation's saved output, so the
+    view gets what it got before the cap (within the view's size limit)."""
     if text is None:
         return None
+    from row_bot.mcp_client.results import ERROR_PREFIX, STRUCTURED_SAME_AS_TEXT
+    from row_bot.mcp_client.runtime import MAX_VIEW_BYTES
+    from row_bot.tool_outputs import full_text
+
     body = re.sub(r"\AApproval: [^\n]*\n?", "", text)  # The approval line Row-Bot adds is not the app's.
-    error = body.startswith("MCP tool error: ")
-    body = body.removeprefix("MCP tool error: ")
+    error = body.startswith(ERROR_PREFIX)
+    body = body.removeprefix(ERROR_PREFIX)
+    if conversation_id:
+        body = full_text(body, thread_id=conversation_id, max_chars=MAX_VIEW_BYTES)
     content, _, structured = body.partition("STRUCTURED_CONTENT:\n")
+
+    if not structured and body.rstrip().endswith(STRUCTURED_SAME_AS_TEXT):
+        # Not repeated in the chat because the text already is the structured content.
+        content = body.rstrip()[: -len(STRUCTURED_SAME_AS_TEXT)]
+        structured = content.strip()
     found: dict[str, Any] = {"content": [{"type": "text", "text": content.strip()}] if content.strip() else []}
     try:
         value = json.loads(structured) if structured else None
@@ -298,7 +312,7 @@ def render(conversation_id: str, call_id: str) -> dict:
             "tool": {"name": info.name, "title": runtime.tool_title(str(call.get("name") or "")) or info.name,
                      "description": (info.description or "")[:4096],
                      "inputSchema": info.input_schema if info.input_schema.get("type") == "object" else {"type": "object"}},
-            "input": call.get("args") or {}, "result": _result(text), "prefers_border": meta.get("prefersBorder") is not False,
+            "input": call.get("args") or {}, "result": _result(text, conversation_id), "prefers_border": meta.get("prefersBorder") is not False,
             "domains": sorted({origin for origins in declared_domains(meta.get("csp")).values() for origin in origins})}
 
 

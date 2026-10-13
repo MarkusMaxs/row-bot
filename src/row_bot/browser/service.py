@@ -58,10 +58,16 @@ def _installed_channel() -> str | None:
     system = platform.system().casefold()
     candidates: tuple[tuple[str, str], ...]
     if system == "windows":
+        # Per-machine installs in either Program Files, and Chrome's per-user install.
+        program_files = os.environ.get("ProgramFiles") or r"C:\Program Files"
+        program_files_x86 = os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
+        local_app_data = os.environ.get("LOCALAPPDATA") or ""
         candidates = (
-            ("chrome", r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
-            ("chrome", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
-            ("msedge", r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            ("chrome", str(Path(program_files, "Google", "Chrome", "Application", "chrome.exe"))),
+            ("chrome", str(Path(program_files_x86, "Google", "Chrome", "Application", "chrome.exe"))),
+            ("chrome", str(Path(local_app_data, "Google", "Chrome", "Application", "chrome.exe")) if local_app_data else ""),
+            ("msedge", str(Path(program_files_x86, "Microsoft", "Edge", "Application", "msedge.exe"))),
+            ("msedge", str(Path(program_files, "Microsoft", "Edge", "Application", "msedge.exe"))),
         )
     elif system == "darwin":
         candidates = (("chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),)

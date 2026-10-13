@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 
 _CONTEXT_MODES = {"auto", "focused", "recent", "full", "empty", "resume"}
@@ -156,6 +156,51 @@ def _profile_header(profile: Mapping[str, Any]) -> list[str]:
     return parts
 
 
+# The newest parent turn, cut to fit, is kept only when at least this much of it fits.
+_MIN_PARTIAL_TURN_CHARS = 200
+
+
+def _recent_parent_sections(
+    compose: Callable[[list[tuple[str, str]]], str],
+    parent_context: Mapping[str, Any],
+    context: str,
+    budget: int,
+) -> list[tuple[str, str]]:
+    """PARENT SUMMARY, RECENT PARENT TURNS and CALLER CONTEXT within the child's allowance.
+
+    Over the allowance the oldest parent turns go first, then the parent
+    summary, then the start of the newest turn. The context the caller wrote
+    for the child is kept (WP C3, F52).
+    """
+    summary = [("PARENT SUMMARY", str(parent_context.get("summary") or ""))]
+    summary = summary if summary[0][1] else []
+    caller = [("CALLER CONTEXT", context)] if context else []
+    # One line per message: ``message_to_text`` folds each message onto one line.
+    turns = [line for line in str(parent_context.get("recent") or "").split("\n") if line]
+
+    def sections(kept: list[str]) -> list[tuple[str, str]]:
+        recent = [("RECENT PARENT TURNS", "\n".join(kept))] if kept else []
+        return [*summary, *recent, *caller]
+
+    def fits(kept: list[str]) -> bool:
+        return estimate_tokens(compose(sections(kept))) <= budget
+
+    while len(turns) > 1 and not fits(turns):
+        turns.pop(0)
+    if not fits(turns):
+        summary = []
+    if turns and not fits(turns):
+        # The newest turn alone is too long: keep its end, when a useful part fits.
+        newest = turns[0]
+        room = (budget - estimate_tokens(compose(sections([])))) * 4 - 48
+        turns = ["..." + newest[-room:]] if room >= _MIN_PARTIAL_TURN_CHARS else []
+        while turns and not fits(turns) and len(turns[0]) > _MIN_PARTIAL_TURN_CHARS:
+            turns = ["..." + turns[0][19:]]
+        if turns and not fits(turns):
+            turns = []
+    return sections(turns)
+
+
 def build_child_agent_prompt(
     *,
     objective: str,
@@ -182,47 +227,8 @@ def build_child_agent_prompt(
     objective = str(objective or "").strip()
     context = str(context or "").strip()
     parent_context = load_parent_context(parent_thread_id)
+    budget = profile_context_budget(profile)
     fallback = ""
-    context_sections: list[tuple[str, str]] = []
-    if mode == "focused":
-        if context:
-            context_sections.append(("CONTEXT PACKET", context))
-    elif mode == "empty":
-        context_sections.append(("CONTEXT MODE", "empty: no parent transcript or caller context was included."))
-    elif mode == "recent":
-        if parent_context["summary"]:
-            context_sections.append(("PARENT SUMMARY", parent_context["summary"]))
-        if parent_context["recent"]:
-            context_sections.append(("RECENT PARENT TURNS", parent_context["recent"]))
-        if context:
-            context_sections.append(("CALLER CONTEXT", context))
-    elif mode == "full":
-        full_text = parent_context["full"]
-        if context:
-            full_text = (full_text + "\n\nCALLER CONTEXT:\n" + context).strip()
-        budget = profile_context_budget(profile)
-        if estimate_tokens(full_text) > budget:
-            fallback = "full_to_recent_summary"
-            mode = "recent"
-            if parent_context["summary"]:
-                context_sections.append(("PARENT SUMMARY", parent_context["summary"]))
-            if parent_context["recent"]:
-                context_sections.append(("RECENT PARENT TURNS", parent_context["recent"]))
-            if context:
-                context_sections.append(("CALLER CONTEXT", context))
-        elif full_text:
-            context_sections.append(("FULL PARENT TRANSCRIPT", full_text))
-    elif mode == "resume":
-        if context:
-            context_sections.append(("RESUME CONTEXT", context))
-        context_sections.append(("CONTEXT MODE", "resume: continue an existing child thread with the supplied instruction."))
-
-    parts = [
-        *_profile_header(profile),
-        "",
-        "MISSION:",
-        objective,
-    ]
     model_ref = str(model_override or "").strip()
     runtime_lines = [
         "The parent selected this child Agent's runtime model before start.",
@@ -234,25 +240,57 @@ def build_child_agent_prompt(
         "Do not call row_bot_update_setting(setting='model') to satisfy your own runtime model request. "
         "Do not use setting='thread_model' or setting='default_model' for that either.",
     ]
-    parts.extend(["", "RUNTIME MODEL:", "\n".join(runtime_lines)])
-    for title, body in context_sections:
-        if body:
-            parts.extend(["", f"{title}:", body])
-    if fallback:
-        parts.extend(["", "CONTEXT FALLBACK:", fallback])
-    if parent_thread_id or parent_run_id:
-        refs = []
-        if parent_thread_id:
-            refs.append(f"parent_thread_id={parent_thread_id}")
-        if parent_run_id:
-            refs.append(f"parent_run_id={parent_run_id}")
-        parts.extend(["", "PARENT REFS:", ", ".join(refs)])
-    parts.extend([
-        "",
-        "Return a concise result for the parent agent. Include evidence, files or commands inspected, risks, and next steps when relevant.",
-    ])
-    prompt = "\n".join(parts).strip()
-    budget = profile_context_budget(profile)
+
+    def compose(context_sections: list[tuple[str, str]]) -> str:
+        parts = [
+            *_profile_header(profile),
+            "",
+            "MISSION:",
+            objective,
+        ]
+        parts.extend(["", "RUNTIME MODEL:", "\n".join(runtime_lines)])
+        for title, body in context_sections:
+            if body:
+                parts.extend(["", f"{title}:", body])
+        if fallback:
+            parts.extend(["", "CONTEXT FALLBACK:", fallback])
+        if parent_thread_id or parent_run_id:
+            refs = []
+            if parent_thread_id:
+                refs.append(f"parent_thread_id={parent_thread_id}")
+            if parent_run_id:
+                refs.append(f"parent_run_id={parent_run_id}")
+            parts.extend(["", "PARENT REFS:", ", ".join(refs)])
+        parts.extend([
+            "",
+            "Return a concise result for the parent agent. Include evidence, files or commands inspected, risks, and next steps when relevant.",
+        ])
+        return "\n".join(parts).strip()
+
+    context_sections: list[tuple[str, str]] = []
+    if mode == "focused":
+        if context:
+            context_sections.append(("CONTEXT PACKET", context))
+    elif mode == "empty":
+        context_sections.append(("CONTEXT MODE", "empty: no parent transcript or caller context was included."))
+    elif mode == "recent":
+        context_sections = _recent_parent_sections(compose, parent_context, context, budget)
+    elif mode == "full":
+        full_text = parent_context["full"]
+        if context:
+            full_text = (full_text + "\n\nCALLER CONTEXT:\n" + context).strip()
+        if estimate_tokens(full_text) > budget:
+            fallback = "full_to_recent_summary"
+            mode = "recent"
+            context_sections = _recent_parent_sections(compose, parent_context, context, budget)
+        elif full_text:
+            context_sections.append(("FULL PARENT TRANSCRIPT", full_text))
+    elif mode == "resume":
+        if context:
+            context_sections.append(("RESUME CONTEXT", context))
+        context_sections.append(("CONTEXT MODE", "resume: continue an existing child thread with the supplied instruction."))
+
+    prompt = compose(context_sections)
     if estimate_tokens(prompt) > budget:
         # Context sections are atomic; removing a complete historical packet
         # cannot leave a tool call separated from its result. Mission, profile,

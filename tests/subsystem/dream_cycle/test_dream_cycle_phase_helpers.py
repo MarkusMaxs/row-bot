@@ -116,7 +116,8 @@ def test_cooccurring_pairs_ignore_rejections_existing_edges_and_duplicate_subjec
     monkeypatch.setattr(threads, "_list_threads", lambda: [("t1", "one", "", ""), ("t2", "two", "", "")])
     monkeypatch.setattr(memory_extraction, "_get_thread_messages", lambda _tid: [{"role": "user", "content": "Alice Bob Carol"}])
     monkeypatch.setattr(memory_extraction, "_format_conversation", lambda messages: messages[0]["content"])
-    monkeypatch.setattr(dream_cycle, "_is_pair_recently_rejected", lambda a, b: "carol" in {a, b})
+    monkeypatch.setattr(dream_cycle, "_rejected_with_same_evidence",
+                        lambda kind, key, _prompt, _cache=None, **_kwargs: kind == "infer" and "carol" in key)
     monkeypatch.setattr(
         kg,
         "get_relations",
@@ -135,16 +136,16 @@ def test_relation_inference_handles_invalid_json_model_failure_and_reverse_direc
     alice = kg.save_entity("person", "Alice", "Alice tests.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project.", source="test")
 
-    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt: "not json")
+    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt, **_kwargs: "not json")
     assert dream_cycle._infer_relation(alice, project, "Alice works on Row-Bot.") is None
 
-    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt: (_ for _ in ()).throw(RuntimeError("model down")))
+    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt, **_kwargs: (_ for _ in ()).throw(RuntimeError("model down")))
     assert dream_cycle._infer_relation(alice, project, "Alice works on Row-Bot.") is None
 
     monkeypatch.setattr(
         dream_cycle,
         "_llm_call",
-        lambda _prompt: json.dumps(
+        lambda _prompt, **_kwargs: json.dumps(
             {
                 "has_relation": True,
                 "relation_type": "maintains",
@@ -199,7 +200,7 @@ def test_insights_phase_stores_added_and_merged_insights(tmp_path, monkeypatch) 
     # Each insight remembers the model in use when it was found (B124).
     monkeypatch.setattr(importlib.import_module("row_bot.models"), "get_current_model", lambda: "fixture-model")
     monkeypatch.setattr(dream_cycle, "_collect_system_snapshot", lambda: "snapshot")
-    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt: json.dumps(added_items))
+    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt, **_kwargs: json.dumps(added_items))
     monkeypatch.setattr(insights, "add_insight", fake_add_insight)
     monkeypatch.setattr(insights, "auto_prune", lambda: 1)
     monkeypatch.setattr(insights, "set_last_analysis", lambda: None)
@@ -211,3 +212,37 @@ def test_insights_phase_stores_added_and_merged_insights(tmp_path, monkeypatch) 
     assert [item["found_with_model"] for item in stored] == ["fixture-model", "fixture-model"]
     assert "Auto-pruned 1 stale insight(s)" in statuses
     assert statuses[-1] == "Insights phase: 1 new, 1 merged"
+
+
+def test_insights_phase_reads_a_schema_reply_with_its_own_cap(tmp_path, monkeypatch) -> None:
+    """WP C1: insights come back as ``{"insights": [...]}`` where the provider takes a
+    schema; an insight without a skill draft carries ``null``, never an empty draft."""
+    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+    import row_bot.insights as insights
+
+    reply = {"insights": [{
+        "category": "error_pattern", "severity": "warning", "title": "Repeated timeouts",
+        "body": "The calendar sync timed out twice.", "evidence": ["timeout x2"],
+        "suggestion": "Check the calendar connection.", "confidence": 0.8, "auto_fixable": False,
+        "skill_draft": None,
+    }]}
+    calls: list[dict] = []
+    stored: list[dict] = []
+
+    def fake_llm_call(_prompt, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(reply)
+
+    monkeypatch.setattr(dream_cycle, "_collect_system_snapshot", lambda: "snapshot")
+    monkeypatch.setattr(dream_cycle, "_llm_call", fake_llm_call)
+    monkeypatch.setattr(insights, "add_insight", lambda **kwargs: stored.append(kwargs) or kwargs)
+    monkeypatch.setattr(insights, "auto_prune", lambda: 0)
+    monkeypatch.setattr(insights, "set_last_analysis", lambda: None)
+
+    result = dream_cycle._run_insights_phase("cycle-2")
+
+    assert result["insights_added"] == 1
+    assert stored[0]["title"] == "Repeated timeouts" and stored[0]["skill_draft"] is None
+    [call] = calls
+    assert call["max_tokens"] == dream_cycle._INSIGHTS_MAX_TOKENS
+    assert call["answer"].schema["properties"]["insights"]["type"] == "array"

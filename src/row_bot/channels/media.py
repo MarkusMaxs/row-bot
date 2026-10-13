@@ -18,7 +18,11 @@ import os
 import pathlib
 import re
 import tempfile
+import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+from typing import Generic, TypeVar
 
 from row_bot.data_paths import get_row_bot_data_dir
 
@@ -319,3 +323,262 @@ def copy_to_workspace(saved_path: pathlib.Path, workspace_filename: str | None =
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+
+# ── Several attachments → one agent turn ─────────────────────────────
+
+_AUDIO_EXTENSIONS = {
+    ".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".webm", ".aac", ".flac", ".amr",
+}
+DEFAULT_IMAGE_QUESTION = "Describe this image in detail."
+
+
+@dataclass(frozen=True)
+class InboundAttachment:
+    """One file a person sent on a channel, already downloaded."""
+
+    filename: str
+    data: bytes
+    content_type: str = ""
+
+
+@dataclass
+class AttachmentTurn:
+    """The single user message one or more attachments become."""
+
+    text: str
+    transcripts: list[str] = field(default_factory=list)
+    usable: bool = False
+    """False when nothing could be read and the person wrote nothing either."""
+
+
+def attachment_kind(attachment: InboundAttachment) -> str:
+    """``"image"``, ``"audio"`` or ``"document"``, from the type, else the extension."""
+    content_type = str(attachment.content_type or "").lower()
+    suffix = pathlib.Path(str(attachment.filename or "")).suffix.lower()
+    if content_type.startswith("image/") or (not content_type and suffix in _IMAGE_EXTENSIONS):
+        return "image"
+    if content_type.startswith("audio/") or (not content_type and suffix in _AUDIO_EXTENSIONS):
+        return "audio"
+    return "document"
+
+
+def _image_block(
+    attachment: InboundAttachment,
+    question: str,
+    cache_image: Callable[[str, bytes], str] | None,
+) -> tuple[str, bool]:
+    from row_bot.file_context import _vision_analysis_failed
+
+    name = _safe_filename(attachment.filename or "image")
+    if cache_image is not None:
+        try:
+            name = cache_image(name, attachment.data) or name
+        except Exception:
+            log.debug("An inbound image could not be cached for image tools", exc_info=True)
+    analysis = analyze_image(attachment.data, question)
+    if _vision_analysis_failed(analysis):
+        detail = str(analysis or "").strip()
+        return f"[Attached image: {name} - vision analysis failed]\n{detail}".rstrip(), False
+    return f"[Attached image: {name} — ALREADY ANALYZED, do NOT call analyze_image]\n{analysis}", True
+
+
+def _document_block(attachment: InboundAttachment) -> str:
+    filename = _safe_filename(attachment.filename or "file")
+    saved = save_inbound_file(attachment.data, filename)
+    extracted = extract_document_text(attachment.data, filename)
+    workspace_path = copy_to_workspace(saved)
+    lines = [f"[Attached file: {filename}]"]
+    lines.append(f"Workspace path: {workspace_path}" if workspace_path else f"Saved to: {saved}")
+    if extracted:
+        lines.append(f"--- File content ---\n{extracted}\n--- End of file ---")
+    else:
+        lines.append("(Could not extract text — file may be image-based or unsupported format)")
+    return "\n".join(lines)
+
+
+def build_attachment_turn(
+    attachments: list[InboundAttachment],
+    caption: str = "",
+    *,
+    cache_image: Callable[[str, bytes], str] | None = None,
+) -> AttachmentTurn:
+    """Read every attachment of one inbound message and make one user message.
+
+    Each image still gets its own vision pre-call and each voice note its own
+    transcription; their text results go into one turn instead of one turn
+    each. Raw images never enter the conversation: text descriptions stay
+    cheap across a long thread. The person's own words come first, then the
+    transcripts, then the files, in the attachment block the app shows as
+    badges (the block the desktop client sends).
+    """
+    from row_bot.file_context import wrap_attachment_context
+
+    caption = str(caption or "").strip()
+    question = caption or DEFAULT_IMAGE_QUESTION
+    blocks: list[str] = []
+    transcripts: list[str] = []
+    usable = bool(caption)
+    seen_names: dict[str, int] = {}
+    for original in attachments:
+        # Albums often name every item alike ("image.jpg"); each keeps its own name.
+        name = _safe_filename(original.filename or "attachment")
+        seen_names[name] = seen_names.get(name, 0) + 1
+        if seen_names[name] > 1:
+            path = pathlib.PurePath(name)
+            name = f"{path.stem}_{seen_names[name]}{path.suffix}"
+        attachment = replace(original, filename=name)
+        kind = attachment_kind(attachment)
+        try:
+            if kind == "image":
+                block, read = _image_block(attachment, question, cache_image)
+                blocks.append(block)
+                usable = usable or read
+            elif kind == "audio":
+                suffix = pathlib.Path(str(attachment.filename or "")).suffix.lower() or ".ogg"
+                transcript = transcribe_audio(attachment.data, suffix)
+                if transcript:
+                    transcripts.append(transcript)
+                    usable = True
+                else:
+                    name = _safe_filename(attachment.filename or "audio")
+                    blocks.append(f"[Attached audio: {name} - could not be transcribed]")
+            else:
+                blocks.append(_document_block(attachment))
+                usable = True
+        except Exception:
+            log.warning("An inbound %s attachment could not be read", kind, exc_info=True)
+            name = _safe_filename(attachment.filename or "attachment")
+            blocks.append(f"[Attached file: {name} - could not be read]")
+    parts: list[str] = [caption] if caption else []
+    if len(transcripts) == 1:
+        parts.append(f"[Voice message transcription]: {transcripts[0]}")
+    else:
+        total = len(transcripts)
+        parts.extend(
+            f"[Voice message {index} of {total} transcription]: {text}"
+            for index, text in enumerate(transcripts, start=1)
+        )
+    context = wrap_attachment_context("\n\n".join(blocks))
+    if context:
+        parts.append(context)
+    return AttachmentTurn(text="\n\n".join(parts), transcripts=transcripts, usable=usable)
+
+
+T = TypeVar("T")
+
+_PENDING_WAIT_S = 120.0  # a download that never finishes stops holding its batch
+
+
+@dataclass
+class _Batch(Generic[T]):
+    items: list[tuple[int, T]] = field(default_factory=list)
+    pending: int = 0
+    version: int = 0
+    arrivals: int = 0
+
+
+class AttachmentCoalescer(Generic[T]):
+    """Join attachments that arrive as separate messages but were sent together.
+
+    A Telegram album or a WhatsApp album arrives as one message per item. The
+    first item for a key opens a batch; items for the same key that arrive
+    before it closes join it. ``begin`` marks an item as on its way (still
+    downloading) and ``add`` delivers it. A batch closes once nothing is on its
+    way and nothing new came for ``settle_s``; ``on_ready(key, items)`` then
+    runs once, on the batch's own worker thread, with the items in arrival order.
+    """
+
+    def __init__(
+        self,
+        on_ready: Callable[[str, list[T]], None],
+        *,
+        settle_s: float = 1.0,
+        name: str = "attachments",
+    ) -> None:
+        self._on_ready = on_ready
+        self._settle_s = max(0.0, float(settle_s))
+        self._name = name
+        self._cond = threading.Condition()
+        self._batches: dict[str, _Batch[T]] = {}
+
+    def begin(self, key: str) -> int:
+        """Mark one item of *key* as on its way; return its arrival order."""
+        with self._cond:
+            batch = self._batches.get(key)
+            if batch is None:
+                batch = _Batch()
+                self._batches[key] = batch
+                threading.Thread(
+                    target=self._settle,
+                    args=(key, batch),
+                    daemon=True,
+                    name=f"{self._name}-batch",
+                ).start()
+            batch.pending += 1
+            batch.version += 1
+            batch.arrivals += 1
+            self._cond.notify_all()
+            return batch.arrivals
+
+    def add(self, key: str, order: int, item: T) -> None:
+        """Deliver an item that ``begin`` announced."""
+        with self._cond:
+            batch = self._batches.get(key)
+            if batch is not None:
+                batch.items.append((order, item))
+                batch.pending = max(0, batch.pending - 1)
+                batch.version += 1
+                self._cond.notify_all()
+                return
+        # Its batch already closed (it waited too long): it goes on its own,
+        # off the caller's thread like any batch.
+        threading.Thread(
+            target=self._run, args=(key, [item]), daemon=True, name=f"{self._name}-batch",
+        ).start()
+
+    def cancel(self, key: str) -> None:
+        """An announced item will not come (its download failed)."""
+        with self._cond:
+            batch = self._batches.get(key)
+            if batch is not None:
+                batch.pending = max(0, batch.pending - 1)
+                batch.version += 1
+                self._cond.notify_all()
+
+    def _wait_for_change(self, batch: _Batch[T], version: int, seconds: float) -> bool:
+        """Wait until *batch* changes or *seconds* pass; True when it changed.
+
+        The condition is shared by every key, so a wake-up alone proves nothing.
+        """
+        deadline = time.monotonic() + seconds
+        while batch.version == version:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self._cond.wait(timeout=remaining)
+        return True
+
+    def _settle(self, key: str, batch: _Batch[T]) -> None:
+        with self._cond:
+            while True:
+                version = batch.version
+                if batch.pending > 0:
+                    if not self._wait_for_change(batch, version, _PENDING_WAIT_S):
+                        log.warning("A %s item never arrived; its batch goes on without it", self._name)
+                        batch.pending = 0
+                    continue
+                if self._wait_for_change(batch, version, self._settle_s):
+                    continue
+                if self._batches.get(key) is batch:
+                    del self._batches[key]
+                items = [item for _order, item in sorted(batch.items, key=lambda pair: pair[0])]
+                break
+        if items:
+            self._run(key, items)
+
+    def _run(self, key: str, items: list[T]) -> None:
+        try:
+            self._on_ready(key, items)
+        except Exception:
+            log.warning("A %s batch could not be handled", self._name, exc_info=True)

@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from typing import Literal
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -38,65 +39,24 @@ def _approval_gate_bool(payload: dict, *, blocked_message: str) -> bool:
 # INPUT SCHEMAS
 # ═════════════════════════════════════════════════════════════════════════════
 
-class _StatusQueryInput(BaseModel):
-    category: str = Field(
-        description=(
-            "What to query. One of: 'overview' (full status summary), "
-            "'version' (Row-Bot version number), "
-            "'model' (current Brain model, provider info, and pinned Brain model choices), "
-            "'channels' (messaging channel status), "
-            "'memory' (knowledge graph stats), "
-            "'skills' (Skill Library availability and pinned defaults), "
-            "'tools' (effective active profile tools plus global enabled/disabled tools), "
-            "'plugins' (installed plugins, stale legacy plugins, and plugin runtime tools), "
-            "'mcp' (external MCP server/tool status), "
-            "'providers' (provider connections, credential sources, and Quick Choices), "
-            "'insights' (active dream-cycle insights and last analysis), "
-            "'evolution' (controlled self-evolution proposals, action runs, rejections, and curator dry-runs), "
-            "'api_keys' (legacy/API key storage status — never returns key values), "
-            "'identity' (configured name and personality), "
-            "'tasks' (active scheduled tasks summary), "
-            "'agents' (durable Agent Runs, subagents, workflow mirrors, writer locks, and V1 defaults), "
-            "'agent_profiles' (Agent Profile Library counts, sources, active profile, and selected tools), "
-            "'goals' (current Goal Mode status, turn budgets, progress, and blockers), "
-            "'vision' (vision/camera model, settings, and pinned Vision choices), "
-            "'image_gen' (image generation model and pinned Image choices), "
-            "'video_gen' (video generation model and pinned Video choices), "
-            "'voice' (TTS and STT settings), "
-            "'config' (context window, dream cycle, wiki vault, memory extraction), "
-            "'designer' (Designer project count and recent projects), "
-            "'logs' (recent warnings and errors from the log file), "
-            "'errors' (recent errors with tracebacks — use to diagnose failures), "
-            "'updates' (auto-update channel + last check + available version), "
-            "'usage' (tokens used in this conversation, the last day, week and month, by model and purpose, with cache share)."
-        )
-    )
+# Settings the model may change. What each value means is in row_bot_status_guide
+# (CHANGING SETTINGS). The legacy 'model' alias still works but is not offered.
+_SETTINGS = (
+    "thread_model", "default_model", "vision_model", "name", "personality", "context_size",
+    "cloud_context_size", "dream_cycle", "dream_window", "skill_toggle", "skill_pin", "tool_toggle",
+    "image_gen_model", "video_gen_model", "run_dream_cycle", "self_improvement",
+)
 
 
 class _SettingUpdateInput(BaseModel):
-    setting: str = Field(
+    setting: Literal[_SETTINGS] = Field(description="The setting to change.")  # type: ignore[valid-type]
+    value: str = Field(
         description=(
-            "The setting to change. One of: "
-            "'thread_model' (set the current conversation's Brain model override; value must be an active pinned Brain Quick Choice canonical ref or exact label; use 'default' to clear), "
-            "'default_model' (switch the global Brain default for new conversations and workflows; value must be an active pinned Brain Quick Choice canonical ref or exact label), "
-            "'model' (legacy alias for default_model outside threaded chat; do not use for conversation model changes), "
-            "'vision_model' (switch Vision model; value may be an installed local vision model, provider vision model, or Vision Quick Choice), "
-            "'name' (change assistant name), "
-            "'personality' (change personality text), "
-            "'context_size' (local model context window — value is token count e.g. '65536'), "
-            "'cloud_context_size' (provider model context cap — value is token count), "
-            "'dream_cycle' (enable/disable — value is 'on' or 'off'), "
-            "'dream_window' (dream cycle hours — value is 'START-END' e.g. '1-5'), "
-            "'skill_toggle' (make a Skill Library item Available/Off — value is 'skill_name:on' or 'skill_name:off'), "
-            "'skill_pin' (pin/unpin a Skill Library item as default active — value is 'skill_name:on' or 'skill_name:off'), "
-            "'tool_toggle' (enable/disable a tool — value is 'tool_name:on' or 'tool_name:off'; use 'mcp:on/off' for the global MCP client), "
-            "'image_gen_model' (set image generation model — value may be provider/model-id, bare model id, or model label), "
-            "'video_gen_model' (set video generation model — value may be provider/model-id, bare model id, or model label), "
-            "'run_dream_cycle' (manually trigger the dream cycle — value is 'now'), "
-            "'self_improvement' (enable/disable self-improvement — value is 'on' or 'off')."
+            "New value: 'on'/'off'; '<name>:on' or '<name>:off' for skill_toggle, skill_pin and tool_toggle; "
+            "'START-END' hours for dream_window; a token count; 'now' for run_dream_cycle; or a pinned "
+            "model ref or label ('default' clears thread_model)."
         )
     )
-    value: str = Field(description="The new value for the setting.")
 
 
 def _normalize_provider_model_value(setting: str, value: str) -> str:
@@ -1770,6 +1730,14 @@ _QUERY_HANDLERS = {
 }
 
 
+class _StatusQueryInput(BaseModel):
+    # Offered straight from the handlers, so the schema and what answers cannot drift apart.
+    # What each category reports is in row_bot_status_guide.
+    category: Literal[tuple(_QUERY_HANDLERS)] = Field(  # type: ignore[valid-type]
+        description="What to query; 'overview' summarises every area."
+    )
+
+
 def _query_updates() -> str:
     """Summary of auto-update state for the agent."""
     try:
@@ -2599,33 +2567,13 @@ class RowBotStatusTool(BaseTool):
             StructuredTool.from_function(
                 func=_row_bot_status,
                 name="row_bot_status",
-                description=(
-                    "Query Row-Bot's current status and configuration. "
-                    "Categories: overview, version, model, channels, memory, skills, "
-                    "tools, plugins, mcp, providers, insights, evolution, api_keys, identity, tasks, "
-                    "agents, agent_profiles, goals, vision, "
-                    "image_gen, video_gen, voice, config, designer, updates, logs, errors, usage."
-                ),
+                description="Query Row-Bot's own status and configuration, one category at a time.",
                 args_schema=_StatusQueryInput,
             ),
             StructuredTool.from_function(
                 func=_update_setting,
                 name="row_bot_update_setting",
-                description=(
-                    "Change a Row-Bot setting. Requires user confirmation. "
-                    "Settings: thread_model (current conversation Brain override; use 'default' to clear), "
-                    "default_model (global Brain default for new conversations/workflows), "
-                    "model (legacy global-default alias outside threaded chat), "
-                    "vision_model, name, personality, context_size, "
-                    "cloud_context_size, dream_cycle (on/off), "
-                    "dream_window (e.g. '1-5'), "
-                    "skill_toggle for Skill Library Available/Off (e.g. 'deep_research:off'), "
-                    "skill_pin for pinned default active skills (e.g. 'deep_research:on'), "
-                    "tool_toggle (e.g. 'arxiv:off' or 'mcp:off'), "
-                    "image_gen_model, video_gen_model, "
-                    "run_dream_cycle (trigger immediately), "
-                    "self_improvement (on/off)."
-                ),
+                description="Change a Row-Bot setting; the person approves the change first.",
                 args_schema=_SettingUpdateInput,
             ),
         ]

@@ -49,6 +49,9 @@ class _ExportConversationInput(BaseModel):
 
 # ── Tool functions ───────────────────────────────────────────────────────────
 
+_ARTICLE_CHARS = 40_000
+
+
 def _search_wiki(query: str, max_results: int = 10) -> str:
     """Search wiki vault articles."""
     import row_bot.wiki_vault as wiki_vault
@@ -78,7 +81,10 @@ def _read_article(subject: str) -> str:
     content = wiki_vault.read_article(subject)
     if content is None:
         return f"No wiki article found for '{subject}'. The entity may not exist or may be too sparse for a full article."
-    return content
+    from row_bot.tool_outputs import bounded
+
+    # A very long article keeps its head and tail here; the rest stays readable by handle.
+    return bounded(content, tool_name="wiki_read", max_chars=_ARTICLE_CHARS)
 
 
 def _rebuild_vault() -> str:

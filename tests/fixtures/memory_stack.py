@@ -12,8 +12,12 @@ def fresh_memory_stack(tmp_path: Path, monkeypatch) -> dict[str, Any]:
     import row_bot.memory as memory
     import row_bot.memory_evolution as memory_evolution
     import row_bot.memory_extraction as memory_extraction
+    import row_bot.threads as threads
     import row_bot.tools.memory_tool as memory_tool
     import row_bot.wiki_vault as wiki_vault
+
+    # Extraction keeps its per-conversation watermarks with the thread metadata.
+    monkeypatch.setattr(threads, "DB_PATH", str(tmp_path / "row-bot-data" / "threads.db"))
 
     kg = importlib.reload(kg)
     kg._skip_reindex = True

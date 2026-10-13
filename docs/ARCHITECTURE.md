@@ -85,7 +85,7 @@ keeps long Agent and Chat Only conversations bounded and recoverable.
 - **30+ core tools plus discoverable external capabilities** — web search, email, calendar, file management, shell access, browser automation, opt-in native Computer Use, vision, image generation, video generation, X (Twitter), a personal knowledge graph, Agent Profiles, Goal Mode, child-agent delegation, Designer Studio, Developer Studio, Custom Tool Builder, scheduled workflows, habit tracking, Row-Bot Status self-inspection, and enabled MCP, plugin, Custom Tool, and channel tools
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Provider-aware reasoning controls** — exact-model capability metadata exposes only valid Provider default, effort, On/Off, or token-budget choices; the selected value is isolated per thread and provider-qualified model, mapped into the native transport request, and reset safely if the provider rejects it before output
-- **Unified context management** — Agent Mode, tool-loop model calls, approval/orchestration resumes, and Chat Only assemble and count the complete next provider request through one capacity-aware preparation path; fixed prompt/tool overhead is checked before history compaction, automatic rolling compaction begins at 75% of the effective limit, and one exact rebuild prevents a stale projection from entering a retry loop
+- **Unified context management** — Agent Mode, tool-loop model calls, approval/orchestration resumes, and Chat Only assemble and count the complete next provider request through one capacity-aware preparation path; fixed prompt/tool overhead is checked before history compaction, old tool output is cleared first and automatic rolling compaction begins near the limit (leaving room for the reply and the summary), and one exact rebuild prevents a stale projection from entering a retry loop
 - **Progressive external capability loading** — recommended Auto mode binds permitted core tools plus bounded search/invoke bridges and keeps enabled external schemas in an immutable authorized catalog until needed; eager compatibility mode remains available, and background workflow runs retain an eager snapshot
 - **Explicit prompt context/cache sections** — `prompt_context.py` assembles named stable and ephemeral sections so identity, profile, platform, self-knowledge, tool guides, manual skills, plugin skills, turn state, memory recall, Developer context, Designer context, channel state, and history have deterministic cache behavior
 - **Runtime readiness routing** — before building the graph, selected models are evaluated for context headroom, provider capability metadata, tool support, and surface requirements; full agent mode, chat-only mode, and blocked states are explicit outcomes rather than accidental provider failures
@@ -141,16 +141,20 @@ renders the meter.
   unscoped evidence is accepted only when the endpoint exposes one model, so a
   successful tool round-trip for one model cannot make a sibling model Agent
   ready
-- **Provider headroom** — combined input/output windows expose 85% as usable
-  input, input-only provider limits expose 95%, and both start automatic
-  compaction at 75% of the effective limit
+- **Provider headroom** — usable input is the window minus a reply allowance
+  (15% of a combined input/output window, 5% of an input-only limit, at most
+  20K tokens), and automatic compaction starts a summary allowance below that
+  (10%, at most 13K tokens): near the limit as Claude Code does (967K on a 1M
+  window), and still a quarter free on small local windows. Old tool output is
+  cleared first; history is summarized only if the request is still over
 - **Complete next-input count** — system and contextual prompts, the projected
   transcript, images, and the exact bound tool schemas are counted together
-  with LangChain's deterministic approximate counter. The fixed system/tool
-  envelope is preflighted before any history compaction; if it cannot fit, the
-  turn stops with the exact token requirement and recovery guidance.
-  Provider-reported usage is normalized afterward for diagnostics, not used to
-  rewrite the estimate
+  with LangChain's deterministic approximate counter (thinking blocks by their
+  text), then calibrated per provider and model by a bounded moving average of
+  provider-reported input over the estimate (`context_calibration.py`, kept in
+  `usage.db`). The fixed system/tool envelope is preflighted before any history
+  compaction; if it cannot fit, the turn stops with the exact token requirement
+  and recovery guidance
 - **One preparation contract** — Agent Mode pre-model hooks, tool-loop rounds,
   approval/orchestration resumes, and Chat Only call the same preparation and
   compaction functions, preventing the UI estimate from describing a different
@@ -192,10 +196,16 @@ renders the meter.
   without producing duplicate external messages
 - **Safe failure and overflow** — a failed compaction may continue only while
   the unchanged input remains below the usable limit; oversized failures stop
-  with recovery guidance, and a provider overflow marks that model unavailable
-  for the same session until the model or reviewed override changes. Known
+  with recovery guidance. A failure is not retried for the same input in the
+  same turn (`thread_meta.compaction_failure_json`). A provider context
+  overflow raises the calibration, compacts, and retries the call once; a
+  second overflow stops the turn. Known
   bounded compaction failures log reason codes, while unexpected failures log
   only the exception class rather than transcript or provider content
+- **Per-mode summaries and checkpoint size** — Agent mode and Chat Only keep
+  their own summaries. The prepared provider request is never checkpointed (a
+  resumed model call prepares it again), and a model's inline `<think>` text is
+  stored as the answer's reasoning
 - **Privacy boundary** — counting and policy resolution are local. Compaction
   uses the already selected task model, so a cloud-selected task sends the
   bounded aged range to that same provider as part of normal model use
@@ -424,7 +434,7 @@ Row-Bot doesn't just store isolated facts — it builds a **personal knowledge g
 - **Bounded semantic fallback** — missing, failed, or slow local embedding loads set a structured fallback code and continue through lexical, keyword, and graph retrieval instead of blocking the turn or downloading a model implicitly
 - **Single visible fallback notice** — `memory_policy.py` deduplicates one display-safe notice per generation, explains the local model recovery action, and records timing/status metadata without including memory content
 - **Recall-safe retrieval** — candidate inspection does not mutate memory state; only memories actually injected into the turn are reinforced with `recalled_at` and recall-count metadata
-- **Automatic memory extraction** — a background process scans past conversations on startup and every 6 hours, extracting entities and relations the agent missed during live conversation; active threads and workflow threads are excluded; assistant messages are truncated to 200 chars to prevent extracting from AI-generated content; low-confidence relations are skipped and conflicting facts can be marked for review instead of overwriting high-authority user edits
+- **Automatic memory extraction** — a background process scans past conversations once the app is idle after startup and every 2 hours while it stays idle, extracting entities and relations the agent missed during live conversation; each conversation keeps a watermark (the last messages read, by id and content hash, and their checkpoint), so a run sends only the messages since then plus two before them as context, keeps the newest when they exceed the 6,000-character budget, and skips conversations whose messages did not change (a rename or a setting does not count); the run stops when the person comes back or a turn starts; the open conversation, workflow threads, delegated Agent threads, Row-Bot's temporary threads, the per-turn context and app events are excluded; assistant messages are truncated to 200 chars to prevent extracting from AI-generated content; low-confidence relations are skipped and conflicting facts can be marked for review instead of overwriting high-authority user edits
 - **Deterministic deduplication** — both live saves and background extraction check for existing entities by normalized subject before creating new entries; cross-category matching prevents fragmentation; alias resolution ensures related names merge; richer content is always kept
 - **Memory evolution metadata** — `memory_evolution.py` normalizes status (`active`, `needs_review`, `superseded`, `archived`), tier (`core`, `semantic`, `episodic`, `resource`), confidence, evidence, source context, manual edits, superseding, archival, and journal entries
 - **Vague-type banning** — `related_to`, `associated_with`, `connected_to`, `linked_to`, `has_relation`, `involves`, and `correlates_with` are rejected before saving, preventing noisy low-value edges
@@ -464,10 +474,12 @@ A 5-phase background daemon refines the knowledge graph during idle hours and en
 - **Subject-name guard** — entities with different normalized subjects require ≥0.98 similarity to merge, preventing false merges of distinct people or concepts
 - **Phase 2: Description enrichment** — thin entities (<80 chars) appearing in multiple conversations get richer descriptions from conversation context and graph neighborhood
 - **Phase 3: Confidence decay** — stale `dream_infer` relations older than 90 days lose 10% confidence per cycle; very low-confidence edges are pruned automatically
-- **Phase 4: Relationship inference** — co-occurring entity pairs with no meaningful edge are evaluated for a specific typed relation; hub diversity caps, batch rotation, half-overlap reuse, multi-excerpt evidence, and a 7-day rejection cache improve quality and reduce repetition
-- **Phase 5: Insights analysis** — the system captures a snapshot of recent logs, provider/model/media configuration, channels, task state, memory stats, skills, and existing insights, feeds it to `DREAM_INSIGHTS_PROMPT`, and stores actionable results in `insights.py`
+- **Phase 4: Relationship inference** — co-occurring entity pairs with no meaningful edge are evaluated for a specific typed relation; hub diversity caps, batch rotation, half-overlap reuse and multi-excerpt evidence improve quality
+- **Evidence cache** — a merge, enrichment or inference the model turned down is remembered with a hash of the exact prompt it read (`dream_rejections.json`), and is asked again only when the entities or the conversation evidence change, or after 30 days
+- **Phase 5: Insights analysis** — the system captures a snapshot of recent logs, provider/model/media configuration, channels, task state, memory stats, skills, and existing insights, feeds it to `DREAM_INSIGHTS_PROMPT`, and stores actionable results in `insights.py`; the call is skipped when the snapshot is the one the last analysis read
+- **Cacheable prompts** — each `DREAM_*` prompt puts its rules before the entities and evidence, so consecutive calls share a prefix
 - **Three-layer anti-contamination** — sentence-level excerpt filtering, deterministic post-enrichment validation, and strengthened prompting prevent cross-entity fact bleed
-- **Ollama busy check** — queries `/api/ps` before starting; defers if Ollama is actively serving a user request to avoid competing for GPU or CPU
+- **Busy check** — defers while Row-Bot is in use: the app idle check and any generation in flight. Ollama's `/api/ps` only lists loaded models (a model stays loaded for its keep-alive), so it is not consulted
 - **Configurable window** — default 1–5 AM local time; checks every 30 minutes if enabled, idle, in window, and not yet run that day
 - **Dream journal** — all operations logged to `~/.row-bot/dream_journal.json` with cycle ID, summary, duration, merges, enrichments, inferences, insights, and errors
 - **Post-cycle rebuilds** — FAISS is rebuilt after the cycle, and the wiki vault is regenerated when enabled so downstream views stay in sync

@@ -132,10 +132,11 @@ class BaseTool(ABC):
                 logger.error("Tool '%s' execute error: %s", tool_instance.name, exc, exc_info=True)
                 return f"Error in {tool_instance.display_name}: {exc}"
 
+        # The display name (with its emoji) is for the UI; the model reads only the description.
         return StructuredTool.from_function(
             func=_run,
             name=self.name,
-            description=f"{self.display_name}: {self.description}",
+            description=self.description or self.display_name,
         )
 
     def as_langchain_tools(self) -> list:

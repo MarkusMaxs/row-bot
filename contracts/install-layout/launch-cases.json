@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "about": "How a native launcher starts versions from a given state.json. Every launcher is tested against these cases: src/row_bot/install_layout.py (begin_launch, relaunch_after_exit), Row-Bot.exe (tests/subsystem/installer/test_windows_launcher.py), the Linux wrapper (tests/subsystem/installer/test_linux_wrapper.py) and, for the cases marked smoke, every installed package's own launcher (scripts/smoke_install_layout.py). Versions are A (older) and B (newer). 'exits' lists the exit codes each start of a version returns, in order; once they run out a start exits 0, except in the smoke, where A is the installed app and keeps serving. 'final' lists the state.json fields to check afterwards.",
+  "cases": [
+    {
+      "id": "a-verified-version-runs-once",
+      "state": {"active": "B", "previous": "A", "pending_verification": false, "unverified_launches": 0},
+      "runnable": ["A", "B"],
+      "exits": {"B": [0]},
+      "launched": ["B"],
+      "final": {"active": "B", "previous": "A", "pending_verification": false, "unverified_launches": 0}
+    },
+    {
+      "id": "exit-75-starts-the-active-version-again",
+      "state": {"active": "B", "previous": "A", "pending_verification": false, "unverified_launches": 0},
+      "runnable": ["A", "B"],
+      "exits": {"B": [75, 0]},
+      "launched": ["B", "B"],
+      "final": {"active": "B", "previous": "A", "pending_verification": false, "unverified_launches": 0}
+    },
+    {
+      "id": "a-verified-version-that-crashes-is-not-restarted",
+      "state": {"active": "B", "previous": "A", "pending_verification": false, "unverified_launches": 0},
+      "runnable": ["A", "B"],
+      "exits": {"B": [3]},
+      "launched": ["B"],
+      "final": {"active": "B", "previous": "A", "pending_verification": false, "unverified_launches": 0}
+    },
+    {
+      "id": "quitting-during-an-unverified-start-is-counted-not-retried",
+      "state": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 0},
+      "runnable": ["A", "B"],
+      "exits": {"B": [0]},
+      "launched": ["B"],
+      "final": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 1}
+    },
+    {
+      "id": "two-failed-starts-roll-back-to-previous",
+      "state": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 0,
+                "ready": {"version": "B", "staged_at": "2026-10-11T10:00:00Z"}},
+      "runnable": ["A", "B"],
+      "exits": {"B": [3, 3, 3]},
+      "launched": ["B", "B", "A"],
+      "final": {"active": "A", "previous": null, "pending_verification": false, "unverified_launches": 0,
+                "ready": null, "last_rollback": {"from": "B", "to": "A"}},
+      "smoke": true
+    },
+    {
+      "id": "a-start-after-two-unverified-launches-rolls-back-first",
+      "state": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 2},
+      "runnable": ["A", "B"],
+      "exits": {},
+      "launched": ["A"],
+      "final": {"active": "A", "previous": null, "pending_verification": false, "unverified_launches": 0,
+                "last_rollback": {"from": "B", "to": "A"}},
+      "smoke": true
+    },
+    {
+      "id": "no-rollback-to-a-previous-that-cannot-start",
+      "state": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 0},
+      "runnable": ["B"],
+      "exits": {"B": [3, 3, 3, 3]},
+      "launched": ["B", "B"],
+      "final": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 2}
+    },
+    {
+      "id": "without-previous-two-tries-then-stop",
+      "state": {"active": "B", "previous": null, "pending_verification": true, "unverified_launches": 0},
+      "runnable": ["B"],
+      "exits": {"B": [3, 3, 3, 3]},
+      "launched": ["B", "B"],
+      "final": {"active": "B", "previous": null, "pending_verification": true, "unverified_launches": 2}
+    },
+    {
+      "id": "exit-75-while-unverified-counts-the-next-start",
+      "state": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 0},
+      "runnable": ["A", "B"],
+      "exits": {"B": [75, 0]},
+      "launched": ["B", "B"],
+      "final": {"active": "B", "previous": "A", "pending_verification": true, "unverified_launches": 2}
+    }
+  ]
+}

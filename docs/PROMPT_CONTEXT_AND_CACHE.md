@@ -9,7 +9,8 @@ reuse) only pay off for that shared start, so:
 - everything that changes from turn to turn travels in one **turn context**
   message per turn, appended after the turn's message and kept in the
   checkpoint;
-- conversation history is replayed as it was stored.
+- conversation history is replayed as it was stored, and old tool output is
+  cleared only in rare jumps (see Tool results in history).
 
 ## Stable sections
 
@@ -108,22 +109,235 @@ context by its metadata, never by its text. The checkpoint keeps what was
 sent. Approvals and tool gating stay enforced in code, and the approval policy
 text stays in the stable prompt.
 
+## Tool results in history
+
+The checkpoint keeps every tool result as it was created (after its cap, see
+Tool schemas and results). What the model
+sees is derived from it on each request (`agent._apply_history_hygiene`,
+`row_bot.history_hygiene`), deterministically, so an earlier request stays an
+exact prefix of a later one:
+
+- **Sticky clearing.** Two marks per thread (`thread_meta.history_hygiene_json`)
+  say where old output stops being sent in full: a non-browser result before
+  the `mask` mark (over 128 tokens) is sent as a one-line summary, and a browser
+  result before the `browser` mark as a URL and title stub. The marks move only
+  in jumps: once the output they would clear reaches about a fifth of the
+  history budget (2K to 50K tokens), or the request reaches the compaction
+  point. A jump keeps the latest five person turns and the newest browser
+  results in full, and is one cache rewrite instead of one per turn. A cleared
+  result is cleared the same way on every later call. Marks are anchored on a
+  message and reset when it is gone (a retry or rewind past it); results behind
+  a compaction summary never count towards a jump.
+- **Repeats.** A result identical to an earlier one still in view is sent as a
+  one-line reference to that call; the earlier copy never changes.
+- **Emergency shrink.** Every result is cut in proportion to its size only when
+  the newest turn alone reaches the compaction point, so compaction cannot bring
+  the request back (without a known context policy: when the request passes the
+  history budget). Otherwise results go as they were stored.
+- **Fields kept.** A rewritten result keeps its `status` (Claude is told an
+  error is an error), artifact, id and metadata.
+- **Untrusted content.** When a result is stored, after its cap, Row-Bot decides
+  once whether it carries outside text (the tools' declared names, MCP tools,
+  plugin and custom tools, tool and skill search; a `read_tool_output` page by
+  its saved output's source) and runs the injection scan once. The
+  decision is kept with the result, and every request wraps its text in an
+  `<EXTERNAL_CONTENT>` fence from it, after any shortening, so the tags are never
+  cut. A result stays fenced even if its tool is later not registered. Results
+  stored before this decide on each request, as before. A child agent's answer
+  or error relayed to its parent in a wake-up event is fenced the same way;
+  Row-Bot's own lines around it are not.
+- **Older charts.** A chart result stored before charts moved to the result's
+  artifact (WP D2) keeps its Plotly figure in the checkpoint, where the
+  transcript reads it, and reaches the model as D2's short chart summary
+  (`agent._legacy_rendered_result_text`), the same bytes on every call.
+
+## Compaction
+
+Compaction does what Claude Code does (`models.context_reserves`,
+`agent._prepare_with_compaction`):
+
+1. **Clear first.** When a request reaches the compaction point, old tool output
+   is cleared in one jump (above). History is summarized only if the request is
+   still over.
+2. **Near the limit.** The compaction point leaves room for the reply and for
+   the summary. Usable input is the window minus a reply allowance (15% of a
+   window where input and output share it, 5% where the provider limits input
+   on its own, at most 20K tokens); compaction starts a summary allowance below
+   that (10% of the window, at most 13K tokens).
+
+   | Window | Before | Now |
+   |---|---|---|
+   | 32K local | 24,576 | 24,575 |
+   | 64K local | 49,152 | 49,151 |
+   | 128K | 98,304 | 98,411 |
+   | 200K | 150,000 | 167,000 (177,000 input-only) |
+   | 1M | 750,000 | 967,000 |
+
+   The user's context cap still sets the window.
+3. **A full snapshot after.** The next turn context after a summary is a full
+   snapshot, checked on every call, so a compaction made outside the pre-model
+   hook (an overflow retry) is followed by one too.
+4. **No thrashing.** A compaction that fails is not tried again for the same
+   input in the same turn: the marker
+   (`thread_meta.compaction_failure_json`) names the summary in force, a digest
+   of every older complete group, the model and the policy. A new turn, or new
+   input to age, gets one more attempt.
+
+**Calibrated estimate.** Requests are sized at about four characters a token
+(thinking blocks by their text, not their signatures), then scaled per provider
+and model by a moving average of the input the provider reported over the
+estimate (`row_bot.context_calibration`, kept in `usage.db`: counts only). The
+factor stays between 0.5 and 3.0, is learned only from requests of 1,000
+estimated tokens or more with a plausible ratio, and never on local Ollama,
+whose count leaves out what it had cached. Clearing, the emergency shrink and
+compaction all compare the calibrated estimate.
+
+**Overflow.** When a provider refuses a request as too long, the overflow
+raises the calibration (the request was at least the window), old output is
+cleared and the history compacted, and the call is retried once
+(`agent._AgentModelCall`, and the same in Chat Only). The provider refused the
+request before reading it, so the retry costs nothing extra. A second overflow
+stands.
+
+**Each mode its own summary.** Agent mode and Chat Only keep separate summaries
+(`summary_state_json`, `chat_only_summary_state_json`), so switching modes keeps
+both.
+
+**The splice.** The summary replaces everything before the first kept message,
+found by its id: preparation drops empty and reasoning-only turns and adds
+repair stubs, so a count of raw messages could cut the person's message or
+orphan a tool result. The kept part is normalized again on its own.
+
+**Thinking.** A thinking block's signature is bound to everything before it, so
+a summary unbinds the kept turns' blocks. The turns that were complete when the
+summary was made lose their thinking blocks in the request (text and tool
+calls stay). The turn then in progress keeps them: a tool round's thinking
+must stay, and the API's `drop_block` (WP A2b) covers it.
+
+**What checkpoints keep.** The provider request the pre-model hook prepares is
+never checkpointed (an untracked LangGraph channel); a model call resumed after
+a failure prepares it again, to the same bytes. A model's inline
+`<think>…</think>` text is stored as the answer's reasoning, where the
+transcript shows it, not as answer text sent back on every call (except to
+custom endpoints that replay reasoning). Images and other base64 data in stored
+messages stay where they are for now (see the A4b handoff).
+
 ## Provider Rules
 
-Direct Anthropic API is the only provider that receives Anthropic
-`cache_control` markers in this rollout. Markers are placed only on stable
-system content. Conversation history and the turn context are never marked.
-A failure placing the marker is logged once per thread and the request goes
-out without it.
+Prompt caching on Claude routes is automatic: there is no setting
+(`row_bot.prompt_cache`, `row_bot.providers.capabilities.prompt_cache_route`,
+`row_bot.providers.transports.prompt_cache_breakpoints`).
 
-Anthropic-compatible routes that are not the direct Anthropic API, including
-MiniMax, OpenCode Anthropic Messages, and Claude Subscription, do not receive
-`cache_control` markers until their transports are explicitly proven to preserve
-and accept those content blocks.
+**Where the breakpoints go.**
 
-OpenAI, OpenRouter, xAI OAuth Responses, Codex Responses, AtlasCloud, and custom
-OpenAI-compatible endpoints do not receive Anthropic markers. Codex keeps its
-existing `prompt_cache_key` behavior.
+- **System prompt.** One explicit breakpoint on the last stable system block.
+- **Conversation tail.** An Agent or Chat Only request is tagged for tail
+  caching (private metadata on its last message, never sent). The transport
+  then caches up to the end of the request. On the direct API this is
+  top-level automatic caching, which the API puts on the last cacheable block
+  and moves forward as the conversation grows. The turn context never needs a
+  breakpoint of its own.
+- **Long appends.** Each breakpoint looks back at most 20 positions for an
+  earlier cache entry. A run of `tool_use` blocks counts as one position, and
+  so does a run of `tool_result` blocks. When a direct-API request adds more
+  than 15 positions since the last breakpoint Row-Bot sent with the same
+  prefix, one explicit breakpoint goes where that request ended.
+- **Limits.** A request never carries more than four breakpoints. Stray
+  markers in history are dropped before placement.
+- **Summarizer.** The compaction summarizer's fixed system prompt gets a
+  five-minute breakpoint. Its request is never tail-cached.
+- **One-off calls** (titles, background jobs) get no tail caching.
+
+**Lifetime (D3).** Both the system breakpoint and the tail use the request's
+lifetime, so a longer one never follows a shorter one, which the API rejects.
+
+| Request | Lifetime |
+|---|---|
+| A conversation a person is in: desktop and remote chat, voice, Designer, channels, channel approvals | 1 hour |
+| Back-to-back loops: workflow and task runs, goal continuations (`goal` surface or `internal_goal_continuation`), child agents (`agent_child`) | 5 minutes |
+| Compaction summary | 5 minutes |
+
+A five-minute marker is `{"type": "ephemeral"}` (the API default), and a
+one-hour marker adds `"ttl": "1h"`.
+
+**Routes.**
+
+| Route | What it gets |
+|---|---|
+| Direct Anthropic API | System breakpoint, top-level automatic caching, and the long-append breakpoint |
+| OpenRouter `anthropic/claude-*` | The system prompt as one system message of text blocks, one per section, with the breakpoint on the last stable block, plus OpenRouter's top-level `cache_control`. Both forms are documented by OpenRouter, with `ttl`. No long-append breakpoint yet |
+| Requesty Claude routes (`anthropic/`, `bedrock/`, `vertex/`) | Requesty's documented `"requesty": {"auto_cache": true}` on conversation requests. Requesty places the breakpoints itself, and it has no `ttl`. The system prompt stays one string, so the largest block is the whole prompt |
+| MiniMax, OpenCode Anthropic Messages, Atlas Cloud | Nothing, until an opt-in live check shows they accept cache instructions |
+| Claude Subscription | Nothing. It is moving to the Claude Agent SDK (D7) |
+
+OpenAI, xAI, Codex, Gemini and custom OpenAI-compatible endpoints never get
+Anthropic markers. Codex keeps its `prompt_cache_key` behaviour.
+
+**Safety net.** A 400 that names `cache_control`, `ttl` or `auto_cache` on a
+request that carried cache instructions is retried once without them. No other
+400 is retried.
+
+- On OpenRouter and Requesty, the route is then remembered for the process,
+  so a gateway that rejects them costs one failed request per process.
+- On the direct API, which documents every instruction Row-Bot sends, only
+  that request is retried.
+- A failure placing the system breakpoint is logged once per thread, and the
+  request goes out without it.
+
+**Truncation.** An Agent reply that stopped at the output token limit gets the
+"cut short" notice. That covers OpenAI-style `finish_reason: "length"`, Ollama
+`done_reason: "length"` and Anthropic `stop_reason: "max_tokens"`.
+
+## Tool schemas and results
+
+Every bound tool's schema is part of each request's prefix, so each topic has
+one home:
+
+- scheduling guidance is in the `task_create` description; the system prompt
+  only points to it;
+- status categories and settings are enums on `row_bot_status` and
+  `row_bot_update_setting`, explained in `row_bot_status_guide`;
+- memory rules are in the system prompt, not repeated in each memory tool;
+- closed sets are JSON-schema enums, and ids the runtime already knows (the
+  parent thread, run and orchestration, a goal's conversation) are not schema
+  fields;
+- descriptions do not start with the tool's display name.
+
+`tests/subsystem/tools/test_tool_schema_budget.py` keeps each default tool's
+schema size on record (`tests/snapshots/tools/default_tool_schema_sizes.txt`).
+Record a deliberate change with `ROW_BOT_UPDATE_SNAPSHOTS=1`.
+
+Tool results are bounded once, when they are created (`row_bot/tool_outputs.py`):
+
+- A result over about 25K tokens (100,000 characters) keeps its head and tail,
+  after a notice naming a handle. The full text is kept for the conversation
+  under the data folder (`tool_outputs/`) and removed with it.
+- `read_tool_output(handle, offset)` pages through it. It is bound with every
+  Agent tool set.
+- The saved output records the tool that produced it. A page is fenced as
+  external content when that source would have been: an untrusted tool, an MCP,
+  plugin or Custom Tool, or text that already held a fence (a child Agent's
+  words). Row-Bot's own results, such as `wiki_read` or `task_list`, read back
+  unfenced, and an unknown handle reads back fenced.
+- Tighter caps apply to command output (30,000 characters), skill references,
+  wiki articles, the conversation and task lists, and Gmail bodies.
+- `workspace_read_file`, `developer_read_file`, `developer_get_diff` and
+  `read_url` page with `offset` and `limit`. Their budgets are fixed: they do
+  not grow with the context window.
+- An MCP result is shown whole up to its server's `output_limit` (24,000
+  characters by default); a longer one keeps its head and tail with a handle,
+  as above, instead of being cut.
+- A result the client renders keeps its payload out of the model's text
+  (`row_bot/rendered_results.py`). A chart's Plotly figure moves to the
+  ToolMessage's `artifact`, which is never sent to a provider; the transcript
+  projection reads it there, and from the text for results stored before. The
+  model reads a summary instead (type, title, axes, traces with their points and
+  ranges) naming a handle that `read_tool_output` reads the figure from. A
+  plugin's image is shown to the person as generated images are, and the model
+  reads its caption.
+
+The untrusted-content fence is added when the model reads a result, after the
+cap, so the cap never cuts it.
 
 ## Verification
 
@@ -141,9 +355,45 @@ compaction, and recall and skill usage once per turn.
 contract for the tag. `tests/subsystem/client_platform/test_turn_context_readers.py`
 checks that no reader of history shows it.
 
+`tests/subsystem/agents/test_history_hygiene.py` covers the tool-result rules:
+jumps are rare and in one step, cleared results are byte-stable, the marks are
+kept with the thread, browser stubs move on jumps, repeats stub the newer copy,
+and the emergency shrink only happens over the limit.
+`tests/subsystem/regression/test_tool_result_fields.py` covers the kept fields,
+and `tests/subsystem/agents/test_untrusted_tool_results.py` the fence (store
+time, older results, plugin results and wake-up events).
+
+`tests/subsystem/agents/test_compaction_trigger.py` covers the compaction point
+per window size, clearing before summarizing, the calibrated comparison and the
+snapshot after a summary; `tests/subsystem/agents/test_context_calibration.py`
+the calibration. `tests/subsystem/regression/test_compaction_regressions.py`
+covers the splice, the failure marker, the overflow retry, the summary per mode
+and thinking at compaction; `tests/subsystem/regression/test_checkpoint_hygiene.py`
+what checkpoints keep, a resumed call's request, inline thinking and older
+charts.
+
+`tests/subsystem/providers/test_prompt_cache_payloads.py` covers the breakpoints
+on the wire for each Claude route through the real request builders:
+
+- the lifetime for each surface;
+- the TTL ordering and the four-breakpoint limit;
+- the long-append breakpoint;
+- the safety net;
+- the usage ledger recording cache writes, then reads, for consecutive calls.
+
 Live provider validation is opt-in. When run, it uses the real Row-Bot runtime
 and at least one latest recommended chat-capable model per configured provider.
 The only acceptable provider-side failure is an explicit out-of-credits, quota,
 usage-exhausted, or billing-limit response. Any authentication, schema,
 unsupported parameter, cache-control, tool-call replay, streaming, routing, or
 serialization failure is a bug or blocker.
+
+The live eval measures what these rules buy on real providers.
+`scripts/live_eval.py plan` lists its tasks and the estimated tokens without
+any network call. `run` sends each task through the real Agent runtime, with
+keys from the environment and a fresh data folder, under a USD and token cap.
+It records pass/fail and the usage ledger's cache share, 1h writes, TTFT and
+cost per task. `tests/e2e/test_live_verification.py` checks the provider rules
+above against the real APIs: the thinking-binding controls, both cache
+lifetimes, the gateway markers, the cache keys, usage shapes and background
+schemas. See `tests/README.md` (Live eval).

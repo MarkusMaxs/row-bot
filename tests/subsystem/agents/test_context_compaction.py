@@ -68,28 +68,38 @@ def test_summary_prompt_requires_exact_user_designated_opaque_identifiers() -> N
 
 
 def test_ollama_compactor_binds_output_limit_in_supported_options(monkeypatch):
+    from row_bot import models
+    from row_bot.providers import background
+    from row_bot.providers.reasoning import ReasoningCapabilities
+
     captured = {}
 
     class FakeOllama:
         num_ctx = 32_768
-        reasoning = True
+        reasoning = False
 
         def bind(self, **kwargs):
-            captured.update(kwargs)
+            captured["bound"] = kwargs
             return self
 
-    monkeypatch.setattr(agent, "_chat_only_llm", lambda _model_ref: FakeOllama())
+    def get_llm_for(ref, num_ctx=None, *, reasoning_plan=None):
+        captured.update(ref=ref, plan=reasoning_plan)
+        return FakeOllama()
+
+    monkeypatch.setattr(models, "get_llm_for", get_llm_for)
+    monkeypatch.setattr(background, "resolve_reasoning_capabilities_for_ref",
+                        lambda _ref: ReasoningCapabilities(can_disable=True, thinking_mode="toggle"))
 
     bound = agent._compaction_model(
-        replace(_inputs([]), provider_id="ollama"),
+        replace(_inputs([]), model_ref="model:ollama:qwen3:8b", provider_id="ollama"),
         512,
     )
 
     assert isinstance(bound, FakeOllama)
-    assert captured == {
-        "options": {"num_predict": 512, "num_ctx": 32_768},
-        "reasoning": False,
-    }
+    # The thread's own model, thinking off, its context allocation kept: nothing reloads.
+    assert captured["ref"] == "model:ollama:qwen3:8b"
+    assert captured["plan"].selection.kind == "off"
+    assert captured["bound"] == {"options": {"num_ctx": 32_768, "num_predict": 512}}
 
 
 def test_compaction_calls_are_counted_as_compaction_for_the_running_conversation(tmp_path, monkeypatch):
@@ -113,7 +123,7 @@ def test_compaction_calls_are_counted_as_compaction_for_the_running_conversation
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     model = attach_usage_ledger(Summarizer(), provider_id="openai", model_name="test")
-    monkeypatch.setattr(agent, "_chat_only_llm", lambda _model_ref: model)
+    monkeypatch.setattr("row_bot.models.get_llm_for", lambda _ref, num_ctx=None, *, reasoning_plan=None: model)
     thread = agent._current_thread_id_var.set("thread-compacting")
     generation = agent._current_generation_id_var.set("gen-compacting")
     try:
@@ -340,7 +350,7 @@ def test_existing_summary_with_oversized_two_group_tail_ages_preceding_atomic_gr
     assert saved[0]["boundary_message_count"] == 8
     assert [kind for kind, _payload in emitted].count("compaction_succeeded") == 1
     assert all(kind != "compaction_failed" for kind, _payload in emitted)
-    assert (thread_id, inputs.checkpoint_revision) not in agent._COMPACTION_FAILURES
+    assert (thread_id, "agent") not in agent._COMPACTION_FAILURES
 
 
 def test_exact_rebuild_falls_back_once_and_persists_only_final_summary(monkeypatch):
@@ -391,7 +401,7 @@ def test_exact_rebuild_falls_back_once_and_persists_only_final_summary(monkeypat
     assert saved[0]["summary"] == final_summary
     assert [kind for kind, _payload in emitted].count("compaction_succeeded") == 1
     assert all(kind != "compaction_failed" for kind, _payload in emitted)
-    assert (thread_id, inputs.checkpoint_revision) not in agent._COMPACTION_FAILURES
+    assert (thread_id, "agent") not in agent._COMPACTION_FAILURES
 
 
 def test_current_group_too_large_fails_after_one_fallback_without_persisting(monkeypatch):
@@ -434,7 +444,7 @@ def test_current_group_too_large_fails_after_one_fallback_without_persisting(mon
     assert len(summaries) == 2
     assert saved == []
     assert [kind for kind, _payload in emitted].count("compaction_failed") == 1
-    assert (thread_id, inputs.checkpoint_revision) in agent._COMPACTION_FAILURES
+    assert (thread_id, "agent") in agent._COMPACTION_FAILURES
 
 
 def test_compaction_failure_logging_includes_only_known_bounded_reason(monkeypatch, caplog):
@@ -690,3 +700,35 @@ def test_stop_during_compaction_discards_result_before_cas(monkeypatch):
     finally:
         agent._current_stop_event_var.reset(stop_token)
         agent._current_thread_id_var.reset(thread_token)
+
+
+@pytest.mark.parametrize(
+    ("model_ref", "provider_id", "marker"),
+    [
+        ("model:anthropic:claude-opus-5-5", "anthropic", {"type": "ephemeral"}),
+        ("model:openrouter:anthropic/claude-opus-5", "openrouter", {"type": "ephemeral"}),
+        ("model:openai:test", "openai", None),
+        ("model:minimax:MiniMax-M2.7", "minimax", None),
+    ],
+)
+def test_the_summarizer_prompt_gets_a_five_minute_breakpoint_on_claude_routes(monkeypatch, model_ref, provider_id, marker):
+    from row_bot.prompt_cache import CONVERSATION_CACHE_KEY
+
+    sent: list = []
+
+    class Summarizer:
+        def invoke(self, messages):
+            sent.extend(messages)
+            return AIMessage(content=_structured_summary())
+
+    monkeypatch.setattr(agent, "_compaction_model", lambda inputs, output_tokens: Summarizer())
+    inputs = replace(_inputs([]), model_ref=model_ref, provider_id=provider_id)
+
+    agent._invoke_compaction_model(inputs, prior_summary="", transcript="user: hello", output_tokens=1_000)
+
+    system, request = sent
+    markers = [block["cache_control"] for block in system.content if "cache_control" in block] if isinstance(
+        system.content, list) else []
+    assert markers == ([marker] if marker else [])
+    # A one-off summary is not a conversation: its tail is never cached.
+    assert CONVERSATION_CACHE_KEY not in request.additional_kwargs

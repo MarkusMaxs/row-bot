@@ -29,7 +29,7 @@ def test_duplicate_merge_repoints_relations_and_deletes_duplicate(tmp_path, monk
     monkeypatch.setattr(
         dream_cycle,
         "_llm_call",
-        lambda _prompt: "Alice writes deterministic subsystem tests for Row-Bot.",
+        lambda _prompt, **_kwargs: "Alice writes deterministic subsystem tests for Row-Bot.",
     )
 
     result = dream_cycle._merge_entities(survivor, duplicate)
@@ -51,7 +51,7 @@ def test_enrichment_accepts_grounded_update_and_rejects_cross_entity_contaminati
     monkeypatch.setattr(
         dream_cycle,
         "_llm_call",
-        lambda _prompt: "Alice likes tea and writes tests for Row-Bot during late work.",
+        lambda _prompt, **_kwargs: "Alice likes tea and writes tests for Row-Bot during late work.",
     )
 
     result = dream_cycle._enrich_entity(alice, excerpts, other_subjects={"Bob", "Row-Bot"})
@@ -63,7 +63,7 @@ def test_enrichment_accepts_grounded_update_and_rejects_cross_entity_contaminati
     monkeypatch.setattr(
         dream_cycle,
         "_llm_call",
-        lambda _prompt: "Alice likes tea. Bob owns unrelated deployment decisions.",
+        lambda _prompt, **_kwargs: "Alice likes tea. Bob owns unrelated deployment decisions.",
     )
     assert dream_cycle._enrich_entity(alice, excerpts, other_subjects={"Bob"}) is None
 
@@ -75,7 +75,7 @@ def test_relation_inference_accepts_high_confidence_json_and_tracks_evidence(tmp
     monkeypatch.setattr(
         dream_cycle,
         "_llm_call",
-        lambda _prompt: json.dumps(
+        lambda _prompt, **_kwargs: json.dumps(
             {
                 "has_relation": True,
                 "relation_type": "works_on",
@@ -109,7 +109,86 @@ def test_relation_inference_rejects_vague_low_confidence_or_negative_results(tmp
     dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
     alice = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project under test.", source="test")
-    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt: json.dumps(payload))
+    monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt, **_kwargs: json.dumps(payload))
 
     assert dream_cycle._infer_relation(alice, project, "Alice and Row-Bot appear together.") is None
     assert kg.get_relations(alice["id"]) == []
+
+
+class _DreamModel:
+    """The default chat model as Dream Cycle sees it: records each request and answers in order."""
+
+    def __init__(self, replies: list[str], requests: list[dict] | None = None, bound: dict | None = None) -> None:
+        self.replies = replies
+        self.requests = [] if requests is None else requests
+        self.bound = dict(bound or {})
+
+    def bind(self, **kwargs):
+        return _DreamModel(self.replies, self.requests, {**self.bound, **kwargs})
+
+    def invoke(self, _messages):
+        from langchain_core.messages import AIMessage
+
+        self.requests.append(dict(self.bound))
+        return AIMessage(content=self.replies.pop(0))
+
+
+@pytest.fixture
+def dream_model(monkeypatch):
+    from row_bot import models
+    from row_bot.providers import background
+
+    model = _DreamModel([])
+    asked: list[str] = []
+
+    def get_llm_for(ref, num_ctx=None, *, reasoning_plan=None):
+        asked.append(ref)
+        return model
+
+    monkeypatch.setattr(models, "get_current_model", lambda: "model:openai:gpt-5")
+    monkeypatch.setattr(models, "get_llm_for", get_llm_for)
+    monkeypatch.setattr(background, "resolve_reasoning_capabilities_for_ref", lambda _ref: None)
+    return model, asked
+
+
+def test_dream_merge_reads_a_schema_description_and_never_stores_a_cut_short_one(
+        tmp_path, monkeypatch, dream_model) -> None:
+    """WP C1: Dream asks the default model for ``{"description": ...}`` with a bounded reply."""
+    from row_bot.providers import background
+
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+    model, asked = dream_model
+    survivor = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
+    duplicate = kg.save_entity("person", "Alice", "Alice writes deterministic subsystem tests.", source="test")
+    model.replies.extend(['{"description": "Alice writes deterministic subsys',
+                          '{"description": "Alice writes deterministic subsystem tests."}'])
+
+    assert dream_cycle._merge_entities(survivor, duplicate) is None
+    assert kg.get_entity(duplicate["id"]) is not None
+
+    assert dream_cycle._merge_entities(survivor, duplicate) is not None
+    assert kg.get_entity(survivor["id"])["description"] == "Alice writes deterministic subsystem tests."
+    assert asked == ["model:openai:gpt-5", "model:openai:gpt-5"]
+    request = model.requests[-1]
+    assert request["max_tokens"] == background.ANSWER_TOKENS["dream"] + background.REASONING_HEADROOM_TOKENS
+    assert request["response_format"]["json_schema"]["schema"]["required"] == ["description"]
+
+
+def test_dream_inference_asks_for_its_relation_schema_with_a_small_cap(tmp_path, monkeypatch, dream_model) -> None:
+    from row_bot.providers import background
+
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+    model, _asked = dream_model
+    alice = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
+    project = kg.save_entity("project", "Row-Bot", "Project under test.", source="test")
+    model.replies.append(json.dumps({"has_relation": True, "relation_type": "works_on", "source": "Alice",
+                                     "target": "Row-Bot", "confidence": 0.92,
+                                     "evidence": "Alice writes tests for Row-Bot."}))
+
+    result = dream_cycle._infer_relation(alice, project, "Alice writes tests for Row-Bot.")
+
+    assert result is not None and result["relation_type"] == "works_on"
+    [request] = model.requests
+    assert request["max_tokens"] == dream_cycle._INFER_MAX_TOKENS + background.REASONING_HEADROOM_TOKENS
+    assert set(request["response_format"]["json_schema"]["schema"]["required"]) == {
+        "has_relation", "relation_type", "source", "target", "confidence", "evidence"}

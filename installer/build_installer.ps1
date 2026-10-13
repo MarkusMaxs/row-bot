@@ -1,7 +1,12 @@
 # =============================================================================
 # build_installer.ps1
-# Downloads embedded Python + get-pip.py, bundles tkinter, pre-installs all
-# pip packages, then compiles a self-contained Inno Setup installer.
+# Builds Row-Bot.exe (MSVC), downloads embedded Python + get-pip.py, bundles
+# tkinter, pre-installs all pip packages, stages the app with deterministic
+# .pyc files, then compiles a self-contained per-user Inno Setup installer.
+#
+# The installer lays out %LOCALAPPDATA%\Programs\Row-Bot\versions\<version>\
+# {app,python} with Row-Bot.exe and state.json at the root (see
+# src/row_bot/install_layout.py).
 #
 # The resulting .exe contains everything needed â€” no internet downloads at
 # install time. Ollama remains optional; the matching Playwright Chromium is
@@ -22,6 +27,9 @@ param(
 $ErrorActionPreference = "Stop"
 $BuildDir = Join-Path $PSScriptRoot "build"
 $ProjectRoot = Split-Path $PSScriptRoot
+# Nothing run during the build writes timestamp .pyc files into the payload;
+# the deterministic ones are compiled once the payload is complete.
+$env:PYTHONDONTWRITEBYTECODE = "1"
 $VersionFile = Join-Path $ProjectRoot "src\row_bot\version.py"
 $ClientBuild = Join-Path $ProjectRoot "frontend\dist"
 $ClientNode = (Get-Command node -ErrorAction Stop).Source
@@ -43,10 +51,56 @@ Write-Host " Row-Bot v$RowBotVersion Installer Builder"       -ForegroundColor C
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
+function Build-RowBotLauncher {
+    # Row-Bot.exe: installer\windows\row_bot_launcher.c with its icon, manifest and version.
+    param([string]$Version, [string]$OutDir)
+
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (!(Test-Path $vswhere)) {
+        throw "Visual Studio Build Tools with the C++ workload are required to build Row-Bot.exe (vswhere.exe not found)."
+    }
+    $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (!$vsPath) {
+        throw "Visual Studio Build Tools with the C++ x64 tools are required to build Row-Bot.exe."
+    }
+    $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+
+    # FILEVERSION needs four numbers: 5.2.0-beta.1 -> 5,2,0,0.
+    $numbers = @(([regex]::Match($Version, '^\d+(\.\d+){0,3}').Value -split '\.') | Where-Object { $_ -ne "" })
+    while ($numbers.Count -lt 4) { $numbers += "0" }
+    $header = @(
+        "#define ROWBOT_VERSION_COMMA $($numbers[0]),$($numbers[1]),$($numbers[2]),$($numbers[3])",
+        "#define ROWBOT_VERSION_STR `"$Version`""
+    )
+    Set-Content -Path (Join-Path $OutDir "row_bot_launcher_version.h") -Value $header -Encoding ascii
+
+    $sourceDir = Join-Path $PSScriptRoot "windows"
+    $source = Join-Path $sourceDir "row_bot_launcher.c"
+    $resourceScript = Join-Path $sourceDir "row_bot_launcher.rc"
+    $resource = Join-Path $OutDir "row_bot_launcher.res"
+    $object = Join-Path $OutDir "row_bot_launcher.obj"
+    $exe = Join-Path $OutDir "Row-Bot.exe"
+    Remove-Item -LiteralPath $exe -ErrorAction SilentlyContinue
+    $commands = @(
+        "`"$vcvars`" >nul",
+        "rc /nologo /I `"$OutDir`" /I `"$sourceDir`" /I `"$ProjectRoot`" /fo `"$resource`" `"$resourceScript`"",
+        "cl /nologo /utf-8 /W4 /WX /O2 /MT /GS /guard:cf /DNDEBUG /Fo`"$object`" /Fe`"$exe`" `"$source`" `"$resource`" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /DYNAMICBASE /NXCOMPAT /GUARD:CF /CETCOMPAT"
+    ) -join " && "
+    & cmd.exe /d /c $commands
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path $exe)) {
+        throw "Building Row-Bot.exe failed."
+    }
+    Write-Host "      Built $exe" -ForegroundColor Green
+}
+
 # â”€â”€ Create build directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 if (!(Test-Path $BuildDir)) {
     New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 }
+
+# Built first: a compiler error fails the build before the long package install.
+Write-Host "Building Row-Bot.exe..." -ForegroundColor Yellow
+Build-RowBotLauncher -Version $RowBotVersion -OutDir $BuildDir
 
 if (!$SkipDownloads) {
     # â”€â”€ 1. Download Python Embeddable Package â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -271,7 +325,7 @@ if (!(Test-Path $LockFile)) {
 }
 Write-Host "      Installing locked Python packages from requirements.txt..." -ForegroundColor Yellow
 Write-Host "      (this may take several minutes)" -ForegroundColor Yellow
-& $PythonExe -m pip install --no-warn-script-location -r $RequirementsFile 2>&1 | ForEach-Object {
+& $PythonExe -m pip install --no-warn-script-location --no-compile -r $RequirementsFile 2>&1 | ForEach-Object {
     $line = $_.ToString()
     if ($line -match 'Successfully installed|Installing collected') {
         Write-Host "      $line" -ForegroundColor Green
@@ -297,11 +351,16 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "      Required runtime packages verified" -ForegroundColor Green
 
-# Validate the current build, then stage only its inventory into a new directory.
+# Stage the app payload (scripts/app_payload_manifest.py) into a fresh folder,
+# with only the validated client build's inventory.
+$AppStage = Join-Path $BuildDir "app"
+if (Test-Path $AppStage) { Remove-Item -LiteralPath $AppStage -Recurse -Force }
+& $PythonExe (Join-Path $ProjectRoot "scripts\app_payload_manifest.py") --project-root $ProjectRoot --stage $AppStage
+if ($LASTEXITCODE -ne 0) { throw "App payload staging failed." }
 $ClientVerifier = Join-Path $ProjectRoot "scripts\verify_client_assets.py"
 & $PythonExe $ClientVerifier --root $ClientBuild
 if ($LASTEXITCODE -ne 0) { throw "Client build validation failed." }
-$ClientAssetStage = Join-Path $BuildDir ("client-v2-" + [guid]::NewGuid().ToString("N"))
+$ClientAssetStage = Join-Path $AppStage "src\row_bot\static\client-v2"
 & $ClientNode (Join-Path $ProjectRoot "frontend\scripts\asset-manifest.mjs") $ClientBuild --package-dir $ClientAssetStage
 if ($LASTEXITCODE -ne 0) { throw "Client asset staging failed." }
 & $PythonExe $ClientVerifier --root $ClientAssetStage --compare $ClientBuild --strict
@@ -320,6 +379,27 @@ if ($LASTEXITCODE -ne 0) {
 } else {
     Write-Host "      Playwright Chromium installed" -ForegroundColor Green
 }
+
+# ── Deterministic bytecode ──
+# Version folders are shared through hard links by later updates, so they
+# never change after install: ship .pyc that need no rewrite (unchecked-hash)
+# and that do not depend on the build folder (-s), and run with
+# PYTHONDONTWRITEBYTECODE=1 (Row-Bot.exe sets it).
+Write-Host ""
+Write-Host "Compiling deterministic bytecode..." -ForegroundColor Yellow
+& $PythonExe -m compileall -q -f -j 0 -s $BuildDir --invalidation-mode unchecked-hash $AppStage
+if ($LASTEXITCODE -ne 0) { throw "Compiling the app's bytecode failed." }
+# Some packages ship sources pip never compiles either (templates, old test data).
+& $PythonExe -m compileall -q -f -j 0 -s $BuildDir --invalidation-mode unchecked-hash (Join-Path $PythonDir "Lib")
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "      Some library files did not compile; they run from source as before." -ForegroundColor DarkYellow
+}
+Write-Host "      Bytecode compiled" -ForegroundColor Green
+
+# version.json describes this version folder (src/row_bot/install_layout.py).
+& $PythonExe -I -S (Join-Path $ProjectRoot "src\row_bot\install_layout.py") version-json `
+    --version $RowBotVersion --python $PythonVersion --lock $LockFile --out (Join-Path $BuildDir "version.json")
+if ($LASTEXITCODE -ne 0) { throw "Writing version.json failed." }
 
 # â”€â”€ 3. Create dist directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $DistDir = Join-Path (Join-Path $PSScriptRoot "..") "dist"
@@ -347,14 +427,14 @@ if ($IsccPaths.Count -eq 0) {
     Write-Host ""
     Write-Host "Build directory is ready at: $BuildDir" -ForegroundColor Yellow
     Write-Host "After installing Inno Setup, run:" -ForegroundColor Yellow
-    Write-Host "  iscc /DClientAssetDir=`"$ClientAssetStage`" `"$IssFile`"" -ForegroundColor White
+    Write-Host "  iscc /DAppStageDir=`"$AppStage`" `"$IssFile`"" -ForegroundColor White
     exit 1
 }
 
 $Iscc = $IsccPaths[0]
 Write-Host "Using ISCC: $Iscc" -ForegroundColor DarkGray
 
-& $Iscc "/DClientAssetDir=$ClientAssetStage" $IssFile
+& $Iscc "/DAppStageDir=$AppStage" $IssFile
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""

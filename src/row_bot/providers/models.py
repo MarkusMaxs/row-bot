@@ -164,6 +164,8 @@ class RoutingProfile:
     triggers: list[str] = field(default_factory=list)
     data_policy: str = "allow_api_key"
     max_fallbacks_per_turn: int = 1
+    # Background purpose -> provider-qualified model ref, read by
+    # ``routing.task_route_model`` for background calls. Empty by default.
     task_routes: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:

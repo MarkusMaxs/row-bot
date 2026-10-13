@@ -139,8 +139,9 @@ def test_memory_tool_update_marks_manual_authority_and_search_shows_status(tmp_p
     assert props["status"] == "active"
     assert props["source_context"]["actor"] == "manual"
     rows = json.loads(search_result)
-    assert rows[0]["status"] == "active"
-    assert "confidence" in rows[0]
+    # "active" is the default status and is left out, as are empty fields; any other status is shown.
+    assert "status" not in rows[0]
+    assert rows[0]["content"] == "User lives in Paris."
 
 
 def test_extraction_document_source_sets_resource_provenance(tmp_path, monkeypatch):

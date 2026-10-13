@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Row-Bot launcher for Linux (bin/row-bot in every release).
+#
+# An installed release lives in $XDG_DATA_HOME/row-bot/releases/<version>, with
+# `current` pointing at the active one and state.json beside them. This wrapper
+# applies the loop guard (src/row_bot/install_layout.py begin-launch), starts
+# <active>/python with <active>/app/launcher.py and the original arguments, and
+# starts the app again only as install_layout.py after-exit says: after exit
+# code 75, or after a failed start of a version not verified yet while another
+# launch can make progress. Two unverified launches in a row roll back to the
+# previous release. Each relaunch runs the wrapper of the release `current`
+# points at, so it never depends on a release an update has removed.
+#
+# One wrapper supervises an install and data folder at a time; a second start
+# only runs launcher.py, which shows the running Row-Bot.
+#
+# Run by systemd as a unit's ExecStart= it starts the app once and leaves
+# restarts to the unit: use Restart=always, or RestartForceExitStatus=75.
+# (INVOCATION_ID alone is not enough: shells in a terminal that runs as a
+# systemd service inherit it, and so do CI runners.)
+set -uo pipefail
+
+RELAUNCH_EXIT_CODE=75
+MAX_ERROR_RELAUNCHES=5
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    TARGET="$(readlink "$SOURCE")"
+    case "$TARGET" in
+        /*) SOURCE="$TARGET" ;;
+        *) SOURCE="$DIR/$TARGET" ;;
+    esac
+done
+SELF="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+DATA_DIR="${ROW_BOT_DATA_DIR:-$HOME/.row-bot}"
+mkdir -p "$DATA_DIR"
+
+if [ "$#" -eq 0 ]; then
+    set -- --browser --no-tray
+fi
+
+# An installed release sits in <root>/releases/<version>; an unpacked tarball runs as itself.
+ROOT=""
+if [ "$(basename "$(dirname "$SELF")")" = "releases" ]; then
+    ROOT="$(dirname "$(dirname "$SELF")")"
+fi
+
+runnable() {
+    [ -x "$1/python/bin/python3" ] && [ -f "$1/app/launcher.py" ]
+}
+
+# install_layout.py with this release's Python (no site-packages), or the current release's.
+layout() {
+    local release="$SELF"
+    if ! runnable "$release"; then
+        release="$(current_release)" || return 1
+    fi
+    "$release/python/bin/python3" -I -S "$release/app/src/row_bot/install_layout.py" "$@"
+}
+
+use_version() {
+    VROOT="$1"
+    export ROW_BOT_INSTALL_ROOT="${ROOT:-$VROOT}"
+    export PYTHONNOUSERSITE=1
+    export PYTHONIOENCODING=utf-8
+    export PYTHONDONTWRITEBYTECODE=1
+    if [ -d "$VROOT/python/playwright-browsers" ]; then
+        export PLAYWRIGHT_BROWSERS_PATH="$VROOT/python/playwright-browsers"
+    else
+        mkdir -p "$DATA_DIR/playwright-browsers"
+        export PLAYWRIGHT_BROWSERS_PATH="$DATA_DIR/playwright-browsers"
+    fi
+    cd "$VROOT/app" || exit 1
+}
+
+# systemd 248+ names the process it started; older ones are this script's parent.
+started_by_systemd() {
+    if [ -n "${SYSTEMD_EXEC_PID:-}" ]; then
+        [ "$SYSTEMD_EXEC_PID" = "$$" ]
+        return
+    fi
+    [ -n "${INVOCATION_ID:-}" ] && [ "$(cat "/proc/$PPID/comm" 2>/dev/null)" = "systemd" ]
+}
+
+current_release() {
+    local target
+    target="$(readlink "$ROOT/current" 2>/dev/null)" || return 1
+    printf '%s\n' "$ROOT/releases/$(basename "$target")"
+}
+
+if [ -z "$ROOT" ]; then
+    use_version "$SELF"
+    exec "$VROOT/python/bin/python3" launcher.py "$@"
+fi
+
+# Counters carried across the exec of the next wrapper.
+error_relaunches="${ROW_BOT_LAUNCH_ERROR_RELAUNCHES:-0}"
+quick_relaunches="${ROW_BOT_LAUNCH_QUICK_RELAUNCHES:-0}"
+unset ROW_BOT_LAUNCH_ERROR_RELAUNCHES ROW_BOT_LAUNCH_QUICK_RELAUNCHES
+
+# The supervising wrapper holds this lock (python inherits it) until the app exits.
+supervising=1
+if command -v flock >/dev/null 2>&1; then
+    # A relaunch keeps the lock it already holds on fd 9.
+    if [ "${ROW_BOT_LAUNCH_LOCKED:-}" != 1 ] || ! { true >&9; } 2>/dev/null; then
+        lock_key="$(printf '%s' "$DATA_DIR" | cksum | cut -d ' ' -f 1)"
+        exec 9>>"$ROOT/.launcher-$lock_key.lock"
+    fi
+    flock -n 9 || supervising=""
+fi
+unset ROW_BOT_LAUNCH_LOCKED
+if [ -z "$supervising" ]; then
+    # Row-Bot already runs from this install: launcher.py shows it and exits.
+    active="$(current_release)" || active="$SELF"
+    runnable "$active" || active="$SELF"
+    use_version "$active"
+    exec "$VROOT/python/bin/python3" launcher.py "$@"
+fi
+
+plan="$(layout begin-launch --root "$ROOT" --kind linux)" || plan=""
+release="$ROOT/releases/${plan%% *}"
+if [ -z "$plan" ] || ! runnable "$release"; then
+    release="$(current_release)" || release=""
+    if [ -z "$release" ] || ! runnable "$release"; then
+        release="$SELF"
+    fi
+    if ! runnable "$release"; then
+        echo "row-bot: no installed release can start; reinstall Row-Bot" >&2
+        exit 1
+    fi
+fi
+version="$(basename "$release")"
+use_version "$release"
+
+if started_by_systemd; then
+    exec "$VROOT/python/bin/python3" launcher.py "$@"
+fi
+
+started=$SECONDS
+stopping=""
+"$VROOT/python/bin/python3" launcher.py "$@" &
+child=$!
+trap 'stopping=1; kill -TERM "$child" 2>/dev/null' TERM INT HUP
+while :; do
+    wait "$child"
+    code=$?
+    if [ "$code" -lt 128 ] || ! kill -0 "$child" 2>/dev/null; then
+        break
+    fi
+done
+trap - TERM INT HUP
+
+if [ -n "$stopping" ] || ! layout after-exit --root "$ROOT" --kind linux --version "$version" --code "$code"; then
+    exit "$code"
+fi
+if [ "$code" -eq "$RELAUNCH_EXIT_CODE" ]; then
+    error_relaunches=0
+    if [ $((SECONDS - started)) -lt 30 ]; then
+        quick_relaunches=$((quick_relaunches + 1))
+    else
+        quick_relaunches=0
+    fi
+    if [ "$quick_relaunches" -ge 3 ]; then
+        echo "row-bot: relaunch asked for $quick_relaunches times within seconds; stopping" >&2
+        exit 1
+    fi
+else
+    error_relaunches=$((error_relaunches + 1))
+    if [ "$error_relaunches" -ge "$MAX_ERROR_RELAUNCHES" ]; then
+        echo "row-bot: stopped after $error_relaunches failed starts in a row" >&2
+        exit "$code"
+    fi
+fi
+
+next="$ROOT/current/bin/row-bot"
+if [ ! -x "$next" ]; then
+    echo "row-bot: $next is missing; reinstall Row-Bot" >&2
+    exit "$code"
+fi
+export ROW_BOT_LAUNCH_ERROR_RELAUNCHES="$error_relaunches"
+export ROW_BOT_LAUNCH_QUICK_RELAUNCHES="$quick_relaunches"
+export ROW_BOT_LAUNCH_LOCKED=1
+exec "$next" "$@"

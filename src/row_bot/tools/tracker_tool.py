@@ -27,7 +27,7 @@ import statistics
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Literal, Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -392,12 +392,9 @@ class _TrackerLogInput(BaseModel):
             "category label (e.g. 'good', 'bad')."
         ),
     )
-    tracker_type: str = Field(
+    tracker_type: Literal["boolean", "numeric", "duration", "categorical"] = Field(
         default="boolean",
-        description=(
-            "Type of tracker — only used when auto-creating a new tracker. "
-            "One of: boolean, numeric, duration, categorical."
-        ),
+        description="Type of tracker; only used when a new tracker is created.",
     )
     unit: Optional[str] = Field(
         default=None,
@@ -699,12 +696,8 @@ class TrackerTool(BaseTool):
                 func=_tracker_log,
                 name="tracker_log",
                 description=(
-                    "Log an entry to a habit/activity tracker.  Auto-creates "
-                    "the tracker if it doesn't exist yet.  Use for medications, "
-                    "symptoms, habits, periods, exercise, mood, sleep, or any "
-                    "recurring activity.  The tracker_type is only needed when "
-                    "creating a new tracker (boolean, numeric, duration, or "
-                    "categorical)."
+                    "Log an entry to a habit or activity tracker (medications, symptoms, habits, periods, "
+                    "exercise, mood, sleep), creating the tracker if it doesn't exist yet."
                 ),
                 args_schema=_TrackerLogInput,
             ),

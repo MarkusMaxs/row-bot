@@ -602,6 +602,28 @@ _model_max_ctx_cache: dict[str, int | None] = {}  # model_name → max context
 _observed_local_context: dict[str, int] = {}
 
 
+# Compaction follows Claude Code (context plan, decision D2): old tool output is cleared first, and
+# history is summarized only near the limit, leaving room for the reply and for the summary. The
+# reply allowance is the request's headroom (usable input = window - reply allowance); compaction
+# starts that much plus the summary allowance below the window. Both are a share of the window,
+# capped: a 1M window compacts at 967K (33K free, as Claude Code), 200K at 167K, and a local 32K or
+# 64K window keeps a quarter of it free, as before (24K and 48K), so a reply always fits.
+REPLY_ALLOWANCE_MAX_TOKENS = 20_000
+SUMMARY_ALLOWANCE_MAX_TOKENS = 13_000
+_REPLY_PERCENT_COMBINED = 15  # input and output share the window (OpenAI, Ollama, most endpoints)
+_REPLY_PERCENT_INPUT_ONLY = 5  # the provider limits input on its own (Anthropic, Google)
+_SUMMARY_PERCENT = 10
+
+
+def context_reserves(effective_limit: int | None, limit_kind: str) -> tuple[int, int]:
+    """(reply allowance, summary allowance) kept free of a window of *effective_limit* tokens."""
+    window = max(0, int(effective_limit or 0))
+    percent = _REPLY_PERCENT_INPUT_ONLY if limit_kind == "input_only" else _REPLY_PERCENT_COMBINED
+    reply = min(REPLY_ALLOWANCE_MAX_TOKENS, -(-window * percent // 100))
+    summary = min(SUMMARY_ALLOWANCE_MAX_TOKENS, -(-window * _SUMMARY_PERCENT // 100))
+    return reply, summary
+
+
 @dataclass(frozen=True)
 class ContextPolicy:
     model_ref: str
@@ -700,7 +722,8 @@ def _chat_ollama(model: str, **kwargs):
     global ChatOllama
     if ChatOllama is None:
         try:
-            from langchain_ollama import ChatOllama as _ChatOllama
+            # Sends its num_ctx and keep_alive on every request (no runner reloads).
+            from row_bot.providers.transports.ollama_local import RowBotChatOllama as _ChatOllama
         except ImportError as exc:
             raise RuntimeError("langchain-ollama is not installed") from exc
         ChatOllama = _ChatOllama
@@ -742,7 +765,7 @@ def get_llm():
     return _llm_instance
 
 
-_override_llm_cache: dict[tuple[str, int, str], object] = {}
+_override_llm_cache: dict[tuple, object] = {}
 
 
 def clear_llm_cache() -> None:
@@ -750,6 +773,19 @@ def clear_llm_cache() -> None:
     global _llm_instance
     _llm_instance = None
     _override_llm_cache.clear()
+
+
+def cached_llm(key: tuple, build) -> object:
+    """The chat model cached under ``key``, built on first use.
+
+    It is dropped with the other cached clients (``clear_llm_cache`` and the
+    context-size setters), so credential and context changes still take effect.
+    """
+    model = _override_llm_cache.get(key)
+    if model is None:
+        model = build()
+        _override_llm_cache[key] = model
+    return model
 
 
 def _local_num_ctx_for(model_name: str | None) -> int:
@@ -766,6 +802,44 @@ def _local_num_ctx_for(model_name: str | None) -> int:
     if observed and observed > 0:
         candidates.append(observed)
     return min(candidates)
+
+
+def _ollama_tag(model_name: str | None) -> str:
+    name = _runtime_model_name(model_name).strip()
+    return name if not name or ":" in name else f"{name}:latest"
+
+
+def ollama_chat_request_settings(model_name: str | None) -> dict | None:
+    """What a direct Ollama call must send when it targets a local chat model.
+
+    Chat requests for a model always carry the same ``num_ctx`` and the chat
+    ``keep_alive`` (``RowBotChatOllama``). A direct ``Client.chat`` call to the
+    same model (Vision on a multimodal chat model, the tool probe) sends them
+    too, or Ollama reloads the runner with another context size and drops its
+    prompt cache. Returns ``{"options": {"num_ctx": ...}, "keep_alive": ...}``
+    (no ``keep_alive`` when ``OLLAMA_KEEP_ALIVE`` leaves it to the server), or
+    ``None`` when ``model_name`` is not this conversation's or the default
+    local chat model.
+    """
+    target = _ollama_tag(model_name)
+    chat_model = next(
+        (
+            name
+            for name in (_active_model_override.get(), _current_model)
+            if name and target and _ollama_tag(name) == target and not is_cloud_model(name)
+        ),
+        None,
+    )
+    if chat_model is None:
+        return None
+    from row_bot.providers.transports.ollama_local import ollama_chat_keep_alive
+
+    # Computed exactly as for the chat model's own requests.
+    settings: dict = {"options": {"num_ctx": _local_num_ctx_for(chat_model)}}
+    keep_alive = ollama_chat_keep_alive()
+    if keep_alive is not None:
+        settings["keep_alive"] = keep_alive
+    return settings
 
 
 def get_llm_for(model_name: str, num_ctx: int | None = None, *, reasoning_plan=None):
@@ -1011,8 +1085,10 @@ def get_context_policy(model_name: str | None = None, *, allow_probe: bool = Tru
     usable_input = None
     compact_at = None
     if effective_limit is not None and effective_limit > 0:
-        usable_input = int(effective_limit * (0.95 if limit_kind == "input_only" else 0.85))
-        compact_at = int(effective_limit * 0.75)
+        # Near the limit, with room for the reply and the summary (see context_reserves).
+        reply_allowance, summary_allowance = context_reserves(effective_limit, limit_kind)
+        usable_input = effective_limit - reply_allowance
+        compact_at = usable_input - summary_allowance
     capacity_state = "ready" if usable_input and compact_at else "unavailable"
     warning = ""
     if observed_limit and requested_limit and observed_limit < requested_limit:

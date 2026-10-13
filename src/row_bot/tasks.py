@@ -221,6 +221,15 @@ _CREATE_TABLE_SQL = {
             delivered_at     TEXT DEFAULT ''
         )
     """,
+    "channel_conversations": """
+        CREATE TABLE IF NOT EXISTS channel_conversations (
+            channel          TEXT NOT NULL,
+            conversation_key TEXT NOT NULL,
+            thread_id        TEXT NOT NULL,
+            updated_at       TEXT NOT NULL,
+            PRIMARY KEY (channel, conversation_key)
+        )
+    """,
 }
 
 _COLUMN_MIGRATIONS = {
@@ -326,6 +335,7 @@ _REQUIRED_COLUMNS = {
         "key", "thread_id", "channel", "target", "kind", "text", "payload_json",
         "status", "attempts", "last_error", "created_at", "updated_at", "delivered_at",
     },
+    "channel_conversations": {"channel", "conversation_key", "thread_id", "updated_at"},
 }
 
 
@@ -3234,6 +3244,12 @@ def cleanup_thread_state(thread_id: str) -> dict[str, int]:
 
         before = conn.total_changes
         conn.execute("DELETE FROM channel_thread_refs WHERE thread_id = ?", (clean_thread_id,))
+        # The chat keeps its place, so its next message starts a fresh
+        # conversation instead of falling back to one it moved away from.
+        conn.execute(
+            "UPDATE channel_conversations SET thread_id = '' WHERE thread_id = ?",
+            (clean_thread_id,),
+        )
         stats["channel_refs"] = max(0, conn.total_changes - before)
 
         before = conn.total_changes
@@ -3603,6 +3619,50 @@ def get_thread_channel_ref(thread_id: str) -> dict | None:
             (clean_thread_id,),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_channel_conversation(channel: str, conversation_key: str) -> dict | None:
+    """Return the current-conversation pointer of one channel chat or thread.
+
+    ``thread_id`` is empty when the conversation it pointed to was deleted.
+    ``None`` means the chat has never had a pointer.
+    """
+
+    clean_channel = str(channel or "").strip()
+    clean_key = str(conversation_key or "").strip()
+    if not clean_channel or not clean_key:
+        return None
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM channel_conversations WHERE channel = ? AND conversation_key = ?",
+            (clean_channel, clean_key),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def set_channel_conversation(channel: str, conversation_key: str, thread_id: str) -> None:
+    """Point one channel chat or thread at the Row-Bot conversation it continues."""
+
+    clean_channel = str(channel or "").strip()
+    clean_key = str(conversation_key or "").strip()
+    clean_thread_id = str(thread_id or "").strip()
+    if not clean_channel or not clean_key or not clean_thread_id:
+        return
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO channel_conversations (channel, conversation_key, thread_id, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(channel, conversation_key) DO UPDATE SET "
+            "thread_id = excluded.thread_id, updated_at = excluded.updated_at",
+            (clean_channel, clean_key, clean_thread_id, datetime.now().isoformat()),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -4569,6 +4629,8 @@ def run_task_background(
                         "prev_output": last_response,
                         "step_outputs": step_outputs,
                         "task_id": task_id,
+                        "thread_id": thread_id,
+                        "model_override": task.get("model_override") or "",
                     }
                     result = evaluate_condition(cond_expr, cond_context)
                     target = step.get("if_true") if result else step.get("if_false")
@@ -7499,6 +7561,8 @@ def _run_subtask_sync(
                     "prev_output": last_output,
                     "step_outputs": step_outputs,
                     "task_id": child_task["id"],
+                    "thread_id": thread_id,
+                    "model_override": child_task.get("model_override") or "",
                 }
                 result = evaluate_condition(cond_expr, cond_ctx)
                 step_outputs[step_id] = str(result)
@@ -7785,16 +7849,31 @@ def _eval_json_condition(expr: str, prev_output: str, context: dict | None = Non
         "prev_output": str(data),
         "step_outputs": (context or {}).get("step_outputs", {}),
         "task_id": (context or {}).get("task_id", ""),
+        "thread_id": (context or {}).get("thread_id", ""),
+        "model_override": (context or {}).get("model_override", ""),
     }
     return evaluate_condition(op_and_val, sub_context)
 
 
+def _llm_condition_verdict(text: str) -> bool:
+    """Yes from a ``{"answer": "yes"}`` schema reply, else from a reply starting with "yes"."""
+    from row_bot.providers.background import parse_json_object
+
+    parsed = parse_json_object(text)
+    if parsed is not None and "answer" in parsed:
+        return str(parsed.get("answer") or "").strip().lower() == "yes"
+    return str(text or "").strip().lower().startswith("yes")
+
+
 def _eval_llm_condition(prompt: str, context: dict) -> bool:
-    """Use the LLM to evaluate a condition. Expects yes/no response."""
+    """Use the LLM to evaluate a condition. Expects yes/no response.
+
+    A background call (WP C1): the task's model override, else the workflow
+    thread's model, at the lowest reasoning effort with a few output tokens.
+    """
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
-        from row_bot.agent import _chat_only_llm
-        from row_bot.models import get_current_model
+        from row_bot.providers.background import invoke_background, structured_answer, thread_model_for
 
         prev = context.get("prev_output", "")
         step_outputs = context.get("step_outputs", {})
@@ -7821,16 +7900,19 @@ def _eval_llm_condition(prompt: str, context: dict) -> bool:
             f"Question: {prompt}"
         )
         # This is a bounded classification call, not a full agent loop.
-        result = _chat_only_llm(get_current_model()).invoke(
+        thread_id = str(context.get("thread_id") or "")
+        answer = invoke_background(
+            "condition",
             [
                 SystemMessage(content="Answer only yes or no. Do not call tools."),
                 HumanMessage(content=full_prompt),
-            ]
+            ],
+            answer=structured_answer("condition", {"answer": {"type": "string", "enum": ["yes", "no"]}}),
+            task_model=str(context.get("model_override") or "") or None,
+            thread_model=thread_model_for(thread_id),
+            thread_id=thread_id,
         )
-        content = getattr(result, "content", result)
-        if content:
-            answer = str(content).strip().lower()
-            return answer.startswith("yes")
+        return _llm_condition_verdict(answer)
     except Exception as exc:
         logger.error("LLM condition evaluation failed: %s", exc)
     return False

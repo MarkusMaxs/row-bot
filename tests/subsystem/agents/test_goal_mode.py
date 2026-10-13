@@ -142,34 +142,30 @@ def test_goal_after_turn_uses_same_model_verifier_and_claims_once(tmp_path, monk
     called = {}
 
     class FakeLLM:
+        def bind(self, **_kwargs):
+            return self
+
         def invoke(self, messages):
             called["messages"] = messages
             return type("Response", (), {"content": '{"verdict":"continue","reason":"not done yet"}'})()
 
-    def fake_get_llm_for(ref):
+    def fake_get_llm_for(ref, num_ctx=None, *, reasoning_plan=None):
         called["model_ref"] = ref
         return FakeLLM()
 
-    def fake_get_llm():
-        called["default_model"] = True
-        return FakeLLM()
-
-    monkeypatch.setattr(models, "get_current_model", lambda: "local:base")
-    monkeypatch.setattr(models, "is_model_local", lambda ref: ref == "local:target")
-    monkeypatch.setattr(models, "is_cloud_model", lambda ref: False)
+    monkeypatch.setattr(models, "get_current_model", lambda: "model:ollama:base")
     monkeypatch.setattr(models, "get_llm_for", fake_get_llm_for)
-    monkeypatch.setattr(models, "get_llm", fake_get_llm)
 
     decision = goals.after_turn(
         thread_id=thread_id,
         turn_id="turn-1",
         assistant_text="I made partial progress.",
-        model_override="local:target",
+        model_override="model:ollama:target",
     )
 
     assert decision.should_continue is True
     assert decision.status == "active"
-    assert called["model_ref"] == "local:target"
+    assert called["model_ref"] == "model:ollama:target"
     assert "not done yet" in goals.get_current_goal(thread_id)["last_reason"]
     events = agent_runs.get_agent_events(started_goal["active_run_id"])
     assert "goal.continuation_requested" in {event["type"] for event in events}
@@ -182,6 +178,52 @@ def test_goal_after_turn_uses_same_model_verifier_and_claims_once(tmp_path, monk
     )
     assert duplicate.should_continue is False
     assert goals.get_current_goal(thread_id)["turns_used"] == 1
+
+
+def test_goal_verifier_uses_the_goal_threads_model_with_a_bounded_structured_verdict(tmp_path, monkeypatch):
+    """WP C1: without a turn model, the verifier asks the goal thread's own model,
+    at the lowest effort, for a schema verdict with a bounded reply."""
+    threads, _agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
+        tmp_path,
+        monkeypatch,
+    )
+    thread_id = threads.create_thread("Goal on a local model")
+    threads._set_thread_model_override(thread_id, "model:ollama:qwen3:8b")
+    goals.start_goal(thread_id, "finish the report")
+
+    import row_bot.models as models
+    from row_bot.providers import background
+
+    requests = []
+
+    class LocalModel:
+        num_ctx = 16_384
+
+        def __init__(self, ref, plan):
+            self.request = {"ref": ref, "plan": plan, "bound": {}}
+
+        def bind(self, **kwargs):
+            self.request["bound"].update(kwargs)
+            return self
+
+        def invoke(self, messages):
+            requests.append(self.request)
+            return type("Response", (), {"content": '{"progress": "done", "reason": "Report sent.", '
+                                                    '"failing_step": ""}'})()
+
+    monkeypatch.setattr(models, "get_current_model", lambda: "model:openai:gpt-5")
+    monkeypatch.setattr(models, "get_llm_for", lambda ref, num_ctx=None, *, reasoning_plan=None:
+                        LocalModel(ref, reasoning_plan))
+    monkeypatch.setattr(background, "resolve_reasoning_capabilities_for_ref", lambda _ref: None)
+
+    decision = goals.after_turn(thread_id=thread_id, turn_id="turn-1", assistant_text="Sent the report.")
+
+    assert decision.status == "completed"
+    [request] = requests
+    assert request["ref"] == "model:ollama:qwen3:8b"
+    assert request["bound"]["options"] == {"num_ctx": 16_384, "num_predict": 512}
+    assert request["bound"]["format"]["properties"]["progress"]["enum"] == [
+        "progress", "no_progress", "done", "blocked"]
 
 
 def test_goal_verifier_failure_falls_back_to_continue(tmp_path, monkeypatch):
@@ -512,3 +554,19 @@ def test_an_agent_that_stops_to_wait_for_the_person_shows_needs_you(tmp_path, mo
     assert payload["ok"] is True
     assert goals.get_goal(goal["id"])["status"] == "blocked"
     assert goals.resume_goal_for_answer(thread_id)["status"] == "active"
+
+
+def test_goal_tools_act_on_the_running_conversation_only(tmp_path, monkeypatch):
+    """The conversation is not a model argument: a goal_update naming another thread updates this one (WP D1)."""
+    threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(tmp_path, monkeypatch)
+    here, elsewhere = threads.create_thread("Here"), threads.create_thread("Elsewhere")
+    mine, theirs = goals.start_goal(here, "Ship the report"), goals.start_goal(elsewhere, "Plan the trip")
+    monkeypatch.setattr(goal_tool, "_runtime_context", lambda: {"thread_id": here})
+    tools = {tool.name: tool for tool in goal_tool.GoalTool().as_langchain_tools()}
+
+    tools["goal_update"].invoke({"thread_id": elsewhere, "progress": "Drafted section one."})
+    status = json.loads(tools["goal_status"].invoke({"thread_id": elsewhere}))
+
+    assert goals.get_goal(mine["id"])["last_progress"] == "Drafted section one."
+    assert not goals.get_goal(theirs["id"])["last_progress"]
+    assert status["goal"]["id"] == mine["id"]

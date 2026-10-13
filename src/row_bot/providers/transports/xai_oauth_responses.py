@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from contextlib import nullcontext
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -17,8 +17,31 @@ from pydantic import Field, PrivateAttr
 from row_bot.cancellation import current_cancellation_scope
 from row_bot.prompt_cache import usage_metadata_from_provider_usage
 from row_bot.providers import xai_oauth as xai_auth
+from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.transports.responses_reasoning import (
+    ENCRYPTED_REASONING_INCLUDE,
+    is_encrypted_reasoning_rejection,
+    reasoning_items_for_replay,
+    reasoning_items_from_events,
+    reasoning_replay_kwargs,
+    without_replayed_reasoning,
+)
 
 logger = logging.getLogger(__name__)
+
+XAI_OAUTH_TRANSPORT = "xai_oauth"
+
+
+def _requests_encrypted_reasoning(model_name: str) -> bool:
+    """Whether to ask for encrypted reasoning: xAI's reasoning families only.
+
+    xAI documents ``include: ["reasoning.encrypted_content"]`` for its reasoning
+    models (grok-4.7 returns it unasked). Non-reasoning models are left as before.
+    """
+    lower = str(model_name or "").strip().lower()
+    if "non-reasoning" in lower:
+        return False
+    return lower.startswith(("grok-4", "grok-3-mini")) or "reasoning" in lower
 
 
 class ChatXAIOAuthResponses(BaseChatModel):
@@ -68,7 +91,7 @@ class ChatXAIOAuthResponses(BaseChatModel):
         run_manager: Any | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        events = list(self._iter_response_events(self._request_body(messages, stop=stop, **kwargs)))
+        events = list(self._events_with_reasoning_recovery(self._request_body(messages, stop=stop, **kwargs)))
         self._validate_probe()
         content = _assistant_text_from_events(events)
         tool_calls = _tool_calls_from_events(events)
@@ -76,6 +99,9 @@ class ChatXAIOAuthResponses(BaseChatModel):
         message = AIMessage(
             content=content,
             tool_calls=tool_calls,
+            additional_kwargs=reasoning_replay_kwargs(
+                XAI_OAUTH_TRANSPORT, self.model_name, reasoning_items_from_events(events)
+            ),
             response_metadata=metadata,
             usage_metadata=usage_metadata_from_provider_usage(metadata.get("token_usage")),
         )
@@ -95,7 +121,8 @@ class ChatXAIOAuthResponses(BaseChatModel):
         logger.info("xai_oauth_sse: stream start model=%s", self.model_name)
         scope = current_cancellation_scope()
         completed: list[dict[str, Any]] = []
-        for event in self._iter_response_events(body):
+        reasoning_events: list[dict[str, Any]] = []
+        for event in self._events_with_reasoning_recovery(body):
             if scope is not None and scope.is_cancelled():
                 return
             event_type = event.get("type")
@@ -115,6 +142,9 @@ class ChatXAIOAuthResponses(BaseChatModel):
             if event_type != "response.output_item.done":
                 continue
             item = event.get("item") if isinstance(event.get("item"), dict) else {}
+            if item.get("type") == "reasoning":
+                reasoning_events.append(event)
+                continue
             if item.get("type") == "function_call":
                 chunk_payload = _tool_call_chunk_from_item(item, tool_index)
                 if chunk_payload:
@@ -132,7 +162,30 @@ class ChatXAIOAuthResponses(BaseChatModel):
         if scope is not None and scope.is_cancelled():
             return
         logger.info("xai_oauth_sse: stream complete after %.3fs model=%s", time.perf_counter() - started, self.model_name)
-        yield _final_usage_chunk(_response_metadata_from_events(completed))
+        yield _final_usage_chunk(
+            _response_metadata_from_events(completed),
+            reasoning_replay_kwargs(
+                XAI_OAUTH_TRANSPORT, self.model_name, reasoning_items_from_events(reasoning_events)
+            ),
+        )
+
+    def _events_with_reasoning_recovery(self, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        """Stream the response; retry once without replayed reasoning the server can't read."""
+        emitted = False
+        try:
+            for event in self._iter_response_events(body):
+                emitted = True
+                yield event
+            return
+        except RuntimeError as exc:
+            stripped = without_replayed_reasoning(body)
+            if emitted or stripped is None or not is_encrypted_reasoning_rejection(exc):
+                raise
+            logger.warning(
+                "xai_oauth_sse: replayed reasoning was rejected; retrying once without it model=%s",
+                self.model_name,
+            )
+        yield from self._iter_response_events(stripped)
 
     def _request_body(
         self,
@@ -141,7 +194,12 @@ class ChatXAIOAuthResponses(BaseChatModel):
         stop: list[str] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        instructions, input_items = _messages_to_responses_input(messages)
+        instructions, input_items = _messages_to_responses_input(
+            messages,
+            replay_reasoning=lambda message: reasoning_items_for_replay(
+                message, transport=XAI_OAUTH_TRANSPORT, model=self.model_name
+            ),
+        )
         body: dict[str, Any] = {
             "model": self.model_name,
             "instructions": instructions,
@@ -149,8 +207,16 @@ class ChatXAIOAuthResponses(BaseChatModel):
             "store": False,
             "stream": True,
         }
-        if self._probe_snapshot is not None and self._captured_headers is None:
+        probe = self._probe_snapshot is not None and self._captured_headers is None
+        if probe:
             body["max_output_tokens"] = 128
+        else:
+            # The Responses form of x-grok-conv-id: one server, and its cache, per conversation.
+            cache_key = conversation_cache_key(XAI_OAUTH_TRANSPORT)
+            if cache_key:
+                body["prompt_cache_key"] = cache_key
+            if _requests_encrypted_reasoning(self.model_name):
+                body["include"] = [ENCRYPTED_REASONING_INCLUDE]
         tools = [_responses_tool(tool) for tool in kwargs.get("tools") or []]
         if tools:
             body["tools"] = tools
@@ -474,7 +540,11 @@ def _message_content_items(message: BaseMessage, *, output: bool = False) -> lis
     return items
 
 
-def _messages_to_responses_input(messages: list[BaseMessage]) -> tuple[str, list[dict[str, Any]]]:
+def _messages_to_responses_input(
+    messages: list[BaseMessage],
+    *,
+    replay_reasoning: Callable[[AIMessage], list[dict[str, Any]]] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     instructions: list[str] = []
     input_items: list[dict[str, Any]] = []
     for message in messages:
@@ -487,6 +557,9 @@ def _messages_to_responses_input(messages: list[BaseMessage]) -> tuple[str, list
             role = "user"
             output = False
         elif isinstance(message, AIMessage):
+            # A response's reasoning came before its text and tool calls.
+            if replay_reasoning is not None:
+                input_items.extend(replay_reasoning(message))
             if text:
                 input_items.append({
                     "type": "message",
@@ -677,14 +750,20 @@ def _assistant_text_parts_from_message_item(item: dict[str, Any]) -> list[str]:
     return parts
 
 
-def _final_usage_chunk(response_metadata: dict[str, Any]) -> ChatGenerationChunk:
-    """The closing chunk, carrying the usage ``response.completed`` reported."""
+def _final_usage_chunk(
+    response_metadata: dict[str, Any],
+    additional_kwargs: dict[str, Any] | None = None,
+) -> ChatGenerationChunk:
+    """The closing chunk: the usage ``response.completed`` reported, and the reasoning to replay."""
     usage_metadata = usage_metadata_from_provider_usage(response_metadata.get("token_usage"))
     if usage_metadata is None:
-        return ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        return ChatGenerationChunk(message=AIMessageChunk(
+            content="", chunk_position="last", additional_kwargs=dict(additional_kwargs or {}),
+        ))
     return ChatGenerationChunk(message=AIMessageChunk(
         content="",
         chunk_position="last",
+        additional_kwargs=dict(additional_kwargs or {}),
         usage_metadata=usage_metadata,
         response_metadata={"token_usage": response_metadata["token_usage"]},
     ))

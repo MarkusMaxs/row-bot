@@ -5,7 +5,7 @@ import logging
 import time
 import uuid
 from contextlib import nullcontext
-from typing import Any, Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -16,11 +16,21 @@ from pydantic import Field, PrivateAttr
 from row_bot.cancellation import current_cancellation_scope
 from row_bot.prompt_cache import usage_metadata_from_provider_usage
 from row_bot.providers import codex as codex_auth
+from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.transports.responses_reasoning import (
+    ENCRYPTED_REASONING_INCLUDE,
+    is_encrypted_reasoning_rejection,
+    reasoning_items_for_replay,
+    reasoning_items_from_events,
+    reasoning_replay_kwargs,
+    without_replayed_reasoning,
+)
 
 CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex"
 CODEX_ORIGINATOR = "codex_cli_rs"
 CODEX_USER_AGENT = "codex_cli_rs/0.0.0 (row-bot)"
-CODEX_INCLUDE = ["reasoning.encrypted_content"]
+CODEX_INCLUDE = [ENCRYPTED_REASONING_INCLUDE]
+CODEX_TRANSPORT = "codex"
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +41,14 @@ class ChatCodexResponses(BaseChatModel):
     model_name: str
     base_url: str = CODEX_RESPONSES_BASE_URL
     timeout: float = 120.0
-    session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    # A fixed session overrides the conversation's key (tests, one-off callers).
+    session_id: str = ""
     installation_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     http_client: Any | None = None
     reasoning_plan: Any | None = None
     _captured_snapshot: Any = PrivateAttr(default=None)
     _captured_validate: Any = PrivateAttr(default=None)
+    _instance_session_id: str = PrivateAttr(default_factory=lambda: str(uuid.uuid4()))
 
     def bind_captured_credentials(self, snapshot: tuple, validate: Any, *, headers: dict | None = None) -> None:
         """Bind one private account snapshot without refresh or global mutation."""
@@ -57,6 +69,18 @@ class ChatCodexResponses(BaseChatModel):
     ) -> Runnable:
         return self.bind(tools=[_responses_tool(tool) for tool in tools], tool_choice=tool_choice or "auto", **kwargs)
 
+    def _session_key(self) -> str:
+        """The cache key and session of this request: one per conversation.
+
+        Codex CLI sends its conversation id as both ``prompt_cache_key`` and the
+        ``session_id`` header, so every call of a conversation reaches the same
+        prompt cache. Row-Bot sends a per-process digest of its conversation id
+        (``cache_affinity``), which is the same for every model instance that
+        serves the conversation, Chat Only and compaction included. Outside a
+        conversation the instance keeps one random session, as before.
+        """
+        return self.session_id or conversation_cache_key(CODEX_TRANSPORT) or self._instance_session_id
+
     def _generate(
         self,
         messages: list[BaseMessage],
@@ -71,6 +95,9 @@ class ChatCodexResponses(BaseChatModel):
         message = AIMessage(
             content=content,
             tool_calls=tool_calls,
+            additional_kwargs=reasoning_replay_kwargs(
+                CODEX_TRANSPORT, self.model_name, reasoning_items_from_events(events)
+            ),
             response_metadata=response_metadata,
             usage_metadata=usage_metadata_from_provider_usage(response_metadata.get("token_usage")),
         )
@@ -105,7 +132,8 @@ class ChatCodexResponses(BaseChatModel):
         scope = current_cancellation_scope()
         writing = _ToolCallProgress()
         completed: list[dict[str, Any]] = []
-        for event in self._iter_response_events(body):
+        reasoning_events: list[dict[str, Any]] = []
+        for event in self._events_with_reasoning_recovery(body):
             if scope is not None and scope.is_cancelled():
                 return
             event_type = event.get("type")
@@ -137,6 +165,9 @@ class ChatCodexResponses(BaseChatModel):
             if event_type != "response.output_item.done":
                 continue
             item = event.get("item") if isinstance(event.get("item"), dict) else {}
+            if item.get("type") == "reasoning":
+                reasoning_events.append(event)
+                continue
             if item.get("type") == "function_call":
                 chunk_payload = _tool_call_chunk_from_item(item, tool_index)
                 if chunk_payload:
@@ -159,14 +190,40 @@ class ChatCodexResponses(BaseChatModel):
             thread_id,
             generation_id,
         )
-        yield _final_usage_chunk(_response_metadata_from_events(completed))
+        yield _final_usage_chunk(
+            _response_metadata_from_events(completed),
+            reasoning_replay_kwargs(CODEX_TRANSPORT, self.model_name, reasoning_items_from_events(reasoning_events)),
+        )
 
     def _request_events(self, messages: list[BaseMessage], **kwargs: Any) -> list[dict[str, Any]]:
         body = self._request_body(messages, **kwargs)
-        return list(self._iter_response_events(body))
+        return list(self._events_with_reasoning_recovery(body))
+
+    def _events_with_reasoning_recovery(self, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        """Stream the response; retry once without replayed reasoning the server can't read."""
+        emitted = False
+        try:
+            for event in self._iter_response_events(body):
+                emitted = True
+                yield event
+            return
+        except RuntimeError as exc:
+            stripped = without_replayed_reasoning(body)
+            if emitted or stripped is None or not is_encrypted_reasoning_rejection(exc):
+                raise
+            logger.warning(
+                "codex_sse: replayed reasoning was rejected; retrying once without it model=%s",
+                self.model_name,
+            )
+        yield from self._iter_response_events(stripped)
 
     def _request_body(self, messages: list[BaseMessage], **kwargs: Any) -> dict[str, Any]:
-        instructions, input_items = _messages_to_responses_input(messages)
+        instructions, input_items = _messages_to_responses_input(
+            messages,
+            replay_reasoning=lambda message: reasoning_items_for_replay(
+                message, transport=CODEX_TRANSPORT, model=self.model_name
+            ),
+        )
         tools = [_responses_tool(tool) for tool in kwargs.get("tools") or []]
         body = {
             "model": self.model_name,
@@ -179,7 +236,7 @@ class ChatCodexResponses(BaseChatModel):
             "store": False,
             "stream": True,
             "include": list(kwargs.get("include") or CODEX_INCLUDE),
-            "prompt_cache_key": self.session_id,
+            "prompt_cache_key": self._session_key(),
             "client_metadata": {"x-codex-installation-id": self.installation_id},
         }
         if self.reasoning_plan is not None and not self.reasoning_plan.is_default:
@@ -310,7 +367,7 @@ class ChatCodexResponses(BaseChatModel):
             "Authorization": f"Bearer {credentials.access_token}",
             "ChatGPT-Account-ID": credentials.account_id,
             "originator": CODEX_ORIGINATOR,
-            "session_id": self.session_id,
+            "session_id": self._session_key(),
             "User-Agent": CODEX_USER_AGENT,
             "Accept": "text/event-stream",
             "Content-Type": "application/json",
@@ -423,7 +480,11 @@ def _message_content_items(message: BaseMessage, *, output: bool = False) -> lis
     return items
 
 
-def _messages_to_responses_input(messages: list[BaseMessage]) -> tuple[str, list[dict[str, Any]]]:
+def _messages_to_responses_input(
+    messages: list[BaseMessage],
+    *,
+    replay_reasoning: Callable[[AIMessage], list[dict[str, Any]]] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     instructions: list[str] = []
     input_items: list[dict[str, Any]] = []
     for message in messages:
@@ -436,6 +497,9 @@ def _messages_to_responses_input(messages: list[BaseMessage]) -> tuple[str, list
             role = "user"
             output = False
         elif isinstance(message, AIMessage):
+            # A response's reasoning came before its text and tool calls.
+            if replay_reasoning is not None:
+                input_items.extend(replay_reasoning(message))
             if text:
                 input_items.append({
                     "type": "message",
@@ -668,14 +732,20 @@ def _assistant_text_parts_from_message_item(item: dict[str, Any]) -> list[str]:
     return parts
 
 
-def _final_usage_chunk(response_metadata: dict[str, Any]) -> ChatGenerationChunk:
-    """The closing chunk, carrying the usage ``response.completed`` reported."""
+def _final_usage_chunk(
+    response_metadata: dict[str, Any],
+    additional_kwargs: dict[str, Any] | None = None,
+) -> ChatGenerationChunk:
+    """The closing chunk: the usage ``response.completed`` reported, and the reasoning to replay."""
     usage_metadata = usage_metadata_from_provider_usage(response_metadata.get("token_usage"))
     if usage_metadata is None:
-        return ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        return ChatGenerationChunk(message=AIMessageChunk(
+            content="", chunk_position="last", additional_kwargs=dict(additional_kwargs or {}),
+        ))
     return ChatGenerationChunk(message=AIMessageChunk(
         content="",
         chunk_position="last",
+        additional_kwargs=dict(additional_kwargs or {}),
         usage_metadata=usage_metadata,
         response_metadata={"token_usage": response_metadata["token_usage"]},
     ))

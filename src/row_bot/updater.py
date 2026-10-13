@@ -72,8 +72,8 @@ from row_bot.brand import (
     UPDATER_USER_AGENT,
     WINDOWS_INSTALLER_BASENAME,
 )
+from row_bot import install_layout
 from row_bot.data_paths import get_row_bot_data_dir
-from row_bot.runtime_paths import app_root as runtime_app_root
 from row_bot.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -319,54 +319,16 @@ def _notify() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def is_dev_install() -> bool:
-    """Return True if we're running from a git checkout, not an installed
-    build. We disable self-installation in dev to avoid clobbering work.
+    """True unless this is a per-user install that manages its own versions.
+
+    A source checkout, a container (its host applies updates) and anything
+    unrecognised never update themselves (``install_layout.detect``).
     """
     try:
-        app_root = runtime_app_root()
-        if (app_root / ".git").exists():
-            return True
-        # Packaged Windows builds ship as frozen exe or _internal dir
-        if platform.system() == "Windows":
-            if getattr(sys, "frozen", False):
-                return False
-            # Running from the installed Row-Bot folder: expect no .git, expect
-            # a sibling 'unins000.exe' or similar. We conservatively treat
-            # "no .git and running under the installer python" as prod.
-            return not (app_root / "unins000.exe").exists() and \
-                   not (app_root.parent / "unins000.exe").exists()
-        if platform.system() == "Darwin":
-            # Running from a .app bundle → app_root ends in
-            # Row-Bot.app/Contents/Resources or similar.
-            return ".app" not in str(app_root)
-        if platform.system() == "Linux":
-            return _linux_install_root(app_root) is None
+        return not install_layout.detect().self_updating
     except Exception:
-        pass
-    return False
-
-
-def _linux_install_root(app_root: pathlib.Path | None = None) -> pathlib.Path | None:
-    """Return the Linux XDG tarball install root, if this is one."""
-    if platform.system() != "Linux":
-        return None
-    env_root = os.environ.get("ROW_BOT_INSTALL_ROOT")
-    candidates: list[pathlib.Path] = []
-    if env_root:
-        candidates.append(pathlib.Path(env_root))
-    resolved_app_root = app_root or runtime_app_root()
-    candidates.extend([resolved_app_root.parent, resolved_app_root])
-    for candidate in candidates:
-        try:
-            marker = candidate / "install_info.json"
-            if not marker.exists():
-                continue
-            data = json.loads(marker.read_text(encoding="utf-8"))
-            if data.get("platform") == "linux" and data.get("install_kind") == "xdg-user-tarball":
-                return candidate
-        except Exception:
-            continue
-    return None
+        logger.warning("Could not read the install layout; updates stay off", exc_info=True)
+        return True
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -430,6 +392,8 @@ def _install_linux_tarball(installer_path: pathlib.Path) -> pathlib.Path:
         version = str(metadata.get("version") or "").strip()
         if not version:
             raise UpdateError("Linux update archive is missing a version")
+        if not install_layout.is_valid_version_name(version):
+            raise UpdateError("Linux update archive has an invalid version")
 
         releases_dir.mkdir(parents=True, exist_ok=True)
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -445,12 +409,11 @@ def _install_linux_tarball(installer_path: pathlib.Path) -> pathlib.Path:
             shutil.rmtree(target)
         staging.replace(target)
 
+    # state.json keeps the version this replaces as `previous` (the rollback
+    # target) before `current` moves.
+    install_layout.record_install(install_home, version, kind=install_layout.InstallKind.LINUX)
     current = install_home / "current"
-    tmp_link = install_home / f".current-{os.getpid()}"
-    if tmp_link.exists() or tmp_link.is_symlink():
-        tmp_link.unlink()
-    os.symlink(pathlib.Path("releases") / version, tmp_link, target_is_directory=True)
-    tmp_link.replace(current)
+    install_layout.set_linux_current(install_home, version)
 
     launcher = bin_dir / LINUX_COMMAND_NAME
     if launcher.exists() or launcher.is_symlink():

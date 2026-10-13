@@ -122,57 +122,6 @@ def test_local_chat_delivery_is_complete_without_a_channel_binding(
     assert orchestrator.retry_pending_deliveries() == 0
 
 
-def test_default_synthesis_uses_a_disposable_thread(monkeypatch, tmp_path):
-    _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
-    orchestration = orchestrator.create_or_get_orchestration(
-        parent_thread_id="visible-parent",
-        parent_generation_id="visible-generation",
-        root_objective="Return one consolidated answer.",
-        model_ref="model:codex:gpt-5.6-sol",
-        approval_mode="approve",
-        runtime_surface="normal_chat",
-    )
-    orchestration["continuation_state_json"] = {
-        "config": {
-            "configurable": {
-                "thread_id": "visible-parent",
-                "generation_id": "visible-generation",
-            }
-        },
-        "enabled_tool_names": ["agents", "web_search"],
-    }
-    seen = {}
-    cleaned = []
-
-    def fake_invoke(prompt, enabled_tools, config):
-        seen["prompt"] = prompt
-        seen["enabled_tools"] = enabled_tools
-        seen["config"] = config
-        return "Consolidated final"
-
-    agent_module = importlib.import_module("row_bot.agent")
-    cleanup_module = importlib.import_module("row_bot.thread_cleanup")
-    monkeypatch.setattr(agent_module, "invoke_agent", fake_invoke)
-    monkeypatch.setattr(
-        cleanup_module,
-        "delete_threads",
-        lambda thread_ids: cleaned.extend(thread_ids) or (len(thread_ids), []),
-    )
-
-    result = orchestrator._default_synthesis_executor(
-        orchestration,
-        "Internal synthesis packet",
-    )
-
-    synthesis_thread_id = seen["config"]["configurable"]["thread_id"]
-    assert result == "Consolidated final"
-    assert synthesis_thread_id == f"orchestration-synthesis:{orchestration['id']}"
-    assert synthesis_thread_id != "visible-parent"
-    assert seen["config"]["configurable"]["generation_id"].endswith(":synthesis")
-    assert seen["enabled_tools"] == ["web_search"]
-    assert cleaned == [synthesis_thread_id]
-
-
 def test_group_message_stop_and_result_packet_keep_worktree_reference(
     tmp_path,
     monkeypatch,

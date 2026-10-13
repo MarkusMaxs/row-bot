@@ -374,8 +374,9 @@ def test_local_auto_requests_64k_and_caps_to_observed_allocation(monkeypatch):
     assert policy.requested_limit_tokens == 65_536
     assert policy.observed_limit_tokens == 24_576
     assert policy.effective_limit_tokens == 24_576
-    assert policy.compact_at_tokens == int(24_576 * 0.75)
-    assert policy.usable_input_tokens == int(24_576 * 0.85)
+    # A small window keeps a quarter free: 15% for the reply, 10% for the summary.
+    assert policy.usable_input_tokens == 24_576 - 3_687
+    assert policy.compact_at_tokens == 24_576 - 3_687 - 2_458
 
 
 def test_local_auto_is_capped_by_smaller_native_capacity(monkeypatch):
@@ -420,8 +421,8 @@ def test_unknown_remote_auto_capacity_uses_disclosed_128k_application_fallback(m
     assert policy.native_limit_tokens is None
     assert policy.requested_limit_tokens is None
     assert policy.effective_limit_tokens == 131_072
-    assert policy.usable_input_tokens == int(131_072 * 0.85)
-    assert policy.compact_at_tokens == int(131_072 * 0.75)
+    assert policy.usable_input_tokens == 131_072 - 19_661
+    assert policy.compact_at_tokens == 131_072 - 19_661 - 13_000
     assert policy.capacity_state == "ready"
     assert policy.capacity_source == "app_fallback"
 
@@ -451,7 +452,8 @@ def test_unknown_remote_explicit_override_is_usable(monkeypatch):
     assert policy.native_limit_tokens is None
     assert policy.requested_limit_tokens == 262_144
     assert policy.effective_limit_tokens == 262_144
-    assert policy.compact_at_tokens == int(262_144 * 0.75)
+    # Near the limit, as Claude Code: 20K for the reply and 13K for the summary stay free.
+    assert policy.compact_at_tokens == 262_144 - 33_000
     assert policy.capacity_state == "ready"
     assert policy.capacity_source == "advanced_override"
 

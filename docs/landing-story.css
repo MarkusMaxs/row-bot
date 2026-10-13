@@ -578,10 +578,10 @@ html:not(.js) .product-stage .story-panel:not(:first-of-type) { display: none; }
     .journey-shell { padding-top: 64px; }
     .journey-header h1 { font-size: clamp(2.7rem, 4.1vw, 4.4rem); }
     .product-journey.is-intro .journey-header h1 { font-size: clamp(4.2rem, 6.2vw, 6.2rem); }
-    .journey-header { margin-bottom: 12px; }
+    .journey-header { margin-bottom: 28px; }
     .product-journey.is-intro .journey-header { margin-bottom: 20px; }
     .journey-intro > p { line-height: 1.4; }
-    .product-stage { max-height: 44vh; }
+    .product-stage { max-height: calc(100svh - 120px); margin-inline: auto; }
     .story-caption { min-height: 70px; margin-top: 8px; }
     .story-caption h2 { font-size: clamp(1.4rem, 2vw, 2rem); }
 }
