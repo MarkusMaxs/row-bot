@@ -26,6 +26,7 @@ Public API is consumed by ``memory.py`` (thin backward-compatible wrapper),
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 import logging
@@ -518,7 +519,15 @@ _projection_lock = threading.RLock()
 _PROJECTION_METADATA_BYTES = 32 * 1024 * 1024
 _PROJECTION_ENTITY_BYTES = 2 * 1024 * 1024
 _PROJECTION_BATCH_BYTES = 8 * 1024 * 1024
-_SEMANTIC_TEXT_VERSION = 2
+# Text version 3 embeds the meaning only (F54). Version 2 also embedded the
+# properties JSON; its vectors keep serving search until they are refreshed.
+_SEMANTIC_TEXT_VERSION = 3
+_READABLE_TEXT_VERSIONS = frozenset({2, _SEMANTIC_TEXT_VERSION})
+# A small change is published as a delta over a complete base generation, so
+# a save writes its own vectors rather than every segment again. Once the delta
+# and the base rows it replaced pass this bound, the next publish is complete.
+_DELTA_MIN_ROWS = 256
+_DELTA_MAX_ROWS = 2000
 _generation_read_state = threading.local()
 
 
@@ -670,8 +679,13 @@ def _initialize_projections(conn: sqlite3.Connection, *, lexical: bool) -> None:
         manifest_hash TEXT,
         retiring INTEGER NOT NULL DEFAULT 0,
         validated_segments INTEGER NOT NULL DEFAULT 0,
-        attempts INTEGER NOT NULL DEFAULT 0
+        attempts INTEGER NOT NULL DEFAULT 0,
+        base_generation TEXT
     )""")
+    # A delta generation reads its base's segments; the base is kept while a
+    # kept generation uses it. Registries from before deltas gain the column.
+    if "base_generation" not in {row[1] for row in conn.execute("PRAGMA table_info(knowledge_vector_generations)")}:
+        conn.execute("ALTER TABLE knowledge_vector_generations ADD COLUMN base_generation TEXT")
     conn.execute("""CREATE TABLE IF NOT EXISTS knowledge_projection_work (
         entity_id TEXT PRIMARY KEY,
         revision INTEGER NOT NULL,
@@ -752,6 +766,31 @@ def _semantic_hash(entity: dict) -> str:
     return hashlib.sha256(_entity_text(entity).encode("utf-8")).hexdigest()
 
 
+def _legacy_semantic_hash(entity: dict) -> str:
+    return hashlib.sha256(_legacy_entity_text(entity).encode("utf-8")).hexdigest()
+
+
+def _vector_text_state(stored: str | None, entity: dict) -> str | None:
+    """How a saved vector's source hash relates to the entity as saved now.
+
+    ``"current"``: embedded from today's text. ``"legacy"``: embedded from the
+    text version 2 form (with properties) of this exact row, so it still
+    describes the entity and serves search until it is refreshed. ``None``:
+    the entity changed since, or there is no vector.
+    """
+    if stored is None:
+        return None
+    if stored == _semantic_hash(entity):
+        return "current"
+    if stored == _legacy_semantic_hash(entity):
+        return "legacy"
+    return None
+
+
+def _vector_covers(stored: str | None, entity: dict) -> bool:
+    return _vector_text_state(stored, entity) is not None
+
+
 def _projection_file(directory: pathlib.Path, name: str, limit: int) -> bytes:
     resolved = (directory / name).resolve(strict=True)
     if resolved.parent != directory.resolve(strict=True):
@@ -763,9 +802,23 @@ def _projection_file(directory: pathlib.Path, name: str, limit: int) -> bytes:
     return value
 
 
+def _generation_directory(generation: object) -> pathlib.Path:
+    """The selected-name directory of a registered generation, inside the index owner."""
+    if not isinstance(generation, str) or not re.fullmatch(r"[a-f0-9]{32}", generation):
+        raise ValueError("No validated knowledge vector generation")
+    root = _VECTOR_DIR / "generations"
+    directory = root / generation
+    if directory.resolve(strict=True).parent != root.resolve(strict=True):
+        raise ValueError("Knowledge generation escapes index owner")
+    return directory
+
+
 def _read_generation_segment(directory: pathlib.Path, segment: dict, dimension: int):
     from row_bot.flat_vector_storage import MAX_VECTOR_BYTES, decode_flat_vectors
 
+    if segment.get("owner") is not None:
+        # A delta generation's base segments stay in the base's own directory.
+        directory = _generation_directory(segment["owner"])
     data = _projection_file(directory, segment["name"], MAX_VECTOR_BYTES)
     if hashlib.sha256(data).hexdigest() != segment["sha256"]:
         raise ValueError("Knowledge vector and metadata publication disagree")
@@ -773,23 +826,34 @@ def _read_generation_segment(directory: pathlib.Path, segment: dict, dimension: 
                                expected_count=segment["count"], expected_metric="inner_product")
 
 
-def _load_vector_generation(state: dict, *, fingerprint: dict | None = None, validate_vectors: bool = True,
-                            retiring: bool = False):
-    generation = state.get("generation")
-    if not isinstance(generation, str) or not re.fullmatch(r"[a-f0-9]{32}", generation):
-        raise ValueError("No validated knowledge vector generation")
-    root = _VECTOR_DIR / "generations"
-    directory = root / (f".retiring-{generation}" if retiring else generation)
-    if directory.resolve(strict=True).parent != root.resolve(strict=True):
-        raise ValueError("Knowledge generation escapes index owner")
-    metadata = json.loads(_projection_file(directory, "manifest.json", _PROJECTION_METADATA_BYTES))
-    if (type(metadata) is not dict or metadata.get("version") != 1
-            or metadata.get("text_version") != _SEMANTIC_TEXT_VERSION
+def _validated_generation_manifest(generation: str, directory: pathlib.Path, data: bytes, *,
+                                   fingerprint: dict | None, validate_vectors: bool) -> dict:
+    """Check one manifest and (optionally) its own segments; a delta's base is not read here."""
+    from row_bot.flat_vector_storage import MAX_VECTOR_COUNT
+
+    metadata = json.loads(data)
+    if (type(metadata) is not dict or metadata.get("version") not in (1, 2)
+            or metadata.get("text_version") not in _READABLE_TEXT_VERSIONS
             or metadata.get("generation") != generation):
         raise ValueError("Knowledge generation metadata is incompatible")
     stored = metadata.get("embedding")
     if type(stored) is not dict or (fingerprint is not None and stored != fingerprint):
         raise ValueError("Knowledge generation embedding fingerprint changed")
+    base = metadata.get("base") if metadata["version"] == 2 else None
+    base_count = base_segments = 0
+    if base is not None:
+        if (type(base) is not dict or not isinstance(base.get("generation"), str)
+                or not re.fullmatch(r"[a-f0-9]{32}", base["generation"]) or base["generation"] == generation
+                or type(base.get("manifest_sha256")) is not str
+                or not re.fullmatch(r"[a-f0-9]{64}", base["manifest_sha256"])
+                or type(base.get("count")) is not int or not 0 <= base["count"] <= MAX_VECTOR_COUNT
+                or type(base.get("segments")) is not int or not 0 <= base["segments"] <= base["count"]):
+            raise ValueError("Knowledge generation base is invalid")
+        base_count, base_segments = base["count"], base["segments"]
+        dead = metadata.get("dead")
+        if (type(dead) is not list or any(type(value) is not int or not 0 <= value < base_count for value in dead)
+                or dead != sorted(set(dead))):
+            raise ValueError("Knowledge generation replaced rows are invalid")
     identifiers, hashes, segments = metadata.get("ids"), metadata.get("source_hashes"), metadata.get("segments")
     if (type(identifiers) is not list or type(hashes) is not list or type(segments) is not list
             or len(identifiers) != len(hashes)
@@ -797,9 +861,10 @@ def _load_vector_generation(state: dict, *, fingerprint: dict | None = None, val
             or len(set(identifiers)) != len(identifiers) or identifiers != sorted(identifiers)
             or any(type(value) is not str or not re.fullmatch(r"[a-f0-9]{64}", value) for value in hashes)):
         raise ValueError("Knowledge generation coverage is invalid")
-    offset = 0
-    for number, segment in enumerate(segments):
-        if (type(segment) is not dict or segment.get("name") != f"segment-{number:06d}.faiss"
+    offset = base_count
+    for number, segment in enumerate(segments, start=base_segments):
+        # "owner" is only ever added in memory, for a delta's base segments.
+        if (type(segment) is not dict or "owner" in segment or segment.get("name") != f"segment-{number:06d}.faiss"
                 or type(segment.get("count")) is not int or not 0 < segment["count"] <= 2000
                 or type(segment.get("start")) is not int or segment["start"] != offset
                 or type(segment.get("sha256")) is not str or not re.fullmatch(r"[a-f0-9]{64}", segment["sha256"])):
@@ -807,32 +872,82 @@ def _load_vector_generation(state: dict, *, fingerprint: dict | None = None, val
         if validate_vectors:
             _read_generation_segment(directory, segment, stored.get("dimension"))
         offset += segment["count"]
-    if offset != len(identifiers):
+    if offset - base_count != len(identifiers):
         raise ValueError("Knowledge segment and identity counts disagree")
-    return metadata, directory
+    return metadata
 
 
-def _retirement_protected(conn: sqlite3.Connection) -> tuple[str, str]:
+def _load_vector_generation(state: dict, *, fingerprint: dict | None = None, validate_vectors: bool = True,
+                            retiring: bool = False, with_base: bool = True):
+    """Validate one generation and return ``(metadata, directory)``.
+
+    A delta generation (manifest version 2 with a ``base``) comes back
+    expanded: the base's rows, with ``None`` where it replaced or removed
+    them, then its own rows; the base's segments carry their ``owner``.
+    ``with_base=False`` returns its own rows and segments only: retirement
+    never reads a base, which may already be gone.
+    """
+    generation = state.get("generation")
+    if not isinstance(generation, str) or not re.fullmatch(r"[a-f0-9]{32}", generation):
+        raise ValueError("No validated knowledge vector generation")
+    root = _VECTOR_DIR / "generations"
+    directory = root / (f".retiring-{generation}" if retiring else generation)
+    if directory.resolve(strict=True).parent != root.resolve(strict=True):
+        raise ValueError("Knowledge generation escapes index owner")
+    metadata = _validated_generation_manifest(
+        generation, directory, _projection_file(directory, "manifest.json", _PROJECTION_METADATA_BYTES),
+        fingerprint=fingerprint, validate_vectors=validate_vectors)
+    base = metadata.get("base") if metadata["version"] == 2 else None
+    if base is None or not with_base:
+        return metadata, directory
+    # A base is always complete itself, so a delta reads at most one other generation.
+    base_directory = _generation_directory(base["generation"])
+    data = _projection_file(base_directory, "manifest.json", _PROJECTION_METADATA_BYTES)
+    if hashlib.sha256(data).hexdigest() != base["manifest_sha256"]:
+        raise ValueError("Knowledge generation base changed")
+    base_metadata = _validated_generation_manifest(base["generation"], base_directory, data,
+                                                   fingerprint=metadata["embedding"], validate_vectors=validate_vectors)
+    if (base_metadata["version"] == 2 and base_metadata.get("base") is not None
+            or len(base_metadata["ids"]) != base["count"] or len(base_metadata["segments"]) != base["segments"]):
+        raise ValueError("Knowledge generation base is not complete")
+    replaced = set(metadata["dead"])
+    ids = [None if position in replaced else value for position, value in enumerate(base_metadata["ids"])]
+    hashes = [None if position in replaced else value for position, value in enumerate(base_metadata["source_hashes"])]
+    if not set(metadata["ids"]).isdisjoint(value for value in ids if value is not None):
+        raise ValueError("Knowledge generation coverage is invalid")
+    expanded = dict(metadata)
+    expanded["ids"] = ids + metadata["ids"]
+    expanded["source_hashes"] = hashes + metadata["source_hashes"]
+    expanded["segments"] = [dict(segment, owner=base["generation"]) for segment in base_metadata["segments"]] + metadata["segments"]
+    return expanded, directory
+
+
+def _retirement_protected(conn: sqlite3.Connection) -> tuple[str, str, str, str]:
+    """The selected and previous generations, and the base each one reads (if a delta)."""
     selected = _projection_state(conn)["generation"] or ""
-    row = conn.execute("SELECT previous_generation FROM knowledge_vector_generations WHERE generation=?",
+    row = conn.execute("SELECT previous_generation,base_generation FROM knowledge_vector_generations WHERE generation=?",
                        (selected,)).fetchone()
     previous = (row[0] if row else None) or ""
-    return selected, previous
+    selected_base = (row[1] if row else None) or ""
+    row = conn.execute("SELECT base_generation FROM knowledge_vector_generations WHERE generation=?",
+                       (previous,)).fetchone()
+    previous_base = (row[0] if row else None) or ""
+    return selected, previous, selected_base, previous_base
 
 
 def _retirement_candidates(conn: sqlite3.Connection, limit: int | None = None):
-    selected, previous = _retirement_protected(conn)
+    protected = _retirement_protected(conn)
     suffix = " LIMIT ?" if limit is not None else ""
-    params = (selected, previous, limit) if limit is not None else (selected, previous)
+    params = (*protected, limit) if limit is not None else protected
     return conn.execute("""SELECT * FROM knowledge_vector_generations
-        WHERE generation!=? AND generation!=? ORDER BY attempts,rowid""" + suffix, params)
+        WHERE generation NOT IN (?,?,?,?) ORDER BY attempts,rowid""" + suffix, params)
 
 
 def _retirement_pending() -> int:
     conn = _get_conn()
     try:
         return conn.execute("""SELECT COUNT(*) FROM knowledge_vector_generations
-            WHERE generation!=? AND generation!=?""", _retirement_protected(conn)).fetchone()[0]
+            WHERE generation NOT IN (?,?,?,?)""", _retirement_protected(conn)).fetchone()[0]
     finally:
         conn.close()
 
@@ -932,8 +1047,9 @@ def _retire_vector_generations(*, max_generations: int = 8, cancelled=None) -> d
                 data = _projection_file(directory, "manifest.json", _PROJECTION_METADATA_BYTES)
                 if hashlib.sha256(data).hexdigest() != item["manifest_hash"]:
                     raise ValueError("Modified generation retained")
+                # Only its own segments: a delta's base belongs to the base generation.
                 metadata, _ = _load_vector_generation({"generation": generation}, validate_vectors=False,
-                                                       retiring=directory == captured)
+                                                       retiring=directory == captured, with_base=False)
                 expected = {"manifest.json", *(segment["name"] for segment in metadata["segments"])}
                 actual = {path.name for path in directory.iterdir()}
                 if actual - expected:
@@ -1074,23 +1190,32 @@ def _projection_source_batches(conn: sqlite3.Connection, batch_size: int) -> Ite
 
 def _publish_vector_projection(*, cancelled=None, allow_embedding: bool = True,
                                max_embeddings: int | None = None,
-                               entity_ids: set[str] | None = None) -> None:
+                               entity_ids: set[str] | None = None,
+                               incremental: bool = False) -> None:
     with _generation_access():
-        if not _reuse_current_vector_projection(cancelled=cancelled):
-            _build_vector_projection(cancelled=cancelled, allow_embedding=allow_embedding,
-                                     max_embeddings=max_embeddings, entity_ids=entity_ids)
+        if _reuse_current_vector_projection(cancelled=cancelled) is None:
+            # A single save or removal is published as a delta over the selected
+            # generation's base; a batch drain, a rebuild or a large delta is complete.
+            if not (incremental and _append_vector_projection(
+                    cancelled=cancelled, allow_embedding=allow_embedding,
+                    max_embeddings=max_embeddings, entity_ids=entity_ids)):
+                _build_vector_projection(cancelled=cancelled, allow_embedding=allow_embedding,
+                                         max_embeddings=max_embeddings, entity_ids=entity_ids)
     _retire_vector_generations(**({"cancelled":cancelled} if cancelled is not None else {}))
 
 
-def _reuse_current_vector_projection(*, cancelled=None) -> bool:
-    """Acknowledge a verified semantic no-op under current source admission."""
+def _reuse_current_vector_projection(*, cancelled=None) -> dict | None:
+    """Acknowledge a verified semantic no-op under current source admission.
+
+    Returns the readiness it acknowledged, or None when work remains.
+    """
     from row_bot.embedding_config import active_embedding_metadata
 
     _cancel_projection(cancelled)
     captured = _projection_state()
     status, loaded = _read_vector_readiness()
     if not status["ready"] or loaded is None:
-        return False
+        return None
     metadata, _directory = loaded
     conn = _get_conn()
     try:
@@ -1099,7 +1224,7 @@ def _reuse_current_vector_projection(*, cancelled=None) -> bool:
         current = _projection_state(conn)
         if (current["revision"] != captured["revision"] or current["generation"] != captured["generation"]
                 or metadata["embedding"] != active_embedding_metadata()):
-            return False
+            return None
         # Full-row/wiki changes keep their own pending work; only validated
         # complete semantic coverage can be acknowledged.
         conn.execute("UPDATE knowledge_projection_work SET semantic_pending=0 WHERE revision<=?",
@@ -1109,15 +1234,77 @@ def _reuse_current_vector_projection(*, cancelled=None) -> bool:
                      (captured["revision"],))
         _cancel_projection(cancelled)
         conn.commit()
-        return True
+        return status
+    finally:
+        conn.close()
+
+
+def _normalized_document_vectors(raw, count: int, dimension: int):
+    vectors = np.asarray(raw, dtype=np.float32)
+    if vectors.shape != (count, dimension) or not np.isfinite(vectors).all():
+        raise ValueError("Knowledge embedding batch shape or values are invalid")
+    norms = np.linalg.norm(vectors.astype(np.float64), axis=1, keepdims=True)
+    norms[norms == 0] = 1
+    return (vectors / norms).astype(np.float32)
+
+
+def _write_generation_manifest(directory: pathlib.Path, metadata: dict, *, has_segments: bool) -> bytes:
+    encoded = json.dumps(metadata, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    if len(encoded) > _PROJECTION_METADATA_BYTES:
+        raise ValueError("Knowledge metadata exceeds publication budget")
+    if not has_segments:
+        directory.mkdir(parents=True, exist_ok=False)
+    with (directory / "manifest.json").open("xb") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return encoded
+
+
+def _select_vector_generation(generation: str, encoded: bytes, captured: dict, fingerprint: dict,
+                              live_ids: set[str], *, base: str | None, cancelled=None) -> None:
+    """Select a written generation if the source cut it was built from is still current."""
+    from row_bot.embedding_config import active_embedding_metadata
+
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _cancel_projection(cancelled)
+        current = _projection_state(conn)
+        if (current["revision"] != captured["revision"]
+                or current["generation"] != captured["generation"]
+                or active_embedding_metadata() != fingerprint):
+            raise KnowledgeProjectionIncomplete("Knowledge changed during projection; retry required")
+        conn.execute("""UPDATE knowledge_projection_state SET generation=?,vector_revision=?,vector_error=NULL
+            WHERE singleton=1""", (generation, captured["revision"]))
+        conn.execute("""INSERT INTO knowledge_vector_generations(generation,previous_generation,manifest_hash,base_generation)
+            VALUES(?,?,?,?)""", (generation, captured["generation"], hashlib.sha256(encoded).hexdigest(), base))
+        conn.execute("""UPDATE knowledge_projection_work SET semantic_pending=0
+            WHERE revision<=? AND NOT EXISTS(SELECT 1 FROM entities WHERE id=entity_id)""",
+                     (captured["revision"],))
+        # Acknowledge the pending rows this generation covers (it covers each
+        # live row as of the captured revision), without one write per row.
+        pending = [row[0] for row in conn.execute("""SELECT entity_id FROM knowledge_projection_work
+            WHERE semantic_pending=1 AND revision<=?""", (captured["revision"],))]
+        conn.executemany("""UPDATE knowledge_projection_work SET semantic_pending=0
+            WHERE entity_id=? AND revision<=?""",
+                         ((identifier, captured["revision"]) for identifier in pending if identifier in live_ids))
+        conn.execute("DELETE FROM knowledge_projection_work WHERE semantic_pending=0 AND wiki_pending=0")
+        _cancel_projection(cancelled)
+        conn.commit()
     finally:
         conn.close()
 
 
 def _build_vector_projection(*, cancelled=None, allow_embedding: bool = True,
                                max_embeddings: int | None = None,
-                               entity_ids: set[str] | None = None) -> None:
-    """Build one immutable source cut and select it with SQLite write admission."""
+                               entity_ids: set[str] | None = None,
+                               refresh_legacy: bool = False) -> int:
+    """Build one immutable source cut and select it with SQLite write admission.
+
+    ``refresh_legacy`` also spends the embedding budget on rows whose
+    vectors are still text version 2. Returns how many rows were embedded.
+    """
     import faiss
     from row_bot.embedding_config import active_embedding_metadata, get_embedding_config
     from row_bot.flat_vector_storage import MAX_VECTOR_BYTES, MAX_VECTOR_DIMENSION
@@ -1137,14 +1324,14 @@ def _build_vector_projection(*, cancelled=None, allow_embedding: bool = True,
             try:
                 old_metadata, previous = _load_vector_generation(previous_state, fingerprint=fingerprint, validate_vectors=False)
                 previous_rows = {identifier: (index, old_metadata["source_hashes"][index])
-                                 for index, identifier in enumerate(old_metadata["ids"])}
+                                 for index, identifier in enumerate(old_metadata["ids"]) if identifier is not None}
             except (OSError, ValueError, TypeError, KeyError):
                 if not allow_embedding:
                     raise KnowledgeProjectionIncomplete("Existing knowledge vectors require recovery before removal")
                 previous = None
         elif not allow_embedding:
             # No selected semantic projection ever exposed these entities.
-            return
+            return 0
 
         generation = uuid.uuid4().hex
         # Created exclusively with its first file: a build that fails earlier
@@ -1207,14 +1394,18 @@ def _build_vector_projection(*, cancelled=None, allow_embedding: bool = True,
                 pending_texts = []
                 for row in rows:
                     entity = dict(row)
-                    digest = _semantic_hash(entity)
                     prior = previous_rows.get(entity["id"])
-                    retained = prior_vector(prior[0]) if prior is not None and prior[1] == digest else None
+                    state = _vector_text_state(prior[1], entity) if prior is not None else None
+                    wanted = (allow_embedding and (entity_ids is None or entity["id"] in entity_ids)
+                              and (max_embeddings is None or embedded_count < max_embeddings))
+                    # A text version 2 vector still serves search: it is kept, with
+                    # its own hash, unless this build was asked to refresh it.
+                    keep = state == "current" or (state == "legacy" and not (refresh_legacy and wanted))
+                    retained = prior_vector(prior[0]) if keep else None
                     if retained is not None:
-                        batch.append((entity["id"], digest, retained, None))
-                    elif (allow_embedding and (entity_ids is None or entity["id"] in entity_ids)
-                          and (max_embeddings is None or embedded_count < max_embeddings)):
-                        batch.append((entity["id"], digest, None, len(pending_texts)))
+                        batch.append((entity["id"], prior[1], retained, None))
+                    elif wanted:
+                        batch.append((entity["id"], _semantic_hash(entity), None, len(pending_texts)))
                         pending_texts.append(_entity_text(entity))
                         embedded_count += 1
                 vectors = None
@@ -1222,12 +1413,7 @@ def _build_vector_projection(*, cancelled=None, allow_embedding: bool = True,
                     embedding = embedding or _get_embedding_model(config=config)
                     raw = embedding.embed_documents(pending_texts)
                     _cancel_projection(cancelled)
-                    vectors = np.asarray(raw, dtype=np.float32)
-                    if vectors.shape != (len(pending_texts), dimension) or not np.isfinite(vectors).all():
-                        raise ValueError("Knowledge embedding batch shape or values are invalid")
-                    norms = np.linalg.norm(vectors.astype(np.float64), axis=1, keepdims=True)
-                    norms[norms == 0] = 1
-                    vectors = (vectors / norms).astype(np.float32)
+                    vectors = _normalized_document_vectors(raw, len(pending_texts), dimension)
                 if batch:
                     added = np.empty((len(batch), dimension), dtype=np.float32)
                     for offset, (identifier, digest, old, pending) in enumerate(batch):
@@ -1251,46 +1437,166 @@ def _build_vector_projection(*, cancelled=None, allow_embedding: bool = True,
         _cancel_projection(cancelled)
         flush_segment()
         metadata = {
-            "version": 1, "text_version": _SEMANTIC_TEXT_VERSION,
+            "version": 2, "text_version": _SEMANTIC_TEXT_VERSION,
             "generation": generation, "source_revision": captured["revision"],
-            "embedding": fingerprint, "ids": ids, "source_hashes": source_hashes,
+            "embedding": fingerprint, "base": None, "ids": ids, "source_hashes": source_hashes,
             "segments": segments,
         }
-        encoded = json.dumps(metadata, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        if len(encoded) > _PROJECTION_METADATA_BYTES:
-            raise ValueError("Knowledge metadata exceeds publication budget")
-        if not segments:
-            directory.mkdir(parents=True, exist_ok=False)
-        with (directory / "manifest.json").open("xb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
+        encoded = _write_generation_manifest(directory, metadata, has_segments=bool(segments))
         _load_vector_generation({"generation": generation}, fingerprint=fingerprint)
         _cancel_projection(cancelled)
+        _select_vector_generation(generation, encoded, captured, fingerprint, set(ids), base=None, cancelled=cancelled)
+        return embedded_count
+
+
+def _delta_limit(base_count: int) -> int:
+    """How many delta and replaced rows a generation carries before the next publish is complete."""
+    return min(_DELTA_MAX_ROWS, max(_DELTA_MIN_ROWS, base_count // 8))
+
+
+def _append_vector_projection(*, cancelled=None, allow_embedding: bool = True,
+                              max_embeddings: int | None = None,
+                              entity_ids: set[str] | None = None) -> bool:
+    """Publish a small change as a delta generation over the selected one's base (F54).
+
+    The base is the selected generation when that is complete, or the base it
+    already reads. Its segments are read in place and never written again:
+    the delta holds the rows added since the base, rewritten each time (it is
+    bounded), and lists the base rows it replaced or removed. Coverage is
+    exactly what a complete build would publish, and selection is the same
+    SQLite admission. Returns False, having selected nothing, when a complete
+    build is needed instead: no valid selected generation, another embedding
+    model, a delta past its bound, or unreadable delta vectors.
+    """
+    import faiss
+    from row_bot.embedding_config import active_embedding_metadata, get_embedding_config
+    from row_bot.flat_vector_storage import MAX_VECTOR_BYTES, MAX_VECTOR_DIMENSION
+
+    with _projection_lock:
+        _cancel_projection(cancelled)
+        config = deepcopy(get_embedding_config())
+        fingerprint = active_embedding_metadata(config)
+        dimension = fingerprint["dimension"]
+        if type(dimension) is not int or not 1 <= dimension <= MAX_VECTOR_DIMENSION:
+            raise ValueError("Invalid knowledge embedding dimension")
+        batch_size = config["batch_size"]
+        previous_state = _projection_state()
+        if not previous_state["generation"]:
+            return False
+        try:
+            old_metadata, old_directory = _load_vector_generation(previous_state, fingerprint=fingerprint,
+                                                                  validate_vectors=False)
+            if old_metadata["version"] == 2 and old_metadata.get("base") is not None:
+                base = dict(old_metadata["base"])
+            else:
+                data = _projection_file(old_directory, "manifest.json", _PROJECTION_METADATA_BYTES)
+                base = {"generation": previous_state["generation"], "manifest_sha256": hashlib.sha256(data).hexdigest(),
+                        "count": len(old_metadata["ids"]), "segments": len(old_metadata["segments"])}
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+        base_count = base["count"]
+        limit = _delta_limit(base_count)
+        dead = set(old_metadata.get("dead") or ())
+        live = {identifier: (position, digest) for position, (identifier, digest)
+                in enumerate(zip(old_metadata["ids"], old_metadata["source_hashes"])) if identifier is not None}
+        kept = []
+        added_ids, added_hashes, added_vectors = [], [], []
+        embedding = None
+        embedded_count = 0
         conn = _get_conn()
         try:
-            conn.execute("BEGIN IMMEDIATE")
-            _cancel_projection(cancelled)
-            current = _projection_state(conn)
-            if (current["revision"] != captured["revision"]
-                    or current["generation"] != captured["generation"]
-                    or active_embedding_metadata() != fingerprint):
-                raise KnowledgeProjectionIncomplete("Knowledge changed during projection; retry required")
-            conn.execute("""UPDATE knowledge_projection_state SET generation=?,vector_revision=?,vector_error=NULL
-                WHERE singleton=1""", (generation, captured["revision"]))
-            conn.execute("""INSERT INTO knowledge_vector_generations(generation,previous_generation,manifest_hash)
-                VALUES(?,?,?)""", (generation, captured["generation"], hashlib.sha256(encoded).hexdigest()))
-            conn.execute("""UPDATE knowledge_projection_work SET semantic_pending=0
-                WHERE revision<=? AND NOT EXISTS(SELECT 1 FROM entities WHERE id=entity_id)""",
-                         (captured["revision"],))
-            conn.executemany("""UPDATE knowledge_projection_work SET semantic_pending=0
-                WHERE entity_id=? AND revision<=?""",
-                             ((identifier, captured["revision"]) for identifier in ids))
-            conn.execute("DELETE FROM knowledge_projection_work WHERE semantic_pending=0 AND wiki_pending=0")
-            _cancel_projection(cancelled)
-            conn.commit()
+            conn.execute("BEGIN")
+            captured = _projection_state(conn)
+            if captured["generation"] != previous_state["generation"]:
+                raise KnowledgeProjectionIncomplete("Knowledge projection changed before rebuild")
+            for rows in _projection_source_batches(conn, batch_size):
+                _cancel_projection(cancelled)
+                pending, pending_texts = [], []
+                for row in rows:
+                    entity = dict(row)
+                    prior = live.pop(entity["id"], None)
+                    if prior is not None and _vector_covers(prior[1], entity):
+                        if prior[0] >= base_count:
+                            kept.append((entity["id"], prior[1], prior[0]))
+                        continue
+                    if prior is not None and prior[0] < base_count:
+                        dead.add(prior[0])
+                    # As in a complete build, a changed row without new vectors is
+                    # left out (and stays pending) rather than kept stale.
+                    if (allow_embedding and (entity_ids is None or entity["id"] in entity_ids)
+                            and (max_embeddings is None or embedded_count < max_embeddings)):
+                        pending.append((entity["id"], _semantic_hash(entity)))
+                        pending_texts.append(_entity_text(entity))
+                        embedded_count += 1
+                if len(kept) + len(added_ids) + len(pending) + len(dead) > limit:
+                    return False
+                if pending_texts:
+                    embedding = embedding or _get_embedding_model(config=config)
+                    raw = embedding.embed_documents(pending_texts)
+                    _cancel_projection(cancelled)
+                    vectors = _normalized_document_vectors(raw, len(pending_texts), dimension)
+                    for (identifier, digest), vector in zip(pending, vectors, strict=True):
+                        added_ids.append(identifier)
+                        added_hashes.append(digest)
+                        added_vectors.append(vector)
         finally:
             conn.close()
+        # Base rows whose entity is gone; gone delta rows are simply not kept.
+        dead.update(position for position, _digest in live.values() if position < base_count)
+        if len(kept) + len(added_ids) + len(dead) > limit:
+            return False
+
+        old_segments = old_metadata["segments"]
+        old_starts = [segment["start"] for segment in old_segments]
+        loaded = {}
+        entries = []
+        try:
+            for identifier, digest, position in kept:
+                number = bisect.bisect_right(old_starts, position) - 1
+                if number not in loaded:
+                    loaded[number] = _read_generation_segment(old_directory, old_segments[number], dimension)
+                entries.append((identifier, digest, loaded[number].vectors[position - old_starts[number]]))
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+        del loaded
+        entries.extend(zip(added_ids, added_hashes, added_vectors))
+        entries.sort(key=lambda item: item[0])
+
+        _cancel_projection(cancelled)
+        generation = uuid.uuid4().hex
+        directory = _VECTOR_DIR / "generations" / generation
+        segment_rows = min(2000, (MAX_VECTOR_BYTES - 64) // (dimension * 4))
+        segments = []
+        for offset in range(0, len(entries), segment_rows):
+            chunk = entries[offset:offset + segment_rows]
+            if not segments:
+                directory.mkdir(parents=True, exist_ok=False)
+            index = faiss.IndexFlatIP(dimension)
+            index.add(np.stack([item[2] for item in chunk]).astype(np.float32))
+            name = f"segment-{base['segments'] + len(segments):06d}.faiss"
+            faiss.write_index(index, str(directory / name))
+            data = _projection_file(directory, name, MAX_VECTOR_BYTES)
+            segment = {"name": name, "start": base_count + offset, "count": index.ntotal,
+                       "sha256": hashlib.sha256(data).hexdigest()}
+            _read_generation_segment(directory, segment, dimension)
+            segments.append(segment)
+        ids = [item[0] for item in entries]
+        metadata = {
+            "version": 2, "text_version": _SEMANTIC_TEXT_VERSION,
+            "generation": generation, "source_revision": captured["revision"],
+            "embedding": fingerprint, "base": base, "dead": sorted(dead),
+            "ids": ids, "source_hashes": [item[1] for item in entries], "segments": segments,
+        }
+        encoded = _write_generation_manifest(directory, metadata, has_segments=bool(segments))
+        # Its own segments were each read back above; the base's were validated
+        # when the selected generation was checked, and are immutable.
+        expanded, _ = _load_vector_generation({"generation": generation}, fingerprint=fingerprint,
+                                              validate_vectors=False)
+        _cancel_projection(cancelled)
+        live_ids = {identifier for identifier in expanded["ids"] if identifier is not None}
+        _select_vector_generation(generation, encoded, captured, fingerprint, live_ids,
+                                  base=base["generation"], cancelled=cancelled)
+        return True
 
 
 def build_missing_index(*, cancelled: Callable[[], bool] | None = None) -> None:
@@ -1321,7 +1627,7 @@ def _upsert_index(entity_id: str) -> None:
     if _projection_batch.get() is not None:
         return
     try:
-        _publish_vector_projection(entity_ids={entity_id}, max_embeddings=1)
+        _publish_vector_projection(entity_ids={entity_id}, max_embeddings=1, incremental=True)
     except Exception as exc:
         # The row is saved and its work stays queued for repair_projections once a
         # search model is available; recall matches it by its words until then.
@@ -1331,7 +1637,8 @@ def _upsert_index(entity_id: str) -> None:
 
 def _remove_from_index(entity_id: str, *, cancelled: Callable[[], bool] | None = None) -> None:
     try:
-        _publish_vector_projection(allow_embedding=False, **({"cancelled": cancelled} if cancelled is not None else {}))
+        _publish_vector_projection(allow_embedding=False, incremental=True,
+                                   **({"cancelled": cancelled} if cancelled is not None else {}))
     except Exception:
         _persist_projection_failure("removal_incomplete")
         raise
@@ -1348,7 +1655,8 @@ def _read_vector_readiness():
     Coverage compares semantic hashes, so only semantic edits leave it
     pending. Knowledge that changes while it is checked (a relation, a field
     outside the embedded text, a real edit) gets one more check, which a real
-    semantic edit fails honestly.
+    semantic edit fails honestly. A ready result counts the vectors still on
+    text version 2 (``refresh_pending``): they cover their rows until refreshed.
     """
     for _attempt in range(2):
         status, loaded, revision = _check_vector_coverage()
@@ -1373,20 +1681,24 @@ def _check_vector_coverage():
             return {"state": "failed", "ready": False, "detail": "The memory vector generation could not be validated."}, None, None
         if metadata["embedding"] != active_embedding_metadata():
             return {"state": "stale", "ready": False, "detail": "The memory vector index does not match the selected embedding model."}, None, None
-        coverage = dict(zip(metadata["ids"], metadata["source_hashes"]))
-        count = 0
+        coverage = {identifier: digest for identifier, digest in zip(metadata["ids"], metadata["source_hashes"])
+                    if identifier is not None}
+        count = legacy = 0
         try:
             for batch in _projection_source_batches(conn, 256):
                 for row in batch:
                     entity = dict(row)
                     count += 1
-                    if coverage.get(entity["id"]) != _semantic_hash(entity):
+                    text_state = _vector_text_state(coverage.get(entity["id"]), entity)
+                    if text_state is None:
                         return {"state": "pending", "ready": False, "detail": "Saved knowledge has pending semantic projection work."}, None, None
+                    legacy += text_state == "legacy"
         except (KnowledgeProjectionIncomplete, ValueError, TypeError, RecursionError):
             return {"state": "failed", "ready": False, "detail": "Saved knowledge exceeds safe projection bounds."}, None, None
         if count != len(coverage):
             return {"state": "pending", "ready": False, "detail": "Knowledge vector coverage does not match current entities."}, None, None
-        return ({"state": "ready", "ready": True, "detail": "The memory vector index completely covers current knowledge."},
+        return ({"state": "ready", "ready": True, "detail": "The memory vector index completely covers current knowledge.",
+                 "refresh_pending": legacy},
                 (metadata, vectors), state["revision"])
     finally:
         conn.close()
@@ -1503,6 +1815,36 @@ def repair_projections(*, max_entities: int = 256, cancelled: Callable[[], bool]
             "retirement_pending": retirement_pending, "failures": failures}
 
 
+def refresh_semantic_vectors(*, max_entities: int = 256,
+                             cancelled: Callable[[], bool] | None = None) -> dict[str, object]:
+    """Re-embed up to ``max_entities`` memories whose vectors are still text version 2.
+
+    Those vectors also embedded the properties JSON (F54). They keep serving
+    search, and a memory moves to the new text by itself when its meaning
+    next changes; this refreshes the rest a bounded batch at a time. It is
+    for idle and maintenance windows only, never a chat turn. It leaves other
+    pending work to ``repair_projections`` and loads no embedding model when
+    nothing is left to refresh. Returns ``{"refreshed", "remaining"}``;
+    ``remaining`` is None while other projection work is pending.
+    """
+    if type(max_entities) is not int or not 1 <= max_entities <= 1000:
+        raise ValueError("max_entities must be between 1 and 1000")
+    _cancel_projection(cancelled)
+    refreshed = 0
+    with _generation_access():
+        status = _reuse_current_vector_projection(cancelled=cancelled)
+        if status is None:
+            return {"refreshed": 0, "remaining": None}
+        remaining = int(status.get("refresh_pending") or 0)
+        if remaining:
+            refreshed = _build_vector_projection(cancelled=cancelled, max_embeddings=max_entities,
+                                                 refresh_legacy=True)
+    if refreshed:
+        logger.info("Refreshed %d memory search vectors to the current embedding text.", refreshed)
+        _retire_vector_generations(**({"cancelled": cancelled} if cancelled is not None else {}))
+    return {"refreshed": refreshed, "remaining": max(0, remaining - refreshed)}
+
+
 def semantic_search(query: str, top_k: int = 5, threshold: float = 0.5, *, for_auto_recall: bool = False) -> list[dict]:
     with _generation_access():
         return _search_vector_generation(query, top_k, threshold, for_auto_recall=for_auto_recall)
@@ -1535,7 +1877,7 @@ def _search_vector_generation(query: str, top_k: int, threshold: float, *, for_a
     if loaded is None:
         raise MemorySemanticUnavailable(f"memory_index_{status['state']}", str(status["detail"]))
     metadata, directory = loaded
-    if not metadata["ids"]:
+    if all(identifier is None for identifier in metadata["ids"]):
         return []
     dimension = metadata["embedding"]["dimension"]
     from row_bot.embedding_config import active_embedding_metadata, get_embedding_config
@@ -1552,16 +1894,23 @@ def _search_vector_generation(query: str, top_k: int, threshold: float, *, for_a
     norm = np.linalg.norm(query_vector.astype(np.float64)) or 1
     query_vector = (query_vector / norm).astype(np.float32).reshape(1, -1)
     limit = max(1, int(top_k))
+    # Base rows a delta generation replaced or removed stay in the base's
+    # segments; each segment is searched deep enough to skip them.
+    replaced = metadata.get("dead") or []
     candidates = []
     for segment in metadata["segments"]:
         vectors = _read_generation_segment(directory, segment, dimension)
         index = faiss.IndexFlatIP(dimension)
         index.add(vectors.vectors)
-        scores, positions = index.search(query_vector, min(limit, vectors.count))
+        skipped = (bisect.bisect_left(replaced, segment["start"] + segment["count"])
+                   - bisect.bisect_left(replaced, segment["start"]))
+        scores, positions = index.search(query_vector, min(limit + skipped, vectors.count))
         for score, position in zip(scores[0], positions[0]):
             if position < 0 or score < threshold:
                 continue
             offset = segment["start"] + int(position)
+            if metadata["ids"][offset] is None:
+                continue
             candidates.append((float(score), offset))
         candidates.sort(key=lambda item: (-item[0], item[1]))
         del candidates[limit:]
@@ -1569,7 +1918,7 @@ def _search_vector_generation(query: str, top_k: int, threshold: float, *, for_a
     results = []
     for score, position in candidates:
         entity = get_entity(metadata["ids"][position])
-        if entity is not None and _semantic_hash(entity) == metadata["source_hashes"][position]:
+        if entity is not None and _vector_covers(metadata["source_hashes"][position], entity):
             entity["score"] = round(score, 4)
             results.append(entity)
     return results
@@ -1861,28 +2210,41 @@ def _get_embedding_model(*, for_auto_recall: bool = False, config: dict | None =
 
 
 def _entity_text(entity: dict) -> str:
-    """Build the string that gets embedded for an entity."""
+    """Build the string that gets embedded (and hashed) for an entity.
+
+    Only what it means: its type, name and description, and the aliases and
+    tags it is found by (the fields a person edits). Properties hold
+    provenance, status, review flags, edit stamps and evidence; they change
+    without the meaning changing, so they stay out (F54). A property-only edit
+    then keeps the vector, and the text stays inside the model's window.
+    """
     parts = [
         entity.get("entity_type", ""),
         entity.get("subject", ""),
         entity.get("description", ""),
+        entity.get("aliases", ""),
+        entity.get("tags", ""),
     ]
-    aliases = entity.get("aliases", "")
-    if aliases:
-        parts.append(aliases)
-    tags = entity.get("tags", "")
-    if tags:
-        parts.append(tags)
-    # Include key properties in embedding
+    return " | ".join(p for p in parts if p)
+
+
+def _legacy_entity_text(entity: dict) -> str:
+    """The text version 2 form: today's text plus the properties JSON.
+
+    Only used to recognise vectors saved before F54, which keep serving
+    search until ``refresh_semantic_vectors`` (or a real edit) replaces them.
+    With no properties it is the same text.
+    """
     props = entity.get("properties", "{}")
     if isinstance(props, str):
         try:
             props = json.loads(props)
         except (json.JSONDecodeError, TypeError):
             props = {}
-    if props:
-        parts.append(json.dumps(props, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-    return " | ".join(p for p in parts if p)
+    text = _entity_text(entity)
+    if not props:
+        return text
+    return " | ".join(p for p in (text, json.dumps(props, ensure_ascii=False, sort_keys=True, separators=(",", ":"))) if p)
 
 
 
@@ -2167,7 +2529,7 @@ def update_entity_properties_pair(first: tuple[dict, dict], second: tuple[dict, 
     if not _skip_reindex and _projection_batch.get() is None:
         # Both rows committed together: publish their bounded work together,
         # rather than attempting incomplete one-row coverage twice.
-        _publish_vector_projection(entity_ids={entity["id"] for entity in rows}, max_embeddings=2)
+        _publish_vector_projection(entity_ids={entity["id"] for entity in rows}, max_embeddings=2, incremental=True)
     for entity in rows:
         _upsert_fts_entity(entity)
         _wiki_export_entity(entity)

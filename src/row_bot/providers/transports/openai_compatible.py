@@ -163,6 +163,7 @@ class ChatOpenAICompatible(BaseChatModel):
             model=self.model_name,
         )
         stream_usage: dict[str, Any] = {}
+        stop_reason = ""
         scope = current_cancellation_scope()
         for payload in self._iter_stream_events(body):
             if scope is not None and scope.is_cancelled():
@@ -174,6 +175,7 @@ class ChatOpenAICompatible(BaseChatModel):
                 if event_type == "error":
                     raise RuntimeError(_atlascloud_stream_error_message(self.model_name, event_payload))
                 _merge_anthropic_stream_usage(stream_usage, event_payload)
+                stop_reason = _anthropic_stop_reason(event_payload) or stop_reason
                 if event_type == "content_block_start":
                     block = event_payload.get("content_block") if isinstance(event_payload.get("content_block"), dict) else {}
                     block_type = str(block.get("type") or "").strip()
@@ -232,6 +234,8 @@ class ChatOpenAICompatible(BaseChatModel):
                 # The final chunk of an include_usage stream (choices is empty).
                 stream_usage = dict(usage)
             choice = _first_choice(payload)
+            if isinstance(choice.get("finish_reason"), str) and choice["finish_reason"]:
+                stop_reason = choice["finish_reason"]
             delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
             content = str(delta.get("content") or "")
             reasoning = _reasoning_content(delta, choice)
@@ -318,7 +322,7 @@ class ChatOpenAICompatible(BaseChatModel):
                 reasoning_seen,
                 tool_seen,
             )
-        yield _final_usage_chunk(stream_usage)
+        yield _final_usage_chunk(stream_usage, stop_reason)
 
     def _stream_via_non_stream(
         self,
@@ -359,8 +363,10 @@ class ChatOpenAICompatible(BaseChatModel):
                 bool(reasoning),
                 bool(tool_calls),
             )
-        token_usage = (getattr(message, "response_metadata", None) or {}).get("token_usage")
-        yield _final_usage_chunk(token_usage if isinstance(token_usage, dict) else {})
+        metadata = getattr(message, "response_metadata", None) or {}
+        token_usage = metadata.get("token_usage")
+        yield _final_usage_chunk(token_usage if isinstance(token_usage, dict) else {},
+                                 str(metadata.get("finish_reason") or ""))
 
     def _request_body(
         self,
@@ -889,17 +895,29 @@ def _merge_anthropic_stream_usage(usage: dict[str, Any], event_payload: dict[str
             usage.update({key: value for key, value in candidate.items() if value is not None})
 
 
-def _final_usage_chunk(token_usage: dict[str, Any]) -> ChatGenerationChunk:
-    """The closing chunk, carrying the usage the endpoint reported, if any."""
+def _final_usage_chunk(token_usage: dict[str, Any], stop_reason: str = "") -> ChatGenerationChunk:
+    """The closing chunk, carrying the usage the endpoint reported and why it stopped, if known.
+
+    The stop reason goes out as ``finish_reason`` whatever the route's own
+    word for it, so the cut-short notice reads it (F17).
+    """
     usage_metadata = usage_metadata_from_provider_usage(token_usage)
+    stop = {"finish_reason": stop_reason} if stop_reason else {}
     if usage_metadata is None:
-        return ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        return ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last", response_metadata=stop))
     return ChatGenerationChunk(message=AIMessageChunk(
         content="",
         chunk_position="last",
         usage_metadata=usage_metadata,
-        response_metadata={"token_usage": dict(token_usage)},
+        response_metadata={"token_usage": dict(token_usage), **stop},
     ))
+
+
+def _anthropic_stop_reason(event_payload: dict[str, Any]) -> str:
+    """An Anthropic-shaped stream says why it stopped on ``message_delta``."""
+    delta = event_payload.get("delta") if isinstance(event_payload.get("delta"), dict) else {}
+    reason = delta.get("stop_reason")
+    return reason if isinstance(reason, str) else ""
 
 
 def _merge_chat_template_kwargs(body: dict[str, Any], values: dict[str, Any]) -> None:
@@ -1409,6 +1427,9 @@ def _response_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     usage = payload.get("usage")
     if isinstance(usage, dict):
         metadata["token_usage"] = usage
+    finish_reason = _first_choice(payload).get("finish_reason") or payload.get("stop_reason")
+    if isinstance(finish_reason, str) and finish_reason:
+        metadata["finish_reason"] = finish_reason
     return metadata
 
 

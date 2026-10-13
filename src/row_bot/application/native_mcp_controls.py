@@ -111,8 +111,8 @@ def public_receipt(value: dict) -> dict:
 
 
 def _invalidate_loaded():
-    # Existing graphs/inference caches cannot exist before their owners load.
-    for module, name in (("row_bot.agent", "clear_agent_cache"), ("row_bot.tasks", "invalidate_keyword_map_cache")):
+    # Existing graphs cannot exist before their owner loads.
+    for module, name in (("row_bot.agent", "clear_agent_cache"),):
         owner = sys.modules.get(module)
         callback = vars(owner).get(name) if owner is not None else None
         if callback is not None:

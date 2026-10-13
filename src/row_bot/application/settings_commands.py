@@ -115,6 +115,10 @@ _ENUMS = {
     ("preferences", "window_mode"): {"ask", "native", "browser"},
     ("preferences", "updates.channel"): {"stable", "beta"},
 }
+# Removed settings that an older client may still send. A change is reviewed
+# and accepted as before, but nothing is saved and nothing reads the value.
+# "Trim search results" had no effect, and search results are not trimmed.
+_RETIRED_FIELDS = {("tools", "compression_mode")}
 _BOOL_FIELDS = {
     ("voice", "runtime.captions_enabled"),
     ("voice", "runtime.talk_auto_start"),
@@ -396,7 +400,9 @@ def review_settings_update(
     digest = admissions.keyed_digest(
         {key: item for key, item in intent.items() if key != "secret"}
     )
-    if (page, field) == ("system", "computer_use.system_binary_verify"):
+    if (page, field) in _RETIRED_FIELDS:
+        summary = "This setting was removed; nothing changes"
+    elif (page, field) == ("system", "computer_use.system_binary_verify"):
         summary = "Verify and use the explicitly selected local Cua executable"
     elif intent["secret"]:
         summary = (
@@ -604,8 +610,6 @@ def _write_tool_setting(root: Path, page: str, field: str, value: Any) -> None:
             tools[field.removesuffix(".enabled")] = value
         elif page == "tools" and field == "external_loading_mode":
             global_config["external_tool_loading_mode"] = value
-        elif page == "tools" and field == "compression_mode":
-            global_config["compression_mode"] = value
         elif page == "system" and field == "workspace.path":
             configs.setdefault("filesystem", {})["workspace_root"] = value
         elif page == "system" and field == "shell.blocked_patterns":
@@ -917,7 +921,9 @@ def _apply(
     root = get_row_bot_data_dir(create=False).absolute()
     page, field, value = intent["page"], intent["field"], intent["value"]
     action_result = None
-    if (page, field) == ("tracker", "delete_all"):
+    if (page, field) in _RETIRED_FIELDS:
+        pass
+    elif (page, field) == ("tracker", "delete_all"):
         _clear_tracker_data(root, intent["settings_revision"], validate=validate)
     elif (page, field) == ("tracker", "delete_tracker"):
         _delete_tracker(root, intent["settings_revision"], value, validate=validate)

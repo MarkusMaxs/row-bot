@@ -51,8 +51,8 @@ pages:
     docs_route: /docs/settings/tracker
     screenshot_id: settings-tracker
   tools:
-    description: Configure progressive external-tool loading, retrieval compression,
-      search and knowledge tools, built-in tools, and custom tools.
+    description: Configure progressive external-tool loading, search and knowledge
+      tools, built-in tools, and custom tools.
     docs_route: /docs/settings/tools
     screenshot_id: settings-tools
   skills:

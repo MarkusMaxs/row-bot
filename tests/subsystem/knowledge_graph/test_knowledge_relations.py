@@ -318,7 +318,7 @@ def test_legacy_supersede_default_is_atomic_on_concurrent_snapshot_conflict(clie
     assert not evo.get_journal()
 
 
-def test_legacy_supersede_retains_properties_and_publishes_two_row_coverage_once(client,projection_stack,monkeypatch):
+def test_legacy_supersede_retains_properties_and_keeps_both_vectors(client,projection_stack,monkeypatch):
     from row_bot import memory_evolution as evo
     _,kg,_ = client
     first,second = pair(client)
@@ -330,5 +330,6 @@ def test_legacy_supersede_retains_properties_and_publishes_two_row_coverage_once
     assert json.loads(old['properties'])['superseded_by'] == new['id']
     assert old['id'] in json.loads(new['properties'])['supersedes']
     assert evo.get_journal()[-1]['reason'] == 'manual correction'
-    assert sum(map(len,embedding.batches[before:])) == 2
+    # Supersession only changes properties, which are not embedded (F54).
+    assert sum(map(len,embedding.batches[before:])) == 0
     assert kg.memory_vector_status()['ready'] is True

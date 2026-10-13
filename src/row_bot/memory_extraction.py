@@ -38,6 +38,8 @@ _JOURNAL_MAX_ENTRIES = 100
 
 _INTERVAL_S = 2 * 3600  # 2 hours
 _IDLE_DELAY_S = 5 * 60
+# Memory search vectors moved to the current embedding text per idle run (F54).
+_VECTOR_REFRESH_PER_RUN = 500
 
 # Thread IDs to exclude from background extraction: the conversation a client
 # opened last (``mark_conversation_open``).
@@ -1107,8 +1109,43 @@ def run_extraction_if_idle(on_status=None, exclude_thread_ids: set[str] | None =
     if not is_app_idle():
         logger.info("Memory extraction deferred; app is active (idle %.0fs)", idle_seconds())
         return 0
-    return run_extraction(on_status=on_status, exclude_thread_ids=exclude_thread_ids,
-                          should_continue=is_app_idle)
+    count = run_extraction(on_status=on_status, exclude_thread_ids=exclude_thread_ids,
+                           should_continue=is_app_idle)
+    refresh_memory_vectors_if_idle()
+    return count
+
+
+def refresh_memory_vectors_if_idle() -> int:
+    """While idle, move a bounded batch of memory search vectors to the current text (F54).
+
+    Vectors saved before F54 also embedded each memory's properties. They keep
+    serving search; each idle run re-embeds up to ``_VECTOR_REFRESH_PER_RUN``
+    of them, and stops (dropping the unfinished batch) once the app is busy
+    again. Returns how many were refreshed.
+    """
+    if not is_app_idle():
+        return 0
+    try:
+        import row_bot.knowledge_graph as kg
+
+        outcome = kg.refresh_semantic_vectors(
+            max_entities=_VECTOR_REFRESH_PER_RUN,
+            cancelled=lambda: _timer_stop.is_set() or not is_app_idle(),
+        )
+    except Exception as exc:
+        logger.info("Memory search vector refresh deferred: %s", exc)
+        return 0
+    refreshed = int(outcome.get("refreshed") or 0)
+    if refreshed:
+        try:
+            from row_bot.embedding_config import get_embedding_config
+            from row_bot.embedding_providers import release_embedding_resources
+
+            if get_embedding_config().get("auto_unload", False):
+                release_embedding_resources("memory vector refresh complete")
+        except Exception:
+            logger.debug("Memory embedding resource release failed", exc_info=True)
+    return refreshed
 
 
 # ── Background timer ─────────────────────────────────────────────────────────
