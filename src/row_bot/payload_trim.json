@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "about": "What a packaged Row-Bot runtime leaves out, and which bytecode it ships. Applied by src/row_bot/payload_trim.py in installer/build_installer.ps1, installer/build_mac_app.sh and installer/build_linux_app.sh. .dist-info folders are never touched: RECORD and METADATA let pip uninstall a library in an update, and licence files stay with the library they cover.",
+  "site_packages": {
+    "test_directories": {
+      "names": ["tests", "test"],
+      "why": "Libraries' own test suites and their data (a few also trip macOS notarization). Folders named testing stay: numpy.testing and torch.testing are imported at run time."
+    },
+    "keep": [
+      {
+        "path": "numpy/_core/tests/_natype.py",
+        "why": "numpy/testing/_private/utils.py imports it when numpy.testing is imported, which scipy, scikit-learn and the embedding stack do."
+      }
+    ],
+    "remove": [
+      {
+        "path": "torch/include",
+        "why": "C++ headers, used only to compile PyTorch extensions or torch.compile code; Row-Bot does neither. About 9,300 files."
+      },
+      {
+        "path": "torch/share",
+        "why": "CMake files for building against PyTorch."
+      }
+    ],
+    "remove_suffixes": {
+      "suffixes": [".lib", ".pdb", ".exp", ".a"],
+      "why": "Import and static libraries and debug symbols, used only to link against a library or to debug it; Python never loads them."
+    },
+    "remove_directory_suffixes": {
+      "suffixes": [".dSYM"],
+      "why": "Debug-symbol bundles (PyObjC's test suite ships them); never loaded."
+    },
+    "discovery_documents": {
+      "path": "googleapiclient/discovery_cache/documents",
+      "keep": ["gmail.v1.json", "calendar.v3.json"],
+      "why": "The Google API client describes each Google API with a bundled JSON document (about 580 of them). Row-Bot builds only Gmail v1 (tools/gmail_tool.py) and Calendar v3 (tools/calendar_tool.py)."
+    }
+  },
+  "scripts": {
+    "why": "Console-script launchers pip writes into python/Scripts (Windows) or python/bin, as listed in each library's RECORD. Row-Bot runs libraries as modules (python -m ...) and never these launchers, and on Windows they embed the build time. The interpreter itself is not in any RECORD and stays."
+  },
+  "stdlib": {
+    "remove": ["test", "ensurepip", "unittest/test", "idlelib/idle_test", "lib2to3/tests"],
+    "why": "The standard library's own test suite (and ensurepip, as the macOS and Linux builds always did)."
+  },
+  "bytecode": {
+    "why": "Version folders are never written after install (updates share them through hard links) and the launchers set PYTHONDONTWRITEBYTECODE=1, so a module without shipped bytecode is compiled in memory each time a process imports it. Compiling every library added about 32,000 files; most of them are never imported.",
+    "rule": "Deterministic bytecode (compileall -s <version root> --invalidation-mode unchecked-hash) for every Python file under app/, and for every Python file under python/ that the bundled interpreter imports while it runs the runtime check below (with a throwaway data folder) and then imports the start-up modules below. Nothing else ships bytecode.",
+    "trace": ["app/scripts/verify_runtime_dependencies.py", "all"],
+    "startup_imports": {
+      "modules": [
+        "telegram.ext",
+        "plotly.express",
+        "plotly.graph_objects",
+        "plotly.io",
+        "apscheduler.schedulers.asyncio",
+        "apscheduler.schedulers.background",
+        "apscheduler.executors.pool",
+        "apscheduler.jobstores.memory",
+        "uvicorn.loops.asyncio",
+        "uvicorn.protocols.http.h11_impl",
+        "starlette.middleware.gzip",
+        "tzlocal",
+        "aiolimiter",
+        "cachetools",
+        "webbrowser",
+        "keyring.backends.Windows",
+        "keyring.backends.macOS",
+        "keyring.backends.SecretService"
+      ],
+      "why": "Imported while the server starts (channels, the scheduler, charts, the keyring backend, uvicorn's loop and protocol) but not by the runtime check: about 150 modules, measured with -X importtime against a real start to /readyz. One that does not import on a platform is skipped; a module left out only costs start-up time (0.1-0.6 s for all of these)."
+    }
+  }
+}
