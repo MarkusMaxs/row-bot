@@ -547,15 +547,19 @@ def test_a_task_runs_through_the_agent_and_records_ledger_counts(tmp_path: Path,
     data_dir = tmp_path / "data"
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
     calls: list[str] = []
+    # Patch the module the runner imports at call time. Tests that pop and re-import row_bot.agent can
+    # leave another copy there than the one imported at collection (seen on Linux CI workers).
+    import row_bot.agent as running_agent
 
     def fake_stream_agent(prompt, tool_names, config):
         calls.append(prompt)
         _record_usage(data_dir, monkeypatch, input_tokens=3_000, cache_read_tokens=2_400, output_tokens=12)
-        yield ("tool_call", agent.ToolCallPayload("Calculator", raw_name="calculate", args={"expression": "17**3+289"}))
+        yield ("tool_call", running_agent.ToolCallPayload("Calculator", raw_name="calculate",
+                                                          args={"expression": "17**3+289"}))
         yield ("tool_done", {"raw_name": "calculate", "content": "5202"})
         yield ("done", "5202")
 
-    monkeypatch.setattr(agent, "stream_agent", fake_stream_agent)
+    monkeypatch.setattr(running_agent, "stream_agent", fake_stream_agent)
     monkeypatch.setattr(Runtime, "_new_thread", lambda self, task: "le_thread")
     monkeypatch.setattr("row_bot.tools.registry.set_tool_config", lambda *args: None)
     caps = Caps(None, 1_000_000)
