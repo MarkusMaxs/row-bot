@@ -1,6 +1,6 @@
 ---
 title: "Chat"
-description: "Use Row-Bot conversations: the composer, models, attachments, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library."
+description: "Use Row-Bot conversations: the composer, models, attachments, context and token usage, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library."
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -74,6 +74,22 @@ Some apps can show a result as an interactive view, such as a chart, a form or a
 ## Attachments
 
 Attach files with **+ › Attach file**, by dropping them on the conversation, or by pasting. Each file shows as a small tile above the text: pictures show a preview, other files their type, name and size. Tiles show upload progress and offer **Retry** if an upload fails. You can keep adding files while others upload; **Send** waits for them. Click a tile to preview it, or × to remove it.
+
+## Context And Usage
+
+The small ring beside **Send** shows how much of the model's context the conversation fills. It appears after the first reply, and the mark on it shows where compaction starts.
+
+- **Hover** over the ring for one line, such as "43% of context · compacts at 88% · 1.2M tokens used, 82% from cache". The tokens are what this conversation's model calls have used so far. The share from cache is how much of their input the provider read from its prompt cache, which providers usually charge less for.
+- **Click** the ring for the details: the approximate tokens against the usable amount, where compaction starts, the model's window, and the conversation's total. When a provider reports a cost, as OpenRouter does, the details show it too; Row-Bot keeps no price list of its own.
+- On a phone or in a narrow window, the composer is one line, and the context line is in its **+** menu.
+
+For usage beyond one conversation, ask Row-Bot in Agent mode, for example "How many tokens did I use this week?" It answers from its own record: this conversation, the last 24 hours, 7 days and 30 days, with a breakdown by model and by kind of work, such as your chats, compaction, memory extraction and Dream Cycle. The record holds token counts and timings only, never prompts, replies or files. It stays on this computer, counts older than 90 days are removed, and deleting a conversation deletes its counts.
+
+### Long Conversations
+
+When a conversation gets long, Row-Bot first clears older tool output from what it sends the model; the steps stay in your transcript. Only when that is no longer enough does it compact the conversation: it summarizes earlier turns and keeps the recent ones. The ring shows **Compacting context…** while that runs.
+
+Compaction starts near the end of the model's window, leaving room for the reply and the summary: at about 967,000 tokens on a 1M-token model, and at 167,000 to 177,000 on a 200,000-token one, depending on the provider. Smaller local models keep about a quarter of the window free. A **Reading limit** in [Settings › Models](/docs/settings/models#reading-limit) makes the window smaller.
 
 ## The Details Card
 

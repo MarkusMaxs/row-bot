@@ -32,6 +32,8 @@ A selection is saved locally for one thread and one exact provider-qualified mod
 
 Changing the global default model does not rewrite existing thread choices. Conversations working on designs and code folders use the same thread-scoped behavior as any other conversation.
 
+Your choice applies to the conversation's own replies. Row-Bot's background work, such as checking a goal's progress, compacting a long conversation, memory extraction and Dream Cycle, uses the lowest effort that model offers instead, when Row-Bot knows its choices. Otherwise, or if the model refuses it, background work uses Provider default.
+
 ## Slash And Channel Commands
 
 Run `/reasoning` with no argument to show the active setting and valid choices. Supported examples include:
