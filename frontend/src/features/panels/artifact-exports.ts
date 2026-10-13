@@ -135,8 +135,8 @@ export function artifactExports(
     );
     if (result.status !== 'ok') throw { code: 'export_unavailable' };
   };
-  // A copy in the workspace's Exports folder, then Open / Show in folder:
-  // this computer's owner only (the server refuses other devices).
+  // A copy in the workspace's Exports folder, then Open / Show in folder: the
+  // panel offers them in the desktop app on the computer Row-Bot runs on.
   const save = (exportId: string) =>
     controller.saveArtifactExport(conversation, bindingId, exportId);
   const reveal = async (exportId: string, action: 'open' | 'show') =>

@@ -84,6 +84,10 @@
           "title": "Dev Install",
           "type": "boolean"
         },
+        "install_here": {
+          "title": "Install Here",
+          "type": "boolean"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -137,7 +141,8 @@
         "last_success",
         "skipped_versions",
         "available",
-        "dev_install"
+        "dev_install",
+        "install_here"
       ],
       "title": "UpdateSnapshot",
       "type": "object"

@@ -130,14 +130,22 @@ def test_custom_tool_library_routes_for_the_local_owner(workspace_api, monkeypat
     assert len(seen) == 1
 
 
-def test_custom_tool_library_is_refused_to_remote_sessions():
+def test_custom_tool_library_serves_every_signed_in_device(monkeypatch):
+    """One owner: a paired phone or a server session reads and changes it too."""
+    from row_bot.developer import client_custom_tool_library as library
     from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
 
-    client, _service, _active = client_app(remote=True)
+    snapshot = {"schema_version": 1, "tools": [], "drafts": [], "revision": "c" * 64}
+    monkeypatch.setattr(library, "read_custom_tool_library", lambda *, validate: (validate(), snapshot)[1])
+    client, _service, active = client_app(remote=True)
     with client:
         _handshake, headers = bootstrap(client)
         response = client.get("/api/v1/custom-tools", headers=headers)
-    assert response.status_code == 403 and response.json()["code"] == "owner_local_only"
+        active["value"] = False
+        signed_out = client.get("/api/v1/custom-tools", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["revision"] == "c" * 64
+    assert signed_out.status_code == 401
 
 
 def test_add_from_a_folder_takes_the_desktop_folder_pick(tmp_path, monkeypatch):

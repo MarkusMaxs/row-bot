@@ -550,7 +550,7 @@ def _system(
         "computer_use": {
             "available": "computer_use" in registered or "computer_use" in tools,
             "enabled": _enabled("computer_use", tools, registered),
-            "local_owner_control_available": True,
+            "screen_actions_available": True,
             "platform": "macos"
             if cua_platform == "darwin"
             else "windows"
@@ -582,7 +582,6 @@ def _system(
             and bool(raw_main_app_enabled)
             and raw_main_app_enabled[0] is True,
             "main_app_url": _text(main_app_url, 512) if main_app_url else None,
-            "local_owner_control_available": True,
         },
         "remote_access": {
             "listen_mode": listen_mode,

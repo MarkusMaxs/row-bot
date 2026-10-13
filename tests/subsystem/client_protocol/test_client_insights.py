@@ -300,3 +300,35 @@ def test_an_insight_says_when_it_may_no_longer_apply(isolated_insights, monkeypa
     # Pinned is the person's choice to keep it: age alone doesn't flag it.
     current.update(status="pinned")
     assert item()["out_of_date"] == ""
+
+
+def test_every_signed_in_device_reads_and_acts_on_insights(monkeypatch):
+    """One owner: a paired phone or a server session has the same Insights."""
+    from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
+
+    snapshot = {"schema_version": 1, "items": [], "curator_report": None, "revision": "a" * 64}
+    monkeypatch.setattr(owner, "read_insights", lambda *, validate: (validate(), snapshot)[1])
+    calls = []
+
+    def execute(command, *, owner_id, validate):
+        validate()
+        calls.append(command["action"])
+        return {"command_id": command["command_id"], "status": "completed",
+                "summary": "Skill review completed.", "snapshot": snapshot}
+
+    monkeypatch.setattr(owner, "execute_insight", execute)
+    client, _service, active = client_app(remote=True)
+    with client:
+        handshake, headers = bootstrap(client)
+        read = client.get("/api/v1/insights", headers=headers)
+        command_id = str(uuid4())
+        accepted = client.post("/api/v1/insights/commands", headers={**headers, "idempotency-key": command_id}, json={
+            "command_id": command_id, "client_session_id": handshake["client_session_id"],
+            "revision": "a" * 64, "action": "review_skills",
+        })
+        active["value"] = False
+        signed_out = client.get("/api/v1/insights", headers=headers)
+    assert read.status_code == 200, read.text
+    assert accepted.status_code == 200, accepted.text
+    assert calls == ["review_skills"]
+    assert signed_out.status_code == 401

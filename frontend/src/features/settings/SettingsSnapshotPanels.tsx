@@ -65,7 +65,10 @@ import ConnectedDataBackup from './DataBackup';
 import ConnectedGitHubAccess, {
   type GitHubAccess,
 } from './GitHubAccessControls';
-import ConnectedAccountAuth, { type AccountAuth } from './AccountAuthControls';
+import ConnectedAccountAuth, {
+  SIGN_IN_ON_THIS_COMPUTER,
+  type AccountAuth,
+} from './AccountAuthControls';
 import { ConnectSheet, type ConnectStep } from './ConnectSheet';
 import { ACCOUNT_LINKS } from './connect-guides';
 import type {
@@ -2144,7 +2147,6 @@ function PublicLinkStatus({
   const [copied, setCopied] = useState('');
   const url = tunnel.main_app_url;
   const count = tunnel.active_count ?? 1;
-  const control = tunnel.local_owner_control_available;
   const line =
     tunnel.runtime_state === 'active'
       ? url
@@ -2172,47 +2174,41 @@ function PublicLinkStatus({
       <p role={tunnel.runtime_state === 'failed' ? 'alert' : undefined}>
         <strong>Public</strong> {line}
       </p>
-      {control ? (
-        <div className="settings-action-grid">
-          {url && (
-            <Button
-              variant="secondary"
-              onClick={() =>
-                void writeClipboardText(url, writeClipboard).then((done) =>
-                  setCopied(done ? 'Copied.' : 'Row-Bot couldn’t copy it.'),
-                )
-              }
-            >
-              Copy address
-            </Button>
-          )}
-          {tunnel.runtime_state === 'active' ? (
+      <div className="settings-action-grid">
+        {url && (
+          <Button
+            variant="secondary"
+            onClick={() =>
+              void writeClipboardText(url, writeClipboard).then((done) =>
+                setCopied(done ? 'Copied.' : 'Row-Bot couldn’t copy it.'),
+              )
+            }
+          >
+            Copy address
+          </Button>
+        )}
+        {tunnel.runtime_state === 'active' ? (
+          <ReviewedSettingsAction
+            mutation={mutation}
+            field="tunnel.stop_main"
+            label="Stop public link"
+            description=""
+            confirm="Devices that reach Row-Bot through this public address, this one too if it does, lose their connection until the link is started again."
+          />
+        ) : tunnel.credential.configured ? (
+          <>
+            <StartPublicLink mutation={mutation} />
             <ReviewedSettingsAction
               mutation={mutation}
-              field="tunnel.stop_main"
-              label="Stop public link"
+              field="tunnel.check"
+              label="Check setup"
               description=""
+              variant="ghost"
             />
-          ) : tunnel.credential.configured ? (
-            <>
-              <StartPublicLink mutation={mutation} />
-              <ReviewedSettingsAction
-                mutation={mutation}
-                field="tunnel.check"
-                label="Check setup"
-                description=""
-                variant="ghost"
-              />
-            </>
-          ) : null}
-          {copied && <span role="status">{copied}</span>}
-        </div>
-      ) : (
-        <p className="settings-help">
-          Only Row-Bot’s owner on the computer running it can start or stop the
-          public link.
-        </p>
-      )}
+          </>
+        ) : null}
+        {copied && <span role="status">{copied}</span>}
+      </div>
     </div>
   );
 }
@@ -2547,25 +2543,23 @@ export function SystemSnapshotPanel({
           />
         </SettingsGroup>
       </SettingsAdvanced>
-      {cu.available &&
-        cu.local_owner_control_available &&
-        cu.disclosure_acknowledged && (
-          <SettingsDangerZone>
-            <DangerAction
-              title="Remove the managed Computer Use runtime"
-              description="Deletes Row-Bot's managed Cua Driver and turns Computer Use off. You can install it again later."
-            >
-              <ReviewedSettingsAction
-                mutation={mutation}
-                field="computer_use.remove"
-                label="Remove managed Cua runtime"
-                description=""
-                variant="danger"
-                confirm="This deletes the managed runtime files. You can install the reviewed runtime again later."
-              />
-            </DangerAction>
-          </SettingsDangerZone>
-        )}
+      {cu.available && cu.disclosure_acknowledged && (
+        <SettingsDangerZone>
+          <DangerAction
+            title="Remove the managed Computer Use runtime"
+            description="Deletes Row-Bot's managed Cua Driver and turns Computer Use off. You can install it again later."
+          >
+            <ReviewedSettingsAction
+              mutation={mutation}
+              field="computer_use.remove"
+              label="Remove managed Cua runtime"
+              description=""
+              variant="danger"
+              confirm="This deletes the managed runtime files. You can install the reviewed runtime again later."
+            />
+          </DangerAction>
+        </SettingsDangerZone>
+      )}
     </div>
   );
 }
@@ -2640,7 +2634,6 @@ function BrowserComputerSetup({
                 layout="inline"
                 bind={false}
                 control={
-                  cu.local_owner_control_available &&
                   cu.disclosure_acknowledged ? (
                     <SwitchSetting
                       mutation={mutation}
@@ -2649,12 +2642,10 @@ function BrowserComputerSetup({
                       value={cu.enabled === true}
                       bare
                     />
-                  ) : !cu.disclosure_acknowledged ? (
+                  ) : (
                     <StatusLine tone="warning">
                       Telemetry notice required
                     </StatusLine>
-                  ) : (
-                    <StatusLine>Host setup is local only</StatusLine>
                   )
                 }
               />
@@ -2668,53 +2659,57 @@ function BrowserComputerSetup({
                 }
               />
             )}
-            {cu.available &&
-              cu.local_owner_control_available &&
-              !cu.disclosure_acknowledged && (
-                <SwitchSetting
+            {cu.available && !cu.disclosure_acknowledged && (
+              <SwitchSetting
+                mutation={mutation}
+                field="computer_use.disclosure_acknowledged"
+                label="Accept Cua Driver telemetry notice"
+                hint={cu.disclosure_text}
+                value={false}
+              />
+            )}
+            {cu.available && cu.disclosure_acknowledged && (
+              <div className="settings-divided settings-system-detail">
+                {cu.remediation && (
+                  <p className="settings-help">{cu.remediation}</p>
+                )}
+                <ReviewedSettingsAction
                   mutation={mutation}
-                  field="computer_use.disclosure_acknowledged"
-                  label="Accept Cua Driver telemetry notice"
-                  hint={cu.disclosure_text}
-                  value={false}
+                  field="computer_use.check"
+                  label="Check Computer Use setup"
+                  description="Run the reviewed local driver diagnostics and report missing access."
                 />
-              )}
-            {cu.available &&
-              cu.local_owner_control_available &&
-              cu.disclosure_acknowledged && (
-                <div className="settings-divided settings-system-detail">
-                  {cu.remediation && (
-                    <p className="settings-help">{cu.remediation}</p>
-                  )}
-                  <ReviewedSettingsAction
-                    mutation={mutation}
-                    field="computer_use.check"
-                    label="Check Computer Use setup"
-                    description="Run the reviewed local driver diagnostics and report missing access."
-                  />
-                  {cu.platform === 'macos' && (
-                    <details>
-                      <summary>macOS permission recovery</summary>
-                      <p className="settings-help">
-                        Switch on Row-Bot in Accessibility and Screen Recording,
-                        then check setup again. macOS may ask you to reopen
-                        Row-Bot.
-                      </p>
-                      <ReviewedSettingsAction
-                        mutation={mutation}
-                        field="computer_use.open_accessibility"
-                        label="Open Accessibility settings"
-                        description="Open the local macOS Privacy & Security pane."
-                      />
-                      <ReviewedSettingsAction
-                        mutation={mutation}
-                        field="computer_use.open_screen_recording"
-                        label="Open Screen Recording settings"
-                        description="Open the local macOS Privacy & Security pane."
-                      />
-                    </details>
-                  )}
-                  {cu.runtime_state === 'ready' && (
+                {!cu.screen_actions_available && (
+                  <p className="settings-help">
+                    Testing and the macOS privacy settings open on the computer
+                    Row-Bot runs on, so they’re in the Row-Bot desktop app
+                    there.
+                  </p>
+                )}
+                {cu.platform === 'macos' && cu.screen_actions_available && (
+                  <details>
+                    <summary>macOS permission recovery</summary>
+                    <p className="settings-help">
+                      Switch on Row-Bot in Accessibility and Screen Recording,
+                      then check setup again. macOS may ask you to reopen
+                      Row-Bot.
+                    </p>
+                    <ReviewedSettingsAction
+                      mutation={mutation}
+                      field="computer_use.open_accessibility"
+                      label="Open Accessibility settings"
+                      description="Open the local macOS Privacy & Security pane."
+                    />
+                    <ReviewedSettingsAction
+                      mutation={mutation}
+                      field="computer_use.open_screen_recording"
+                      label="Open Screen Recording settings"
+                      description="Open the local macOS Privacy & Security pane."
+                    />
+                  </details>
+                )}
+                {cu.runtime_state === 'ready' &&
+                  cu.screen_actions_available && (
                     <ReviewedSettingsAction
                       mutation={mutation}
                       field="computer_use.test"
@@ -2722,36 +2717,36 @@ function BrowserComputerSetup({
                       description="Open Calculator briefly and verify a local target window."
                     />
                   )}
-                  <ReviewedSettingsAction
+                <ReviewedSettingsAction
+                  mutation={mutation}
+                  field="computer_use.install"
+                  label="Install Computer Use runtime"
+                  description="Downloads the pinned Cua Driver artifact for this platform."
+                />
+                <details>
+                  <summary>Advanced system Cua executable</summary>
+                  <p className="settings-help">
+                    Verifying starts the executable you select on this host. Use
+                    only a separately reviewed Cua Driver binary.
+                  </p>
+                  <TextSetting
                     mutation={mutation}
-                    field="computer_use.install"
-                    label="Install Computer Use runtime"
-                    description="Downloads the pinned Cua Driver artifact for this platform."
+                    field="computer_use.system_binary_verify"
+                    label="Verify system Cua executable"
+                    value=""
+                    maxLength={4096}
                   />
-                  <details>
-                    <summary>Advanced system Cua executable</summary>
-                    <p className="settings-help">
-                      Verifying starts the executable you select on this host.
-                      Use only a separately reviewed Cua Driver binary.
-                    </p>
-                    <TextSetting
+                  {cu.system_binary_configured && (
+                    <ReviewedSettingsAction
                       mutation={mutation}
-                      field="computer_use.system_binary_verify"
-                      label="Verify system Cua executable"
-                      value=""
-                      maxLength={4096}
+                      field="computer_use.use_managed_runtime"
+                      label="Use managed Cua runtime"
+                      description="Return to Row-Bot's reviewed managed component."
                     />
-                    {cu.system_binary_configured && (
-                      <ReviewedSettingsAction
-                        mutation={mutation}
-                        field="computer_use.use_managed_runtime"
-                        label="Use managed Cua runtime"
-                        description="Return to Row-Bot's reviewed managed component."
-                      />
-                    )}
-                  </details>
-                </div>
-              )}
+                  )}
+                </details>
+              </div>
+            )}
             {cu.available && (
               <details className="settings-divided settings-system-detail">
                 <summary>Computer Use setup details</summary>
@@ -3961,7 +3956,7 @@ function GitHubAccount({
   access: GitHubAccess | null;
 }) {
   const state = accountState([account.authentication_state]);
-  const usable = access && !access.localOnly && access.snapshot;
+  const usable = access && access.snapshot;
   const source = access?.snapshot?.credential_source;
   const how =
     source === 'github_cli'
@@ -3972,7 +3967,9 @@ function GitHubAccount({
           ? 'With a token in your keychain'
           : '';
   // Without the CLI a sign-in that stopped working is fixed in the guide.
-  const cli = access?.snapshot?.cli_installed === true;
+  // Its sign-in opens a console on the computer Row-Bot runs on: the desktop
+  // app there offers it, other devices use a token.
+  const cli = access?.snapshot?.cli_installed === true && access.onThisComputer;
   return (
     <AccountRow
       anchor="github"
@@ -4082,7 +4079,7 @@ function GoogleAccount({
     calendar.authentication_state,
   ]);
   const configured = gmail.configured || calendar.configured;
-  const usable = auth && !auth.localOnly && auth.snapshot;
+  const usable = auth && auth.snapshot;
   return (
     <AccountRow
       anchor="google"
@@ -4106,7 +4103,9 @@ function GoogleAccount({
             state={state}
             locked={auth.locked}
             onCheck={auth.check}
-            onReconnect={configured ? auth.start : undefined}
+            onReconnect={
+              configured && auth.onThisComputer ? auth.start : undefined
+            }
             onDisconnect={auth.disconnect}
           />
         )
@@ -4158,18 +4157,22 @@ function GoogleAccount({
           id: 'authenticate',
           text: 'Sign in to Google in your browser. While your Google app is in Testing, Google asks you to sign in again every 7 days; publishing it in Audience stops that, and Google then warns that the app is unverified, which is fine for your own use.',
           done: signedIn(state),
-          children: usable && (
-            <div className="action-cluster">
-              <Button
-                variant="primary"
-                className="small"
-                disabled={auth.locked || !configured}
-                onClick={auth.start}
-              >
-                Sign in with Google
-              </Button>
-            </div>
-          ),
+          children:
+            usable &&
+            (auth.onThisComputer ? (
+              <div className="action-cluster">
+                <Button
+                  variant="primary"
+                  className="small"
+                  disabled={auth.locked || !configured}
+                  onClick={auth.start}
+                >
+                  Sign in with Google
+                </Button>
+              </div>
+            ) : (
+              <p className="muted">{SIGN_IN_ON_THIS_COMPUTER}</p>
+            )),
         },
       ]}
     >
@@ -4251,7 +4254,7 @@ function XAccount({
   auth: AccountAuth | null;
 }) {
   const state = accountState([account.authentication_state]);
-  const usable = auth && !auth.localOnly && auth.snapshot;
+  const usable = auth && auth.snapshot;
   return (
     <AccountRow
       anchor="x"
@@ -4273,7 +4276,9 @@ function XAccount({
             state={state}
             locked={auth.locked}
             onCheck={auth.check}
-            onReconnect={account.configured ? auth.start : undefined}
+            onReconnect={
+              account.configured && auth.onThisComputer ? auth.start : undefined
+            }
             onDisconnect={auth.disconnect}
           />
         )
@@ -4328,18 +4333,22 @@ function XAccount({
           id: 'authenticate',
           text: 'Sign in to X in your browser.',
           done: signedIn(state),
-          children: usable && (
-            <div className="action-cluster">
-              <Button
-                variant="primary"
-                className="small"
-                disabled={auth.locked || !account.configured}
-                onClick={auth.start}
-              >
-                Connect X
-              </Button>
-            </div>
-          ),
+          children:
+            usable &&
+            (auth.onThisComputer ? (
+              <div className="action-cluster">
+                <Button
+                  variant="primary"
+                  className="small"
+                  disabled={auth.locked || !account.configured}
+                  onClick={auth.start}
+                >
+                  Connect X
+                </Button>
+              </div>
+            ) : (
+              <p className="muted">{SIGN_IN_ON_THIS_COMPUTER}</p>
+            )),
         },
       ]}
     >

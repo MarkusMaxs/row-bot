@@ -61,7 +61,6 @@ _MESSAGES = {
     "service_timeout": "A service this step checks didn't answer in time. Try again in a moment.",
     "skill_preview_expired": "The skill check expired. Start again.",
     "package_preview_expired": "The package check expired. Start again.",
-    "owner_local_only": "Adding packages works only in Row-Bot on this computer.",
     "tools_unreadable": "Row-Bot couldn't read the list of what this app can do, so it can't ask you about it. "
                         "Retry; if it happens again, the app's list is larger or differently shaped than Row-Bot accepts.",
 }
@@ -82,7 +81,6 @@ class Context:
     owner_id: str
     mcp_owner_id: str
     validate: Callable[[], None]
-    local_owner: bool = False
     redirect_uri: str = ""
     runtimes: Any = None
     read_policy: Callable[[str], dict] | None = None
@@ -444,8 +442,6 @@ def start(ctx: Context, row: dict, reference: dict, *, digest: str, intent: str 
         raise PlanError("plan_unsupported")
     if preset and preset not in presets.PRESETS:
         raise PlanError("invalid_access_preset")
-    if not ctx.local_owner and _local_only(plan, reference):
-        raise PlanError("owner_local_only")
     installed = row["lifecycle"] != "available"
     target = row.get("target") if installed else None
     reference = dict(reference)
@@ -485,13 +481,6 @@ def start(ctx: Context, row: dict, reference: dict, *, digest: str, intent: str 
     return _launch(ctx, record, background)
 
 
-def _local_only(plan: dict, reference: dict) -> bool:
-    """Changes only the owner at this computer may agree to: packages, Hermes recipes, Registry bundles and
-    installed runtimes, which put code on this computer."""
-    return ((plan["kind"] == "plugin" and plan["intent"] in {"add", "remove", "update"}) or reference.get("kind") == "hermes_mcp"
-            or registry_bundle(reference) or any(s["type"] == "runtime" and s["runtime"]["id"] in PACKAGES for s in plan["steps"]))
-
-
 def resume(ctx: Context, plan_id: str, *, preset: str = "", overrides: dict | None = None, background: bool = False) -> dict:
     """Continue from the current step: after a sign-in, an input, access, or a finished background step."""
     record, open_ = _load(ctx.owner_id, plan_id)
@@ -500,8 +489,6 @@ def resume(ctx: Context, plan_id: str, *, preset: str = "", overrides: dict | No
         open_ = False
     if not open_:
         raise PlanError("plan_not_resumable")
-    if not ctx.local_owner and _local_only(record, record["reference"]):  # Continuing is agreeing again.
-        raise PlanError("owner_local_only")
     if preset:
         if preset not in presets.PRESETS:
             raise PlanError("invalid_access_preset")
@@ -552,7 +539,7 @@ def read_plan(ctx: Context, plan_id: str) -> dict:
     with _plan_lock(plan_id):  # Observing never interleaves with this plan's runner, a cancel or another reader.
         found = _read(ctx, plan_id)
     with _LOCK:
-        log = _LOGS.get(plan_id) if ctx.local_owner else None
+        log = _LOGS.get(plan_id)
     if log is not None:
         for step in found["steps"]:
             if step["id"] == log[0]:
@@ -1191,8 +1178,6 @@ def _mcp_runtime(ctx: Context, record: dict, step: dict) -> str:
     if step["runtime"]["id"] in PACKAGES:
         from row_bot.application.mcp_runtime_installation import inspect_mcp_package, prepare_mcp_package
         from row_bot.mcp_client import packages
-        if not ctx.local_owner:
-            raise PlanError("owner_local_only")
         lock = record.setdefault("_locks", {}).get(step["id"])
         if lock is None:  # Exact versions and checksums, from the registry; nothing is installed or run.
             try:
@@ -1647,8 +1632,6 @@ def _package_test(ctx: Context, record: dict, step: dict) -> str:
 def _lifecycle(ctx: Context, record: dict, name: str, action: str, preview_id: str = "") -> dict:
     """One package lifecycle command (install, update, remove, purge), recorded before it is sent."""
     from row_bot.application.client_plugin_lifecycle import execute_plugin_lifecycle, review_plugin_lifecycle
-    if not ctx.local_owner:
-        raise PlanError("owner_local_only")
     plugin_id = record.get("_package", {}).get("plugin_id") or record["item_id"].removeprefix("plugin:")
 
     def build():

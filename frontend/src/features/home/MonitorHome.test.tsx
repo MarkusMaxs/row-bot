@@ -181,7 +181,11 @@ function fakeController() {
     revision: 'c'.repeat(64),
     running: false,
   } as ChannelStatus;
+  // The desktop app on the computer Row-Bot runs on.
+  const state = { handshake: { authentication_kind: 'local_owner' } };
   const controller = {
+    subscribe: () => () => undefined,
+    getSnapshot: () => state,
     channels: vi.fn(async () => ({
       schema_version: 1 as const,
       total: 1,
@@ -1193,7 +1197,7 @@ it('copies the visible log lines and reports clipboard failure', async () => {
   );
 });
 
-it('reads the full redacted log for the local owner and follows new lines every 6 seconds', async () => {
+it('reads the full redacted log and follows new lines every 6 seconds', async () => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   const full = {
@@ -1331,7 +1335,7 @@ it('shows refreshed recent lines until the full log has been read', async () => 
   expect(loadLogs).toHaveBeenCalledOnce();
 });
 
-it('explains remote log authority without exposing entries or log controls', async () => {
+it('says logs are unavailable without exposing entries or log controls', async () => {
   const loadLogs = vi.fn(async () => logsResponse([recentLog]));
   renderMonitor({
     loadLogs,
@@ -1347,10 +1351,8 @@ it('explains remote log authority without exposing entries or log controls', asy
   });
   await act(async () => {});
 
-  expect(screen.getByText(/available only to the local owner/)).toBeVisible();
-  expect(
-    screen.getByText(/No log contents or private filesystem paths/),
-  ).toBeVisible();
+  expect(screen.getByText(/Logs aren’t available right now/)).toBeVisible();
+  expect(screen.queryByText(/local owner/)).toBeNull();
   expect(screen.queryByText('Monitor fixture ready')).toBeNull();
   expect(screen.queryByRole('list', { name: 'Log lines' })).toBeNull();
   expect(screen.queryByRole('group', { name: 'Log levels' })).toBeNull();
@@ -1384,7 +1386,7 @@ it('shows recent lines without reading the full log when it is not offered', asy
     },
   });
   await act(async () => {});
-  expect(screen.getByText(/available only to the local owner/)).toBeVisible();
+  expect(screen.getByText(/Logs aren’t available right now/)).toBeVisible();
   expect(screen.queryByText('Monitor fixture ready')).toBeNull();
   expect(loadLogs).not.toHaveBeenCalled();
 });

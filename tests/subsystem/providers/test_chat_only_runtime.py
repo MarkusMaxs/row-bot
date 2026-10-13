@@ -336,7 +336,9 @@ def test_friendly_rate_limit_error_keeps_the_providers_wait():
     assert untimed == "⚠️ Rate limit reached — please wait a moment and try again."
 
 
-def test_stream_agent_auto_routes_visible_chat_only_without_graph(tmp_path, monkeypatch):
+# remote_client: a chat on another of the owner's signed-in devices runs the same way.
+@pytest.mark.parametrize("surface", ["normal_chat", "remote_client"])
+def test_stream_agent_auto_routes_visible_chat_only_without_graph(tmp_path, monkeypatch, surface):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / ".row-bot"))
     import row_bot.agent as agent
     import row_bot.providers.readiness as readiness
@@ -357,7 +359,7 @@ def test_stream_agent_auto_routes_visible_chat_only_without_graph(tmp_path, monk
     events = list(agent.stream_agent(
         "hi",
         [],
-        {"configurable": {"thread_id": "thread-chat", "runtime_surface": "normal_chat", "runtime_mode": "auto"}},
+        {"configurable": {"thread_id": "thread-chat", "runtime_surface": surface, "runtime_mode": "auto"}},
     ))
 
     assert events == [("token", "chat"), ("done", "chat")]

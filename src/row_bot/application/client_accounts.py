@@ -1,4 +1,4 @@
-"""Explicit local-owner account health actions over the existing account owners."""
+"""Explicit account health actions over the existing account owners, for any signed-in device."""
 
 from __future__ import annotations
 

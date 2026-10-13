@@ -840,10 +840,6 @@
           ],
           "title": "Enabled"
         },
-        "local_owner_control_available": {
-          "title": "Local Owner Control Available",
-          "type": "boolean"
-        },
         "platform": {
           "enum": [
             "windows",
@@ -863,6 +859,10 @@
           "title": "Runtime State",
           "type": "string"
         },
+        "screen_actions_available": {
+          "title": "Screen Actions Available",
+          "type": "boolean"
+        },
         "status_message": {
           "maxLength": 256,
           "title": "Status Message",
@@ -877,7 +877,7 @@
         "available",
         "enabled",
         "runtime_state",
-        "local_owner_control_available",
+        "screen_actions_available",
         "platform",
         "disclosure_acknowledged",
         "system_binary_configured",
@@ -1392,10 +1392,6 @@
           "default": null,
           "title": "Last Error"
         },
-        "local_owner_control_available": {
-          "title": "Local Owner Control Available",
-          "type": "boolean"
-        },
         "main_app_enabled": {
           "title": "Main App Enabled",
           "type": "boolean"
@@ -1435,8 +1431,7 @@
         "runtime_state",
         "active_count",
         "main_app_enabled",
-        "main_app_url",
-        "local_owner_control_available"
+        "main_app_url"
       ],
       "title": "SettingsTunnelSnapshot",
       "type": "object"

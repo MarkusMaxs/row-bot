@@ -18,7 +18,6 @@ function fixture(): AccessInvitationClient {
       listen_mode: 'local_only',
       configured_origins: [],
       managed_externally: false,
-      can_manage_routes: true,
     }),
     invitations: vi.fn().mockResolvedValue([]),
     create: vi.fn(),
@@ -60,7 +59,7 @@ it('changes where Row-Bot listens only after a confirmation and reports a needed
   ).toBeInTheDocument();
 });
 
-it('adds one allowed address and does not offer changes to a remote owner', async () => {
+it('adds one allowed address, and asks first before removing the one this device uses', async () => {
   const client = fixture();
   const view = show(client);
   fireEvent.change(await screen.findByLabelText('Add an allowed address'), {
@@ -74,14 +73,41 @@ it('adds one allowed address and does not offer changes to a remote owner', asyn
       [],
     ),
   );
+  // Any signed-in device may change these; removing its own address would
+  // cut it off, so that one asks first. Another address goes at once.
+  const here = window.location.origin;
+  const origins = [here, 'https://other.example.test'];
   vi.mocked(client.routeSettings).mockResolvedValue({
     listen_mode: 'local_only',
-    configured_origins: [],
+    configured_origins: origins,
     managed_externally: false,
-    can_manage_routes: false,
   });
   view.unmount();
   show(client);
-  expect(await screen.findByLabelText('Listen on')).toBeDisabled();
-  expect(screen.queryByLabelText('Add an allowed address')).toBeNull();
+  expect(await screen.findByLabelText('Listen on')).toBeEnabled();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Remove https://other.example.test' }),
+  );
+  await waitFor(() =>
+    expect(client.changeOrigin).toHaveBeenLastCalledWith(
+      'remove',
+      'https://other.example.test',
+      origins,
+    ),
+  );
+  const own = await screen.findByRole('button', { name: `Remove ${here}` });
+  await waitFor(() => expect(own).toBeEnabled());
+  fireEvent.click(own);
+  const dialog = await screen.findByRole('alertdialog', {
+    name: 'Remove the address this device uses?',
+  });
+  expect(client.changeOrigin).not.toHaveBeenCalledWith('remove', here, origins);
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+  await waitFor(() =>
+    expect(client.changeOrigin).toHaveBeenLastCalledWith(
+      'remove',
+      here,
+      origins,
+    ),
+  );
 });

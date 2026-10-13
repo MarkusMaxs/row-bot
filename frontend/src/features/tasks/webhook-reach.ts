@@ -8,7 +8,7 @@ import type { WebhookConfiguration, WebhookReach } from './WebhookAddress';
 
 const reachOf = (snapshot: SettingsSnapshot): WebhookReach => ({
   publicBase: snapshot.system.tunnel.main_app_url,
-  canControl: snapshot.system.tunnel.local_owner_control_available,
+  canControl: true,
 });
 
 /**

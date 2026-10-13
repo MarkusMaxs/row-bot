@@ -50,8 +50,8 @@ def catalogs(isolated, monkeypatch):
     return fake
 
 
-def context(*, local_owner: bool = False) -> plans.Context:
-    return plans.Context("owner", "owner", lambda: None, local_owner=local_owner)
+def context() -> plans.Context:
+    return plans.Context("owner", "owner", lambda: None)
 
 
 def test_type_default_and_passive_http_contract(service, catalogs, monkeypatch):
@@ -248,7 +248,7 @@ def test_hermes_subpath_and_pin_are_distinct_and_removed_hidden(catalogs, isolat
     # After consent the package check reads the current catalog: a removed package is never fetched or added.
     _, plan = api.read_item(owner_id="owner", item_id=removed["id"], revision=searched["revision"])
     if plan["supported"]:  # Either the plan refuses it, or its check does after consent.
-        failed = api.start_plan(context(local_owner=True), plan_id=str(uuid4()), item_id=removed["id"],
+        failed = api.start_plan(context(), plan_id=str(uuid4()), item_id=removed["id"],
                                 revision=searched["revision"], digest=plan["digest"])
         assert failed["state"] == "failed" and next(s for s in failed["steps"] if s["type"] == "test")["state"] == "failed"
     assert fetched == [] and not api.read_items(owner_id="owner", kind="plugin")["items"]
@@ -267,7 +267,7 @@ def test_a_hermes_package_whose_pin_moved_after_consent_is_never_fetched(catalog
     page = search_catalog(sources=["hermes"])
     _, plan = api.read_item(owner_id="owner", item_id=page["items"][0]["id"], revision=page["revision"])
     rows[0]["pin"] = "b" * 40  # The catalog moved to another commit after the person agreed.
-    failed = api.start_plan(context(local_owner=True), plan_id=str(uuid4()), item_id=page["items"][0]["id"],
+    failed = api.start_plan(context(), plan_id=str(uuid4()), item_id=page["items"][0]["id"],
                             revision=page["revision"], digest=plan["digest"])
     assert failed["state"] == "failed" and fetched == [], "a pin nobody agreed to is never downloaded"
 

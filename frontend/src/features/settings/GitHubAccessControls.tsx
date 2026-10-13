@@ -5,7 +5,7 @@ import type {
   GitHubAccessSnapshot,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { useRuntime } from '../../runtime';
+import { useOnThisComputer, useRuntime } from '../../runtime';
 import { Button } from '../../ui/primitives';
 
 type Owner = {
@@ -35,8 +35,11 @@ const STARTED =
 /** GitHub's actions, for its row on the Accounts page (B263). */
 export type GitHubAccess = {
   snapshot: GitHubAccessSnapshot | null;
-  /** GitHub actions only run on the local owner device. */
-  localOnly: boolean;
+  /**
+   * The GitHub CLI's sign-in opens a console window on the computer Row-Bot
+   * runs on, so only the desktop app there offers it.
+   */
+  onThisComputer: boolean;
   /** An action is running or its outcome is still being checked. */
   locked: boolean;
   send: (action: GitHubAccessCommand['action']) => void;
@@ -51,6 +54,7 @@ export type GitHubAccess = {
 export function useGitHubAccess(
   owner: Owner,
   onChanged?: () => void,
+  onThisComputer = true,
 ): GitHubAccess {
   const changed = useRef(onChanged);
   useEffect(() => {
@@ -61,7 +65,6 @@ export function useGitHubAccess(
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [localOnly, setLocalOnly] = useState(false);
   const running = useRef(false);
 
   useEffect(() => {
@@ -73,14 +76,7 @@ export function useGitHubAccess(
           if (!cancelled) setSnapshot(value);
         },
         (cause) => {
-          if (cancelled) return;
-          const issue = clientError(cause);
-          if (
-            issue.code === 'action_denied' ||
-            issue.code === 'origin_rejected'
-          )
-            setLocalOnly(true);
-          else setError(issue.message);
+          if (!cancelled) setError(clientError(cause).message);
         },
       );
     if (original) {
@@ -187,11 +183,7 @@ export function useGitHubAccess(
   }
 
   const quiet = !pending && !error && !notice;
-  const feedback = localOnly ? (
-    <p className="muted">
-      GitHub account actions are available on the local owner device.
-    </p>
-  ) : quiet ? null : (
+  const feedback = quiet ? null : (
     <>
       {pending && (
         <div role="status" className="action-cluster">
@@ -218,7 +210,7 @@ export function useGitHubAccess(
   );
   return {
     snapshot,
-    localOnly,
+    onThisComputer,
     locked: busy || Boolean(pending),
     send: (action) => void send(action),
     feedback,
@@ -235,11 +227,12 @@ export default function ConnectedGitHubAccess({
   children: (access: GitHubAccess) => ReactNode;
 }) {
   const { controller } = useRuntime();
+  const onThisComputer = useOnThisComputer();
   const owner = useRef<Owner>({
     load: () => controller.githubAccess(),
     send: (command) => controller.githubAccessCommand(command),
     receipt: (commandId) => controller.githubAccessReceipt(commandId),
   });
-  const access = useGitHubAccess(owner.current, onChanged);
+  const access = useGitHubAccess(owner.current, onChanged, onThisComputer);
   return children(access);
 }

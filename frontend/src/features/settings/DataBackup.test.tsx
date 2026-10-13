@@ -8,7 +8,7 @@ import type {
 import { DataBackup, type DataBackupOwner } from './DataBackup';
 
 const idle: DataBackupState = {
-  local_owner: true,
+  reveal_available: true,
   last_backup_at: null,
   last_backup_name: null,
   folder: 'Row-Bot › Backups',
@@ -201,20 +201,54 @@ it('refused archives and other devices explain themselves', async () => {
   const browser = owner();
   render(<DataBackup owner={browser} canPick={false} />);
   expect(
-    await screen.findByText('Open the Row-Bot desktop app to restore.'),
+    await screen.findByText(
+      'Restoring picks the backup file in the Row-Bot desktop app on the computer Row-Bot runs on.',
+    ),
   ).toBeVisible();
   expect(
     screen.queryByRole('button', { name: 'Restore from backup…' }),
   ).toBeNull();
 });
 
-it('another device sees that backups belong to this computer', async () => {
-  const fake = owner({ ...idle, local_owner: false, folder: null });
-  render(<DataBackup owner={fake} />);
+it('another device backs up too, without the file manager of the computer it runs on', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const away: DataBackupState = { ...idle, reveal_available: false };
+  const running: DataBackupState = {
+    ...away,
+    job: {
+      kind: 'backup',
+      status: 'running',
+      started_at: '2026-10-11T09:00:00',
+    },
+  };
+  const done: DataBackupState = {
+    ...away,
+    last_backup_at: new Date().toISOString(),
+    last_backup_name: 'Row-Bot backup 2026-10-11 0900.zip',
+    job: {
+      kind: 'backup',
+      status: 'completed',
+      name: 'Row-Bot backup 2026-10-11 0900.zip',
+    },
+  };
+  const fake = owner(away);
+  fake.send.mockResolvedValueOnce(receipt(running, { status: 'accepted' }));
+  render(<DataBackup owner={fake} canPick={false} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Back up now' }));
+  expect(
+    await screen.findByRole('button', { name: 'Backing up…' }),
+  ).toBeDisabled();
+  expect(fake.send).toHaveBeenCalledWith('backup', undefined);
+  fake.read.mockResolvedValue(done);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
   expect(
     await screen.findByText(
-      /Backups are made and restored in the Row-Bot desktop app/,
+      'Saved “Row-Bot backup 2026-10-11 0900.zip” in Row-Bot › Backups.',
+      { exact: false },
     ),
   ).toBeVisible();
-  expect(screen.queryByRole('button', { name: 'Back up now' })).toBeNull();
+  // Show in folder opens the file manager on that computer's screen.
+  expect(screen.queryByRole('button', { name: 'Show in folder' })).toBeNull();
 });

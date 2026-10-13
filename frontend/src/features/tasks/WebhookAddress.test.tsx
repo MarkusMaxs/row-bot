@@ -135,15 +135,16 @@ it('makes it reachable from the internet only after an explicit confirmation (pa
   ).toBeInTheDocument();
 });
 
-it('says who can change reachability and shows start failures in place', async () => {
+it('says where to look when the public link can’t be read', async () => {
   show({
-    loadTunnel: vi.fn(async () => ({ publicBase: null, canControl: false })),
+    loadTunnel: vi.fn(async () => {
+      throw { code: 'settings_unavailable' };
+    }),
   });
   expect(
-    await screen.findByText(
-      /Only Row-Bot's owner on this computer can make it reachable/,
-    ),
+    await screen.findByText(/Row-Bot couldn’t read its public link/),
   ).toBeInTheDocument();
+  expect(screen.queryByText(/owner on this computer/)).toBeNull();
   expect(
     screen.queryByRole('button', { name: 'Make reachable from the internet' }),
   ).toBeNull();

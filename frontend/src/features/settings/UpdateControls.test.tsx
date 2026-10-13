@@ -19,6 +19,7 @@ const snapshot: UpdateSnapshot = {
   skipped_versions: [],
   available: null,
   dev_install: false,
+  install_here: true,
 };
 
 function show(
@@ -227,6 +228,44 @@ it('starts a verified installed-app update from one click and shows the original
     startInstall.mock.calls[0][0].command_id,
   );
   expect(screen.getByRole('progressbar')).toHaveAttribute('value', '12');
+});
+
+it('leaves a Mac install to the desktop app there, on another device', async () => {
+  const startInstall = vi.fn();
+  render(
+    <UpdateControls
+      owner={{
+        load: async () => ({
+          ...snapshot,
+          install_here: false,
+          available: {
+            version: '2.0.0',
+            channel: 'stable',
+            published_at: '',
+            notes: 'Fixture release',
+            html_url: 'https://github.com/example/release',
+            asset_size: 12,
+            verified_manifest: true,
+          },
+        }),
+        send: vi.fn(),
+        startInstall,
+        installStatus: vi.fn(),
+        cancelInstall: vi.fn(),
+      }}
+    />,
+  );
+  expect(
+    await screen.findByText(/Installing on a Mac opens Finder there/),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'Install version 2.0.0' }),
+  ).toBeNull();
+  // Skipping it, or being reminded later, still works from here.
+  expect(
+    screen.getByRole('button', { name: 'Skip version 2.0.0' }),
+  ).toBeEnabled();
+  expect(startInstall).not.toHaveBeenCalled();
 });
 
 it('allows a running download to request cancellation without another install', async () => {

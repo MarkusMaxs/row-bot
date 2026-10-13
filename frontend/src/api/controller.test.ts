@@ -1576,7 +1576,7 @@ describe('revisioned snapshot and independent selection', () => {
     ).toBe(true);
     expect(transport.counters.active).toBe(1);
   });
-  it('keeps the session when an owner-only update view is denied', async () => {
+  it('keeps the session when an update view is denied', async () => {
     class BrowserTransport extends FixtureTransport {
       async updates(): Promise<never> {
         throw { status: 403, code: 'action_denied' };

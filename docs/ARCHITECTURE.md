@@ -1377,7 +1377,7 @@ and the network rules are in [`INTEGRATION_SOURCES.md`](INTEGRATION_SOURCES.md).
 - **Local search first** — the shipped `mcp_client/registry_snapshot.jsonl.xz` (every latest Registry record) is indexed at start into a SQLite FTS5 mirror under `catalogs/`. The library searches local data as you type; only **Search online catalogs**, an explicit catalog **Update** in Apps › Advanced › Catalogs, or a schedule the person turns on (off by default) contacts a catalog
 - **Built-in ways** — `integrations/builtin.py` lists Google, GitHub, X, the channels and key-based tools as ways to connect an app, read from their owners without contacting a service or starting a program; each opens its owner's page, and an account's token is never another app's key
 - **Owner facts and status** — `integrations/facts.py` projects the owners into typed facts with a lifecycle, a readiness, blockers and exactly one next action; unfinished owner commands are reconciled on read, never repeated
-- **Install plans** — `integrations/plans.py` computes typed steps (consent, runtimes and packages, inputs, sign-in, connection test, access, enable) and runs them server-side through the existing owner commands, only after a consent token bound to the plan's digest. Each owner command is recorded before it is sent, plans are kept as admission receipts in `tasks.db`, and anything that puts code on this computer (plugin and MCP packages, Hermes recipes, Registry bundles) needs the owner at this computer
+- **Install plans** — `integrations/plans.py` computes typed steps (consent, runtimes and packages, inputs, sign-in, connection test, access, enable) and runs them server-side through the existing owner commands, only after a consent token bound to the plan's digest. Each owner command is recorded before it is sent, plans are kept as admission receipts in `tasks.db`; anything that puts code on the host (plugin and MCP packages, Hermes recipes, Registry bundles) takes the same consent from any of the owner's signed-in devices
 - **Declared inputs** — `integrations/inputs.py` gives every source one way to ask for a key, tenant or folder: templates stay in the saved configuration and values are filled in only when Row-Bot connects, secrets from the system keychain
 - **Access presets** — `integrations/presets.py` applies Read only, Ask before changes (default) or Full access on the per-tool policy. Destructive, high-impact and unknown-effect tools are approval-locked in every preset, a routine change runs without asking only under Full access or a per-tool Use, and tools discovered later wait to be accepted
 - **Apps in chats** — `integrations/scope.py` narrows a turn: an app switched off in the composer's + › Apps, or left out because the message @mentions other apps, loses its tools, and delegated children never regain them. The agent profile's tool rules stay the ceiling and approvals are unchanged. When work needs an app, `suggest_apps` searches only local data and leaves a Connect card that runs the app's consent and plan in the chat
@@ -1527,7 +1527,7 @@ modifying the core codebase.
 ### Marketplace
 
 - **Marketplace index** — v2 plugin catalog fetched from GitHub-hosted JSON or a local fixture index, with caching, stale-cache fallback, checksums, source metadata, and update checks
-- **Browse in Apps** — plugins are searched, reviewed, and installed from Settings › Apps through the same install plans as other apps; adding, updating, or removing a package needs the owner at this computer
+- **Browse in Apps** — plugins are searched, reviewed, and installed from Settings › Apps through the same install plans as other apps, from any of the owner's signed-in devices
 - **Install / update / uninstall** — plugins are validated before install, installed and kept off by default, checksum-verified when catalog data provides a `sha256:` value, and reloaded immediately afterward
 - **Native Plugin Center** — one Row-Bot-owned UI (a plugin's **Advanced settings** in Apps) renders per-plugin metadata, permissions, settings, secrets, auth, health checks, tools, channels, skills, logs, updates, and enable/disable controls; plugin-owned channels do not render arbitrary custom UI
 - **Custom Tool bridge** — promoted Custom Tools are registered through the plugin/tool surface as synthetic local tools so normal chat can use them without adding a separate extension mechanism
@@ -1659,6 +1659,16 @@ initial presentation.
   `server` behavior and keeps reachability independent from authentication;
   desktop direct loopback is the implicit local owner, but server-mode and
   forwarded loopback requests require a session
+- **Capabilities, not tiers** — the implicit local owner and a signed-in session
+  have the same authority (one owner model; no step-up or confirm-it's-you
+  prompts). Only what happens on the host's own screen needs the desktop app on
+  that computer: the native bridge's `/native/*` routes and its folder and file
+  picker, the OS terminal window, opening the file manager or an exported file,
+  Computer Use's live picture and controls (and its Test and macOS privacy
+  panes), the Google and X browser sign-in (a loopback redirect on the host),
+  the GitHub CLI's console sign-in and a macOS update install (Finder). The
+  native routes keep their attestation checks; the others answer `desktop_only`
+  (409) elsewhere, and the client hides or explains those controls instead
 - **Request context** — `access/request_context.py` canonicalizes host, origin,
   effective client, forwarding trust, route class, session identity, and
   presentation into one immutable context used by HTTP and WebSocket admission
@@ -1723,8 +1733,9 @@ initial presentation.
 - **Remote Access settings** — Settings › Devices & remote access exposes current
   browser/logout, invitation creation, trusted-address add/list/confirmed-remove,
   LAN restart flow, reviewed route status and warnings, devices, sessions,
-  per-session revoke, device revoke, and explicit Tailscale actions under an
-  owner authorization guard
+  per-session revoke, device revoke, and explicit Tailscale actions for any
+  signed-in device; removing the trusted address or stopping the Tailscale share
+  the current device uses asks first, since it would disconnect that device
 - **Access CLI** — `row-bot access invite|list|revoke|revoke-all|doctor`; doctor
   checks configuration/database/proxy/Tailscale hazards read-only and redacts
   nested credentials
@@ -1823,7 +1834,7 @@ the full desktop layout.
 - **Responsive composer** — safe-area-aware left/right/bottom padding, bounded Model and Thinking controls, a contained action row, and non-shrinking send button keep narrow mobile layouts usable
 - **Activity surface** — tool approvals, orchestration/child approvals, active chat generations, running/stoppable workflows, and recent workflow history are combined into a compact operational view
 - **Safe workflow editing** — the simple mobile editor can create and update prompt workflows while detecting and preserving advanced graph workflows that require desktop controls
-- **Settings adapters** — provider cards expose display-safe connection and credential summaries; installed skills can be enabled or pinned; installed plugins can be enabled or disabled when setup is complete; Apps & Skills works in the compact layout, but adding, updating, or removing anything that puts code on the host (plugin packages, MCP packages and bundles, Hermes recipes) is refused from any session other than the owner at that computer
+- **Settings adapters** — provider cards expose display-safe connection and credential summaries; installed skills can be enabled or pinned; installed plugins can be enabled or disabled when setup is complete; Apps & Skills works in the compact layout, including adding, updating, or removing anything that puts code on the host, each after its own consent
 - **PWA boundary** — `mobile/routes.py` serves the manifest, service worker, icon metadata, and offline page; the service worker caches only public shell assets and explicitly avoids authenticated/private application routes
 
 ### Access & Presentation Integration
@@ -1858,7 +1869,7 @@ the full desktop layout.
 ### Mobile Limitations
 
 - **Host required** — the desktop/server process must remain running and reachable; mobile is not an offline replica even though the PWA provides an offline status page
-- **Desktop-oriented rich editors** — the compact presentation exposes full owner Settings and state, but Developer Studio, Designer Studio, skill creation, and advanced workflow graph editing remain optimized for the full desktop layout, and installing code on the host stays with the owner at that computer
+- **Desktop-oriented rich editors** — the compact presentation exposes full owner Settings and state, but Developer Studio, Designer Studio, skill creation, and advanced workflow graph editing remain optimized for the full desktop layout
 - **No native Computer Use** — mobile, channel, scheduled, workflow, child-agent, and headless/server turns cannot acquire the native desktop-control lease; Computer Use is restricted to the interactive local desktop UI
 - **No hidden network enablement** — Row-Bot does not automatically broaden its bind host, install/sign in to Tailscale, enable Funnel, overwrite another Serve route, or trust a reverse proxy. LAN and owned Tailscale changes require explicit reviewed owner actions
 

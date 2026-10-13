@@ -7,7 +7,12 @@ import pytest
 from row_bot.runtime import admissions
 from row_bot.designer import export
 from tests.subsystem.client_protocol.test_artifact_modes_setup import artifact_service, _create  # noqa: F401
-from tests.subsystem.client_protocol.test_protocol_application import _client, _command, service  # noqa: F401
+from tests.subsystem.client_protocol.test_protocol_application import (  # noqa: F401
+    _client,
+    _command,
+    _remote_client,
+    service,
+)
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 from tests.subsystem.client_protocol.test_artifact_edit_commands import editing, target
 from tests.subsystem.client_platform.test_workspace_setup_integrity import _completed
@@ -138,13 +143,33 @@ def test_local_owner_saves_an_export_into_the_exports_folder_and_opens_it(artifa
         assert refused.status_code == 422
 
 
-def test_a_remote_session_cannot_save_or_open_files_here():
-    from tests.subsystem.client_protocol.test_protocol_security import client_app
+def test_another_device_saves_an_export_but_open_and_show_stay_with_the_desktop_app(
+        artifact_service, monkeypatch, tmp_path):
+    """Any signed-in device may save a copy into Exports; Open and Show in folder
+    open an app or the file manager on the computer Row-Bot runs on."""
+    from row_bot.application import conversation_creation
+    from row_bot.designer import client_exports
 
-    client, _service, _active = client_app(remote=True)
-    with client:
-        _handshake, headers = bootstrap(client)
-        base = f"/api/v1/conversations/c/artifacts/b/exports/{uuid4()}"
-        for path, body in (("/save", {}), ("/reveal", {"action": "open"})):
-            response = client.post(base + path, headers=headers, json=body)
-            assert response.status_code == 403 and response.json()["code"] == "owner_local_only"
+    root = (tmp_path / "Row-Bot")
+    root.mkdir()
+    monkeypatch.setattr(conversation_creation, "configured_workspace_root", lambda: root.resolve())
+    monkeypatch.setattr(export, "_launch_playwright_browser", lambda *a: pytest.fail("HTML export launched a browser"))
+    opened = []
+    monkeypatch.setattr(client_exports, "_open_path", lambda action, path: opened.append(action) or True)
+    remote, active = _remote_client(artifact_service)
+    with remote as client:
+        _, headers = bootstrap(client)
+        created, payload = prepare(client, headers, "deck")
+        identity = str(uuid4())
+        made = _command(client, headers, "artifact.export", payload, target=created["conversation_id"],
+                        revision=created["revision"], command_id=identity, key=str(uuid4()))
+        assert made.status_code == 200, made.text
+        saved = client.post(url(created, identity) + "/save", headers=headers, json={})
+        assert saved.status_code == 200, saved.text
+        assert (root / "Exports" / saved.json()["filename"]).is_file()
+        for action in ("open", "show"):
+            response = client.post(url(created, identity) + "/reveal", headers=headers, json={"action": action})
+            assert response.status_code == 409 and response.json()["code"] == "desktop_only"
+        active["value"] = False
+        assert client.post(url(created, identity) + "/save", headers=headers, json={}).status_code == 401
+    assert opened == []

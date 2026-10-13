@@ -11,7 +11,7 @@ import type {
   AccountAuthSnapshot,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { useRuntime } from '../../runtime';
+import { useOnThisComputer, useRuntime } from '../../runtime';
 import { Button } from '../../ui/primitives';
 
 type Account = 'google' | 'x';
@@ -34,11 +34,18 @@ function saved(account: Account): string {
 }
 const NAMES: Record<Account, string> = { google: 'Google', x: 'X' };
 
+/** Why another device doesn't offer the browser sign-in. */
+export const SIGN_IN_ON_THIS_COMPUTER =
+  'Signing in opens a browser on the computer Row-Bot runs on and returns to it there, so for now it’s done in the Row-Bot desktop app on that computer. Check and Disconnect work from here.';
+
 /** A Google or X account's actions, for its row on the Accounts page (B263). */
 export type AccountAuth = {
   snapshot: AccountAuthSnapshot | null;
-  /** Sign-in actions only run on the local owner device. */
-  localOnly: boolean;
+  /**
+   * Sign-in opens the browser of the computer Row-Bot runs on and returns to
+   * a loopback address there, so only the desktop app there offers it.
+   */
+  onThisComputer: boolean;
   /** An action is running or its outcome is still being checked. */
   locked: boolean;
   check: () => void;
@@ -60,6 +67,7 @@ export function useAccountAuth(
   account: Account,
   owner: Owner,
   onChanged?: () => void,
+  onThisComputer = true,
 ): AccountAuth {
   const changed = useRef(onChanged);
   useEffect(() => {
@@ -73,7 +81,6 @@ export function useAccountAuth(
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
-  const [localOnly, setLocalOnly] = useState(false);
   const [missingReceipt, setMissingReceipt] = useState(false);
   const active = useRef(false);
 
@@ -83,10 +90,7 @@ export function useAccountAuth(
       setSnapshot(result);
       setError('');
     } catch (cause) {
-      const issue = clientError(cause);
-      if (issue.code === 'action_denied' || issue.code === 'origin_rejected')
-        setLocalOnly(true);
-      else setError(issue.message);
+      setError(clientError(cause).message);
     }
   }, [account, owner]);
 
@@ -212,11 +216,7 @@ export function useAccountAuth(
 
   const name = NAMES[account];
   const quiet = !confirmDisconnect && !pending && !error && !notice;
-  const feedback = localOnly ? (
-    <p className="muted">
-      Account sign-in is available on the local owner device.
-    </p>
-  ) : quiet ? null : (
+  const feedback = quiet ? null : (
     <>
       {confirmDisconnect && (
         <div
@@ -316,7 +316,7 @@ export function useAccountAuth(
   );
   return {
     snapshot,
-    localOnly,
+    onThisComputer,
     locked: busy || Boolean(pending),
     check: () => void send('check'),
     start: () => void send('start'),
@@ -338,6 +338,7 @@ export default function ConnectedAccountAuth({
   children: (auth: AccountAuth) => ReactNode;
 }) {
   const { controller } = useRuntime();
+  const onThisComputer = useOnThisComputer();
   const owner = useRef<Owner>({
     load: (which) => controller.accountAuth(which),
     send: (which, command) => controller.accountAuthCommand(which, command),
@@ -346,6 +347,11 @@ export default function ConnectedAccountAuth({
     cancel: (which, commandId) =>
       controller.cancelAccountAuth(which, commandId),
   });
-  const auth = useAccountAuth(account, owner.current, onChanged);
+  const auth = useAccountAuth(
+    account,
+    owner.current,
+    onChanged,
+    onThisComputer,
+  );
   return children(auth);
 }

@@ -64,6 +64,21 @@ def _client(service):
                       base_url="http://localhost", client=("127.0.0.1", 12345))
 
 
+def _remote_client(service):
+    """Another of the owner's signed-in devices (a server-mode session); clear
+    ``active["value"]`` to sign it out."""
+    from row_bot.access.config import AccessConfig, DeploymentMode
+    from row_bot.access.request_context import SessionIdentity
+
+    active = {"value": True}
+    app = create_client_platform_app(
+        service, access_config=AccessConfig(deployment_mode=DeploymentMode.SERVER),
+        session_authenticator=lambda scope, provenance: (
+            SessionIdentity("fixture-device", "fixture-session") if active["value"] else None),
+        choices=lambda: {"models": [], "capabilities": []})
+    return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)), active
+
+
 def _command(client, headers, kind, payload, *, target=None, revision="0", key=None, command_id=None):
     body = {"command_id": command_id or str(uuid4()), "client_session_id": headers["X-Client-Session"],
             "type": kind, "expected_revision": revision, "payload": payload}

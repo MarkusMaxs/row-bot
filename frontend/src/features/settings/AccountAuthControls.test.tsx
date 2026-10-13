@@ -100,13 +100,20 @@ function page(
   snapshot: Accounts = accounts,
   prepare: (controller: ReturnType<typeof fakeController>) => void = () =>
     undefined,
+  /** The desktop app on the computer Row-Bot runs on, or another device. */
+  here = true,
 ) {
-  const controller = fakeController();
+  const controller = fakeController(here);
   prepare(controller);
   return mount(snapshot, controller);
 }
-function fakeController() {
+function fakeController(here = true) {
+  const state = {
+    handshake: { authentication_kind: here ? 'local_owner' : 'session' },
+  };
   return {
+    subscribe: () => () => undefined,
+    getSnapshot: () => state,
     accountAuth: vi.fn(async (account: 'google' | 'x') => auth(account)),
     accountAuthCommand: vi.fn(
       async (
@@ -320,17 +327,32 @@ it('reconnects an expired Google sign-in in the browser', async () => {
   );
 });
 
-it('shows the local-owner boundary instead of sign-in actions', async () => {
-  page(accounts, (controller) =>
-    controller.accountAuth.mockRejectedValue({ code: 'action_denied' }),
+it('another device checks and disconnects, and leaves the browser sign-in to the desktop app', async () => {
+  // Sign-in opens a browser on the computer Row-Bot runs on and returns to
+  // a loopback address there.
+  const { controller } = page(accounts, undefined, false);
+  fireEvent.click(await screen.findByRole('button', { name: 'Check Google' }));
+  expect(controller.accountAuthCommand).toHaveBeenCalledWith(
+    'google',
+    expect.objectContaining({ action: 'check' }),
   );
   expect(
-    await screen.findAllByText(
-      /sign-in is available on the local owner device/,
-    ),
-  ).toHaveLength(2);
+    screen.getByRole('button', { name: 'Disconnect Google' }),
+  ).toBeVisible();
+  expect(
+    (
+      await screen.findAllByText(
+        /Signing in opens a browser on the computer Row-Bot runs on/,
+      )
+    ).length,
+  ).toBeGreaterThan(0);
   expect(screen.queryByRole('button', { name: 'Connect X' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Reconnect Google' })).toBeNull();
+  expect(screen.queryByText(/local owner/)).toBeNull();
+  expect(controller.accountAuthCommand).not.toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({ action: 'start' }),
+  );
 });
 
 it('recovers a retained sign-in without starting another one', async () => {
