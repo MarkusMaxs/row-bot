@@ -258,8 +258,8 @@ jobs:
           python3 scripts/smoke_app.py --port 8096 --timeout 180 --public-probes --data-dir "$HOME/.row-bot" \
             --cwd "$RESOURCES/app" -- "$RESOURCES/python/bin/python3" launcher.py --server --no-open --no-splash --no-ollama --port 8096
           echo kept > "$HOME/.row-bot/bridge-marker.txt"
-          # Logs, locks and the launcher's run file come and go; the rest is the user's data.
-          (cd "$HOME/.row-bot" && find . -type f ! -name '*.log*' ! -name '*.lock' ! -name '*-wal' ! -name '*-shm' \
+          # Logs, locks, SQLite's journals and the launcher's run file come and go; the rest is the user's data.
+          (cd "$HOME/.row-bot" && find . -type f ! -name '*.log*' ! -name '*.lock' ! -name '*-wal' ! -name '*-shm' ! -name '*-journal' \
             ! -name 'launcher_state.json' ! -name '*.pid' | sort) > "$RUNNER_TEMP/data-before.txt"
           cat "$RUNNER_TEMP/data-before.txt"
           wc -l < "$RUNNER_TEMP/data-before.txt"
@@ -391,7 +391,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Row-Bot 5.1.0 did not start" }
           Set-Content -Path (Join-Path $data "bridge-marker.txt") -Value "kept"
           $files = Get-ChildItem -Path $data -Recurse -File |
-            Where-Object { $_.Name -notmatch '\.log|\.lock$|-wal$|-shm$|^launcher_state\.json$|\.pid$' } |
+            Where-Object { $_.Name -notmatch '\.log|\.lock$|-wal$|-shm$|-journal$|^launcher_state\.json$|\.pid$' } |
             ForEach-Object { $_.FullName.Substring($data.Length + 1) }
           $files | Set-Content (Join-Path $env:RUNNER_TEMP "data-before.txt")
           $files | ForEach-Object { Write-Host "   $_" }
@@ -541,8 +541,8 @@ jobs:
           python3 scripts/smoke_app.py --port 8130 --timeout 180 --public-probes --data-dir "$HOME/.row-bot" \
             --cwd "$ROOT/current/app" -- "$HOME/.local/bin/row-bot" --no-ollama serve --port 8130
           echo kept > "$HOME/.row-bot/bridge-marker.txt"
-          # Logs, locks and the launcher's run file come and go; the rest is the user's data.
-          (cd "$HOME/.row-bot" && find . -type f ! -name '*.log*' ! -name '*.lock' ! -name '*-wal' ! -name '*-shm' \
+          # Logs, locks, SQLite's journals and the launcher's run file come and go; the rest is the user's data.
+          (cd "$HOME/.row-bot" && find . -type f ! -name '*.log*' ! -name '*.lock' ! -name '*-wal' ! -name '*-shm' ! -name '*-journal' \
             ! -name 'launcher_state.json' ! -name '*.pid' | sort) > "$RUNNER_TEMP/data-before.txt"
           cat "$RUNNER_TEMP/data-before.txt"
           echo "5.1.0 installed at $ROOT; its data folder holds $(wc -l < "$RUNNER_TEMP/data-before.txt") files"
