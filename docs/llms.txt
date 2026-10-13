@@ -17,7 +17,7 @@ Public documentation index for Row-Bot.
 - [Home: Overview](/docs/home/overview)
   Route: /docs/home/overview. Start from Home Overview: ask Row-Bot anything, answer what needs you, see live status, and pick up recent work.
 - [Chat](/docs/chat/)
-  Route: /docs/chat/. Use Row-Bot conversations: the composer, models, attachments, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library.
+  Route: /docs/chat/. Use Row-Bot conversations: the composer, models, attachments, context and token usage, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library.
 - [Model Picker](/docs/chat/model-picker)
   Route: /docs/chat/model-picker. Choose a conversation's model from one list across local, subscription, pay-per-use and custom providers, and troubleshoot missing models.
 - [Reasoning Controls](/docs/chat/reasoning-controls)
@@ -91,7 +91,7 @@ Public documentation index for Row-Bot.
 - [Accounts And Authorisation](/docs/integrations/accounts)
   Route: /docs/integrations/accounts. Connect your GitHub, Google and X accounts as apps, set Google up with your own OAuth client, and keep scopes, tokens and data flow understandable.
 - [Channels](/docs/integrations/channels)
-  Route: /docs/integrations/channels. Connect Row-Bot to messaging channels as apps: setup steps, pairing, public addresses, delivery, and safe external behavior.
+  Route: /docs/integrations/channels. Connect Row-Bot to messaging channels as apps: setup steps, pairing, public addresses, conversations and threads, delivery, and safe external behavior.
 - [Skills](/docs/skills/)
   Route: /docs/skills/. Find, add, use, turn off, remove, create and troubleshoot Row-Bot skills, and how Row-Bot picks them automatically.
 - [Packages (Plugins)](/docs/integrations/plugins)
