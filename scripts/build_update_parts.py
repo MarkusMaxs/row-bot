@@ -173,7 +173,14 @@ def split_app(app: Path) -> tuple[list[_Member], list[_Member]]:
                 problems.append(f"{relative} has CRLF line endings (release payloads ship LF)")
                 continue
             member = _Member(relative, path, _mode(path))
-            (assets if relative.split("/", 1)[0] in update_manifest.ASSET_DIRS else code).append(member)
+            is_asset = relative.split("/", 1)[0] in update_manifest.ASSET_DIRS
+            if is_asset and path.suffix.lower() == ".py":
+                # The installers compile every Python file under app/
+                # (src/row_bot/payload_trim.py bytecode), so installed assets
+                # would carry __pycache__ and never match the content hash.
+                problems.append(f"{relative} is Python code among the assets (static/ and sounds/ hold none)")
+                continue
+            (assets if is_asset else code).append(member)
     if problems:
         raise PartsError("the staged app cannot be released:\n  " + "\n  ".join(problems[:20]))
     return code, assets

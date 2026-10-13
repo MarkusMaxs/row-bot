@@ -154,9 +154,11 @@ def test_the_archives_are_the_same_bytes_every_time(tmp_path, app, project) -> N
     [
         ("src/row_bot/__pycache__/server.cpython-312.pyc", b"\x00", "bytecode"),
         ("src/row_bot/server.py", b"import os\r\nprint(os)\r\n", "CRLF"),
+        # Installers compile every .py under app/: installed assets would never match their hash.
+        ("static/vendor/helper.py", b"print('x')\n", "Python code among the assets"),
     ],
 )
-def test_bytecode_and_crlf_never_ship(tmp_path, app, project, relative, data, problem) -> None:
+def test_bytecode_crlf_and_python_assets_never_ship(tmp_path, app, project, relative, data, problem) -> None:
     _write(app / relative, data)
 
     with pytest.raises(parts.PartsError, match=problem):
