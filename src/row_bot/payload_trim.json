@@ -45,7 +45,30 @@
   },
   "bytecode": {
     "why": "Version folders are never written after install (updates share them through hard links) and the launchers set PYTHONDONTWRITEBYTECODE=1, so a module without shipped bytecode is compiled in memory each time a process imports it. Compiling every library added about 32,000 files; most of them are never imported.",
-    "rule": "Deterministic bytecode (compileall -s <version root> --invalidation-mode unchecked-hash) for every Python file under app/, and for every Python file under python/ that the bundled interpreter imports while it runs the runtime check below with a throwaway data folder. Nothing else ships bytecode.",
-    "trace": ["app/scripts/verify_runtime_dependencies.py", "all"]
+    "rule": "Deterministic bytecode (compileall -s <version root> --invalidation-mode unchecked-hash) for every Python file under app/, and for every Python file under python/ that the bundled interpreter imports while it runs the runtime check below (with a throwaway data folder) and then imports the start-up modules below. Nothing else ships bytecode.",
+    "trace": ["app/scripts/verify_runtime_dependencies.py", "all"],
+    "startup_imports": {
+      "modules": [
+        "telegram.ext",
+        "plotly.express",
+        "plotly.graph_objects",
+        "plotly.io",
+        "apscheduler.schedulers.asyncio",
+        "apscheduler.schedulers.background",
+        "apscheduler.executors.pool",
+        "apscheduler.jobstores.memory",
+        "uvicorn.loops.asyncio",
+        "uvicorn.protocols.http.h11_impl",
+        "starlette.middleware.gzip",
+        "tzlocal",
+        "aiolimiter",
+        "cachetools",
+        "webbrowser",
+        "keyring.backends.Windows",
+        "keyring.backends.macOS",
+        "keyring.backends.SecretService"
+      ],
+      "why": "Imported while the server starts (channels, the scheduler, charts, the keyring backend, uvicorn's loop and protocol) but not by the runtime check: about 150 modules, measured with -X importtime against a real start to /readyz. One that does not import on a platform is skipped; a module left out only costs start-up time (0.1-0.6 s for all of these)."
+    }
   }
 }

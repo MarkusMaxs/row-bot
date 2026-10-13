@@ -129,6 +129,7 @@ def _fake_runner(listing: str, calls: list[SimpleNamespace], *, trace_exit: int 
     def run(command, *, env, cwd, check):  # noqa: ANN001
         calls.append(SimpleNamespace(command=list(command), env=dict(env), cwd=cwd))
         if "compileall" not in command:
+            calls[-1].extras = Path(command[3]).read_text(encoding="utf-8").split()
             Path(command[2]).write_text(listing, encoding="utf-8")
             return subprocess.CompletedProcess(command, trace_exit)
         if "-i" in command:
@@ -157,7 +158,8 @@ def test_bytecode_compiles_the_app_and_only_the_runtime_modules_the_runtime_chec
 
     assert not any(path.exists() for path in stale)
     trace, app_compile, libraries = calls
-    assert trace.command[3:] == [str(real / "app" / "scripts" / "verify_runtime_dependencies.py"), "all"]
+    assert trace.command[4:] == [str(real / "app" / "scripts" / "verify_runtime_dependencies.py"), "all"]
+    assert trace.extras == payload_trim.load_rules()["bytecode"]["startup_imports"]["modules"]
     assert trace.env["PYTHONDONTWRITEBYTECODE"] == "1" and "PYTHONPATH" not in trace.env
     assert Path(trace.env["ROW_BOT_DATA_DIR"]).name == "data"
     for call in (app_compile, libraries):
@@ -194,8 +196,12 @@ def test_shipped_bytecode_is_hash_based_path_independent_and_only_for_imported_m
     _write(site / "used" / "__init__.py", "from . import core\n")
     _write(site / "used" / "core.py", "X = 1\n")
     _write(site / "unused" / "__init__.py", "Y = 1\n")
+    _write(site / "started" / "__init__.py", "Z = 1\n")
+    rules = payload_trim.load_rules()
+    # A start-up import is traced too; one that does not import here is skipped.
+    rules["bytecode"]["startup_imports"]["modules"] = ["started", "not_installed_anywhere"]
 
-    payload_trim.compile_payload(python, app, root, python=Path(sys.executable))
+    payload_trim.compile_payload(python, app, root, rules=rules, python=Path(sys.executable))
 
     tag = sys.implementation.cache_tag
     compiled = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.pyc"))
@@ -204,6 +210,7 @@ def test_shipped_bytecode_is_hash_based_path_independent_and_only_for_imported_m
         f"app/src/row_bot/__pycache__/thing.{tag}.pyc",
         f"python/lib/python3.12/site-packages/used/__pycache__/__init__.{tag}.pyc",
         f"python/lib/python3.12/site-packages/used/__pycache__/core.{tag}.pyc",
+        f"python/lib/python3.12/site-packages/started/__pycache__/__init__.{tag}.pyc",
     ])
     for path in root.rglob("*.pyc"):
         data = path.read_bytes()

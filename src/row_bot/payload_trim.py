@@ -11,8 +11,9 @@ staged version:
   never touched.
 - ``bytecode``: removes any ``__pycache__`` and compiles deterministic,
   path-independent bytecode (``unchecked-hash``) for the app and for the
-  runtime's modules that the runtime check imports. Version folders are never
-  written after install, so nothing else ever gets bytecode.
+  runtime's modules that the runtime check and the server's start-up import.
+  Version folders are never written after install, so nothing else ever gets
+  bytecode.
 
 The module uses the standard library only, so it runs as a script
 (``python -I -S payload_trim.py ...``) with the bundled interpreter.
@@ -37,22 +38,33 @@ logger = logging.getLogger(__name__)
 RULES_FILE = Path(__file__).with_name("payload_trim.json")
 BYTECODE_FLAGS = ("--invalidation-mode", "unchecked-hash")
 
-# Run by the bundled interpreter: the runtime check, then the source files of
-# every module it imported, one per line.
+# Run by the bundled interpreter: the runtime check, then the start-up imports
+# (each one skipped if it does not import here), then the source files of every
+# module imported, one per line. Exits with the runtime check's code.
 _TRACE = """\
-import atexit, os, runpy, sys
-out, script = sys.argv[1], sys.argv[2]
-def _dump():
-    files = set()
-    for module in list(sys.modules.values()):
-        path = getattr(module, "__file__", None)
-        if isinstance(path, str) and path.endswith(".py"):
-            files.add(os.path.realpath(path))
-    with open(out, "w", encoding="utf-8") as stream:
-        stream.write("\\n".join(sorted(files)) + "\\n")
-atexit.register(_dump)
-sys.argv = [script, *sys.argv[3:]]
-runpy.run_path(script, run_name="__main__")
+import importlib, os, runpy, sys
+out, extras, script = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.argv = [script, *sys.argv[4:]]
+try:
+    runpy.run_path(script, run_name="__main__")
+    code = 0
+except SystemExit as exc:
+    code = exc.code
+with open(extras, encoding="utf-8") as stream:
+    names = [line.strip() for line in stream if line.strip()]
+for name in names:
+    try:
+        importlib.import_module(name)
+    except Exception:
+        pass
+files = set()
+for module in list(sys.modules.values()):
+    path = getattr(module, "__file__", None)
+    if isinstance(path, str) and path.endswith(".py"):
+        files.add(os.path.realpath(path))
+with open(out, "w", encoding="utf-8") as stream:
+    stream.write("\\n".join(sorted(files)) + "\\n")
+sys.exit(code)
 """
 
 
@@ -313,9 +325,10 @@ def compile_payload(
     """Ship the bytecode the rules ask for, and nothing else.
 
     Removes every ``__pycache__`` under *python_root* and *app_root*, runs the
-    runtime check with the bundled Python to see which runtime modules it
-    imports, then compiles the app and those modules. The app must compile;
-    runtime modules compile leniently, as they always have.
+    runtime check with the bundled Python and imports the start-up modules the
+    rules list, records which runtime modules were imported, then compiles the
+    app and those modules. The app must compile; runtime modules compile
+    leniently, as they always have.
     """
     rules = rules or load_rules()
     # Real paths throughout: compileall strips --version-root from the paths it
@@ -331,8 +344,11 @@ def compile_payload(
         (work_dir / "data").mkdir()
         script = work_dir / "trace.py"
         script.write_text(_TRACE, encoding="utf-8")
-        traced = runner([str(interpreter), str(script), str(listing), *trace], env=env, cwd=str(app_root),
-                        check=False)
+        extras = work_dir / "startup-imports.txt"
+        extras.write_text("".join(f"{name}\n" for name in rules["bytecode"]["startup_imports"]["modules"]),
+                          encoding="utf-8")
+        traced = runner([str(interpreter), str(script), str(listing), str(extras), *trace], env=env,
+                        cwd=str(app_root), check=False)
         if traced.returncode != 0 or not listing.is_file():
             raise RuntimeError(f"the runtime check failed while tracing imports (exit {traced.returncode})")
         sources = traced_sources(listing.read_text(encoding="utf-8"), python_root)
