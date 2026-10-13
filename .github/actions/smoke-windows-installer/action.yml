@@ -15,6 +15,10 @@ inputs:
     description: Also rehearse a real background update to a next version served from a loopback feed (installer-verify)
     required: false
     default: "false"
+  update-parts:
+    description: With background-update, serve this folder's release parts (build_update_parts.py parts) instead of parts made from the install (release.yml)
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -23,6 +27,7 @@ runs:
       env:
         SMOKE_PORT: ${{ inputs.port }}
         BACKGROUND_UPDATE: ${{ inputs.background-update }}
+        UPDATE_PARTS: ${{ inputs.update-parts }}
       run: |
         $ErrorActionPreference = "Stop"
         $installer = Get-ChildItem -Path dist -Filter "Row-Bot-*-Windows-*.exe" | Select-Object -First 1
@@ -129,8 +134,10 @@ runs:
         if ($env:BACKGROUND_UPDATE -eq "true") {
           # A real background update to the next version, then Restart now.
           $updatePort = [int]$env:SMOKE_PORT + 2
+          $partsArgs = @()
+          if ($env:UPDATE_PARTS) { $partsArgs = @("--parts", $env:UPDATE_PARTS) }
           python scripts/smoke_background_update.py --root "$root" --kind windows --port $updatePort `
-            --version-root "$versionDir" `
+            --version-root "$versionDir" @partsArgs `
             -- "$launcher" --no-tray --no-open --no-splash --no-ollama --port $updatePort
           if ($LASTEXITCODE -ne 0) { throw "Background update rehearsal failed." }
         }

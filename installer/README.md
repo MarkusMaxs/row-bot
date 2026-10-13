@@ -15,16 +15,20 @@ uv run python scripts/run_test_matrix.py installer-contracts
 uv run python scripts/run_test_matrix.py platform
 ```
 
-Actual package builds and installed-app smoke checks are manual release work.
-Use the GitHub `Release - Build & Sign Installers` workflow for release
-candidates and `Installer Verify` when you want to smoke platform packages
-without publishing. Those workflows build the Windows, Linux, and macOS
-artifacts, launch the installed app with isolated data dirs, and upload
-checksums/manifests for review.
+Actual package builds and installed-app smoke checks run in GitHub Actions.
+Use the `Release - Build & Sign Installers` workflow for releases (from the
+tag, or `dry_run: true` on any branch) and `Installer Verify` when you want to
+smoke platform packages without publishing. Both build the Windows, Linux, and
+macOS packages, launch the installed app with isolated data dirs, and rehearse
+a background update; Installer Verify also installs each package over the real
+5.1.0 release the way 5.1's updater does (the 5.1 bridge). The release also
+builds the update parts (`scripts/build_update_parts.py`) and notarizes and
+staples macOS automatically.
 
-Windows code signing remains local-only unless the project signing policy
-changes. macOS notarization remains an explicit manual workflow after the
-signed artifact has been reviewed.
+Windows code signing stays local-only: CI uploads the installer stage, and
+`scripts/release_windows.ps1` signs `Row-Bot.exe`, packs and signs the
+installer with Certum on the maintainer's machine, and publishes (see
+[RELEASING.md](../docs/RELEASING.md)).
 
 ## Linux Tarball
 
@@ -153,13 +157,13 @@ report unavailable until the platform libraries are installed.
 
 ### Architecture
 
-The installer bundles the embedded Python runtime, pre-installed Python packages, and app source code. Python packages are installed from `requirements.txt`, which is a generated locked export from `pyproject.toml` and `uv.lock`. Repair and upgrade installs replace the embedded Python directory before copying the new payload so manually installed or corrupted packages cannot linger inside Row-Bot's bundled runtime. Kokoro TTS model files are auto-downloaded on first use. Ollama and Playwright Chromium are handled by the build/runtime flow, and Ollama is optional because Row-Bot can run entirely with provider models. The optional Cua Driver used by Computer Use is not bundled: Row-Bot downloads the pinned platform asset only after the user reads its telemetry disclosure and explicitly chooses Install or Repair, verifies SHA-256, and keeps it in the private Row-Bot data directory.
+The installer bundles the embedded Python runtime, pre-installed Python packages, and app source code. Python packages are installed from `requirements.txt`, which is a generated locked export from `pyproject.toml` and `uv.lock`. Repair and upgrade installs replace the embedded Python directory before copying the new payload so manually installed or corrupted packages cannot linger inside Row-Bot's bundled runtime. Kokoro TTS model files are auto-downloaded on first use. Ollama is optional because Row-Bot can run entirely with provider models. Playwright Chromium is not bundled, as on macOS and Linux: Browser Automation uses an installed Chrome or Edge, and Row-Bot's matching Chromium (which PDF, PNG and PowerPoint exports need) is downloaded into the data folder only when the user chooses **Install browser runtime**. The optional Cua Driver used by Computer Use is not bundled: Row-Bot downloads the pinned platform asset only after the user reads its telemetry disclosure and explicitly chooses Install or Repair, verifies SHA-256, and keeps it in the private Row-Bot data directory.
 
 | Bundled in .exe | Downloaded or created outside install |
 |----------------|--------------------------------------|
 | Python 3.13 embeddable runtime | Ollama installer is optional for local models |
 | App source code, authenticated access/server package, Remote Access UI, automatic Agent orchestration, Agent Profiles, Goal Mode, checkpointed Agent budgets and settings, child-agent runner, generation cancellation, provider-aware reasoning controls, exact context/compaction policy, native OpenCode routing, local Whisper and SenseVoice runtimes, durable document ingestion and sharded retrieval, Computer Use integration and pinned manifest, cache-only embedding fallback, responsive desktop/mobile owner UI, channel streaming, tools, providers, plugins, MCP client, Apps & Skills catalogs (curated apps, featured skills, and the compressed MCP Registry snapshot), migration wizard, the React client (built from `frontend/` at package time), Design and Developer panels, bundled skills/tool guides, static assets, and sounds | Kokoro TTS model + voices auto-download on first TTS use; SenseVoice Small is an explicit approximately 940 MB ModelScope download |
-| Python packages from locked `requirements.txt` export and its matching Playwright Chromium when the platform build supports bundling | A missing source-install Browser runtime is installed only after the user's explicit Browser Automation install/repair action; Browser startup never downloads it |
+| Python packages from locked `requirements.txt` export (no Playwright Chromium; a local build can add it with `-BundlePlaywright`) | Row-Bot's Playwright-matched Chromium is downloaded into `~/.row-bot/runtimes/playwright-chrome/` only by the user's explicit Browser Automation Install or Repair action, and survives updates; Browser startup never downloads it |
 | Computer Use policy, private client, installer metadata, and platform checks | Pinned Cua Driver 0.20.0 is downloaded only after the version-2 disclosure and explicit user consent |
 
 ### Prerequisites
@@ -196,10 +200,19 @@ This will:
 4. Install the locked packages from `requirements.txt` and verify the runtime dependencies
 5. Stage the app payload (`scripts/app_payload_manifest.py --stage`) and the React client from
    `frontend/dist` into `installer\build\app` and verify the client strictly
-6. Install Playwright Chromium when it can (otherwise Browser Automation waits for the user's Install or Repair)
-7. Compile deterministic bytecode for the app and the packages (`compileall -s installer\build
-   --invalidation-mode unchecked-hash`) and write `version.json`
+6. Leave Playwright Chromium out (`-BundlePlaywright` or `BUNDLE_PLAYWRIGHT=1` bundles it for a local build); Browser Automation's Install action downloads it into the data folder
+7. Trim the runtime with the rules all three builds share (`src/row_bot/payload_trim.json`:
+   libraries' test suites, C++ headers, link libraries and debug symbols, unused Google API
+   discovery documents, pip's console-script launchers), then compile deterministic bytecode
+   (`unchecked-hash`, recorded relative to `installer\build`) for the app and for the runtime
+   modules `verify_runtime_dependencies.py all` imports, and write `version.json`
 8. Compile everything into `dist\Row-Bot-X.Y.Z-Windows-x64.exe`
+
+For a release, `Row-Bot.exe` has to be signed before Inno Setup packs it. CI
+therefore keeps the stage (`installer\build\{python,app,Row-Bot.exe,version.json}`
+and `row_bot_setup.iss`) as the `Row-Bot-Windows-stage` artifact, and
+`scripts/release_windows.ps1` signs `Row-Bot.exe`, runs ISCC on that stage
+and signs the installer locally.
 
 #### Options
 
@@ -225,9 +238,9 @@ contract is `src/row_bot/install_layout.py`):
         ├── version.json                # Version, Python version and uv.lock hash
         ├── python\                     # Embedded Python 3.13 runtime
         │   ├── python.exe
-        │   ├── Lib\site-packages\      # Locked packages from requirements.txt, with .pyc
+        │   ├── Lib\site-packages\      # Locked packages from requirements.txt, trimmed (payload_trim.json)
         │   ├── tcl\                    # Tcl/Tk for the splash screen and first-run chooser
-        │   └── playwright-browsers\    # Bundled Chromium, when the build could install it
+        │   └── playwright-browsers\    # Only in a local -BundlePlaywright build (or a version that bundled it)
         └── app\
             ├── app.py, launcher.py     # Thin root wrappers
             ├── pyproject.toml, uv.lock, requirements.txt, row-bot.ico
@@ -285,8 +298,10 @@ Ollama is installed system-wide via its official installer.
 > **Note:** User data is stored in `~/.row-bot/`, never under the install root. Override the location by setting the `ROW_BOT_DATA_DIR` environment variable.
 
 `Row-Bot.exe` sets the environment Python needs (`PYTHONNOUSERSITE`,
-`PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, Tcl/Tk, Playwright, `PATH`,
-`ROW_BOT_INSTALL_ROOT`) and starts `versions\<active>\python\python.exe
+`PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, Tcl/Tk, `PATH`,
+`ROW_BOT_INSTALL_ROOT`, and `PLAYWRIGHT_BROWSERS_PATH`: the version's
+`python\playwright-browsers` if it bundles Chromium, otherwise
+`<data dir>\playwright-browsers`, as the macOS host and the Linux wrapper do) and starts `versions\<active>\python\python.exe
 versions\<active>\app\launcher.py` with its own arguments in a hidden console.
 It starts it again when it exits with code 75. A version that has not become
 ready since it was switched to and fails to start twice in a row is replaced by

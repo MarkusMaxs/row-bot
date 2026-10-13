@@ -79,17 +79,25 @@ static void log_line(const char *format, ...)
     CloseHandle(file);
 }
 
+/* The user's data folder: ROW_BOT_DATA_DIR, or %USERPROFILE%\.row-bot. Created if missing. */
+static int data_dir(wchar_t *dir, size_t size)
+{
+    DWORD n = GetEnvironmentVariableW(L"ROW_BOT_DATA_DIR", dir, (DWORD)size);
+    if (n == 0 || n >= size) {
+        n = GetEnvironmentVariableW(L"USERPROFILE", dir, (DWORD)size);
+        if (n == 0 || n >= size - 10)
+            return 0;
+        wcscat_s(dir, size, L"\\.row-bot");
+    }
+    CreateDirectoryW(dir, NULL);
+    return 1;
+}
+
 static void open_log(void)
 {
     wchar_t dir[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(L"ROW_BOT_DATA_DIR", dir, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) {
-        n = GetEnvironmentVariableW(L"USERPROFILE", dir, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH - 10)
-            return;
-        wcscat_s(dir, MAX_PATH, L"\\.row-bot");
-    }
-    CreateDirectoryW(dir, NULL);
+    if (!data_dir(dir, MAX_PATH))
+        return;
     if (swprintf(g_log, MAX_PATH, L"%ls\\launcher-host.log", dir) < 0)
         g_log[0] = 0;
 }
@@ -562,7 +570,8 @@ static const wchar_t *forwarded_arguments(void)
 
 static void set_version_environment(const wchar_t *root)
 {
-    wchar_t value[MAX_PATH * 2];
+    wchar_t value[MAX_PATH * 2], browsers[MAX_PATH * 2];
+    DWORD attributes;
     size_t path_length = g_original_path ? wcslen(g_original_path) : 0;
     wchar_t *path = (wchar_t *)malloc((path_length + MAX_PATH * 2 + 4) * sizeof(wchar_t));
 
@@ -574,7 +583,18 @@ static void set_version_environment(const wchar_t *root)
     SetEnvironmentVariableW(L"TCL_LIBRARY", value);
     swprintf(value, MAX_PATH * 2, L"%ls\\python\\tcl\\tk8.6", root);
     SetEnvironmentVariableW(L"TK_LIBRARY", value);
+    /* A version that bundles Chromium uses its own copy. Otherwise Playwright's
+     * browsers live in the data folder, outside every version folder (they are
+     * never written after install), as the macOS host and the Linux wrapper do.
+     * Browser Automation's Install action is what downloads one. */
     swprintf(value, MAX_PATH * 2, L"%ls\\python\\playwright-browsers", root);
+    attributes = GetFileAttributesW(value);
+    if ((attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+            && data_dir(browsers, MAX_PATH)) {
+        wcscat_s(browsers, MAX_PATH * 2, L"\\playwright-browsers");
+        CreateDirectoryW(browsers, NULL);
+        wcscpy_s(value, MAX_PATH * 2, browsers);
+    }
     SetEnvironmentVariableW(L"PLAYWRIGHT_BROWSERS_PATH", value);
     if (path) {
         swprintf(path, path_length + MAX_PATH * 2 + 4, L"%ls\\python\\Scripts;%ls\\python;%ls", root, root,

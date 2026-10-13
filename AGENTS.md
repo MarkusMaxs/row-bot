@@ -230,7 +230,8 @@ Useful focused tiers: `quality`, `client-foundation`, `python`, `deterministic`,
   deterministic export/snapshot checks; run `npm --prefix frontend run check`
   for client changes; report manual visual checks when needed.
 - Installers/release: never add signing secrets to CI. Windows signing is
-  local-only; macOS notarization is manual.
+  local-only (Certum SimplySign, `scripts/release_windows.ps1`); macOS
+  notarization is automated in `release.yml` with the existing Apple secrets.
 
 ## Release Flow
 
@@ -238,20 +239,27 @@ Useful focused tiers: `quality`, `client-foundation`, `python`, `deterministic`,
 2. For an actual versioned release, run `python scripts/cut_release.py X.Y.Z`.
 3. Run `uv run python scripts/run_test_matrix.py pr`, open the release-prep PR,
    merge it after `CI / ci-ok` passes, and wait for CI on the merge commit.
-4. Trigger `.github/workflows/release.yml` with the version and platform
-   builds. Its `release-gate` checks the version and lock files and refuses a
-   commit without a green `CI / ci-ok`; it runs the nightly suite once only if
-   that commit has no green nightly run. Nothing else is re-tested.
-5. Each build install-smokes its own package (`.github/actions/smoke-*`);
-   review the artifacts and the checksum manifest.
+4. Tag the merge commit and run `.github/workflows/release.yml` from the tag.
+   Its `release-gate` checks the version and lock files and refuses a run that
+   is not from the tag or a commit without a green `CI / ci-ok`; it runs the
+   nightly suite once only if that commit has no green nightly run. Nothing
+   else is re-tested. `dry_run: true` builds any branch and publishes nothing.
+5. Each build install-smokes its own package (`.github/actions/smoke-*`) and
+   rehearses a background update from the release's own update parts
+   (`scripts/build_update_parts.py`). macOS is notarized and stapled in the run
+   (`scripts/macos_notarize.py`; `notarize-finish.yml` finishes a slow one).
+   The run leaves a draft release with every file but the Windows installer.
 6. `.github/workflows/installer-verify.yml` is the unsigned dry run for
-   branches (nightly runs its Linux job daily and Windows and macOS weekly).
-7. Sign Windows locally, run the macOS notarization workflows, and perform
-   clean machine/VM manual smoke checks before publishing final assets.
+   branches, with the 5.1 bridge (nightly runs its Linux job daily and Windows
+   and macOS weekly).
+7. Perform clean machine/VM manual smoke checks, then run
+   `scripts/release_windows.ps1` on the Windows signing machine: it signs and
+   packs Windows locally, writes the SHA-256 block and publishes after a typed
+   confirmation, refusing while macOS is not stapled or a file is missing.
 
 Manual checks outside default PR CI: real provider accounts, real MCP servers,
 real channels, clean-machine installer UX, repair/upgrade/uninstall, Windows
-signing, macOS notarization, and release notes review.
+signing, Gatekeeper first launch of the notarized DMG, and release notes review.
 
 ## Coding And Handoff
 

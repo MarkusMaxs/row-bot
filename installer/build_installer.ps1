@@ -9,9 +9,11 @@
 # src/row_bot/install_layout.py).
 #
 # The resulting .exe contains everything needed â€” no internet downloads at
-# install time. Ollama remains optional; the matching Playwright Chromium is
-# bundled when its build-time install succeeds and otherwise requires the
-# user's explicit Browser Automation Install or Repair action.
+# install time. Ollama remains optional. Playwright Chromium is not bundled,
+# as on macOS and Linux: Browser Automation uses installed Chrome or Edge, and
+# the user's explicit Install or Repair action downloads the matching Chromium
+# into the data folder. -BundlePlaywright (or BUNDLE_PLAYWRIGHT=1) bundles it
+# for a local build.
 #
 # TTS: Kokoro TTS is a pip package â€” no binary to bundle.  The model
 #      downloads automatically on first use (~170 MB).
@@ -21,7 +23,8 @@
 
 param(
     [string]$PythonVersion = "3.13.2",
-    [switch]$SkipDownloads
+    [switch]$SkipDownloads,
+    [switch]$BundlePlaywright
 )
 
 $ErrorActionPreference = "Stop"
@@ -366,34 +369,46 @@ if ($LASTEXITCODE -ne 0) { throw "Client asset staging failed." }
 & $PythonExe $ClientVerifier --root $ClientAssetStage --compare $ClientBuild --strict
 if ($LASTEXITCODE -ne 0) { throw "Staged client asset validation failed." }
 
-# Install Playwright Chromium into the embedded Python's cache
-Write-Host "      Installing Playwright Chromium browser..." -ForegroundColor Yellow
-$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $PythonDir "playwright-browsers"
-& $PythonExe -m playwright install chromium 2>&1 | ForEach-Object {
-    if ($_ -match 'downloading|Chromium') {
-        Write-Host "      $_" -ForegroundColor Green
+# Playwright Chromium is not bundled (about 735 MB installed), as on macOS and
+# Linux: Row-Bot.exe points Playwright at <data dir>\playwright-browsers and the
+# user's Browser Automation Install action downloads the matching Chromium into
+# the data folder. A local build can still bundle it.
+$BundledBrowsers = Join-Path $PythonDir "playwright-browsers"
+if ($BundlePlaywright -or $env:BUNDLE_PLAYWRIGHT -eq "1") {
+    Write-Host "      Bundling Playwright Chromium (local build)..." -ForegroundColor Yellow
+    $env:PLAYWRIGHT_BROWSERS_PATH = $BundledBrowsers
+    & $PythonExe -m playwright install chromium 2>&1 | ForEach-Object {
+        if ($_ -match 'downloading|Chromium') {
+            Write-Host "      $_" -ForegroundColor Green
+        }
     }
-}
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARNING: Playwright Chromium install failed. Browser Automation will remain unavailable until the user runs Install or Repair." -ForegroundColor DarkYellow
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARNING: Playwright Chromium install failed. Browser Automation needs the user's Install or Repair." -ForegroundColor DarkYellow
+    }
+    Remove-Item Env:PLAYWRIGHT_BROWSERS_PATH
 } else {
-    Write-Host "      Playwright Chromium installed" -ForegroundColor Green
+    # A folder left by an earlier local build (-SkipDownloads keeps python\) must not ship.
+    if (Test-Path -LiteralPath $BundledBrowsers) { Remove-Item -LiteralPath $BundledBrowsers -Recurse -Force }
+    Write-Host "      Playwright Chromium is not bundled; Browser Automation's Install action downloads it" -ForegroundColor DarkGray
 }
 
-# ── Deterministic bytecode ──
+# -- Trim the runtime and compile its bytecode --
+# The rules are shared with the macOS and Linux builds: src\row_bot\payload_trim.json.
+$PayloadTrim = Join-Path $ProjectRoot "src\row_bot\payload_trim.py"
+Write-Host ""
+Write-Host "Trimming the runtime (test suites, headers, unused Google API documents, launchers)..." -ForegroundColor Yellow
+& $PythonExe -I -S $PayloadTrim trim --python-root $PythonDir
+if ($LASTEXITCODE -ne 0) { throw "Trimming the runtime failed." }
+
 # Version folders are shared through hard links by later updates, so they
 # never change after install: ship .pyc that need no rewrite (unchecked-hash)
 # and that do not depend on the build folder (-s), and run with
-# PYTHONDONTWRITEBYTECODE=1 (Row-Bot.exe sets it).
-Write-Host ""
+# PYTHONDONTWRITEBYTECODE=1 (Row-Bot.exe sets it). The app gets bytecode, and so
+# does every runtime module the runtime check imports (it runs again here, on
+# the trimmed runtime).
 Write-Host "Compiling deterministic bytecode..." -ForegroundColor Yellow
-& $PythonExe -m compileall -q -f -j 0 -s $BuildDir --invalidation-mode unchecked-hash $AppStage
-if ($LASTEXITCODE -ne 0) { throw "Compiling the app's bytecode failed." }
-# Some packages ship sources pip never compiles either (templates, old test data).
-& $PythonExe -m compileall -q -f -j 0 -s $BuildDir --invalidation-mode unchecked-hash (Join-Path $PythonDir "Lib")
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "      Some library files did not compile; they run from source as before." -ForegroundColor DarkYellow
-}
+& $PythonExe -I -S $PayloadTrim bytecode --python-root $PythonDir --app-root $AppStage --version-root $BuildDir
+if ($LASTEXITCODE -ne 0) { throw "Compiling bytecode failed." }
 Write-Host "      Bytecode compiled" -ForegroundColor Green
 
 # version.json describes this version folder (src/row_bot/install_layout.py).

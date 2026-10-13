@@ -71,9 +71,9 @@ def test_update_status_tool_self_knowledge_and_manifest_helpers(tmp_path, monkey
     assert isinstance(summary["update_available"], bool)
     assert isinstance(summary["skipped_versions"], list)
 
-    block = build_manifest_block({"a.exe": "x" * 64, "b.dmg": "y" * 64})
+    block = build_manifest_block({"a.exe": "a" * 64, "b.dmg": "b" * 64})
     merged = merge_into_body("# Notes", block)
-    updated = merge_into_body(merged, build_manifest_block({"new.exe": "z" * 64}))
+    updated = merge_into_body(merged, build_manifest_block({"new.exe": "c" * 64}))
     assert updated.count("<!-- row-bot-update-manifest -->") == 1
     assert "new.exe" in updated
     assert "a.exe" not in updated
