@@ -1,22 +1,22 @@
-"""Row-Bot in-app auto-update — polls GitHub Releases, downloads installers,
-verifies SHA256 + OS code signatures, and hands off to the OS installer.
+"""Row-Bot's release check, update preferences and background update schedule.
 
 Design principles
 -----------------
 - **Silent-on-failure**: any network/parse/IO error during a background check
   is logged at DEBUG and swallowed. Never blocks startup, never surfaces a
   modal error for a routine poll.
-- **No opt-in**: checking is on by default. Users can still pick channel
-  (stable/beta), skip specific versions, or ignore the prompt — they're
-  never auto-installed-into.
-- **Stdlib-only networking** via ``urllib.request`` so the updater has no
-  new external dependencies and can run before heavier modules are imported.
+- **Preferences are honoured**: ``auto_check`` turns the background check off;
+  ``auto_download`` (D2, on by default) lets a found release be downloaded and
+  prepared in the background. Users pick a channel (stable/beta) and can skip
+  the release on offer. Installing always needs a restart the person chooses,
+  or happens when they next quit.
+- **Stdlib-only networking** for the check via ``urllib.request``.
 - **Thread-based scheduler** — avoids touching the server's event loop.
 
-Data model
-~~~~~~~~~~
-- ``UpdateInfo``  — a parsed release (version, asset, sha256, notes).
-- ``UpdateState`` — persisted preferences + last-check / skipped-versions.
+Preparing and applying an update is the engine's job (:mod:`row_bot.updates`):
+it only runs for installs that update themselves (``install_layout``).
+Installs whose host applies updates (``ROW_BOT_UPDATES=external``) run no
+checks at all.
 
 Release body manifest
 ~~~~~~~~~~~~~~~~~~~~~
@@ -27,30 +27,24 @@ We look for a fenced block of the form::
     schema: 1
     files:
       Row-Bot-4.0.0-Windows-x64.exe: sha256=<hex>
-      Row-Bot-4.0.0-macOS-arm64.dmg: sha256=<hex>
+      row-bot-update-4.0.0.json: sha256=<hex>
     ```
 
-If the manifest is missing we still surface the release, but refuse to
-install (SHA256 is a hard requirement).
+It names the SHA-256 of every release file, among them the update
+description ``row-bot-update-<version>.json`` that the engine starts from.
+Without it a release is still shown, but never prepared.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import logging
 import os
 import pathlib
 import platform
 import re
-import shutil
-import subprocess
-import sys
-import tarfile
-import tempfile
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -64,16 +58,14 @@ from row_bot.brand import (
     APP_DISPLAY_NAME,
     APP_RELEASES_LATEST_URL,
     APP_RELEASES_URL,
-    APP_SLUG,
     LEGACY_WINDOWS_INSTALLER_BASENAME,
-    LINUX_COMMAND_NAME,
-    LINUX_DESKTOP_ID,
     UPDATE_MANIFEST_MARKER,
     UPDATER_USER_AGENT,
     WINDOWS_INSTALLER_BASENAME,
 )
 from row_bot import install_layout
 from row_bot.data_paths import get_row_bot_data_dir
+from row_bot.updates.external import external_mode
 from row_bot.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -84,16 +76,20 @@ logger = logging.getLogger(__name__)
 
 _DATA_DIR = get_row_bot_data_dir(create=False)
 _CONFIG_PATH = _DATA_DIR / "update_config.json"
-_DOWNLOAD_DIR = _DATA_DIR / "updates"
 
 _GITHUB_API_HOST = "api.github.com"
 _GITHUB_DOWNLOAD_HOST = "github.com"
 _RELEASES_LATEST_URL = APP_RELEASES_LATEST_URL
 _RELEASES_URL = APP_RELEASES_URL
+#: A loopback release feed for rehearsing an update before it is published
+#: (``http://127.0.0.1:<port>/`` serving ``releases.json`` and the files).
+#: It replaces GitHub as the trust root, so it also needs the test-only
+#: opt-in below; Settings and the log say when it is in use.
+UPDATE_FEED_ENV = "ROW_BOT_UPDATE_FEED"
+UPDATE_FEED_TESTING_ENV = "ROW_BOT_UPDATE_FEED_TESTING"
 
 _USER_AGENT = UPDATER_USER_AGENT
 _HTTP_TIMEOUT = 15
-_DOWNLOAD_TIMEOUT = 600  # 10 min for a ~300 MB installer
 
 _CHECK_STARTUP_DELAY_SEC = 30
 _CHECK_INTERVAL_SEC = 6 * 60 * 60      # 6 hours between scheduler ticks
@@ -112,6 +108,7 @@ _MAC_ARM_ASSET_RE = re.compile(rf"^{_DISPLAY_ASSET_NAME}-{_VERSION_ASSET_PART}-m
 _MAC_X86_ASSET_RE = re.compile(rf"^{_DISPLAY_ASSET_NAME}-{_VERSION_ASSET_PART}-macOS-x86_64\.dmg$")
 _LINUX_X64_ASSET_RE = re.compile(rf"^{_DISPLAY_ASSET_NAME}-{_VERSION_ASSET_PART}-Linux-x86_64\.tar\.gz$")
 _LINUX_ARM64_ASSET_RE = re.compile(rf"^{_DISPLAY_ASSET_NAME}-{_VERSION_ASSET_PART}-Linux-aarch64\.tar\.gz$")
+_RELEASE_FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,159}$")
 
 # Manifest fenced-block parser
 _MANIFEST_BLOCK_RE = re.compile(
@@ -129,19 +126,25 @@ _MANIFEST_FILE_LINE_RE = re.compile(
 
 @dataclass
 class UpdateInfo:
-    """A parsed GitHub release that could be installed."""
+    """A parsed release that is newer than this version."""
 
     version: str
     channel: str  # 'stable' or 'beta'
     published_at: str  # ISO-8601
     notes_md: str
     notes_summary: str
-    asset_name: str
+    asset_name: str  # this platform's full installer
     asset_url: str
     asset_size: int
-    sha256: str  # may be "" if manifest missing
+    sha256: str  # the installer's, may be "" if the manifest is missing
     html_url: str
     is_prerelease: bool
+    # The background update description, row-bot-update-<version>.json.
+    update_manifest_url: str = ""
+    update_manifest_sha256: str = ""
+    update_manifest_size: int = 0
+    # Every release file: name -> [download URL, size].
+    files: dict[str, list[Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -152,7 +155,8 @@ class UpdateState:
     """Persisted updater preferences + runtime state."""
 
     channel: str = "stable"
-    auto_check: bool = True                      # kept for completeness, defaults on
+    auto_check: bool = True                      # the background check (honoured)
+    auto_download: bool = True                   # prepare found releases in the background (D2)
     check_interval_hours: int = 24
     last_check: Optional[str] = None             # ISO-8601
     last_success: Optional[str] = None
@@ -178,6 +182,7 @@ class UpdateState:
 _state_lock = threading.RLock()
 _state: Optional[UpdateState] = None
 _listeners: list[Callable[[UpdateState], None]] = []
+_checking = threading.Event()
 
 
 def _load_state() -> UpdateState:
@@ -191,8 +196,9 @@ def _load_state() -> UpdateState:
             for key in ("channel", "last_check", "last_success"):
                 if isinstance(data.get(key), str):
                     setattr(state, key, data[key])
-            if isinstance(data.get("auto_check"), bool):
-                state.auto_check = data["auto_check"]
+            for key in ("auto_check", "auto_download"):
+                if isinstance(data.get(key), bool):
+                    setattr(state, key, data[key])
             if isinstance(data.get("check_interval_hours"), int):
                 state.check_interval_hours = max(1, data["check_interval_hours"])
             for key in ("skipped_versions", "dismissed_banner_versions"):
@@ -238,6 +244,17 @@ def reload_saved_update_state(config_path: pathlib.Path) -> None:
         if previous is not None and current.channel == previous.channel:
             current.available = previous.available
         _state = current
+    _notify()
+
+
+def set_preference(name: str, enabled: bool) -> None:
+    """Turn ``auto_check`` or ``auto_download`` on or off (saved at once)."""
+    if name not in {"auto_check", "auto_download"} or not isinstance(enabled, bool):
+        raise ValueError(f"unknown update preference {name!r}")
+    with _state_lock:
+        st = get_update_state()
+        setattr(st, name, enabled)
+        _save_state(st)
     _notify()
 
 
@@ -314,8 +331,12 @@ def _notify() -> None:
             logger.exception("Updater listener raised")
 
 
+def is_checking() -> bool:
+    return _checking.is_set()
+
+
 # ════════════════════════════════════════════════════════════════════════════
-# HELPERS — DEV INSTALL DETECTION
+# HELPERS — WHAT KIND OF INSTALL
 # ════════════════════════════════════════════════════════════════════════════
 
 def is_dev_install() -> bool:
@@ -329,6 +350,108 @@ def is_dev_install() -> bool:
     except Exception:
         logger.warning("Could not read the install layout; updates stay off", exc_info=True)
         return True
+
+
+def update_mode() -> str:
+    """``external`` (the host updates), ``self`` (the engine) or ``unavailable``."""
+    if external_mode():
+        return "external"
+    return "unavailable" if is_dev_install() else "self"
+
+
+_engine_lock = threading.Lock()
+_engine: Any = None
+
+
+def get_engine() -> Any:
+    """The background update engine for this install, or None if it has none."""
+    global _engine
+    if update_mode() != "self":
+        return None
+    with _engine_lock:
+        if _engine is None:
+            from row_bot.updates.downloader import HttpsTransport, loopback_feed_origin
+            from row_bot.updates.engine import UpdateEngine
+
+            feed = feed_url()
+            origin = loopback_feed_origin(feed) if feed else None
+            try:
+                _engine = UpdateEngine(
+                    install_layout.detect(),
+                    transport=HttpsTransport(
+                        extra_origins=[origin] if origin else [],
+                        # A rehearsal feed is loopback: never through a proxy.
+                        proxies=not origin,
+                    ),
+                    on_change=_notify,
+                )
+            except Exception:
+                logger.warning("The background updater is unavailable", exc_info=True)
+                return None
+        return _engine
+
+
+def release_files(info: UpdateInfo) -> Any:
+    """What the engine needs to fetch *info*'s parts."""
+    from row_bot.updates.engine import ReleaseFiles
+
+    files = {
+        name: (str(entry[0]), int(entry[1]) if len(entry) > 1 and isinstance(entry[1], int) and entry[1] > 0 else None)
+        for name, entry in info.files.items()
+        if isinstance(entry, (list, tuple)) and entry
+    }
+    return ReleaseFiles(
+        version=info.version,
+        manifest_url=info.update_manifest_url,
+        manifest_sha256=info.update_manifest_sha256,
+        manifest_size=info.update_manifest_size or None,
+        files=files,
+        page_url=info.html_url,
+        installer_url=info.asset_url,
+    )
+
+
+def held_back_update() -> Optional[tuple[str, str]]:
+    """The version Row-Bot went back from (rolled back or Repair), and why."""
+    if update_mode() != "self":
+        return None
+    try:
+        from row_bot.updates.switcher import held_back
+
+        return held_back(install_layout.detect())
+    except Exception:
+        logger.debug("Could not read the install's rollback", exc_info=True)
+        return None
+
+
+def start_background_update(*, explicit: bool = False) -> bool:
+    """Prepare the release on offer, if the preferences and the engine allow it.
+
+    Never by itself for the version Row-Bot went back from: it did not start,
+    or the person chose to leave it. Only an explicit Download prepares it.
+    """
+    engine = get_engine()
+    st = get_update_state()
+    info = st.available
+    if engine is None or info is None:
+        return False
+    if not explicit and not st.auto_download:
+        return False
+    held = held_back_update()
+    if not explicit and held is not None and held[0] == info.version:
+        logger.info("Not preparing %s by itself: Row-Bot went back from it (%s)", info.version, held[1])
+        return False
+    status = engine.status()
+    if status.phase in {"downloading", "staging", "applying"}:
+        return False
+    if status.phase == "ready" and status.version == info.version:
+        return False
+    if status.phase == "failed" and status.version == info.version and not explicit and not status.retryable:
+        return False
+    if not info.update_manifest_url or not info.update_manifest_sha256:
+        engine.offer_full_installer(release_files(info), "the release has no background update")
+        return False
+    return bool(engine.start(release_files(info)))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -350,95 +473,6 @@ def _platform_asset_re() -> Optional[re.Pattern[str]]:
             return _LINUX_ARM64_ASSET_RE
         return _LINUX_X64_ASSET_RE
     return None
-
-
-def _safe_extract_tar(archive: pathlib.Path, destination: pathlib.Path) -> pathlib.Path:
-    destination.mkdir(parents=True, exist_ok=True)
-    destination_root = destination.resolve()
-    with tarfile.open(archive, "r:gz") as handle:
-        for member in handle.getmembers():
-            target = (destination / member.name).resolve()
-            if target != destination_root and destination_root not in target.parents:
-                raise UpdateError(f"Archive contains unsafe path: {member.name}")
-        handle.extractall(destination)
-    children = [child for child in destination.iterdir() if child.is_dir()]
-    if len(children) == 1:
-        return children[0]
-    return destination
-
-
-def _install_linux_tarball(installer_path: pathlib.Path) -> pathlib.Path:
-    """Install a verified Linux tarball into the user's XDG app directory."""
-    install_home = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local" / "share")) / APP_SLUG
-    releases_dir = install_home / "releases"
-    bin_dir = pathlib.Path.home() / ".local" / "bin"
-    desktop_dir = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local" / "share")) / "applications"
-    icon_dir = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local" / "share")) / "icons" / "hicolor" / "256x256" / "apps"
-
-    with tempfile.TemporaryDirectory(prefix="row_bot_linux_update_") as tmp:
-        extracted = _safe_extract_tar(installer_path, pathlib.Path(tmp))
-        marker = extracted / "install_info.json"
-        wrapper = extracted / "bin" / LINUX_COMMAND_NAME
-        app_dir = extracted / "app"
-        python_bin = extracted / "python" / "bin" / "python3"
-        if not marker.exists() or not wrapper.exists() or not app_dir.exists() or not python_bin.exists():
-            raise UpdateError("Linux update archive is missing required package files")
-        try:
-            metadata = json.loads(marker.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise UpdateError("Linux update archive has invalid install_info.json") from exc
-        if metadata.get("platform") != "linux" or metadata.get("install_kind") != "xdg-user-tarball":
-            raise UpdateError("Linux update archive is not a Row-Bot XDG tarball install")
-        version = str(metadata.get("version") or "").strip()
-        if not version:
-            raise UpdateError("Linux update archive is missing a version")
-        if not install_layout.is_valid_version_name(version):
-            raise UpdateError("Linux update archive has an invalid version")
-
-        releases_dir.mkdir(parents=True, exist_ok=True)
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        desktop_dir.mkdir(parents=True, exist_ok=True)
-        icon_dir.mkdir(parents=True, exist_ok=True)
-
-        target = releases_dir / version
-        staging = releases_dir / f".installing-{version}-{os.getpid()}"
-        if staging.exists():
-            shutil.rmtree(staging)
-        shutil.copytree(extracted, staging, symlinks=True)
-        if target.exists():
-            shutil.rmtree(target)
-        staging.replace(target)
-
-    # state.json keeps the version this replaces as `previous` (the rollback
-    # target) before `current` moves.
-    install_layout.record_install(install_home, version, kind=install_layout.InstallKind.LINUX)
-    current = install_home / "current"
-    install_layout.set_linux_current(install_home, version)
-
-    launcher = bin_dir / LINUX_COMMAND_NAME
-    if launcher.exists() or launcher.is_symlink():
-        launcher.unlink()
-    os.symlink(current / "bin" / LINUX_COMMAND_NAME, launcher)
-
-    desktop_src = current / "share" / "applications" / LINUX_DESKTOP_ID
-    if desktop_src.exists():
-        desktop_target = desktop_dir / LINUX_DESKTOP_ID
-        text = desktop_src.read_text(encoding="utf-8")
-        text = re.sub(r"^Exec=.*$", f"Exec={launcher}", text, flags=re.MULTILINE)
-        desktop_target.write_text(text, encoding="utf-8")
-    icon_src = current / "share" / "icons" / "hicolor" / "256x256" / "apps" / f"{APP_SLUG}.png"
-    if icon_src.exists():
-        shutil.copy2(icon_src, icon_dir / f"{APP_SLUG}.png")
-
-    for cmd, arg in (("update-desktop-database", desktop_dir), ("gtk-update-icon-cache", icon_dir.parents[1])):
-        tool = shutil.which(cmd)
-        if tool:
-            try:
-                subprocess.run([tool, str(arg)], capture_output=True, timeout=20)
-            except Exception:
-                logger.debug("Linux desktop cache refresh failed for %s", cmd, exc_info=True)
-
-    return launcher
 
 
 def parse_manifest(body: str) -> dict[str, str]:
@@ -478,13 +512,21 @@ def _summarize_notes(markdown: str, max_chars: int = 280) -> str:
     return cleaned[:max_chars].rstrip() + "…"
 
 
-def _parse_release(release: dict[str, Any], channel: str) -> Optional[UpdateInfo]:
+def _asset_url(asset: dict[str, Any], base: str | None) -> str:
+    url = str(asset.get("browser_download_url") or "")
+    if base and url and "://" not in url:
+        # A rehearsal feed lists its files relative to itself.
+        return urllib.parse.urljoin(base, url)
+    return url
+
+
+def _parse_release(release: dict[str, Any], channel: str, *, base: str | None = None) -> Optional[UpdateInfo]:
     """Turn a GitHub release JSON payload into an UpdateInfo for *this*
     platform, or return None if no suitable asset exists."""
     asset_re = _platform_asset_re()
     if asset_re is None:
         return None
-    assets = release.get("assets") or []
+    assets = [asset for asset in (release.get("assets") or []) if isinstance(asset, dict)]
     chosen = None
     for asset in assets:
         name = asset.get("name") or ""
@@ -500,6 +542,15 @@ def _parse_release(release: dict[str, Any], channel: str) -> Optional[UpdateInfo
 
     manifest = parse_manifest(release.get("body") or "")
     sha256 = manifest.get(chosen.get("name", ""), "")
+    files: dict[str, list[Any]] = {}
+    for asset in assets:
+        name = str(asset.get("name") or "")
+        url = _asset_url(asset, base)
+        if _RELEASE_FILE_NAME_RE.fullmatch(name) and url:
+            size = asset.get("size")
+            files[name] = [url, size if type(size) is int and size > 0 else 0]
+    update_name = f"row-bot-update-{tag}.json"
+    update_entry = files.get(update_name)
 
     notes_md = release.get("body") or ""
     return UpdateInfo(
@@ -509,11 +560,15 @@ def _parse_release(release: dict[str, Any], channel: str) -> Optional[UpdateInfo
         notes_md=notes_md,
         notes_summary=_summarize_notes(notes_md),
         asset_name=chosen.get("name") or "",
-        asset_url=chosen.get("browser_download_url") or "",
+        asset_url=_asset_url(chosen, base),
         asset_size=int(chosen.get("size") or 0),
         sha256=sha256,
         html_url=release.get("html_url") or "",
         is_prerelease=bool(release.get("prerelease")),
+        update_manifest_url=update_entry[0] if update_entry and manifest.get(update_name) else "",
+        update_manifest_sha256=manifest.get(update_name, "") if update_entry else "",
+        update_manifest_size=int(update_entry[1]) if update_entry else 0,
+        files=files,
     )
 
 
@@ -572,9 +627,58 @@ def _http_get(url: str, *, accept: str = "application/vnd.github+json") -> Optio
         return None
 
 
+_feed_warned: set[str] = set()
+
+
+def feed_url() -> Optional[str]:
+    """The loopback rehearsal feed in use instead of GitHub, if any (testing only)."""
+    from row_bot.updates.downloader import loopback_feed_origin
+
+    feed = os.environ.get(UPDATE_FEED_ENV, "").strip()
+    if not feed:
+        return None
+    if os.environ.get(UPDATE_FEED_TESTING_ENV, "").strip() != "1" or loopback_feed_origin(feed) is None:
+        if feed not in _feed_warned:
+            _feed_warned.add(feed)
+            logger.warning("Ignoring %s: it needs %s=1 and a loopback http address", UPDATE_FEED_ENV,
+                           UPDATE_FEED_TESTING_ENV)
+        return None
+    feed = feed if feed.endswith("/") else feed + "/"
+    if feed not in _feed_warned:
+        _feed_warned.add(feed)
+        logger.warning("Updates come from the test feed %s, not GitHub (%s)", feed, UPDATE_FEED_ENV)
+    return feed
+
+
+def _fetch_feed_releases(feed: str) -> Optional[list[dict[str, Any]]]:
+    """Releases from a loopback rehearsal feed (no token, no proxy, checked redirects)."""
+    from row_bot.updates.downloader import DownloadError, HttpsTransport, loopback_feed_origin
+
+    origin = loopback_feed_origin(feed)
+    if origin is None:
+        return None
+    try:
+        response = HttpsTransport(extra_origins=[origin], proxies=False).open(
+            feed + "releases.json", headers={"Accept": "application/json"}, timeout=_HTTP_TIMEOUT
+        )
+        try:
+            payload = json.loads(response.read(4 * 1024 * 1024).decode("utf-8"))
+        finally:
+            response.close()
+    except (DownloadError, OSError, ValueError) as exc:
+        logger.debug("Update feed unavailable: %s", exc)
+        return None
+    if not isinstance(payload, list):
+        return None
+    return [r for r in payload if isinstance(r, dict) and not r.get("draft")]
+
+
 def _fetch_releases_payload(channel: str) -> Optional[list[dict[str, Any]]]:
     """Fetch the relevant release(s) for *channel*. Returns a list so the
     caller can iterate (stable → length 1, beta → up to 10)."""
+    feed = feed_url()
+    if feed:
+        return _fetch_feed_releases(feed)
     if channel == "stable":
         data = _http_get(_RELEASES_LATEST_URL)
         if not data:
@@ -610,6 +714,8 @@ def check_for_updates(*, force: bool = False) -> Optional[UpdateInfo]:
     None. Never raises — all failures are swallowed and logged at DEBUG.
     Results are cached on ``UpdateState.available``.
     """
+    if external_mode():
+        return None
     st = get_update_state()
     now = datetime.now(timezone.utc)
     if not force and st.last_check:
@@ -625,15 +731,21 @@ def check_for_updates(*, force: bool = False) -> Optional[UpdateInfo]:
         st.last_check = now.isoformat()
         _save_state(st)
 
-    releases = _fetch_releases_payload(st.channel)
+    _checking.set()
+    _notify()
+    try:
+        releases = _fetch_releases_payload(st.channel)
+    finally:
+        _checking.clear()
     if releases is None:
         logger.debug("Update check: no network / rate-limited / parse failure")
         _notify()
         return st.available
 
+    base = feed_url()
     newest: Optional[UpdateInfo] = None
     for r in releases:
-        info = _parse_release(r, st.channel)
+        info = _parse_release(r, st.channel, base=base)
         if info is None:
             continue
         if st.channel == "stable" and info.is_prerelease:
@@ -652,224 +764,15 @@ def check_for_updates(*, force: bool = False) -> Optional[UpdateInfo]:
         st.available = best
         st.skipped_versions = [newest.version] if skipped else []
         _save_state(st)
+    engine = get_engine()
+    if engine is not None:
+        engine.acknowledge()
     _notify()
     if best:
         logger.info("Update available: v%s (%s channel)", best.version, best.channel)
     else:
         logger.debug("No update available")
     return best
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# DOWNLOAD + VERIFY + INSTALL
-# ════════════════════════════════════════════════════════════════════════════
-
-class UpdateError(Exception):
-    """Raised by ``download_update`` / ``install_and_restart`` on fatal errors."""
-
-
-def download_update(
-    info: UpdateInfo,
-    *,
-    progress: Optional[Callable[[int, int], None]] = None,
-) -> pathlib.Path:
-    """Download the installer for *info* to the updates dir and verify SHA256.
-
-    Raises ``UpdateError`` on any failure. Returns the installer path on
-    success. The caller is responsible for not calling this on dev installs.
-    """
-    if not info.asset_url:
-        raise UpdateError("Release has no downloadable asset for this platform")
-    if not info.sha256:
-        raise UpdateError(
-            "Release is missing a SHA256 manifest — refusing to install"
-        )
-
-    _DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    target = _DOWNLOAD_DIR / info.asset_name
-    tmp = target.with_suffix(target.suffix + ".part")
-
-    parsed = urllib.parse.urlparse(info.asset_url)
-    if parsed.scheme != "https":
-        raise UpdateError(f"Refusing non-https download URL: {info.asset_url}")
-
-    req = urllib.request.Request(
-        info.asset_url,
-        headers={"Accept": "application/octet-stream", "User-Agent": _USER_AGENT},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:  # nosec
-            total = info.asset_size or int(resp.headers.get("Content-Length") or 0)
-            downloaded = 0
-            hasher = hashlib.sha256()
-            with open(tmp, "wb") as fp:
-                while True:
-                    chunk = resp.read(64 * 1024)
-                    if not chunk:
-                        break
-                    fp.write(chunk)
-                    hasher.update(chunk)
-                    downloaded += len(chunk)
-                    if progress:
-                        try:
-                            progress(downloaded, total)
-                        except Exception:
-                            pass
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        _safe_unlink(tmp)
-        raise UpdateError(f"Download failed: {exc}") from exc
-
-    actual = hasher.hexdigest().lower()
-    if actual != info.sha256.lower():
-        _safe_unlink(tmp)
-        raise UpdateError(
-            f"SHA256 mismatch (expected {info.sha256[:12]}…, "
-            f"got {actual[:12]}…)"
-        )
-
-    _safe_unlink(target)
-    try:
-        tmp.replace(target)
-    except OSError as exc:
-        _safe_unlink(tmp)
-        raise UpdateError(f"Could not finalize download: {exc}") from exc
-    return target
-
-
-def _safe_unlink(path: pathlib.Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        logger.debug("Could not remove %s", path, exc_info=True)
-
-
-def verify_os_signature(path: pathlib.Path) -> tuple[bool, str]:
-    """Verify OS-level code signature. Returns (ok, message).
-
-    - Windows: ``signtool.exe verify /pa <path>`` if available; otherwise
-      returns (True, "signtool not found — skipping") and trusts SHA256.
-    - macOS: ``codesign --verify --deep --strict`` and ``spctl --assess``.
-    - Other: (True, "no verifier").
-    """
-    import shutil
-    import subprocess
-
-    sys_name = platform.system()
-    if sys_name == "Windows":
-        signtool = shutil.which("signtool.exe") or shutil.which("signtool")
-        if not signtool:
-            return True, "signtool not found — relying on SHA256 only"
-        try:
-            r = subprocess.run(
-                [signtool, "verify", "/pa", "/q", str(path)],
-                capture_output=True, text=True, timeout=30,
-            )
-            if r.returncode == 0:
-                return True, "signtool: signature OK"
-            return False, f"signtool failed: {r.stdout or r.stderr}"
-        except (subprocess.SubprocessError, OSError) as exc:
-            return True, f"signtool error ({exc}) — relying on SHA256"
-    if sys_name == "Darwin":
-        try:
-            r = subprocess.run(
-                ["codesign", "--verify", "--deep", "--strict", str(path)],
-                capture_output=True, text=True, timeout=60,
-            )
-            if r.returncode != 0:
-                return False, f"codesign failed: {r.stderr.strip()}"
-            return True, "codesign: signature OK"
-        except (subprocess.SubprocessError, OSError) as exc:
-            return True, f"codesign error ({exc}) — relying on SHA256"
-    return True, "no OS-level verifier available"
-
-
-def install_and_restart(installer_path: pathlib.Path) -> None:
-    """Launch the installer and schedule this process to exit.
-
-    Windows: ``Row-Bot-x.y.z-Windows-x64.exe /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS``.
-    macOS: ``open <dmg>`` (Finder handles mount + drag-to-Applications).
-    """
-    import subprocess
-
-    if not installer_path.exists():
-        raise UpdateError(f"Installer not found: {installer_path}")
-
-    ok, msg = verify_os_signature(installer_path)
-    if not ok:
-        raise UpdateError(f"Signature verification failed: {msg}")
-    logger.info("Signature check: %s", msg)
-
-    sys_name = platform.system()
-    try:
-        if sys_name == "Windows":
-            _launch_windows_update_handoff(installer_path)
-        elif sys_name == "Darwin":
-            subprocess.Popen(["open", str(installer_path)], close_fds=True)
-        elif sys_name == "Linux":
-            launcher = _install_linux_tarball(installer_path)
-            subprocess.Popen([str(launcher)], close_fds=True)
-        else:
-            raise UpdateError(f"Unsupported platform: {sys_name}")
-    except OSError as exc:
-        raise UpdateError(f"Failed to launch installer: {exc}") from exc
-
-    # Give the installer a moment to spawn before we exit.
-    try:
-        from row_bot.launcher import quit_for_update  # optional hook
-        quit_for_update()
-        return
-    except Exception:
-        pass
-    # Default: exit after short delay
-    def _exit():
-        time.sleep(2)
-        os._exit(0)
-    threading.Thread(target=_exit, daemon=True).start()
-
-
-def _launch_windows_update_handoff(installer_path: pathlib.Path) -> None:
-    """Start the detached Windows helper that waits before launching installer."""
-
-    from row_bot.app_port import ROW_BOT_PORT_ENV, parse_app_port
-
-    port = parse_app_port(os.environ.get(ROW_BOT_PORT_ENV), default=0)
-    app_pid = os.getpid()
-    launcher_pid = os.getppid()
-    cmd = [
-        sys.executable,
-        "-m",
-        "row_bot.update_handoff",
-        "--installer",
-        str(installer_path),
-        "--app-pid",
-        str(app_pid),
-        "--launcher-pid",
-        str(launcher_pid if launcher_pid != app_pid else 0),
-        "--port",
-        str(port),
-        "--timeout",
-        "30",
-    ]
-    flags = 0
-    flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
-    flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    logger.info(
-        "Starting Windows update handoff helper: app_pid=%s launcher_pid=%s port=%s",
-        app_pid,
-        launcher_pid,
-        port,
-    )
-    subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-        creationflags=flags,
-    )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -880,10 +783,21 @@ _scheduler_thread: Optional[threading.Thread] = None
 _scheduler_stop = threading.Event()
 
 
+def scheduler_tick() -> None:
+    """One background round: check if allowed, then prepare if allowed."""
+    st = get_update_state()
+    if st.auto_check:
+        check_for_updates()
+    start_background_update()
+
+
 def start_update_scheduler() -> None:
     """Start the background poll loop. Idempotent. Silent on all failures."""
     global _scheduler_thread
     if _scheduler_thread is not None and _scheduler_thread.is_alive():
+        return
+    if external_mode():
+        logger.info("Updater: the host applies updates (ROW_BOT_UPDATES=external) — scheduler disabled")
         return
     if is_dev_install():
         logger.info("Updater: dev install detected — scheduler disabled")
@@ -895,9 +809,15 @@ def start_update_scheduler() -> None:
         # Startup delay so we don't compete with heavy init
         if _scheduler_stop.wait(_CHECK_STARTUP_DELAY_SEC):
             return
+        engine = get_engine()
+        if engine is not None:
+            # Old versions go once this start is verified (never on the switch path).
+            threading.Thread(
+                target=engine.cleanup_after_verified_start, name="row-bot-update-cleanup", daemon=True
+            ).start()
         while not _scheduler_stop.is_set():
             try:
-                check_for_updates()
+                scheduler_tick()
             except Exception:
                 logger.debug("Updater scheduler tick failed", exc_info=True)
             if _scheduler_stop.wait(_CHECK_INTERVAL_SEC):
@@ -914,18 +834,47 @@ def stop_update_scheduler() -> None:
     _scheduler_stop.set()
 
 
+def shutdown_background_update(timeout: float = 15.0) -> bool:
+    """Row-Bot is stopping: end the scheduler and stop preparing an update."""
+    _scheduler_stop.set()
+    engine = _engine
+    if engine is None:
+        return True
+    try:
+        return bool(engine.shutdown(timeout))
+    except Exception:
+        logger.debug("Stopping the update engine failed", exc_info=True)
+        return False
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # CONVENIENCE
 # ════════════════════════════════════════════════════════════════════════════
+
+def ready_update() -> Optional[str]:
+    """The version that is prepared and waits for a restart, if any."""
+    if update_mode() != "self":
+        return None
+    try:
+        from row_bot.updates.switcher import ready_version
+
+        return ready_version(install_layout.detect())
+    except Exception:
+        logger.debug("Could not read the ready update", exc_info=True)
+        return None
+
 
 def summary_for_status() -> dict[str, Any]:
     """Return a JSON-serializable summary for the row_bot_status tool."""
     st = get_update_state()
     info = st.available
+    engine = get_engine()
+    status = engine.status() if engine is not None else None
     return {
         "current_version": __version__,
         "channel": st.channel,
         "auto_check": st.auto_check,
+        "auto_download": st.auto_download,
         "last_check": st.last_check,
         "last_success": st.last_success,
         "update_available": info is not None,
@@ -933,4 +882,7 @@ def summary_for_status() -> dict[str, Any]:
         "available_notes_summary": info.notes_summary if info else None,
         "skipped_versions": list(st.skipped_versions),
         "dev_install": is_dev_install(),
+        "mode": update_mode(),
+        "phase": status.phase if status else None,
+        "ready_version": ready_update(),
     }

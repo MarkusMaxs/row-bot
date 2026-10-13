@@ -777,18 +777,6 @@ export interface ClientTransport {
     command: Wire.UpdateCommand,
     signal?: AbortSignal,
   ): Promise<Wire.UpdateReceipt>;
-  startUpdateInstall?(
-    command: Wire.UpdateInstallCommand,
-    signal?: AbortSignal,
-  ): Promise<Wire.UpdateInstallStatus>;
-  updateInstall?(
-    commandId: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.UpdateInstallStatus>;
-  cancelUpdateInstall?(
-    commandId: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.UpdateInstallStatus>;
   migrationSources?(signal?: AbortSignal): Promise<Wire.MigrationSources>;
   scanMigration?(
     request: Wire.MigrationScanRequest,

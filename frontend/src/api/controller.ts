@@ -24,7 +24,6 @@ import type {
   TranscriptPage,
   OnboardingCommand,
   UpdateCommand,
-  UpdateInstallCommand,
   MigrationScanRequest,
   MigrationApplyReviewRequest,
   MigrationApplyCommand,
@@ -2530,12 +2529,6 @@ export class ClientController {
     this.query(() => this.transport.updates?.(signal));
   updateCommand = (command: UpdateCommand, signal?: AbortSignal) =>
     this.query(() => this.transport.updateCommand?.(command, signal));
-  startUpdateInstall = (command: UpdateInstallCommand, signal?: AbortSignal) =>
-    this.query(() => this.transport.startUpdateInstall?.(command, signal));
-  updateInstall = (commandId: string, signal?: AbortSignal) =>
-    this.query(() => this.transport.updateInstall?.(commandId, signal));
-  cancelUpdateInstall = (commandId: string, signal?: AbortSignal) =>
-    this.query(() => this.transport.cancelUpdateInstall?.(commandId, signal));
   migrationSources = (signal?: AbortSignal) =>
     this.query(() => this.transport.migrationSources?.(signal));
   scanMigration = (request: MigrationScanRequest, signal?: AbortSignal) =>

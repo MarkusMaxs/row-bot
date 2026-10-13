@@ -51,6 +51,8 @@ def test_the_image_runs_as_a_non_root_user_with_a_persistent_data_volume() -> No
     assert "USER 10001:10001" in source
     assert 'ROW_BOT_DATA_DIR=/data' in source
     assert 'ROW_BOT_DEPLOYMENT_MODE=server' in source
+    # The container's host applies updates (D11): no checks or downloads inside.
+    assert 'ROW_BOT_UPDATES=external' in source
     assert 'VOLUME ["/data"]' in source
 
 
