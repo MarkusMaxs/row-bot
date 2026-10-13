@@ -83,6 +83,8 @@ def test_quitting_the_tray_applies_a_ready_update(tmp_path, monkeypatch):
     assert stopped == ["server", "state"]
     state = install_layout.read_state(layout.root)
     assert (state.active, state.previous, state.pending_verification) == ("5.2.1", "5.2.0", True)
+    # The person quit: the next start is theirs, not a restart Row-Bot made.
+    assert switcher.RESTART_REASON_KEY not in state.extra
 
 
 def test_the_tray_shows_restart_to_update_only_while_one_is_ready(tmp_path, monkeypatch):
@@ -194,7 +196,9 @@ def test_the_tray_never_bypasses_the_apps_restart_guard(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher, "_request_update_apply", lambda _port, _server: "unreachable")
     tray._restart_to_update()
     assert events == [install_layout.RELAUNCH_EXIT_CODE]
-    assert install_layout.read_state(layout.root).active == "5.2.1"
+    state = install_layout.read_state(layout.root)
+    assert state.active == "5.2.1"
+    assert state.extra[switcher.RESTART_REASON_KEY]["reason"] == "update"  # the tray relaunches it
 
 
 def test_asking_the_app_to_restart_tells_refused_from_unanswered(monkeypatch):
@@ -368,3 +372,51 @@ def test_an_old_install_known_only_to_the_current_user_is_never_removed(tmp_path
     opened.clear()
     assert legacy.start_removal(other) is False
     assert opened == [] and started == []
+
+
+def _running(layout, version="5.2.1"):
+    return install_layout.InstallLayout(layout.kind, layout.root, version, layout.versions_dir / version)
+
+
+def test_only_a_fresh_marker_for_the_running_version_counts(tmp_path):
+    import calendar
+    import time
+
+    layout = _ready(tmp_path)
+    assert switcher.apply_on_quit(layout) == "5.2.1"
+    running = _running(layout)
+    assert switcher.consume_restart_reason(running) is None  # quitting records nothing
+    at = "2026-10-11T12:00:00Z"
+    written = calendar.timegm(time.strptime(at, "%Y-%m-%dT%H:%M:%SZ"))
+
+    def mark(version):
+        state = install_layout.read_state(layout.root)
+        state.extra[switcher.RESTART_REASON_KEY] = {"reason": "update", "version": version, "at": at}
+        install_layout.write_state(layout.root, state)
+
+    mark("5.2.1")
+    assert switcher.consume_restart_reason(running, now=lambda: written + 5) == "update"
+    assert switcher.RESTART_REASON_KEY not in install_layout.read_state(layout.root).extra
+    mark("5.2.1")  # long ago: that restart didn't happen then
+    assert switcher.consume_restart_reason(running, now=lambda: written + 3600) is None
+    mark("5.2.9")  # the launcher went back from the version Row-Bot restarted into
+    assert switcher.consume_restart_reason(running, now=lambda: written + 5) is None
+    assert switcher.RESTART_REASON_KEY not in install_layout.read_state(layout.root).extra
+
+
+def test_the_next_start_after_a_restart_row_bot_made_says_so_once(tmp_path, monkeypatch):
+    from row_bot.application import startup_state
+
+    layout = _ready(tmp_path)
+    running = _running(layout)
+    monkeypatch.setattr(install_layout, "detect", lambda **_kwargs: running)
+    monkeypatch.setattr(startup_state, "_app_initiated", None)
+    assert startup_state.last_exit_was_app_initiated() is False  # a plain start
+
+    switcher.switch_to_ready(layout, restart_reason="update")  # Restart now, then exit 75
+    monkeypatch.setattr(startup_state, "_app_initiated", None)  # the relaunched process
+    assert startup_state.last_exit_was_app_initiated() is True
+    assert startup_state.last_exit_was_app_initiated() is True  # every reader in this run agrees
+    assert switcher.RESTART_REASON_KEY not in install_layout.read_state(layout.root).extra
+    monkeypatch.setattr(startup_state, "_app_initiated", None)  # the launch after that
+    assert startup_state.last_exit_was_app_initiated() is False

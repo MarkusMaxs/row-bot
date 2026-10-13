@@ -658,7 +658,20 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
         state[@"unverified_launches"] = @0;
         RowBotWriteState(state);
     }
+    [self recordRestartReason];
     [self launchPrimary];
+}
+
+// As updates.switcher records it: the next start was caused by Row-Bot, so
+// goals left working carry on by themselves (decision D4).
+- (void)recordRestartReason {
+    NSMutableDictionary *state = RowBotReadState();
+    NSString *active = state[@"active"];
+    if (!state || ![active isKindOfClass:[NSString class]]) {
+        return;
+    }
+    state[@"restart_reason"] = @{@"reason": @"update", @"version": active, @"at": RowBotNowISO()};
+    RowBotWriteState(state);
 }
 
 // launcher_state.json in the data folder, written by the Python launcher.
@@ -784,6 +797,7 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     if (self.restartForUpdate) {
         self.restartForUpdate = NO;
         RowBotLog(self.dataDir, @"relaunching for update");
+        [self recordRestartReason];
         [self launchPrimary];
         return;
     }

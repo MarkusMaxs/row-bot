@@ -3866,7 +3866,9 @@ def _switch_to_ready_update() -> bool:
     try:
         from row_bot.updates import switcher
 
-        return switcher.switch_to_ready_locked(install_layout.detect()) is not None
+        # The tray relaunches right away (exit 75): a restart Row-Bot made (D4).
+        layout = install_layout.detect()
+        return switcher.switch_to_ready_locked(layout, restart_reason="update") is not None
     except Exception:
         logger.warning("Could not switch to the ready update", exc_info=True)
         return False

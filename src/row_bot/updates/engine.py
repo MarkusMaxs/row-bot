@@ -611,7 +611,8 @@ class UpdateEngine:
         if not self._install_lock.acquire():
             raise EngineError("update_busy")
         try:
-            switcher.switch_to_ready(self.layout, expected=version)
+            # Row-Bot relaunches itself: the next start may let goals go on (D4).
+            switcher.switch_to_ready(self.layout, expected=version, restart_reason="update")
         except switcher.SwitchError:
             raise EngineError("update_not_ready") from None
         finally:
@@ -623,6 +624,7 @@ class UpdateEngine:
             logger.warning("Could not ask the launcher to restart", exc_info=True)
             restarting = False
         if not restarting:
+            switcher.clear_restart_reason(self.layout)  # the person restarts it
             status = self._set(message="Restart Row-Bot to finish updating.")
         return status
 
@@ -659,7 +661,7 @@ class UpdateEngine:
         if not self._install_lock.acquire():
             raise EngineError("update_busy")
         try:
-            target = switcher.rollback(self.layout)
+            target = switcher.rollback(self.layout, restart_reason="repair")
         except switcher.SwitchError:
             raise EngineError("update_no_previous") from None
         finally:
@@ -670,6 +672,7 @@ class UpdateEngine:
         except Exception:  # noqa: BLE001
             restarting = False
         if not restarting:
+            switcher.clear_restart_reason(self.layout)
             self._set(message="Restart Row-Bot to finish going back.")
         return target
 

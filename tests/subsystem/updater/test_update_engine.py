@@ -525,3 +525,26 @@ def test_restart_now_waits_while_an_update_is_being_prepared(tmp_path):
         go_on.set()
         engine.wait(30)
     assert engine.status().phase == "ready"
+
+
+def test_restart_now_and_repair_mark_the_next_start_as_row_bots_own(tmp_path):
+    """Goals carry on by themselves only after a restart Row-Bot made (D4)."""
+    layout = make_install(tmp_path)
+    release = make_release()
+    _engine(layout, FakeTransport(serve(release))).start(release.files)
+    _engine(layout, FakeTransport({})).apply(when="now", force=True)
+    newer = InstallLayout(layout.kind, layout.root, "5.2.1", layout.versions_dir / "5.2.1")
+    assert switcher.consume_restart_reason(newer) == "update"
+    assert switcher.consume_restart_reason(newer) is None  # read once
+    _engine(newer, FakeTransport({})).rollback()
+    assert switcher.consume_restart_reason(layout) == "repair"
+
+
+def test_a_relaunch_that_does_not_happen_leaves_a_normal_start(tmp_path):
+    layout = make_install(tmp_path)
+    release = make_release()
+    _engine(layout, FakeTransport(serve(release))).start(release.files)
+    engine = _engine(layout, FakeTransport({}), relaunch=lambda: False)
+    assert engine.apply(when="now", force=True).message == "Restart Row-Bot to finish updating."
+    newer = InstallLayout(layout.kind, layout.root, "5.2.1", layout.versions_dir / "5.2.1")
+    assert switcher.consume_restart_reason(newer) is None  # the person restarted it
