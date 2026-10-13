@@ -79,7 +79,7 @@ Public documentation index for Row-Bot.
 - [Settings: Documents](/docs/settings/documents)
   Route: /docs/settings/documents. Manage document ingestion, extraction, and vector indexing.
 - [Settings: Tools](/docs/settings/tools)
-  Route: /docs/settings/tools. Configure progressive external-tool loading, retrieval compression, search and knowledge tools, built-in tools, and custom tools.
+  Route: /docs/settings/tools. Configure progressive external-tool loading, search and knowledge tools, built-in tools, and custom tools.
 - [Settings: Skills](/docs/settings/skills)
   Route: /docs/settings/skills. Find, add, try, update, and remove skills, and open the skill editor to create or edit one.
 - [Settings: Apps](/docs/settings/apps)

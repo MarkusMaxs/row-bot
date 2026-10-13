@@ -1448,10 +1448,10 @@ def test_tracker_delete_all_uncertain_outcome_is_not_replayed(api, monkeypatch):
         ),
         (
             "tools",
-            "compression_mode",
-            "off",
+            "external_loading_mode",
+            "eager",
             "tools_config.json",
-            ("global", "compression_mode"),
+            ("global", "external_tool_loading_mode"),
         ),
         (
             "accounts",
@@ -1502,6 +1502,36 @@ def test_each_snapshot_owned_page_has_a_reviewed_saved_mutation(
     for part in saved_path:
         saved = saved[part]
     assert saved == value
+
+
+def test_removed_trim_search_results_setting_loads_and_is_ignored(api):
+    """A saved "Trim search results" choice, or an older client sending one,
+    still works; search results are never trimmed (WP G1)."""
+
+    client, headers, data, _ = api
+    path = data / "tools_config.json"
+    assert json.loads(path.read_text())["global"] == {"compression_mode": "deep"}
+    response = client.get(BASE, headers=headers)
+    assert response.status_code == 200, response.text
+    snapshot = response.json()
+    SettingsSnapshot.model_validate(snapshot)
+    assert set(snapshot["tools"]) == {"availability", "external_loading_mode", "items"}
+    assert snapshot["defaults"]["tools"] == {"external_loading_mode": "auto"}
+    before = path.read_bytes()
+    request = {
+        "settings_revision": snapshot["revision"],
+        "page": "tools",
+        "field": "compression_mode",
+        "value": "off",
+    }
+    review = _review(client, headers, request)
+    assert review["value_summary"] == "This setting was removed; nothing changes"
+    response = _execute(client, headers, request, review)
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    assert receipt["status"] == "completed"
+    assert receipt["settings_revision"] == snapshot["revision"]
+    assert path.read_bytes() == before
 
 
 def test_memory_switch_refreshes_the_existing_tool_registry(api, monkeypatch):

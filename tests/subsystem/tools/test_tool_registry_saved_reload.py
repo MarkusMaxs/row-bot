@@ -23,7 +23,7 @@ def test_reload_saved_config_replaces_loaded_enablement_config_and_globals(
             {
                 "tools": {"sample": False},
                 "tool_configs": {"sample": {"mode": "saved"}},
-                "global": {"compression_mode": "deep"},
+                "global": {"external_tool_loading_mode": "eager"},
             }
         ),
         encoding="utf-8",
@@ -37,7 +37,9 @@ def test_reload_saved_config_replaces_loaded_enablement_config_and_globals(
     monkeypatch.setattr(registry, "_tools", {"sample": tool})
     monkeypatch.setattr(registry, "_enabled", {"sample": True})
     monkeypatch.setattr(registry, "_tool_configs", {"sample": {"mode": "stale"}})
-    monkeypatch.setattr(registry, "_global_config", {"compression_mode": "off"})
+    monkeypatch.setattr(
+        registry, "_global_config", {"external_tool_loading_mode": "auto"}
+    )
     invalidated: list[bool] = []
     monkeypatch.setattr(
         registry, "_invalidate_agent_cache", lambda: invalidated.append(True)
@@ -47,5 +49,6 @@ def test_reload_saved_config_replaces_loaded_enablement_config_and_globals(
 
     assert registry._enabled == {"sample": False}
     assert registry._tool_configs["sample"]["mode"] == "saved"
-    assert registry._global_config == {"compression_mode": "deep"}
+    assert registry._global_config == {"external_tool_loading_mode": "eager"}
+    assert registry.get_external_tool_loading_mode() == "eager"
     assert invalidated == [True]
