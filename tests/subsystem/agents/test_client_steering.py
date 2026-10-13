@@ -15,8 +15,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def owner(tmp_path, monkeypatch):
-    _tasks, runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def owner(tmp_path, monkeypatch, reload_for_data_dir):
+    _tasks, runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     from row_bot.projection import conversation
 
     projection = conversation.ConversationProjection("steering-test-epoch")

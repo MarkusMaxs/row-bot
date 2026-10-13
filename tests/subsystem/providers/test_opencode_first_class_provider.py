@@ -1,5 +1,4 @@
 import copy
-import importlib
 import json
 import sys
 from pathlib import Path
@@ -1189,13 +1188,13 @@ def test_phase6_default_and_quick_choice_values_use_opencode_canonical_refs(tmp_
     assert list_quick_choices("chat")[0]["id"] == "model:opencode_zen:nemotron-3-super-free"
 
 
-def test_phase6_workflow_model_overrides_store_opencode_refs(tmp_path, monkeypatch):
+def test_phase6_workflow_model_overrides_store_opencode_refs(tmp_path, monkeypatch, reload_for_data_dir):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(provider_config, "CONFIG_PATH", tmp_path / "providers.json")
     monkeypatch.setattr("row_bot.api_keys.get_cloud_config", lambda: {"starred_models": []})
     import row_bot.tasks as tasks
 
-    tasks = importlib.reload(tasks)
+    (tasks,) = reload_for_data_dir(tmp_path / "data", "row_bot.tasks")
 
     task_id = tasks.create_task(
         "OpenCode workflow",
@@ -1210,11 +1209,10 @@ def test_phase6_workflow_model_overrides_store_opencode_refs(tmp_path, monkeypat
     assert task["steps"][0]["model_override"] == "model:opencode_go:mimo-v2.5-pro"
 
 
-def test_phase6_channel_model_override_preserves_opencode_ref(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "threads"))
+def test_phase6_channel_model_override_preserves_opencode_ref(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.threads as threads
 
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(tmp_path / "threads", "row_bot.threads")
     ref = "model:opencode_go:glm-5.1"
     threads._save_thread_meta("tg_opencode", "Telegram OpenCode")
     threads._set_thread_model_override("tg_opencode", ref)
@@ -1345,7 +1343,7 @@ class _FakeKeyring:
         self.values.pop((service, account), None)
 
 
-def test_ux_opencode_api_keys_use_existing_keyring_backed_store(tmp_path, monkeypatch):
+def test_ux_opencode_api_keys_use_existing_keyring_backed_store(tmp_path, monkeypatch, reload_for_data_dir):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     for env_var in ("OPENCODE_ZEN_API_KEY", "OPENCODE_GO_API_KEY"):
         monkeypatch.delenv(env_var, raising=False)
@@ -1353,8 +1351,8 @@ def test_ux_opencode_api_keys_use_existing_keyring_backed_store(tmp_path, monkey
     import row_bot.api_keys as api_keys
     import row_bot.secret_store as secret_store
 
-    secret_store = importlib.reload(secret_store)
-    api_keys = importlib.reload(api_keys)
+    (secret_store,) = reload_for_data_dir(tmp_path, "row_bot.secret_store")
+    (api_keys,) = reload_for_data_dir(tmp_path, "row_bot.api_keys")
     backend = _FakeKeyring()
     secret_store._set_backend_for_tests(backend)
     try:

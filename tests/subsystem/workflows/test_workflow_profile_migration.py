@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Iterable
 
@@ -12,23 +10,8 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in (
-        "row_bot.tasks",
-        "row_bot.agent_profiles",
-        "row_bot.skills",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.agent_profiles as agent_profiles
-    import row_bot.skills as skills
-
-    tasks = importlib.reload(tasks)
-    agent_profiles = importlib.reload(agent_profiles)
-    skills = importlib.reload(skills)
-    return tasks, agent_profiles, skills
+def _fresh_modules(tmp_path: Path, reload_for_data_dir):
+    return tuple(reload_for_data_dir(tmp_path / "data", "row_bot.tasks", "row_bot.agent_profiles", "row_bot.skills"))
 
 
 def _json_list(value: list[str] | None) -> str | None:
@@ -80,9 +63,9 @@ def _known_policy(monkeypatch, tasks, *, tools: Iterable[str], skills: Iterable[
 
 def test_migration_assigns_default_profile_and_preserves_model_override(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    tasks, _profiles, _skills = _fresh_modules(tmp_path, monkeypatch)
+    tasks, _profiles, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     task_id = _make_legacy_task(
         tasks,
         name="No custom policy",
@@ -104,9 +87,9 @@ def test_migration_assigns_default_profile_and_preserves_model_override(
 
 def test_migration_ignores_old_default_skill_snapshot_but_marks_review(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    tasks, _profiles, skills = _fresh_modules(tmp_path, monkeypatch)
+    tasks, _profiles, skills = _fresh_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
     task_id = _make_legacy_task(
         tasks,
@@ -127,8 +110,8 @@ def test_migration_ignores_old_default_skill_snapshot_but_marks_review(
     assert "legacy task default skill snapshot" in task["profile_migration_note"]
 
 
-def test_migration_maps_exact_builtin_profile_policy(tmp_path, monkeypatch) -> None:
-    tasks, agent_profiles, _skills = _fresh_modules(tmp_path, monkeypatch)
+def test_migration_maps_exact_builtin_profile_policy(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks, agent_profiles, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     research = agent_profiles.require_agent_profile("research")
     tools = list(research["tool_policy_json"]["allow_tools"])
     skills = list(research["skill_policy_json"]["skills_override"])
@@ -156,8 +139,9 @@ def test_migration_maps_exact_builtin_profile_policy(tmp_path, monkeypatch) -> N
 def test_migration_reuses_one_profile_for_identical_custom_policy(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    tasks, agent_profiles, _skills = _fresh_modules(tmp_path, monkeypatch)
+    tasks, agent_profiles, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     _known_policy(
         monkeypatch,
         tasks,
@@ -208,8 +192,9 @@ def test_migration_reuses_one_profile_for_identical_custom_policy(
 def test_migration_blocks_missing_policy_items_and_preserves_legacy_fields(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    tasks, _profiles, _skills = _fresh_modules(tmp_path, monkeypatch)
+    tasks, _profiles, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     _known_policy(monkeypatch, tasks, tools={"filesystem"}, skills={"meeting_notes"})
     task_id = _make_legacy_task(
         tasks,
@@ -234,9 +219,9 @@ def test_migration_blocks_missing_policy_items_and_preserves_legacy_fields(
 
 def test_migration_clears_legacy_fields_when_existing_profile_is_valid(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    tasks, _profiles, _skills = _fresh_modules(tmp_path, monkeypatch)
+    tasks, _profiles, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     task_id = _make_legacy_task(
         tasks,
         name="Already profiled",

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 
 import pytest
 
@@ -8,16 +7,13 @@ import pytest
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
-def _reload_updater(monkeypatch, tmp_path):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    sys.modules.pop("row_bot.updater", None)
-    import row_bot.updater as updater
-
+def _reload_updater(reload_for_data_dir, tmp_path):
+    (updater,) = reload_for_data_dir(tmp_path, "row_bot.updater")
     return updater
 
 
-def test_updater_manifest_and_version_contracts(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_updater_manifest_and_version_contracts(tmp_path, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
 
     assert updater.compare_versions("3.17.0", "3.18.0") > 0
     assert updater.compare_versions("3.17.0", "3.17.0") == 0
@@ -39,8 +35,8 @@ def test_updater_manifest_and_version_contracts(tmp_path, monkeypatch) -> None:
     assert updater.parse_manifest("<!-- row-bot-update-manifest -->\n```manifest\nfiles:\n  bad-line\n```\n") == {}
 
 
-def test_update_state_persists_skipped_versions(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_update_state_persists_skipped_versions(tmp_path, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
 
     state = updater.get_update_state()
     assert state.channel == "stable"
@@ -51,8 +47,8 @@ def test_update_state_persists_skipped_versions(tmp_path, monkeypatch) -> None:
     assert "9.9.9" in reloaded.skipped_versions
 
 
-def test_update_status_tool_self_knowledge_and_manifest_helpers(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_update_status_tool_self_knowledge_and_manifest_helpers(tmp_path, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
     from scripts.append_sha_manifest import build_manifest_block, merge_into_body
 
     summary = updater.summary_for_status()
@@ -79,8 +75,8 @@ def test_update_status_tool_self_knowledge_and_manifest_helpers(tmp_path, monkey
     assert "a.exe" not in updated
 
 
-def test_updater_tool_and_status_query_are_registered(tmp_path, monkeypatch) -> None:
-    _reload_updater(monkeypatch, tmp_path)
+def test_updater_tool_and_status_query_are_registered(tmp_path, reload_for_data_dir) -> None:
+    _reload_updater(reload_for_data_dir, tmp_path)
     from row_bot.tools import registry
     from row_bot.tools.row_bot_status_tool import _QUERY_HANDLERS
 

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 import pytest
 
@@ -9,27 +7,18 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path, monkeypatch):
+def _fresh_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    tasks, _profiles, _settings, agent_runs, orchestrator = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.agent_profiles",
         "row_bot.agent_settings",
         "row_bot.agent_runs",
         "row_bot.agent_orchestrator",
-    ):
-        sys.modules.pop(name, None)
-    import row_bot.agent_orchestrator as orchestrator
-    import row_bot.agent_runs as agent_runs
-    import row_bot.tasks as tasks
-
-    return (
-        importlib.reload(tasks),
-        importlib.reload(agent_runs),
-        importlib.reload(orchestrator),
     )
+    return tasks, agent_runs, orchestrator
 
 
 def _orchestration(orchestrator, thread_id: str, generation: str):
@@ -59,9 +48,9 @@ def _run(agent_runs, thread_id: str, run_id: str, status: str = "running"):
 
 def test_activity_query_tracks_joined_approval_retry_and_later_parent_phase(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, "joined-thread", "generation-1")
     child = _run(agent_runs, "joined-thread", "joined-child")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -139,9 +128,9 @@ def test_activity_query_tracks_joined_approval_retry_and_later_parent_phase(
 
 def test_activity_query_requires_pending_approval_and_never_animates_interrupted_stop(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, "repair-thread", "generation-repair")
     child = _run(agent_runs, "repair-thread", "repair-child")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -190,9 +179,9 @@ def test_activity_query_requires_pending_approval_and_never_animates_interrupted
 
 def test_activity_query_keeps_detached_background_nonblocking_and_recovers(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, "detached-thread", "generation-2")
     detached = _run(agent_runs, "detached-thread", "detached-child")
     orchestrator.register_member(
@@ -212,7 +201,7 @@ def test_activity_query_keeps_detached_background_nonblocking_and_recovers(
     assert activity["active_members"] == 1
 
     # A fresh process view reconstructs the same state from SQLite.
-    _tasks, _agent_runs, restarted = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, restarted = _fresh_modules(tmp_path, reload_for_data_dir)
     recovered = restarted.get_thread_orchestration_activity(["detached-thread"])[
         "detached-thread"
     ]
@@ -236,9 +225,9 @@ def test_activity_query_keeps_detached_background_nonblocking_and_recovers(
 
 def test_activity_query_stop_all_becomes_terminal_only_after_durable_stop(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, "stop-thread", "generation-3")
     first = _run(agent_runs, "stop-thread", "stop-one")
     second = _run(agent_runs, "stop-thread", "stop-two")

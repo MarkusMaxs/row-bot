@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import pathlib
 
@@ -13,11 +12,10 @@ import pytest
 pytestmark = pytest.mark.platform
 
 
-def test_chunk_batches_never_exceed_reviewed_bound(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_chunk_batches_never_exceed_reviewed_bound(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.documents as documents
 
-    documents = importlib.reload(documents)
+    (documents,) = reload_for_data_dir(tmp_path / "data", "row_bot.documents")
     chunks = (Document(page_content=str(i)) for i in range(101))
     batches = list(documents.iter_chunk_batches(chunks))
 
@@ -25,11 +23,10 @@ def test_chunk_batches_never_exceed_reviewed_bound(tmp_path, monkeypatch):
     assert max(map(len, batches)) <= 32
 
 
-def test_page_iterator_prefers_lazy_loader(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_page_iterator_prefers_lazy_loader(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.documents as documents
 
-    documents = importlib.reload(documents)
+    (documents,) = reload_for_data_dir(tmp_path / "data", "row_bot.documents")
     source = tmp_path / "notes.fake"
     source.write_text("unused", encoding="utf-8")
     calls = []
@@ -58,11 +55,11 @@ def test_page_iterator_prefers_lazy_loader(tmp_path, monkeypatch):
 def test_page_iterator_adapts_eager_loader_and_rejects_empty_or_unsupported(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
     import row_bot.documents as documents
 
-    documents = importlib.reload(documents)
+    (documents,) = reload_for_data_dir(tmp_path / "data", "row_bot.documents")
     source = tmp_path / "notes.fake"
     source.write_text("unused", encoding="utf-8")
 
@@ -95,11 +92,11 @@ def test_page_iterator_adapts_eager_loader_and_rejects_empty_or_unsupported(
 def test_text_loader_reads_fixed_pages_and_resource_release_clears_cache(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
     import row_bot.documents as documents
 
-    documents = importlib.reload(documents)
+    (documents,) = reload_for_data_dir(tmp_path / "data", "row_bot.documents")
     monkeypatch.setattr(documents, "TEXT_PAGE_CHARS", 8)
     source = tmp_path / "notes.txt"
     source.write_text("0123456789abcdefghi", encoding="utf-8")
@@ -142,11 +139,10 @@ class FakeEmbeddings(Embeddings):
         return [float(len(text)), 0.0, 1.0]
 
 
-def test_segment_rollover_and_embedding_batches_are_bounded(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_segment_rollover_and_embedding_batches_are_bounded(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_index as document_index
 
-    document_index = importlib.reload(document_index)
+    (document_index,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     embedding = FakeEmbeddings()
     work = tmp_path / "work" / "doc"
     chunks = (
@@ -169,11 +165,10 @@ def test_segment_rollover_and_embedding_batches_are_bounded(tmp_path, monkeypatc
     assert max(embedding.batch_sizes) <= 32
 
 
-def test_cancellation_during_build_removes_unpublished_work(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_cancellation_during_build_removes_unpublished_work(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_index as document_index
 
-    document_index = importlib.reload(document_index)
+    (document_index,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     calls = 0
 
     def cancel():
@@ -201,11 +196,10 @@ def test_cancellation_during_build_removes_unpublished_work(tmp_path, monkeypatc
     assert not work.exists()
 
 
-def test_manifest_replace_failure_keeps_old_corpus_visible(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_manifest_replace_failure_keeps_old_corpus_visible(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_index as document_index
 
-    document_index = importlib.reload(document_index)
+    (document_index,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     root = tmp_path / "index"
     document_index.initialize_index(root)
     old = {
@@ -272,11 +266,10 @@ def _write_fake_document_manifest(root, document_id, name, embedding, segments):
         (doc_dir / segment).mkdir()
 
 
-def test_deterministic_top_k_stale_exclusion_and_legacy_merge(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_deterministic_top_k_stale_exclusion_and_legacy_merge(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_index as document_index
 
-    document_index = importlib.reload(document_index)
+    (document_index,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     active = {"provider": "fake", "model": "v1", "dimension": 3}
     root = tmp_path / "index"
     legacy = tmp_path / "legacy"
@@ -334,11 +327,10 @@ def test_deterministic_top_k_stale_exclusion_and_legacy_merge(tmp_path, monkeypa
     assert all(result.metadata["source"].startswith("same.txt (") for result in results[:2])
 
 
-def test_remove_same_name_document_targets_id_only(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_remove_same_name_document_targets_id_only(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_index as document_index
 
-    document_index = importlib.reload(document_index)
+    (document_index,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     root = tmp_path / "index"
     _write_fake_document_manifest(root, "a", "same.txt", {}, [])
     _write_fake_document_manifest(root, "b", "same.txt", {}, [])
@@ -352,14 +344,13 @@ def test_remove_same_name_document_targets_id_only(tmp_path, monkeypatch):
     assert list((root / "retired").glob("a-*"))
 
 
-def test_bounded_rebuild_from_vault_uses_sharded_atomic_output(tmp_path, monkeypatch):
+def test_bounded_rebuild_from_vault_uses_sharded_atomic_output(tmp_path, monkeypatch, reload_for_data_dir):
     data = tmp_path / "data"
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data))
     import row_bot.documents as documents
     import row_bot.wiki_vault as wiki_vault
 
-    documents = importlib.reload(documents)
-    wiki_vault = importlib.reload(wiki_vault)
+    (documents,) = reload_for_data_dir(data, "row_bot.documents")
+    (wiki_vault,) = reload_for_data_dir(data, "row_bot.wiki_vault")
     vault = tmp_path / "vault"
     wiki_vault.set_vault_path(str(vault))
     wiki_vault.set_enabled(True)
@@ -379,11 +370,11 @@ def test_bounded_rebuild_from_vault_uses_sharded_atomic_output(tmp_path, monkeyp
 def test_index_health_covers_new_compatible_and_stale_legacy_states(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
     import row_bot.document_index as document_index
 
-    document_index = importlib.reload(document_index)
+    (document_index,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     root = tmp_path / "index"
     legacy = tmp_path / "legacy"
 

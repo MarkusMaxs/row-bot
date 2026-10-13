@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +11,7 @@ import pytest
 
 
 pytestmark = pytest.mark.platform
+_KEYS_SET_HERE = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ATLASCLOUD_API_KEY")
 
 
 class FakeKeyring:
@@ -37,28 +36,20 @@ class FakeKeyring:
 
 
 class ApiKeyStorageTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.old_data_dir = os.environ.get("ROW_BOT_DATA_DIR")
-        os.environ["ROW_BOT_DATA_DIR"] = self.temp_dir.name
-        import row_bot.secret_store as secret_store
-        import row_bot.api_keys as api_keys
-        from row_bot.plugins import state as plugin_state
-        self.secret_store = importlib.reload(secret_store)
-        self.api_keys = importlib.reload(api_keys)
-        self.plugin_state = importlib.reload(plugin_state)
+    @pytest.fixture(autouse=True)
+    def _key_modules_for_a_fresh_folder(self, tmp_path, monkeypatch, reload_for_data_dir):
+        # set_key writes the environment itself: start without these keys, and put back any the shell had.
+        for key in _KEYS_SET_HERE:
+            monkeypatch.delenv(key, raising=False)
+        self.secret_store, self.api_keys, self.plugin_state = reload_for_data_dir(
+            tmp_path, "row_bot.secret_store", "row_bot.api_keys", "row_bot.plugins.state",
+        )
         self.backend = FakeKeyring()
         self.secret_store._set_backend_for_tests(self.backend)
-
-    def tearDown(self) -> None:
+        yield
         self.secret_store._set_backend_for_tests(None)
-        if self.old_data_dir is None:
-            os.environ.pop("ROW_BOT_DATA_DIR", None)
-        else:
-            os.environ["ROW_BOT_DATA_DIR"] = self.old_data_dir
-        for key in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ATLASCLOUD_API_KEY"):
+        for key in _KEYS_SET_HERE:
             os.environ.pop(key, None)
-        self.temp_dir.cleanup()
 
     def test_set_key_writes_keyring_and_metadata_only(self) -> None:
         self.api_keys.set_key("OPENAI_API_KEY", "sk-test-secret-1234")

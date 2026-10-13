@@ -17,15 +17,13 @@ pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
 @pytest.fixture
-def stack(tmp_path, monkeypatch):
+def stack(tmp_path, monkeypatch, reload_for_data_dir):
     data = tmp_path / "data"
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data))
-    from row_bot import document_index, document_jobs, documents, knowledge_graph, wiki_vault
-    jobs = importlib.reload(document_jobs)
-    index = importlib.reload(document_index)
-    docs = importlib.reload(documents)
-    kg = importlib.reload(knowledge_graph)
-    wiki = importlib.reload(wiki_vault)
+    (jobs,) = reload_for_data_dir(data, "row_bot.document_jobs")
+    (index,) = reload_for_data_dir(data, "row_bot.document_index")
+    (docs,) = reload_for_data_dir(data, "row_bot.documents")
+    (kg,) = reload_for_data_dir(data, "row_bot.knowledge_graph")
+    (wiki,) = reload_for_data_dir(data, "row_bot.wiki_vault")
     kg._skip_reindex = True
     monkeypatch.setattr(kg, "semantic_search", lambda *_args, **_kwargs: [])
     wiki.set_vault_path(str(tmp_path / "vault"))

@@ -18,6 +18,8 @@ def test_optional_tool_import_helper_skips_missing_optional_module(monkeypatch):
         return real_import(name)
 
     monkeypatch.setattr(tools.importlib, "import_module", fake_import)
+    # A skipped module is dropped from sys.modules: put back the one already imported afterwards.
+    monkeypatch.delitem(sys.modules, "row_bot.tools.browser_tool", raising=False)
 
     tools._import_tool_module("row_bot.tools.browser_tool", optional=True)
     with pytest.raises(ImportError):
@@ -65,7 +67,7 @@ def test_native_client_modules_import_without_optional_platform_runtime(
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)
-    sys.modules.pop(module_name, None)
+    monkeypatch.delitem(sys.modules, module_name, raising=False)  # put back afterwards
 
     imported = importlib.import_module(module_name)
 

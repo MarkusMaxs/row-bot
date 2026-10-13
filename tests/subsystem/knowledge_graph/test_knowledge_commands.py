@@ -1,6 +1,5 @@
 # ruff: noqa: F811 -- canonical isolated projection fixture.
 from concurrent.futures import ThreadPoolExecutor
-import importlib
 import json
 import os
 import sqlite3
@@ -14,14 +13,14 @@ from tests.subsystem.knowledge_graph.test_knowledge_projection_recovery import p
 
 
 @pytest.fixture
-def client(projection_stack, tmp_path, monkeypatch):
-    from row_bot import tasks, memory_evolution
+def client(projection_stack, tmp_path, monkeypatch, reload_for_data_dir):
+    from row_bot import tasks
     from row_bot.application import knowledge_commands as api
     kg = projection_stack[0]
     monkeypatch.setattr(kg, '_skip_reindex', False)
     monkeypatch.setattr(tasks, '_DB_PATH', str(tmp_path / 'tasks.db'))
     monkeypatch.setattr(tasks, '_SCHEMA_READY_PATH', None)
-    importlib.reload(memory_evolution)
+    reload_for_data_dir(None, "row_bot.memory_evolution")
     def forbidden(*a, **k):
         pytest.fail('A client save must not call a projection/provider')
     monkeypatch.setattr(kg, '_get_embedding_model', forbidden)

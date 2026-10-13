@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib
 import sqlite3
-import sys
 from pathlib import Path
 
 
@@ -16,25 +14,12 @@ AGENT_RUN_TABLES = {
 }
 
 
-def _fresh_agent_run_modules(tmp_path, monkeypatch):
+def _fresh_agent_run_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
-        "row_bot.tasks",
-        "row_bot.agent_profiles",
-        "row_bot.agent_settings",
-        "row_bot.agent_runs",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.agent_profiles as agent_profiles
-    import row_bot.agent_runs as agent_runs
-
-    tasks = importlib.reload(tasks)
-    agent_profiles = importlib.reload(agent_profiles)
-    agent_runs = importlib.reload(agent_runs)
+    tasks, agent_profiles, _settings, agent_runs = reload_for_data_dir(
+        data_dir, "row_bot.tasks", "row_bot.agent_profiles", "row_bot.agent_settings", "row_bot.agent_runs"
+    )
     return agent_runs, agent_profiles, tasks, data_dir
 
 
@@ -53,7 +38,7 @@ def _columns(db_path: Path, table: str) -> set[str]:
         return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def test_agent_run_schema_creation_and_migration(tmp_path, monkeypatch):
+def test_agent_run_schema_creation_and_migration(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path = data_dir / "tasks.db"
@@ -66,7 +51,7 @@ def test_agent_run_schema_creation_and_migration(tmp_path, monkeypatch):
 
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     agent_runs.ensure_agent_run_schema(force=True)
 
@@ -87,10 +72,10 @@ def test_agent_run_schema_creation_and_migration(tmp_path, monkeypatch):
     assert {"active_run_id", "continuation_key"} <= _columns(db_path, "thread_goals")
 
 
-def test_agent_run_event_edge_crud(tmp_path, monkeypatch):
+def test_agent_run_event_edge_crud(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
 
     parent = agent_runs.create_agent_run(
@@ -150,10 +135,10 @@ def test_agent_run_event_edge_crud(tmp_path, monkeypatch):
     assert {"run.created", "run.started", "tool.completed", "run.completed"} <= event_types
 
 
-def test_parent_messages_return_the_newest_limited_window(tmp_path, monkeypatch):
+def test_parent_messages_return_the_newest_limited_window(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     run = agent_runs.create_agent_run(run_id="guided-run", status="running")
     for index in range(5):
@@ -171,8 +156,8 @@ def test_parent_messages_return_the_newest_limited_window(tmp_path, monkeypatch)
     ]
 
 
-def test_agent_run_budget_progress_and_terminal_reason_are_additive(tmp_path, monkeypatch):
-    agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(tmp_path, monkeypatch)
+def test_agent_run_budget_progress_and_terminal_reason_are_additive(tmp_path, reload_for_data_dir):
+    agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(tmp_path, reload_for_data_dir)
     run = agent_runs.create_agent_run(run_id="budget-run", status="running")
 
     updated = agent_runs.update_agent_budget_progress(
@@ -195,10 +180,10 @@ def test_agent_run_budget_progress_and_terminal_reason_are_additive(tmp_path, mo
     assert finished["terminal_reason"] == "budget_exhausted"
 
 
-def test_stop_agent_run_marks_durable_stop_state(tmp_path, monkeypatch):
+def test_stop_agent_run_marks_durable_stop_state(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     run = agent_runs.create_agent_run(
         run_id="stop-me",
@@ -215,10 +200,10 @@ def test_stop_agent_run_marks_durable_stop_state(tmp_path, monkeypatch):
     assert agent_runs.get_agent_events(run["id"])[-1]["type"] == "run.stopped"
 
 
-def test_finish_agent_run_does_not_overwrite_requested_stop(tmp_path, monkeypatch):
+def test_finish_agent_run_does_not_overwrite_requested_stop(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     run = agent_runs.create_agent_run(
         run_id="late-success-after-stop",
@@ -244,14 +229,12 @@ def test_finish_agent_run_does_not_overwrite_requested_stop(tmp_path, monkeypatc
     assert "run.completed" not in event_types
 
 
-def test_startup_recovery_stops_stale_runs_and_releases_locks(tmp_path, monkeypatch):
+def test_startup_recovery_stops_stale_runs_and_releases_locks(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
-    import row_bot.threads as threads
-
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(_data_dir, "row_bot.threads")
     parent_thread_id = threads.create_thread("Recovery parent")
     queued_keep = agent_runs.create_agent_run(
         run_id="queued-keep",
@@ -298,14 +281,12 @@ def test_startup_recovery_stops_stale_runs_and_releases_locks(tmp_path, monkeypa
     assert agent_runs.get_agent_run(approval_orphan["id"])["status"] == "stopped"
 
 
-def test_parent_thread_delete_cascades_chat_agent_state_but_keeps_workflows(tmp_path, monkeypatch):
+def test_parent_thread_delete_cascades_chat_agent_state_but_keeps_workflows(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
-    import row_bot.threads as threads
-
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(_data_dir, "row_bot.threads")
     parent_thread_id = threads.create_thread("Cascade parent")
     child_thread_id = threads.create_thread("Cascade child", thread_type="agent_child")
     child = agent_runs.create_agent_run(
@@ -367,14 +348,12 @@ def test_parent_thread_delete_cascades_chat_agent_state_but_keeps_workflows(tmp_
     assert row is None
 
 
-def test_get_agent_run_for_child_thread(tmp_path, monkeypatch):
+def test_get_agent_run_for_child_thread(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, _tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
-    import row_bot.threads as threads
-
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(_data_dir, "row_bot.threads")
     parent_thread_id = threads.create_thread("Lookup parent")
     child_thread_id = threads.create_thread("Lookup child", thread_type="agent_child")
     agent_runs.create_agent_run(
@@ -392,10 +371,10 @@ def test_get_agent_run_for_child_thread(tmp_path, monkeypatch):
     assert row["parent_thread_id"] == parent_thread_id
 
 
-def test_workflow_run_is_mirrored_to_agent_runs(tmp_path, monkeypatch):
+def test_workflow_run_is_mirrored_to_agent_runs(tmp_path, reload_for_data_dir):
     agent_runs, _profiles, tasks, _data_dir = _fresh_agent_run_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
 
     task_id = tasks.create_task(

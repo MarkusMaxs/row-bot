@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextvars
-import importlib
 import sys
 import types
 from pathlib import Path
@@ -12,30 +11,16 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in (
+def _fresh_modules(tmp_path: Path, reload_for_data_dir):
+    # row_bot.agent is not reloaded: these runs replace it with _install_fake_agent.
+    return tuple(reload_for_data_dir(
+        tmp_path / "data",
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
         "row_bot.agent_runs",
         "row_bot.skills",
-        "row_bot.agent",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_profiles as agent_profiles
-    import row_bot.agent_runs as agent_runs
-    import row_bot.skills as skills
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_profiles = importlib.reload(agent_profiles)
-    agent_runs = importlib.reload(agent_runs)
-    skills = importlib.reload(skills)
-    return tasks, threads, agent_profiles, agent_runs, skills
+    ))
 
 
 def _install_fake_agent(monkeypatch, calls: list[dict]) -> None:
@@ -86,10 +71,11 @@ def _run_workflow_synchronously(monkeypatch, tasks) -> None:
 def test_workflow_run_applies_profile_policy_and_mirrors_snapshot(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
     tasks, threads, agent_profiles, agent_runs, _skills = _fresh_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     calls: list[dict] = []
     _install_fake_agent(monkeypatch, calls)
@@ -158,10 +144,11 @@ def test_workflow_run_applies_profile_policy_and_mirrors_snapshot(
 def test_default_workflow_profile_uses_task_default_skills_without_task_snapshot(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
     tasks, threads, _profiles, _agent_runs, skills = _fresh_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     skills.load_skills()
     calls: list[dict] = []

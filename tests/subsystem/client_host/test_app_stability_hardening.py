@@ -1,4 +1,3 @@
-import importlib
 from types import SimpleNamespace
 
 import pytest
@@ -55,11 +54,10 @@ def test_stability_suppresses_benign_windows_proactor_reset():
     )
 
 
-def test_checkpoint_cleanup_keeps_latest_and_prunes_old(data_dir, monkeypatch):
+def test_checkpoint_cleanup_keeps_latest_and_prunes_old(data_dir, monkeypatch, reload_for_data_dir):
     import sqlite3
-    import row_bot.threads as threads
 
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(data_dir, "row_bot.threads")
     monkeypatch.setattr(threads, "DB_PATH", str(data_dir / "threads.db"))
     threads._init_thread_db(raise_on_error=True)
 

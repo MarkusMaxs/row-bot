@@ -1,7 +1,6 @@
 """Real canonical command/run records with isolated disposable process effects."""
 # ruff: noqa: F811 -- imported pytest fixture name.
 from concurrent.futures import ThreadPoolExecutor
-import importlib
 import json
 import sqlite3
 import sys
@@ -111,7 +110,7 @@ def test_consumed_nonce_is_bound_to_exact_review_and_second_authority_check(owne
     assert not d.runtime.tracked_processes(d.workspace.path)
 
 
-def test_uncertain_reserved_start_after_reload_is_never_redispatched(owner, monkeypatch):
+def test_uncertain_reserved_start_after_reload_is_never_redispatched(owner, monkeypatch, reload_for_data_dir):
     d, body = owner.d, owner.body()
     calls = []
     def lost(*a, **kw):
@@ -120,7 +119,7 @@ def test_uncertain_reserved_start_after_reload_is_never_redispatched(owner, monk
     monkeypatch.setattr(d.service, "start_workspace_process", lost)
     first = owner.execute(body)
     assert first["status"] == "partial"
-    importlib.reload(commands)
+    reload_for_data_dir(None, "row_bot.application.workspace_process_commands")
     second = owner.execute(body)
     assert second["status"] == "partial" and second["workspace_process_id"] == body["command_id"]
     assert calls == [1]

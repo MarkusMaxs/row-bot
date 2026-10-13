@@ -1,36 +1,22 @@
 from __future__ import annotations
 
-import importlib
 import sqlite3
-import sys
 
 
-def _fresh_threads(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in ("threads", "row_bot.threads"):
-        sys.modules.pop(name, None)
-    import row_bot.threads as threads
-
-    return importlib.reload(threads)
+def _fresh_threads(tmp_path, reload_for_data_dir):
+    (threads,) = reload_for_data_dir(tmp_path / "data", "row_bot.threads")
+    return threads
 
 
-def _fresh_developer_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in (
-        "row_bot.threads",
-        "row_bot.developer.storage",
-        "row_bot.developer.worktrees",
-        "row_bot.tasks",
-    ):
-        sys.modules.pop(name, None)
-    import row_bot.threads as threads
-    import row_bot.developer.storage as storage
-
-    return importlib.reload(threads), importlib.reload(storage)
+def _fresh_developer_modules(tmp_path, reload_for_data_dir):
+    threads, storage, _worktrees, _tasks = reload_for_data_dir(
+        tmp_path / "data", "row_bot.threads", "row_bot.developer.storage", "row_bot.developer.worktrees", "row_bot.tasks"
+    )
+    return threads, storage
 
 
-def test_thread_pin_metadata_migrates_and_preserves_updated_at(tmp_path, monkeypatch):
-    threads = _fresh_threads(tmp_path, monkeypatch)
+def test_thread_pin_metadata_migrates_and_preserves_updated_at(tmp_path, reload_for_data_dir):
+    threads = _fresh_threads(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Thread Jun 03, 20:45")
 
     with sqlite3.connect(threads.DB_PATH) as conn:
@@ -67,8 +53,8 @@ def test_thread_pin_metadata_migrates_and_preserves_updated_at(tmp_path, monkeyp
     assert stored_updated_at == "2026-06-03T10:00:00"
 
 
-def test_thread_pin_helpers_reject_missing_or_empty_thread_ids(tmp_path, monkeypatch):
-    threads = _fresh_threads(tmp_path, monkeypatch)
+def test_thread_pin_helpers_reject_missing_or_empty_thread_ids(tmp_path, reload_for_data_dir):
+    threads = _fresh_threads(tmp_path, reload_for_data_dir)
 
     for thread_id in ("", "missing"):
         try:
@@ -79,8 +65,8 @@ def test_thread_pin_helpers_reject_missing_or_empty_thread_ids(tmp_path, monkeyp
             raise AssertionError(f"pinning {thread_id!r} should fail")
 
 
-def test_developer_workspace_thread_rows_append_pin_state(tmp_path, monkeypatch):
-    threads = _fresh_threads(tmp_path, monkeypatch)
+def test_developer_workspace_thread_rows_append_pin_state(tmp_path, reload_for_data_dir):
+    threads = _fresh_threads(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread(
         "Developer thread",
         thread_type="code",
@@ -95,8 +81,8 @@ def test_developer_workspace_thread_rows_append_pin_state(tmp_path, monkeypatch)
     assert row[11] == pinned_at
 
 
-def test_developer_latest_thread_remains_recency_based_when_older_thread_is_pinned(tmp_path, monkeypatch):
-    threads, storage = _fresh_developer_modules(tmp_path, monkeypatch)
+def test_developer_latest_thread_remains_recency_based_when_older_thread_is_pinned(tmp_path, reload_for_data_dir):
+    threads, storage = _fresh_developer_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     workspace = storage.add_or_update_local_workspace(str(repo))

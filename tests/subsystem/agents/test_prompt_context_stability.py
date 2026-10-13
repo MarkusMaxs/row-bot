@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import importlib
 import json
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 
-def _fresh_agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.agent as agent
-
-    return importlib.reload(agent)
+def _fresh_agent(tmp_path, reload_for_data_dir):
+    (agent,) = reload_for_data_dir(tmp_path / "data", "row_bot.agent")
+    return agent
 
 
 def _message_text(message) -> str:
@@ -47,8 +44,8 @@ def _combined_text(messages) -> str:
     return "\n".join(_message_text(message) for message in messages)
 
 
-def test_plugin_skill_prompt_is_not_injected_wholesale(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_plugin_skill_prompt_is_not_injected_wholesale(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
 
     captured_allowlists: list[tuple[str, ...] | None] = []
 
@@ -115,8 +112,8 @@ def test_plugin_skill_prompt_is_not_injected_wholesale(tmp_path, monkeypatch):
     assert "RSS_PLUGIN_SKILL_SENTINEL" not in _combined_text(inherited)
 
 
-def test_tool_guides_follow_effective_authorization_not_global_parent_names(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_tool_guides_follow_effective_authorization_not_global_parent_names(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
 
     def fake_guides(_manual_names, *, active_tool_names=None) -> str:
         active = set(active_tool_names or ())
@@ -159,8 +156,8 @@ def test_tool_guides_follow_effective_authorization_not_global_parent_names(tmp_
     assert "FILESYSTEM_GUIDE_SENTINEL" not in mcp_only
 
 
-def test_deferred_skill_prompt_failure_is_closed_without_dropping_core_guides(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_deferred_skill_prompt_failure_is_closed_without_dropping_core_guides(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
 
     monkeypatch.setattr(agent, "get_context_size", lambda: 200_000)
     monkeypatch.setattr(agent, "get_current_model", lambda: "model:openai:gpt-4o")
@@ -195,8 +192,8 @@ def test_deferred_skill_prompt_failure_is_closed_without_dropping_core_guides(tm
     assert "## Skills" not in combined
 
 
-def test_anthropic_breakpoints_cover_the_stable_system_prompt_and_the_conversation_tail(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_anthropic_breakpoints_cover_the_stable_system_prompt_and_the_conversation_tail(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
 
     decision = SimpleNamespace(
         allowed=True,
@@ -288,8 +285,8 @@ def test_anthropic_breakpoints_cover_the_stable_system_prompt_and_the_conversati
     assert "cache_control" not in json.dumps(body["messages"])
 
 
-def test_chat_only_prompt_uses_stable_chat_contract_without_agent_runtime_context(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_chat_only_prompt_uses_stable_chat_contract_without_agent_runtime_context(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
 
     monkeypatch.setattr("row_bot.threads.get_latest_checkpoint_messages", lambda thread_id: [])
     monkeypatch.setattr(agent, "_agent_runtime_guidance", lambda tool_names: "RUNTIME_DYNAMIC_SENTINEL")

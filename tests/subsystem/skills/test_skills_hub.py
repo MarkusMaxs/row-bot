@@ -1,23 +1,16 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from pathlib import Path
 
 
-def _reload_hub(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    for name in list(sys.modules):
-        if name == "skills" or name.startswith("skills_hub"):
-            sys.modules.pop(name, None)
-    import row_bot.skills as skills
+def _reload_hub(tmp_path: Path, reload_for_data_dir):
+    (skills,) = reload_for_data_dir(tmp_path, "row_bot.skills")
     import row_bot.skills_hub.catalog as catalog
     import row_bot.skills_hub.installer as installer
     import row_bot.skills_hub.provenance as provenance
     import row_bot.skills_hub.scanner as scanner
     import row_bot.skills_hub.sources as sources
 
-    importlib.reload(skills)
     return skills, catalog, installer, provenance, scanner, sources
 
 
@@ -57,8 +50,8 @@ def _bundle(tmp_path: Path, name: str, *, files=None):
     )
 
 
-def test_direct_url_skill_md_bundle_parse(tmp_path, monkeypatch):
-    _skills, _catalog, _installer, _prov, _scanner, _sources = _reload_hub(tmp_path, monkeypatch)
+def test_direct_url_skill_md_bundle_parse(tmp_path, monkeypatch, reload_for_data_dir):
+    _skills, _catalog, _installer, _prov, _scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
     from row_bot.skills_hub.url_source import DirectURLSource
     import row_bot.skills_hub.url_source as url_source
 
@@ -70,8 +63,8 @@ def test_direct_url_skill_md_bundle_parse(tmp_path, monkeypatch):
     assert bundle.instructions == "Instructions for direct_skill."
 
 
-def test_github_style_install_ref_parsing(tmp_path, monkeypatch):
-    _reload_hub(tmp_path, monkeypatch)
+def test_github_style_install_ref_parsing(tmp_path, reload_for_data_dir):
+    _reload_hub(tmp_path, reload_for_data_dir)
     from row_bot.skills_hub.github_source import parse_github_install_ref
 
     parsed = parse_github_install_ref("openai/skills/skills/researcher")
@@ -86,8 +79,8 @@ def test_github_style_install_ref_parsing(tmp_path, monkeypatch):
     assert parsed.path == "skills/researcher"
 
 
-def test_well_known_index_parsing(tmp_path, monkeypatch):
-    _reload_hub(tmp_path, monkeypatch)
+def test_well_known_index_parsing(tmp_path, reload_for_data_dir):
+    _reload_hub(tmp_path, reload_for_data_dir)
     from row_bot.skills_hub.well_known_source import parse_well_known_index
 
     entries = parse_well_known_index(
@@ -110,8 +103,8 @@ def test_well_known_index_parsing(tmp_path, monkeypatch):
     assert entries[0].install_ref.endswith("SKILL.md")
 
 
-def test_multi_file_bundle_copy_scripts_warned_and_default_off(tmp_path, monkeypatch):
-    skills, _catalog, installer, provenance, _scanner, sources = _reload_hub(tmp_path, monkeypatch)
+def test_multi_file_bundle_copy_scripts_warned_and_default_off(tmp_path, reload_for_data_dir):
+    skills, _catalog, installer, provenance, _scanner, sources = _reload_hub(tmp_path, reload_for_data_dir)
     files = [
         sources.SkillFile.from_text("SKILL.md", _skill_md("multi_file"), kind="markdown"),
         sources.SkillFile.from_text("references/guide.md", "Reference notes.", kind="markdown"),
@@ -140,8 +133,8 @@ def test_multi_file_bundle_copy_scripts_warned_and_default_off(tmp_path, monkeyp
     assert provenance.get_record("multi_file") is not None
 
 
-def test_scanner_blocks_tools_metadata_and_path_traversal(tmp_path, monkeypatch):
-    _skills, _catalog, _installer, _prov, scanner, sources = _reload_hub(tmp_path, monkeypatch)
+def test_scanner_blocks_tools_metadata_and_path_traversal(tmp_path, reload_for_data_dir):
+    _skills, _catalog, _installer, _prov, scanner, sources = _reload_hub(tmp_path, reload_for_data_dir)
     tool_bundle = sources.bundle_from_files(
         source="direct_url",
         install_ref="https://example.test/toolish/SKILL.md",
@@ -166,8 +159,8 @@ def test_scanner_blocks_tools_metadata_and_path_traversal(tmp_path, monkeypatch)
     assert any(f.code == "path_traversal" for f in traversal_scan.findings)
 
 
-def test_scanner_warns_on_shell_commands(tmp_path, monkeypatch):
-    _skills, _catalog, _installer, _prov, scanner, sources = _reload_hub(tmp_path, monkeypatch)
+def test_scanner_warns_on_shell_commands(tmp_path, reload_for_data_dir):
+    _skills, _catalog, _installer, _prov, scanner, sources = _reload_hub(tmp_path, reload_for_data_dir)
     bundle = sources.bundle_from_files(
         source="direct_url",
         install_ref="https://example.test/shell/SKILL.md",
@@ -179,8 +172,8 @@ def test_scanner_warns_on_shell_commands(tmp_path, monkeypatch):
     assert any(f.code == "shell_commands" for f in scan.findings)
 
 
-def test_scanner_blocks_too_many_files(tmp_path, monkeypatch):
-    _skills, _catalog, _installer, _prov, scanner, sources = _reload_hub(tmp_path, monkeypatch)
+def test_scanner_blocks_too_many_files(tmp_path, reload_for_data_dir):
+    _skills, _catalog, _installer, _prov, scanner, sources = _reload_hub(tmp_path, reload_for_data_dir)
     files = [sources.SkillFile.from_text("SKILL.md", _skill_md("many_files"), kind="markdown")]
     files.extend(
         sources.SkillFile.from_text(f"references/{index}.md", "x", kind="markdown")
@@ -199,8 +192,8 @@ def test_scanner_blocks_too_many_files(tmp_path, monkeypatch):
     assert any(f.code == "too_many_files" for f in scan.findings)
 
 
-def test_explicit_install_make_available_sets_enabled(tmp_path, monkeypatch):
-    skills, _catalog, installer, _prov, _scanner, _sources = _reload_hub(tmp_path, monkeypatch)
+def test_explicit_install_make_available_sets_enabled(tmp_path, reload_for_data_dir):
+    skills, _catalog, installer, _prov, _scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
     bundle = _bundle(tmp_path, "available_skill")
 
     result = installer.install_bundle(bundle, enabled=True)
@@ -210,8 +203,8 @@ def test_explicit_install_make_available_sets_enabled(tmp_path, monkeypatch):
     assert not skills.is_tool_guide(skills.get_skill("available_skill"))
 
 
-def test_conflict_rename_behavior(tmp_path, monkeypatch):
-    skills, _catalog, installer, provenance, _scanner, _sources = _reload_hub(tmp_path, monkeypatch)
+def test_conflict_rename_behavior(tmp_path, reload_for_data_dir):
+    skills, _catalog, installer, provenance, _scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
     assert installer.install_bundle(_bundle(tmp_path, "conflict_skill")).success
 
     result = installer.install_bundle(_bundle(tmp_path, "conflict_skill"), conflict_policy="rename")
@@ -222,8 +215,8 @@ def test_conflict_rename_behavior(tmp_path, monkeypatch):
     assert provenance.get_record("conflict_skill_2") is not None
 
 
-def test_replace_with_backup_behavior(tmp_path, monkeypatch):
-    skills, _catalog, installer, _prov, _scanner, _sources = _reload_hub(tmp_path, monkeypatch)
+def test_replace_with_backup_behavior(tmp_path, reload_for_data_dir):
+    skills, _catalog, installer, _prov, _scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
     assert installer.install_bundle(_bundle(tmp_path, "replace_skill")).success
     changed = _bundle(
         tmp_path,
@@ -248,8 +241,8 @@ def test_replace_with_backup_behavior(tmp_path, monkeypatch):
     assert "Instructions for replace_skill." in previous.read_text(encoding="utf-8")
 
 
-def test_update_hash_detection_and_update(tmp_path, monkeypatch):
-    skills, _catalog, installer, provenance, _scanner, _sources = _reload_hub(tmp_path, monkeypatch)
+def test_update_hash_detection_and_update(tmp_path, monkeypatch, reload_for_data_dir):
+    skills, _catalog, installer, provenance, _scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
     initial = _bundle(tmp_path, "update_skill")
     assert installer.install_bundle(initial).success
 
@@ -280,8 +273,8 @@ def test_update_hash_detection_and_update(tmp_path, monkeypatch):
     assert provenance.get_record("update_skill").content_hash == updated.record.content_hash
 
 
-def test_update_check_reports_unavailable_for_non_refetchable_source(tmp_path, monkeypatch):
-    _skills, _catalog, installer, _provenance, _scanner, sources = _reload_hub(tmp_path, monkeypatch)
+def test_update_check_reports_unavailable_for_non_refetchable_source(tmp_path, reload_for_data_dir):
+    _skills, _catalog, installer, _provenance, _scanner, sources = _reload_hub(tmp_path, reload_for_data_dir)
     bundle = sources.bundle_from_files(
         source="pasted_markdown",
         install_ref="pasted:abc123",
@@ -297,8 +290,8 @@ def test_update_check_reports_unavailable_for_non_refetchable_source(tmp_path, m
     assert "Update check unavailable" in result.message
 
 
-def test_uninstall_removes_only_hub_installed_skill(tmp_path, monkeypatch):
-    skills, _catalog, installer, provenance, _scanner, _sources = _reload_hub(tmp_path, monkeypatch)
+def test_uninstall_removes_only_hub_installed_skill(tmp_path, reload_for_data_dir):
+    skills, _catalog, installer, provenance, _scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
     assert installer.install_bundle(_bundle(tmp_path, "hub_delete")).success
     assert installer.uninstall_skill("hub_delete").success
     assert skills.get_skill("hub_delete") is None

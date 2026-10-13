@@ -10,8 +10,8 @@ from tests.fixtures.tasks import fresh_tasks_module
 pytestmark = pytest.mark.subsystem
 
 
-def test_pipeline_state_round_trips_graph_interrupt_flag(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_pipeline_state_round_trips_graph_interrupt_flag(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
 
     tasks._save_pipeline_state(
         run_id="run-1",
@@ -37,8 +37,8 @@ def test_pipeline_state_round_trips_graph_interrupt_flag(tmp_path, monkeypatch) 
     assert tasks._load_pipeline_state("resume-1")["graph_interrupted"] is None
 
 
-def test_approval_resume_tokens_are_single_use(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_approval_resume_tokens_are_single_use(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     resumed: list[tuple[str, bool]] = []
     monkeypatch.setattr(tasks, "_resume_pipeline", lambda token, approved=True: resumed.append((token, approved)))
 
@@ -51,8 +51,8 @@ def test_approval_resume_tokens_are_single_use(tmp_path, monkeypatch) -> None:
     assert tasks.get_pending_approvals() == []
 
 
-def test_approval_buddy_events_include_resume_token(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_approval_buddy_events_include_resume_token(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.buddy import events
     from row_bot.buddy.events import BuddyEventBus, BuddyEventType
 
@@ -77,8 +77,8 @@ def test_approval_buddy_events_include_resume_token(tmp_path, monkeypatch) -> No
     assert approved.payload["resume_token"] == token
 
 
-def test_expired_approval_does_not_resume_pipeline(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_expired_approval_does_not_resume_pipeline(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     resumed: list[str] = []
     monkeypatch.setattr(tasks, "_resume_pipeline", lambda token, approved=True: resumed.append(token))
 
@@ -95,8 +95,8 @@ def test_expired_approval_does_not_resume_pipeline(tmp_path, monkeypatch) -> Non
     assert resumed == []
 
 
-def test_agent_run_approval_resumes_agent_runner_not_workflow(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_agent_run_approval_resumes_agent_runner_not_workflow(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     workflow_resumes: list[str] = []
     agent_resumes: list[tuple[str, str, bool]] = []
     monkeypatch.setattr(tasks, "_resume_pipeline", lambda token, approved=True: workflow_resumes.append(token))

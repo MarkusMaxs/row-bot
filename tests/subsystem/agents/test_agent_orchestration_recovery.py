@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 import pytest
 
@@ -9,25 +7,17 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path, monkeypatch):
+def _fresh_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    _tasks, _profiles, _settings, agent_runs, orchestrator = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.agent_profiles",
         "row_bot.agent_settings",
         "row_bot.agent_runs",
         "row_bot.agent_orchestrator",
-    ):
-        sys.modules.pop(name, None)
-    import row_bot.tasks as tasks
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_orchestrator as orchestrator
-
-    importlib.reload(tasks)
-    agent_runs = importlib.reload(agent_runs)
-    orchestrator = importlib.reload(orchestrator)
+    )
     return agent_runs, orchestrator
 
 
@@ -66,9 +56,9 @@ def _setup(agent_runs, orchestrator):
 
 def test_deferred_repair_marks_active_work_interrupted_without_executor_calls(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration, completed, running = _setup(agent_runs, orchestrator)
     superseded = agent_runs.create_agent_run(
         run_id="superseded",
@@ -118,9 +108,9 @@ def test_deferred_repair_marks_active_work_interrupted_without_executor_calls(
 
 def test_deferred_repair_restores_recorded_terminal_event_before_interrupting(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration, _completed, running = _setup(agent_runs, orchestrator)
     agent_runs.append_agent_event(
         running["id"],
@@ -169,8 +159,9 @@ def test_deferred_repair_restores_recorded_terminal_event_before_interrupting(
 def test_explicit_resume_requeues_only_interrupted_required_work(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration, completed, running = _setup(agent_runs, orchestrator)
     orchestrator.recover_interrupted_orchestrations()
     replacements: list[str] = []
@@ -217,8 +208,9 @@ def test_explicit_resume_requeues_only_interrupted_required_work(
 def test_resume_revalidates_agents_model_and_workspace_without_calling_executor(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration, _completed, running = _setup(agent_runs, orchestrator)
     orchestrator.recover_interrupted_orchestrations()
     calls: list[str] = []
@@ -263,8 +255,9 @@ def test_resume_revalidates_agents_model_and_workspace_without_calling_executor(
 def test_v2_recovery_keeps_inbox_and_resumes_original_parent_only_on_request(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     schedule_parent = orchestrator._schedule_parent_runner
     monkeypatch.setattr(orchestrator, "_schedule_parent_runner", lambda _id: None)
     orchestration = orchestrator.create_or_get_orchestration(
@@ -343,8 +336,9 @@ def test_v2_recovery_keeps_inbox_and_resumes_original_parent_only_on_request(
 def test_v2_foreground_recovery_resumes_terminal_children_with_empty_continuation(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id="foreground-parent",
         parent_generation_id="foreground-generation",

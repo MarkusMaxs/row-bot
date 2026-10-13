@@ -15,8 +15,8 @@ pytestmark = pytest.mark.platform
 
 
 @pytest.fixture
-def saved(tmp_path, monkeypatch):
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def saved(tmp_path, monkeypatch, reload_for_data_dir):
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     with sqlite3.connect(kg.DB_PATH) as conn:
         conn.executemany(
             "INSERT INTO entities VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -178,11 +178,11 @@ def test_graph_nodes_carry_status_and_tier_and_counts_cover_the_library(saved):
 
 @pytest.mark.slow
 def test_show_all_reads_thousands_of_linked_memories_within_the_wire_contract(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, reload_for_data_dir
 ):
     from row_bot.api.v1 import schemas as dto
 
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     with sqlite3.connect(kg.DB_PATH) as conn:
         conn.executemany(
             "INSERT INTO entities VALUES(?,?,?,?,?,?,?,?,?,?)",

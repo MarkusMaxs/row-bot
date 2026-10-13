@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextvars
-import importlib
 import sys
 import types
 from pathlib import Path
@@ -12,13 +11,14 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def _fresh_modules(tmp_path: Path, monkeypatch, reload_for_data_dir):
     # Nothing is preset (decision 9): these runs need an explicitly chosen model.
     from row_bot import models
 
     monkeypatch.setattr(models, "_current_model", "model:ollama:fixture-model")
-    for name in (
+    # row_bot.agent is not reloaded: these runs replace it with _install_fake_agent.
+    tasks, threads, agent_profiles, agent_runs, agent_runner, _orchestrator, worktrees = reload_for_data_dir(
+        tmp_path / "data",
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
@@ -26,23 +26,7 @@ def _fresh_modules(tmp_path: Path, monkeypatch):
         "row_bot.agent_runner",
         "row_bot.agent_orchestrator",
         "row_bot.developer.worktrees",
-        "row_bot.agent",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_profiles as agent_profiles
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_runner as agent_runner
-    import row_bot.developer.worktrees as worktrees
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_profiles = importlib.reload(agent_profiles)
-    agent_runs = importlib.reload(agent_runs)
-    agent_runner = importlib.reload(agent_runner)
-    worktrees = importlib.reload(worktrees)
+    )
     return tasks, threads, agent_profiles, agent_runs, agent_runner, worktrees
 
 
@@ -104,10 +88,11 @@ def _run_workflow_synchronously(monkeypatch, tasks) -> None:
     monkeypatch.setattr(tasks.threading, "Thread", ImmediateThread)
 
 
-def test_delegate_agent_step_waits_and_records_child_run(tmp_path, monkeypatch) -> None:
+def test_delegate_agent_step_waits_and_records_child_run(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, _worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     calls: list[dict] = []
     _install_fake_agent(monkeypatch, calls)
@@ -148,10 +133,12 @@ def test_delegate_agent_step_waits_and_records_child_run(tmp_path, monkeypatch) 
 def test_delegate_agent_wait_pauses_and_resumes_after_child_approval(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, _worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     _run_workflow_synchronously(monkeypatch, tasks)
     fake_agent = types.ModuleType("row_bot.agent")
@@ -218,10 +205,11 @@ def test_delegate_agent_wait_pauses_and_resumes_after_child_approval(
     assert history[0]["status"] == "completed"
 
 
-def test_delegate_agent_wait_denial_stops_parent_workflow(tmp_path, monkeypatch) -> None:
+def test_delegate_agent_wait_denial_stops_parent_workflow(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, _worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     _run_workflow_synchronously(monkeypatch, tasks)
     fake_agent = types.ModuleType("row_bot.agent")
@@ -280,10 +268,11 @@ def test_delegate_agent_wait_denial_stops_parent_workflow(tmp_path, monkeypatch)
     assert "Child Agent" in history[0]["status_message"]
 
 
-def test_delegate_agent_wait_child_error_fails_parent_workflow(tmp_path, monkeypatch) -> None:
+def test_delegate_agent_wait_child_error_fails_parent_workflow(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, _worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     _run_workflow_synchronously(monkeypatch, tasks)
     fake_agent = types.ModuleType("row_bot.agent")
@@ -333,10 +322,11 @@ def test_delegate_agent_wait_child_error_fails_parent_workflow(tmp_path, monkeyp
     assert "finished with status: failed" in history[0]["status_message"]
 
 
-def test_delegate_agent_step_can_start_background_and_wait_for_children(tmp_path, monkeypatch) -> None:
+def test_delegate_agent_step_can_start_background_and_wait_for_children(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, _worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     calls: list[dict] = []
     _install_fake_agent(monkeypatch, calls)
@@ -369,10 +359,11 @@ def test_delegate_agent_step_can_start_background_and_wait_for_children(tmp_path
     assert child_runs[0]["status"] == "completed"
 
 
-def test_delegate_agent_step_uses_worktree_workspace(tmp_path, monkeypatch) -> None:
+def test_delegate_agent_step_uses_worktree_workspace(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     calls: list[dict] = []
     _install_fake_agent(monkeypatch, calls)
@@ -447,10 +438,12 @@ def test_delegate_agent_worktree_requires_developer_workspace_even_when_skippabl
     tmp_path,
     monkeypatch,
     on_error,
+    reload_for_data_dir,
 ) -> None:
     tasks, threads, _profiles, agent_runs, _agent_runner, _worktrees = _fresh_modules(
         tmp_path,
         monkeypatch,
+        reload_for_data_dir,
     )
     calls: list[dict] = []
     _install_fake_agent(monkeypatch, calls)
