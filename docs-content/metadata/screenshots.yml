@@ -353,11 +353,11 @@ screenshots:
     <<: *desktop
     title: Tools settings
     output: settings-tools.png
-    alt: Tools settings with capability loading, retrieval compression, and the search and knowledge tools the assistant can use.
+    alt: Tools settings with how tools are offered, and the search and knowledge tools the assistant can use.
     docs_pages: [/docs/settings/tools]
     route: /app-v2/settings/tools
     capture_selector: '#workspace-columns'
-    expected_text: ["Search", "research and built-in tools", "Capability loading"]
+    expected_text: ["Search", "research and built-in tools", "How tools are offered"]
   settings-preferences:
     <<: *desktop
     title: Preferences settings
