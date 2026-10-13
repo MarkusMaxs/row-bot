@@ -413,8 +413,21 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
         assert after["previous_version"] == previous, after
         if kind == "linux":
             assert Path(os.readlink(root / "current")).name == version
+        # Restart now is a restart Row-Bot made: the launcher kept the marker
+        # through its own state.json writes, and the new version read it once
+        # (goals left working carry on, decision D4).
+        assert "restart_reason" not in state, state
+        app_log = work / "data" / "row_bot_app.log"
+
+        def counted_as_row_bots_own() -> bool:
+            try:
+                return "Row-Bot restarted itself (update)" in app_log.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return False
+
+        _wait("the restart to count as Row-Bot's own", counted_as_row_bots_own, 60, launcher)
         results.append(f"Restart now: {version} answered {restart_seconds:.0f}s later, verified, "
-                       f"previous={previous}")
+                       f"previous={previous}, counted as Row-Bot's own restart")
     except BaseException:
         for log in sorted(work.glob("*.log")):
             print(f"--- {log.name} ---\n{log.read_text(encoding='utf-8', errors='replace')[-8000:]}")
