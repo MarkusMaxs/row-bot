@@ -37,10 +37,6 @@ class McpTool(BaseTool):
             logger.debug("MCP destructive tool lookup failed: %s", exc)
             return set()
 
-    @property
-    def inference_keywords(self) -> list[str]:
-        return ["mcp", "model context protocol", "external tool", "external server"]
-
     def execute(self, query: str) -> str:
         try:
             from row_bot.mcp_client.runtime import get_status_summary

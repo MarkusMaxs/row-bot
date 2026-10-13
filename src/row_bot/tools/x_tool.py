@@ -670,10 +670,6 @@ class XTool(BaseTool):
             },
         }
 
-    @property
-    def inference_keywords(self) -> list[str]:
-        return ["tweet", "twitter", "x.com", "timeline", "retweet", "repost"]
-
     # ── Auth helpers ─────────────────────────────────────────────────────────
 
     def _get_client_id(self) -> str:

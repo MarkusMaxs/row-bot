@@ -185,12 +185,6 @@ def set_enabled(name: str, value: bool) -> None:
         _enabled[tool.name] = value
     logger.info("Tool '%s' %s", tool.name, "enabled" if value else "disabled")
     _invalidate_agent_cache()
-    # Also invalidate the task tool-inference keyword map
-    try:
-        from row_bot.tasks import invalidate_keyword_map_cache
-        invalidate_keyword_map_cache()
-    except ImportError:
-        pass
 
 
 def get_tool(name: str) -> "BaseTool | None":
