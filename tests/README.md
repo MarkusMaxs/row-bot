@@ -57,3 +57,39 @@ recommended chat model per configured provider. The only acceptable
 provider-side failure is an explicit quota, credit or billing-limit response;
 schema, auth, routing, streaming, tool replay and unsupported-parameter
 failures are bugs.
+
+## Live eval (opt-in, spends money)
+
+`tests/e2e/live_eval/` runs about 25 representative tasks through the real
+Agent runtime. They cover chat, files, tools, a loopback web page, memory, a
+workflow, delegation, a long thread past compaction and a local Ollama model.
+`tests/e2e/test_live_verification.py` checks the cost plan's provider work
+against real APIs. Both need `ROW_BOT_LIVE_EVAL=1`.
+
+How a run is set up:
+
+- **Keys.** They come from provider environment variables only (for example
+  `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`), never from a data folder or the OS
+  keychain.
+- **Data.** Each provider runs in its own process with a fresh data folder.
+- **Budget.** The run stops before passing `ROW_BOT_LIVE_EVAL_MAX_USD`
+  (default 5) or `ROW_BOT_LIVE_EVAL_MAX_TOKENS` (default 2,000,000).
+- **Report.** It lands in `.tmp/live-eval/<timestamp>/report.md` and
+  `report.json`.
+
+```bash
+uv run python scripts/live_eval.py plan          # tasks x providers and estimated tokens; no network
+ROW_BOT_LIVE_EVAL=1 uv run python scripts/live_eval.py run --providers anthropic --checks
+uv run python scripts/live_eval.py ab --a baseline --b cache-key-none --providers openai   # with ROW_BOT_LIVE_EVAL=1
+uv run python scripts/live_eval.py manual        # the checks a person runs by hand
+```
+
+Costs are reported in one of three ways:
+
+- the provider's own figure (OpenRouter);
+- figures from a rates file you supply (`ROW_BOT_LIVE_EVAL_RATES`; see
+  `tests/e2e/live_eval/rates.example.json`);
+- otherwise "unpriced". There is no built-in price table.
+
+CI runs the same suite only by manual dispatch of `.github/workflows/live-e2e.yml`
+(`run_live_eval`), using repository secrets.
