@@ -374,6 +374,15 @@ def _saved_keys_restored():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_context_calibration():
+    # Request-size calibration is learned from reported usage per model and kept in usage.db.
+    # One test's fake usage (or a previous run's, in the reused worker folder) must not move
+    # another test's estimates and compaction points.
+    importlib.import_module("row_bot.context_calibration").reset_for_tests()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_title_model(monkeypatch):
     # A conversation's first finished turn asks its model for a title on a background
     # thread. Tests that run turns script the agent, not that model: unscripted, the thread

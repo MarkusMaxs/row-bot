@@ -106,6 +106,8 @@ class ContextUsage:
 class PreparedModelInput:
     messages: list[BaseMessage]
     usage: ContextUsage
+    # The uncalibrated estimate (``usage`` holds the calibrated one); calibration learns from it.
+    raw_estimated_input_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -2238,6 +2240,34 @@ def _count_text_tokens(text: str) -> int:
     return _count_prepared_tokens([HumanMessage(content=text)], ())
 
 
+def _legacy_rendered_result_text(text: str) -> str:
+    """An older chart or plugin-image result as the model now reads it, else *text*.
+
+    Before WP D2, a chart result kept its whole Plotly figure (often 3K-17K tokens) in its text,
+    and a plugin image its base64, so every later call sent them. New results move them out when
+    they are created (``rendered_results``). An older one is sent as D2's short summary, rendered
+    the same way on every call (one cache reset for an existing conversation, then none); the
+    checkpoint, which the transcript reads charts from, keeps it as it was.
+    """
+    if not text.startswith(("__CHART__:", "__IMAGE__:")):
+        return text
+    from row_bot import rendered_results
+
+    try:
+        if text.startswith(rendered_results.CHART_MARKER):
+            raw, label = rendered_results.split_marker(text, rendered_results.CHART_MARKER) or ("", "")
+            figure = json.loads(raw)
+            if not isinstance(figure, dict) or not isinstance(figure.get("data"), list):
+                return text
+            return rendered_results.chart_summary(figure, label=label, handle=None, size=len(raw))
+        encoded, caption = rendered_results.split_marker(text, rendered_results.IMAGE_MARKER) or ("", "")
+        size = len(encoded.strip()) * 3 // 4
+        note = f"[Image produced (about {max(1, round(size / 1024)):,} KB); its data is not included here.]"
+        return f"{caption}\n{note}" if caption else note
+    except (ValueError, TypeError, AttributeError):
+        return text
+
+
 def _tool_result_views(visible: list) -> list[_ToolResultView]:
     views: list[_ToolResultView] = []
     untrusted_names: frozenset[str] | None = None
@@ -2247,7 +2277,7 @@ def _tool_result_views(visible: list) -> list[_ToolResultView]:
             continue
         name = _tool_message_name_at(visible, position, message)
         raw = _content_to_str(getattr(message, "content", ""))
-        text = _redact_data_uris(raw)
+        text = _redact_data_uris(_legacy_rendered_result_text(raw))
         fence: tuple[str, tuple[str, ...] | None] | None = _stored_fence(message)
         if fence is None:
             # Stored before results carried their fence decision: decide now, as before.
@@ -2446,13 +2476,16 @@ def _apply_history_hygiene(
     *,
     policy: Any,
     max_tokens: int,
+    pressure: bool = False,
 ) -> list:
     """Put every tool result in *trimmed* in the form the model sees (F19-F22).
 
     * Old results are cleared only when the marks jump (``history_hygiene``): once the clearable
       output reaches the jump threshold, or the request reaches the compaction point. A jump moves
       the marks to the latest person turns in one step and is persisted, so it is one cache
-      rewrite, not one per turn.
+      rewrite, not one per turn. This runs before compaction, which summarizes only if the request
+      is still over (D2: clear first). Sizes are compared calibrated, as compaction compares them.
+      Under *pressure* (the provider just said the request was too long) anything clearable jumps.
     * A repeated result is stubbed as the newer copy; the earlier copy is never rewritten.
     * Proportional shrinking is an emergency step: only when the newest turn alone would reach
       the compaction point (compaction can't bring it back), or, without a known policy, when the
@@ -2473,6 +2506,9 @@ def _apply_history_hygiene(
     system = [message for message in trimmed if isinstance(message, SystemMessage)]
     compact_at = int(getattr(policy, "compact_at_tokens", None) or 0)
 
+    def request_size(summary: str, part: list) -> int:
+        return _calibrated_tokens(_request_tokens(system, summary, part), policy)
+
     target = _hygiene_jump_target(views, visible, marks, boundary)
     clearable = sum(
         view.tokens
@@ -2483,12 +2519,14 @@ def _apply_history_hygiene(
     current: list = []
     if clearable:
         reason = ""
-        if clearable >= history_hygiene.jump_threshold(max_tokens):
+        if pressure:
+            reason = "overflow"
+        elif clearable >= history_hygiene.jump_threshold(max_tokens):
             reason = "batch"
         elif compact_at:
             rendered = _render_tool_results(views, marks, boundary=boundary)
             current = _with_rendered_results(visible, rendered)
-            if _request_tokens(system, summary_text, current[boundary:]) >= compact_at:
+            if request_size(summary_text, current[boundary:]) >= compact_at:
                 reason = "compaction point"
         if reason:
             marks = target
@@ -2513,9 +2551,9 @@ def _apply_history_hygiene(
             (index for index, message in enumerate(visible) if is_person_message(message)),
             default=0,
         )
-        emergency = _request_tokens(system, "", current[newest:]) >= compact_at
+        emergency = request_size("", current[newest:]) >= compact_at
     else:
-        emergency = _request_tokens(system, summary_text, current[boundary:]) >= max_tokens
+        emergency = request_size(summary_text, current[boundary:]) >= max_tokens
     if emergency:
         logger.debug("History hygiene: emergency shrink of tool results (thread=%s)", thread_id[:8])
         rendered = _render_tool_results(views, marks, boundary=boundary, shrink_budget=int(max_tokens * 0.65))
@@ -2531,12 +2569,13 @@ def _apply_history_hygiene(
     return [replacements.get(id(message), message) for message in trimmed]
 
 
-def _collect_agent_complete_input(state: dict, *, policy: Any = None) -> dict:
+def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: bool = False) -> dict:
     """Collect the complete provider-facing Agent input without hard trimming.
 
     Tool results reach the model through ``_apply_history_hygiene``: old output is cleared only in
     sticky jumps, a repeated result is stubbed as the newer copy, untrusted results are fenced, and
-    proportional shrinking is an emergency step. *policy* is the model's context policy.
+    proportional shrinking is an emergency step. *policy* is the model's context policy; *pressure*
+    says the provider has just refused the request as too long.
     """
     budget = pre_model_budget_hook(state)
     _thread_id = _current_thread_id_var.get() or None
@@ -2787,7 +2826,9 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None) -> dict:
     _current_prompt_prefix_sections_var.set(tuple(_prefix_sections))
 
     # ── Tool results: sticky clearing, dedup, fencing (WP A4a) ────────
-    trimmed = _apply_history_hygiene(trimmed, history, visible, policy=policy, max_tokens=max_tokens)
+    trimmed = _apply_history_hygiene(
+        trimmed, history, visible, policy=policy, max_tokens=max_tokens, pressure=pressure
+    )
 
     # ── Anthropic-compatible: consolidate system messages ─────────────
     # Anthropic Messages transports require all system messages to be
@@ -2868,8 +2909,8 @@ _CONTEXT_USAGE_SCHEMA_VERSION = 2
 _SUMMARY_STATE_SCHEMA_VERSION = 1
 _COMPACTION_LOCKS: dict[str, threading.Lock] = {}
 _COMPACTION_LOCKS_GUARD = threading.Lock()
-_COMPACTION_FAILURES: set[tuple[str, str]] = set()
-_CONTEXT_OVERFLOWED_MODELS: set[str] = set()
+# (thread id, mode) -> the attempt that last failed (see _compaction_blocked).
+_COMPACTION_FAILURES: dict[tuple[str, str], dict[str, Any]] = {}
 _SUMMARY_HEADINGS = (
     "## Current Goal",
     "## Constraints and Decisions",
@@ -2946,15 +2987,51 @@ def _preparation_fingerprint(inputs: PreparationInputs) -> str:
     })
 
 
+_THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def _counted_message(message: BaseMessage) -> BaseMessage:
+    """*message* as it is counted: a thinking block by its text, not by its repr and signature (F29)."""
+    content = getattr(message, "content", None)
+    if not isinstance(message, AIMessage) or not isinstance(content, list):
+        return message
+    if not any(isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES for block in content):
+        return message
+    blocks: list[Any] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES:
+            text = block.get("thinking") if block.get("type") == "thinking" else block.get("data")
+            blocks.append({"type": "text", "text": text if isinstance(text, str) else ""})
+        else:
+            blocks.append(block)
+    return _copy_message(message, content=blocks)
+
+
 def _count_prepared_tokens(
     messages: list[BaseMessage], tools: tuple[dict, ...]  # noqa: F811
 ) -> int:
     return int(count_tokens_approximately(
-        messages,
+        [_counted_message(message) for message in messages],
         tools=list(tools),
         tokens_per_image=1600,
         use_usage_metadata_scaling=False,
     ))
+
+
+def _calibration_key(policy: Any, *, provider_id: str = "", model_ref: str = "") -> tuple[str, str]:
+    """Which model's calibration applies: the policy's provider and model, else the request's."""
+    return (
+        str(getattr(policy, "provider_id", "") or provider_id or ""),
+        str(getattr(policy, "model_ref", "") or model_ref or ""),
+    )
+
+
+def _calibrated_tokens(tokens: int, policy: Any, *, provider_id: str = "", model_ref: str = "") -> int:
+    """An estimate as the provider is expected to count it (see ``context_calibration``)."""
+    from row_bot import context_calibration
+
+    provider, model = _calibration_key(policy, provider_id=provider_id, model_ref=model_ref)
+    return context_calibration.calibrated(tokens, provider, model)
 
 
 def _normalized_confirmed_input_tokens(
@@ -3002,6 +3079,83 @@ def _chat_projected_prefix_count(messages: tuple[BaseMessage, ...], boundary: in
         )
 
 
+def _summary_splice_start(
+    inputs: PreparationInputs,
+    history: list[BaseMessage],
+    boundary: int,
+) -> int | None:
+    """Where the kept part of the prepared *history* starts: after everything the summary covers.
+
+    Agent mode finds the first kept message by its id (F25). Preparation drops empty and
+    reasoning-only turns and orphaned results and adds repair stubs, so a count of raw messages
+    could cut the person's message or orphan a tool result. Without ids (direct calls) the count
+    still serves. Chat Only, rebuilt from the projected transcript, counts projected messages.
+    """
+    if inputs.mode == "chat_only":
+        count = _chat_projected_prefix_count(inputs.raw_messages, boundary)
+        return count if count <= len(history) else None
+    first_kept = inputs.raw_messages[boundary] if boundary < len(inputs.raw_messages) else None
+    kept_id = str(getattr(first_kept, "id", "") or "")
+    if kept_id:
+        positions = [
+            index for index, message in enumerate(history) if str(getattr(message, "id", "") or "") == kept_id
+        ]
+        if len(positions) == 1:
+            return positions[0]
+    count = sum(1 for message in inputs.raw_messages[:boundary] if not isinstance(message, SystemMessage))
+    return count if count <= len(history) else None
+
+
+def _without_thinking_blocks(message: AIMessage) -> AIMessage | None:
+    """*message* without thinking blocks; None when nothing (no text, no tool call) is left."""
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return message
+    kept = [block for block in content if not (isinstance(block, dict) and block.get("type") in _THINKING_BLOCK_TYPES)]
+    if len(kept) == len(content):
+        return message
+    stripped = _copy_message(message, content=kept)
+    return None if _is_empty_assistant_without_action(stripped) else stripped
+
+
+def _without_rebound_thinking(
+    retained: list[BaseMessage],
+    inputs: PreparationInputs,
+    summary_state: dict,
+) -> list[BaseMessage]:
+    """The kept turns, without thinking blocks the summary unbound (Claude 5.x preserved thinking).
+
+    A thinking block's signature is bound to everything before it, and the summary replaced that.
+    The turns that were complete when the summary was made (up to ``thinking_strip``) lose their
+    thinking blocks in the request; their text and tool calls stay. The turn then in progress keeps
+    them: a tool round's thinking must stay, and the API's ``drop_block`` (WP A2b) covers it. The
+    same request is sent on every later call, so this is one cache reset, made with the summary.
+    """
+    boundary = int(summary_state.get("boundary_message_count") or 0)
+    raw = inputs.raw_messages
+    until = history_hygiene.resolve(raw, summary_state.get("thinking_strip"))
+    # Never into the turn in progress, whatever the anchor says.
+    until = min(until, max((index for index, message in enumerate(raw) if is_person_message(message)), default=0))
+    if until <= boundary:
+        return retained
+    unbound = {
+        str(message.id)
+        for message in raw[boundary:until]
+        if isinstance(message, AIMessage) and getattr(message, "id", None)
+    }
+    if not unbound:
+        return retained
+    result: list[BaseMessage] = []
+    for message in retained:
+        if isinstance(message, AIMessage) and str(getattr(message, "id", "") or "") in unbound:
+            stripped = _without_thinking_blocks(message)
+            if stripped is not None:
+                result.append(stripped)
+        else:
+            result.append(message)
+    return result
+
+
 def _messages_with_summary(inputs: PreparationInputs, summary_state: dict | None) -> list[BaseMessage]:
     messages = list(inputs.complete_messages)
     if not _summary_matches_inputs(summary_state, inputs):
@@ -3009,18 +3163,16 @@ def _messages_with_summary(inputs: PreparationInputs, summary_state: dict | None
     boundary = int(summary_state.get("boundary_message_count") or 0)
     if boundary <= 0 or boundary > len(inputs.raw_messages):
         return messages
-    if inputs.mode == "chat_only":
-        history_prefix_count = _chat_projected_prefix_count(inputs.raw_messages, boundary)
-    else:
-        history_prefix_count = sum(
-            1
-            for message in inputs.raw_messages[:boundary]
-            if not isinstance(message, SystemMessage)
-        )
     system_messages = [message for message in messages if isinstance(message, SystemMessage)]
     history_messages = [message for message in messages if not isinstance(message, SystemMessage)]
-    if history_prefix_count > len(history_messages):
+    start = _summary_splice_start(inputs, history_messages, boundary)
+    if start is None:
         return messages
+    retained = history_messages[start:]
+    if inputs.mode == "agent":
+        retained = _without_rebound_thinking(retained, inputs, summary_state)
+        # Spliced, the kept part is normalized again: it must be a valid transcript on its own.
+        retained = _normalize_provider_facing_messages(retained, provider_id=inputs.provider_id or None)
     summary_message = HumanMessage(content=(
         "<HISTORICAL_CONTEXT untrusted=\"true\">\n"
         f"{str(summary_state.get('summary') or '').strip()}\n"
@@ -3030,7 +3182,7 @@ def _messages_with_summary(inputs: PreparationInputs, summary_state: dict | None
         *system_messages,
         SystemMessage(content=_SUMMARY_REFERENCE_GUIDANCE),
         summary_message,
-        *history_messages[history_prefix_count:],
+        *retained,
     ]
 
 
@@ -3047,8 +3199,10 @@ def _prepare_model_input(
     if mode != inputs.mode:
         raise ValueError("preparation mode mismatch")
     messages = _messages_with_summary(inputs, summary_state)
-    estimated = _count_prepared_tokens(messages, inputs.canonical_tools)
+    raw_estimate = _count_prepared_tokens(messages, inputs.canonical_tools)
     policy = inputs.policy
+    # Calibrated per model from what providers reported (F29); compared with the compaction point.
+    estimated = _calibrated_tokens(raw_estimate, policy, provider_id=inputs.provider_id, model_ref=inputs.model_ref)
     usage = ContextUsage(
         schema_version=_CONTEXT_USAGE_SCHEMA_VERSION,
         estimated_input_tokens=estimated,
@@ -3056,7 +3210,7 @@ def _prepare_model_input(
         compact_at_tokens=getattr(policy, "compact_at_tokens", None),
         native_window_tokens=getattr(policy, "native_limit_tokens", None),
         effective_limit_tokens=getattr(policy, "effective_limit_tokens", None),
-        count_source="langchain_approximate",
+        count_source="langchain_approximate" if estimated == raw_estimate else "calibrated_approximate",
         capacity_source=str(getattr(policy, "capacity_source", "unknown") or "unknown"),
         capacity_state=str(getattr(policy, "capacity_state", "unavailable") or "unavailable"),
         limit_kind=str(getattr(policy, "limit_kind", "unknown") or "unknown"),
@@ -3067,13 +3221,18 @@ def _prepare_model_input(
         policy_fingerprint=inputs.policy_fingerprint,
         status=status,
     )
-    return PreparedModelInput(messages=messages, usage=usage)
+    return PreparedModelInput(messages=messages, usage=usage, raw_estimated_input_tokens=raw_estimate)
 
 
-def _collect_agent_preparation_inputs(state: dict, config: dict | None = None) -> PreparationInputs:
+def _collect_agent_preparation_inputs(
+    state: dict,
+    config: dict | None = None,
+    *,
+    pressure: bool = False,
+) -> PreparationInputs:
     model_ref = str(_active_model_override.get() or get_current_model())
     policy = get_context_policy(model_ref)
-    collected = _collect_agent_complete_input(state, policy=policy)
+    collected = _collect_agent_complete_input(state, policy=policy, pressure=pressure)
     messages = tuple(collected["llm_input_messages"])
     raw_messages = tuple(state.get("messages") or ())
     provider_id = str(getattr(policy, "provider_id", "") or _active_provider_id() or "")
@@ -3185,7 +3344,10 @@ def _user_led_groups(messages: tuple[BaseMessage, ...]) -> list[tuple[int, int]]
 
 def _serialized_compaction_message(message: BaseMessage) -> str:
     role = "row_bot_turn_context" if is_turn_context_message(message) else str(getattr(message, "type", type(message).__name__))
-    content = _redact_data_uris(_content_to_str(getattr(message, "content", "") or ""))
+    content = _content_to_str(getattr(message, "content", "") or "")
+    if isinstance(message, ToolMessage):
+        content = _legacy_rendered_result_text(content)
+    content = _redact_data_uris(content)
     if isinstance(message, AIMessage):
         calls = list(getattr(message, "tool_calls", None) or [])
         call_text = json.dumps(calls, sort_keys=True, ensure_ascii=False, default=str) if calls else ""
@@ -3243,7 +3405,9 @@ def _bounded_group_text(
     per_tool_tokens = max(128, token_budget // max(2, tool_count + 1))
     for message in messages[start:end]:
         if isinstance(message, ToolMessage):
-            content = _redact_data_uris(_content_to_str(getattr(message, "content", "") or ""))
+            content = _redact_data_uris(
+                _legacy_rendered_result_text(_content_to_str(getattr(message, "content", "") or ""))
+            )
             content = _truncate_text_to_token_budget(
                 content,
                 per_tool_tokens,
@@ -3336,10 +3500,14 @@ def _summarize_aged_range(
     previous_boundary = int((previous_state or {}).get("boundary_message_count") or 0)
     if boundary <= previous_boundary:
         raise ContextCompactionError("No new complete conversation range is available to compact.")
+    from row_bot import context_calibration
+
     usable = int(getattr(inputs.policy, "usable_input_tokens", None) or 0)
     output_tokens = _summary_output_allowance(inputs, compactable_tokens)
     instruction_tokens = _count_prepared_tokens([SystemMessage(content=_SUMMARY_SYSTEM_PROMPT)], ())
-    input_budget = usable - output_tokens - instruction_tokens - 256
+    # The summarizer is the thread's model: its window, in this model's estimated tokens.
+    provider, model = _calibration_key(inputs.policy, provider_id=inputs.provider_id, model_ref=inputs.model_ref)
+    input_budget = context_calibration.uncalibrated(usable - output_tokens - 256, provider, model) - instruction_tokens
     if input_budget <= 512:
         raise ContextCompactionError("The selected context allocation cannot fit a bounded compactor request.")
 
@@ -3524,16 +3692,118 @@ def _terminal_compaction_failure(
 
 
 def _fixed_prompt_tool_envelope_tokens(inputs: PreparationInputs) -> int:
-    """Count the non-compactable system prompt and bound tool schemas."""
+    """Count the non-compactable system prompt and bound tool schemas (calibrated)."""
     fixed_messages = [
         message
         for message in inputs.complete_messages
         if isinstance(message, SystemMessage)
     ]
-    return _count_prepared_tokens(fixed_messages, inputs.canonical_tools)
+    return _calibrated_tokens(
+        _count_prepared_tokens(fixed_messages, inputs.canonical_tools),
+        inputs.policy,
+        provider_id=inputs.provider_id,
+        model_ref=inputs.model_ref,
+    )
 
 
-def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
+# ── Failed compactions are not retried until the turn or the input changes (F26) ─────────────
+# A failure was remembered per checkpoint revision, which changes with every tool step, so a
+# compaction that could not work ran again (with its summarizer calls) on every model call. Now the
+# marker names what was attempted: the summary in force and every older complete group, under this
+# model and policy. The same attempt runs at most once per turn; a new turn, or new input to age,
+# gets one more. Markers are kept in thread_meta (and in memory for calls without a thread row).
+_COMPACTION_FAILURES_MAX = 256
+
+
+def _compaction_turn_id(inputs: PreparationInputs) -> str:
+    return _turn_id_from_budget(inputs.execution_budget) or _current_generation_id_var.get("") or ""
+
+
+def _compaction_attempt(inputs: PreparationInputs, summary_state: dict | None) -> dict[str, Any]:
+    """What a compaction now would work on: the summary in force and every older complete group."""
+    from row_bot.threads import context_boundary_digest
+
+    groups = _user_led_groups(inputs.raw_messages)
+    newest = groups[-1][0] if groups else 0
+    return {
+        "boundary": int((summary_state or {}).get("boundary_message_count") or 0),
+        "digest": _stable_json_hash({
+            "mode": inputs.mode,
+            "model": inputs.model_ref,
+            "policy": inputs.policy_fingerprint,
+            "agable": context_boundary_digest(list(inputs.raw_messages), newest, inputs.mode),
+        })[:32],
+    }
+
+
+def _compaction_failure_marker(thread_id: str, mode: str) -> dict | None:
+    marker = _COMPACTION_FAILURES.get((thread_id, mode))
+    if marker is None and thread_id:
+        try:
+            from row_bot.threads import load_compaction_failure
+
+            marker = load_compaction_failure(thread_id, mode)
+        except Exception:
+            logger.debug("Compaction failure marker unavailable", exc_info=True)
+    return marker
+
+
+def _compaction_blocked(thread_id: str, inputs: PreparationInputs, attempt: dict[str, Any]) -> bool:
+    """Whether this attempt already failed, in this turn (or, without turns, at all)."""
+    marker = _compaction_failure_marker(thread_id, inputs.mode)
+    if not marker or any(marker.get(key) != value for key, value in attempt.items()):
+        return False
+    turn = _compaction_turn_id(inputs)
+    return not turn or str(marker.get("turn") or "") == turn
+
+
+def _record_compaction_failure(thread_id: str, inputs: PreparationInputs, attempt: dict[str, Any]) -> None:
+    marker = {**attempt, "turn": _compaction_turn_id(inputs)}
+    _COMPACTION_FAILURES[(thread_id, inputs.mode)] = marker
+    while len(_COMPACTION_FAILURES) > _COMPACTION_FAILURES_MAX:
+        _COMPACTION_FAILURES.pop(next(iter(_COMPACTION_FAILURES)))
+    if thread_id:
+        try:
+            from row_bot.threads import save_compaction_failure
+
+            save_compaction_failure(thread_id, inputs.mode, marker)
+        except Exception:
+            logger.debug("Compaction failure marker was not saved", exc_info=True)
+
+
+def _clear_compaction_failure(thread_id: str, mode: str) -> None:
+    known = _COMPACTION_FAILURES.pop((thread_id, mode), None)
+    if thread_id and (known is not None or _compaction_failure_marker(thread_id, mode)):
+        try:
+            from row_bot.threads import save_compaction_failure
+
+            save_compaction_failure(thread_id, mode, None)
+        except Exception:
+            logger.debug("Compaction failure marker was not cleared", exc_info=True)
+
+
+def _thinking_strip_anchor(inputs: PreparationInputs, boundary: int) -> dict | None:
+    """Where the turns complete at this compaction end (their thinking is unbound by it)."""
+    groups = _user_led_groups(inputs.raw_messages)
+    newest = groups[-1][0] if groups else 0
+    return history_hygiene.anchor(list(inputs.raw_messages), newest) if newest > boundary else None
+
+
+def _with_status(prepared: PreparedModelInput, status: str) -> PreparedModelInput:
+    return PreparedModelInput(
+        messages=prepared.messages,
+        usage=ContextUsage(**{**prepared.usage.to_dict(), "status": status}),
+        raw_estimated_input_tokens=prepared.raw_estimated_input_tokens,
+    )
+
+
+def _prepare_with_compaction(inputs: PreparationInputs, *, force: bool = False) -> PreparedModelInput:
+    """The next request, compacted first when it reaches the compaction point (D2).
+
+    Old tool output was already cleared at that point (``_apply_history_hygiene``), so this
+    summarizes only when the request is still over. *force* compacts below the point: the provider
+    has just refused the request as too long, so the estimate was wrong (reactive overflow, F27).
+    """
     thread_id = _current_thread_id_var.get() or ""
     summary_state = _validated_summary_for_inputs(inputs)
     prepared = _prepare_model_input(
@@ -3545,36 +3815,27 @@ def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
     compact_at = prepared.usage.compact_at_tokens
     usable = prepared.usage.usable_input_tokens
     if compact_at is None or usable is None:
-        unavailable = PreparedModelInput(
-            messages=prepared.messages,
-            usage=ContextUsage(**{**prepared.usage.to_dict(), "status": "unavailable"}),
-        )
+        unavailable = _with_status(prepared, "unavailable")
         _emit_context_event("context_usage", _usage_event_payload(unavailable.usage))
         return unavailable
     fixed_envelope = _fixed_prompt_tool_envelope_tokens(inputs)
     if fixed_envelope > usable:
-        failed = PreparedModelInput(
-            messages=prepared.messages,
-            usage=ContextUsage(**{**prepared.usage.to_dict(), "status": "failed"}),
-        )
         raise _terminal_compaction_failure(
             inputs,
-            failed,
+            _with_status(prepared, "failed"),
             "The fixed prompt and tool schema envelope exceeds the usable input limit.",
             required_input_tokens=fixed_envelope,
             fixed_envelope=True,
         )
-    if prepared.usage.estimated_input_tokens < compact_at:
+    if not force and prepared.usage.estimated_input_tokens < compact_at:
         _emit_context_event("context_usage", _usage_event_payload(prepared.usage))
         return prepared
 
-    failure_key = (thread_id, inputs.checkpoint_revision or "")
-    if failure_key in _COMPACTION_FAILURES:
+    attempt = _compaction_attempt(inputs, summary_state)
+    if not force and _compaction_blocked(thread_id, inputs, attempt):
+        # It failed for this input already in this turn: no summarizer call on every iteration.
         if prepared.usage.estimated_input_tokens <= usable:
-            warned = PreparedModelInput(
-                messages=prepared.messages,
-                usage=ContextUsage(**{**prepared.usage.to_dict(), "status": "failed"}),
-            )
+            warned = _with_status(prepared, "failed")
             _emit_context_event("compaction_failed", {
                 **_usage_event_payload(warned.usage),
                 "reason": "Compaction already failed for this unchanged conversation.",
@@ -3595,7 +3856,7 @@ def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
             summary_state,
             mode=inputs.mode,
         )
-        if prepared.usage.estimated_input_tokens < compact_at:
+        if not force and prepared.usage.estimated_input_tokens < compact_at:
             _emit_context_event("context_usage", _usage_event_payload(prepared.usage))
             return prepared
         _emit_context_event("compaction_started", _usage_event_payload(prepared.usage))
@@ -3632,6 +3893,8 @@ def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
                 "prompt_fingerprint": inputs.prompt_fingerprint,
                 "tool_fingerprint": inputs.tool_fingerprint,
                 "policy_fingerprint": inputs.policy_fingerprint,
+                # The kept turns already complete lose their (now unbound) thinking blocks.
+                "thinking_strip": _thinking_strip_anchor(inputs, boundary),
                 "created_at": _context_datetime.now().isoformat(),
             }
             rebuilt = _prepare_model_input(
@@ -3671,6 +3934,7 @@ def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
                         "boundary_message_count": boundary,
                         "boundary_digest": boundary_digest,
                         "summary": summary,
+                        "thinking_strip": _thinking_strip_anchor(inputs, boundary),
                         "created_at": _context_datetime.now().isoformat(),
                     }
                     rebuilt = _prepare_model_input(
@@ -3721,18 +3985,16 @@ def _prepare_with_compaction(inputs: PreparationInputs) -> PreparedModelInput:
             })
             # The Agent pre-model hook then shows this turn a full turn-context snapshot.
             _current_compaction_succeeded_var.set(True)
+            _clear_compaction_failure(thread_id, inputs.mode)
             return rebuilt
         except TaskStoppedError:
             raise
         except Exception as exc:
-            _COMPACTION_FAILURES.add(failure_key)
+            _record_compaction_failure(thread_id, inputs, attempt)
             reason = str(exc)[:240] or type(exc).__name__
             log_reason = reason if isinstance(exc, ContextCompactionError) else type(exc).__name__
             logger.warning("Context compaction failed: %s", log_reason)
-            failed = PreparedModelInput(
-                messages=prepared.messages,
-                usage=ContextUsage(**{**prepared.usage.to_dict(), "status": "failed"}),
-            )
+            failed = _with_status(prepared, "failed")
             if prepared.usage.estimated_input_tokens <= usable:
                 failure_event = _record_compaction_event(
                     inputs,
@@ -3829,19 +4091,18 @@ def _persist_settled_context_usage(
     return usage
 
 
-def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
-    """Prepare every Agent model/tool-loop call through one accounting path."""
-    from row_bot.runtime.executions import current_execution, generation_registry
-    execution = current_execution()
-    if execution is not None:
-        generation_registry.check_dispatch(execution)
-        if execution.segment_id:
-            from row_bot.runtime import admissions
-            if admissions.deletion_state(execution.conversation_id) != "active":
-                raise InterruptedError("conversation_deleting")
-            segment_id = admissions.start_segment(execution.pass_id) if execution.invocation_started else execution.segment_id
-            execution.invocation_started = True
-            _emit_context_event("platform_segment", {"segment_id": segment_id})
+def _prepare_agent_request(
+    state: dict,
+    config: dict | None = None,
+    *,
+    pressure: bool = False,
+) -> tuple[list, list, Any, Any]:
+    """The provider request for one Agent model call: cleared, compacted, and rendered.
+
+    Returns the request messages, the turn-context messages built for the checkpoint, the
+    preparation inputs, and the prepared input. *pressure* (the provider just refused the request
+    as too long) clears and compacts even below the compaction point.
+    """
     # This turn's context: built on the turn's first call, persisted through the hook's
     # ``messages`` update (LangGraph's add_messages reducer appends it after the turn's message),
     # and found in the checkpoint by every later call of the turn.
@@ -3851,17 +4112,22 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
         state = {**state, "messages": messages}
     _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for((config or {}).get("configurable")))
     _current_compaction_succeeded_var.set(False)
-    inputs = _collect_agent_preparation_inputs(state, config)
-    prepared = _prepare_with_compaction(inputs)
-    if _current_compaction_succeeded_var.get():
-        # A summary now stands in for older turn contexts: show this turn a full snapshot.
-        _current_compaction_succeeded_var.set(False)
-        resnapshot, created_after = _turn_context_after_compaction(messages, budget, created)
-        if created_after != created:
-            messages, created = resnapshot, created_after
-            state = {**state, "messages": messages}
-            inputs = _collect_agent_preparation_inputs(state, config)
-            prepared = _prepare_with_compaction(inputs)
+    if pressure:
+        inputs = _collect_agent_preparation_inputs(state, config, pressure=True)
+        prepared = _prepare_with_compaction(inputs, force=True)
+    else:
+        inputs = _collect_agent_preparation_inputs(state, config)
+        prepared = _prepare_with_compaction(inputs)
+    _current_compaction_succeeded_var.set(False)
+    # A summary stands in for older turn contexts: this turn gets a full snapshot. Checked on every
+    # call, so a compaction made outside this hook (an overflow retry, a resumed call) is followed
+    # by one on the next call.
+    resnapshot, created_after = _turn_context_after_compaction(messages, budget, created)
+    if created_after != created:
+        messages, created = resnapshot, created_after
+        state = {**state, "messages": messages}
+        inputs = _collect_agent_preparation_inputs(state, config)
+        prepared = _prepare_with_compaction(inputs)
     # The turn context travels in the user turn it follows (see turn_context.merge_into_preceding).
     llm_messages = turn_context.merge_into_preceding(prepared.messages)
     llm_messages = _with_conversation_cache_request(
@@ -3878,6 +4144,24 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             getattr(inputs, "canonical_tools", ()),
             sections=_current_prompt_prefix_sections_var.get(),
         )
+    return llm_messages, created, inputs, prepared
+
+
+def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
+    """Prepare every Agent model/tool-loop call through one accounting path."""
+    from row_bot.runtime.executions import current_execution, generation_registry
+    execution = current_execution()
+    if execution is not None:
+        generation_registry.check_dispatch(execution)
+        if execution.segment_id:
+            from row_bot.runtime import admissions
+            if admissions.deletion_state(execution.conversation_id) != "active":
+                raise InterruptedError("conversation_deleting")
+            segment_id = admissions.start_segment(execution.pass_id) if execution.invocation_started else execution.segment_id
+            execution.invocation_started = True
+            _emit_context_event("platform_segment", {"segment_id": segment_id})
+    llm_messages, created, inputs, prepared = _prepare_agent_request(state, config)
+    _remember_request_estimate(config, getattr(prepared, "raw_estimated_input_tokens", 0))
     if execution is not None:
         generation_registry.check_dispatch(execution)
         from row_bot.application.client_queue import acknowledge_consumed
@@ -3890,6 +4174,161 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     if created:
         update["messages"] = created
     return update
+
+
+# ── The Agent graph's model call (WP A4b) ───────────────────────────────────────────────────────
+
+# Reasoning written inline in an answer; the transcript shows it as the answer's reasoning (F32).
+_INLINE_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _with_inline_thinking_moved(message: Any, provider_id: str | None) -> Any:
+    """*message* with its inline ``<think>…</think>`` text kept as its reasoning, not its answer (F32).
+
+    Models that think in their answer text had that text stored in the answer, and so sent back on
+    every later call. It moves to ``reasoning_content``, where the transcript already shows it (the
+    same text, in the same place). Endpoints that replay reasoning keep the message as it came.
+    """
+    if not isinstance(message, AIMessage) or not isinstance(message.content, str):
+        return message
+    if _custom_endpoint_supports_reasoning_replay(provider_id):
+        return message
+    parts = _INLINE_THINK_RE.findall(message.content)
+    if not parts:
+        return message
+    additional = dict(getattr(message, "additional_kwargs", None) or {})
+    previous = additional.get("reasoning_content")
+    previous = previous if isinstance(previous, str) else ""
+    additional["reasoning_content"] = (previous + "\n" + "\n".join(parts)).strip()
+    return _copy_message(
+        message,
+        content=_INLINE_THINK_RE.sub("", message.content).strip(),
+        additional_kwargs=additional,
+    )
+
+
+def _observe_request_size(config: dict | None, response: Any) -> None:
+    """Teach the calibration what this request really cost (F29). Never fails the call."""
+    try:
+        inputs = _last_preparation_inputs(config)
+        estimate = _request_estimate(config)
+        if inputs is None or not estimate:
+            return
+        usage = normalize_model_usage(
+            dict(getattr(response, "response_metadata", None) or {}),
+            getattr(response, "usage_metadata", None),
+        )
+        from row_bot import context_calibration
+
+        provider, model = _calibration_key(inputs.policy, provider_id=inputs.provider_id, model_ref=inputs.model_ref)
+        context_calibration.observe(provider, model, estimated=estimate, reported=usage.input_tokens)
+    except Exception:
+        logger.debug("Request size calibration skipped", exc_info=True)
+
+
+def _request_after_overflow(exc: BaseException, config: dict | None) -> list | None:
+    """The request again, cleared and compacted after the provider refused it as too long (F27).
+
+    The overflow also calibrates the estimate (the request was at least the window). Returns None
+    when nothing smaller can be sent, so the error stands.
+    """
+    inputs = _last_preparation_inputs(config)
+    if inputs is None:
+        return None
+    estimate = _request_estimate(config)
+    try:
+        from row_bot import context_calibration
+
+        provider, model = _calibration_key(inputs.policy, provider_id=inputs.provider_id, model_ref=inputs.model_ref)
+        context_calibration.observe_overflow(
+            provider,
+            model,
+            estimated=estimate,
+            limit=getattr(inputs.policy, "effective_limit_tokens", None),
+            error_text=str(exc),
+        )
+    except Exception:
+        logger.debug("Overflow calibration skipped", exc_info=True)
+    state = {"messages": list(inputs.raw_messages), "execution_budget": inputs.execution_budget}
+    try:
+        llm_messages, _created, _inputs, prepared = _prepare_agent_request(state, config, pressure=True)
+    except (TaskStoppedError, InterruptedError):
+        raise
+    except Exception as retry_exc:
+        logger.warning("Context overflow: the request could not be compacted (%s)", type(retry_exc).__name__)
+        return None
+    retried = int(getattr(prepared, "raw_estimated_input_tokens", 0) or 0)
+    if estimate and retried >= estimate:
+        logger.warning("Context overflow: compaction found nothing to shorten; not retrying")
+        return None
+    logger.warning(
+        "Context overflow: compacted and retrying once (~%d estimated tokens, was ~%d, thread=%s)",
+        retried,
+        estimate,
+        (_current_thread_id_var.get() or "")[:8],
+    )
+    _remember_request_estimate(config, retried)
+    return llm_messages
+
+
+class _AgentModelCall:
+    """The Agent graph's model: it binds the tools once, then makes each provider call (WP A4b).
+
+    LangGraph calls it with the node's state for each model call and invokes what it returns. Around
+    the provider call itself:
+
+    * a call resumed after a failure has no prepared request (the request is never checkpointed,
+      F30), so it is prepared again, as the pre-model hook prepares it;
+    * a context-overflow error is followed by one compaction and one retry (F27). The provider
+      refused the request before reading it, so the retry costs nothing extra; a second overflow
+      stands;
+    * the input the provider reports calibrates the request-size estimate (F29);
+    * inline ``<think>`` text is stored as the answer's reasoning (F32).
+    """
+
+    def __init__(self, model: Any, bound_tools: list) -> None:
+        self.model = model
+        self.tools = list(bound_tools)
+        self._bound: Any = None
+        self._lock = threading.Lock()
+
+    def bound_model(self) -> Any:
+        if self._bound is None:
+            with self._lock:
+                if self._bound is None:
+                    # As create_react_agent binds a static model.
+                    self._bound = self.model.bind_tools(self.tools) if self.tools else self.model
+        return self._bound
+
+    def __call__(self, state: dict, runtime: Any = None) -> Any:
+        from langchain_core.runnables import RunnableLambda
+
+        model = self.bound_model()
+        resumed = None if state.get("llm_input_messages") else {
+            # LangGraph handed the model the raw history: no request was prepared in this run.
+            "messages": list(state.get("messages") or []),
+            "execution_budget": state.get("execution_budget"),
+        }
+
+        def call(messages: list, config: dict) -> Any:
+            if resumed is not None:
+                messages, _created, _inputs, prepared = _prepare_agent_request(resumed, config)
+                _remember_request_estimate(config, getattr(prepared, "raw_estimated_input_tokens", 0))
+            try:
+                response = model.invoke(messages, config)
+            except Exception as exc:
+                if not _is_context_overflow_error(exc):
+                    raise
+                retry = _request_after_overflow(exc, config)
+                if retry is None:
+                    raise
+                response = model.invoke(retry, config)
+            _observe_request_size(config, response)
+            inputs = _last_preparation_inputs(config)
+            return _with_inline_thinking_moved(response, getattr(inputs, "provider_id", None))
+
+        return RunnableLambda(call, name="row_bot_model_call")
+
 
 # Cache compiled agent graphs keyed by frozenset of enabled tool names
 _agent_cache: dict[frozenset[str], object] = {}
@@ -4072,7 +4511,29 @@ def _forget_preparation_inputs(config: dict | None) -> None:
     if key:
         with _PREPARATION_CARRIER_LOCK:
             _PREPARATION_CARRIER.pop(key, None)
+            _REQUEST_ESTIMATES.pop(key, None)
     _current_last_preparation_var.set(None)
+
+
+# The uncalibrated size of the request each model call is about to send, for calibration (F29).
+_REQUEST_ESTIMATES: dict[str, int] = {}
+
+
+def _remember_request_estimate(config: dict | None, tokens: int) -> None:
+    key = _preparation_carrier_key(config)
+    if key and tokens:
+        with _PREPARATION_CARRIER_LOCK:
+            _REQUEST_ESTIMATES[key] = int(tokens)
+            while len(_REQUEST_ESTIMATES) > 128:
+                _REQUEST_ESTIMATES.pop(next(iter(_REQUEST_ESTIMATES)))
+
+
+def _request_estimate(config: dict | None) -> int:
+    key = _preparation_carrier_key(config)
+    if not key:
+        return 0
+    with _PREPARATION_CARRIER_LOCK:
+        return int(_REQUEST_ESTIMATES.get(key) or 0)
 
 
 def get_current_thread_id() -> str:
@@ -5401,9 +5862,12 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 lc_tools = []
 
             from langgraph.prebuilt import ToolNode
+            tool_node = ToolNode(lc_tools, wrap_tool_call=_wrap_platform_tool_call) if lc_tools else None
             agent = create_react_agent(
-                model=llm,
-                tools=ToolNode(lc_tools, wrap_tool_call=_wrap_platform_tool_call) if lc_tools else [],
+                # Binds the same tools create_react_agent would, and makes each call (overflow
+                # retry, a resumed call's request, calibration; see _AgentModelCall).
+                model=_AgentModelCall(llm, list(tool_node.tools_by_name.values()) if tool_node is not None else []),
+                tools=tool_node if tool_node is not None else [],
                 prompt=None,
                 pre_model_hook=_pre_model_trim,
                 post_model_hook=post_model_budget_hook,
@@ -6170,6 +6634,62 @@ def _get_llm_for_reasoning_plan(model_label: str, reasoning_plan, *, use_overrid
     return get_llm_for(model_label)
 
 
+def _take_pending_context_events() -> list[tuple[str, dict]]:
+    """Chat Only's context events gathered so far, as stream events (and forgotten)."""
+    events = [
+        (str(event.get("type") or "context_usage"), event.get("payload") or {})
+        for event in _current_pending_context_events_var.get() or ()
+    ]
+    _current_pending_context_events_var.set(())
+    return events
+
+
+def _chat_only_request_after_overflow(
+    exc: BaseException,
+    inputs: PreparationInputs,
+    prepared: PreparedModelInput,
+) -> tuple[PreparedModelInput, list] | None:
+    """Chat Only's request again, compacted, after the provider refused it as too long (F27).
+
+    Returns the prepared input and request, or None when nothing smaller can be sent.
+    """
+    try:
+        from row_bot import context_calibration
+
+        provider, model = _calibration_key(inputs.policy, provider_id=inputs.provider_id, model_ref=inputs.model_ref)
+        context_calibration.observe_overflow(
+            provider,
+            model,
+            estimated=prepared.raw_estimated_input_tokens,
+            limit=getattr(inputs.policy, "effective_limit_tokens", None),
+            error_text=str(exc),
+        )
+    except Exception:
+        logger.debug("Overflow calibration skipped", exc_info=True)
+    try:
+        retried = _prepare_with_compaction(inputs, force=True)
+    except TaskStoppedError:
+        raise
+    except Exception as retry_exc:
+        logger.warning("Context overflow: the request could not be compacted (%s)", type(retry_exc).__name__)
+        return None
+    if retried.raw_estimated_input_tokens >= prepared.raw_estimated_input_tokens:
+        logger.warning("Context overflow: compaction found nothing to shorten; not retrying")
+        return None
+    logger.warning(
+        "Context overflow: compacted and retrying once (~%d estimated tokens, was ~%d)",
+        retried.raw_estimated_input_tokens,
+        prepared.raw_estimated_input_tokens,
+    )
+    messages = _with_conversation_cache_request(
+        retried.messages,
+        model_ref=inputs.model_ref,
+        provider_id=inputs.provider_id or None,
+        ttl=_current_prompt_cache_ttl(),
+    )
+    return retried, messages
+
+
 def stream_chat_only(
     user_input: str,
     config: dict,
@@ -6293,40 +6813,85 @@ def stream_chat_only(
         from row_bot.application.client_queue import acknowledge_consumed
         acknowledge_consumed(execution, [str(getattr(message, "id", "") or "") for message in messages])
         generation_registry.check_dispatch(execution)
-    try:
-        stream_iter = llm.stream(messages)
-        phase_timings["generation.provider_stream_create_ms"] = (
-            time.perf_counter() - _provider_started
-        ) * 1000.0
-    except Exception as exc:
-        if _is_context_overflow_error(exc):
-            _mark_context_overflow(preparation_inputs)
-            yield ("error", _friendly_api_error(str(exc), model_label))
-            return
-        stream_iter = None
+    overflow_retried = False
+    while True:
+        try:
+            stream_iter = llm.stream(messages)
+            phase_timings["generation.provider_stream_create_ms"] = (
+                time.perf_counter() - _provider_started
+            ) * 1000.0
+        except Exception as exc:
+            if _is_context_overflow_error(exc):
+                retry = None if overflow_retried else _chat_only_request_after_overflow(
+                    exc, preparation_inputs, prepared)
+                if retry is not None:
+                    overflow_retried = True
+                    prepared, messages = retry
+                    yield from _take_pending_context_events()
+                    continue
+                _mark_context_overflow(preparation_inputs)
+                yield ("error", _friendly_api_error(str(exc), model_label))
+                return
+            stream_iter = None
 
-    try:
-        if stream_iter is not None:
-            for chunk in stream_iter:
-                if stop_event and stop_event.is_set():
-                    break
-                response_metadata = getattr(chunk, "response_metadata", None) or {}
+        try:
+            if stream_iter is not None:
+                for chunk in stream_iter:
+                    if stop_event and stop_event.is_set():
+                        break
+                    response_metadata = getattr(chunk, "response_metadata", None) or {}
+                    if isinstance(response_metadata, dict) and response_metadata:
+                        latest_response_metadata.update(response_metadata)
+                    usage_metadata = getattr(chunk, "usage_metadata", None) or {}
+                    if isinstance(usage_metadata, dict) and usage_metadata:
+                        # Chunks carry usage deltas (input on one, output on
+                        # another for some providers); sum them as LangChain does.
+                        latest_response_metadata["usage_metadata"] = dict(add_usage(
+                            latest_response_metadata.get("usage_metadata"),
+                            usage_metadata,
+                        ))
+                    parts = decode_ai_stream_parts(chunk, decoder)
+                    if not parts and not thinking_signalled:
+                        thinking_signalled = True
+                        yield ("thinking", None)
+                        continue
+                    for part in parts:
+                        text = str(part.get("text") or "")
+                        if not text:
+                            continue
+                        if part.get("type") == "text":
+                            first_answer_ms = (time.perf_counter() - _provider_started) * 1000.0
+                            phase_timings.setdefault(
+                                "generation.provider_first_answer_token_ms",
+                                first_answer_ms,
+                            )
+                            provider_call.setdefault("first_answer_token_ms", first_answer_ms)
+                            full_answer.append(text)
+                            yield ("token", text)
+                        elif part.get("type") == "reasoning":
+                            provider_call.setdefault(
+                                "first_reasoning_token_ms",
+                                (time.perf_counter() - _provider_started) * 1000.0,
+                            )
+                            thinking_signalled = True
+                            full_reasoning.append(text)
+                            yield ("thinking_token", text)
+            else:
+                provider_call["mode"] = "invoke"
+                _provider_started = time.perf_counter()
+                if execution is not None:
+                    generation_registry.check_dispatch(execution)
+                result = llm.invoke(messages)
+                response_metadata = getattr(result, "response_metadata", None) or {}
                 if isinstance(response_metadata, dict) and response_metadata:
                     latest_response_metadata.update(response_metadata)
-                usage_metadata = getattr(chunk, "usage_metadata", None) or {}
+                usage_metadata = getattr(result, "usage_metadata", None) or {}
                 if isinstance(usage_metadata, dict) and usage_metadata:
-                    # Chunks carry usage deltas (input on one, output on
-                    # another for some providers); sum them as LangChain does.
-                    latest_response_metadata["usage_metadata"] = dict(add_usage(
-                        latest_response_metadata.get("usage_metadata"),
-                        usage_metadata,
-                    ))
-                parts = decode_ai_stream_parts(chunk, decoder)
-                if not parts and not thinking_signalled:
-                    thinking_signalled = True
-                    yield ("thinking", None)
-                    continue
-                for part in parts:
+                    latest_response_metadata["usage_metadata"] = dict(usage_metadata)
+                phase_timings["generation.provider_invoke_ms"] = (
+                    time.perf_counter() - _provider_started
+                ) * 1000.0
+                for part in decode_ai_stream_parts(result, decoder):
                     text = str(part.get("text") or "")
                     if not text:
                         continue
@@ -6344,49 +6909,40 @@ def stream_chat_only(
                             "first_reasoning_token_ms",
                             (time.perf_counter() - _provider_started) * 1000.0,
                         )
-                        thinking_signalled = True
                         full_reasoning.append(text)
                         yield ("thinking_token", text)
-        else:
-            provider_call["mode"] = "invoke"
-            _provider_started = time.perf_counter()
-            if execution is not None:
-                generation_registry.check_dispatch(execution)
-            result = llm.invoke(messages)
-            response_metadata = getattr(result, "response_metadata", None) or {}
-            if isinstance(response_metadata, dict) and response_metadata:
-                latest_response_metadata.update(response_metadata)
-            usage_metadata = getattr(result, "usage_metadata", None) or {}
-            if isinstance(usage_metadata, dict) and usage_metadata:
-                latest_response_metadata["usage_metadata"] = dict(usage_metadata)
-            phase_timings["generation.provider_invoke_ms"] = (
-                time.perf_counter() - _provider_started
-            ) * 1000.0
-            for part in decode_ai_stream_parts(result, decoder):
-                text = str(part.get("text") or "")
-                if not text:
+        except Exception as exc:
+            # Refused as too long before anything streamed: compacted once and asked again (F27).
+            if (_is_context_overflow_error(exc) and not overflow_retried
+                    and not full_answer and not full_reasoning):
+                retry = _chat_only_request_after_overflow(exc, preparation_inputs, prepared)
+                if retry is not None:
+                    overflow_retried = True
+                    prepared, messages = retry
+                    yield from _take_pending_context_events()
                     continue
-                if part.get("type") == "text":
-                    first_answer_ms = (time.perf_counter() - _provider_started) * 1000.0
-                    phase_timings.setdefault(
-                        "generation.provider_first_answer_token_ms",
-                        first_answer_ms,
-                    )
-                    provider_call.setdefault("first_answer_token_ms", first_answer_ms)
-                    full_answer.append(text)
-                    yield ("token", text)
-                elif part.get("type") == "reasoning":
-                    provider_call.setdefault(
-                        "first_reasoning_token_ms",
-                        (time.perf_counter() - _provider_started) * 1000.0,
-                    )
-                    full_reasoning.append(text)
-                    yield ("thinking_token", text)
-    except Exception as exc:
-        if _is_context_overflow_error(exc):
-            _mark_context_overflow(preparation_inputs)
-        yield ("error", _friendly_api_error(str(exc), model_label))
-        return
+            if _is_context_overflow_error(exc):
+                _mark_context_overflow(preparation_inputs)
+            yield ("error", _friendly_api_error(str(exc), model_label))
+            return
+        break
+
+    try:
+        from row_bot import context_calibration
+
+        provider, model = _calibration_key(
+            preparation_inputs.policy,
+            provider_id=preparation_inputs.provider_id,
+            model_ref=preparation_inputs.model_ref,
+        )
+        context_calibration.observe(
+            provider,
+            model,
+            estimated=getattr(prepared, "raw_estimated_input_tokens", 0),
+            reported=normalize_model_usage(dict(latest_response_metadata)).input_tokens,
+        )
+    except Exception:
+        logger.debug("Chat Only request size calibration skipped", exc_info=True)
 
     answer = "".join(full_answer)
     provider_done_ms = (time.perf_counter() - _provider_started) * 1000.0
@@ -7481,8 +8037,8 @@ def _stream_graph(agent, input_data, config: dict,
         return
     except Exception as exc:
         exc_str = str(exc)
-        # Auto-repair orphaned tool calls and retry once. Provider overflow is
-        # never replayed because a prior attempt may already have incurred cost.
+        # Auto-repair orphaned tool calls and retry once. A provider overflow reaching here already
+        # had its one compacted retry inside the model call (_AgentModelCall): the graph is not replayed.
         if _is_context_overflow_error(exc):
             _mark_context_overflow(_last_preparation_inputs(config))
             yield ("error", _friendly_api_error(exc_str))
@@ -7733,7 +8289,7 @@ def _stream_graph(agent, input_data, config: dict,
         return
     except Exception as exc:
         exc_str = str(exc)
-        # Auto-repair orphaned tool calls and retry once. Never replay overflow.
+        # Auto-repair orphaned tool calls and retry once. Never replay overflow (its retry was in the call).
         if _is_context_overflow_error(exc):
             _mark_context_overflow(_last_preparation_inputs(config))
             yield ("error", _friendly_api_error(exc_str))

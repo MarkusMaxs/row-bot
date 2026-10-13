@@ -602,6 +602,28 @@ _model_max_ctx_cache: dict[str, int | None] = {}  # model_name → max context
 _observed_local_context: dict[str, int] = {}
 
 
+# Compaction follows Claude Code (context plan, decision D2): old tool output is cleared first, and
+# history is summarized only near the limit, leaving room for the reply and for the summary. The
+# reply allowance is the request's headroom (usable input = window - reply allowance); compaction
+# starts that much plus the summary allowance below the window. Both are a share of the window,
+# capped: a 1M window compacts at 967K (33K free, as Claude Code), 200K at 167K, and a local 32K or
+# 64K window keeps a quarter of it free, as before (24K and 48K), so a reply always fits.
+REPLY_ALLOWANCE_MAX_TOKENS = 20_000
+SUMMARY_ALLOWANCE_MAX_TOKENS = 13_000
+_REPLY_PERCENT_COMBINED = 15  # input and output share the window (OpenAI, Ollama, most endpoints)
+_REPLY_PERCENT_INPUT_ONLY = 5  # the provider limits input on its own (Anthropic, Google)
+_SUMMARY_PERCENT = 10
+
+
+def context_reserves(effective_limit: int | None, limit_kind: str) -> tuple[int, int]:
+    """(reply allowance, summary allowance) kept free of a window of *effective_limit* tokens."""
+    window = max(0, int(effective_limit or 0))
+    percent = _REPLY_PERCENT_INPUT_ONLY if limit_kind == "input_only" else _REPLY_PERCENT_COMBINED
+    reply = min(REPLY_ALLOWANCE_MAX_TOKENS, -(-window * percent // 100))
+    summary = min(SUMMARY_ALLOWANCE_MAX_TOKENS, -(-window * _SUMMARY_PERCENT // 100))
+    return reply, summary
+
+
 @dataclass(frozen=True)
 class ContextPolicy:
     model_ref: str
@@ -1063,8 +1085,10 @@ def get_context_policy(model_name: str | None = None, *, allow_probe: bool = Tru
     usable_input = None
     compact_at = None
     if effective_limit is not None and effective_limit > 0:
-        usable_input = int(effective_limit * (0.95 if limit_kind == "input_only" else 0.85))
-        compact_at = int(effective_limit * 0.75)
+        # Near the limit, with room for the reply and the summary (see context_reserves).
+        reply_allowance, summary_allowance = context_reserves(effective_limit, limit_kind)
+        usable_input = effective_limit - reply_allowance
+        compact_at = usable_input - summary_allowance
     capacity_state = "ready" if usable_input and compact_at else "unavailable"
     warning = ""
     if observed_limit and requested_limit and observed_limit < requested_limit:
