@@ -48,6 +48,17 @@ def add(kg, subject="Synthetic fact", source="test"):
     return kg.save_entity("fact", subject, "Synthetic deterministic knowledge body.", source=source)
 
 
+def add_published(kg, subject):
+    """Save, then publish a complete generation, so the one before becomes obsolete.
+
+    A single save publishes a delta that keeps reading its base, which is then
+    still in use rather than obsolete.
+    """
+    entity = add(kg, subject)
+    kg.rebuild_index()
+    return entity
+
+
 def test_source_commit_survives_provider_failure_and_explicit_repair(projection_stack):
     kg, embedding, _fingerprint, _config = projection_stack
     entity = add(kg)
@@ -233,7 +244,7 @@ def test_wiki_drain_never_acknowledges_newer_source_revision(projection_stack, m
 
 
 @pytest.mark.slow
-def test_another_process_reader_preserves_obsolete_generation_until_release(projection_stack, monkeypatch):
+def test_another_process_reader_preserves_obsolete_generation_until_release(projection_stack):
     import subprocess
     import sys
     from concurrent.futures import ThreadPoolExecutor
@@ -258,9 +269,8 @@ with kg._generation_access():
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             assert pool.submit(process.stdout.readline).result(timeout=15).strip() == old
-        monkeypatch.setattr(kg, "_skip_reindex", False)
-        add(kg, "Second generation")
-        add(kg, "Third generation")
+        add_published(kg, "Second generation")
+        add_published(kg, "Third generation")
         assert (kg._VECTOR_DIR / "generations" / old).exists()
         assert kg.memory_vector_status()["retirement_pending"] == 1
         output, errors = process.communicate("\n", timeout=15)
@@ -277,16 +287,15 @@ with kg._generation_access():
 
 
 @pytest.mark.parametrize("damage", ["unknown_file", "modified_manifest", "corrupt_vectors", "unregistered"])
-def test_retirement_preserves_unverified_generation_bytes(projection_stack, monkeypatch, damage):
+def test_retirement_preserves_unverified_generation_bytes(projection_stack, damage):
     kg, _embedding, _fingerprint, _config = projection_stack
     add(kg)
     kg.rebuild_index()
     old = kg._projection_state()["generation"]
     directory = kg._VECTOR_DIR / "generations" / old
     with kg._generation_access():
-        monkeypatch.setattr(kg, "_skip_reindex", False)
-        add(kg, "Second generation")
-        add(kg, "Third generation")
+        add_published(kg, "Second generation")
+        add_published(kg, "Third generation")
     if damage == "unknown_file":
         (directory / "user-notes.txt").write_text("Preserve synthetic private note")
     elif damage == "modified_manifest":
@@ -316,9 +325,8 @@ def test_retirement_failure_after_capture_retries_without_losing_new_head(projec
     kg.rebuild_index()
     old = kg._projection_state()["generation"]
     with kg._generation_access():
-        monkeypatch.setattr(kg, "_skip_reindex", False)
-        add(kg, "Second generation")
-        add(kg, "Third generation")
+        add_published(kg, "Second generation")
+        add_published(kg, "Third generation")
     selected = kg._projection_state()["generation"]
     unlink = Path.unlink
 
@@ -335,7 +343,7 @@ def test_retirement_failure_after_capture_retries_without_losing_new_head(projec
     assert kg._retire_vector_generations()["pending"] == 0
 
 
-def test_retirement_preserves_linked_directory_with_matching_manifest(projection_stack, monkeypatch):
+def test_retirement_preserves_linked_directory_with_matching_manifest(projection_stack):
     import os
 
     kg, _embedding, _fingerprint, _config = projection_stack
@@ -344,9 +352,8 @@ def test_retirement_preserves_linked_directory_with_matching_manifest(projection
     old = kg._projection_state()["generation"]
     directory = kg._VECTOR_DIR / "generations" / old
     with kg._generation_access():
-        monkeypatch.setattr(kg, "_skip_reindex", False)
-        add(kg, "Second generation")
-        add(kg, "Third generation")
+        add_published(kg, "Second generation")
+        add_published(kg, "Third generation")
     retained = directory.with_name("unregistered-retained-copy")
     directory.rename(retained)
     if os.name == "nt":

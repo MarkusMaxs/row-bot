@@ -285,8 +285,14 @@ request that carried cache instructions is retried once without them. No other
   request goes out without it.
 
 **Truncation.** An Agent reply that stopped at the output token limit gets the
-"cut short" notice. That covers OpenAI-style `finish_reason: "length"`, Ollama
-`done_reason: "length"` and Anthropic `stop_reason: "max_tokens"`.
+"cut short" notice. `providers/stop_reason.py` reads why a reply stopped from
+every provider shape: OpenAI-style `finish_reason: "length"`, Ollama
+`done_reason: "length"`, Anthropic `stop_reason: "max_tokens"`, Gemini
+`finish_reason: "MAX_TOKENS"`, and, for Responses APIs (OpenAI, Codex, xAI
+OAuth), `status: "incomplete"` with `incomplete_details.reason:
+"max_output_tokens"`. Row-Bot's own transports (Codex, xAI OAuth, Ollama Cloud
+and the OpenAI-compatible routes, including Anthropic-shaped ones) end their
+stream with that reason.
 
 ## Tool schemas and results
 
