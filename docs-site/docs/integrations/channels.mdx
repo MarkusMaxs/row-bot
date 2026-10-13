@@ -1,6 +1,6 @@
 ---
 title: "Channels"
-description: "Connect Row-Bot to messaging channels as apps: setup steps, pairing, public addresses, delivery, and safe external behavior."
+description: "Connect Row-Bot to messaging channels as apps: setup steps, pairing, public addresses, conversations and threads, delivery, and safe external behavior."
 ---
 
 # Channels
@@ -28,6 +28,21 @@ Each channel is an app in **Settings › Apps**, under the **Communication** cat
 - **Reset session** (WhatsApp) unlinks your phone and shows a new code to scan.
 - **More settings** holds the channel's other fields.
 - **`/reasoning`** shows or changes the reasoning choice for that channel conversation's active model. Run it without an argument to see the exact valid choices.
+- **`/new`** starts a fresh conversation; see [Conversations](#conversations).
+
+## Conversations
+
+Every chat with Row-Bot on a channel is also a conversation in Row-Bot, with its history, tools, approvals and goal, so you can open it in the app and carry on there.
+
+- **Slack channels.** Each Slack thread is its own conversation. Mention @Row-Bot in a channel to start one: Row-Bot replies in a thread under your message, and that thread continues the same conversation. Mention Row-Bot again in the thread to continue. To continue with a plain reply instead, your Slack app also needs the `message.channels` event and the `channels:history` scope (`message.groups` and `groups:history` for private channels). They are optional: with them, Slack sends Row-Bot every message in the channels it is in, and Row-Bot ignores all but replies in its own threads from accounts you approved.
+- **Discord servers.** Mention @Row-Bot in a channel to start a conversation. Row-Bot opens a Discord thread from your message and replies there, and replies in that thread continue the conversation without a mention. Invite the bot with the **Create Public Threads** and **Send Messages in Threads** permissions. Without them, or in a channel that has no threads, the channel keeps one conversation.
+- **Direct messages, Telegram, WhatsApp and SMS.** Each direct message or chat keeps one conversation going.
+- **Starting fresh.** Send `/new` to start a new conversation, on any channel (Telegram also accepts `/newthread`). In a Slack or Discord thread, the thread continues in the new conversation. Earlier conversations stay in Row-Bot. An approval the earlier conversation was waiting for no longer holds up the chat; answer it in Row-Bot.
+- **Names.** A Slack thread's conversation is named from its first message and a Discord thread's from the thread's name. A name you give a conversation in Row-Bot is kept.
+- **Several attachments.** Send several photos, voice notes or files in one message, or as an album, and Row-Bot answers them together in one reply. It reads each photo with your Vision model and transcribes each voice note first. On WhatsApp, Row-Bot waits about a second for the rest of an album.
+- **A stuck conversation.** If a conversation gets stuck on a tool call that can't finish, Row-Bot starts a fresh one and asks you to resend your message.
+
+Chats you already had keep their conversation until you send `/new`. Slack and Discord channels used to share one long conversation per channel. That conversation stays in Row-Bot, and new mentions start their own; a Discord channel without thread permissions carries on in it.
 
 ## Safety
 
@@ -42,4 +57,6 @@ When work starts from a channel and a child agent asks for approval, Row-Bot sen
 - If a channel cannot start, check its fields and the public link. Automatic tunnel startup runs outside the UI event loop, so a slow tunnel helper should report status without freezing app startup.
 - If a channel stopped, Monitor offers **Restart _channel_** for it.
 - If inbound messages fail, verify webhook URLs and platform permissions.
+- If a plain reply in a Slack thread gets no answer, mention Row-Bot in the thread, or add the optional message events described in [Conversations](#conversations).
+- If Row-Bot answers a Discord mention in the channel instead of opening a thread, give the bot the **Create Public Threads** and **Send Messages in Threads** permissions, then stop and start the channel.
 - If the wrong person has access, revoke them from **Paired accounts**.

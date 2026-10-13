@@ -13,6 +13,8 @@ Row-Bot is local-first: the app and its data live on your machine. Local-first d
 
 Conversations, memories, documents, workflows, logs, designs, code folder records, skills, plugins, Buddy assets, and settings are stored in the active local Row-Bot data directory. Buddy's native overlay reuses the selected conversation and does not create a second transcript store.
 
+Row-Bot also records how many tokens each model call used, for the context ring and for questions such as "How many tokens did I use this week?". The record holds counts and timings only, never prompts, replies or files, and it stays on this computer; when you ask about usage, the counts go to the conversation's model like any tool result. Counts older than 90 days are removed, and deleting a conversation deletes its counts. See [Context And Usage](/docs/chat/#context-and-usage).
+
 ## External Calls
 
 External calls happen when you choose or enable something that needs them: hosted models, subscription providers, API providers, web search, browser automation, account tools, messaging channels, MCP servers, plugin tools, realtime voice, and media generation. OpenRouter requests identify Row-Bot as the app making them (its website address and name, in the headers OpenRouter asks apps to send), which lets OpenRouter show Row-Bot in its public app rankings; these headers add no user, prompt or account data.
