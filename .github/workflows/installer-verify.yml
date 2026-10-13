@@ -93,6 +93,19 @@ jobs:
           python -m pip install --quiet "pytest==9.1.1"
           python -m pytest tests/subsystem/installer/test_windows_launcher.py --noconftest -p no:cacheprovider -q
 
+      # Chromium is not bundled; Browser Automation's Install action puts it in the
+      # data folder, never in a version folder (which updates share and never write).
+      - name: Check that Chromium stays out of the version folder
+        shell: pwsh
+        run: |
+          if (Test-Path installer\build\python\playwright-browsers) { throw "Playwright Chromium is bundled in the version folder" }
+          $env:ROW_BOT_DATA_DIR = Join-Path $env:RUNNER_TEMP "row-bot-browser-probe"
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          & installer\build\python\python.exe -c "import os; from pathlib import Path; from row_bot.browser.runtime import runtime_root, check_managed_browser_runtime; root = runtime_root().resolve(); data = Path(os.environ['ROW_BOT_DATA_DIR']).resolve(); assert root.is_relative_to(data), root; print('Install target:', root, '- now:', check_managed_browser_runtime().code)"
+          if ($LASTEXITCODE -ne 0) { throw "Browser Automation's Install action does not target the data folder" }
+          $exe = Get-ChildItem dist -Filter "Row-Bot-*-Windows-*.exe" | Select-Object -First 1
+          Write-Host "Installer $($exe.Name): $($exe.Length) bytes"
+
       - name: Smoke installed Windows package
         uses: ./.github/actions/smoke-windows-installer
         with:
