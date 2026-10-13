@@ -1053,9 +1053,23 @@ const CATALOG: Record<string, Entry> = {
     'review',
     UPDATES,
   ],
-  update_install_busy: ['An update is already installing.', 'retry', RETRY],
-  update_job_missing: [
-    "Row-Bot can't find that installation. Check the installed version before trying again.",
+  update_busy: [
+    'Row-Bot is already preparing an update. Wait for it to finish.',
+    'retry',
+    RETRY,
+  ],
+  update_no_previous: [
+    'There is no earlier version to go back to.',
+    'review',
+    UPDATES,
+  ],
+  update_not_ready: [
+    'No update is ready yet. Refresh the update status.',
+    'retry',
+    RETRY,
+  ],
+  update_restart_busy: [
+    'Row-Bot is still working. Restart when it is idle, or when you quit.',
     'review',
     UPDATES,
   ],

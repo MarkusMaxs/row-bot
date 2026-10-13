@@ -317,3 +317,23 @@ def test_reference_read_rejects_symlink_escape_when_supported(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="inside"):
         read_skill_reference(root, "link.txt")
+
+
+def test_skill_search_lists_every_skill_and_reads_which_are_active_when_it_runs(tmp_path, monkeypatch):
+    """WP A5: the catalog never changes with a load or a mention; search and load decide when called."""
+    from row_bot import skills_activation
+
+    monkeypatch.setattr(skills_activation, "STATE_PATH", tmp_path / "activation.json")
+    monkeypatch.setattr(skills_activation, "DATA_DIR", tmp_path)
+    active: set[str] = set()
+    search, load = build_skill_discovery_tools(
+        [_record("writer", instructions="WRITER STEPS"), _record("reviewer", instructions="REVIEWER STEPS")],
+        thread_id="thread", context_tokens=200_000, current_active_ids=lambda: active)
+    catalog = search.description
+
+    active.add("writer")  # pinned, say: its instructions are in the conversation's prompt
+    assert search.description == catalog and "- writer [manual]" in catalog
+    found = json.loads(search.invoke({"query": "writer reviewer workflow", "limit": 5}))["results"]
+    assert [result["skill_id"] for result in found] == ["reviewer"]
+    assert "instructions" not in json.loads(load.invoke({"name": "writer"}))  # already in the prompt
+    assert json.loads(load.invoke({"name": "reviewer"}))["instructions"] == "REVIEWER STEPS"

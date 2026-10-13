@@ -5,7 +5,17 @@
       "enum": [
         "check",
         "skip",
-        "clear_skipped"
+        "clear_skipped",
+        "download",
+        "cancel",
+        "retry",
+        "apply",
+        "rollback",
+        "set_auto_check",
+        "set_auto_download",
+        "remove_legacy",
+        "pause",
+        "resume"
       ],
       "title": "Action",
       "type": "string"
@@ -15,16 +25,50 @@
       "title": "Command Id",
       "type": "string"
     },
+    "enabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Enabled"
+    },
     "expected_revision": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Expected Revision",
       "type": "string"
+    },
+    "force": {
+      "default": false,
+      "title": "Force",
+      "type": "boolean"
     },
     "version": {
       "default": "",
       "maxLength": 64,
       "title": "Version",
       "type": "string"
+    },
+    "when": {
+      "anyOf": [
+        {
+          "enum": [
+            "now",
+            "when_idle",
+            "on_quit"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "When"
     }
   },
   "required": [

@@ -1629,14 +1629,6 @@ class DesignerTool(BaseTool):
         # Text extracted from files the person attached as references.
         return {"designer_get_reference"}
 
-    @property
-    def inference_keywords(self) -> list[str]:
-        return [
-            "design", "slide", "presentation", "deck", "page",
-            "layout", "brand", "one-pager", "wireframe", "mockup",
-            "marketing material", "poster", "brochure",
-        ]
-
     def as_langchain_tools(self) -> list:
         if get_active_project() is None:
             return []

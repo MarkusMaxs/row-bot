@@ -761,7 +761,7 @@ def test_smart_off_retains_implicit_skill_but_disables_future_discovery(tmp_path
     authorized, active_ids, discoverable, _fingerprint = agent._build_runtime_skill_snapshot()
 
     assert [item.canonical_id for item in authorized] == ["implicit"]
-    assert active_ids == ("implicit",)
+    assert active_ids == ()  # Loaded with skill_load: turn-scoped, never part of the snapshot (WP A5).
     assert discoverable is False
 
 

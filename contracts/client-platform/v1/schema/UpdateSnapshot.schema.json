@@ -1,5 +1,291 @@
 {
   "$defs": {
+    "UpdateEngineView": {
+      "additionalProperties": false,
+      "description": "The background updater: preparing, ready, applying, or why it stopped.",
+      "properties": {
+        "apply_when": {
+          "anyOf": [
+            {
+              "enum": [
+                "now",
+                "when_idle",
+                "on_quit"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Apply When"
+        },
+        "downloaded": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Downloaded",
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "full_installer_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Full Installer Url"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "phase": {
+          "enum": [
+            "idle",
+            "checking",
+            "downloading",
+            "staging",
+            "ready",
+            "applying",
+            "verified",
+            "failed"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "retryable": {
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Step"
+        },
+        "total": {
+          "maximum": 1000000000000,
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Version"
+        }
+      },
+      "required": [
+        "phase",
+        "version",
+        "step",
+        "message",
+        "error",
+        "retryable",
+        "apply_when",
+        "full_installer_url",
+        "downloaded",
+        "total"
+      ],
+      "title": "UpdateEngineView",
+      "type": "object"
+    },
+    "UpdateHeldBack": {
+      "additionalProperties": false,
+      "description": "The version Row-Bot went back from; it is not prepared again by itself.",
+      "properties": {
+        "reason": {
+          "enum": [
+            "rolled_back",
+            "repair"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 64,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "reason"
+      ],
+      "title": "UpdateHeldBack",
+      "type": "object"
+    },
+    "UpdateHostRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "check",
+            "update_now",
+            "skip",
+            "pause",
+            "resume"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "requested_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Requested At"
+        }
+      },
+      "required": [
+        "action",
+        "requested_at"
+      ],
+      "title": "UpdateHostRequest",
+      "type": "object"
+    },
+    "UpdateHostView": {
+      "additionalProperties": false,
+      "description": "ROW_BOT_UPDATES=external: what the host that applies updates reports.",
+      "properties": {
+        "available_version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Available Version"
+        },
+        "current_version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Current Version"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "maxLength": 300,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Message"
+        },
+        "notes_url": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Notes Url"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UpdateHostRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "unknown",
+            "idle",
+            "checking",
+            "downloading",
+            "ready",
+            "applying",
+            "failed",
+            "paused"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Updated At"
+        }
+      },
+      "required": [
+        "state",
+        "current_version",
+        "available_version",
+        "message",
+        "notes_url",
+        "updated_at",
+        "request"
+      ],
+      "title": "UpdateHostView",
+      "type": "object"
+    },
     "UpdateRelease": {
       "additionalProperties": false,
       "properties": {
@@ -57,6 +343,23 @@
   },
   "additionalProperties": false,
   "properties": {
+    "active_work": {
+      "items": {
+        "maxLength": 120,
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Active Work",
+      "type": "array"
+    },
+    "auto_check": {
+      "title": "Auto Check",
+      "type": "boolean"
+    },
+    "auto_download": {
+      "title": "Auto Download",
+      "type": "boolean"
+    },
     "available": {
       "anyOf": [
         {
@@ -84,9 +387,40 @@
       "title": "Dev Install",
       "type": "boolean"
     },
-    "install_here": {
-      "title": "Install Here",
-      "type": "boolean"
+    "engine": {
+      "$ref": "#/$defs/UpdateEngineView"
+    },
+    "feed_url": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Feed Url"
+    },
+    "held_back": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UpdateHeldBack"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "host": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UpdateHostView"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "last_check": {
       "anyOf": [
@@ -111,6 +445,31 @@
         }
       ],
       "title": "Last Success"
+    },
+    "legacy_install": {
+      "title": "Legacy Install",
+      "type": "boolean"
+    },
+    "mode": {
+      "enum": [
+        "self",
+        "external",
+        "unavailable"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "previous_version": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Previous Version"
     },
     "revision": {
       "pattern": "^[0-9a-f]{64}$",
@@ -142,7 +501,16 @@
     "skipped_versions",
     "available",
     "dev_install",
-    "install_here"
+    "mode",
+    "auto_check",
+    "auto_download",
+    "engine",
+    "previous_version",
+    "legacy_install",
+    "host",
+    "active_work",
+    "held_back",
+    "feed_url"
   ],
   "title": "UpdateSnapshot",
   "type": "object"

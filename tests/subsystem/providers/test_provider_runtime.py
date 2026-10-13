@@ -2089,7 +2089,8 @@ def test_openai_pre_model_trim_keeps_standard_skill_injections(tmp_path, monkeyp
     import row_bot.agent as agent
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    monkeypatch.setattr(agent, "get_context_size", lambda: 32_768)
+    # Above 32K; a window of 32K or less gets the small-context profile on every provider (WP A5).
+    monkeypatch.setattr(agent, "get_context_size", lambda: 65_536)
     monkeypatch.setattr(agent, "get_current_model", lambda: "gpt-4o")
     monkeypatch.setattr(agent, "is_cloud_model", lambda model: True)
     monkeypatch.setattr(agent, "get_cloud_provider", lambda model: "openai")

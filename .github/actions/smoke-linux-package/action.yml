@@ -10,6 +10,10 @@ inputs:
     description: Loopback port for the launcher smoke; `serve` uses the next one and the layout smoke the one after
     required: false
     default: "8095"
+  background-update:
+    description: Also rehearse a real background update to a next version served from a loopback feed (installer-verify)
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -17,6 +21,7 @@ runs:
       shell: bash
       env:
         SMOKE_PORT: ${{ inputs.port }}
+        BACKGROUND_UPDATE: ${{ inputs.background-update }}
       run: |
         set -euo pipefail
         SERVE_PORT="$((SMOKE_PORT + 1))"
@@ -70,6 +75,13 @@ runs:
         # The wrapper relaunches `serve` on exit code 75 and rolls back after two failed starts.
         python3 scripts/smoke_install_layout.py --root "$ROOT" --kind linux --port "$LAYOUT_PORT" \
           -- "$HOME/.local/bin/row-bot" --no-ollama serve --port "$LAYOUT_PORT"
+        if [ "$BACKGROUND_UPDATE" = "true" ]; then
+          # A real background update to the next version, then Restart now.
+          UPDATE_PORT="$((SMOKE_PORT + 3))"
+          python3 scripts/smoke_background_update.py --root "$ROOT" --kind linux --port "$UPDATE_PORT" \
+            --version-root "$ROOT/releases/$VERSION" \
+            -- "$HOME/.local/bin/row-bot" --no-open --no-ollama --port "$UPDATE_PORT"
+        fi
 
         # Uninstall removes the application files and never the user's data.
         mkdir -p "$HOME/.row-bot"
