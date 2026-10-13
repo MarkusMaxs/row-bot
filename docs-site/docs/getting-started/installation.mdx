@@ -81,6 +81,10 @@ loginctl enable-linger "$USER"
 
 When Row-Bot restarts itself to install an update, it exits with code 75 and leaves the restart to systemd. Use `Restart=always`, or add `RestartForceExitStatus=75` to your own restart policy. `systemctl --user stop row-bot` installs an update that is ready, and the next start runs it.
 
+## Browser Automation And Exports
+
+No installer includes a browser. Browser Automation uses Chrome or Edge already on your computer (Edge comes with Windows). Exporting a design to PDF, PNG or PowerPoint needs Row-Bot's own browser runtime instead: the first time, the export says **Exports need Browser Automation** with **Set up Browser Automation**. Choose it, then **Install** the **Browser runtime** in **Settings › System › Browser and computer use**. It is a one-time download into your data folder, so updates keep it, and Row-Bot never downloads it by itself.
+
 ## Where Row-Bot Keeps Things
 
 | System | App files | Your data |

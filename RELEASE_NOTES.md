@@ -37,6 +37,10 @@ Notes** below before upgrading from 5.1.
 - **Smaller downloads** - the Windows installer is about 420 MB (731 MB in
   5.1), the macOS DMG about 960 MB (1.09 GB) and the Linux tarball about
   790 MB (846 MB).
+- **No browser in the Windows installer** - Browser Automation uses Chrome or
+  Edge, as on macOS and Linux. Design exports to PDF, PNG and PowerPoint ask
+  once to install Row-Bot's browser runtime, which goes into your data folder
+  and stays across updates.
 - **Docker** - a container is updated by its host: Settings › Updates says so,
   and the agent has no update tool there. Pull a newer image as before.
 - **What updates contact** - GitHub for the release, and, only when libraries
