@@ -190,7 +190,7 @@ the updater trusts only files listed there.
   signs both files in that session.
 - **GitHub CLI** logged in with write access to the repository (`gh auth login`).
 - **Python 3.11 or newer** on `PATH` (`python` or `py -3`); no packages needed.
-- About 8 GB free in `%LOCALAPPDATA%\rbr\<run id>` (the installer stage is 3.3 GB
+- About 5 GB free in `%LOCALAPPDATA%\rbr\<run id>` (the installer stage is 1.9 GB
   unpacked; the folder name is short because the stage's deepest paths are as
   long as an installed version's).
 
