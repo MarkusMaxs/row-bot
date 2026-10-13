@@ -268,7 +268,7 @@ def test_attention_is_quiet_when_healthy_and_names_what_needs_you(tmp_path, monk
     monkeypatch.setattr(client_monitor, "_available_update", lambda: SimpleNamespace(version="9.1.0"))
     value = client_monitor.read_attention(include_update=True)
     assert [problem["id"] for problem in value["problems"]] == ["channel:telegram"]
-    assert value["update"] == {"version": "9.1.0"}
+    assert value["update"] == {"version": "9.1.0", "ready": False}
     # Without its update (for the projection's own callers).
     assert client_monitor.read_attention(include_update=False)["update"] is None
 
@@ -283,4 +283,4 @@ def test_attention_is_quiet_when_healthy_and_names_what_needs_you(tmp_path, monk
         _, remote_headers = bootstrap(remote)
         elsewhere = remote.get("/api/v1/monitor/attention", headers=remote_headers)
         assert elsewhere.status_code == 200, elsewhere.text
-        assert elsewhere.json()["update"] == {"version": "9.1.0"}
+        assert elsewhere.json()["update"] == {"version": "9.1.0", "ready": False}

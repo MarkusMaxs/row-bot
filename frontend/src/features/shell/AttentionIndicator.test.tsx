@@ -178,3 +178,19 @@ it('counts waiting approvals and answers them in place (B255)', async () => {
     screen.queryByRole('listitem', { name: 'Daily News needs your approval' }),
   ).toBeNull();
 });
+
+it('says "Restart to update" once an update is downloaded and ready', async () => {
+  show({
+    schema_version: 1,
+    problems: [],
+    update: { version: '9.1.0', ready: true },
+  });
+  const link = await screen.findByRole('link', {
+    name: 'Restart to update to 9.1.0. Open Updates',
+  });
+  expect(link).toHaveTextContent('Restart to update');
+  fireEvent.click(link);
+  expect(screen.getByLabelText('Location')).toHaveTextContent(
+    '/settings/updates',
+  );
+});

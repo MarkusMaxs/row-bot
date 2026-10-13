@@ -11,6 +11,10 @@ inputs:
     description: Loopback port for the launcher smoke; the layout smoke uses the next one
     required: false
     default: "8094"
+  background-update:
+    description: Also rehearse a real background update to a next version served from a loopback feed (installer-verify)
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -18,6 +22,7 @@ runs:
       shell: pwsh
       env:
         SMOKE_PORT: ${{ inputs.port }}
+        BACKGROUND_UPDATE: ${{ inputs.background-update }}
       run: |
         $ErrorActionPreference = "Stop"
         $installer = Get-ChildItem -Path dist -Filter "Row-Bot-*-Windows-*.exe" | Select-Object -First 1
@@ -120,6 +125,15 @@ runs:
         python scripts/smoke_install_layout.py --root "$root" --kind windows --port $layoutPort `
           -- "$launcher" --server --no-open --no-splash --no-ollama --port $layoutPort
         if ($LASTEXITCODE -ne 0) { throw "Installed launcher layout smoke failed." }
+
+        if ($env:BACKGROUND_UPDATE -eq "true") {
+          # A real background update to the next version, then Restart now.
+          $updatePort = [int]$env:SMOKE_PORT + 2
+          python scripts/smoke_background_update.py --root "$root" --kind windows --port $updatePort `
+            --version-root "$versionDir" `
+            -- "$launcher" --no-tray --no-open --no-splash --no-ollama --port $updatePort
+          if ($LASTEXITCODE -ne 0) { throw "Background update rehearsal failed." }
+        }
 
         # Without /NOLAUNCH even a silent install starts Row-Bot (the 5.1 updater
         # runs the installer silently). Reinstall this version and look for it.

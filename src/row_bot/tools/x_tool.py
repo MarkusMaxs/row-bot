@@ -81,6 +81,18 @@ def _token_expired(token: dict) -> bool:
     return time.time() >= (expires_at - 60)
 
 
+# Whether a saved sign-in may bind the X tools, decided once per sign-in (WP A5). Building a chat's
+# tools used to ask X (GET /users/me) on every turn, and a timeout or a 5xx dropped the X tools for
+# that turn: a different tool list, so a cold prompt cache, and the X tools gone for no reason.
+_SIGN_IN_VERDICTS: dict[str, bool] = {}
+_SIGN_IN_VERDICTS_MAX = 16
+
+
+def _sign_in_key(token: dict) -> str:
+    raw = f"{token.get('access_token', '')}\n{token.get('refresh_token', '')}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _refresh_token(token: dict, client_id: str, client_secret: str) -> dict | None:
     """Attempt to refresh the access token using the refresh token."""
     import httpx
@@ -657,10 +669,6 @@ class XTool(BaseTool):
             },
         }
 
-    @property
-    def inference_keywords(self) -> list[str]:
-        return ["tweet", "twitter", "x.com", "timeline", "retweet", "repost"]
-
     # ── Auth helpers ─────────────────────────────────────────────────────────
 
     def _get_client_id(self) -> str:
@@ -1210,16 +1218,37 @@ class XTool(BaseTool):
 
     # ── LangChain tool wrappers ──────────────────────────────────────────────
 
+    def _sign_in_usable(self, token: dict) -> bool:
+        """Whether this saved sign-in binds the X tools.
+
+        X is asked once per sign-in and the answer is kept, so a chat's tools never wait on X. An
+        access token past its time is refreshed by the call that needs it, which also says if X
+        refuses. A check that could not reach X keeps the tools bound: the call reports the error.
+        Only X refusing the sign-in leaves them out (until a new sign-in).
+        """
+        key = _sign_in_key(token)
+        known = _SIGN_IN_VERDICTS.get(key)
+        if known is not None:
+            return known
+        if _token_expired(token):
+            return True
+        status, _ = self.check_token_health()
+        usable = status not in ("missing", "expired")
+        current = _load_token() or token  # A refresh during the check saved a new sign-in.
+        for sign_in in {key, _sign_in_key(current)}:
+            _SIGN_IN_VERDICTS[sign_in] = usable
+        while len(_SIGN_IN_VERDICTS) > _SIGN_IN_VERDICTS_MAX:
+            _SIGN_IN_VERDICTS.pop(next(iter(_SIGN_IN_VERDICTS)))
+        return usable
+
     def as_langchain_tools(self) -> list:
         """Return the X tools based on configured operations."""
         if not self.has_credentials():
             return []
-        if not self.is_authenticated():
+        token = _load_token()
+        if token is None:
             return []
-
-        # Verify token health
-        status, _ = self.check_token_health()
-        if status in ("missing", "expired", "error"):
+        if not self._sign_in_usable(token):
             return []
 
         tools = []

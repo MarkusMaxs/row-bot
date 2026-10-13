@@ -1638,6 +1638,9 @@ def get_langchain_tools(
             info for tools in _catalog.values() for info in tools.values()
             if info.enabled and _source_plugin_allowed(info, source_plugin_id)
         ]
+    # By server, then tool name: the order servers happened to connect in (or a server listed its
+    # tools in) never reorders a chat's tools, which would be a new prompt for every provider cache.
+    infos.sort(key=lambda info: (info.server_name.casefold(), info.server_name, info.name))
     issued: dict[str, tuple[str, str]] = {}
     for info in infos:
         if not _mcp_runtime_name_allowed(info.prefixed_name, allow) or "model" not in info.visibility:
@@ -1652,7 +1655,8 @@ def get_langchain_tools(
             ))
         except Exception as exc:
             log_event("mcp.tool.wrap_failed", level=logging.WARNING, server=info.server_name, tool=info.name, error=str(exc))
-    for server_name, server_cfg in cfg.get("servers", {}).items():
+    for server_name, server_cfg in sorted(cfg.get("servers", {}).items(),
+                                          key=lambda item: (str(item[0]).casefold(), str(item[0]))):
         if not _server_source_plugin_allowed(server_cfg, source_plugin_id):
             continue
         if server_name not in _servers:
