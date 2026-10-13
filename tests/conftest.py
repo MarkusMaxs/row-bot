@@ -277,18 +277,29 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     items[:] = [item for item in items if paths[item.path] in kept_files]
 
 
-@pytest.fixture(autouse=True)
-def _keep_module_identity():
+_ROW_BOT_MODULES_BEFORE = pytest.StashKey[dict[str, Any]]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item: pytest.Item):
+    item.stash[_ROW_BOT_MODULES_BEFORE] = {name: module for name, module in sys.modules.items()
+                                           if name == "row_bot" or name.startswith("row_bot.")}
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
     """Put back the row_bot module objects a test popped and imported again.
 
     Some tests re-import modules for a fresh data folder. Product modules keep
     references to the original objects, so a later test that patched the new copy
-    would patch nothing (the stale developer.storage of B215).
+    would patch nothing (the stale developer.storage of B215). This runs after every
+    fixture has finished: a test that popped row_bot.agent by hand and then set a fake
+    with monkeypatch.setitem had monkeypatch delete the module on its way out, after a
+    fixture had put it back, and a later test patched a copy nothing used.
     """
-    before = {name: module for name, module in sys.modules.items()
-              if name == "row_bot" or name.startswith("row_bot.")}
     yield
-    for name, module in before.items():
+    for name, module in item.stash.get(_ROW_BOT_MODULES_BEFORE, {}).items():
         if sys.modules.get(name) is not module:
             sys.modules[name] = module
             parent, _, child = name.rpartition(".")
