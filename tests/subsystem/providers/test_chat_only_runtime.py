@@ -954,3 +954,96 @@ def test_stream_graph_logs_provider_call_segments_around_tool_result(caplog):
     assert "'end_reason': 'complete'" in message
     assert "'tool_gap_ms':" in message
     assert "'first_answer_token_ms':" in message
+
+
+def _claude_ready_result():
+    from row_bot.providers.models import TransportMode
+    from row_bot.providers.readiness import ChatReadinessResult
+
+    return ChatReadinessResult(
+        ready=True,
+        provider_id="anthropic",
+        model_id="claude-opus-5-5",
+        runtime_model="claude-opus-5-5",
+        selection_ref="model:anthropic:claude-opus-5-5",
+        transport=TransportMode.ANTHROPIC_MESSAGES,
+        context_window=200_000,
+        credential_status="configured",
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "extra", "marker"),
+    [
+        ("normal_chat", {}, {"type": "ephemeral", "ttl": "1h"}),
+        ("channel", {}, {"type": "ephemeral", "ttl": "1h"}),
+        ("normal_chat", {"internal_goal_continuation": True}, {"type": "ephemeral"}),
+    ],
+)
+def test_chat_only_on_claude_caches_its_prompt_and_conversation_tail(tmp_path, monkeypatch, surface, extra, marker):
+    """Chat Only follows Agent mode's breakpoint policy (WP A3)."""
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / ".row-bot"))
+    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+    import row_bot.agent as agent
+    import row_bot.providers.readiness as readiness
+    import row_bot.threads as threads
+    from row_bot.providers.transports.anthropic_cancellable import CancellableChatAnthropic
+
+    class FakeLLM:
+        def stream(self, messages):
+            self.messages = messages
+            yield AIMessageChunk(content="hello")
+
+    llm = FakeLLM()
+    history = [HumanMessage(content="earlier question", id="h1"), AIMessage(content="earlier answer", id="a1")]
+    monkeypatch.setattr(readiness, "evaluate_chat_readiness", lambda model_label: _claude_ready_result())
+    monkeypatch.setattr(agent, "_chat_only_llm", lambda model_label: llm)
+    monkeypatch.setattr(threads, "get_latest_checkpoint_messages", lambda thread_id: list(history))
+    monkeypatch.setattr(threads, "append_checkpoint_messages", lambda thread_id, messages: True)
+
+    events = list(agent.stream_chat_only(
+        "hi",
+        {"configurable": {
+            "thread_id": "thread-claude-chat",
+            "runtime_surface": surface,
+            "model_override": "model:anthropic:claude-opus-5-5",
+            **extra,
+        }},
+    ))
+
+    assert [payload for event_type, payload in events if event_type == "done"] == ["hello"]
+    body = CancellableChatAnthropic(
+        model="claude-opus-5-5", api_key="test-key", prompt_cache=True,
+    )._get_request_payload(llm.messages)
+    assert [block["cache_control"] for block in body["system"] if "cache_control" in block] == [marker]
+    assert body["cache_control"] == marker
+    assert "cache_control" not in str(body["messages"])
+    assert [message["content"] for message in body["messages"]] == ["earlier question", "earlier answer", "hi"]
+
+
+def test_chat_only_reuses_one_model_per_model_and_reasoning_plan(monkeypatch):
+    """F10: Chat Only no longer builds a new client on every call."""
+    import row_bot.agent as agent
+    from row_bot import models
+    from row_bot.providers import reasoning, resolution, runtime
+
+    built = []
+    plans = {"thread-a": SimpleNamespace(fingerprint="plan-low"), "thread-b": SimpleNamespace(fingerprint="plan-high")}
+    monkeypatch.setattr(models, "_override_llm_cache", {})
+    monkeypatch.setattr(resolution, "resolve_provider_config", lambda *args, **kwargs: SimpleNamespace(
+        runtime_model="claude-opus-5-5", provider_id="anthropic", selection_ref="model:anthropic:claude-opus-5-5"))
+    monkeypatch.setattr(reasoning, "request_plan_for", lambda thread_id, ref: plans[thread_id])
+    monkeypatch.setattr(runtime, "create_chat_model", lambda *args, reasoning_plan, **kwargs: (
+        built.append(reasoning_plan.fingerprint) or object()))
+
+    first = agent._chat_only_llm("model:anthropic:claude-opus-5-5", thread_id="thread-a")
+    again = agent._chat_only_llm("model:anthropic:claude-opus-5-5", thread_id="thread-a")
+    other_plan = agent._chat_only_llm("model:anthropic:claude-opus-5-5", thread_id="thread-b")
+
+    assert again is first
+    assert other_plan is not first
+    assert built == ["plan-low", "plan-high"]
+    # Credential and context changes drop it with the other cached clients.
+    models.clear_llm_cache()
+    assert agent._chat_only_llm("model:anthropic:claude-opus-5-5", thread_id="thread-a") is not first
+    assert built == ["plan-low", "plan-high", "plan-low"]

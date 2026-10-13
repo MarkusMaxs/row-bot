@@ -10,6 +10,7 @@ import gc
 import hashlib
 import threading
 from contextlib import closing, contextmanager
+from collections import OrderedDict
 from collections.abc import Iterator
 from datetime import datetime, timedelta
 
@@ -52,6 +53,14 @@ _THREAD_META_COLUMNS = {
     "client_runtime_mode": "TEXT NOT NULL DEFAULT 'agent'",
     # Apps switched off in this chat (item ids); every other ready app stays on, as before.
     "apps_off_json": "TEXT NOT NULL DEFAULT ''",
+    # How far background memory extraction has read this chat (memory_extraction.py).
+    "memory_extraction_json": "TEXT NOT NULL DEFAULT ''",
+    # Where old tool output stops being sent in full (history_hygiene.py); moves only in jumps.
+    "history_hygiene_json": "TEXT NOT NULL DEFAULT ''",
+    # Chat Only's own compaction summary; summary_state_json is Agent mode's (and older rows').
+    "chat_only_summary_state_json": "TEXT NOT NULL DEFAULT ''",
+    # The compaction that last failed, per mode, so it is not retried before the turn or input changes.
+    "compaction_failure_json": "TEXT NOT NULL DEFAULT ''",
 }
 
 THREAD_NAME_SOURCE_AUTO = "auto"
@@ -1196,11 +1205,44 @@ def _message_content_for_digest(message) -> object:
     return str(content)
 
 
+# Digests of message prefixes already hashed, by the identity of the message objects (F30). One
+# model call validates its summary several times over the same loaded messages, and a turn's later
+# calls reuse them: each prefix is hashed once while it is loaded, not on every check.
+_DIGEST_MEMO: "OrderedDict[tuple, tuple[str, tuple]]" = OrderedDict()
+_DIGEST_MEMO_MAX = 64
+_DIGEST_MEMO_LOCK = threading.Lock()
+
+
+def _digest_memo_key(prefix: tuple, mode: str) -> tuple:
+    def shape(message) -> int:
+        content = getattr(message, "content", "")
+        return len(content) if isinstance(content, (str, list)) else -1
+
+    return (mode, len(prefix), tuple((id(message), shape(message)) for message in prefix))
+
+
 def context_boundary_digest(messages: list, boundary_message_count: int, mode: str) -> str:
     """Hash the canonical mode-specific raw prefix represented by a summary."""
     count = max(0, min(int(boundary_message_count or 0), len(messages)))
+    prefix = tuple(messages[:count])
+    key = _digest_memo_key(prefix, mode)
+    with _DIGEST_MEMO_LOCK:
+        known = _DIGEST_MEMO.get(key)
+        if known is not None and all(left is right for left, right in zip(known[1], prefix)):
+            _DIGEST_MEMO.move_to_end(key)
+            return known[0]
+    digest = _context_boundary_digest(prefix, mode)
+    with _DIGEST_MEMO_LOCK:
+        # The entry keeps its messages, so their ids are not reused while it lives.
+        _DIGEST_MEMO[key] = (digest, prefix)
+        while len(_DIGEST_MEMO) > _DIGEST_MEMO_MAX:
+            _DIGEST_MEMO.popitem(last=False)
+    return digest
+
+
+def _context_boundary_digest(prefix: tuple, mode: str) -> str:
     canonical: list[dict] = []
-    for message in messages[:count]:
+    for message in prefix:
         role = str(getattr(message, "type", "") or "")
         if mode == "chat_only" and role == "system":
             continue
@@ -1259,30 +1301,52 @@ def save_summary_state_cas(
     if not summary or mode not in {"agent", "chat_only"} or boundary_count <= 0 or len(boundary_digest) != 64:
         return False
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    column = _SUMMARY_STATE_COLUMNS[mode]
     with sqlite3.connect(DB_PATH, timeout=30) as conn:
         conn.execute("BEGIN IMMEDIATE")
         current_revision = _latest_checkpoint_revision_conn(conn, thread_id)
         if current_revision != str(expected_revision or ""):
             conn.rollback()
             return False
-        existing_row = conn.execute(
-            "SELECT COALESCE(summary_state_json, '') FROM thread_meta WHERE thread_id = ?",
-            (thread_id,),
-        ).fetchone()
-        try:
-            existing_state = json.loads(existing_row[0]) if existing_row and existing_row[0] else {}
-        except (TypeError, json.JSONDecodeError):
-            existing_state = {}
+        existing_state = _summary_state_slot(conn, thread_id, mode) or {}
         if str(existing_state.get("source_revision") or "") == str(expected_revision or ""):
             conn.rollback()
             return False
         conn.execute(
-            "UPDATE thread_meta SET summary_state_json = ?, summary = ?, summary_msg_count = ? "
+            f"UPDATE thread_meta SET {column} = ?, summary = ?, summary_msg_count = ? "
             "WHERE thread_id = ?",
             (encoded, summary, boundary_count, thread_id),
         )
         conn.commit()
     return True
+
+
+# Each mode keeps its own summary (F28): switching between Agent and Chat Only no longer discards
+# the other's. Rows from before kept one summary, for either mode, in summary_state_json.
+_SUMMARY_STATE_COLUMNS = {"agent": "summary_state_json", "chat_only": "chat_only_summary_state_json"}
+
+
+def _summary_state_slot(conn: sqlite3.Connection, thread_id: str, mode: str) -> dict | None:
+    """The raw summary state saved for *mode* (unvalidated), or None."""
+    row = conn.execute(
+        "SELECT COALESCE(summary_state_json, ''), COALESCE(chat_only_summary_state_json, '') "
+        "FROM thread_meta WHERE thread_id = ?",
+        (thread_id,),
+    ).fetchone()
+    if not row:
+        return None
+    agent_slot, chat_slot = row
+    candidates = [agent_slot] if mode == "agent" else [chat_slot or agent_slot]
+    for raw in candidates:
+        if not raw:
+            continue
+        try:
+            state = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if isinstance(state, dict) and str(state.get("mode") or "") == mode:
+            return state
+    return None
 
 
 def load_validated_summary_state(
@@ -1296,16 +1360,7 @@ def load_validated_summary_state(
         return None
     _ensure_thread_db()
     with closing(sqlite3.connect(DB_PATH)) as conn, conn:
-        row = conn.execute(
-            "SELECT COALESCE(summary_state_json, '') FROM thread_meta WHERE thread_id = ?",
-            (thread_id,),
-        ).fetchone()
-    if not row or not row[0]:
-        return None
-    try:
-        state = json.loads(row[0])
-    except (TypeError, json.JSONDecodeError):
-        return None
+        state = _summary_state_slot(conn, thread_id, mode)
     if not isinstance(state, dict):
         return None
     if int(state.get("schema_version") or 0) != SUMMARY_STATE_SCHEMA_VERSION:
@@ -1320,6 +1375,88 @@ def load_validated_summary_state(
     if expected != str(state.get("boundary_digest") or ""):
         return None
     return state
+
+
+def load_history_hygiene(thread_id: str) -> dict | None:
+    """The thread's persisted tool-output clearing marks (see history_hygiene), or None."""
+    if not thread_id:
+        return None
+    _ensure_thread_db()
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        row = conn.execute(
+            "SELECT COALESCE(history_hygiene_json, '') FROM thread_meta WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        state = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def save_history_hygiene(thread_id: str, state: dict) -> bool:
+    """Persist the thread's tool-output clearing marks; False when there is no thread row."""
+    if not thread_id or _thread_write_blocked(thread_id):
+        return False
+    _ensure_thread_db()
+    encoded = json.dumps(dict(state or {}), sort_keys=True, ensure_ascii=False)
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as conn, conn:
+        updated = conn.execute(
+            "UPDATE thread_meta SET history_hygiene_json = ? WHERE thread_id = ?",
+            (encoded, thread_id),
+        ).rowcount
+    return bool(updated)
+
+
+def load_compaction_failure(thread_id: str, mode: str) -> dict | None:
+    """The marker of the compaction that last failed in this thread and mode, or None."""
+    if not thread_id or mode not in _SUMMARY_STATE_COLUMNS:
+        return None
+    _ensure_thread_db()
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        row = conn.execute(
+            "SELECT COALESCE(compaction_failure_json, '') FROM thread_meta WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        markers = json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    marker = markers.get(mode) if isinstance(markers, dict) else None
+    return marker if isinstance(marker, dict) else None
+
+
+def save_compaction_failure(thread_id: str, mode: str, marker: dict | None) -> bool:
+    """Record (or with None, clear) a mode's failed compaction; False when there is no thread row."""
+    if not thread_id or mode not in _SUMMARY_STATE_COLUMNS or _thread_write_blocked(thread_id):
+        return False
+    _ensure_thread_db()
+    with closing(sqlite3.connect(DB_PATH, timeout=30)) as conn, conn:
+        row = conn.execute(
+            "SELECT COALESCE(compaction_failure_json, '') FROM thread_meta WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            markers = json.loads(row[0]) if row[0] else {}
+        except (TypeError, json.JSONDecodeError):
+            markers = {}
+        if not isinstance(markers, dict):
+            markers = {}
+        if marker:
+            markers[mode] = dict(marker)
+        else:
+            markers.pop(mode, None)
+        conn.execute(
+            "UPDATE thread_meta SET compaction_failure_json = ? WHERE thread_id = ?",
+            (json.dumps(markers, sort_keys=True, ensure_ascii=False) if markers else "", thread_id),
+        )
+    return True
 
 
 def save_context_usage(thread_id: str, usage: dict) -> None:
@@ -1563,37 +1700,33 @@ def complete_thread_event_delivery(
 
 
 def copy_validated_summary_state(source_thread_id: str, target_thread_id: str) -> bool:
-    """Copy a valid summary for an identical checkpoint and clear usage cache."""
+    """Copy each mode's valid summary for an identical checkpoint and clear usage cache."""
     source_messages = get_latest_checkpoint_messages(source_thread_id)
-    state = None
-    for mode in ("agent", "chat_only"):
-        state = load_validated_summary_state(
-            source_thread_id,
-            mode,
-            messages=source_messages,
-        )
-        if state:
-            break
+    states = {
+        mode: load_validated_summary_state(source_thread_id, mode, messages=source_messages)
+        for mode in ("agent", "chat_only")
+    }
+    shown = states["agent"] or states["chat_only"]
     _ensure_thread_db()
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
-            "UPDATE thread_meta SET summary_state_json = ?, summary = ?, "
+            "UPDATE thread_meta SET summary_state_json = ?, chat_only_summary_state_json = ?, summary = ?, "
             "summary_msg_count = ?, context_usage_json = '' WHERE thread_id = ?",
             (
-                json.dumps(state, sort_keys=True, ensure_ascii=False) if state else "",
-                str((state or {}).get("summary") or ""),
-                int((state or {}).get("boundary_message_count") or 0),
+                json.dumps(states["agent"], sort_keys=True, ensure_ascii=False) if states["agent"] else "",
+                json.dumps(states["chat_only"], sort_keys=True, ensure_ascii=False) if states["chat_only"] else "",
+                str((shown or {}).get("summary") or ""),
+                int((shown or {}).get("boundary_message_count") or 0),
                 target_thread_id,
             ),
         )
         conn.commit()
-    if not state:
+    if not shown:
         return False
-    return bool(
-        load_validated_summary_state(
-            target_thread_id,
-            str(state.get("mode") or ""),
-        )
+    return all(
+        load_validated_summary_state(target_thread_id, mode)
+        for mode, state in states.items()
+        if state
     )
 
 

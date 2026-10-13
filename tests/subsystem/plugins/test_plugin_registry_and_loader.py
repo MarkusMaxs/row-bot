@@ -731,7 +731,7 @@ def test_refresh_plugin_runtime_registers_enabled_tool_for_agent_graph(
     assert isinstance(graph.tools, ToolNode)
     bound_tools = graph.tools.tools_by_name
     assert list(bound_tools) == [
-        "tool_search", "tool_invoke", "skill_search", "skill_load",
+        "tool_search", "tool_invoke", "skill_search", "skill_load", "read_tool_output",
     ]
     discovered = json.loads(bound_tools["tool_search"].invoke({"query": "sample_tool"}))
     assert [item["name"] for item in discovered["results"]] == ["sample_tool"]

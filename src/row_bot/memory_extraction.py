@@ -1,20 +1,27 @@
 """Background memory extraction — scans past conversations for personal facts.
 
-Runs at app startup and periodically (every ~6 hours) to catch memories
-the agent missed during live conversation.  Uses the user's current LLM
-model to extract personal facts, then deduplicates against existing
-memories before saving.
+Runs once the app is idle after startup, then every 2 hours while it stays
+idle, to catch memories the agent missed during live conversation.  Uses the
+default chat model (WP C1) to extract personal facts, then deduplicates
+against existing memories before saving.
 
-Stores the last extraction timestamp so it only processes new/updated
-threads since the previous run.
+Each conversation keeps a watermark: the last messages read (id and content
+hash) and the checkpoint they came from.  A run reads only the messages said
+since, with the two before them as context, and keeps the newest when they
+do not all fit.  A conversation whose messages did not change (renamed, a
+setting switched) is not read again.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import sqlite3
 import threading
 import time
+from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime
 
 from row_bot.data_paths import get_row_bot_data_dir
@@ -153,21 +160,32 @@ def _append_extraction_journal(entry: dict) -> None:
 
 # ── Core extraction logic ────────────────────────────────────────────────────
 
+def _is_app_event(message) -> bool:
+    """A message Row-Bot itself wrote into the conversation (a goal or orchestration event)."""
+    kwargs = getattr(message, "additional_kwargs", None)
+    if not isinstance(kwargs, dict):
+        return False
+    ui = kwargs.get("row_bot_ui")
+    return bool(kwargs.get("row_bot_internal_event")) or (isinstance(ui, dict) and bool(ui.get("thread_event")))
+
+
 def _get_thread_messages(thread_id: str) -> list[dict]:
-    """Load messages from a thread via the LangGraph checkpointer."""
+    """Load the person's and the assistant's messages from a thread's checkpoint.
+
+    Each is ``{"role", "content"}``, with the message's ``id`` when it has one.
+    """
     try:
         from row_bot.threads import get_latest_checkpoint_messages
-        from row_bot.turn_context import is_turn_context_message
+        from row_bot.turn_context import is_person_message, is_turn_context_message
 
         messages = get_latest_checkpoint_messages(thread_id)
         result = []
         for m in messages:
-            if is_turn_context_message(m):
-                # Row-Bot's per-turn context (time, state, recalled memories): never a source of
-                # new memories, and never something the person said.
+            if is_turn_context_message(m) or _is_app_event(m):
+                # Row-Bot's per-turn context (time, state, recalled memories) and its own
+                # events: never a source of new memories, and never something the person said.
                 continue
-            mtype = getattr(m, "type", None)
-            role = "user" if mtype == "human" else ("assistant" if mtype == "ai" else None)
+            role = "user" if is_person_message(m) else ("assistant" if getattr(m, "type", None) == "ai" else None)
             content = getattr(m, "content", "") or ""
             if isinstance(content, list):
                 text_parts = []
@@ -180,7 +198,10 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
             if not isinstance(content, str):
                 content = str(content) if content else ""
             if role and content.strip():
-                result.append({"role": role, "content": content[:2000]})
+                entry = {"role": role, "content": content[:2000]}
+                if getattr(m, "id", None):
+                    entry["id"] = str(m.id)
+                result.append(entry)
         return result
     except Exception as exc:
         logger.debug("Could not load thread %s: %s", thread_id, exc)
@@ -214,40 +235,65 @@ def _format_conversation(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _extraction_answer():
+    """The extraction reply as a JSON schema: entities and relations, as the prompt describes."""
+    from row_bot.memory import VALID_CATEGORIES
+    from row_bot.providers.background import json_object, structured_answer
+
+    entity = json_object({
+        "category": {"type": "string", "enum": sorted(VALID_CATEGORIES)},
+        "subject": {"type": "string"},
+        "content": {"type": "string"},
+        "aliases": {"type": "string", "description": "Other names, comma separated, or an empty string."},
+    })
+    relation = json_object({
+        "relation_type": {"type": "string"},
+        "source_subject": {"type": "string"},
+        "target_subject": {"type": "string"},
+        "confidence": {"type": "number"},
+    })
+    return structured_answer("memory_extraction", {
+        "memories": {"type": "array", "items": {"anyOf": [entity, relation]}},
+    })
+
+
+class _NoReply(list):
+    """An extraction that got no reply (an outage, a timeout).
+
+    Empty like a reply with nothing worth saving, but the conversation stays
+    unread, so the next run reads it again.
+    """
+
+
 def _extract_from_conversation(conversation_text: str) -> list[dict]:
-    """Call the LLM to extract personal facts from a conversation."""
-    import re
+    """Call the LLM to extract personal facts from a conversation.
+
+    An unattended background call (WP C1): the default chat model at the
+    lowest reasoning effort, a bounded reply, a JSON schema where the provider
+    takes one, and the JSON-array parser for every other reply. A call that
+    fails returns ``_NoReply()``.
+    """
     try:
-        from row_bot.models import get_current_model, get_llm_for
         from langchain_core.messages import HumanMessage
+        from row_bot.providers.background import invoke_background
 
         prompt = EXTRACTION_PROMPT.format(conversation=conversation_text)
-        llm = get_llm_for(get_current_model())
-        response = llm.invoke([HumanMessage(content=prompt)])
-        raw = response.content or ""
-        if isinstance(raw, list):
-            text_parts = []
-            for block in raw:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-                elif isinstance(block, str):
-                    text_parts.append(block)
-            raw = "\n".join(text_parts)
-        if not isinstance(raw, str):
-            raw = str(raw) if raw else ""
-        raw = raw.strip()
+        raw = invoke_background("extraction", [HumanMessage(content=prompt)], answer=_extraction_answer())
+    except Exception as exc:
+        logger.warning("Memory extraction LLM call failed: %s", exc)
+        return _NoReply()
+    try:
+        from row_bot.providers.background import list_field
 
-        # Strip <think>...</think> blocks from reasoning models
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-        raw = re.sub(r"</?think>", "", raw).strip()
-
-        # Try to find JSON array in the response (bracket-counting
-        # handles nested arrays correctly, unlike greedy regex).
-        import row_bot.knowledge_graph as _kg_parse
-        _json_str = _kg_parse.extract_json_block(raw, "[")
-        if not _json_str:
-            return []
-        data = json.loads(_json_str)
+        data = list_field(raw, "memories")
+        if data is None:
+            # Try to find JSON array in the response (bracket-counting
+            # handles nested arrays correctly, unlike greedy regex).
+            import row_bot.knowledge_graph as _kg_parse
+            _json_str = _kg_parse.extract_json_block(raw, "[")
+            if not _json_str:
+                return []
+            data = json.loads(_json_str)
         if not isinstance(data, list):
             return []
         # Validate each entry
@@ -255,6 +301,8 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
         for entry in data:
             if not isinstance(entry, dict):
                 continue
+            # A schema reply fills every field; an empty one was not given.
+            entry = {key: value for key, value in entry.items() if value != ""}
             # Entity object: has category + subject + content
             if (
                 entry.get("category")
@@ -271,7 +319,7 @@ def _extract_from_conversation(conversation_text: str) -> list[dict]:
                 valid.append(entry)
         return valid
     except Exception as exc:
-        logger.warning("Memory extraction LLM call failed: %s", exc)
+        logger.warning("Memory extraction reply could not be read: %s", exc)
         return []
 
 
@@ -469,6 +517,8 @@ def _dedup_and_save(
                     # memory tool uses to prevent conflicting facts.
                     try:
                         from row_bot.tools.memory_tool import _check_contradiction
+                        # Without ``invoke`` this runs on the extraction worker,
+                        # outside any turn, so the check uses the default model (D1).
                         conflict = _check_contradiction(old_content, content, subject,
                             **strict, **({"invoke":invoke} if invoke is not None else {}))
                         if conflict:
@@ -676,10 +726,204 @@ def _dedup_and_save(
     return saved_count
 
 
+# ── Per-conversation watermark ───────────────────────────────────────────────
+#
+# Kept in ``thread_meta.memory_extraction_json``, so it goes with the conversation:
+#   {"v": 1, "revision": <checkpoint read>, "count": <messages read>,
+#    "anchors": [{"id": <message id or "">, "i": <index>, "h": <content hash>}, ...]}
+# The anchors are the last messages read, newest last.  A run resumes after the
+# newest anchor still there with the same content: a retried answer or an
+# edited message is read again, and a history that was replaced is read from
+# its end, within the budget.
+
+_NEVER = "2000-01-01T00:00:00"
+_WATERMARK_VERSION = 1
+_ANCHORS = 3
+_OVERLAP_MESSAGES = 2  # messages already read, sent before the new ones as context
+_CONVERSATION_BUDGET = 6000  # characters of conversation per extraction call
+_EARLIER_LABEL = "[Earlier in this conversation, already read: context only]"
+_NEW_LABEL = "[New since then]"
+_OMITTED_LABEL = "[... earlier new messages not shown]"
+
+# Conversations where no person states facts about themselves: workflow runs,
+# delegated Agents' threads and Row-Bot's own temporary threads.
+_WORKFLOW_NAME_PREFIX = "⚡"
+_SKIPPED_THREAD_TYPES = frozenset({"agent_child"})
+_INTERNAL_THREAD_PREFIXES = ("orchestration-synthesis:",)
+
+
+@dataclass(frozen=True)
+class _Unread:
+    messages: list[dict]
+    start: int  # the first message not read yet
+    revision: str  # the checkpoint the messages came from
+
+
+def _message_hash(message: dict) -> str:
+    text = f"{message.get('role', '')}\n{message.get('content', '')}"
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def _watermark_for(messages: list[dict], revision: str) -> dict:
+    """A watermark at the end of *messages*."""
+    first = max(0, len(messages) - _ANCHORS)
+    return {
+        "v": _WATERMARK_VERSION,
+        "revision": str(revision or ""),
+        "count": len(messages),
+        "anchors": [
+            {"id": str(messages[index].get("id") or ""), "i": index, "h": _message_hash(messages[index])}
+            for index in range(first, len(messages))
+        ],
+    }
+
+
+def _parse_watermark(raw: str) -> dict | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("v") != _WATERMARK_VERSION:
+        return None
+    return value if isinstance(value.get("anchors"), list) else None
+
+
+def _anchor_index(messages: list[dict], anchor: dict) -> int | None:
+    digest = str(anchor.get("h") or "")
+    message_id = str(anchor.get("id") or "")
+    if message_id:
+        for index in range(len(messages) - 1, -1, -1):
+            if str(messages[index].get("id") or "") == message_id:
+                return index if _message_hash(messages[index]) == digest else None
+        return None
+    index = anchor.get("i")
+    if isinstance(index, int) and 0 <= index < len(messages) and _message_hash(messages[index]) == digest:
+        return index
+    return None
+
+
+def _resume_index(messages: list[dict], watermark: dict) -> int:
+    """The first message after the newest anchor still there unchanged; 0 when none is."""
+    for anchor in reversed(watermark.get("anchors") or []):
+        if isinstance(anchor, dict):
+            index = _anchor_index(messages, anchor)
+            if index is not None:
+                return index + 1
+    return 0
+
+
+def _thread_watermarks() -> dict[str, tuple[str, str]]:
+    """``{thread id: (thread type, watermark json)}`` for every conversation."""
+    from row_bot import threads
+
+    try:
+        threads._ensure_thread_db()
+        with closing(sqlite3.connect(threads.DB_PATH, timeout=30)) as conn:
+            rows = conn.execute(
+                "SELECT thread_id, COALESCE(thread_type, ''), COALESCE(memory_extraction_json, '') "
+                "FROM thread_meta"
+            ).fetchall()
+    except Exception:
+        logger.debug("Could not read the memory extraction watermarks", exc_info=True)
+        return {}
+    return {str(row[0]): (str(row[1]), str(row[2])) for row in rows}
+
+
+def _save_watermark(thread_id: str, watermark: dict) -> None:
+    from row_bot import threads
+
+    encoded = json.dumps(watermark, sort_keys=True, separators=(",", ":"))
+    try:
+        with closing(sqlite3.connect(threads.DB_PATH, timeout=30)) as conn, conn:
+            # Neither updated_at nor client_revision moves: the conversation did not change.
+            conn.execute(
+                "UPDATE thread_meta SET memory_extraction_json = ? "
+                "WHERE thread_id = ? AND COALESCE(memory_extraction_json, '') != ?",
+                (encoded, thread_id, encoded),
+            )
+    except Exception:
+        logger.debug("Could not save the memory extraction watermark of %s", thread_id, exc_info=True)
+
+
+def _checkpoint_revision(thread_id: str) -> str:
+    try:
+        from row_bot.threads import get_latest_checkpoint_revision
+
+        return str(get_latest_checkpoint_revision(thread_id) or "")
+    except Exception:
+        logger.debug("Could not read the checkpoint revision of %s", thread_id, exc_info=True)
+        return ""
+
+
+def _skipped_thread(thread_id: str, name: str, thread_type: str, workflow_ids: set[str]) -> bool:
+    return (
+        name.startswith(_WORKFLOW_NAME_PREFIX)
+        or thread_id in workflow_ids
+        or thread_type in _SKIPPED_THREAD_TYPES
+        or thread_id.startswith(_INTERNAL_THREAD_PREFIXES)
+    )
+
+
+def _unread(thread_id: str, updated: str, watermark: dict | None, cutoff: str) -> _Unread | None:
+    """What a conversation holds past its watermark, or None when there is nothing to read.
+
+    A conversation whose checkpoint is the one its watermark read is not even
+    loaded: a rename or a setting moves ``updated_at`` but writes no message.
+    """
+    # Read before the messages, so a message written in between is read next time.
+    revision = _checkpoint_revision(thread_id)
+    if watermark is not None and revision and watermark.get("revision") == revision:
+        return None
+    messages = _get_thread_messages(thread_id)
+    if watermark is None:
+        if not updated or updated <= cutoff:
+            # Read before watermarks existed, and unchanged since: start from its end.
+            _save_watermark(thread_id, _watermark_for(messages, revision))
+            return None
+        start = 0
+    else:
+        start = _resume_index(messages, watermark)
+    if not any(message.get("role") == "user" for message in messages[start:]):
+        # Nothing new from the person: no call, the watermark just moves on.
+        _save_watermark(thread_id, _watermark_for(messages, revision))
+        return None
+    return _Unread(messages, start, revision)
+
+
+def _conversation_window(messages: list[dict], start: int) -> str:
+    """The text one call reads: the unread messages, the newest kept when they
+    do not all fit, after up to two messages already read, as context."""
+    new_lines = [line for line in (_format_conversation([message]) for message in messages[start:]) if line]
+    kept: list[str] = []
+    used = 0
+    for line in reversed(new_lines):
+        if kept and used + len(line) + 1 > _CONVERSATION_BUDGET:
+            break
+        kept.append(line)
+        used += len(line) + 1
+    kept.reverse()
+    parts: list[str] = []
+    if len(kept) < len(new_lines):
+        parts.append(_OMITTED_LABEL)
+    elif start:
+        context = _format_conversation(messages[max(0, start - _OVERLAP_MESSAGES):start])
+        labels = len(_EARLIER_LABEL) + len(_NEW_LABEL) + 3
+        if context and used + len(context) + labels <= _CONVERSATION_BUDGET:
+            parts += [_EARLIER_LABEL, context, _NEW_LABEL]
+    return "\n".join(parts + kept)
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -> int:
-    """Scan threads updated since last extraction and extract memories.
+def run_extraction(
+    on_status=None,
+    exclude_thread_ids: set[str] | None = None,
+    *,
+    should_continue=None,
+) -> int:
+    """Read what was said in each conversation since its watermark and save new memories.
 
     Parameters
     ----------
@@ -688,6 +932,11 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
     exclude_thread_ids : set[str], optional
         Thread IDs to skip (e.g. the currently active conversation) to
         avoid racing with live tool calls.
+    should_continue : callable, optional
+        Asked before each conversation; False stops the run there and the
+        conversations not read yet wait for the next run.
+        ``run_extraction_if_idle`` passes ``is_app_idle``, so a person coming
+        back or a turn starting stops it.
 
     Returns
     -------
@@ -695,7 +944,7 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         Number of new/updated memories saved.
     """
     from row_bot.models import get_current_model
-    from row_bot.threads import _list_threads
+    from row_bot.threads import _list_threads, get_workflow_thread_ids
 
     if not str(get_current_model() or "").strip():
         # Nothing is preset (decision 9). Leave the bookmark where it is so the
@@ -705,7 +954,9 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         return 0
 
     state = _load_state()
-    last_run = state.get("last_extraction", "2000-01-01T00:00:00")
+    # A conversation without a watermark was last read before watermarks existed.
+    # It follows the old rule once: read when it changed after the last run then.
+    cutoff = str(state.setdefault("watermark_cutoff", state.get("last_extraction") or _NEVER))
     exclude = exclude_thread_ids or set()
 
     threads = _list_threads()
@@ -716,19 +967,22 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         _save_state(state)
         return 0
 
-    # Find threads updated since last extraction, excluding active ones
-    # and background workflow threads (⚡ prefix) which contain only
-    # AI-generated content with no user-stated facts.
-    new_threads = []
-    for tid, name, created, updated, *rest in threads:
+    # Workflow runs, delegated Agents' threads and Row-Bot's temporary threads
+    # hold no user-stated facts; the open conversation races live tool calls.
+    watermarks = _thread_watermarks()
+    workflow_ids = get_workflow_thread_ids()
+    due: list[tuple[str, str, _Unread]] = []
+    for tid, name, _created, updated, *_rest in threads:
         if tid in exclude:
             continue
-        if name and name.startswith("⚡"):
+        thread_type, raw_watermark = watermarks.get(str(tid), ("", ""))
+        if _skipped_thread(str(tid), str(name or ""), thread_type, workflow_ids):
             continue
-        if updated and updated > last_run:
-            new_threads.append((tid, name))
+        unread = _unread(str(tid), str(updated or ""), _parse_watermark(raw_watermark), cutoff)
+        if unread is not None:
+            due.append((tid, name, unread))
 
-    if not new_threads:
+    if not due:
         if on_status:
             on_status("No new conversations since last extraction")
         state["last_extraction"] = datetime.now().isoformat()
@@ -736,13 +990,14 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         return 0
 
     if on_status:
-        on_status(f"Scanning {len(new_threads)} conversation(s) for memories…")
+        on_status(f"Scanning {len(due)} conversation(s) for memories…")
 
     total_saved = 0
+    scanned = 0
     islands_repaired = 0
     journal_entry = {
         "timestamp": datetime.now().isoformat(),
-        "threads_scanned": len(new_threads),
+        "threads_scanned": 0,
         "thread_details": [],
         "entities_saved": 0,
         "contradictions_blocked": 0,
@@ -750,22 +1005,23 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
         "errors": [],
     }
 
-    for tid, name in new_threads:
-        messages = _get_thread_messages(tid)
-        # Only process threads with user messages
-        user_msgs = [m for m in messages if m["role"] == "user"]
-        if not user_msgs:
-            continue
+    for tid, name, unread in due:
+        if should_continue is not None and not should_continue():
+            logger.info("Memory extraction paused: the app is in use; %d conversation(s) wait",
+                        len(due) - scanned)
+            break
 
-        # Build conversation text (cap at ~6000 chars to fit in context)
-        conv_text = _format_conversation(messages)
-        if len(conv_text) > 6000:
-            conv_text = conv_text[:6000] + "\n[... truncated]"
+        conv_text = _conversation_window(unread.messages, unread.start)
 
         if on_status:
             on_status(f"Extracting memories from: {name}")
 
         extracted = _extract_from_conversation(conv_text)
+        if isinstance(extracted, _NoReply):
+            # No reply from the model: this conversation and the rest stay unread.
+            journal_entry["errors"].append("The model did not reply; the rest waits for the next run")
+            break
+        scanned += 1
         if extracted:
             count = _dedup_and_save(
                 extracted,
@@ -788,6 +1044,7 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
                 "extracted": 0,
                 "saved": 0,
             })
+        _save_watermark(tid, _watermark_for(unread.messages, unread.revision))
 
     # One bounded canonical projection drain after all conversation writes.
     projection_pending = False
@@ -813,38 +1070,45 @@ def run_extraction(on_status=None, exclude_thread_ids: set[str] | None = None) -
             except Exception:
                 logger.debug("Memory embedding resource release failed", exc_info=True)
 
+    waiting = len(due) - scanned
     state["last_extraction"] = datetime.now().isoformat()
-    state["threads_scanned"] = len(new_threads)
+    state["threads_scanned"] = scanned
     state["entities_saved"] = total_saved
     state["projection_pending"] = projection_pending
     _save_state(state)
 
     # Append journal entry
+    journal_entry["threads_scanned"] = scanned
     journal_entry["entities_saved"] = total_saved
     journal_entry["islands_repaired"] = islands_repaired
     journal_entry["summary"] = (
-        f"{len(new_threads)} thread(s) scanned, {total_saved} saved, "
+        f"{scanned} thread(s) scanned, {total_saved} saved, "
         f"{islands_repaired} island(s) repaired"
     )
+    if waiting:
+        journal_entry["threads_waiting"] = waiting
+        journal_entry["summary"] += f", {waiting} left for the next run"
     _append_extraction_journal(journal_entry)
     logger.info("Memory extraction complete: %s", journal_entry["summary"])
 
     if on_status:
+        later = f"; {waiting} conversation(s) left for the next run" if waiting else ""
         if total_saved:
             suffix = "; projection repair pending" if projection_pending else ""
-            on_status(f"Extracted {total_saved} new memory(s){suffix}")
+            on_status(f"Extracted {total_saved} new memory(s){suffix}{later}")
         else:
-            on_status("No new memories found")
+            on_status(f"No new memories found{later}")
 
     return total_saved
 
 
 def run_extraction_if_idle(on_status=None, exclude_thread_ids: set[str] | None = None) -> int:
-    """Run extraction only when the foreground app is idle."""
+    """Run extraction only while the foreground app is idle, stopping when it no longer is."""
     if not is_app_idle():
         logger.info("Memory extraction deferred; app is active (idle %.0fs)", idle_seconds())
         return 0
-    return run_extraction(on_status=on_status, exclude_thread_ids=exclude_thread_ids)
+    return run_extraction(on_status=on_status, exclude_thread_ids=exclude_thread_ids,
+                          should_continue=is_app_idle)
 
 
 # ── Background timer ─────────────────────────────────────────────────────────
@@ -854,7 +1118,7 @@ _timer_stop = threading.Event()
 
 
 def start_periodic_extraction() -> None:
-    """Start a daemon thread that runs extraction every 6 hours."""
+    """Start a daemon thread that runs extraction every 2 hours, while the app is idle."""
     global _timer_thread
     if _timer_thread is not None and _timer_thread.is_alive():
         return

@@ -17,7 +17,7 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import List, Optional
+from typing import List, Literal, Optional
 from urllib.parse import urlencode, urlparse, parse_qs
 
 from langchain_core.tools import StructuredTool
@@ -323,14 +323,10 @@ def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True)
 # ── Pydantic input schemas ──────────────────────────────────────────────────
 
 class _XReadInput(BaseModel):
-    action: str = Field(
+    action: Literal["search", "read_tweet", "timeline", "mentions", "user_info"] = Field(
         description=(
-            "The read action to perform. One of: "
-            "'search' (search recent tweets), "
-            "'read_tweet' (get a specific tweet by ID), "
-            "'timeline' (get a user's recent tweets), "
-            "'mentions' (get your recent mentions), "
-            "'user_info' (get info about a user)."
+            "search: recent tweets; read_tweet: one tweet by ID; timeline: a user's recent tweets; "
+            "mentions: your recent mentions; user_info: a user's profile."
         )
     )
     query: Optional[str] = Field(
@@ -375,14 +371,8 @@ class _XReadInput(BaseModel):
 
 
 class _XPostInput(BaseModel):
-    action: str = Field(
-        description=(
-            "The post action to perform. One of: "
-            "'post' (create a new tweet), "
-            "'reply' (reply to a tweet), "
-            "'quote' (quote a tweet), "
-            "'delete' (delete a tweet)."
-        )
+    action: Literal["post", "reply", "quote", "delete"] = Field(
+        description="post a new tweet, reply to or quote a tweet, or delete one."
     )
     text: Optional[str] = Field(
         default=None,
@@ -403,12 +393,8 @@ class _XPostInput(BaseModel):
 
 
 class _XEngageInput(BaseModel):
-    action: str = Field(
-        description=(
-            "The engagement action to perform. One of: "
-            "'like', 'unlike', 'repost', 'unrepost', "
-            "'bookmark', 'unbookmark'."
-        )
+    action: Literal["like", "unlike", "repost", "unrepost", "bookmark", "unbookmark"] = Field(
+        description="The engagement action."
     )
     tweet_id: str = Field(
         description="The tweet ID to engage with.",

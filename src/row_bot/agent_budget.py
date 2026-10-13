@@ -9,8 +9,9 @@ import json
 import secrets
 import threading
 from dataclasses import dataclass
-from typing import Any, Mapping, NotRequired, TypedDict
+from typing import Annotated, Any, Mapping, NotRequired, TypedDict
 
+from langgraph.channels.untracked_value import UntrackedValue
 from langgraph.prebuilt.chat_agent_executor import AgentState
 from langchain_core.runnables import RunnableConfig
 
@@ -30,7 +31,10 @@ class ExecutionBudgetState(TypedDict):
 
 class RowBotAgentState(AgentState):
     execution_budget: ExecutionBudgetState
-    llm_input_messages: NotRequired[list[Any]]
+    # The provider request the pre-model hook prepares for the model call right after it. It is
+    # rebuilt for every call, so it is never checkpointed (F30): each checkpoint used to carry the
+    # whole prompt a second time. A model call resumed after a failure prepares it again.
+    llm_input_messages: NotRequired[Annotated[list[Any], UntrackedValue]]
 
 
 class ExecutionBudgetError(RuntimeError):

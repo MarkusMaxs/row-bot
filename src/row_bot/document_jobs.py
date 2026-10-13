@@ -553,6 +553,16 @@ class DocumentJobService:
                     PRIMARY KEY(job_id, level, group_index),
                     FOREIGN KEY(job_id) REFERENCES document_jobs(id) ON DELETE CASCADE
                 );
+
+                -- The map windows a job started with (WP C3): its map summaries
+                -- are numbered by them, so every resume reuses them.
+                CREATE TABLE IF NOT EXISTS document_map_plans (
+                    job_id TEXT PRIMARY KEY,
+                    window_size INTEGER NOT NULL,
+                    overlap INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(job_id) REFERENCES document_jobs(id) ON DELETE CASCADE
+                );
                 """
             )
             conn.execute("PRAGMA user_version=1")
@@ -2290,6 +2300,33 @@ class DocumentJobService:
                 (job_id,),
             ).fetchone()[0]
         return int(value) if value is not None else -1
+
+    def map_window_plan(self, job_id: str) -> tuple[int, int] | None:
+        """The ``(window, overlap)`` a job's map stage started with, if it has started."""
+        with contextlib.closing(self._connect()) as conn, conn:
+            row = conn.execute(
+                "SELECT window_size, overlap FROM document_map_plans WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        return (int(row["window_size"]), int(row["overlap"])) if row else None
+
+    def record_map_window_plan(self, job_id: str, window_size: int, overlap: int) -> tuple[int, int]:
+        """Keep a job's map windows; the first plan saved wins and is returned."""
+        if window_size <= 0 or overlap < 0 or overlap >= window_size:
+            raise DocumentJobError("Invalid extraction window bounds")
+        with contextlib.closing(self._connect()) as conn, conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO document_map_plans (job_id, window_size, overlap, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (job_id, int(window_size), int(overlap), self._now()),
+            )
+            row = conn.execute(
+                "SELECT window_size, overlap FROM document_map_plans WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        return int(row["window_size"]), int(row["overlap"])
 
     def store_reduce_summary(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from langchain_core.tools import StructuredTool
 from langgraph.types import interrupt
@@ -15,9 +16,9 @@ from row_bot.tools.base import BaseTool
 
 
 class _CustomToolBuilderInput(BaseModel):
-    action: str = Field(
-        description="One of: start, show, list, refine, update, test, setup, create, enable, promote, delete."
-    )
+    action: Literal[
+        "start", "show", "list", "refine", "update", "test", "setup", "create", "enable", "promote", "delete"
+    ] = Field(description="The builder step to run.")
     source_path: str = Field(default="", description="Local repo/folder path for action=start.")
     source_url: str = Field(default="", description="Repo URL or label for action=start.")
     draft_id: str = Field(default="", description="Custom Tool draft id for draft actions.")
@@ -138,15 +139,11 @@ class CustomToolBuilderTool(BaseTool):
             StructuredTool.from_function(
                 func=_run_builder,
                 name="custom_tool_builder",
+                # The step-by-step flow and its rules live in custom_tool_builder_guide.
                 description=(
-                    "Use when the user asks to create, add, generate, or turn a GitHub repo/local folder into a "
-                    "Row-Bot Custom Tool. Start with action='start'. If the user gives a repo URL, pass it as "
-                    "source_url and pass fields.clone_parent when provided; if clone_parent is missing or must be "
-                    "created, ask for it. Show proposed commands before action='create'. For Python repos, use "
-                    "action='setup' to install dependencies into the tool's isolated .venv; do not run pip installs "
-                    "manually in Row-Bot's environment. Use action='promote' only after explicit user request to make "
-                    "the tool available in normal chat. Use this tool for Custom Tool lifecycle state; shell is only "
-                    "for extra inspection or approved testing, not manual registration."
+                    "Turn a GitHub repo or local folder into a Row-Bot Custom Tool and manage it (start, refine, "
+                    "test, set up, create, enable, promote, delete), following the Custom Tool Builder Guide. "
+                    "Never register or install a Custom Tool by hand in the shell."
                 ),
                 args_schema=_CustomToolBuilderInput,
             )

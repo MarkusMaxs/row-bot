@@ -274,45 +274,160 @@ def usage_metadata_from_provider_usage(usage: Any) -> dict[str, Any] | None:
     return langchain_usage_metadata(_usage_from_mapping(usage))
 
 
-def _with_anthropic_cache_marker(message: SystemMessage) -> SystemMessage:
-    content = message.content
-    if isinstance(content, str):
-        next_content: Any = [
-            {
-                "type": "text",
-                "text": content,
-                "cache_control": dict(ANTHROPIC_CACHE_MARKER),
-            }
-        ]
-    elif isinstance(content, list):
+# ── Prompt-cache breakpoints (WP A3) ────────────────────────────────────────
+#
+# Lifetimes are automatic (D3, no setting):
+# - a conversation a person is in (desktop and remote client chat, voice, Designer,
+#   channels and channel approvals) caches for one hour, because people pause for
+#   longer than five minutes and the one-hour write premium applies only to each
+#   call's small new part;
+# - back-to-back loops (workflow and task runs, goal continuations, child agents,
+#   compaction) cache for five minutes, which their next call always refreshes.
+# Both the system breakpoint and the conversation tail use the request's lifetime,
+# so the longer lifetime never follows a shorter one (an API rule).
+CACHE_TTL_INTERACTIVE = "1h"
+CACHE_TTL_LOOP = "5m"
+_CACHE_TTL_RANK = {CACHE_TTL_LOOP: 1, CACHE_TTL_INTERACTIVE: 2}
+# Runtime surfaces that are back-to-back loops; every other surface is a person's conversation.
+LOOP_RUNTIME_SURFACES = frozenset({"workflow", "goal"})
+
+# Private request metadata: set on the last message of a conversation request (Agent and
+# Chat Only) to ask a Claude transport to cache the conversation tail. Transports read it from
+# the LangChain messages; no request builder sends the ``additional_kwargs`` of a person or tool
+# message, so it never reaches a provider.
+CONVERSATION_CACHE_KEY = "row_bot_prompt_cache"
+
+
+def prompt_cache_lifetime(
+    *,
+    runtime_surface: str = "",
+    background: bool = False,
+    goal_continuation: bool = False,
+) -> str:
+    """The automatic cache lifetime for a request (D3): ``"1h"`` or ``"5m"``."""
+    surface = str(runtime_surface or "").strip().lower()
+    if background or goal_continuation or surface in LOOP_RUNTIME_SURFACES or surface.startswith("agent_child"):
+        return CACHE_TTL_LOOP
+    return CACHE_TTL_INTERACTIVE
+
+
+def normalize_cache_ttl(ttl: Any) -> str:
+    """``"1h"`` or ``"5m"``; anything else is the five-minute default."""
+    return CACHE_TTL_INTERACTIVE if str(ttl or "").strip().lower() == CACHE_TTL_INTERACTIVE else CACHE_TTL_LOOP
+
+
+def cache_marker(ttl: str | None = None) -> dict[str, str]:
+    """A ``cache_control`` value. Five minutes is the API default, so only one hour names a ``ttl``."""
+    marker = dict(ANTHROPIC_CACHE_MARKER)
+    if normalize_cache_ttl(ttl) == CACHE_TTL_INTERACTIVE:
+        marker["ttl"] = CACHE_TTL_INTERACTIVE
+    return marker
+
+
+def marker_ttl(marker: Any) -> str:
+    """The lifetime a ``cache_control`` value asks for."""
+    return normalize_cache_ttl(marker.get("ttl") if isinstance(marker, dict) else None)
+
+
+def shorter_ttl(first: str, second: str) -> str:
+    """The shorter of two lifetimes: a later breakpoint may never outlive an earlier one."""
+    first, second = normalize_cache_ttl(first), normalize_cache_ttl(second)
+    return first if _CACHE_TTL_RANK[first] <= _CACHE_TTL_RANK[second] else second
+
+
+def with_conversation_cache(messages: list[BaseMessage], *, ttl: str) -> list[BaseMessage]:
+    """Ask the transport to cache this conversation request's tail for ``ttl``.
+
+    The request is tagged on a copy of its last message (private metadata, never sent).
+    """
+    if not messages:
+        return list(messages)
+    tagged = list(messages)
+    last = tagged[-1]
+    additional = dict(getattr(last, "additional_kwargs", None) or {})
+    additional[CONVERSATION_CACHE_KEY] = {"ttl": normalize_cache_ttl(ttl)}
+    tagged[-1] = _copy_message(last, additional_kwargs=additional)
+    return tagged
+
+
+def conversation_cache_ttl(messages: Any) -> str | None:
+    """The tail lifetime a conversation request asked for, or None for any other request."""
+    if not isinstance(messages, (list, tuple)) or not messages:
+        return None
+    additional = getattr(messages[-1], "additional_kwargs", None)
+    if not isinstance(additional, dict):
+        return None
+    request = additional.get(CONVERSATION_CACHE_KEY)
+    if not isinstance(request, dict):
+        return None
+    return normalize_cache_ttl(request.get("ttl"))
+
+
+def _copy_message(message: BaseMessage, **updates: Any) -> BaseMessage:
+    try:
+        return message.model_copy(update=updates)
+    except AttributeError:
+        return message.copy(update=updates)
+
+
+def _marked_content(content: Any, marker: dict[str, str]) -> list[Any]:
+    """Content blocks with ``marker`` on the last text block."""
+    if isinstance(content, list):
         next_content = list(content)
         for index in range(len(next_content) - 1, -1, -1):
             block = next_content[index]
             if isinstance(block, dict) and str(block.get("type") or "text") == "text":
-                next_content[index] = {
-                    **block,
-                    "cache_control": dict(ANTHROPIC_CACHE_MARKER),
-                }
-                break
-        else:
-            next_content.append({
-                "type": "text",
-                "text": "",
-                "cache_control": dict(ANTHROPIC_CACHE_MARKER),
-            })
-    else:
-        next_content = [
-            {
-                "type": "text",
-                "text": str(content or ""),
-                "cache_control": dict(ANTHROPIC_CACHE_MARKER),
-            }
-        ]
+                next_content[index] = {**block, "cache_control": dict(marker)}
+                return next_content
+        next_content.append({"type": "text", "text": "", "cache_control": dict(marker)})
+        return next_content
+    return [{
+        "type": "text",
+        "text": content if isinstance(content, str) else str(content or ""),
+        "cache_control": dict(marker),
+    }]
 
-    try:
-        return message.model_copy(update={"content": next_content})
-    except AttributeError:
-        return message.copy(update={"content": next_content})
+
+def _with_anthropic_cache_marker(message: SystemMessage, ttl: str | None = None) -> SystemMessage:
+    return _copy_message(message, content=_marked_content(message.content, cache_marker(ttl)))
+
+
+def _system_blocks(content: Any) -> list[dict[str, Any]]:
+    """A system message's content as text blocks (strings become one block)."""
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    blocks: list[dict[str, Any]] = []
+    for block in content if isinstance(content, list) else [str(content or "")]:
+        if isinstance(block, str):
+            if block:
+                blocks.append({"type": "text", "text": block})
+        elif isinstance(block, dict) and str(block.get("type") or "text") == "text":
+            blocks.append(dict(block))
+    return blocks
+
+
+def _consolidated_system_blocks(
+    messages: list[BaseMessage],
+    marked_ids: set[int],
+    ttl: str | None,
+) -> list[BaseMessage]:
+    """One leading system message whose content keeps each system message as its own text block.
+
+    Chat-style Claude routes (OpenRouter) take a breakpoint on one block of the system
+    message, so the system prompt is no longer flattened into one string; the marked
+    block is the last cache-eligible system message.
+    """
+    system = [message for message in messages if isinstance(message, SystemMessage)]
+    if not system:
+        return list(messages)
+    rest = [message for message in messages if not isinstance(message, SystemMessage)]
+    blocks: list[dict[str, Any]] = []
+    for message in system:
+        message_blocks = _system_blocks(message.content)
+        if id(message) in marked_ids:
+            message_blocks = _marked_content(message_blocks, cache_marker(ttl))
+        blocks.extend(message_blocks)
+    return [SystemMessage(content=blocks), *rest]
 
 
 def apply_anthropic_system_cache_marker(
@@ -321,40 +436,50 @@ def apply_anthropic_system_cache_marker(
     provider_id: str | None,
     cache_eligible_system_message_ids: set[int],
     stable_fingerprint: str = "",
+    model_id: str | None = None,
+    ttl: str | None = None,
 ) -> tuple[list[BaseMessage], PromptCacheMarkerResult]:
+    """Put one breakpoint on the last stable system block, on Claude routes that take one.
+
+    The direct API keeps its system messages (langchain-anthropic turns them into system
+    blocks). OpenRouter gets one system message of text blocks, one per system message.
+    ``ttl`` is the request's lifetime (``prompt_cache_lifetime``). Other routes are unchanged.
+    """
+    from row_bot.providers.capabilities import (
+        PROMPT_CACHE_ROUTE_OPENROUTER,
+        PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES,
+        prompt_cache_route,
+    )
+
     provider = str(provider_id or "")
+    route = prompt_cache_route(provider, model_id)
     eligible_indices = [
         index
         for index, message in enumerate(messages)
         if isinstance(message, SystemMessage) and id(message) in cache_eligible_system_message_ids
     ]
-    if provider != "anthropic":
+    if route not in PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES:
         return list(messages), PromptCacheMarkerResult(
             provider_id=provider,
             applied=False,
             marker_count=0,
             eligible_system_count=len(eligible_indices),
             stable_fingerprint=stable_fingerprint,
-            reason="provider_not_anthropic",
+            reason="route_takes_no_breakpoints",
         )
-    if not eligible_indices:
-        return list(messages), PromptCacheMarkerResult(
-            provider_id=provider,
-            applied=False,
-            marker_count=0,
-            eligible_system_count=0,
-            stable_fingerprint=stable_fingerprint,
-            reason="no_cache_eligible_system",
-        )
-
-    target_index = eligible_indices[-1]
-    marked_messages = list(messages)
-    marked_messages[target_index] = _with_anthropic_cache_marker(marked_messages[target_index])
+    marked_ids = {id(messages[eligible_indices[-1]])} if eligible_indices else set()
+    if route == PROMPT_CACHE_ROUTE_OPENROUTER:
+        marked_messages = _consolidated_system_blocks(list(messages), marked_ids, ttl)
+    else:
+        marked_messages = list(messages)
+        if eligible_indices:
+            target_index = eligible_indices[-1]
+            marked_messages[target_index] = _with_anthropic_cache_marker(marked_messages[target_index], ttl)
     return marked_messages, PromptCacheMarkerResult(
         provider_id=provider,
-        applied=True,
-        marker_count=1,
+        applied=bool(eligible_indices),
+        marker_count=1 if eligible_indices else 0,
         eligible_system_count=len(eligible_indices),
         stable_fingerprint=stable_fingerprint,
-        reason="stable_system_breakpoint",
+        reason="stable_system_breakpoint" if eligible_indices else "no_cache_eligible_system",
     )

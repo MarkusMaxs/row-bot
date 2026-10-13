@@ -99,3 +99,40 @@ def visible_surfaces_for_model(model_info: ModelInfo) -> list[str]:
 
 def endpoint_values(modes: set[TransportMode] | frozenset[TransportMode] | tuple[TransportMode, ...]) -> frozenset[TransportMode]:
     return frozenset(modes)
+
+
+# ── Prompt caching on Claude routes ─────────────────────────────────────────
+# How each Claude route takes prompt-cache instructions (WP A3). Only routes whose
+# documented request forms were checked are on; the rest send no cache
+# instructions until an opt-in live check (WP B3) shows they accept them.
+#
+# - "anthropic": the direct Claude API. Block-level ``cache_control`` breakpoints
+#   (with ``ttl``) and top-level automatic caching.
+# - "openrouter": OpenRouter ``anthropic/claude-*`` models. OpenRouter documents
+#   the same two forms (block-level ``cache_control`` on system and message
+#   content parts, and a top-level ``cache_control``), both with ``ttl``.
+# - "requesty": Requesty Claude routes. Requesty documents only its own flag,
+#   ``"requesty": {"auto_cache": true}``, which places the breakpoints itself
+#   (no ``ttl``).
+#
+# Off: MiniMax, OpenCode's Anthropic route, Atlas Cloud and Claude Subscription
+# (a separate plan, D7).
+PROMPT_CACHE_ROUTE_ANTHROPIC = "anthropic"
+PROMPT_CACHE_ROUTE_OPENROUTER = "openrouter"
+PROMPT_CACHE_ROUTE_REQUESTY = "requesty"
+# Routes that take an explicit breakpoint on the system prompt.
+PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES = frozenset({PROMPT_CACHE_ROUTE_ANTHROPIC, PROMPT_CACHE_ROUTE_OPENROUTER})
+_REQUESTY_CLAUDE_PREFIXES = ("anthropic/claude-", "bedrock/claude-", "vertex/claude-")
+
+
+def prompt_cache_route(provider_id: str | None, model_id: str | None) -> str:
+    """The prompt-cache route for a Claude model, or ``""`` when Row-Bot sends no cache instructions."""
+    provider = str(provider_id or "").strip().lower()
+    model = str(model_id or "").strip().lower()
+    if provider == "anthropic":
+        return PROMPT_CACHE_ROUTE_ANTHROPIC
+    if provider == "openrouter" and model.startswith("anthropic/claude-"):
+        return PROMPT_CACHE_ROUTE_OPENROUTER
+    if provider == "requesty" and model.startswith(_REQUESTY_CLAUDE_PREFIXES):
+        return PROMPT_CACHE_ROUTE_REQUESTY
+    return ""

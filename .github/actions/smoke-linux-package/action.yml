@@ -1,11 +1,13 @@
 name: Smoke the Linux package
 description: >-
   Install dist/Row-Bot-*-Linux-*.tar.gz into a temporary HOME and XDG data folder (never
-  a real profile), verify the installed client assets, and start the installed
-  launcher and its `serve` mode. Shared by release.yml and installer-verify.yml.
+  a real profile), check the releases/<version> layout and state.json, verify the
+  installed client assets, start the installed launcher and its `serve` mode, check
+  the wrapper's relaunch and rollback rules, and uninstall. Shared by release.yml and
+  installer-verify.yml.
 inputs:
   port:
-    description: Loopback port for the launcher smoke; `serve` uses the next one
+    description: Loopback port for the launcher smoke; `serve` uses the next one and the layout smoke the one after
     required: false
     default: "8095"
 runs:
@@ -18,6 +20,7 @@ runs:
       run: |
         set -euo pipefail
         SERVE_PORT="$((SMOKE_PORT + 1))"
+        LAYOUT_PORT="$((SMOKE_PORT + 2))"
         mkdir -p "$RUNNER_TEMP/row-bot-linux-smoke"
         tar -xzf dist/Row-Bot-*-Linux-*.tar.gz -C "$RUNNER_TEMP/row-bot-linux-smoke"
         PACKAGE_ROOT="$(find "$RUNNER_TEMP/row-bot-linux-smoke" -maxdepth 1 -type d -name 'Row-Bot-*-Linux-*' | head -n 1)"
@@ -30,20 +33,48 @@ runs:
         export XDG_DATA_HOME="$RUNNER_TEMP/row-bot-linux-xdg"
         mkdir -p "$HOME" "$XDG_DATA_HOME"
         bash "$PACKAGE_ROOT/install.sh"
-        PYTHONNOUSERSITE=1 "$XDG_DATA_HOME/row-bot/current/python/bin/python3" \
+
+        # The layout: releases/<version>, `current` and state.json.
+        ROOT="$XDG_DATA_HOME/row-bot"
+        VERSION="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$PACKAGE_ROOT/install_info.json")"
+        test "$(readlink "$ROOT/current")" = "releases/$VERSION"
+        python3 - "$ROOT/state.json" "$VERSION" <<'PY'
+        import json, sys
+        state = json.load(open(sys.argv[1]))
+        assert state["active"] == sys.argv[2] and state["pending_verification"] is False, state
+        PY
+        for file in bin/row-bot install.sh uninstall.sh version.json install_info.json; do
+          test -f "$ROOT/releases/$VERSION/$file"
+        done
+        # Shipped bytecode is hash-based and never checked against the source (flags = 1).
+        PYC="$(find "$ROOT/current/app/src/row_bot/__pycache__" -name 'install_layout.*.pyc' | head -n 1)"
+        python3 -c 'import sys; sys.exit(int.from_bytes(open(sys.argv[1], "rb").read()[4:8], "little") != 1)' "$PYC"
+
+        PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 "$ROOT/current/python/bin/python3" \
           "$GITHUB_WORKSPACE/scripts/verify_client_assets.py" \
-          --root "$XDG_DATA_HOME/row-bot/current/app/src/row_bot/static/client-v2" \
+          --root "$ROOT/current/app/src/row_bot/static/client-v2" \
           --compare "$GITHUB_WORKSPACE/frontend/dist" --strict
         # The launcher issues its own launch secret, so the smokes use the public probes (B203).
         python3 scripts/smoke_app.py \
           --port "$SMOKE_PORT" \
           --timeout 180 \
           --public-probes \
-          --cwd "$XDG_DATA_HOME/row-bot/current/app" \
+          --cwd "$ROOT/current/app" \
           -- "$HOME/.local/bin/row-bot" --no-open --no-ollama --port "$SMOKE_PORT"
         python3 scripts/smoke_app.py \
           --port "$SERVE_PORT" \
           --timeout 120 \
           --public-probes \
-          --cwd "$XDG_DATA_HOME/row-bot/current/app" \
+          --cwd "$ROOT/current/app" \
           -- "$HOME/.local/bin/row-bot" --no-ollama serve --port "$SERVE_PORT"
+        # The wrapper relaunches `serve` on exit code 75 and rolls back after two failed starts.
+        python3 scripts/smoke_install_layout.py --root "$ROOT" --kind linux --port "$LAYOUT_PORT" \
+          -- "$HOME/.local/bin/row-bot" --no-ollama serve --port "$LAYOUT_PORT"
+
+        # Uninstall removes the application files and never the user's data.
+        mkdir -p "$HOME/.row-bot"
+        echo kept > "$HOME/.row-bot/marker"
+        bash "$ROOT/current/uninstall.sh"
+        test ! -e "$ROOT"
+        test ! -e "$HOME/.local/bin/row-bot"
+        test "$(cat "$HOME/.row-bot/marker")" = kept

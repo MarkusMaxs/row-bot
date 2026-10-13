@@ -437,12 +437,13 @@ def test_row_bot_status_vision_reports_manual_disabled_custom_endpoint(tmp_path,
     assert "- Vision compatibility: manual vision capability disabled" in output
 
 
-def test_row_bot_status_update_setting_description_mentions_vision_model():
+def test_row_bot_status_update_setting_offers_vision_model():
     from row_bot.tools.row_bot_status_tool import RowBotStatusTool
 
     tools = {tool.name: tool for tool in RowBotStatusTool().as_langchain_tools()}
+    schema = tools["row_bot_update_setting"].args_schema.model_json_schema()
 
-    assert "vision_model" in tools["row_bot_update_setting"].description
+    assert "vision_model" in schema["properties"]["setting"]["enum"]
 
 
 def test_provider_status_summarizes_custom_probe_without_reprobe(tmp_path, monkeypatch):

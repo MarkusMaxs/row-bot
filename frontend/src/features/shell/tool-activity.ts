@@ -161,6 +161,11 @@ const EXACT: Record<string, Verb> = {
   run_command: verb('Ran a command', 'Running a command', Terminal),
   shell: verb('Ran a command', 'Running a command', Terminal),
   read_terminal: verb('Read the terminal', 'Reading the terminal', Terminal),
+  read_tool_output: verb(
+    'Read more of a result',
+    'Reading more of a result',
+    FileText,
+  ),
   read_file: verb('Read a file', 'Reading a file', FileText),
   write_file: verb('Wrote a file', 'Writing a file', FilePen),
   list_directory: verb('Listed files', 'Listing files', Folder),

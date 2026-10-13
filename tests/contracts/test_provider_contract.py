@@ -191,3 +191,64 @@ def test_every_usage_shape_keeps_one_meaning_for_input_and_output(shape) -> None
     if usage.cache_write_1h_tokens is not None:
         assert usage.cache_write_tokens is not None and usage.cache_write_1h_tokens <= usage.cache_write_tokens
     assert usage.cost is None or usage.cost >= 0
+
+
+def test_a_conversation_has_one_opaque_cache_key_per_provider(monkeypatch) -> None:
+    """Cache routing keys (WP B2): stable within a conversation, unrelated across
+    conversations and providers, never the conversation id, and absent outside one."""
+    from row_bot.providers.cache_affinity import conversation_cache_key
+
+    current = {"thread": ""}
+    monkeypatch.setitem(
+        sys.modules, "row_bot.agent", types.SimpleNamespace(get_current_thread_id=lambda: current["thread"])
+    )
+
+    def key(thread: str, provider: str) -> str | None:
+        current["thread"] = thread
+        return conversation_cache_key(provider)
+
+    conversation = "whatsapp:15550001111"
+    first = key(conversation, "openai")
+
+    assert first == key(conversation, "openai")
+    assert first != key("another-conversation", "openai")
+    assert first != key(conversation, "openrouter")
+    assert "15550001111" not in first
+    assert len(first) <= 64  # OpenAI's prompt_cache_key limit; OpenRouter's session_id allows 256
+    assert key("", "openai") is None
+
+
+def test_every_request_for_a_local_chat_model_keeps_its_context_size_and_lifetime(monkeypatch) -> None:
+    """Ollama reloads a runner, losing its prompt cache, when num_ctx changes (WP B2, F13).
+
+    The agent, background jobs and Chat Only build the model by different routes,
+    and some calls pass their own options; every request still carries the same
+    num_ctx and the chat keep_alive.
+    """
+    from langchain_core.messages import HumanMessage
+
+    import row_bot.models as models
+    from row_bot.providers import runtime
+    from row_bot.providers.transports.ollama_local import OLLAMA_CHAT_KEEP_ALIVE
+
+    monkeypatch.delenv("OLLAMA_KEEP_ALIVE", raising=False)
+    monkeypatch.setattr(models, "_ollama_base_url", lambda: "http://127.0.0.1:9")  # nothing listens
+    monkeypatch.setattr(models, "_num_ctx", 16_384)
+    monkeypatch.setattr(models, "_local_context_mode", "fixed")
+    monkeypatch.setattr(models, "get_model_max_context", lambda *args, **kwargs: 8_192)
+    monkeypatch.setattr(models, "_observed_local_context", {})
+    monkeypatch.setattr(models, "_override_llm_cache", {})
+
+    built = [
+        models.get_llm_for("model:ollama:contract-local:7b"),
+        runtime.create_chat_model("model:ollama:contract-local:7b"),
+    ]
+    prompt = [HumanMessage(content="hi")]
+    requests = [
+        params
+        for model in built
+        for params in (model._chat_params(prompt), model._chat_params(prompt, options={"num_predict": 8}))
+    ]
+
+    assert {params["options"]["num_ctx"] for params in requests} == {8_192}
+    assert {params["keep_alive"] for params in requests} == {OLLAMA_CHAT_KEEP_ALIVE}

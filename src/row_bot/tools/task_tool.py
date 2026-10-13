@@ -6,10 +6,10 @@ and quick timers via natural language.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -24,223 +24,130 @@ logger = logging.getLogger(__name__)
 
 # ── Pydantic schemas ─────────────────────────────────────────────────────────
 
+ApprovalModeChoice = Literal["block", "approve", "allow_all"]
+_SCHEDULE_FORMATS = (
+    "'daily:HH:MM', 'weekly:DAY:HH:MM' (e.g. 'weekly:monday:09:00'), 'interval:H' (every H hours), "
+    "'interval_minutes:M' or 'cron:EXPR' (e.g. 'cron:0 9 * * mon-fri')"
+)
+_TEMPLATE_VARIABLES = "{{date}}, {{day}}, {{time}}, {{month}}, {{year}} and {{task_id}} (this task's own id)"
+_TASK_LIST_CHARS = 30_000  # Beyond this the list is saved, and read on with read_tool_output.
+
+
 class _TaskCreateInput(BaseModel):
-    name: str = Field(
-        description="Short descriptive name for the task (e.g. 'Morning Briefing', 'Remind me to call Mom')."
-    )
+    name: str = Field(description="Short name, e.g. 'Morning Briefing' or 'Call Mom'.")
     prompts: list[str] = Field(
         default=[],
         description=(
-            "Ordered list of prompts the agent will execute sequentially. "
-            "Leave empty for notify-only tasks (reminders/timers). "
-            "Supports template variables: {{date}}, {{day}}, {{time}}, "
-            "{{month}}, {{year}}, {{task_id}} (the task's own ID, useful "
-            "for self-management like task_update(task_id='{{task_id}}', enabled=false))."
+            "Prompts the agent runs in order, in a background conversation. Empty for a notify-only "
+            f"reminder. Template variables: {_TEMPLATE_VARIABLES}."
         ),
     )
-    description: str = Field(
-        default="",
-        description="Optional longer description of what the task does.",
-    )
-    icon: str = Field(
-        default="⚡",
-        description="Single emoji icon for the task (e.g. '📰', '🔬', '⏰').",
-    )
+    description: str = Field(default="", description="Optional longer description.")
+    icon: str = Field(default="⚡", description="One emoji, e.g. '📰'.")
     schedule: str | None = Field(
         default=None,
-        description=(
-            "Recurring schedule. Formats: "
-            "'daily:HH:MM' (e.g. 'daily:08:00'), "
-            "'weekly:DAY:HH:MM' (e.g. 'weekly:monday:09:00'), "
-            "'interval:H' for every H hours (e.g. 'interval:2'), "
-            "'interval_minutes:M' for every M minutes (e.g. 'interval_minutes:30'), "
-            "'cron:EXPR' for advanced cron (e.g. 'cron:0 9 * * mon-fri'). "
-            "Mutually exclusive with delay_minutes."
-        ),
+        description=f"Recurring schedule: {_SCHEDULE_FORMATS}. Not with delay_minutes or run_at.",
     )
     delay_minutes: float | None = Field(
         default=None,
-        description=(
-            "Set a one-shot timer that fires after this many minutes. "
-            "Use only for 'remind me in 30 minutes'; for a stated date or time use run_at. "
-            "The task auto-deletes after firing. "
-            "Mutually exclusive with schedule and run_at."
-        ),
+        description="One-shot timer after this many minutes; the task deletes itself after firing.",
     )
     run_at: str | None = Field(
         default=None,
-        description=(
-            "A one-off date and time, in the person's local time, as 'YYYY-MM-DDTHH:MM' "
-            "(e.g. '2026-10-08T09:00' for 'remind me at 9am on 8 October'). Must be in the future. "
-            "Use this for any reminder or task at a stated time; use delay_minutes only for 'in N minutes'. "
-            "Mutually exclusive with schedule and delay_minutes."
-        ),
+        description="One-off local date and time 'YYYY-MM-DDTHH:MM', in the future.",
     )
     notify_only: bool = Field(
         default=False,
-        description=(
-            "If true, the task fires a desktop notification only — "
-            "no agent invocation. Use for simple reminders/timers."
-        ),
+        description="Only notify (desktop and in-app); no agent run. For plain reminders and timers.",
     )
-    notify_label: str = Field(
-        default="",
-        description="Custom notification label for notify-only tasks (defaults to the task name).",
-    )
+    notify_label: str = Field(default="", description="Notification text for notify-only tasks (default: the name).")
     delivery_channel: str | None = Field(
         default=None,
         description=(
-            "Optional delivery channel: 'telegram' or 'email'. "
-            "When set, task output is also sent via this channel. "
-            "Desktop + in-app notification always fires regardless."
+            "Also send the output through this channel, e.g. 'telegram' (no target needed) or 'email'. "
+            "Desktop and in-app notifications always fire."
         ),
     )
     delivery_target: str | None = Field(
         default=None,
-        description=(
-            "Target for the delivery channel: Telegram chat ID (number) "
-            "or email address. Required if delivery_channel is set."
-        ),
+        description="Chat id or email address for delivery_channel. Ask the person for an email address; never guess.",
     )
     model: str | None = Field(
         default=None,
-        description=(
-            "Optional workflow-level model override. Use a provider-qualified or pinned model. "
-            "Leave empty to use the current brain model."
-        ),
+        description="Model for this task: provider-qualified or pinned. Empty uses the current Brain model.",
     )
-    agent_profile: str | None = Field(
-        default=None,
-        description="Optional Agent Profile slug or id. Defaults to the Default profile.",
-    )
+    agent_profile: str | None = Field(default=None, description="Agent Profile slug or id (default: Default).")
     steps: list[dict] | None = Field(
         default=None,
         description=(
-            "Advanced pipeline steps (overrides prompts). Each step is a dict with: "
-            "'type' (prompt|condition|approval|subtask|notify) — "
-            "IDs are auto-assigned as {type}_{counter} (prompt_1, condition_1, etc.). "
+            "Pipeline steps instead of prompts, for branching, approvals or notifications. Each step has a "
+            "'type' (prompt|condition|approval|subtask|notify); ids are assigned as {type}_{counter} "
+            "(prompt_1, condition_1). "
             "prompt: {'prompt': str, 'on_error': 'stop'|'skip', 'max_retries': int}. "
-            "condition: {'condition': str, 'if_true': step_id, 'if_false': step_id}; the condition checks the previous "
-            "step's output and is one of: " + tasks_db.CONDITION_SYNTAX + ". For a judgement in words (for example 'is any item "
-            "below its reorder level?') use llm:<question>. "
-            "approval: {'message': str, 'timeout_minutes': int, 'if_approved': step_id (optional, default: next step), 'if_denied': step_id or 'end' (optional, default: 'end')}. "
+            "condition: {'condition': str, 'if_true': step_id, 'if_false': step_id}; it checks the previous "
+            "step's output and is one of: " + tasks_db.CONDITION_SYNTAX + " (use llm:<question> for a judgement "
+            "in words, e.g. 'is any item below its reorder level?'). "
+            "approval: {'message': str, 'timeout_minutes': int, 'if_approved': step_id (default: next step), "
+            "'if_denied': step_id or 'end' (default 'end')}. "
             "subtask: {'task_id': str, 'pass_output': bool}. "
-            "notify: {'message': str, 'channel': 'desktop' or any configured channel name (e.g. 'telegram')}; "
-            "when the person says 'notify me' or 'tell me', use a notify step, not a prompt step. Every step needs its "
-            "text: a prompt step its prompt, a notify or approval step its message. "
-            "IMPORTANT: 'email' is NOT a valid notify channel. To send email, use a prompt step that calls the gmail/email tool instead. "
-            "All step types support an optional 'next' field (step_id or 'end') to override linear flow after that step. "
-            "Use {{prev_output}} and {{step.<id>.output}} for data passing between steps."
+            "notify: {'message': str, 'channel': 'desktop' or a configured channel name such as 'telegram'}; "
+            "use a notify step, not a prompt step, when the person says 'notify me' or 'tell me'. "
+            "'email' is not a notify channel: send email from a prompt step with the email tool. "
+            "Every step needs its text (a prompt, or a message). Any step may set 'next' (step_id or 'end') "
+            "to change the flow. Pass data with {{prev_output}} and {{step.<id>.output}}."
         ),
     )
-    approval_mode: str | None = Field(
+    approval_mode: ApprovalModeChoice | None = Field(
         default=None,
-        description=(
-            "Approval mode for this task: 'block', 'approve', or 'allow_all'. Defaults to 'block'."
-        ),
-    )
-    safety_mode: str | None = Field(
-        default=None,
-        description="Legacy alias for approval_mode.",
+        description="Destructive tools: block (default), approve (pause for the person) or allow_all.",
     )
     persistent_thread: bool = Field(
         default=False,
         description=(
-            "If true, all runs of this task share one conversation thread "
-            "so the agent can see prior outputs across runs. Use for "
-            "monitoring/polling tasks that need to compare against previous "
-            "results (e.g. price tracking, status dashboards). "
-            "Default false = each run gets a fresh thread."
+            "Share one conversation across runs so each run sees earlier results (monitoring, price "
+            "tracking). Default: a fresh conversation per run."
         ),
     )
 
 
 class _TaskListInput(BaseModel):
-    include_history: bool = Field(
-        default=False,
-        description="If true, include last run info for each task.",
-    )
+    include_history: bool = Field(default=False, description="Also show each task's recent runs.")
 
 
 class _TaskRunNowInput(BaseModel):
-    task_id: str = Field(
-        description="The ID of the task to run immediately (from task_list output)."
-    )
+    task_id: str = Field(description="Task id from task_list.")
 
 
 class _TaskDeleteInput(BaseModel):
-    task_id: str = Field(
-        description="The ID of the task to delete (from task_list output)."
-    )
+    task_id: str = Field(description="Task id from task_list.")
 
 
 class _TaskUpdateInput(BaseModel):
-    task_id: str = Field(
-        description="The ID of the task to update (from task_list output)."
-    )
-    name: str | None = Field(
-        default=None,
-        description="New name for the task.",
-    )
+    task_id: str = Field(description="Task id from task_list.")
+    name: str | None = Field(default=None, description="New name.")
     schedule: str | None = Field(
         default=None,
-        description=(
-            "New schedule string. Same formats as task_create: "
-            "'daily:HH:MM', 'weekly:DAY:HH:MM', 'interval:H', "
-            "'interval_minutes:M', 'cron:EXPR'. "
-            "Set to empty string '' to clear schedule (make manual)."
-        ),
+        description="New schedule, in task_create's formats; '' clears it (run manually).",
     )
     run_at: str | None = Field(
         default=None,
-        description=(
-            "Move the task to one new local date and time, 'YYYY-MM-DDTHH:MM' (e.g. '2026-10-08T09:00'). "
-            "Must be in the future; replaces any recurring schedule."
-        ),
+        description="Move the task to one new local time 'YYYY-MM-DDTHH:MM'; replaces any schedule.",
     )
-    prompts: list[str] | None = Field(
-        default=None,
-        description=(
-            "New prompt list (full replacement — provide ALL steps). "
-            "Supports template variables: {{date}}, {{day}}, {{time}}, {{month}}, {{year}}."
-        ),
-    )
+    prompts: list[str] | None = Field(default=None, description="New prompts (replaces all of them).")
     steps: list[dict] | None = Field(
         default=None,
-        description=(
-            "New pipeline steps (full replacement). Same format as task_create steps. "
-            "Overrides prompts when set."
-        ),
+        description="New pipeline steps (replaces all of them), in task_create's format.",
     )
-    approval_mode: str | None = Field(
-        default=None,
-        description="Approval mode: 'block', 'approve', or 'allow_all'.",
-    )
-    safety_mode: str | None = Field(
-        default=None,
-        description="Legacy alias for approval_mode.",
-    )
-    enabled: bool | None = Field(
-        default=None,
-        description="Set to false to pause the task, true to resume it.",
-    )
-    model: str | None = Field(
-        default=None,
-        description=(
-            "Optional workflow-level model override. "
-            "Set to empty string '' to clear and use the default model."
-        ),
-    )
+    approval_mode: ApprovalModeChoice | None = Field(default=None, description="New approval mode.")
+    enabled: bool | None = Field(default=None, description="false pauses the task, true resumes it.")
+    model: str | None = Field(default=None, description="New model; '' uses the default model.")
     agent_profile: str | None = Field(
         default=None,
-        description="Agent Profile slug or id. Set to empty string '' to use the Default profile.",
+        description="Agent Profile slug or id; '' uses the Default profile.",
     )
     persistent_thread: bool | None = Field(
         default=None,
-        description=(
-            "Set to true to keep conversation history across runs, "
-            "or false to use a fresh thread each run."
-        ),
+        description="true keeps one conversation across runs; false uses a fresh one each run.",
     )
 
 
@@ -397,7 +304,9 @@ def _task_list(include_history: bool = False) -> str:
                 ]
         entries.append(entry)
 
-    return json.dumps(entries, indent=2)
+    from row_bot.tool_outputs import bounded, compact_json
+
+    return bounded(compact_json(entries), tool_name="task_list", max_chars=_TASK_LIST_CHARS)
 
 
 def _task_delete(task_id: str) -> str:
@@ -553,59 +462,44 @@ class TaskTool(BaseTool):
             StructuredTool.from_function(
                 func=_task_create,
                 name="task_create",
+                # The one home for scheduling guidance; the system prompt only points here.
                 description=(
-                    "Create a new task or quick timer. For a reminder at a stated time, "
-                    "use run_at in local time ('remind me at 09:00 on 8 October' → "
-                    "run_at='2026-10-08T09:00', notify_only=true); for 'in N minutes' use "
-                    "delay_minutes. To change a reminder's time, use task_update with run_at "
-                    "rather than deleting and re-creating it. For "
-                    "recurring agent tasks, provide prompts and a schedule. "
-                    "Supports template variables in prompts: {{date}}, {{day}}, "
-                    "{{time}}, {{month}}, {{year}}. "
-                    "For advanced pipelines with conditions, approvals, or "
-                    "branching, use 'steps' instead of 'prompts'."
+                    "Create a reminder, timer, scheduled task or monitor. "
+                    "Reminders: 'in N minutes' uses delay_minutes; a stated time uses run_at in local time "
+                    "('remind me at 9am on 8 October' -> run_at='2026-10-08T09:00'), never minutes worked out "
+                    "from now; add notify_only=true for a plain notification. To move a reminder, use "
+                    "task_update with run_at instead of deleting and re-creating it. "
+                    "Recurring work: a schedule plus prompts. A task that should do something (check the "
+                    "weather, search news, read email) needs prompts; notify_only is only for passive "
+                    "reminders. Monitoring ('check X and tell me when Y', 'alert me if W changes'): "
+                    "schedule='interval_minutes:M', prompts, persistent_thread=true, and a prompt that ends "
+                    "it with task_update(task_id='{{task_id}}', enabled=false) once done. "
+                    "Branching, approvals or notifications: steps instead of prompts."
                 ),
                 args_schema=_TaskCreateInput,
             ),
             StructuredTool.from_function(
                 func=_task_list,
                 name="task_list",
-                description=(
-                    "List all configured tasks with their status, schedule, "
-                    "and last run time. Set include_history=true to also see "
-                    "recent run results."
-                ),
+                description="List tasks with their ids, schedules and last runs.",
                 args_schema=_TaskListInput,
             ),
             StructuredTool.from_function(
                 func=_task_run_now,
                 name="task_run_now",
-                description=(
-                    "Run an existing task immediately, regardless of its "
-                    "schedule. Use when the user wants to trigger a specific "
-                    "task right now. Requires the task ID from task_list."
-                ),
+                description="Run a task now, whatever its schedule.",
                 args_schema=_TaskRunNowInput,
             ),
             StructuredTool.from_function(
                 func=_task_delete,
                 name="task_delete",
-                description=(
-                    "Delete a task permanently. Requires the task ID from "
-                    "task_list. The user will be asked to confirm before "
-                    "deletion proceeds."
-                ),
+                description="Delete a task permanently; the person confirms first.",
                 args_schema=_TaskDeleteInput,
             ),
             StructuredTool.from_function(
                 func=_task_update,
                 name="task_update",
-                description=(
-                    "Update an existing task. Can change name, schedule, "
-                    "prompts, steps, approval_mode, model, or enabled state. "
-                    "Requires the task ID from task_list. Only provide the "
-                    "fields you want to change."
-                ),
+                description="Change a task; give only the fields to change.",
                 args_schema=_TaskUpdateInput,
             ),
         ]

@@ -93,6 +93,14 @@ def test_strict_factory_binds_credentials_endpoint_and_disables_environment(runt
         assert kwargs["http_client"].is_closed
 
 
+def test_openai_responses_document_calls_are_not_stored_at_openai(runtime, monkeypatch):
+    fake_openai(monkeypatch)
+    captured = runtime.capture_chat_runtime("model:openai:gpt-5.4")
+    with runtime.captured_chat_model(captured, validate=lambda: None) as model:
+        assert model._model.kwargs["use_responses_api"] is True
+        assert model._model.kwargs["store"] is False
+
+
 def test_revocation_after_construction_blocks_invoke(runtime, monkeypatch):
     fake_openai(monkeypatch)
     captured = runtime.capture_chat_runtime("model:openai:gpt-4o")
@@ -756,6 +764,64 @@ def test_worker_refuses_changed_policy_or_missing_proof_without_legacy_fallback(
     assert service.list_jobs(batch)[0].status == "queued"
 
 
+_GPT5_SNAPSHOT = {"model_ref": "model:openai:gpt-5", "selection": {"kind": "effort", "effort": "high"},
+                  "capabilities": {"supported_efforts": ["minimal", "low", "high"], "request_style": "openai"}}
+
+
+def test_documents_keep_the_conversations_model_at_its_lowest_effort(processing, monkeypatch):
+    """WP C1: map, reduce and extract are background work: the conversation's model,
+    its lowest effort whatever the conversation chose, and a plan fixed for the job."""
+    from row_bot.providers import reasoning
+    api,service,policy,batch,context,cfg,state = processing
+    context.update(model_override="model:openai:gpt-5", reasoning_snapshot=dict(_GPT5_SNAPSHOT))
+    monkeypatch.setattr(reasoning, "_background_rejections", set())
+
+    captured = policy.capture()
+
+    assert captured.chat.resolved.selection_ref == "model:openai:gpt-5"
+    assert captured.chat.reasoning_plan.selection.to_json() == {"kind": "effort", "effort": "minimal"}
+    assert captured.chat.reasoning_plan.is_background
+    # Another background call's refusal never changes a reviewed job's policy.
+    reasoning.remember_background_rejection("model:openai:gpt-5")
+    assert policy.capture().digest == captured.digest
+
+
+def test_a_document_job_refused_its_lowered_effort_uses_the_default_once(processing, monkeypatch):
+    api,service,policy,batch,context,cfg,state = processing
+    from row_bot import embedding_providers
+    from row_bot.providers import runtime
+    context.update(model_override="model:openai:gpt-5", reasoning_snapshot=dict(_GPT5_SNAPSHOT))
+
+    class Refused(RuntimeError):
+        status_code = 400
+
+    plans, tags = [], []
+
+    @contextmanager
+    def chat(capture, *, validate, usage_purpose="", usage_thread_id=""):
+        plans.append(capture.reasoning_plan)
+        tags.append((usage_purpose, usage_thread_id))
+        def invoke(messages):
+            if capture.reasoning_plan is not None:
+                raise Refused("HTTP 400: reasoning_effort 'minimal' is not supported with this model")
+            return SimpleNamespace(content="A synthetic summary.")
+        yield SimpleNamespace(invoke=invoke)
+
+    @contextmanager
+    def embedding(capture, *, validate):
+        yield SimpleNamespace(embed_documents=lambda texts: [], embed_query=lambda text: [])
+
+    monkeypatch.setattr(runtime, "captured_chat_model", chat)
+    monkeypatch.setattr(embedding_providers, "captured_embedding_provider", embedding)
+
+    with policy.worker_scope(policy.capture().digest, validate_work=lambda: None) as worker:
+        assert worker.invoke("Summarise section one.") == "A synthetic summary."
+        assert worker.invoke("Summarise section two.") == "A synthetic summary."
+
+    assert [plan is None for plan in plans] == [False, True]
+    assert tags == [("document", "test-conversation")] * 2
+
+
 def test_original_processing_command_receipt_never_reenables_or_recaptures_policy(processing, monkeypatch):
     api,service,policy,batch,*_ = processing
     command,first = admit(processing)
@@ -825,7 +891,8 @@ def test_strict_worker_completes_canonical_pipeline_without_legacy_provider_sele
     def embedding(capture, *, validate):
         yield embedding_providers._CapturedEmbeddings(Fake(),validate)
     @contextmanager
-    def chat(capture, *, validate):
+    def chat(capture, *, validate, usage_purpose="", usage_thread_id=""):
+        calls.setdefault("purpose", []).append(usage_purpose)
         def invoke(messages):
             validate()
             calls["chat"].append(messages[0].content)
@@ -848,6 +915,7 @@ def test_strict_worker_completes_canonical_pipeline_without_legacy_provider_sele
     supervisor._finalize_ready_batches()
     assert service.get_batch(batch).status == "completed"
     assert len(calls["chat"]) == 3
+    assert set(calls["purpose"]) == {"document"}
     assert calls["embed"][0] == ["reviewed source bytes"]
     assert kg.memory_vector_status()["ready"]
     assert Path(service.get_job(indexing.id).staged_path).read_bytes() == b"reviewed source bytes"

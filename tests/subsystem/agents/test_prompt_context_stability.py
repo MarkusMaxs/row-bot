@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -194,7 +195,7 @@ def test_deferred_skill_prompt_failure_is_closed_without_dropping_core_guides(tm
     assert "## Skills" not in combined
 
 
-def test_anthropic_cache_markers_stay_on_stable_system_context_only(tmp_path, monkeypatch):
+def test_anthropic_breakpoints_cover_the_stable_system_prompt_and_the_conversation_tail(tmp_path, monkeypatch):
     agent = _fresh_agent(tmp_path, monkeypatch)
 
     decision = SimpleNamespace(
@@ -250,8 +251,8 @@ def test_anthropic_cache_markers_stay_on_stable_system_context_only(tmp_path, mo
     assert re.search(r"Current date and time: .+, UTC[+-]\d\d:\d\d \(\d{4}-\d\d-\d\d \d\d:\d\d UTC\)\.",
                      _combined_text(result))
 
-    assert marked, "Anthropic should receive at least one cache breakpoint"
-    assert all(message_type == "system" for message_type, _text in marked)
+    # The explicit breakpoint sits on stable system context, never in the conversation.
+    assert [message_type for message_type, _text in marked] == ["system"]
     assert any(
         any(stable_sentinel in text for stable_sentinel in (
             "ROOT_STABLE_SENTINEL",
@@ -269,6 +270,22 @@ def test_anthropic_cache_markers_stay_on_stable_system_context_only(tmp_path, mo
         "second turn",
     ):
         assert all(dynamic_sentinel not in text for _message_type, text in marked)
+
+    # The conversation tail (the turn's message, with its turn context) is cached too: the request
+    # asks the transport for it, and the direct API gets top-level automatic caching with the same
+    # one-hour lifetime as the system breakpoint (a desktop conversation).
+    from row_bot.prompt_cache import CONVERSATION_CACHE_KEY
+    from row_bot.providers.transports.anthropic_cancellable import CancellableChatAnthropic
+
+    assert result[-1].additional_kwargs[CONVERSATION_CACHE_KEY] == {"ttl": "1h"}
+    body = CancellableChatAnthropic(
+        model="claude-sonnet-4-5", api_key="test-key", prompt_cache=True,
+    )._get_request_payload(result)
+    one_hour = {"type": "ephemeral", "ttl": "1h"}
+    assert body["cache_control"] == one_hour
+    assert [block["cache_control"] for block in body["system"] if "cache_control" in block] == [one_hour]
+    assert "DYNAMIC_RECALL_SENTINEL" in json.dumps(body["messages"])
+    assert "cache_control" not in json.dumps(body["messages"])
 
 
 def test_chat_only_prompt_uses_stable_chat_contract_without_agent_runtime_context(tmp_path, monkeypatch):

@@ -130,11 +130,6 @@ class FileSystemTool(BaseTool):
         return "Use the individual file operations instead."
 
 
-def _max_read_chars() -> int:
-    from row_bot.models import get_tool_budget
-    return get_tool_budget(0.25, floor=30_000, ceiling=300_000)
-
-
 def _within(path: Path, root: str | Path) -> bool:
     """True when *path* is *root* or inside it; a sibling such as ``Row-Bot2`` beside ``Row-Bot`` is not."""
     import os
@@ -273,24 +268,35 @@ def _wrap_tool_with_path_fix(tool, root_dir: str):
 def _make_pdf_aware_read_tool(root_dir: str):
     """Create a ``read_file`` StructuredTool that can read both text and PDF
     files.  Paths are resolved relative to *root_dir* and validated to stay
-    within the sandbox.  Output is capped dynamically to prevent
-    a single tool result from blowing up the agent context window."""
-    import os
+    within the sandbox.  Text is read a page of lines at a time, with fixed
+    budgets (not scaled to the model's context), so every part of a long file
+    can be reached with ``offset``."""
     from pathlib import Path
     from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel as _BM, Field as _F
 
-    def _cap(text: str, label: str = "") -> str:
-        """Truncate *text* to the dynamic budget with a notice if trimmed."""
-        limit = _max_read_chars()
-        if len(text) <= limit:
-            return text
-        suffix = (
-            f"\n\n[Truncated — showing first {limit:,} characters"
-            f"{label}. File is {len(text):,} characters total.]"
+    from row_bot.tool_outputs import PAGE_CHARS, PAGE_LINES, page_lines
+
+    class _ReadFileInput(_BM):
+        file_path: str = _F(
+            description="Path relative to the workspace folder. For Excel, add '::SheetName' for a sheet."
         )
-        return text[:limit] + suffix
+        offset: int = _F(
+            default=0,
+            description=(
+                "First line to read (1-based). 0 starts at the top; for CSV or JSON files 0 gives a "
+                "summary and 1 or more reads the raw lines."
+            ),
+        )
+        limit: int = _F(default=PAGE_LINES, description="Most lines to read.")
 
-    def read_file(file_path: str) -> str:
+    def _page(text: str, offset: int, limit: int) -> str:
+        page, footer = page_lines(
+            text, offset=max(1, offset), limit=limit, max_chars=PAGE_CHARS, tool_name="workspace_read_file"
+        )
+        return f"{page}\n{footer}" if footer else page
+
+    def read_file(file_path: str, offset: int = 0, limit: int = PAGE_LINES) -> str:
         """Read the contents of a file. For PDF files, extracts all text
         from every page. For CSV/Excel/JSON files, returns schema, stats,
         and a preview. The file_path is relative to the workspace root.
@@ -347,15 +353,13 @@ def _make_pdf_aware_read_tool(root_dir: str):
 
         # ── Structured data files (CSV, Excel, JSON) ────────────────────
         from row_bot.data_reader import is_data_file, read_data_file
-        if is_data_file(resolved.name):
-            return read_data_file(resolved, sheet=sheet_name,
-                                  max_chars=_max_read_chars())
+        if is_data_file(resolved.name) and (offset <= 0 or resolved.suffix.lower() in {".xlsx", ".xls"}):
+            return read_data_file(resolved, sheet=sheet_name, max_chars=PAGE_CHARS)
 
         if resolved.suffix.lower() == ".pdf":
             try:
                 from pypdf import PdfReader
                 reader = PdfReader(str(resolved))
-                total_pages = len(reader.pages)
                 pages = []
                 for i, page in enumerate(reader.pages, 1):
                     text = page.extract_text() or ""
@@ -363,14 +367,13 @@ def _make_pdf_aware_read_tool(root_dir: str):
                         pages.append(f"--- Page {i} ---\n{text}")
                 if not pages:
                     return f"PDF file '{file_path}' contains no extractable text."
-                full = "\n\n".join(pages)
-                return _cap(full, f" of {total_pages} pages")
+                return _page("\n\n".join(pages), offset, limit)
             except Exception as exc:
                 return f"Error reading PDF '{file_path}': {exc}"
         else:
             try:
                 text = resolved.read_text(encoding="utf-8", errors="replace")
-                return _cap(text)
+                return _page(text, offset, limit)
             except Exception as exc:
                 return f"Error reading '{file_path}': {exc}"
 
@@ -378,13 +381,12 @@ def _make_pdf_aware_read_tool(root_dir: str):
         func=read_file,
         name="workspace_read_file",
         description=(
-            "Read the contents of a file (including PDF, CSV, Excel, JSON, "
-            "and image files). For images, displays the image inline in chat. "
-            "For CSV/Excel/JSON, returns column schema, statistics, and a preview. "
-            "For Excel, append '::SheetName' to the path to read a specific sheet. "
+            "Read a file in pages of lines, including PDF, CSV, Excel, JSON and images (images are "
+            "shown inline). A long file ends with the line range shown and the offset to continue from. "
             "(WORKSPACE ONLY — file_path is relative to the workspace folder. "
             "For files outside the workspace, use run_command instead.)"
         ),
+        args_schema=_ReadFileInput,
     )
 
 

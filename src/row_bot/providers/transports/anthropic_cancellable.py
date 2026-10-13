@@ -8,7 +8,10 @@ the underlying Anthropic SDK clients with Row-Bot cancellable httpx clients.
 
 On the direct Anthropic API (``thinking_binding=True``) it also applies the
 preserved-thinking controls and the one strip-and-retry recovery described in
-``thinking_binding``.
+``thinking_binding``. With ``prompt_cache=True`` (direct API only) it caches a
+conversation's tail with top-level automatic caching, adds one breakpoint for
+long appends, and retries a request once without cache instructions when the
+API rejects them (``prompt_cache_breakpoints``).
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessageChunk
 
 from row_bot.cancellation import current_cancellation_scope
+from row_bot.prompt_cache import conversation_cache_ttl
+from row_bot.providers.transports import prompt_cache_breakpoints as cache_breakpoints
 from row_bot.providers.transports.cancellable_http import (
     cancellable_async_http_client,
     cancellable_http_client,
@@ -61,6 +66,13 @@ class CancellableChatAnthropic(ChatAnthropic):
     (MiniMax, OpenCode) leave it off: the beta is unverified there.
     """
 
+    prompt_cache: bool = False
+    """Cache the tail of conversation requests (see ``prompt_cache_breakpoints``).
+
+    Only the direct Anthropic provider sets this. MiniMax and OpenCode leave it
+    off until a live check shows they accept cache instructions.
+    """
+
     def _request_hooks(self, *, asynchronous: bool) -> list[Any]:
         """httpx request hooks for the SDK clients; none unless a gateway needs them."""
         return []
@@ -69,13 +81,17 @@ class CancellableChatAnthropic(ChatAnthropic):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         if self.thinking_binding and not thinking_binding_rejected(self._thinking_binding_route()):
             payload = with_thinking_binding(payload)
+        if self.prompt_cache:
+            tail_ttl = conversation_cache_ttl(self._convert_input(input_).to_messages())
+            if tail_ttl:
+                payload = cache_breakpoints.place_anthropic_breakpoints(payload, ttl=tail_ttl)
         return payload
 
     def _create(self, payload: dict) -> Any:
         try:
             return super()._create(payload)
         except anthropic.BadRequestError as exc:
-            retry = self._thinking_recovery(payload, exc)
+            retry = self._thinking_recovery(payload, exc) or self._cache_recovery(payload, exc)
             if retry is None:
                 raise
         return super()._create(retry)
@@ -84,10 +100,27 @@ class CancellableChatAnthropic(ChatAnthropic):
         try:
             return await super()._acreate(payload)
         except anthropic.BadRequestError as exc:
-            retry = self._thinking_recovery(payload, exc)
+            retry = self._thinking_recovery(payload, exc) or self._cache_recovery(payload, exc)
             if retry is None:
                 raise
         return await super()._acreate(retry)
+
+    def _cache_recovery(self, payload: dict, exc: anthropic.BadRequestError) -> dict | None:
+        """The one retry without cache instructions, for a 400 that names them.
+
+        The direct API documents every instruction Row-Bot sends, so a rejection
+        means this request was malformed: it is retried, and the route is not
+        remembered. Thinking-binding 400s are handled first, by ``_thinking_recovery``.
+        """
+        if not self.prompt_cache or not cache_breakpoints.has_cache_markers(payload):
+            return None
+        scope = current_cancellation_scope()
+        if scope is not None and scope.is_cancelled():
+            return None
+        if not cache_breakpoints.is_cache_control_rejection(exc):
+            return None
+        cache_breakpoints.log_cache_retry(("anthropic", str(self.model or "")), remembered=False)
+        return cache_breakpoints.without_cache_markers(payload)
 
     def _thinking_recovery(self, payload: dict, exc: anthropic.BadRequestError) -> dict | None:
         """The single strip-and-retry payload for a thinking-binding 400, if any.

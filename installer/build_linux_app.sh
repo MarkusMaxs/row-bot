@@ -3,12 +3,17 @@
 # build_linux_app.sh - Build self-contained Row-Bot Linux tarball
 #
 # Produces dist/Row-Bot-X.Y.Z-Linux-ARCH.tar.gz using python-build-standalone.
-# The artifact installs into XDG user paths via install.sh and launches in
-# browser/no-tray mode by default so Linux desktop system dependencies stay
-# optional.
+# The artifact installs into XDG user paths via install.sh
+# ($XDG_DATA_HOME/row-bot/releases/<version>, `current` and state.json; see
+# src/row_bot/install_layout.py) and launches in browser/no-tray mode by default
+# so Linux desktop system dependencies stay optional. installer/linux holds the
+# release's bin/row-bot, install.sh and uninstall.sh.
 # =============================================================================
 
 set -euo pipefail
+# Nothing run during the build writes timestamp .pyc files into the package;
+# the deterministic ones are compiled once the package is complete.
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -94,7 +99,7 @@ fi
 
 info "[2/6] Installing locked Python packages from requirements.txt..."
 "$PYTHON_PREFIX/bin/python3" -m pip install --upgrade pip setuptools wheel --quiet 2>&1 | tail -1 || true
-"$PYTHON_PREFIX/bin/python3" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet 2>&1 | tail -5
+"$PYTHON_PREFIX/bin/python3" -m pip install --no-compile -r "$PROJECT_DIR/requirements.txt" --quiet 2>&1 | tail -5
 "$PYTHON_PREFIX/bin/python3" "$PROJECT_DIR/scripts/verify_runtime_dependencies.py" all
 "$PYTHON_PREFIX/bin/python3" "$PROJECT_DIR/scripts/verify_client_assets.py" --root "$CLIENT_BUILD"
 ok "Python packages installed"
@@ -198,45 +203,10 @@ fi
 ok "Source code copied"
 
 info "[4/6] Creating launchers and install metadata..."
-cat > "$PACKAGE_ROOT/bin/row-bot" <<'LAUNCHER'
-#!/usr/bin/env bash
-set -euo pipefail
-
-SOURCE="${BASH_SOURCE[0]}"
-while [ -L "$SOURCE" ]; do
-    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-    TARGET="$(readlink "$SOURCE")"
-    case "$TARGET" in
-        /*) SOURCE="$TARGET" ;;
-        *) SOURCE="$DIR/$TARGET" ;;
-    esac
-done
-ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
-PYTHON="$ROOT/python/bin/python3"
-APP_DIR="$ROOT/app"
-DATA_DIR="${ROW_BOT_DATA_DIR:-$HOME/.row-bot}"
-
-mkdir -p "$DATA_DIR"
-export ROW_BOT_INSTALL_ROOT="$ROOT"
-export PYTHONNOUSERSITE=1
-export PYTHONIOENCODING=utf-8
-
-BUNDLED_BROWSERS="$ROOT/python/playwright-browsers"
-USER_BROWSERS="$DATA_DIR/playwright-browsers"
-if [ -d "$BUNDLED_BROWSERS" ]; then
-    export PLAYWRIGHT_BROWSERS_PATH="$BUNDLED_BROWSERS"
-else
-    mkdir -p "$USER_BROWSERS"
-    export PLAYWRIGHT_BROWSERS_PATH="$USER_BROWSERS"
-fi
-
-cd "$APP_DIR"
-if [ "$#" -eq 0 ]; then
-    set -- --browser --no-tray
-fi
-exec "$PYTHON" launcher.py "$@"
-LAUNCHER
-chmod +x "$PACKAGE_ROOT/bin/row-bot"
+# The launcher wrapper, install.sh and uninstall.sh ship in every release.
+install -m 0755 "$SCRIPT_DIR/linux/row-bot" "$PACKAGE_ROOT/bin/row-bot"
+install -m 0755 "$SCRIPT_DIR/linux/install.sh" "$PACKAGE_ROOT/install.sh"
+install -m 0755 "$SCRIPT_DIR/linux/uninstall.sh" "$PACKAGE_ROOT/uninstall.sh"
 
 cat > "$PACKAGE_ROOT/share/applications/ai.row-bot.RowBot.desktop" <<'DESKTOP'
 [Desktop Entry]
@@ -260,80 +230,6 @@ cat > "$PACKAGE_ROOT/install_info.json" <<JSON
 }
 JSON
 
-cat > "$PACKAGE_ROOT/install.sh" <<'INSTALL'
-#!/usr/bin/env bash
-set -euo pipefail
-
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="$(SOURCE_DIR="$SOURCE_DIR" "$SOURCE_DIR/python/bin/python3" - <<'PY'
-import json, os
-from pathlib import Path
-print(json.loads((Path(os.environ['SOURCE_DIR']) / 'install_info.json').read_text())['version'])
-PY
-)"
-APP_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/row-bot"
-RELEASES_DIR="$APP_HOME/releases"
-TARGET="$RELEASES_DIR/$VERSION"
-STAGING="$RELEASES_DIR/.installing-$VERSION-$$"
-BIN_HOME="${HOME}/.local/bin"
-DESKTOP_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-ICON_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
-
-mkdir -p "$RELEASES_DIR" "$BIN_HOME" "$DESKTOP_HOME" "$ICON_HOME"
-rm -rf "$STAGING"
-cp -a "$SOURCE_DIR" "$STAGING"
-rm -rf "$TARGET"
-mv "$STAGING" "$TARGET"
-
-ln -sfn "releases/$VERSION" "$APP_HOME/current"
-ln -sfn "$APP_HOME/current/bin/row-bot" "$BIN_HOME/row-bot"
-
-cp "$TARGET/share/applications/ai.row-bot.RowBot.desktop" "$DESKTOP_HOME/ai.row-bot.RowBot.desktop"
-sed -i "s|^Exec=.*|Exec=$BIN_HOME/row-bot|" "$DESKTOP_HOME/ai.row-bot.RowBot.desktop"
-cp "$TARGET/share/icons/hicolor/256x256/apps/row-bot.png" "$ICON_HOME/row-bot.png" 2>/dev/null || true
-chmod +x "$TARGET/bin/row-bot"
-chmod +x "$TARGET/install.sh" "$TARGET/uninstall.sh" 2>/dev/null || true
-
-command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DESKTOP_HOME" >/dev/null 2>&1 || true
-command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
-
-if [ "${ROW_BOT_SUPPRESS_INSTALL_PATH_HINT:-0}" != "1" ]; then
-    LAUNCH_CMD="row-bot"
-    case ":${PATH}:" in
-        *":${BIN_HOME}:"*) ;;
-        *)
-            LAUNCH_CMD="$BIN_HOME/row-bot"
-            echo "[WARN] $BIN_HOME is not on PATH. Run $BIN_HOME/row-bot now, or add this to your shell profile:"
-            echo '       export PATH="$HOME/.local/bin:$PATH"'
-            echo "       Open a new terminal after updating your profile."
-            ;;
-    esac
-
-    echo "Row-Bot $VERSION installed. Run: $LAUNCH_CMD"
-fi
-INSTALL
-chmod +x "$PACKAGE_ROOT/install.sh"
-
-cat > "$PACKAGE_ROOT/uninstall.sh" <<'UNINSTALL'
-#!/usr/bin/env bash
-set -euo pipefail
-
-APP_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/row-bot"
-BIN_HOME="${HOME}/.local/bin"
-DESKTOP_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-ICON_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
-
-rm -f "$BIN_HOME/row-bot"
-rm -f "$DESKTOP_HOME/ai.row-bot.RowBot.desktop"
-rm -f "$ICON_HOME/row-bot.png"
-rm -rf "$APP_HOME"
-
-command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$DESKTOP_HOME" >/dev/null 2>&1 || true
-command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
-
-echo "Row-Bot application files removed. User data in ~/.row-bot was left untouched."
-UNINSTALL
-chmod +x "$PACKAGE_ROOT/uninstall.sh"
 ok "Launchers created"
 
 info "[5/6] Cleaning package..."
@@ -360,12 +256,27 @@ find "$PACKAGE_ROOT" -name '*.so' -print0 | while IFS= read -r -d '' lib; do
 done
 ok "Package cleaned"
 
+# Release folders are shared through hard links by later updates, so they never
+# change after install: ship .pyc that need no rewrite (unchecked-hash) and do
+# not depend on the build folder (-s); bin/row-bot sets PYTHONDONTWRITEBYTECODE.
+info "Compiling deterministic bytecode..."
+"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$PACKAGE_ROOT" \
+    --invalidation-mode unchecked-hash "$APP_SRC"
+# Some packages ship sources that never compile (templates, old test data).
+"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$PACKAGE_ROOT" \
+    --invalidation-mode unchecked-hash "$PYTHON_PREFIX/lib" >/dev/null || \
+    warn "Some library files did not compile; they run from source"
+ok "Bytecode compiled"
+
 info "Verifying assembled Linux runtime dependencies..."
 ROW_BOT_INSTALL_ROOT="$PACKAGE_ROOT" PYTHONNOUSERSITE=1 \
     "$PYTHON_PREFIX/bin/python3" "$APP_SRC/scripts/verify_runtime_dependencies.py" all
 ok "Assembled Linux runtime dependencies verified"
 "$PYTHON_PREFIX/bin/python3" "$PROJECT_DIR/scripts/verify_client_assets.py" \
     --root "$CLIENT_STAGE" --compare "$CLIENT_BUILD" --strict
+
+"$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/install_layout.py" version-json \
+    --version "$VERSION" --python "$PYTHON_VERSION" --lock "$PROJECT_DIR/uv.lock" --out "$PACKAGE_ROOT/version.json"
 
 info "[6/6] Creating tarball..."
 rm -f "$TARBALL"

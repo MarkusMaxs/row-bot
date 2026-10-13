@@ -177,9 +177,12 @@ def test_memory_tool_search_formats_properties_and_graph_context(tmp_path, monke
     )
     monkeypatch.setattr(memory_tool.kg, "touch_recalled", lambda ids: touched.append(ids))
 
-    payload = json.loads(memory_tool._search_memory("Ada", category="person"))
+    result = memory_tool._search_memory("Ada", category="person")
+    payload = json.loads(result)
 
     assert touched == [["person-1"]]
+    # Compact, with empty fields and the default "active" status left out.
+    assert "\n" not in result
     assert payload == [
         {
             "id": "person-1",
@@ -189,12 +192,8 @@ def test_memory_tool_search_formats_properties_and_graph_context(tmp_path, monke
             "tags": "testing",
             "relevance": 0.92,
             "source": "live",
-            "status": "active",
             "confidence": 0.88,
             "tier": "core",
-            "review_reason": "",
-            "superseded_by": "",
-            "supersedes": [],
             "updated": "2026-06-23T10:11",
             "connected_via": "Ada Tool \u2192 works_on \u2192 Row-Bot",
         }

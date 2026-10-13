@@ -22,6 +22,7 @@ PLATFORM_SENSITIVE = frozenset({
     "row_bot.developer.process_worker",
     "row_bot.document_jobs",
     "row_bot.file_ownership",
+    "row_bot.install_layout",
     "row_bot.launcher",
     "row_bot.mcp_client.requirements",
     "row_bot.native_client",

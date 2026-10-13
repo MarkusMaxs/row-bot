@@ -157,6 +157,7 @@ async def handle_plugin_channel_message(
             message.text,
             thread_id=thread_id if channel_commands.is_thread_scoped_command(message.text) else None,
             enabled_tool_names=enabled_tool_names,
+            new_conversation=_new_conversation_for(message, channel),
         )
         if command_response is not None:
             await _send_text(callbacks, command_response)
@@ -447,13 +448,17 @@ def _prompt_from_message(message: ChannelInboundMessage) -> str:
     return "\n\n".join(part for part in parts if str(part).strip())
 
 
-def _resolve_thread_id(message: ChannelInboundMessage, channel: Channel | None) -> str:
-    external_id = (
+def _external_id(message: ChannelInboundMessage) -> str:
+    return str(
         message.external_conversation_id
         or message.platform_thread_id
         or message.sender_id
         or "conversation"
     )
+
+
+def _default_thread_id(message: ChannelInboundMessage, channel: Channel | None) -> str:
+    external_id = _external_id(message)
     if channel is not None:
         try:
             return _safe_thread_id(channel.make_thread_id(str(external_id)))
@@ -462,19 +467,67 @@ def _resolve_thread_id(message: ChannelInboundMessage, channel: Channel | None) 
     return _safe_thread_id(f"{message.channel_name}_{external_id}")
 
 
+def _plugin_conversation(message: ChannelInboundMessage, channel: Channel | None):
+    from row_bot.channels.conversations import ChannelConversation
+
+    return ChannelConversation(
+        channel=str(message.channel_name or ""),
+        key=_external_id(message),
+        default_thread_id=_default_thread_id(message, channel),
+        name=_thread_title(message),
+        target=_external_id(message),
+    )
+
+
+def _resolve_thread_id(message: ChannelInboundMessage, channel: Channel | None) -> str:
+    """The chat's conversation: its fixed thread until ``/new`` moves it (D6)."""
+    default_thread_id = _default_thread_id(message, channel)
+    try:
+        from row_bot.channels import conversations
+        from row_bot.tasks import get_channel_conversation
+
+        channel_name = str(message.channel_name or "")
+        if get_channel_conversation(channel_name, _external_id(message)) is None:
+            return default_thread_id
+        thread_id = conversations.known_thread(channel_name, _external_id(message))
+        if thread_id:
+            return thread_id
+        # Its conversation was deleted: a fresh one, never the one it left.
+        return conversations.start_new_thread(
+            _plugin_conversation(message, channel), name=_thread_title(message),
+        )
+    except Exception:
+        log.debug("Plugin channel conversation lookup failed", exc_info=True)
+        return default_thread_id
+
+
+def _new_conversation_for(message: ChannelInboundMessage, channel: Channel | None):
+    def _new_conversation() -> str | None:
+        from row_bot.channels import conversations
+
+        conversations.start_new_thread(_plugin_conversation(message, channel))
+        return None
+
+    return _new_conversation
+
+
 def _safe_thread_id(value: str) -> str:
     safe = _SAFE_THREAD_RE.sub("_", str(value or "").strip())
     safe = safe.strip("._:-")
     return safe or "plugin_channel_thread"
 
 
+def _thread_title(message: ChannelInboundMessage) -> str:
+    channel_name = str(message.channel_name or "Plugin channel").replace("_", " ").title()
+    sender = str(message.sender_display_name or message.sender_id or "").strip()
+    return f"{channel_name} - {sender}" if sender else f"{channel_name} conversation"
+
+
 def _ensure_thread_meta(thread_id: str, message: ChannelInboundMessage) -> None:
     try:
         from row_bot.threads import _save_thread_meta
 
-        channel_name = str(message.channel_name or "Plugin channel").replace("_", " ").title()
-        sender = str(message.sender_display_name or message.sender_id or "").strip()
-        title = f"{channel_name} - {sender}" if sender else f"{channel_name} conversation"
+        title = _thread_title(message)
         _save_thread_meta(
             thread_id,
             title,

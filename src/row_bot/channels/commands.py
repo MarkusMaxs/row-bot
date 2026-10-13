@@ -108,15 +108,30 @@ def normalize_skill_command_text(text: str) -> str:
 
 # ── Command handlers ────────────────────────────────────────────────
 
-def cmd_new(channel_name: str) -> str:
-    """Handle ``/new`` — create a new conversation thread."""
+NEW_CONVERSATION_STARTED = (
+    "🆕 Started a new conversation. The earlier one stays in Row-Bot."
+)
+
+
+def cmd_new(
+    channel_name: str,
+    new_conversation: Callable[[], str | None] | None = None,
+) -> str:
+    """Handle ``/new``: move this chat to a fresh conversation.
+
+    *new_conversation* is the adapter's own rotation for the chat the command
+    came from; it may return its own reply. Without one there is nothing to
+    move, and the reply says so rather than claiming a conversation that no
+    message would ever reach.
+    """
+    if new_conversation is None:
+        return f"{channel_name} can't start a new conversation from here."
     try:
-        from row_bot.threads import create_thread
-        tid = create_thread(title=f"{channel_name} conversation")
-        return f"✅ New conversation started (thread {tid[:8]}…)"
+        reply = new_conversation()
     except Exception as exc:
         log.warning("/new failed: %s", exc)
-        return f"❌ Could not start new conversation: {exc}"
+        return f"❌ Could not start a new conversation: {exc}"
+    return str(reply or "").strip() or NEW_CONVERSATION_STARTED
 
 
 def cmd_status(channel_name: str) -> str:
@@ -447,8 +462,9 @@ def cmd_skill_result(
         return SkillCommandResult("error", f"Could not update Smart Skills: {exc}")
 
 
+NEW_COMMAND_TOKENS = {"/new", "/newthread"}
+
 _HANDLER_MAP = {
-    "/new":    lambda ch, _arg: cmd_new(ch),
     "/status": lambda ch, _arg: cmd_status(ch),
     "/model":  cmd_model,
     "/help":   lambda ch, _arg: cmd_help(ch),
@@ -463,12 +479,14 @@ def dispatch(
     *,
     thread_id: str | None = None,
     enabled_tool_names: list[str] | None = None,
+    new_conversation: Callable[[], str | None] | None = None,
 ) -> str | None:
     """Try to dispatch *text* as a slash command.
 
     Returns the response string if *text* matches a known command,
     or ``None`` if it is not a command (so the caller should treat it
-    as a regular message).
+    as a regular message). *new_conversation* is how ``/new`` moves the
+    chat the command came from to a fresh conversation.
     """
     text = text.strip()
     if not text.startswith("/"):
@@ -477,6 +495,9 @@ def dispatch(
     parts = text.split(maxsplit=1)
     cmd = parts[0].lower()
     arg = parts[1] if len(parts) > 1 else ""
+
+    if cmd in NEW_COMMAND_TOKENS:
+        return cmd_new(channel_name, new_conversation)
 
     if cmd in SKILL_COMMAND_TOKENS:
         return cmd_skill(

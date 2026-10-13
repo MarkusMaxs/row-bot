@@ -36,66 +36,9 @@ _AGENT_GUIDELINES = (
     "  search your knowledge base (search_memory) for compiled\n"
     "  knowledge extracted from those documents.\n"
     "TASKS & REMINDERS:\n"
-    "- You have a task engine for creating scheduled automations and quick reminders.\n"
-    "  Use task_create, task_list, and task_run_now.\n"
-    "- QUICK REMINDERS / TIMERS: When the user says 'remind me in X minutes',\n"
-    "  'set a timer for 30 minutes', etc., use task_create with delay_minutes\n"
-    "  and notify_only=true. This fires a desktop notification after the delay.\n"
-    "  Example: 'remind me in 5 minutes to stretch' →\n"
-    "    task_create(name='Stretch', delay_minutes=5, notify_only=true,\n"
-    "               notify_label='Time to stretch!')\n"
-    "- REMINDERS AT A TIME: 'remind me at 9am on 8 October' → task_create with\n"
-    "  run_at='2026-10-08T09:00' (local time) and notify_only=true. Never work out\n"
-    "  minutes from now for a stated time. To move it, task_update with run_at.\n"
-    "- RECURRING AGENT TASKS: When the user wants something done automatically\n"
-    "  on a schedule (daily briefing, weather check, email digest), use\n"
-    "  task_create with prompts and a schedule. The prompts are what the agent\n"
-    "  will execute in a background thread at the scheduled time.\n"
-    "  IMPORTANT: If the task should DO something (check weather, search news,\n"
-    "  read emails), you MUST provide prompts — the agent needs instructions.\n"
-    "  Only use notify_only=true for passive reminders with no agent action.\n"
-    "  Example: 'check the weather every day at 9am' →\n"
-    "    task_create(name='Daily Weather', icon='🌤', schedule='daily:09:00',\n"
-    "               prompts=['Check today\\'s weather forecast for my location.'])\n"
-    "- MONITORING / POLLING TASKS: When the user says 'check X and notify me\n"
-    "  when Y', 'monitor Z', or 'alert me if W changes', this is a monitoring\n"
-    "  task — NOT a reminder. Use schedule='interval_minutes:M' with prompts,\n"
-    "  persistent_thread=true, and a self-disable instruction using {{task_id}}.\n"
-    "  persistent_thread keeps conversation history across runs so the agent\n"
-    "  can compare against previous results.\n"
-    "- SCHEDULE FORMATS:\n"
-    "  * 'daily:HH:MM' — every day at that time (e.g. 'daily:08:00')\n"
-    "  * 'weekly:DAY:HH:MM' — every week (e.g. 'weekly:monday:09:00')\n"
-    "  * 'interval:H' — every H hours (e.g. 'interval:2')\n"
-    "  * 'interval_minutes:M' — every M minutes (e.g. 'interval_minutes:30')\n"
-    "  * 'cron:EXPR' — advanced cron expression\n"
-    "- TEMPLATE VARIABLES: Prompts can use {{date}}, {{day}}, {{time}},\n"
-    "  {{month}}, {{year}}, {{task_id}} — replaced at runtime with current\n"
-    "  values. {{task_id}} is the task's own ID (useful for self-management).\n"
-    "- DELIVERY CHANNELS: Tasks can optionally deliver results via Telegram\n"
-    "  or email by setting delivery_channel and delivery_target.\n"
-    "  * Telegram: delivery_channel='telegram' — no target needed.\n"
-    "    The message is always sent to the configured TELEGRAM_USER_ID.\n"
-    "  * Email: delivery_channel='email', delivery_target='user@example.com'.\n"
-    "  * For email delivery, ASK the user for the email address — do NOT guess.\n"
-    "  * Desktop + in-app notification always fires regardless of channel.\n"
-    "- MODEL OVERRIDE: Tasks can use a specific model instead of the default\n"
-    "  by setting the 'model' parameter (e.g. model='qwen3:32b').\n"
-    "  Only locally downloaded, tool-compatible models work.\n"
-    "- MANAGEMENT: Use task_list to show all tasks. Use task_delete to\n"
-    "  delete a task (requires confirmation). Use task_update to modify an\n"
-    "  existing task — you can change its name, schedule, prompts, or\n"
-    "  enabled status. Use task_run_now to run a task immediately.\n"
-    "- SAFETY MODES: Tasks have a safety_mode controlling destructive\n"
-    "  tool access: 'block' (default, safest), 'approve' (pause for\n"
-    "  human approval), 'allow_all' (no restrictions). Set it via\n"
-    "  task_create or task_update when the user requests it.\n"
-    "- PIPELINE MODE: For complex workflows with branching, approvals,\n"
-    "  or notifications, use the 'steps' parameter instead of 'prompts'.\n"
-    "  Step IDs are auto-generated as {type}_{counter} (e.g. prompt_1,\n"
-    "  condition_1). Use 'next' field on any step to override linear\n"
-    "  flow (e.g. 'end' to stop after a branch). Reference outputs\n"
-    "  with {{step.prompt_1.output}}.\n"
+    "- Reminders, timers and scheduled, recurring or monitoring work are tasks: create them with\n"
+    "  task_create (its description says which fields to use) and manage them with task_list,\n"
+    "  task_update, task_run_now and task_delete.\n"
     "- BATCH ACTIONS: When the user asks to delete multiple tasks (or perform\n"
     "  any destructive action on multiple items), call the tool once per item\n"
     "  ALL IN THE SAME TURN. Do NOT go one-by-one across separate turns.\n"
@@ -426,16 +369,22 @@ Respond with ONLY a valid JSON array. No other text."""
 # Prompts: document knowledge extraction (map-reduce pipeline)
 # ---------------------------------------------------------------------------
 
-# Step 1 — MAP: summarize each chunk into a few key sentences
+# Step 1 — MAP: summarize each chunk into a few key sentences per ~6,000
+# characters (the length scales with the section, WP C3). The instructions come
+# before anything that varies, so they stay a cacheable prefix.
 DOC_MAP_PROMPT = """\
-Summarize this section of "{document_title}" in 3-5 sentences. \
-Focus on the main arguments, findings, and named entities (people, \
-organisations, technologies). Omit filler and formatting artifacts.
+Summarize one section of a document for a knowledge base. Focus on the main \
+arguments, findings, and named entities (people, organisations, technologies). \
+Cover the whole section evenly, not only its start. Omit filler and \
+formatting artifacts.
+
+LENGTH: {summary_length}
+DOCUMENT: "{document_title}"
 
 SECTION {section_number} of {total_sections}:
 {document_text}
 
-Respond with ONLY the summary paragraph. No headings, no bullets."""
+Respond with ONLY the summary. No headings, no bullets."""
 
 
 # Step 2 — REDUCE: combine chunk summaries into one coherent article
@@ -513,9 +462,16 @@ DOCUMENT_EXTRACTION_PROMPT = DOC_EXTRACT_PROMPT
 # Dream Cycle prompts — used by dream_cycle.py for nightly knowledge refinement
 # ═════════════════════════════════════════════════════════════════════════════
 
+# The rules come before the entities and evidence in each, so consecutive
+# calls share a cacheable prefix.
+
 DREAM_MERGE_PROMPT = """\
-You are a knowledge-graph curator. Two entities of type "{entity_type}" \
-have been detected as near-duplicates and need to be merged into one.
+You are a knowledge-graph curator. Write a single, merged description that \
+preserves ALL information from BOTH descriptions. Do not lose any facts. Be \
+concise but complete.
+
+Two entities of type "{entity_type}" have been detected as near-duplicates \
+and need to be merged into one.
 
 Entity A — subject: "{subject_a}"
 Description: {description_a}
@@ -523,9 +479,7 @@ Description: {description_a}
 Entity B — subject: "{subject_b}"
 Description: {description_b}
 
-Write a single, merged description that preserves ALL information from \
-BOTH descriptions. Do not lose any facts. Be concise but complete. Write \
-in the same style as the descriptions above — factual, third-person, \
+Write in the same style as the descriptions above — factual, third-person, \
 knowledge-base style.
 
 Return ONLY the merged description text. No preamble, no explanation."""
@@ -534,16 +488,6 @@ Return ONLY the merged description text. No preamble, no explanation."""
 DREAM_ENRICH_PROMPT = """\
 You are a knowledge-graph curator. An entity has a thin description that \
 needs to be enriched using evidence from conversations.
-
-Entity type: {entity_type}
-Subject: "{subject}"
-Current description: {current_description}
-
-Known relationships:
-{relationships}
-
-Relevant conversation excerpts:
-{conversation_excerpts}
 
 Write an improved description that:
 1. Keeps ALL information from the current description (do not remove anything)
@@ -558,22 +502,21 @@ STRICT RULES (violations will corrupt the knowledge base):
 - Do NOT invent details like specific times, ages, locations, or skill levels not in the text
 - If unsure whether a detail applies to "{subject}" specifically, leave it out — being incomplete is better than being wrong
 
+Entity type: {entity_type}
+Subject: "{subject}"
+Current description: {current_description}
+
+Known relationships:
+{relationships}
+
+Relevant conversation excerpts:
+{conversation_excerpts}
+
 Return ONLY the enriched description text. No preamble, no explanation."""
 
 
 DREAM_INFER_PROMPT = """\
-You are a knowledge-graph curator with high standards. Two entities \
-co-occur in {co_occurrence_count} conversation(s) but have no edge in the \
-graph. Determine whether a SPECIFIC, FACTUAL relationship exists.
-
-Entity A — type: {type_a}, subject: "{subject_a}"
-Description: {description_a}
-
-Entity B — type: {type_b}, subject: "{subject_b}"
-Description: {description_b}
-
-Conversation excerpt where both appear:
-{conversation_excerpt}
+You are a knowledge-graph curator with high standards.
 
 RULES — read carefully:
 1. Provide brief evidence from the excerpt or entity descriptions that \
@@ -617,16 +560,24 @@ If there is NO clear, specific relationship, or you are unsure, or the only
 link is that both entities were discussed by the same user, return:
 {{"has_relation": false}}
 
+Two entities co-occur in {co_occurrence_count} conversation(s) but have no \
+edge in the graph. Determine whether a SPECIFIC, FACTUAL relationship exists.
+
+Entity A — type: {type_a}, subject: "{subject_a}"
+Description: {description_a}
+
+Entity B — type: {type_b}, subject: "{subject_b}"
+Description: {description_b}
+
+Conversation excerpt where both appear:
+{conversation_excerpt}
+
 Return ONLY the JSON object. No other text."""
 
 
 DREAM_INSIGHTS_PROMPT = """\
 You are {assistant_name}'s self-analysis engine. Your job is to examine a \
 snapshot of the system's recent activity and produce actionable insights.
-
-SYSTEM SNAPSHOT
-===============
-{snapshot}
 
 INSTRUCTIONS
 ============
@@ -704,6 +655,10 @@ Return a JSON array of objects, each with these fields:
 - skill_draft (object or null — only for skill_proposal)
 
 If there is nothing noteworthy, return an empty array: []
+
+SYSTEM SNAPSHOT
+===============
+{snapshot}
 
 Return ONLY the JSON array. No preamble, no explanation."""
 

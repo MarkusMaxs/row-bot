@@ -66,6 +66,7 @@ from row_bot.data_paths import (
     get_threads_db_path,
     get_row_bot_data_dir,
 )
+from row_bot import install_layout
 from row_bot.runtime_paths import app_icon_path, app_root, static_dir
 
 if TYPE_CHECKING:
@@ -99,6 +100,9 @@ _INSTANCE_LOCK_FILENAME = "launcher.lock"
 # quitting (an update relaunch starts the new launcher before the old one exits).
 _INSTANCE_WAIT_SECONDS = 30.0
 _held_instance_locks: dict[Path, "_InstanceLock"] = {}
+# Set by quit_for_relaunch() in direct mode; main() exits with this code.
+_EXIT_REQUESTED = threading.Event()
+_requested_exit_code = 0
 _LEGACY_RUNTIME_ENV_VARS = frozenset(
     {
         "THOTH_AUTO_START_OLLAMA",
@@ -1264,6 +1268,31 @@ def _select_app_port(preferred: int = _PORT, max_tries: int = 50) -> tuple[int, 
 
 
 # ── Server subprocess management ───────────────────────────────────────────
+
+
+def _verify_install_when_ready(port: int, server: object) -> threading.Thread | None:
+    """Clear the install's ``pending_verification`` once this server answers ``/readyz``.
+
+    The native launcher counts unverified launches after a switch and goes back
+    to the previous version after two; a version that becomes ready is kept,
+    however long its start takes. The watch ends when the server stops.
+    """
+    try:
+        layout = install_layout.detect()
+    except Exception:
+        logger.debug("Could not read the install layout", exc_info=True)
+        return None
+    if not layout.self_updating:
+        return None
+    thread = threading.Thread(
+        target=install_layout.verify_when_ready,
+        args=(layout, port),
+        kwargs={"alive": lambda: bool(getattr(server, "is_alive", False))},
+        daemon=True,
+        name="row-bot-install-verify",
+    )
+    thread.start()
+    return thread
 
 
 def _process_tree(pid: int) -> set[int]:
@@ -3011,18 +3040,20 @@ class RowBotTray:
         else:
             logger.info("Buddy overlay was not open")
 
-    def _on_quit(self, icon=None, item=None) -> None:  # noqa: ARG002
-        logger.info("Quit requested")
+    def _on_quit(self, icon=None, item=None, *, exit_code: int = 0) -> None:  # noqa: ARG002
+        logger.info("Quit requested%s", f" (exit code {exit_code})" if exit_code else "")
         if self._quitting:
             logger.info("Quit already in progress")
             return
         self._quitting = True
         self._stop_event.set()
+        quit_done = threading.Event()
 
         def _quit_watchdog() -> None:
-            time.sleep(_QUIT_WATCHDOG_TIMEOUT)
+            if quit_done.wait(_QUIT_WATCHDOG_TIMEOUT):
+                return
             logger.warning("Quit watchdog forcing launcher exit after timeout")
-            os._exit(0)
+            os._exit(exit_code)
 
         def _quit_worker() -> None:
             try:
@@ -3045,7 +3076,8 @@ class RowBotTray:
                 except Exception:
                     logger.debug("Could not stop tray icon during quit", exc_info=True)
                 logger.info("Launcher quit complete")
-                os._exit(0)
+                quit_done.set()
+                os._exit(exit_code)
 
         threading.Thread(
             target=_quit_watchdog, daemon=True, name="quit-watchdog"
@@ -3133,6 +3165,7 @@ class RowBotTray:
                 duration_ms=round((time.perf_counter() - server_started) * 1000.0, 1),
             )
             self._owns_server = True
+            _verify_install_when_ready(self._port, self._server)
             # Register cleanup in case launcher crashes
             atexit.register(self._server.stop)
 
@@ -3274,7 +3307,7 @@ def _block_until_interrupted(
             except (OSError, ValueError):
                 continue
     try:
-        while not stop_requested.wait(1.0):
+        while not stop_requested.wait(1.0) and not _EXIT_REQUESTED.is_set():
             if owns_server and server is not None and not server.is_alive:
                 if restart_in_progress is not None and restart_in_progress():
                     continue
@@ -3361,6 +3394,7 @@ def _run_direct(args: argparse.Namespace) -> None:
             duration_ms=round((time.perf_counter() - server_started) * 1000.0, 1),
         )
         owns_server = True
+        _verify_install_when_ready(port, server)
         atexit.register(server.stop)
         if (
             splash_proc is None
@@ -3728,6 +3762,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def quit_for_relaunch() -> None:
+    """Stop Row-Bot gracefully, then exit with ``RELAUNCH_EXIT_CODE`` (75).
+
+    The native launcher (``Row-Bot.exe``, the macOS tray host or the Linux
+    ``row-bot`` wrapper) then reads ``state.json`` again and starts the active
+    version with the same arguments. Nothing persisted asks for the relaunch,
+    so it cannot loop.
+    """
+    global _requested_exit_code
+    _requested_exit_code = install_layout.RELAUNCH_EXIT_CODE
+    _EXIT_REQUESTED.set()
+    tray = _ACTIVE_TRAY
+    if tray is not None:
+        tray._on_quit(exit_code=install_layout.RELAUNCH_EXIT_CODE)
+
+
 def quit_for_update() -> None:
     """Best-effort shutdown hook used by updater.install_and_restart."""
     global _ACTIVE_TRAY
@@ -3839,6 +3889,8 @@ def main(argv: list[str] | None = None) -> None:
             if sys.platform.startswith("linux") and preferred_mode is None:
                 args.browser = True
             _run_direct(args)
+            if _requested_exit_code:
+                raise SystemExit(_requested_exit_code)
             return
         tray = RowBotTray(
             preferred_port=parse_app_port(args.port, default=_PORT),
@@ -3855,6 +3907,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         args.no_tray = True
         _run_direct(args)
+        if _requested_exit_code:
+            raise SystemExit(_requested_exit_code)
     except KeyboardInterrupt:
         logger.info("Interrupted — shutting down")
 

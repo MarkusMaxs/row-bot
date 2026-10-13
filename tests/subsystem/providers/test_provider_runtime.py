@@ -13,6 +13,7 @@ from row_bot.cancellation import CancellationScope, use_cancellation_scope
 from row_bot.agent_budget import new_execution_budget
 from row_bot.providers.errors import ProviderErrorKind, normalize_provider_error
 from row_bot.providers.transports.anthropic_cancellable import CancellableChatAnthropic
+from row_bot.providers.transports import ollama_local, openai_direct
 from row_bot.providers.transports.openrouter_cancellable import CancellableChatOpenRouter
 
 
@@ -50,10 +51,8 @@ def _assert_sync_client_registered_with_cancellation_scope(client: httpx.Client)
 
 
 def test_openai_gpt5_family_uses_responses_api(monkeypatch):
-    fake_module = ModuleType("langchain_openai")
-    fake_module.ChatOpenAI = _FakeChatOpenAI
     _FakeChatOpenAI.calls.clear()
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
+    monkeypatch.setattr(openai_direct, "DirectChatOpenAI", _FakeChatOpenAI)
     monkeypatch.setattr(runtime, "get_provider_secret", lambda provider_id: "sk-test")
 
     model = runtime.create_chat_model("gpt-5.5-pro", provider_id="openai")
@@ -61,22 +60,24 @@ def test_openai_gpt5_family_uses_responses_api(monkeypatch):
     assert model.kwargs["model"] == "gpt-5.5-pro"
     assert model.kwargs["use_responses_api"] is True
     assert model.kwargs["output_version"] == "responses/v1"
+    # Stateless: nothing stored at OpenAI, encrypted reasoning travels in the thread.
+    assert model.kwargs["store"] is False
+    assert model.kwargs["include"] == ["reasoning.encrypted_content"]
     assert "reasoning" not in model.kwargs
     assert "reasoning_effort" not in model.kwargs
     assert isinstance(model.kwargs["http_client"], httpx.Client)
 
 
 def test_openai_legacy_chat_model_keeps_chat_completions_path(monkeypatch):
-    fake_module = ModuleType("langchain_openai")
-    fake_module.ChatOpenAI = _FakeChatOpenAI
     _FakeChatOpenAI.calls.clear()
-    monkeypatch.setitem(sys.modules, "langchain_openai", fake_module)
+    monkeypatch.setattr(openai_direct, "DirectChatOpenAI", _FakeChatOpenAI)
     monkeypatch.setattr(runtime, "get_provider_secret", lambda provider_id: "sk-test")
 
     model = runtime.create_chat_model("gpt-4o", provider_id="openai")
 
     assert model.kwargs["model"] == "gpt-4o"
     assert "use_responses_api" not in model.kwargs
+    assert "store" not in model.kwargs and "include" not in model.kwargs
     assert "reasoning" not in model.kwargs
     assert "reasoning_effort" not in model.kwargs
     assert isinstance(model.kwargs["http_client"], httpx.Client)
@@ -497,14 +498,12 @@ def test_runtime_rejects_custom_endpoint_non_chat_model(tmp_path, monkeypatch):
 
 
 def test_ollama_provider_runtime_constructs_chat_ollama(monkeypatch):
-    fake_module = ModuleType("langchain_ollama")
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_module)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0:11435")
     monkeypatch.setattr("row_bot.models.get_context_size", lambda model_ref=None: 65_536)
 
@@ -519,14 +518,12 @@ def test_ollama_provider_runtime_constructs_chat_ollama(monkeypatch):
 
 
 def test_ollama_provider_ref_unwraps_at_runtime_edge(monkeypatch):
-    fake_module = ModuleType("langchain_ollama")
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_module)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
     monkeypatch.setattr("row_bot.models.get_context_size", lambda model_ref=None: 32_768)
 
@@ -538,14 +535,12 @@ def test_ollama_provider_ref_unwraps_at_runtime_edge(monkeypatch):
 
 
 def test_ollama_provider_runtime_expands_unique_family_alias(monkeypatch):
-    fake_module = ModuleType("langchain_ollama")
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_module.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_module)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11434")
     monkeypatch.setattr("row_bot.models.list_local_models", lambda: ["llama3:latest"])
     monkeypatch.setattr("row_bot.models.get_context_size", lambda model_ref=None: 32_768)
@@ -1393,8 +1388,11 @@ def test_routed_claude_pre_model_trim_consolidates_long_history_without_mutating
 
     assert isinstance(provider_messages[0], SystemMessage)
     assert sum(isinstance(message, SystemMessage) for message in provider_messages) == 1
-    assert "Root system" in provider_messages[0].content
-    assert "Late recall and wind-down" in provider_messages[0].content
+    # OpenRouter keeps each system message as its own text block (WP A3); the others get one string.
+    content = provider_messages[0].content
+    system_text = content if isinstance(content, str) else "\n".join(block["text"] for block in content)
+    assert "Root system" in system_text
+    assert "Late recall and wind-down" in system_text
     assert not any(isinstance(message, SystemMessage) for message in provider_messages[1:])
     tool_call_index = next(
         index for index, message in enumerate(provider_messages) if getattr(message, "tool_calls", None)
@@ -1639,6 +1637,112 @@ def test_provider_transcript_normalizer_repairs_google_reasoning_blocks(tmp_path
     assert history[1].parts[0].text == "legacy reasoning"
     assert history[1].parts[0].thought is True
     assert history[1].parts[1].text == "hello"
+
+
+def _foreign_provider_history():
+    """A thread's turns on OpenAI Responses (gpt-5) and Anthropic, as the checkpoint keeps them."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    return [
+        SystemMessage(content="Root system"),
+        HumanMessage(content="Look it up"),
+        AIMessage(
+            content=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "private plan"}],
+                    "encrypted_content": "gAAAA-private-ciphertext",
+                },
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            ],
+            tool_calls=[{"name": "lookup", "args": {}, "id": "call_1", "type": "tool_call"}],
+            response_metadata={"model_provider": "openai"},
+        ),
+        ToolMessage(content="found it", tool_call_id="call_1"),
+        AIMessage(
+            content=[
+                {"type": "reasoning", "id": "rs_2", "summary": []},
+                {"type": "text", "text": "OpenAI answer.", "annotations": [], "id": "msg_1"},
+            ],
+            response_metadata={"model_provider": "openai"},
+        ),
+        HumanMessage(content="And now?"),
+        AIMessage(
+            content=[
+                {"type": "thinking", "thinking": "private reasoning", "signature": "sig"},
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "output_text", "text": "Claude answer."},
+            ],
+        ),
+        HumanMessage(content="Continue on the local model"),
+    ]
+
+
+def test_switching_a_thread_to_local_ollama_sends_only_what_ollama_reads(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    import row_bot.agent as agent
+    from langchain_ollama import ChatOllama
+
+    monkeypatch.setattr(agent, "get_context_size", lambda: 32_768)
+    monkeypatch.setattr(agent, "get_current_model", lambda: "qwen3:8b")
+    monkeypatch.setattr(agent, "is_cloud_model", lambda model: False)
+    monkeypatch.setattr(agent, "is_background_workflow", lambda: False)
+
+    agent.set_active_model_override("qwen3:8b")
+    try:
+        provider_messages = agent._pre_model_trim({
+            "execution_budget": new_execution_budget("ollama-switch"),
+            "messages": _foreign_provider_history(),
+        })["llm_input_messages"]
+    finally:
+        agent.set_active_model_override("")
+
+    # ChatOllama raised "Unsupported message content type" on this history before.
+    ollama_messages = ChatOllama(model="qwen3:8b", num_ctx=32_768)._convert_messages_to_ollama_messages(
+        provider_messages
+    )
+    payload = json.dumps(ollama_messages, default=str)
+    assistant = [message for message in ollama_messages if message["role"] == "assistant"]
+
+    assert "OpenAI answer." in payload
+    assert "Claude answer." in payload
+    assert any(message.get("tool_calls") for message in assistant)
+    assert [message["tool_call_id"] for message in ollama_messages if message["role"] == "tool"] == ["call_1"]
+    for private in ("private plan", "gAAAA-private-ciphertext", "private reasoning", "opaque"):
+        assert private not in payload
+
+
+def test_ollama_target_keeps_text_images_and_skipped_tool_use_blocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    import row_bot.agent as agent
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    tool_use = {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}
+    messages = [
+        HumanMessage(content="hi"),
+        AIMessage(content=[{"type": "text", "text": "plain"}, image, tool_use, "bare string"]),
+        AIMessage(content="string content stays"),
+    ]
+
+    result = agent._normalize_provider_facing_messages(messages, provider_id="ollama")
+
+    assert result[1].content == messages[1].content
+    assert result[2].content == "string content stays"
+
+
+def test_cloud_targets_keep_their_own_content_blocks(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    import row_bot.agent as agent
+
+    history = _foreign_provider_history()
+
+    result = agent._normalize_provider_facing_messages(list(history), provider_id="openai")
+
+    # OpenAI Responses replays its own reasoning and function-call items; nothing is dropped for it.
+    assert result[2].content == history[2].content
+    assert result[4].content == history[4].content
 
 
 def test_provider_transcript_normalizer_strips_reasoning_for_custom_artifacts(tmp_path, monkeypatch):
@@ -1966,7 +2070,9 @@ def test_agent_graph_installs_custom_tool_validation_repair(tmp_path, monkeypatc
     from langgraph.prebuilt import ToolNode
 
     assert isinstance(graph.tools, ToolNode)
-    assert set(graph.tools.tools_by_name) == {"duckduckgo"}
+    # read_tool_output pages through results shortened when created; it is bound with every tool set.
+    assert set(graph.tools.tools_by_name) == {"duckduckgo", "read_tool_output"}
+    assert "ROW_BOT_TOOL_VALIDATION_RETRY_REQUIRED" in graph.tools.tools_by_name["read_tool_output"].invoke({})
     bound_tool = graph.tools.tools_by_name["duckduckgo"]
     # Profile enforcement copies the tool; the bound schema and validation
     # repair must survive that wrapper and still dispatch valid arguments.
@@ -2047,15 +2153,13 @@ def test_minimax_provider_raises_when_api_key_missing(monkeypatch):
 
 
 def test_ollama_runtime_does_not_force_reasoning(monkeypatch):
-    fake_langchain_ollama = ModuleType("langchain_ollama")
     captured = {}
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    fake_langchain_ollama.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_langchain_ollama)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setattr("row_bot.models._ollama_base_url", lambda: "http://127.0.0.1:11434")
 
     model = runtime.create_chat_model("vendor/non-tool-chat:14b", provider_id="ollama")
@@ -2066,15 +2170,13 @@ def test_ollama_runtime_does_not_force_reasoning(monkeypatch):
 
 
 def test_ollama_runtime_enables_reasoning_for_thinking_models(monkeypatch):
-    fake_langchain_ollama = ModuleType("langchain_ollama")
     captured = {}
 
     class _FakeChatOllama:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    fake_langchain_ollama.ChatOllama = _FakeChatOllama
-    monkeypatch.setitem(sys.modules, "langchain_ollama", fake_langchain_ollama)
+    monkeypatch.setattr(ollama_local, "RowBotChatOllama", _FakeChatOllama)
     monkeypatch.setattr("row_bot.models._ollama_base_url", lambda: "http://127.0.0.1:11434")
 
     model = runtime.create_chat_model("qwen3.5:30b", provider_id="ollama")

@@ -1,0 +1,10 @@
+{
+  "_comment": "Copy this file, fill in each provider's current prices in US dollars per million tokens from its pricing page, and point ROW_BOT_LIVE_EVAL_RATES at the copy. Row-Bot ships no prices. A rate left null makes calls that need it 'unpriced'. Keys: provider:model, a bare model id, or provider:*.",
+  "models": {
+    "anthropic:claude-opus-5-5": {"input": null, "output": null, "cache_read": null, "cache_write_5m": null, "cache_write_1h": null},
+    "anthropic:claude-haiku-5-5": {"input": null, "output": null, "cache_read": null, "cache_write_5m": null, "cache_write_1h": null},
+    "openai:*": {"input": null, "output": null, "cache_read": null},
+    "google:*": {"input": null, "output": null, "cache_read": null},
+    "xai:*": {"input": null, "output": null, "cache_read": null}
+  }
+}
