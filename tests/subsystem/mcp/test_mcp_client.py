@@ -626,7 +626,7 @@ class McpClientFoundationTests(unittest.TestCase):
                      patch.object(agent.tool_registry, "get_external_tool_loading_mode", return_value="eager"), \
                      patch.object(agent, "get_llm", return_value=object()), \
                      patch.object(agent, "get_current_model", return_value="test-model"), \
-                     patch.object(agent, "get_context_size", return_value=8192), \
+                     patch.object(agent, "get_context_size", return_value=200_000), \
                      patch.object(agent, "_ensure_agent_mode_ready", return_value=SimpleNamespace(
                          provider_id="test",
                          runtime_model="test-model",

@@ -382,12 +382,15 @@ def test_developer_skill_prompt_is_scoped_to_developer_mode(tmp_path, monkeypatc
 
     assert "Developer Tool Guide" not in regular_prompt
     assert "Developer Tool Guide" in developer_prompt
-    assert "Developer Coding" in developer_prompt
-    assert "Developer Review" in developer_prompt
-    assert "Developer PR Prep" in developer_prompt
-    assert "Developer Custom Tools" in developer_prompt
-    assert "custom_tool_builder" in developer_prompt
-    assert "developer_custom_tool_builder" not in developer_prompt
+    # The Developer workflows are off by default: loaded with skill_load while Developer tools are
+    # bound, never injected into every prompt (F34).
+    for name in ("Developer Coding", "Developer Review", "Developer PR Prep", "Developer Custom Tools"):
+        assert name not in developer_prompt
+    workflows = {skill.display_name: skill for skill in skills.get_on_demand_tool_skills(["developer"])}
+    assert set(workflows) == {"Developer Coding", "Developer Review", "Developer PR Prep", "Developer Custom Tools"}
+    assert skills.get_on_demand_tool_skills([]) == []
+    assert "custom_tool_builder" in workflows["Developer Custom Tools"].instructions
+    assert "developer_custom_tool_builder" not in workflows["Developer Custom Tools"].instructions
 
     custom_tool_prompt = skills.get_skills_prompt([], active_tool_names=["custom_tool_builder"])
     assert "Custom Tool Builder Guide" in custom_tool_prompt

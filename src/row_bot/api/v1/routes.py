@@ -148,8 +148,10 @@ _STATUS.update(
         "update_command_conflict": 409,
         "update_changed": 409,
         "update_unavailable": 409,
-        "update_install_busy": 429,
-        "update_job_missing": 404,
+        "update_not_ready": 409,
+        "update_restart_busy": 409,
+        "update_busy": 429,
+        "update_no_previous": 409,
     }
 )
 _STATUS.update(
@@ -5219,19 +5221,12 @@ def create_router(
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
 
-    async def updates_for_this_device(request: Request, snapshot: dict) -> dict:
-        from row_bot.application.client_updates import install_needs_this_computer
-
-        here = not install_needs_this_computer() or on_this_computer(await _context(request))
-        return {**snapshot, "install_here": here}
-
     @router.get("/system/updates")
     async def update_snapshot(request: Request) -> JSONResponse:
         await session(request)
         from row_bot.application.client_updates import read_updates
 
-        snapshot = await updates_for_this_device(request, await call(read_updates))
-        return await respond(request, dto.UpdateSnapshot, snapshot)
+        return await respond(request, dto.UpdateSnapshot, await call(read_updates))
 
     @router.post("/system/updates/commands")
     async def update_command(request: Request) -> JSONResponse:
@@ -5239,8 +5234,13 @@ def create_router(
         body = await _body(request, dto.UpdateCommand, 4096)
         if request.headers.get("idempotency-key", "") != str(body.command_id):
             raise ProtocolError("idempotency_mismatch", 409)
+        if body.action == "remove_legacy":
+            # Windows shows its administrator prompt on this computer's screen.
+            require_this_computer(await _context(request))
         from row_bot.application.client_updates import execute_update_choice
 
+        # Restarting into a ready update stops this server; the snapshot in the
+        # receipt is read before that happens.
         result = await call(
             execute_update_choice,
             owner_id=current.id,
@@ -5248,50 +5248,11 @@ def create_router(
             expected_revision=body.expected_revision,
             action=body.action,
             version=body.version,
+            when=body.when,
+            force=body.force,
+            enabled=body.enabled,
         )
-        result = {**result, "snapshot": await updates_for_this_device(request, result["snapshot"])}
         return await respond(request, dto.UpdateReceipt, result)
-
-    @router.post("/system/updates/installs")
-    async def update_install_start(request: Request) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        body = await _body(request, dto.UpdateInstallCommand, 4096)
-        if request.headers.get("idempotency-key", "") != str(body.command_id):
-            raise ProtocolError("idempotency_mismatch", 409)
-        from row_bot.application.client_updates import install_needs_this_computer, start_update_install
-
-        if install_needs_this_computer():
-            require_this_computer(await _context(request))
-
-        result = await call(
-            start_update_install,
-            owner_id=current.id,
-            command_id=str(body.command_id),
-            expected_revision=body.expected_revision,
-            version=body.version,
-            validate=dispatch_validation(request, current),
-        )
-        return await respond(request, dto.UpdateInstallStatus, result)
-
-    @router.get("/system/updates/installs/{command_id}")
-    async def update_install_status(command_id: UUID, request: Request) -> JSONResponse:
-        current = await session(request)
-        from row_bot.application.client_updates import read_update_install
-
-        result = await call(
-            read_update_install, owner_id=current.id, command_id=str(command_id)
-        )
-        return await respond(request, dto.UpdateInstallStatus, result)
-
-    @router.post("/system/updates/installs/{command_id}/cancel")
-    async def update_install_cancel(command_id: UUID, request: Request) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        from row_bot.application.client_updates import cancel_update_install
-
-        result = await call(
-            cancel_update_install, owner_id=current.id, command_id=str(command_id)
-        )
-        return await respond(request, dto.UpdateInstallStatus, result)
 
     @router.get("/accounts/github/access")
     async def github_access(request: Request) -> JSONResponse:

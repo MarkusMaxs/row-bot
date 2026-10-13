@@ -1,0 +1,137 @@
+{
+  "$defs": {
+    "UpdateHostRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "check",
+            "update_now",
+            "skip",
+            "pause",
+            "resume"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "requested_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Requested At"
+        }
+      },
+      "required": [
+        "action",
+        "requested_at"
+      ],
+      "title": "UpdateHostRequest",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "ROW_BOT_UPDATES=external: what the host that applies updates reports.",
+  "properties": {
+    "available_version": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Available Version"
+    },
+    "current_version": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Current Version"
+    },
+    "message": {
+      "anyOf": [
+        {
+          "maxLength": 300,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Message"
+    },
+    "notes_url": {
+      "anyOf": [
+        {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Notes Url"
+    },
+    "request": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UpdateHostRequest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "enum": [
+        "unknown",
+        "idle",
+        "checking",
+        "downloading",
+        "ready",
+        "applying",
+        "failed",
+        "paused"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "updated_at": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Updated At"
+    }
+  },
+  "required": [
+    "state",
+    "current_version",
+    "available_version",
+    "message",
+    "notes_url",
+    "updated_at",
+    "request"
+  ],
+  "title": "UpdateHostView",
+  "type": "object"
+}

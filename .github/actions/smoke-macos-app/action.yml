@@ -12,6 +12,10 @@ inputs:
     description: Loopback port for the launcher smoke; the layout smoke uses the next one
     required: false
     default: "8097"
+  background-update:
+    description: Also rehearse a real background update to a next version served from a loopback feed (installer-verify)
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -20,6 +24,7 @@ runs:
       env:
         APP_PATH: ${{ inputs.app-path }}
         SMOKE_PORT: ${{ inputs.port }}
+        BACKGROUND_UPDATE: ${{ inputs.background-update }}
       run: |
         set -euo pipefail
         resolve_bundle_python() {
@@ -81,6 +86,14 @@ runs:
         python3 scripts/smoke_install_layout.py --root "$ROW_BOT_INSTALL_ROOT" --kind macos --port "$LAYOUT_PORT" \
           --seed "$RESOURCES" --seed-version "$VERSION" \
           -- "$APP_EXEC" -- --server --no-open --no-splash --no-ollama --port "$LAYOUT_PORT"
+        if [ "$BACKGROUND_UPDATE" = "true" ]; then
+          # A real background update to the next version, staged next to the
+          # bundle (the seed), then Restart now through the tray host.
+          UPDATE_PORT="$((SMOKE_PORT + 2))"
+          python3 scripts/smoke_background_update.py --root "$ROW_BOT_INSTALL_ROOT" --kind macos --port "$UPDATE_PORT" \
+            --version-root "$RESOURCES" \
+            -- "$APP_EXEC" -- --no-tray --no-open --no-splash --no-ollama --port "$UPDATE_PORT"
+        fi
         if [ -n "$(find "$APP_PATH" -newer "$RUNNER_TEMP/row-bot-smoke-started" -name '*.pyc' -print -quit)" ]; then
           echo "::error::Running the app wrote bytecode into the bundle"
           exit 1

@@ -74,7 +74,8 @@ def _prepare_graph(monkeypatch):
     monkeypatch.setattr(agent, "_build_runtime_skill_snapshot", lambda: ((), (), False, "test-skills"))
     monkeypatch.setattr(agent, "get_current_model", lambda: "model:test")
     monkeypatch.setattr(agent, "get_llm", lambda: object())
-    monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 32_768)
+    # A 64K window: F11's small window. 32K or less is the small-context profile (test_stable_tool_set).
+    monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 65_536)
     monkeypatch.setattr(agent, "get_agent_system_prompt", lambda: "system")
     monkeypatch.setattr(
         agent,
@@ -602,13 +603,17 @@ def test_a_rare_tool_called_by_its_own_name_still_runs(monkeypatch):
     assert [tool.name for tool in seen] == ["row_bot_status"]
 
 
-def test_a_large_window_binds_every_group_as_before(monkeypatch):
+def test_a_large_window_binds_every_group_and_developer_tools_with_a_code_folder(monkeypatch):
     agent = _prepare_graph(monkeypatch)
     monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 131_072)
     _registry_with(monkeypatch, agent, {"row_bot_status": [_lc_tool("row_bot_status")],
                                         "developer": [_lc_tool("developer_read_file")]})
     monkeypatch.setattr(agent, "_has_code_folder", lambda: False)
 
+    # F34: without a code folder every Developer tool fails, so none is bound, on any window.
+    assert set(_bound_tools(agent.get_agent_graph(["row_bot_status", "developer"]))) == {"row_bot_status", READER}
+
+    monkeypatch.setattr(agent, "_has_code_folder", lambda: True)
     graph = agent.get_agent_graph(["row_bot_status", "developer"])
 
     assert set(_bound_tools(graph)) == {"row_bot_status", "developer_read_file", READER}

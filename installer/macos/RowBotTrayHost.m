@@ -271,8 +271,10 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     return original ? [(__bridge_transfer NSURL *)original path] : path;
 }
 
-@interface RowBotHost : NSObject <NSApplicationDelegate>
+@interface RowBotHost : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSMenuItem *updateItem;
+@property(nonatomic, assign) BOOL restartForUpdate;
 @property(nonatomic, strong) NSTask *pythonTask;
 @property(nonatomic, copy) NSString *seedDir;
 @property(nonatomic, copy) NSString *seedVersion;
@@ -572,6 +574,14 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     browserItem.target = self;
     [menu addItem:browserItem];
 
+    // Shown while a staged update waits in state.json (menuNeedsUpdate:).
+    self.updateItem = [[NSMenuItem alloc] initWithTitle:@"Restart to Update"
+                                                 action:@selector(restartToUpdate:)
+                                          keyEquivalent:@""];
+    self.updateItem.target = self;
+    self.updateItem.hidden = YES;
+    [menu addItem:self.updateItem];
+
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *showBuddyItem = [[NSMenuItem alloc] initWithTitle:@"Show Buddy"
@@ -594,7 +604,74 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     quitItem.target = self;
     [menu addItem:quitItem];
 
+    menu.delegate = self;
     self.statusItem.menu = menu;
+}
+
+// The version a background update staged and marked ready, if it can start.
+- (NSString *)readyUpdate {
+    NSDictionary *state = RowBotReadState();
+    NSDictionary *ready = state[@"ready"];
+    if (![ready isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    NSString *version = RowBotVersionOrNil(ready[@"version"]);
+    if (!version || [version isEqualToString:RowBotVersionOrNil(state[@"active"]) ?: @""] ||
+        [version isEqualToString:self.seedVersion] || ![self folderForVersion:version]) {
+        return nil;
+    }
+    return version;
+}
+
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    (void)menu;
+    NSString *ready = [self readyUpdate];
+    self.updateItem.hidden = ready == nil;
+    self.updateItem.title = ready ? [NSString stringWithFormat:@"Restart to Update (%@)", ready] : @"Restart to Update";
+}
+
+// The Python launcher switches state.json to the ready version as it quits
+// (updates.switcher.apply_on_quit); the host then starts the new active version.
+- (void)restartToUpdate:(id)sender {
+    (void)sender;
+    NSString *ready = [self readyUpdate];
+    if (!ready) {
+        return;
+    }
+    RowBotLog(self.dataDir, @"restart_to_update version=%@", ready);
+    if (self.pythonTask && self.pythonTask.running) {
+        self.restartForUpdate = YES;
+        [self terminateWindowIfKnown];
+        [self.pythonTask terminate];
+        return;
+    }
+    NSMutableDictionary *state = RowBotReadState();
+    if (state) {
+        // As updates.switcher records a switch, so a rollback can be told apart.
+        state[@"switched_from"] = state[@"active"] ?: [NSNull null];
+        state[@"switched_to"] = ready;
+        state[@"switched_at"] = RowBotNowISO();
+        state[@"previous"] = state[@"active"] ?: [NSNull null];
+        state[@"active"] = ready;
+        state[@"ready"] = [NSNull null];
+        state[@"pending_verification"] = @YES;
+        state[@"unverified_launches"] = @0;
+        RowBotWriteState(state);
+    }
+    [self recordRestartReason];
+    [self launchPrimary];
+}
+
+// As updates.switcher records it: the next start was caused by Row-Bot, so
+// goals left working carry on by themselves (decision D4).
+- (void)recordRestartReason {
+    NSMutableDictionary *state = RowBotReadState();
+    NSString *active = state[@"active"];
+    if (!state || ![active isKindOfClass:[NSString class]]) {
+        return;
+    }
+    state[@"restart_reason"] = @{@"reason": @"update", @"version": active, @"at": RowBotNowISO()};
+    RowBotWriteState(state);
 }
 
 // launcher_state.json in the data folder, written by the Python launcher.
@@ -715,6 +792,13 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
                                                                                 : task.terminationStatus;
     RowBotLog(self.dataDir, @"launcher_exited version=%@ pid=%d code=%d", version, task.processIdentifier, code);
     if (task != self.pythonTask || self.quitting) {
+        return;
+    }
+    if (self.restartForUpdate) {
+        self.restartForUpdate = NO;
+        RowBotLog(self.dataDir, @"relaunching for update");
+        [self recordRestartReason];
+        [self launchPrimary];
         return;
     }
     if (![self relaunchAfterExit:version code:code]) {

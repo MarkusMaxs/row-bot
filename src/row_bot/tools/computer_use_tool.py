@@ -645,24 +645,6 @@ class ComputerUseTool(BaseTool):
     def untrusted_tool_names(self) -> set[str]:
         return {"computer_use"}
 
-    @property
-    def inference_keywords(self) -> list[str]:
-        return [
-            "desktop",
-            "native app",
-            "calculator",
-            "notepad",
-            "textedit",
-            "computer use",
-            "this browser",
-            "browser below",
-            "browser window",
-            "microsoft edge",
-            "google chrome",
-            "mozilla firefox",
-            "safari window",
-        ]
-
     def as_langchain_tools(self) -> list:
         service = get_computer_use_service()
 

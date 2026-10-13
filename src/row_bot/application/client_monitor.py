@@ -432,6 +432,17 @@ def _available_update() -> Any:
         return None
 
 
+def _ready_update() -> str | None:
+    """A version prepared in the background that a restart installs."""
+    updater = _MODULE.get("row_bot.updater")
+    if updater is None:
+        return None
+    try:
+        return updater.ready_update()
+    except Exception:
+        return None
+
+
 def _health_problems() -> list[dict[str, str]]:
     """Monitor checks whose kept result is an error (B252): a file read."""
     from row_bot.application.client_diagnosis import attention_problems
@@ -450,9 +461,10 @@ def read_attention(*, include_update: bool) -> dict[str, Any]:
             continue
     update = None
     if include_update:
+        ready = _bounded(_ready_update() or "", 64)
         available = _available_update()
-        version = _bounded(getattr(available, "version", ""), 64) if available else ""
-        update = {"version": version} if version else None
+        version = ready or (_bounded(getattr(available, "version", ""), 64) if available else "")
+        update = {"version": version, "ready": bool(ready)} if version else None
     return {"schema_version": 1, "problems": problems[:_MAX_PROBLEMS], "update": update}
 
 

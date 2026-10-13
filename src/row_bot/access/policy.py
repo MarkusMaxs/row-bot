@@ -64,6 +64,7 @@ LAUNCHER_ONLY_PATHS = frozenset(
         "/api/launcher-ping",
         "/api/launcher-shutdown",
         "/api/launcher-restart",
+        "/api/launcher-apply-update",
         "/api/startup-state",
     }
 )

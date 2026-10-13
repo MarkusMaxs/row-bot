@@ -53,10 +53,12 @@ def _is_loopback(value: object) -> bool:
 class LauncherControlServer:
     """Small launcher-owned server exposing only guarded launcher operations.
 
-    Restart and shutdown need the launch secret, which only the server child
-    holds. Opening the window (a second start of Row-Bot on the same data
-    folder) needs its own token, published in the data folder's launcher state
-    and good for nothing else.
+    Restart, relaunch and shutdown need the launch secret, which only the
+    server child holds. Relaunch quits the whole launcher with exit code 75 so
+    the native launcher starts the active version again (an update switch).
+    Opening the window (a second start of Row-Bot on the same data folder)
+    needs its own token, published in the data folder's launcher state and
+    good for nothing else.
     """
 
     def __init__(
@@ -65,12 +67,14 @@ class LauncherControlServer:
         *,
         shutdown_launcher: Callable[[], None] | None = None,
         open_window: Callable[[], bool] | None = None,
+        relaunch_launcher: Callable[[], None] | None = None,
         secret: str | None = None,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self.restart_child = restart_child
         self.shutdown_launcher = shutdown_launcher
         self.open_window = open_window
+        self.relaunch_launcher = relaunch_launcher
         self.secret = secret or secrets.token_urlsafe(32)
         self.open_token = secrets.token_urlsafe(32)
         self._now = now
@@ -148,6 +152,7 @@ class LauncherControlServer:
                         controller.secret,
                     ),
                     "/v1/open-window": (controller.open_window, controller.open_token),
+                    "/v1/relaunch": (controller.relaunch_launcher, controller.secret),
                 }
                 callback, token = routes.get(self.path, (None, ""))
                 if callback is None:
@@ -184,11 +189,10 @@ class LauncherControlServer:
                 threading.Thread(
                     target=callback,
                     daemon=True,
-                    name=(
-                        "row-bot-launcher-shutdown"
-                        if self.path == "/v1/shutdown-launcher"
-                        else "row-bot-child-restart"
-                    ),
+                    name={
+                        "/v1/shutdown-launcher": "row-bot-launcher-shutdown",
+                        "/v1/relaunch": "row-bot-launcher-relaunch",
+                    }.get(self.path, "row-bot-child-restart"),
                 ).start()
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -219,6 +223,28 @@ def request_launcher_restart(
     timeout: float = 3.0,
 ) -> LauncherControlResult:
     """Ask the owning launcher to restart its child, or request manual restart."""
+    return _request_launcher("/v1/restart-child", environ=environ, timeout=timeout)
+
+
+def request_launcher_relaunch(
+    *,
+    environ: Mapping[str, str] | None = None,
+    timeout: float = 3.0,
+) -> LauncherControlResult:
+    """Ask the owning launcher to quit and be started again (exit code 75).
+
+    The native launcher then starts whatever ``state.json`` makes active, so
+    this is how a switched update takes effect without the person quitting.
+    """
+    return _request_launcher("/v1/relaunch", environ=environ, timeout=timeout)
+
+
+def _request_launcher(
+    path: str,
+    *,
+    environ: Mapping[str, str] | None,
+    timeout: float,
+) -> LauncherControlResult:
     env = os.environ if environ is None else environ
     secret = str(env.get(LAUNCH_SECRET_ENV) or "")
     raw_port = str(env.get(LAUNCHER_CONTROL_PORT_ENV) or "")
@@ -231,7 +257,7 @@ def request_launcher_restart(
     if not 1 <= port <= 65535:
         return LauncherControlResult(LauncherControlStatus.UNAVAILABLE, True)
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/restart-child",
+        f"http://127.0.0.1:{port}{path}",
         data=b"",
         method="POST",
         headers={
@@ -287,6 +313,7 @@ __all__ = [
     "LauncherControlResult",
     "LauncherControlServer",
     "LauncherControlStatus",
+    "request_launcher_relaunch",
     "request_launcher_restart",
     "request_open_window",
 ]

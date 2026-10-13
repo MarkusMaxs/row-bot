@@ -4106,6 +4106,12 @@
 .settings-update-recovery > p {
   margin: 0;
 }
+/* Restart now? What a restart would interrupt. */
+.settings-update-work {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+}
 
 /* Buddy (B258): small looks in a grid that never overlaps. */
 .settings-page-content .settings-buddy-preferences {

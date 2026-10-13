@@ -1,0 +1,25 @@
+{
+  "additionalProperties": false,
+  "description": "The version Row-Bot went back from; it is not prepared again by itself.",
+  "properties": {
+    "reason": {
+      "enum": [
+        "rolled_back",
+        "repair"
+      ],
+      "title": "Reason",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 64,
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "reason"
+  ],
+  "title": "UpdateHeldBack",
+  "type": "object"
+}
