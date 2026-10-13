@@ -80,6 +80,12 @@ class LocalModel:
         monkeypatch.setattr(agent, "_get_llm_for_reasoning_plan", lambda *args, **kwargs: object())
         monkeypatch.setattr(agent, "create_react_agent", lambda **kwargs: SimpleNamespace(**kwargs))
         monkeypatch.setattr(agent, "_has_code_folder", lambda: False)
+        # Row-Bot's own tools only: no plugin or channel tools another test may have left registered.
+        monkeypatch.setattr("row_bot.plugins.registry.get_langchain_tools",
+                            lambda allow_names=None, refresh_mcp=True: [])
+        monkeypatch.setattr("row_bot.plugins.registry.get_destructive_names", lambda allow_names=None: set())
+        monkeypatch.setattr("row_bot.plugins.registry.get_skills_prompt", lambda *args, **kwargs: "")
+        monkeypatch.setattr("row_bot.channels.registry.running_channels", lambda: [])
         monkeypatch.setattr("row_bot.prompts.get_platform_context", lambda: PLATFORM)
         monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block", lambda: STATIC_SELF_KNOWLEDGE)
         monkeypatch.setattr("row_bot.self_knowledge.build_dynamic_self_knowledge_block", lambda: DYNAMIC_STATE)

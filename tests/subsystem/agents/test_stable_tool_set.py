@@ -190,6 +190,10 @@ def test_developer_tools_and_workflows_come_with_a_code_folder(tmp_path, monkeyp
     monkeypatch.setattr(agent, "_build_runtime_skill_snapshot", real_snapshot)
     monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 200_000)
     monkeypatch.setattr("row_bot.skill_discovery.collect_enabled_skill_records", lambda **kwargs: [])
+    # Only these built-in groups: no plugin or channel tools another test may have left registered.
+    monkeypatch.setattr("row_bot.plugins.registry.get_langchain_tools", lambda allow_names=None, refresh_mcp=True: [])
+    monkeypatch.setattr("row_bot.plugins.registry.get_destructive_names", lambda allow_names=None: set())
+    monkeypatch.setattr("row_bot.channels.registry.running_channels", lambda: [])
     tools = {"developer": ["developer_read_file"], "conversation_setup": ["create_code_folder", "use_code_folder"]}
     monkeypatch.setattr(agent.tool_registry, "get_tool", lambda name: SimpleNamespace(
         as_langchain_tools=lambda: [_lc_tool(tool) for tool in tools[name]], destructive_tool_names=set())
