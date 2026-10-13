@@ -121,7 +121,8 @@ def _run_python(version_root: Path, code: str) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "ROW_BOT_"))}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return subprocess.run(
-        [str(_python(version_root)), "-I", "-c", code], check=True, capture_output=True, text=True, env=env,
+        # -B: -I ignores PYTHONDONTWRITEBYTECODE, and a version folder is never written.
+        [str(_python(version_root)), "-I", "-B", "-c", code], check=True, capture_output=True, text=True, env=env,
     ).stdout.strip()
 
 
@@ -199,7 +200,7 @@ def _plan_with_the_app(version_root: Path, pylock: Path) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "ROW_BOT_"))}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     out = subprocess.run(
-        [str(_python(version_root)), "-I", "-c", _PLAN_WITH_THE_APP, str(version_root / "app" / "src"),
+        [str(_python(version_root)), "-I", "-B", "-c", _PLAN_WITH_THE_APP, str(version_root / "app" / "src"),
          str(version_root / "python"), str(pylock)],
         check=True, capture_output=True, text=True, env=env,
     ).stdout

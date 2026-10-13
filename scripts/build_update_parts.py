@@ -296,7 +296,8 @@ def describe_platform(python: Path, version: str, *, installer_dir: Path | None 
     """What one platform build ships, read from its own runtime."""
     _check_version(version)
     completed = subprocess.run(
-        [str(python), "-I", "-c", _DESCRIBE], capture_output=True, text=True, check=False,
+        # -B: the runtime may be a signed bundle; nothing is written into it.
+        [str(python), "-I", "-B", "-c", _DESCRIBE], capture_output=True, text=True, check=False,
         env={key: value for key, value in os.environ.items() if not key.startswith("PYTHON")},
     )
     if completed.returncode != 0:
