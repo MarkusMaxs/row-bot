@@ -236,11 +236,10 @@ info "[5/6] Cleaning package..."
 find "$PACKAGE_ROOT" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find "$PACKAGE_ROOT" -name '*.pyc' -delete 2>/dev/null || true
 find "$APP_SRC" \( -name '.pytest_cache' -o -name 'test-results' -o -name 'node_modules' \) -prune -exec rm -rf {} + 2>/dev/null || true
-rm -rf "$PYTHON_PREFIX/lib/python"*/ensurepip 2>/dev/null || true
-rm -rf "$PYTHON_PREFIX/lib/python"*/test 2>/dev/null || true
-rm -rf "$PYTHON_PREFIX/lib/python"*/unittest/test 2>/dev/null || true
-# Keep package-internal test dirs under site-packages:
-# some runtime packages import private helpers from those modules.
+# Libraries' test suites, headers, link libraries, unused Google API documents,
+# console-script launchers and the standard library's tests. The rules are
+# shared with the Windows and macOS builds: src/row_bot/payload_trim.json.
+"$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/payload_trim.py" trim --python-root "$PYTHON_PREFIX"
 if [ -d "$APP_SRC/docs" ]; then
     fail "Linux package payload unexpectedly contains docs/"
 fi
@@ -259,13 +258,11 @@ ok "Package cleaned"
 # Release folders are shared through hard links by later updates, so they never
 # change after install: ship .pyc that need no rewrite (unchecked-hash) and do
 # not depend on the build folder (-s); bin/row-bot sets PYTHONDONTWRITEBYTECODE.
+# The app gets bytecode, and so does every runtime module the runtime check
+# imports (it runs again here, on the trimmed runtime).
 info "Compiling deterministic bytecode..."
-"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$PACKAGE_ROOT" \
-    --invalidation-mode unchecked-hash "$APP_SRC"
-# Some packages ship sources that never compile (templates, old test data).
-"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$PACKAGE_ROOT" \
-    --invalidation-mode unchecked-hash "$PYTHON_PREFIX/lib" >/dev/null || \
-    warn "Some library files did not compile; they run from source"
+ROW_BOT_INSTALL_ROOT="$PACKAGE_ROOT" "$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/payload_trim.py" bytecode \
+    --python-root "$PYTHON_PREFIX" --app-root "$APP_SRC" --version-root "$PACKAGE_ROOT"
 ok "Bytecode compiled"
 
 info "Verifying assembled Linux runtime dependencies..."

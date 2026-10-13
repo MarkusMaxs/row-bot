@@ -1,0 +1,237 @@
+# =============================================================================
+# notarize-finish.yml - Finish macOS notarizations a release left pending (D3)
+#
+# release.yml submits the signed app to Apple as soon as it is built, staples
+# it, then notarizes and staples the DMG, each wait bounded by its
+# notarize_wait_minutes input. When Apple takes longer, the release job uploads
+# a macos-notarization-pending-<version>-r<run id> artifact (the files and the
+# submission ids, scripts/macos_notarize.py) and succeeds with a warning. This
+# workflow finds those artifacts, hourly or for one run when dispatched, and
+# finishes the work: wait, staple the app, build and sign the DMG, notarize and
+# staple it, check it (stapled, team 33PQRTZLNW, the app's version), attach it
+# to the draft release, record its SHA-256 for the publish step, and delete the
+# pending artifact.
+#
+# A DMG goes on a draft only for the newest successful release run of the tag's
+# current commit, never over a DMG already there, and only while the release is
+# a draft. Anything that can never be attached (published or deleted release,
+# moved tag, newer run, Apple refused) deletes the pending artifact instead of
+# coming back every hour. Only an answer Apple has not given yet is retried.
+#
+# The draft carries a DMG only once it is stapled, so a DMG on the draft is how
+# scripts/release_windows.ps1 knows macOS is ready.
+#
+# Dry runs (…-dry-run) are finished only when dispatched with their run id, and
+# never touch a release. A dispatched run has its own concurrency group, so a
+# scheduled scan queued behind another one never replaces it.
+#
+# Replaces the manual notarize-submit.yml and notarize-check.yml.
+# =============================================================================
+
+name: "Notarize: Finish macOS"
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The release.yml (or notarize-finish.yml) run to finish; empty finds every pending notarization
+        type: string
+        default: ""
+      wait_minutes:
+        description: How long each wait for Apple may take
+        type: string
+        default: "30"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notarize-finish-${{ inputs.run_id || 'scan' }}
+  cancel-in-progress: false
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      pending: ${{ steps.find.outputs.pending }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Find pending notarizations
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          args=(--repository "$GITHUB_REPOSITORY")
+          if [ -n "$RUN_ID" ]; then args+=(--run-id "$RUN_ID"); fi
+          python3 -u scripts/macos_notarize.py find-pending "${args[@]}"
+
+  finish:
+    needs: find
+    if: ${{ needs.find.outputs.pending != '' && needs.find.outputs.pending != '[]' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        item: ${{ fromJSON(needs.find.outputs.pending) }}
+    runs-on: macos-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write   # attach the stapled DMG to the draft release
+      actions: write    # delete the pending artifact once finished
+    env:
+      CODESIGN_IDENTITY: "Developer ID Application: Siddharth Sachar (33PQRTZLNW)"
+      VERSION: ${{ matrix.item.version }}
+      DRY_RUN: ${{ matrix.item.dry_run }}
+      RELEASE_RUN_ID: ${{ matrix.item.release_run_id }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      # Waits end 20 minutes before the job's 150, so the state is always kept.
+      - name: Note when the job started
+        run: echo "NOTARIZE_UNTIL=$(( $(date +%s) + 130 * 60 ))" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # Before anything is downloaded: is there still a draft this run's DMG may go on?
+      - name: Is this notarization still wanted?
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u scripts/macos_notarize.py preflight --version "$VERSION" --release-run-id "$RELEASE_RUN_ID" --dry-run "$DRY_RUN"
+
+      - name: Download the pending notarization
+        if: steps.preflight.outputs.action == 'finish'
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.item.artifact }}
+          run-id: ${{ matrix.item.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/notarization
+
+      - name: Import Apple certificates
+        if: steps.preflight.outputs.action == 'finish'
+        uses: ./.github/actions/import-apple-certificates
+        with:
+          application-p12: ${{ secrets.APPLE_APPLICATION_P12 }}
+          installer-p12: ${{ secrets.APPLE_INSTALLER_P12 }}
+          p12-password: ${{ secrets.APPLE_P12_PASSWORD }}
+          application-p12-password: ${{ secrets.APPLE_APPLICATION_P12_PASSWORD }}
+          installer-p12-password: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }}
+
+      - name: Wait, staple the app, build the DMG, notarize and staple it
+        id: notarize
+        if: steps.preflight.outputs.action == 'finish'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes }}
+        run: |
+          set -euo pipefail
+          N="$RUNNER_TEMP/notarization"
+          stage() { python3 -c 'import json, sys; s = json.load(open(sys.argv[1])); print("dmg" if (s.get("dmg") or {}).get("submission_id") else "app")' "$N/notarization.json"; }
+          echo "stage_before=$(stage)" >> "$GITHUB_OUTPUT"
+          args=(--state "$N/notarization.json" --app "$N/app/Row-Bot.app"
+                --dmg "$N/Row-Bot-$VERSION-macOS-arm64.dmg" --minutes "${WAIT_MINUTES:-30}" --until "$NOTARIZE_UNTIL")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          status=0
+          python -u scripts/macos_notarize.py finish "${args[@]}" || status=$?
+          echo "stage_after=$(stage)" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Check the DMG and the app inside
+        if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
+        env:
+          READINESS: ${{ steps.notarize.outputs.readiness }}
+        run: |
+          set -euo pipefail
+          DMG="$RUNNER_TEMP/notarization/Row-Bot-$VERSION-macOS-arm64.dmg"
+          notarized=false
+          if [ "$READINESS" = "ready" ]; then
+            notarized=true
+            spctl --assess --type open --context context:primary-signature -vv "$DMG"
+          fi
+          python -u scripts/macos_notarize.py verify-dmg --dmg "$DMG" --version "$VERSION" --notarized "$notarized"
+
+      - name: macOS notarization summary
+        if: always() && steps.preflight.outputs.action == 'finish'
+        run: |
+          if [ -f "$RUNNER_TEMP/notarization/notarization.json" ]; then
+            python -u scripts/macos_notarize.py summary --state "$RUNNER_TEMP/notarization/notarization.json"
+          fi
+
+      - name: Upload the macOS DMG
+        if: steps.notarize.outputs.readiness == 'ready' || steps.notarize.outputs.readiness == 'app-only'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Row-Bot-macOS
+          path: ${{ runner.temp }}/notarization/Row-Bot-*-macOS-*.dmg
+          retention-days: 90
+
+      # Re-checks the run, the tag and the draft right before uploading; never
+      # replaces a DMG already on the draft.
+      - name: Attach the stapled DMG to the draft release
+        id: attach
+        if: steps.notarize.outputs.readiness == 'ready' && matrix.item.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/record"
+          python -u scripts/macos_notarize.py attach --dmg "$RUNNER_TEMP/notarization/Row-Bot-$VERSION-macOS-arm64.dmg" \
+            --version "$VERSION" --release-run-id "$RELEASE_RUN_ID" \
+            --record "$RUNNER_TEMP/record/macos-dmg-record-$RELEASE_RUN_ID.json"
+
+      # What scripts/release_windows.ps1 accepts a DMG without a CI checksum by.
+      - name: Record the attached DMG for the publish step
+        if: steps.attach.outputs.outcome == 'attached' || steps.attach.outputs.outcome == 'already'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-dmg-record-${{ matrix.item.release_run_id }}
+          path: ${{ runner.temp }}/record/
+          retention-days: 90
+
+      # Apple moved on (the app is stapled, the DMG is being checked): keep the new state.
+      - name: Upload the pending notarization again
+        if: steps.notarize.outputs.readiness == 'pending' && steps.notarize.outputs.stage_before != steps.notarize.outputs.stage_after
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.item.artifact }}
+          path: |
+            ${{ runner.temp }}/notarization/notarization.json
+            ${{ runner.temp }}/notarization/*.zip
+            ${{ runner.temp }}/notarization/*.dmg
+          retention-days: 14
+
+      # Finished, replaced, or never attachable: never retried every hour.
+      # Kept only while Apple has not answered, or after an error before an outcome.
+      - name: Remove the pending artifact
+        if: >-
+          always() && (
+            steps.preflight.outputs.action == 'discard' ||
+            steps.notarize.outputs.readiness == 'failed' ||
+            steps.notarize.outputs.readiness == 'app-only' ||
+            (steps.notarize.outputs.readiness == 'ready' && (matrix.item.dry_run || steps.attach.outputs.outcome != '')) ||
+            (steps.notarize.outputs.readiness == 'pending' && steps.notarize.outputs.stage_before != steps.notarize.outputs.stage_after)
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ matrix.item.artifact_id }}
+          ARTIFACT: ${{ matrix.item.artifact }}
+          OUTCOME: ${{ steps.preflight.outputs.action }}/${{ steps.notarize.outputs.readiness }}/${{ steps.attach.outputs.outcome }}
+        run: |
+          echo "Removing $ARTIFACT ($OUTCOME)"
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" || echo "::warning::it was already gone"
+          echo "Removed $ARTIFACT: $OUTCOME" >> "$GITHUB_STEP_SUMMARY"
