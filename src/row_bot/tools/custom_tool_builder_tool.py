@@ -121,16 +121,6 @@ class CustomToolBuilderTool(BaseTool):
     def enabled_by_default(self) -> bool:
         return True
 
-    @property
-    def inference_keywords(self) -> list[str]:
-        return [
-            "custom tool",
-            "turn repo into a tool",
-            "add github repo as tool",
-            "create tool from repo",
-            "repo as a tool",
-        ]
-
     def execute(self, query: str) -> str:
         return _run_builder("list")
 

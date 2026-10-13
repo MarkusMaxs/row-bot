@@ -62,6 +62,21 @@ def test_media_requests_expose_only_one_generation_family():
     assert media_tool_selection("Edit the cover page", enabled, has_design=True) == enabled
 
 
+def test_a_media_request_names_only_the_media_family_it_leaves_out():
+    """WP A5: the groups a media request leaves out of its turn (still bound; refused when called)."""
+    from row_bot.application.conversation_creation import media_left_out
+    from row_bot.integrations.scope import with_tools_left_out
+
+    enabled = ["designer", "image_gen", "video_gen", "filesystem"]
+    assert media_left_out("Generate an image of a cat", enabled, has_design=False) == ["designer", "video_gen"]
+    assert media_left_out("Make a short video clip", enabled, has_design=False) == ["designer"]
+    assert media_left_out("Edit the cover page", enabled, has_design=True) == []
+    narrowed = with_tools_left_out({"exclude_servers": ["Notion"], "exclude_tools": ["gmail"], "focus": [],
+                                    "skills": []}, ["video_gen"])
+    assert narrowed["exclude_tools"] == ["gmail", "video_gen"] and narrowed["exclude_servers"] == ["Notion"]
+    assert with_tools_left_out(None, []) is None  # nothing to narrow
+
+
 def test_second_workspace_is_rejected_before_creating_an_orphan(creation):
     from row_bot.application.conversation_creation import _draft_parent
     from row_bot.application.client_platform import ClientPlatformError

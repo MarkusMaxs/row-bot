@@ -341,9 +341,9 @@ def test_plugin_mcp_runtime_filters_tools_by_plugin_source(monkeypatch) -> None:
     destructive = runtime.get_plugin_destructive_tool_names("office-plugin")
     records = runtime.get_plugin_tool_records("office-plugin")
 
-    assert [tool.name for tool in tools] == [
-        "mcp_plugin_office_plugin_office_search_mail",
+    assert [tool.name for tool in tools] == [  # By server, then tool name (WP A5).
         "mcp_plugin_office_plugin_office_delete_mail",
+        "mcp_plugin_office_plugin_office_search_mail",
     ]
     assert destructive == {"mcp_plugin_office_plugin_office_delete_mail"}
     assert [record["plugin_id"] for record in records] == ["office-plugin", "office-plugin"]
@@ -475,3 +475,25 @@ def test_an_optional_argument_the_model_leaves_out_is_not_sent_to_the_app(monkey
     tool = next(tool for tool in runtime.get_langchain_tools(refresh=False) if tool.name == "mcp_fake_search")
     assert tool.invoke({"query": "recent"}) == "ok"
     assert sent == [{"query": "recent"}]
+
+
+def test_mcp_tools_bind_by_server_then_name_whatever_order_servers_connected(monkeypatch):
+    """WP A5: a tool list in a new order is a new prompt for every provider cache."""
+    from row_bot.mcp_client import runtime
+
+    config = {"enabled": True, "transport": "stdio", "tools": {"enabled": {"search": True, "fetch": True}}}
+    monkeypatch.setattr(runtime, "_get_effective_config",
+                        lambda: {"enabled": True, "servers": {"zeta": config, "Alpha": config}})
+    monkeypatch.setattr(runtime, "discover_enabled_servers", lambda: None)
+    monkeypatch.setattr(runtime, "_sync_catalog_from_config", lambda cfg: None)
+
+    def tools_after(order: list[str]) -> list[str]:
+        catalog = {server: runtime._normalize_tools(server, config, [FakeMcpTool("search", "Search", {"type": "object"}),
+                                                                     FakeMcpTool("fetch", "Fetch", {"type": "object"})])
+                   for server in order}
+        monkeypatch.setattr(runtime, "_catalog", catalog)
+        monkeypatch.setattr(runtime, "_issued", {})
+        return [tool.name for tool in runtime.get_langchain_tools(refresh=False)]
+
+    assert tools_after(["zeta", "Alpha"]) == tools_after(["Alpha", "zeta"]) == [
+        "mcp_alpha_fetch", "mcp_alpha_search", "mcp_zeta_fetch", "mcp_zeta_search"]

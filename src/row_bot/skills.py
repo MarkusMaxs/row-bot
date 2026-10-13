@@ -78,6 +78,9 @@ class Skill:
     enabled_by_default: bool = False
     source: str = "user"  # "bundled" or "user"
     path: Optional[pathlib.Path] = None  # folder containing SKILL.md
+    # Linked to tools but marked ``enabled_by_default: false``: a workflow loaded with skill_load
+    # while its tools are bound, never injected into every prompt as a tool guide (F34).
+    on_demand: bool = False
 
 
 # ── Parser ───────────────────────────────────────────────────────────────────
@@ -157,6 +160,7 @@ def _parse_skill_text(text: str, filepath: pathlib.Path, source: str = "user") -
         enabled_by_default=enabled_by_default,
         source=source,
         path=filepath.parent,
+        on_demand=bool(raw_tools) and explicit_enabled_default and not enabled_by_default,
     )
 
 
@@ -555,11 +559,9 @@ def get_skills_prompt(
     Returns an empty string when there are no skills to inject.
     """
     # Tool guides are ALWAYS injected based on which tools are enabled —
-    # they cannot be toggled off via skill overrides.
-    guides = [
-        s for s in get_all_skills()
-        if is_tool_guide(s) and _is_tool_guide_active(s, active_tool_names)
-    ]
+    # they cannot be toggled off via skill overrides. A tool-linked skill that is off by
+    # default is a workflow loaded on request instead (see get_on_demand_tool_skills).
+    guides = active_tool_guides(active_tool_names)
 
     if skill_names is not None:
         manual = [_skills_cache[n] for n in skill_names
@@ -598,6 +600,39 @@ def get_skills_prompt(
             parts.append(f"\n### {skill.icon} {skill.display_name}\n{skill.instructions}\n")
 
     return "\n".join(parts)
+
+
+def active_tool_guides(active_tool_names: Iterable[str] | None = None) -> list[Skill]:
+    """The tool guides injected for these tools (never the on-demand tool skills)."""
+    return [
+        s for s in get_all_skills()
+        if is_tool_guide(s) and not s.on_demand and _is_tool_guide_active(s, active_tool_names)
+    ]
+
+
+def get_on_demand_tool_skills(active_tool_names: Iterable[str]) -> list[Skill]:
+    """Tool-linked skills that are off by default, for tools that are bound: loaded with skill_load."""
+    active = set(active_tool_names or ())
+    return [s for s in get_all_skills() if s.on_demand and any(t in active for t in s.tools)]
+
+
+def get_tool_guide_index(active_tool_names: Iterable[str] | None = None, *, loadable: bool = False) -> str:
+    """One line per tool guide for these tools: the small-context version of the guides (WP A5).
+
+    *loadable*: the guides can be read in full with skill_load, so the header says so.
+    """
+    guides = active_tool_guides(active_tool_names)
+    if not guides:
+        return ""
+    header = "TOOL GUIDES (index): each guide explains how to use its tools well."
+    if loadable:
+        header += " Before relying on a tool you have not used yet, read its guide with skill_load(name)."
+    lines = [header]
+    for skill in guides:
+        description = " ".join(str(skill.description or "").split())[:160]
+        lines.append(f"- {skill.name} ({', '.join(skill.tools)}): {description}" if description
+                     else f"- {skill.name} ({', '.join(skill.tools)})")
+    return "\n".join(lines)
 
 
 def estimate_tokens(skill_names: Optional[list[str]] = None) -> int:

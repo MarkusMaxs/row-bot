@@ -31,6 +31,16 @@ def media_tool_selection(text: str, enabled: list[str], *, has_design: bool) -> 
     return [name for name in enabled if name not in excluded]
 
 
+def media_left_out(text: str, enabled: list[str], *, has_design: bool) -> list[str]:
+    """The tool groups an explicit media request leaves out of its turn.
+
+    They stay bound, so the conversation's tool list never changes with a message's wording; the
+    turn's scope refuses a call to one of them (WP A5, integrations.scope).
+    """
+    kept = set(media_tool_selection(text, enabled, has_design=has_design))
+    return [name for name in enabled if name not in kept]
+
+
 def configured_workspace_root() -> Path:
     from row_bot.tools import registry
 

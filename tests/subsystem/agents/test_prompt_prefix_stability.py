@@ -319,6 +319,7 @@ class Harness:
         self.memories: list[dict] = []
         self.groups: tuple[str, ...] = DEFAULT_GROUPS
         self.skill_records: tuple = ()
+        self.app_scope: dict | None = None
         self._client: Any = None
         model_ref = shape.model_ref
         # Compaction is A4's contract: the window here never asks for it, so only per-call rewrites show.
@@ -372,6 +373,7 @@ class Harness:
             generation_id=generation_id,
             model_override=self.shape.model_ref,
             enabled_tool_names=self.groups if mode == "agent" else (),
+            app_scope=self.app_scope,
         )
         if mode != "agent":
             return
@@ -580,8 +582,11 @@ def iteration_dedups_repeated_tool_output(h: Harness) -> list[tuple[dict, dict]]
 
 
 def turn_media_request_changes_tools(h: Harness) -> list[tuple[dict, dict]]:
-    """(d) A media keyword narrows the bound tool set for one turn (F38)."""
-    from row_bot.application.conversation_creation import media_tool_selection
+    """(d) A media keyword used to narrow the bound tool set for one turn (F38). Now the conversation
+    binds the same tools, and the request scopes its turn (refused at call time, said in the turn
+    context), as client_platform builds it (WP A5)."""
+    from row_bot.application.conversation_creation import media_left_out
+    from row_bot.integrations.scope import with_tools_left_out
 
     enabled = ["filesystem", "web_search", "image_gen", "video_gen"]
     h.groups = tuple(enabled)
@@ -590,9 +595,12 @@ def turn_media_request_changes_tools(h: Harness) -> list[tuple[dict, dict]]:
     last = h.agent_request(state, turn="t1")
     _answer(state, "Here are the notes in three bullets.")
     text = "Make an image of a lighthouse for the cover."
-    h.groups = tuple(media_tool_selection(text, enabled, has_design=False))
+    h.app_scope = with_tools_left_out(None, media_left_out(text, enabled, has_design=False))
+    assert h.app_scope and h.app_scope["exclude_tools"] == ["video_gen"]
     state = h.new_turn(state, text, turn="t2")
-    return [(last, h.agent_request(state, turn="t2"))]
+    later = h.agent_request(state, turn="t2")
+    assert any("NOT IN THIS TURN: video_gen" in json.dumps(message) for message in later["messages"])
+    return [(last, later)]
 
 
 def chat_only_turn(h: Harness) -> list[tuple[dict, dict]]:
@@ -626,11 +634,7 @@ SCENARIOS: dict[str, Callable[[Harness], list[tuple[dict, dict]]]] = {
 # Today's breaks, by the work package of the context and cost plan that fixes them. A package
 # that fixes a case removes its entry here; strict xfail fails the run if a fixed case stays marked.
 ALL_SHAPES = "*"
-KNOWN_BREAKS: dict[str, dict[str, str]] = {
-    "turn_media_request_changes_tools": {
-        ALL_SHAPES: "fixed by WP A5: a media keyword changes the bound tool set for one turn (F38)",
-    },
-}
+KNOWN_BREAKS: dict[str, dict[str, str]] = {}
 
 
 def _cases():
