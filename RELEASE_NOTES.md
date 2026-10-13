@@ -35,7 +35,7 @@ Notes** below before upgrading from 5.1.
   finishes. Updates no longer ask for administrator approval, and Row-Bot
   starts again by itself after updating.
 - **Smaller downloads** - the Windows installer is about 420 MB (731 MB in
-  5.1), the macOS DMG about 960 MB (1.09 GB) and the Linux tarball about
+  5.1), the macOS DMG about 690 MB (1.09 GB) and the Linux tarball about
   790 MB (846 MB).
 - **No browser in the Windows installer** - Browser Automation uses Chrome or
   Edge, as on macOS and Linux. Design exports to PDF, PNG and PowerPoint ask

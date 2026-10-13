@@ -66,7 +66,7 @@ browsers, phones and server mode.
 | Platform | Package | Notes |
 |----------|---------|-------|
 | Windows 10/11, 64-bit | Installer, about 420 MB | Native window, tray, Buddy overlay, Computer Use. |
-| macOS 14 (Sonoma) or newer, Apple silicon | DMG, about 960 MB | Native window, tray, Buddy overlay, Computer Use. |
+| macOS 14 (Sonoma) or newer, Apple silicon | DMG, about 690 MB | Native window, tray, Buddy overlay, Computer Use. |
 | Linux x86_64 (glibc) | Tarball and one-line installer, about 790 MB | Opens in your browser; a native window and tray need GTK or Qt and AppIndicator. |
 | Docker, amd64 and arm64 | `ghcr.io/siddsachar/row-bot` | Authenticated single-owner server. |
 
