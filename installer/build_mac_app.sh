@@ -324,11 +324,11 @@ info "[5/6] Cleaning up build artifacts..."
 find "$APP_BUNDLE" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find "$APP_BUNDLE" -name '*.pyc' -delete 2>/dev/null || true
 find "$APP_SRC" \( -name '.pytest_cache' -o -name 'test-results' -o -name 'node_modules' \) -prune -exec rm -rf {} + 2>/dev/null || true
-rm -rf "$PYTHON_PREFIX/lib/python"*/ensurepip 2>/dev/null || true
-rm -rf "$PYTHON_PREFIX/lib/python"*/test 2>/dev/null || true
-rm -rf "$PYTHON_PREFIX/lib/python"*/unittest/test 2>/dev/null || true
-# Keep package-internal test dirs under site-packages:
-# some runtime packages import private helpers from those modules.
+# Libraries' test suites, headers, link libraries and debug symbols, unused
+# Google API documents, console-script launchers and the standard library's
+# tests. The rules are shared with the Windows and Linux builds:
+# src/row_bot/payload_trim.json.
+"$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/payload_trim.py" trim --python-root "$PYTHON_PREFIX"
 if [ -d "$APP_SRC/docs" ]; then
     fail "macOS app payload unexpectedly contains docs/"
 fi
@@ -345,9 +345,7 @@ fi
 # Mac kills the process that loads it ("Code Signature Invalid"). A signed
 # build signs every library below; an unsigned build signs each one ad hoc.
 info "Stripping debug symbols from shared libraries..."
-# Debug-symbol bundles (PyObjC's test suite ships *.dSYM folders whose DWARF
-# files end in .so) are never loaded; they only add size.
-find "$APP_BUNDLE" -type d -name '*.dSYM' -prune -exec rm -rf {} +
+# The trim above removed the *.dSYM bundles, whose DWARF files end in .so too.
 find "$APP_BUNDLE" \( -name '*.so' -o -name '*.dylib' \) -print0 | while IFS= read -r -d '' lib; do
     if strip -x "$lib" 2>/dev/null && [ -z "$CODESIGN_IDENTITY" ]; then
         codesign --force --sign - "$lib"
@@ -370,14 +368,11 @@ ok "Bundle size: $BUNDLE_SIZE"
 # The bundle is the seed version; staged versions share files with it through
 # clones, so nothing in it changes after install: ship .pyc that need no rewrite
 # (unchecked-hash) and do not depend on the build folder (-s). The tray host
-# sets PYTHONDONTWRITEBYTECODE.
+# sets PYTHONDONTWRITEBYTECODE. The app gets bytecode, and so does every runtime
+# module the runtime check imports (it runs again here, on the trimmed runtime).
 info "Compiling deterministic bytecode..."
-"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$RESOURCES" \
-    --invalidation-mode unchecked-hash "$APP_SRC"
-# Some packages ship sources that never compile (templates, old test data).
-"$PYTHON_PREFIX/bin/python3" -m compileall -q -f -j 0 -s "$RESOURCES" \
-    --invalidation-mode unchecked-hash "$PYTHON_PREFIX/lib" >/dev/null || \
-    warn "Some library files did not compile; they run from source"
+"$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/payload_trim.py" bytecode \
+    --python-root "$PYTHON_PREFIX" --app-root "$APP_SRC" --version-root "$RESOURCES"
 "$PYTHON_PREFIX/bin/python3" -I -S "$PROJECT_DIR/src/row_bot/install_layout.py" version-json \
     --version "$VERSION" --python "$PYTHON_VERSION" --lock "$PROJECT_DIR/uv.lock" --out "$RESOURCES/version.json"
 ok "Bytecode compiled"

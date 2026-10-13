@@ -197,8 +197,11 @@ This will:
 5. Stage the app payload (`scripts/app_payload_manifest.py --stage`) and the React client from
    `frontend/dist` into `installer\build\app` and verify the client strictly
 6. Install Playwright Chromium when it can (otherwise Browser Automation waits for the user's Install or Repair)
-7. Compile deterministic bytecode for the app and the packages (`compileall -s installer\build
-   --invalidation-mode unchecked-hash`) and write `version.json`
+7. Trim the runtime with the rules all three builds share (`src/row_bot/payload_trim.json`:
+   libraries' test suites, C++ headers, link libraries and debug symbols, unused Google API
+   discovery documents, pip's console-script launchers), then compile deterministic bytecode
+   (`unchecked-hash`, recorded relative to `installer\build`) for the app and for the runtime
+   modules `verify_runtime_dependencies.py all` imports, and write `version.json`
 8. Compile everything into `dist\Row-Bot-X.Y.Z-Windows-x64.exe`
 
 #### Options
@@ -225,7 +228,7 @@ contract is `src/row_bot/install_layout.py`):
         ├── version.json                # Version, Python version and uv.lock hash
         ├── python\                     # Embedded Python 3.13 runtime
         │   ├── python.exe
-        │   ├── Lib\site-packages\      # Locked packages from requirements.txt, with .pyc
+        │   ├── Lib\site-packages\      # Locked packages from requirements.txt, trimmed (payload_trim.json)
         │   ├── tcl\                    # Tcl/Tk for the splash screen and first-run chooser
         │   └── playwright-browsers\    # Bundled Chromium, when the build could install it
         └── app\

@@ -380,20 +380,23 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "      Playwright Chromium installed" -ForegroundColor Green
 }
 
-# ── Deterministic bytecode ──
+# -- Trim the runtime and compile its bytecode --
+# The rules are shared with the macOS and Linux builds: src\row_bot\payload_trim.json.
+$PayloadTrim = Join-Path $ProjectRoot "src\row_bot\payload_trim.py"
+Write-Host ""
+Write-Host "Trimming the runtime (test suites, headers, unused Google API documents, launchers)..." -ForegroundColor Yellow
+& $PythonExe -I -S $PayloadTrim trim --python-root $PythonDir
+if ($LASTEXITCODE -ne 0) { throw "Trimming the runtime failed." }
+
 # Version folders are shared through hard links by later updates, so they
 # never change after install: ship .pyc that need no rewrite (unchecked-hash)
 # and that do not depend on the build folder (-s), and run with
-# PYTHONDONTWRITEBYTECODE=1 (Row-Bot.exe sets it).
-Write-Host ""
+# PYTHONDONTWRITEBYTECODE=1 (Row-Bot.exe sets it). The app gets bytecode, and so
+# does every runtime module the runtime check imports (it runs again here, on
+# the trimmed runtime).
 Write-Host "Compiling deterministic bytecode..." -ForegroundColor Yellow
-& $PythonExe -m compileall -q -f -j 0 -s $BuildDir --invalidation-mode unchecked-hash $AppStage
-if ($LASTEXITCODE -ne 0) { throw "Compiling the app's bytecode failed." }
-# Some packages ship sources pip never compiles either (templates, old test data).
-& $PythonExe -m compileall -q -f -j 0 -s $BuildDir --invalidation-mode unchecked-hash (Join-Path $PythonDir "Lib")
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "      Some library files did not compile; they run from source as before." -ForegroundColor DarkYellow
-}
+& $PythonExe -I -S $PayloadTrim bytecode --python-root $PythonDir --app-root $AppStage --version-root $BuildDir
+if ($LASTEXITCODE -ne 0) { throw "Compiling bytecode failed." }
 Write-Host "      Bytecode compiled" -ForegroundColor Green
 
 # version.json describes this version folder (src/row_bot/install_layout.py).
