@@ -65,9 +65,9 @@ browsers, phones and server mode.
 
 | Platform | Package | Notes |
 |----------|---------|-------|
-| Windows 10/11, 64-bit | Installer | Native window, tray, Buddy overlay, Computer Use. |
-| macOS 12+, Apple Silicon and Intel | DMG | Native window, tray, Buddy overlay, Computer Use. |
-| Linux x86_64 (glibc) | Tarball and one-line installer | Opens in your browser; a native window and tray need GTK or Qt and AppIndicator. |
+| Windows 10/11, 64-bit | Installer, about 420 MB | Native window, tray, Buddy overlay, Computer Use. |
+| macOS 14 (Sonoma) or newer, Apple silicon | DMG, about 960 MB | Native window, tray, Buddy overlay, Computer Use. |
+| Linux x86_64 (glibc) | Tarball and one-line installer, about 790 MB | Opens in your browser; a native window and tray need GTK or Qt and AppIndicator. |
 | Docker, amd64 and arm64 | `ghcr.io/siddsachar/row-bot` | Authenticated single-owner server. |
 
 Ollama is optional, for local models only. System requirements are in the
@@ -77,7 +77,9 @@ Ollama is optional, for local models only. System requirements are in the
 
 Download the Windows installer or the macOS DMG from
 [GitHub Releases](https://github.com/siddsachar/row-bot/releases/latest) and
-run it. Upgrades and repairs keep your data.
+run it. On Windows it installs for your account only, without administrator
+rights or questions, and opens Row-Bot when it finishes; on macOS, drag
+Row-Bot to Applications.
 
 On Linux:
 
@@ -103,6 +105,22 @@ docker compose -f deploy/docker/compose.yaml exec row-bot \
 
 Read [Docker and VPS operations](https://row-bot.ai/docs/operations/docker)
 before exposing it beyond loopback.
+
+### Updates
+
+Installed Row-Bot keeps itself up to date: about once a day it checks GitHub,
+downloads only what changed in the background, checks every file, and shows
+**Restart to update** when the new version is ready (otherwise it installs the
+next time you quit). If a new version doesn't start, Row-Bot goes back to the
+previous one by itself, and Settings › Updates can go back on request. Turn
+background checks or downloads off in Settings › Updates. Docker installs are
+updated by pulling a newer image. Your data is never touched. See
+[Updates](https://row-bot.ai/docs/operations/updates).
+
+Upgrading from 5.1? It updates to 5.2 once with the full installer. On
+Windows, 5.2 moves Row-Bot from Program Files to your account and asks once for
+administrator approval to remove the old copy; on macOS, drag Row-Bot to
+Applications one last time; Linux needs nothing.
 
 Upgrading from 5.0? Your MCP servers, plugins, skills, accounts and channels
 carry over to Settings › Apps and Skills; the

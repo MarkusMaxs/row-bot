@@ -1,20 +1,115 @@
 ---
 title: "Installation"
-description: "Install Row-Bot from a release package or run it from source with clear next steps."
+description: "Install Row-Bot on Windows, macOS or Linux, see where it keeps your data, move from 5.1, uninstall, or run it from source."
 ---
 
 # Installation
 
-For ordinary use, install Row-Bot from the latest release package for your operating system. Running from source is useful for contributors, testers, and people who want to inspect or modify the app.
+Download the latest Row-Bot for your system from [GitHub Releases](https://github.com/siddsachar/row-bot/releases/latest) and install it. You do this once: after that, Row-Bot downloads its updates in the background (see [Updates](/docs/operations/updates)).
 
-## Install From A Release
+| System | Download | Size |
+| --- | --- | --- |
+| Windows 10 or 11, 64-bit | `Row-Bot-X.Y.Z-Windows-x64.exe` | about 420 MB |
+| macOS 14 (Sonoma) or newer, Apple silicon | `Row-Bot-X.Y.Z-macOS-arm64.dmg` | about 960 MB |
+| Linux x86_64 (glibc) | the one-line installer, or `Row-Bot-X.Y.Z-Linux-x86_64.tar.gz` | about 790 MB |
 
-1. Download the latest Row-Bot release for Windows, macOS, or Linux.
-2. Run the installer or unpack the archive.
-3. Launch Row-Bot from the Start Menu, Applications, app launcher, or the provided command.
-4. Answer **How should Row-Bot think?** to choose your first model.
+Ollama is optional; you only need it for models that run on your own computer.
 
-The installed app starts a local Row-Bot process and opens the UI in a desktop window or browser, depending on your platform and launch preference. If the usual port is busy, Row-Bot chooses another local port.
+## Windows
+
+1. Download the installer and open it.
+2. It installs without questions and without administrator rights, for your Windows account only. When it finishes, Row-Bot opens.
+
+Row-Bot installs into `%LocalAppData%\Programs\Row-Bot` and adds a Start menu shortcut (and, the first time, a desktop shortcut). While it runs, its icon sits in the system tray.
+
+## macOS
+
+Row-Bot needs macOS 14 (Sonoma) or newer on a Mac with Apple silicon (M1 or later).
+
+1. Open the downloaded DMG and drag **Row-Bot** to **Applications**.
+2. Open Row-Bot from Applications. The first time, macOS asks whether to open an app downloaded from the internet: choose **Open**.
+
+If you open Row-Bot straight from the disk image or the Downloads folder, it offers **Move to Applications**. Choose it, so Row-Bot always starts from the same place. While it runs, Row-Bot sits in the menu bar. The first time it uses the microphone or camera, macOS asks you to allow Row-Bot.
+
+## Linux
+
+Install the latest release for your user with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/siddsachar/row-bot/main/installer/install-linux.sh | bash
+```
+
+It checks the download's SHA-256, installs under `~/.local/share/row-bot`, creates the `row-bot` command in `~/.local/bin` and adds Row-Bot to your app menu. Run `row-bot`; it opens in your browser. To install a specific release, add its version: `... | bash -s -- X.Y.Z`.
+
+Or install the tarball by hand:
+
+```bash
+tar -xzf Row-Bot-X.Y.Z-Linux-x86_64.tar.gz
+cd Row-Bot-X.Y.Z-Linux-x86_64
+./install.sh
+row-bot
+```
+
+A native window and tray icon need GTK or Qt and AppIndicator from your distribution; without them Row-Bot uses your browser.
+
+### Run As A Server
+
+`row-bot serve --port 8080` runs Row-Bot as an authenticated server, without a window or tray. Connect your browser with an invitation, as [Remote Access And Server Mode](/docs/operations/remote-access) explains.
+
+To keep it running with systemd, create `~/.config/systemd/user/row-bot.service`:
+
+```ini
+[Unit]
+Description=Row-Bot server
+
+[Service]
+ExecStart=%h/.local/bin/row-bot serve --port 8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Then start it, and let it keep running after you log out:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now row-bot
+loginctl enable-linger "$USER"
+```
+
+When Row-Bot restarts itself to install an update, it exits with code 75 and leaves the restart to systemd. Use `Restart=always`, or add `RestartForceExitStatus=75` to your own restart policy. `systemctl --user stop row-bot` installs an update that is ready, and the next start runs it.
+
+## Where Row-Bot Keeps Things
+
+| System | App files | Your data |
+| --- | --- | --- |
+| Windows | `%LocalAppData%\Programs\Row-Bot` | `%USERPROFILE%\.row-bot` |
+| macOS | `Row-Bot.app` in Applications, and updates in `~/Library/Application Support/Row-Bot` | `~/.row-bot` |
+| Linux | `~/.local/share/row-bot`, and the `row-bot` command in `~/.local/bin` | `~/.row-bot` |
+
+Your data folder holds conversations, memories, model and provider settings, workflows, designs, code folder records, documents, logs, skills, plugins, Buddy assets, channel settings and MCP settings. Keys and sign-ins are kept in Windows Credential Manager, the macOS Keychain or the Linux Secret Service. Updates, Repair and uninstalling never touch your data.
+
+Advanced users can set `ROW_BOT_DATA_DIR` before launch to use a separate data folder for testing or portable runs. Row-Bot then treats that folder as its data for the whole run.
+
+## Moving From 5.1
+
+Row-Bot 5.1 updates to 5.2 the way it always has, once, with the full installer. After that, updates download in the background.
+
+- **Windows:** 5.1 was installed for all users in Program Files. The 5.2 installer moves Row-Bot to your account and asks once for administrator approval to remove the old copy. If you decline, or your account isn't an administrator, Row-Bot 5.2 installs and opens anyway, and **Settings › Updates** offers **Remove the old Row-Bot** later. That button appears only in the Row-Bot desktop app on that computer, because Windows asks for approval on its own screen.
+- **macOS:** 5.1 opens the new DMG. Drag Row-Bot to Applications one last time and replace the old copy.
+- **Linux:** nothing to do; 5.1 installs 5.2 by itself.
+
+Your data, settings and sign-ins carry over. **Repair** can go back to an earlier 5.2 version, not to 5.1.
+
+## Uninstall
+
+- **Windows:** open Windows Settings › Apps › Installed apps (Apps & features on Windows 10), choose Row-Bot and **Uninstall**. It asks you to quit Row-Bot first if it is running, and removes `%LocalAppData%\Programs\Row-Bot`.
+- **macOS:** quit Row-Bot from the menu bar, drag Row-Bot from Applications to the Bin, and delete `~/Library/Application Support/Row-Bot`, which holds the updates it downloaded.
+- **Linux:** run `~/.local/share/row-bot/current/uninstall.sh`. It removes the app files, the `row-bot` command and the app menu entry.
+
+Uninstalling keeps your data folder, so reinstalling picks up where you left off. To remove your data too, delete the data folder after uninstalling (back it up first if you might come back), and remove Row-Bot's saved keys from the system's key store.
 
 ## Run From Source
 
@@ -28,16 +123,12 @@ Use the source path if you are developing Row-Bot or testing changes:
 
 `requirements.txt` is a generated pip export from `uv.lock` for installer compatibility. It is available as a fallback for environments that cannot use uv, but source dependency changes should be made in `pyproject.toml`.
 
-Source runs use the same local data concepts as the packaged app. Keep test data separate from personal data when experimenting.
-
-## Local Data Directory
-
-Row-Bot stores local app data under the active Row-Bot data directory. This includes conversations, memories, model/provider metadata, workflows, designs, code folder records, documents, logs, skills, plugins, Buddy assets, channel settings, and MCP settings.
-
-Advanced users can set `ROW_BOT_DATA_DIR` before launch to use a separate data directory for testing or portable runs. Do this before starting the app, and remember that Row-Bot will treat that folder as the active local data store for the whole process.
+Source runs use the same local data as the installed app and never update themselves. Keep test data separate from personal data when experimenting.
 
 ## After Installing
 
-Continue to [First Launch](/docs/getting-started/first-launch). You can finish optional setup later from the Setup Center and Settings.
+Continue to [First Launch](/docs/getting-started/first-launch): answer **How should Row-Bot think?** to choose your first model. You can finish optional setup later from the Setup Center and Settings.
+
+The installed app starts a local Row-Bot process and opens it in a desktop window or your browser, depending on your system. If the usual port is busy, Row-Bot chooses another local port.
 
 The standard desktop install stays on local loopback. To connect another trusted computer or phone, finish local setup first and then follow [Remote Access And Server Mode](/docs/operations/remote-access). For a headless or container deployment, read that guide before publishing a port or creating the first owner invitation.

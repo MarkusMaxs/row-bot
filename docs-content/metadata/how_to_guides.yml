@@ -191,3 +191,11 @@ guides:
     - frontend/src/features/settings/DataBackup.tsx
     - src/row_bot/data_paths.py
     - src/row_bot/updater.py
+  update-row-bot:
+    title: Update Row-Bot And Go Back With Repair
+    route: /docs/operations/updates
+    sources:
+    - frontend/src/features/settings/UpdateControls.tsx
+    - src/row_bot/updater.py
+    - src/row_bot/updates/engine.py
+    - src/row_bot/updates/external.py

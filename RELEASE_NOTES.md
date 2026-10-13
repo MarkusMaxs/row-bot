@@ -2,6 +2,65 @@
 
 ---
 
+## v5.2.0 - Draft
+
+<!-- Draft: each 5.2 lane adds its own sections. Name the release before it is cut. -->
+
+Row-Bot now keeps itself up to date in the background. It downloads only what
+changed, prepares the new version next to the one you are using, and switches
+to it in seconds when it restarts. Windows installs for your account only,
+without administrator rights, and every installer is smaller. Read **Upgrade
+Notes** below before upgrading from 5.1.
+
+### Installing And Updating
+
+- **Updates in the background** - about once a day Row-Bot checks for a new
+  release, downloads only what changed (typically about 10 MB rather than the
+  whole installer), checks every file, and prepares the new version while you
+  keep working. Nothing changes until Row-Bot restarts.
+- **Restart to update** - when the update is ready, the sidebar and the tray
+  say **Restart to update**, and Row-Bot switches in seconds. If something is
+  running, it can wait until Row-Bot is idle or until you quit; if you ignore
+  it, the update installs the next time you quit. Goals that were working
+  carry on after the restart.
+- **Your choice** - background checks and downloads are on by default. Turn
+  either off in Settings › Updates; first launch says where.
+- **Safe to go back** - if a new version doesn't start, Row-Bot goes back to
+  the previous one by itself and doesn't download that version again unless
+  you ask. **Repair** in Settings › Updates goes back on request.
+- **From any of your devices** - a phone or another computer signed in to your
+  Row-Bot can see what is downloading and restart into a ready update.
+- **Windows installs per user** - no administrator rights and no wizard pages,
+  into `%LocalAppData%\Programs\Row-Bot`, and Row-Bot opens when the installer
+  finishes. Updates no longer ask for administrator approval, and Row-Bot
+  starts again by itself after updating.
+- **Smaller downloads** - the Windows installer is about 420 MB (731 MB in
+  5.1), the macOS DMG about 960 MB (1.09 GB) and the Linux tarball about
+  790 MB (846 MB).
+- **Docker** - a container is updated by its host: Settings › Updates says so,
+  and the agent has no update tool there. Pull a newer image as before.
+- **What updates contact** - GitHub for the release, and, only when libraries
+  changed, the Python Package Index and PyTorch's download server. Every file
+  is checked against a published checksum. No telemetry.
+
+### Upgrade Notes
+
+- **From 5.1, once with the full installer** - 5.1 updates to 5.2 the way it
+  always has. After that, updates download in the background.
+- **Windows** - 5.2 moves Row-Bot from Program Files to your account and asks
+  once for administrator approval to remove the old copy. If you decline,
+  Row-Bot 5.2 installs and opens anyway, and Settings › Updates offers **Remove
+  the old Row-Bot** later, in the desktop app on that computer.
+- **macOS** - Row-Bot now needs macOS 14 (Sonoma) or newer on Apple silicon.
+  When 5.1 opens the new DMG, drag Row-Bot to Applications one last time.
+- **Linux** - nothing to do; 5.1 installs 5.2 by itself. To run Row-Bot under
+  systemd, use `Restart=always` (or `RestartForceExitStatus=75`), so it comes
+  back after restarting to update.
+- **Your data stays** - conversations, memory, settings and sign-ins carry
+  over. Repair can go back to an earlier 5.2 version, not to 5.1.
+
+---
+
 ## v5.1.0 - Apps & Skills, Fewer Approvals & Fixes From Real Use
 
 This release brings every way Row-Bot reaches another service into one place.
