@@ -146,6 +146,81 @@ exact prefix of a later one:
   stored before this decide on each request, as before. A child agent's answer
   or error relayed to its parent in a wake-up event is fenced the same way;
   Row-Bot's own lines around it are not.
+- **Older charts.** A chart result stored before charts moved to the result's
+  artifact (WP D2) keeps its Plotly figure in the checkpoint, where the
+  transcript reads it, and reaches the model as D2's short chart summary
+  (`agent._legacy_rendered_result_text`), the same bytes on every call.
+
+## Compaction
+
+Compaction does what Claude Code does (`models.context_reserves`,
+`agent._prepare_with_compaction`):
+
+1. **Clear first.** When a request reaches the compaction point, old tool output
+   is cleared in one jump (above). History is summarized only if the request is
+   still over.
+2. **Near the limit.** The compaction point leaves room for the reply and for
+   the summary. Usable input is the window minus a reply allowance (15% of a
+   window where input and output share it, 5% where the provider limits input
+   on its own, at most 20K tokens); compaction starts a summary allowance below
+   that (10% of the window, at most 13K tokens).
+
+   | Window | Before | Now |
+   |---|---|---|
+   | 32K local | 24,576 | 24,575 |
+   | 64K local | 49,152 | 49,151 |
+   | 128K | 98,304 | 98,411 |
+   | 200K | 150,000 | 167,000 (177,000 input-only) |
+   | 1M | 750,000 | 967,000 |
+
+   The user's context cap still sets the window.
+3. **A full snapshot after.** The next turn context after a summary is a full
+   snapshot, checked on every call, so a compaction made outside the pre-model
+   hook (an overflow retry) is followed by one too.
+4. **No thrashing.** A compaction that fails is not tried again for the same
+   input in the same turn: the marker
+   (`thread_meta.compaction_failure_json`) names the summary in force, a digest
+   of every older complete group, the model and the policy. A new turn, or new
+   input to age, gets one more attempt.
+
+**Calibrated estimate.** Requests are sized at about four characters a token
+(thinking blocks by their text, not their signatures), then scaled per provider
+and model by a moving average of the input the provider reported over the
+estimate (`row_bot.context_calibration`, kept in `usage.db`: counts only). The
+factor stays between 0.5 and 3.0, is learned only from requests of 1,000
+estimated tokens or more with a plausible ratio, and never on local Ollama,
+whose count leaves out what it had cached. Clearing, the emergency shrink and
+compaction all compare the calibrated estimate.
+
+**Overflow.** When a provider refuses a request as too long, the overflow
+raises the calibration (the request was at least the window), old output is
+cleared and the history compacted, and the call is retried once
+(`agent._AgentModelCall`, and the same in Chat Only). The provider refused the
+request before reading it, so the retry costs nothing extra. A second overflow
+stands.
+
+**Each mode its own summary.** Agent mode and Chat Only keep separate summaries
+(`summary_state_json`, `chat_only_summary_state_json`), so switching modes keeps
+both.
+
+**The splice.** The summary replaces everything before the first kept message,
+found by its id: preparation drops empty and reasoning-only turns and adds
+repair stubs, so a count of raw messages could cut the person's message or
+orphan a tool result. The kept part is normalized again on its own.
+
+**Thinking.** A thinking block's signature is bound to everything before it, so
+a summary unbinds the kept turns' blocks. The turns that were complete when the
+summary was made lose their thinking blocks in the request (text and tool
+calls stay). The turn then in progress keeps them: a tool round's thinking
+must stay, and the API's `drop_block` (WP A2b) covers it.
+
+**What checkpoints keep.** The provider request the pre-model hook prepares is
+never checkpointed (an untracked LangGraph channel); a model call resumed after
+a failure prepares it again, to the same bytes. A model's inline
+`<think>…</think>` text is stored as the answer's reasoning, where the
+transcript shows it, not as answer text sent back on every call (except to
+custom endpoints that replay reasoning). Images and other base64 data in stored
+messages stay where they are for now (see the A4b handoff).
 
 ## Provider Rules
 
@@ -287,6 +362,15 @@ and the emergency shrink only happens over the limit.
 `tests/subsystem/regression/test_tool_result_fields.py` covers the kept fields,
 and `tests/subsystem/agents/test_untrusted_tool_results.py` the fence (store
 time, older results, plugin results and wake-up events).
+
+`tests/subsystem/agents/test_compaction_trigger.py` covers the compaction point
+per window size, clearing before summarizing, the calibrated comparison and the
+snapshot after a summary; `tests/subsystem/agents/test_context_calibration.py`
+the calibration. `tests/subsystem/regression/test_compaction_regressions.py`
+covers the splice, the failure marker, the overflow retry, the summary per mode
+and thinking at compaction; `tests/subsystem/regression/test_checkpoint_hygiene.py`
+what checkpoints keep, a resumed call's request, inline thinking and older
+charts.
 
 `tests/subsystem/providers/test_prompt_cache_payloads.py` covers the breakpoints
 on the wire for each Claude route through the real request builders:

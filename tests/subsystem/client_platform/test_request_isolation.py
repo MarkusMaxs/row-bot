@@ -15,11 +15,10 @@ def test_f_r05_overflowed_request_does_not_quarantine_valid_same_model_input(mon
     monkeypatch.setattr(agent, "_validated_summary_for_inputs", lambda _: None)
     monkeypatch.setattr(agent, "_emit_context_event", lambda *_: None)
     monkeypatch.setattr(agent, "_persist_context_usage", lambda *_: None)
-    agent._CONTEXT_OVERFLOWED_MODELS.clear()
     agent._mark_context_overflow(first)
     prepared = agent._prepare_with_compaction(second)
     assert prepared.messages[-1].content == "valid synthetic input"
-    assert second.model_ref not in agent._CONTEXT_OVERFLOWED_MODELS
+    assert prepared.usage.status == "ready"
 
 
 @pytest.mark.parametrize("entry", ["normal", "resume_stream", "child", "child_resume", "channel"])
