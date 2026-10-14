@@ -4,6 +4,7 @@ import {
   Brain,
   Calculator,
   Calendar,
+  Camera,
   ChartColumn,
   Clapperboard,
   Clock,
@@ -24,7 +25,9 @@ import {
   Palette,
   Plug,
   Search,
+  Smartphone,
   Terminal,
+  Video,
   Wrench,
   Zap,
   type LucideIcon,
@@ -75,6 +78,13 @@ const EXACT: Record<string, Verb> = {
   browser_snapshot: verb('Read the browser', 'Reading the browser', Globe),
   browser_back: verb('Went back', 'Going back', Globe),
   browser_tab: verb('Switched tab', 'Switching tab', Globe),
+  browser_screenshot: verb('Took a screenshot', 'Taking a screenshot', Camera),
+  browser_viewport: verb(
+    'Changed the page size',
+    'Changing the page size',
+    Smartphone,
+  ),
+  browser_record: verb('Recorded the browser', 'Recording the browser', Video),
   computer_use: verb('Used the computer', 'Using the computer', Monitor),
   wikipedia: verb('Searched Wikipedia', 'Searching Wikipedia', BookOpen),
   arxiv: verb('Searched arXiv', 'Searching arXiv', BookOpen),
@@ -272,7 +282,8 @@ function bareName(name: string) {
 }
 
 function describe(name: string): Verb | null {
-  const key = bareName(name).toLowerCase();
+  // Settled steps carry the canonical name ("Browser Navigate" for browser_navigate).
+  const key = bareName(name).toLowerCase().replace(/\s+/g, '_');
   if (Object.hasOwn(EXACT, key)) return EXACT[key];
   // Workspace file tools mirror the plain ones: workspace_write_file.
   const inner = key.replace(/^workspace_/, '');

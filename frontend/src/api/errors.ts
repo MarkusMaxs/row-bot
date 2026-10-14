@@ -1700,6 +1700,11 @@ const CATALOG: Record<string, Entry> = {
     RETRY,
   ],
   process_unavailable: ['That command is no longer running.', 'none'],
+  recording_unavailable: ['That recording is no longer listed.', 'none'],
+  local_address_unavailable: [
+    'That address was already removed or ran out.',
+    'none',
+  ],
   runtime_installation_command_unavailable: [
     "That install action isn't available.",
     'none',

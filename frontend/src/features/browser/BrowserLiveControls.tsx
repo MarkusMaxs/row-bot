@@ -9,6 +9,7 @@ import {
   ScanEye,
 } from 'lucide-react';
 import type { BrowserPreview } from '../../api/types';
+import { LocalAddresses, type LocalAddressesProps } from './LocalAddresses';
 import {
   Button,
   CompactAction,
@@ -175,6 +176,8 @@ export type BrowserLiveControlsProps = {
     command: BrowserCommand,
     review: BrowserReview,
   ) => Promise<BrowserReceipt>;
+  /** The local addresses this conversation's browser may open, and Remove (F4). */
+  localAddresses?: Omit<LocalAddressesProps, 'conversationId'>;
 };
 
 const actionLabels: Record<BrowserAction, string> = {
@@ -277,6 +280,7 @@ export default function BrowserLiveControls({
   loadPreview,
   review,
   execute,
+  localAddresses,
 }: BrowserLiveControlsProps) {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
   const [url, setUrl] = useState('');
@@ -584,6 +588,14 @@ export default function BrowserLiveControls({
           Open address
         </Button>
       </div>
+
+      {localAddresses && (
+        <LocalAddresses
+          conversationId={conversationId}
+          load={localAddresses.load}
+          remove={localAddresses.remove}
+        />
+      )}
 
       <div
         className="action-cluster capability-section"

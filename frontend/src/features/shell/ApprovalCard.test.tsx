@@ -320,3 +320,29 @@ it('offers reviewed Auto for this chat under Ask, and approves', async () => {
     '3',
   );
 });
+
+it('asks the tool’s own question for a local address in one chat (F4)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'Browser Navigate',
+    question: "Allow Row-Bot's browser to open localhost:5173 in this chat?",
+    reason:
+      'localhost:5173 is on this computer. Allowing it lets Row-Bot’s browser open only this address, only in this chat, for up to an hour. You can remove it sooner in the browser panel.',
+    safe_argument_summary: '{"address": "localhost:5173"}',
+  });
+  await renderCard();
+
+  const card = screen.getByRole('complementary', {
+    name: "Approval required: Allow Row-Bot's browser to open localhost:5173 in this chat?",
+  });
+  expect(
+    within(card).getByText(
+      "Allow Row-Bot's browser to open localhost:5173 in this chat?",
+    ),
+  ).toBeVisible();
+  expect(card).toHaveTextContent('only this address, only in this chat');
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  expect(open.mock.calls[0][0].title).toBe(
+    "Allow Row-Bot's browser to open localhost:5173 in this chat?",
+  );
+});
