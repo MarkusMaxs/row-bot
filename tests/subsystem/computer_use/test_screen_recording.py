@@ -169,3 +169,12 @@ def test_the_recording_tools_stay_out_of_the_models_and_generic_paths(screen):
     with pytest.raises(PermissionError):
         client.call_recording("start_recording", {"output_dir": str(Path.cwd()), "record_video": False})
     assert screen.transport.calls == []
+
+
+@pytest.mark.parametrize("context", [{"runtime_surface": "channel"}, {"runtime_surface": "workflow"},
+                                     {"background_workflow": True}, {"runtime_surface": "agent"}])
+def test_only_an_interactive_chat_on_this_computer_records_the_screen(screen, monkeypatch, context):
+    monkeypatch.setattr("row_bot.agent.get_active_runtime_context", lambda: dict(context))
+
+    assert _computer("start_recording").startswith("Recording the screen works only in a chat in Row-Bot")
+    assert screen.asked == [] and screen.transport.calls == []

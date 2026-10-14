@@ -118,6 +118,14 @@ def _screen_recording(action: str, minutes: int) -> str:
     running = recordings.active_for(conversation, "screen")
     if running is not None:
         return recordings.summary(running)
+    from row_bot.computer_use.service import ComputerUseError, get_computer_use_service
+
+    try:
+        # The same boundary as every Computer Use session: an interactive chat on this computer only.
+        get_computer_use_service()._validate_local_interactive()
+    except ComputerUseError:
+        return ("Recording the screen works only in a chat in Row-Bot on this computer, not from a channel, "
+                "a workflow or a helper agent.")
     problem = setup_problem()
     if problem:
         return problem
