@@ -11,7 +11,8 @@ import type {
   AccountAuthSnapshot,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { useOnThisComputer, useRuntime } from '../../runtime';
+import { safeExternalUrl } from '../../platform/types';
+import { useRuntime } from '../../runtime';
 import { Button } from '../../ui/primitives';
 
 type Account = 'google' | 'x';
@@ -23,6 +24,8 @@ type Owner = {
   ) => Promise<AccountAuthReceipt>;
   receipt: (account: Account, commandId: string) => Promise<AccountAuthReceipt>;
   cancel: (account: Account, commandId: string) => Promise<AccountAuthReceipt>;
+  /** Opens the provider's sign-in page in this device's browser. */
+  open?: (url: string) => void;
 };
 
 function pendingKey(account: Account) {
@@ -34,18 +37,41 @@ function saved(account: Account): string {
 }
 const NAMES: Record<Account, string> = { google: 'Google', x: 'X' };
 
-/** Why another device doesn't offer the browser sign-in. */
-export const SIGN_IN_ON_THIS_COMPUTER =
-  'Signing in opens a browser on the computer Row-Bot runs on and returns to it there, so for now it’s done in the Row-Bot desktop app on that computer. Check and Disconnect work from here.';
+/** The provider's sign-in page from a receipt: an https address, or ''. */
+function signInPage(receipt: AccountAuthReceipt): string {
+  const url = safeExternalUrl(receipt.authorization_url ?? '');
+  return receipt.phase === 'running' && url?.startsWith('https://') ? url : '';
+}
+
+/**
+ * Why this device can't start the account's sign-in, in plain words ('' when
+ * it can). The desktop app on the computer Row-Bot runs on signs in through
+ * that computer's browser; another device signs in through Row-Bot's one
+ * public HTTPS address, which the provider must list.
+ */
+export function signInBlocked(snapshot: AccountAuthSnapshot | null): string {
+  if (!snapshot || snapshot.sign_in !== 'unavailable') return '';
+  switch (snapshot.sign_in_blocker) {
+    case 'desktop_client':
+      return 'Your Google client is a Desktop app, which returns only to the computer Row-Bot runs on. To sign in from this device, create a Web application client as the guide shows and choose its file. Check and Disconnect work from here.';
+    case 'redirect_not_listed':
+      return 'Your Google client doesn’t list the redirect address the guide shows. Add it to the client in Google Cloud, download the file again and choose it. Check and Disconnect work from here.';
+    default:
+      return 'Signing in from this device returns to Row-Bot’s public HTTPS address, and Row-Bot doesn’t have one yet: add it in Settings › Devices & remote access, or sign in from the Row-Bot desktop app on the computer it runs on. Check and Disconnect work from here.';
+  }
+}
 
 /** A Google or X account's actions, for its row on the Accounts page (B263). */
 export type AccountAuth = {
   snapshot: AccountAuthSnapshot | null;
   /**
-   * Sign-in opens the browser of the computer Row-Bot runs on and returns to
-   * a loopback address there, so only the desktop app there offers it.
+   * Whether this device can start a sign-in (the server says how: the
+   * desktop app here through this computer's browser, or this device's own
+   * browser through Row-Bot's public address). False until the account loads.
    */
-  onThisComputer: boolean;
+  canSignIn: boolean;
+  /** Why it can't, in a sentence; '' when it can or isn't known yet. */
+  blocked: string;
   /** An action is running or its outcome is still being checked. */
   locked: boolean;
   check: () => void;
@@ -61,13 +87,13 @@ export type AccountAuth = {
 /**
  * A Google or X account's reviewed sign-in actions: Check, sign in,
  * disconnect and the Google sign-in file. Nothing is refreshed or contacted
- * until one is chosen; a sign-in still running survives a reload.
+ * until one is chosen; a sign-in still running survives a reload. A sign-in
+ * from another device opens the provider's page in this device's browser.
  */
 export function useAccountAuth(
   account: Account,
   owner: Owner,
   onChanged?: () => void,
-  onThisComputer = true,
 ): AccountAuth {
   const changed = useRef(onChanged);
   useEffect(() => {
@@ -77,6 +103,8 @@ export function useAccountAuth(
   const initialPending = useRef(saved(account));
   const [pending, setPending] = useState(initialPending.current);
   const [phase, setPhase] = useState<AccountAuthReceipt['phase'] | ''>('');
+  /** The provider's page while a sign-in through Row-Bot's public address waits. */
+  const [page, setPage] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -108,6 +136,7 @@ export function useAccountAuth(
         if (stopped || result.command_id !== pending) return;
         setSnapshot(result.snapshot);
         setPhase(result.phase);
+        setPage(signInPage(result));
         setNotice(result.message);
         setError('');
         if (result.phase === 'running' || result.phase === 'cancel_requested') {
@@ -160,6 +189,10 @@ export function useAccountAuth(
         throw new Error('Account receipt did not match this action');
       setSnapshot(result.snapshot);
       setPhase(result.phase);
+      const url = signInPage(result);
+      setPage(url);
+      // Its link below stays for a browser that blocks the page opening.
+      if (url) owner.open?.(url);
       setNotice(result.message);
       if (result.phase !== 'running' && result.phase !== 'cancel_requested') {
         sessionStorage.removeItem(pendingKey(account));
@@ -175,6 +208,8 @@ export function useAccountAuth(
           'account_credentials_invalid',
           'account_credentials_required',
           'account_confirmation_required',
+          'account_callback_unavailable',
+          'account_redirect_mismatch',
         ].includes(issue.code)
       ) {
         sessionStorage.removeItem(pendingKey(account));
@@ -206,6 +241,7 @@ export function useAccountAuth(
     try {
       const result = await owner.cancel(account, pending);
       setPhase(result.phase);
+      setPage(signInPage(result));
       setNotice(result.message);
     } catch (cause) {
       setError(clientError(cause).message);
@@ -252,12 +288,24 @@ export function useAccountAuth(
       {pending && (
         <div role="status" className="action-cluster">
           <span>
-            {phase === 'running'
-              ? `Finish signing in to ${name} in your browser.`
-              : phase === 'cancel_requested'
-                ? 'Stopping the sign-in…'
-                : 'Checking what happened to the last action…'}
+            {phase === 'running' && page
+              ? `Finish signing in to ${name} in the page that opened. This updates by itself.`
+              : phase === 'running'
+                ? `Finish signing in to ${name} in your browser.`
+                : phase === 'cancel_requested'
+                  ? 'Stopping the sign-in…'
+                  : 'Checking what happened to the last action…'}
           </span>
+          {phase === 'running' && page && (
+            <a
+              className="button small"
+              href={page}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open {name}’s sign-in page
+            </a>
+          )}
           {(phase === 'running' || phase === 'cancel_requested') && (
             <Button
               className="small"
@@ -276,6 +324,7 @@ export function useAccountAuth(
                 (result) => {
                   setSnapshot(result.snapshot);
                   setPhase(result.phase);
+                  setPage(signInPage(result));
                   setNotice(result.message);
                   setMissingReceipt(false);
                   if (!['running', 'cancel_requested'].includes(result.phase)) {
@@ -316,7 +365,9 @@ export function useAccountAuth(
   );
   return {
     snapshot,
-    onThisComputer,
+    canSignIn:
+      snapshot?.sign_in === 'this_computer' || snapshot?.sign_in === 'link',
+    blocked: signInBlocked(snapshot),
     locked: busy || Boolean(pending),
     check: () => void send('check'),
     start: () => void send('start'),
@@ -337,8 +388,7 @@ export default function ConnectedAccountAuth({
   onChanged?: () => void;
   children: (auth: AccountAuth) => ReactNode;
 }) {
-  const { controller } = useRuntime();
-  const onThisComputer = useOnThisComputer();
+  const { controller, platform } = useRuntime();
   const owner = useRef<Owner>({
     load: (which) => controller.accountAuth(which),
     send: (which, command) => controller.accountAuthCommand(which, command),
@@ -346,12 +396,8 @@ export default function ConnectedAccountAuth({
       controller.accountAuthReceipt(which, commandId),
     cancel: (which, commandId) =>
       controller.cancelAccountAuth(which, commandId),
+    open: (url) => void platform.openExternal?.(url),
   });
-  const auth = useAccountAuth(
-    account,
-    owner.current,
-    onChanged,
-    onThisComputer,
-  );
+  const auth = useAccountAuth(account, owner.current, onChanged);
   return children(auth);
 }

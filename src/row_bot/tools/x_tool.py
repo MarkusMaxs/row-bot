@@ -208,6 +208,53 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
         pass  # Suppress HTTP access log noise
 
 
+def _authorization_url(client_id: str, redirect_uri: str, state: str, code_challenge: str) -> str:
+    """X's sign-in page for one PKCE sign-in that returns to ``redirect_uri``."""
+    auth_params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": _SCOPES,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    return f"{_AUTH_URL}?{urlencode(auth_params)}"
+
+
+def _exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str,
+                   code_verifier: str, *, http=None) -> dict:
+    """Exchange a sign-in's code for X's tokens (``http``: an httpx client; default, httpx itself)."""
+    import httpx
+
+    resp = (http or httpx).post(
+        _TOKEN_URL,
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": code_verifier,
+        },
+        auth=(client_id, client_secret),
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        body = resp.text
+        logger.error("X token exchange failed (HTTP %d): %s", resp.status_code, body)
+        # Provide a human-friendly error for common cases
+        if resp.status_code == 400:
+            raise RuntimeError(
+                "X token exchange failed (400 Bad Request). "
+                "This usually means the Client ID or Client Secret is wrong, "
+                "or the callback URL doesn't match. Check your X Developer Portal settings."
+            )
+        raise RuntimeError(f"X token exchange failed (HTTP {resp.status_code}): {body}")
+    token = resp.json()
+    token["expires_at"] = time.time() + token.get("expires_in", 7200)
+    return token
+
+
 def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True) -> dict:
     """Run the full OAuth 2.0 PKCE flow.
 
@@ -230,7 +277,6 @@ def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True)
     dict
         Token dictionary with access_token, refresh_token, expires_at.
     """
-    import httpx
     import webbrowser
     import base64
 
@@ -259,17 +305,7 @@ def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True)
             f"Is another process using it? Error: {exc}"
         ) from exc
 
-    # Build the authorization URL
-    auth_params = {
-        "response_type": "code",
-        "client_id": client_id,
-        "redirect_uri": _OAUTH_REDIRECT_URI,
-        "scope": _SCOPES,
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
-    auth_url = f"{_AUTH_URL}?{urlencode(auth_params)}"
+    auth_url = _authorization_url(client_id, _OAUTH_REDIRECT_URI, state, code_challenge)
 
     # Open browser
     logger.info("Opening browser for X authentication...")
@@ -288,32 +324,8 @@ def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True)
     if not _OAuthCallbackHandler.auth_code:
         raise RuntimeError("X authentication timed out — no callback received.")
 
-    # Exchange code for tokens
-    resp = httpx.post(
-        _TOKEN_URL,
-        data={
-            "grant_type": "authorization_code",
-            "code": _OAuthCallbackHandler.auth_code,
-            "redirect_uri": _OAUTH_REDIRECT_URI,
-            "client_id": client_id,
-            "code_verifier": code_verifier,
-        },
-        auth=(client_id, client_secret),
-        timeout=15,
-    )
-    if resp.status_code != 200:
-        body = resp.text
-        logger.error("X token exchange failed (HTTP %d): %s", resp.status_code, body)
-        # Provide a human-friendly error for common cases
-        if resp.status_code == 400:
-            raise RuntimeError(
-                "X token exchange failed (400 Bad Request). "
-                "This usually means the Client ID or Client Secret is wrong, "
-                "or the callback URL doesn't match. Check your X Developer Portal settings."
-            )
-        raise RuntimeError(f"X token exchange failed (HTTP {resp.status_code}): {body}")
-    token = resp.json()
-    token["expires_at"] = time.time() + token.get("expires_in", 7200)
+    token = _exchange_code(client_id, client_secret, _OAuthCallbackHandler.auth_code,
+                           _OAUTH_REDIRECT_URI, code_verifier)
     if persist:
         _save_token(token)
     return token

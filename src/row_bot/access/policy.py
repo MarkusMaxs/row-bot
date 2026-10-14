@@ -51,10 +51,17 @@ PUBLIC_HTTP_ROUTES: frozenset[tuple[str, str]] = frozenset(
     }
 )
 # Callers with no Row-Bot session that prove themselves to the route instead:
-# Twilio signs every inbound SMS, and each plugin webhook handler checks its
-# service's own credentials. The plugin id and name follow plugins.webhooks.
+# Twilio signs every inbound SMS, each plugin webhook handler checks its
+# service's own credentials, and an OAuth callback (MCP, Google, X) brings
+# the one-time state of the sign-in waiting for it. The plugin id and name
+# follow plugins.webhooks.
+OAUTH_CALLBACK_PATHS: tuple[str, ...] = (
+    "/api/v1/settings/mcp/auth/callback",
+    "/api/v1/accounts/google/auth/callback",
+    "/api/v1/accounts/x/auth/callback",
+)
 ROUTE_AUTHENTICATED_HTTP_ROUTES: frozenset[tuple[str, str]] = frozenset(
-    {("POST", "/sms"), ("GET", "/api/v1/settings/mcp/auth/callback")}
+    {("POST", "/sms"), *(("GET", path) for path in OAUTH_CALLBACK_PATHS)}
 )
 PLUGIN_WEBHOOK_PATH = re.compile(
     r"/plugin-webhooks/[a-z][a-z0-9\-]{1,63}/[a-z0-9][a-z0-9_-]{0,63}"

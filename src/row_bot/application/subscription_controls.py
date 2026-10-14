@@ -402,6 +402,11 @@ class SubscriptionFlows:
         elif flow.provider_id == "claude_subscription":
             flow.flow = module.start_claude_subscription_oauth_flow()
         else:
+            # Loopback from every device, unlike Google and X (client_account_oauth): Row-Bot's
+            # shared xAI client redirects to 127.0.0.1, and only xAI registers that client's
+            # addresses, so no installation's own public callback can be added to it. Another
+            # device finishes by pasting the address its browser ends on ("submit"); the flow's
+            # state and PKCE verifier bind that code to this sign-in.
             flow.method = "loopback"
             flow.flow = module.start_xai_oauth_flow(http_client=flow.client, persist_discovery=False)
         guard()

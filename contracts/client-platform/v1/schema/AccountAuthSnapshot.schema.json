@@ -23,6 +23,32 @@
       "title": "Schema Version",
       "type": "integer"
     },
+    "sign_in": {
+      "enum": [
+        "this_computer",
+        "link",
+        "unavailable"
+      ],
+      "title": "Sign In",
+      "type": "string"
+    },
+    "sign_in_blocker": {
+      "anyOf": [
+        {
+          "enum": [
+            "public_address_required",
+            "desktop_client",
+            "redirect_not_listed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sign In Blocker"
+    },
     "state": {
       "enum": [
         "not_configured",
@@ -50,7 +76,8 @@
     "revision",
     "configured",
     "state",
-    "token_files"
+    "token_files",
+    "sign_in"
   ],
   "title": "AccountAuthSnapshot",
   "type": "object"

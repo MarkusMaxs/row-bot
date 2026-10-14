@@ -1,12 +1,14 @@
 {
   "codes": {
     "account_busy": 429,
+    "account_callback_unavailable": 409,
     "account_changed": 409,
     "account_command_conflict": 409,
     "account_confirmation_required": 409,
     "account_credentials_invalid": 422,
     "account_credentials_required": 409,
     "account_receipt_missing": 404,
+    "account_redirect_mismatch": 422,
     "action_denied": 403,
     "action_unavailable": 404,
     "agent_resume_unavailable": 409,
