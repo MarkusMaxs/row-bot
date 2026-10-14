@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-import importlib
 import subprocess
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in ["threads", "developer.storage", "developer.git", "developer.sandbox"]:
-        sys.modules.pop(name, None)
-    import row_bot.threads as threads
-    import row_bot.developer.storage as storage
-    import row_bot.developer.git as dev_git
-    import row_bot.developer.sandbox as sandbox
+def _fresh_modules(tmp_path, reload_for_data_dir):
 
     return (
-        importlib.reload(threads),
-        importlib.reload(storage),
-        importlib.reload(dev_git),
-        importlib.reload(sandbox),
+        reload_for_data_dir(tmp_path / "data", "row_bot.threads")[0],
+        reload_for_data_dir(tmp_path / "data", "row_bot.developer.storage")[0],
+        reload_for_data_dir(tmp_path / "data", "row_bot.developer.git")[0],
+        reload_for_data_dir(tmp_path / "data", "row_bot.developer.sandbox")[0],
     )
 
 
@@ -41,8 +32,8 @@ def _init_repo(repo):
     _git(repo, "commit", "-m", "init")
 
 
-def test_developer_approval_policy_modes(tmp_path, monkeypatch):
-    _threads, _storage, _dev_git, sandbox = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_approval_policy_modes(tmp_path, reload_for_data_dir):
+    _threads, _storage, _dev_git, sandbox = _fresh_modules(tmp_path, reload_for_data_dir)
 
     assert sandbox.decide_action("read_only", "read").decision == "allow"
     assert sandbox.decide_action("read_only", "edit").decision == "block"
@@ -56,8 +47,8 @@ def test_developer_approval_policy_modes(tmp_path, monkeypatch):
     assert sandbox.action_needs_explicit_user_intent("git_push") is True
 
 
-def test_developer_workspace_approval_mode_persists(tmp_path, monkeypatch):
-    _threads, storage, _dev_git, _sandbox = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_workspace_approval_mode_persists(tmp_path, reload_for_data_dir):
+    _threads, storage, _dev_git, _sandbox = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -68,8 +59,8 @@ def test_developer_workspace_approval_mode_persists(tmp_path, monkeypatch):
     assert storage.get_workspace(workspace.id).approval_mode == "allow_all"
 
 
-def test_developer_git_status_and_branch_creation(tmp_path, monkeypatch):
-    _threads, _storage, dev_git, _sandbox = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_git_status_and_branch_creation(tmp_path, reload_for_data_dir):
+    _threads, _storage, dev_git, _sandbox = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     _init_repo(repo)
 
@@ -85,8 +76,8 @@ def test_developer_git_status_and_branch_creation(tmp_path, monkeypatch):
     assert branch_status.branch == "feat/example-branch"
 
 
-def test_developer_worktree_requires_explicit_parent(tmp_path, monkeypatch):
-    _threads, _storage, dev_git, _sandbox = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_worktree_requires_explicit_parent(tmp_path, reload_for_data_dir):
+    _threads, _storage, dev_git, _sandbox = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     _init_repo(repo)
 

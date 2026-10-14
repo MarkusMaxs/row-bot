@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 LEGACY_DATA_DIR_ENV = "THOTH_DATA_DIR"
 
 
-def test_data_path_helpers_default_to_row_bot_target(tmp_path, monkeypatch):
+def test_data_path_helpers_default_to_row_bot_target(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.brand as brand
     import row_bot.data_paths as data_paths
 
-    data_paths = importlib.reload(data_paths)
+    (data_paths,) = reload_for_data_dir(None, "row_bot.data_paths")
 
     monkeypatch.delenv("ROW_BOT_DATA_DIR", raising=False)
     monkeypatch.delenv(LEGACY_DATA_DIR_ENV, raising=False)
@@ -24,7 +23,7 @@ def test_data_path_helpers_default_to_row_bot_target(tmp_path, monkeypatch):
     assert target == tmp_path / ".row-bot"
 
 
-def test_row_bot_data_dir_ignores_legacy_runtime_env(tmp_path, monkeypatch):
+def test_row_bot_data_dir_ignores_legacy_runtime_env(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.data_paths as data_paths
 
     target = tmp_path / "target"
@@ -32,7 +31,7 @@ def test_row_bot_data_dir_ignores_legacy_runtime_env(tmp_path, monkeypatch):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(target))
     monkeypatch.setenv(LEGACY_DATA_DIR_ENV, str(legacy))
 
-    data_paths = importlib.reload(data_paths)
+    (data_paths,) = reload_for_data_dir(target, "row_bot.data_paths")
 
     assert data_paths.get_row_bot_data_dir(create=False) == target
     assert data_paths.get_row_bot_target_data_dir(create=False) == target

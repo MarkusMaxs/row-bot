@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from types import SimpleNamespace
 
 import pytest
 
 
-def _fresh_status_modules(tmp_path, monkeypatch):
+def _fresh_status_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    _tasks, *modules = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
@@ -19,25 +17,8 @@ def _fresh_status_modules(tmp_path, monkeypatch):
         "row_bot.goals",
         "row_bot.agent",
         "row_bot.tools.row_bot_status_tool",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_profiles as agent_profiles
-    import row_bot.agent_runs as agent_runs
-    import row_bot.goals as goals
-    import row_bot.agent as agent
-    import row_bot.tools.row_bot_status_tool as row_bot_status_tool
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_profiles = importlib.reload(agent_profiles)
-    agent_runs = importlib.reload(agent_runs)
-    goals = importlib.reload(goals)
-    agent = importlib.reload(agent)
-    row_bot_status_tool = importlib.reload(row_bot_status_tool)
-    return threads, agent_profiles, agent_runs, goals, agent, row_bot_status_tool
+    )
+    return tuple(modules)
 
 
 def _isolated_model_choices(tmp_path, monkeypatch):
@@ -61,10 +42,10 @@ def _chat_snapshot() -> dict:
 
 
 @pytest.mark.slow
-def test_row_bot_status_reports_agents_profiles_and_goals(tmp_path, monkeypatch):
+def test_row_bot_status_reports_agents_profiles_and_goals(tmp_path, reload_for_data_dir):
     threads, profiles, agent_runs, goals, agent, status_tool = _fresh_status_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Status thread")
     threads._set_thread_agent_profile(thread_id, "quality_reviewer")
@@ -159,8 +140,8 @@ def test_row_bot_status_reports_agents_profiles_and_goals(tmp_path, monkeypatch)
     assert "Default turn limit: none" in goal_status
 
 
-def test_row_bot_status_reports_plugin_tools_and_stale_plugins(tmp_path, monkeypatch):
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+def test_row_bot_status_reports_plugin_tools_and_stale_plugins(tmp_path, monkeypatch, reload_for_data_dir):
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
 
     from row_bot.plugins import loader as plugin_loader
     from row_bot.plugins import registry as plugin_registry
@@ -209,8 +190,8 @@ def test_row_bot_status_reports_plugin_tools_and_stale_plugins(tmp_path, monkeyp
 
 
 @pytest.mark.slow
-def test_row_bot_status_agents_goals_empty_state_and_overview(tmp_path, monkeypatch):
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+def test_row_bot_status_agents_goals_empty_state_and_overview(tmp_path, reload_for_data_dir):
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
 
     agents = status_tool._row_bot_status("agents")
     assert "No durable Agent Runs recorded." in agents
@@ -227,10 +208,10 @@ def test_row_bot_status_agents_goals_empty_state_and_overview(tmp_path, monkeypa
     assert "**Goals**" in overview
 
 
-def test_row_bot_status_tools_distinguishes_global_and_effective_profile_scope(tmp_path, monkeypatch):
+def test_row_bot_status_tools_distinguishes_global_and_effective_profile_scope(tmp_path, reload_for_data_dir):
     threads, _profiles, _agent_runs, _goals, agent, status_tool = _fresh_status_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Browser status thread")
     threads._set_thread_agent_profile(thread_id, "web_ui_checker")
@@ -258,12 +239,12 @@ def test_row_bot_status_tools_distinguishes_global_and_effective_profile_scope(t
 @pytest.mark.parametrize("runtime_surface", ["agent_child", "agent_child_resume"])
 def test_row_bot_status_tools_explains_separate_bounded_child_skill_bridges(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
     runtime_surface,
 ):
     threads, _profiles, _agent_runs, _goals, agent, status_tool = _fresh_status_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Restricted child status")
     threads._set_thread_agent_profile(thread_id, "web_ui_checker")
@@ -284,8 +265,8 @@ def test_row_bot_status_tools_explains_separate_bounded_child_skill_bridges(
     assert "profile, approval, or workspace boundaries" in tools
 
 
-def test_row_bot_status_tools_keeps_global_catalog_without_profile_allowlist(tmp_path, monkeypatch):
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+def test_row_bot_status_tools_keeps_global_catalog_without_profile_allowlist(tmp_path, reload_for_data_dir):
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
 
     tools = status_tool._row_bot_status("tools")
 
@@ -296,10 +277,10 @@ def test_row_bot_status_tools_keeps_global_catalog_without_profile_allowlist(tmp
 
 
 @pytest.mark.slow
-def test_row_bot_status_tools_reports_inherited_profile_scope(tmp_path, monkeypatch):
+def test_row_bot_status_tools_reports_inherited_profile_scope(tmp_path, reload_for_data_dir):
     threads, _profiles, _agent_runs, _goals, agent, status_tool = _fresh_status_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Worker status thread")
     threads._set_thread_agent_profile(thread_id, "worker")
@@ -319,7 +300,7 @@ def test_row_bot_status_tools_reports_inherited_profile_scope(tmp_path, monkeypa
     assert "Active profile tool mode: inherited enabled tools" in agent_profiles
 
 
-def test_row_bot_status_model_setting_uses_strict_canonical_refs(tmp_path, monkeypatch):
+def test_row_bot_status_model_setting_uses_strict_canonical_refs(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "gpt-4o-mini",
@@ -327,7 +308,7 @@ def test_row_bot_status_model_setting_uses_strict_canonical_refs(tmp_path, monke
         display_name="Fast OpenAI",
         capabilities_snapshot=_chat_snapshot(),
     )
-    *_modules, agent, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    *_modules, agent, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     captured = {}
 
     monkeypatch.setattr(status_tool, "_approval_gate_bool", lambda *_args, **_kwargs: True)
@@ -341,7 +322,7 @@ def test_row_bot_status_model_setting_uses_strict_canonical_refs(tmp_path, monke
     assert captured["cache_cleared"] is True
 
 
-def test_row_bot_status_thread_model_setting_writes_thread_override(tmp_path, monkeypatch):
+def test_row_bot_status_thread_model_setting_writes_thread_override(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "gpt-4o-mini",
@@ -349,7 +330,7 @@ def test_row_bot_status_thread_model_setting_writes_thread_override(tmp_path, mo
         display_name="Fast OpenAI",
         capabilities_snapshot=_chat_snapshot(),
     )
-    threads, *_modules, agent, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    threads, *_modules, agent, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Thread model scope")
     captured = {}
 
@@ -368,7 +349,7 @@ def test_row_bot_status_thread_model_setting_writes_thread_override(tmp_path, mo
     assert captured["cache_cleared"] is True
 
 
-def test_row_bot_status_thread_model_default_clears_override(tmp_path, monkeypatch):
+def test_row_bot_status_thread_model_default_clears_override(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "gpt-4o-mini",
@@ -376,7 +357,7 @@ def test_row_bot_status_thread_model_default_clears_override(tmp_path, monkeypat
         display_name="Fast OpenAI",
         capabilities_snapshot=_chat_snapshot(),
     )
-    threads, *_modules, agent, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    threads, *_modules, agent, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Thread model clear")
     threads._set_thread_model_override(thread_id, "model:openai:gpt-4o-mini")
     captured = {}
@@ -395,7 +376,7 @@ def test_row_bot_status_thread_model_default_clears_override(tmp_path, monkeypat
     assert captured["cache_cleared"] is True
 
 
-def test_row_bot_status_default_model_setting_changes_global_default(tmp_path, monkeypatch):
+def test_row_bot_status_default_model_setting_changes_global_default(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "gpt-4o-mini",
@@ -403,7 +384,7 @@ def test_row_bot_status_default_model_setting_changes_global_default(tmp_path, m
         display_name="Fast OpenAI",
         capabilities_snapshot=_chat_snapshot(),
     )
-    *_modules, agent, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    *_modules, agent, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     captured = {}
 
     monkeypatch.setattr(status_tool, "_approval_gate_bool", lambda *_args, **_kwargs: True)
@@ -417,7 +398,7 @@ def test_row_bot_status_default_model_setting_changes_global_default(tmp_path, m
     assert captured["cache_cleared"] is True
 
 
-def test_row_bot_status_legacy_model_refuses_threaded_ambiguity(tmp_path, monkeypatch):
+def test_row_bot_status_legacy_model_refuses_threaded_ambiguity(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "gpt-4o-mini",
@@ -425,7 +406,7 @@ def test_row_bot_status_legacy_model_refuses_threaded_ambiguity(tmp_path, monkey
         display_name="Fast OpenAI",
         capabilities_snapshot=_chat_snapshot(),
     )
-    threads, *_modules, agent, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    threads, *_modules, agent, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Ambiguous model scope")
 
     agent._set_active_runtime_context(thread_id=thread_id, runtime_surface="channel")
@@ -440,7 +421,7 @@ def test_row_bot_status_legacy_model_refuses_threaded_ambiguity(tmp_path, monkey
     assert threads._get_thread_model_override(thread_id) == ""
 
 
-def test_row_bot_status_model_lists_pinned_brain_choices(tmp_path, monkeypatch):
+def test_row_bot_status_model_lists_pinned_brain_choices(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "gpt-4o-mini",
@@ -448,7 +429,7 @@ def test_row_bot_status_model_lists_pinned_brain_choices(tmp_path, monkeypatch):
         display_name="Fast OpenAI",
         capabilities_snapshot=_chat_snapshot(),
     )
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
 
     result = status_tool._row_bot_status("model")
 
@@ -460,7 +441,7 @@ def test_row_bot_status_model_lists_pinned_brain_choices(tmp_path, monkeypatch):
     assert "model_id: gpt-4o-mini" in result
 
 
-def test_row_bot_status_model_lists_all_pinned_brain_choices_but_overview_stays_compact(tmp_path, monkeypatch):
+def test_row_bot_status_model_lists_all_pinned_brain_choices_but_overview_stays_compact(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     for index in range(10):
         selection.add_quick_choice_for_model(
@@ -469,7 +450,7 @@ def test_row_bot_status_model_lists_all_pinned_brain_choices_but_overview_stays_
             display_name=f"Model {index}",
             capabilities_snapshot=_chat_snapshot(),
         )
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
 
     full = status_tool._row_bot_status("model")
     compact = status_tool._query_model(compact_pinned=True)
@@ -479,8 +460,8 @@ def test_row_bot_status_model_lists_all_pinned_brain_choices_but_overview_stays_
     assert "Plus" in compact
 
 
-def test_row_bot_status_model_setting_blocks_child_runtime_self_switch_before_approval(tmp_path, monkeypatch):
-    *_modules, agent, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+def test_row_bot_status_model_setting_blocks_child_runtime_self_switch_before_approval(tmp_path, monkeypatch, reload_for_data_dir):
+    *_modules, agent, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
 
     def fail_approval(*_args, **_kwargs):
         raise AssertionError("child model switch should not request approval")
@@ -496,9 +477,9 @@ def test_row_bot_status_model_setting_blocks_child_runtime_self_switch_before_ap
     assert "delegate_work(model=...)" in result
 
 
-def test_row_bot_status_model_setting_rejects_unpinned_canonical_ref(tmp_path, monkeypatch):
+def test_row_bot_status_model_setting_rejects_unpinned_canonical_ref(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_model_choices(tmp_path, monkeypatch)
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     captured = {}
 
     monkeypatch.setattr(status_tool, "_approval_gate_bool", lambda *_args, **_kwargs: True)
@@ -510,7 +491,7 @@ def test_row_bot_status_model_setting_rejects_unpinned_canonical_ref(tmp_path, m
     assert captured == {}
 
 
-def test_row_bot_status_model_setting_rejects_ambiguous_model(tmp_path, monkeypatch):
+def test_row_bot_status_model_setting_rejects_ambiguous_model(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "shared-model",
@@ -524,7 +505,7 @@ def test_row_bot_status_model_setting_rejects_ambiguous_model(tmp_path, monkeypa
         display_name="Shared Model",
         capabilities_snapshot=_chat_snapshot(),
     )
-    *_modules, status_tool = _fresh_status_modules(tmp_path, monkeypatch)
+    *_modules, status_tool = _fresh_status_modules(tmp_path, reload_for_data_dir)
     captured = {}
 
     monkeypatch.setattr(status_tool, "_approval_gate_bool", lambda *_args, **_kwargs: True)

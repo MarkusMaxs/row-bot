@@ -70,8 +70,8 @@ def test_f_r03_cancel_waiter_unregisters_without_capacity(monkeypatch):
 
 
 @pytest.mark.parametrize("action,expected", [("pause_goal", "paused"), ("clear_goal", "cleared")])
-def test_f_r04_user_transition_wins_delayed_verifier(tmp_path, monkeypatch, action, expected):
-    fresh_tasks_module(tmp_path, monkeypatch)
+def test_f_r04_user_transition_wins_delayed_verifier(tmp_path, reload_for_data_dir, action, expected):
+    fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot import goals
     goal = goals.start_goal("fixture-goal", "Keep synthetic state", max_turns=10)
     def verifier(_goal, _context):
@@ -82,8 +82,8 @@ def test_f_r04_user_transition_wins_delayed_verifier(tmp_path, monkeypatch, acti
     assert goals.get_goal(goal["id"])["status"] == expected
 
 
-def test_f_r04_logical_turn_a_b_a_claims_once(tmp_path, monkeypatch):
-    fresh_tasks_module(tmp_path, monkeypatch)
+def test_f_r04_logical_turn_a_b_a_claims_once(tmp_path, reload_for_data_dir):
+    fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot import goals
     goal = goals.start_goal("fixture-turns", "Process synthetic turns", max_turns=10)
     assert goals._claim_turn("fixture-turns", "A")
@@ -92,8 +92,8 @@ def test_f_r04_logical_turn_a_b_a_claims_once(tmp_path, monkeypatch):
     assert goals.get_goal(goal["id"])["turns_used"] == 2
 
 
-def test_f_r06_seven_equal_text_ids_only_consumed_batch_settles(tmp_path, monkeypatch):
-    fresh_tasks_module(tmp_path, monkeypatch)
+def test_f_r06_seven_equal_text_ids_only_consumed_batch_settles(tmp_path, reload_for_data_dir):
+    fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot import agent_runs
     agent_runs.create_agent_run(run_id="fixture-steering", thread_id="fixture-child")
     for i in range(7):

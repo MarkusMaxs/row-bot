@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,27 +8,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from row_bot.agent_budget import new_execution_budget
 
 
-def _fresh_runtime_modules(tmp_path, monkeypatch):
+def _fresh_runtime_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
-        "row_bot.tasks",
-        "row_bot.threads",
-        "row_bot.agent_profiles",
-        "row_bot.agent",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_profiles as agent_profiles
-    import row_bot.agent as agent
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_profiles = importlib.reload(agent_profiles)
-    agent = importlib.reload(agent)
+    _tasks, threads, agent_profiles, agent = reload_for_data_dir(
+        data_dir, "row_bot.tasks", "row_bot.threads", "row_bot.agent_profiles", "row_bot.agent"
+    )
     return threads, agent_profiles, agent
 
 
@@ -40,11 +23,11 @@ def _prompt_text(result: dict) -> str:
 
 def test_graph_interrupt_result_extracts_paused_state_for_non_streaming_invoke(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     _threads, _profiles, agent = _fresh_runtime_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     state = SimpleNamespace(
         next=("tools",),
@@ -75,8 +58,8 @@ def test_graph_interrupt_result_extracts_paused_state_for_non_streaming_invoke(
     }
 
 
-def test_thread_agent_profile_is_injected_into_agent_mode_prompt(tmp_path, monkeypatch):
-    threads, _profiles, agent = _fresh_runtime_modules(tmp_path, monkeypatch)
+def test_thread_agent_profile_is_injected_into_agent_mode_prompt(tmp_path, reload_for_data_dir):
+    threads, _profiles, agent = _fresh_runtime_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Profile runtime")
     threads._set_thread_agent_profile(thread_id, "quality_reviewer")
 
@@ -95,10 +78,10 @@ def test_thread_agent_profile_is_injected_into_agent_mode_prompt(tmp_path, monke
     assert "capability=read_only" in prompt
 
 
-def test_ordinary_profile_skill_selection_is_a_hard_canonical_boundary(tmp_path, monkeypatch):
+def test_ordinary_profile_skill_selection_is_a_hard_canonical_boundary(tmp_path, monkeypatch, reload_for_data_dir):
     _threads, _profiles, agent = _fresh_runtime_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     import row_bot.skill_discovery as discovery
     import row_bot.skills_activation as activation
@@ -157,8 +140,8 @@ def test_ordinary_profile_skill_selection_is_a_hard_canonical_boundary(tmp_path,
     assert "MANUAL_OTHER_BODY" not in prompt
 
 
-def test_thread_agent_profile_is_injected_into_chat_only_prompt(tmp_path, monkeypatch):
-    threads, _profiles, agent = _fresh_runtime_modules(tmp_path, monkeypatch)
+def test_thread_agent_profile_is_injected_into_chat_only_prompt(tmp_path, reload_for_data_dir):
+    threads, _profiles, agent = _fresh_runtime_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Chat only profile")
     threads._set_thread_agent_profile(thread_id, "planner")
 
@@ -170,8 +153,8 @@ def test_thread_agent_profile_is_injected_into_chat_only_prompt(tmp_path, monkey
     assert "Turn fuzzy goals into a concise plan" in text
 
 
-def test_disabled_thread_profile_warns_instead_of_silent_fallback(tmp_path, monkeypatch):
-    threads, profiles, agent = _fresh_runtime_modules(tmp_path, monkeypatch)
+def test_disabled_thread_profile_warns_instead_of_silent_fallback(tmp_path, reload_for_data_dir):
+    threads, profiles, agent = _fresh_runtime_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Disabled profile")
     saved = profiles.save_agent_profile(
         slug="brief_reviewer",
@@ -200,8 +183,8 @@ def test_disabled_thread_profile_warns_instead_of_silent_fallback(tmp_path, monk
     assert "disabled" in prompt
 
 
-def test_thread_profile_allowlist_flows_into_chat_stream_config(tmp_path, monkeypatch):
-    threads, profiles, _agent = _fresh_runtime_modules(tmp_path, monkeypatch)
+def test_thread_profile_allowlist_flows_into_chat_stream_config(tmp_path, reload_for_data_dir):
+    threads, profiles, _agent = _fresh_runtime_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Profile tool filter")
     saved = profiles.save_agent_profile(
         slug="tool_filter_smoke",

@@ -869,14 +869,13 @@ def test_strict_indexing_worker_uses_reviewed_snapshot_and_captured_embeddings(p
 
 
 @pytest.mark.slow
-def test_strict_worker_completes_canonical_pipeline_without_legacy_provider_selection(processing, monkeypatch, tmp_path):
-    import importlib
+def test_strict_worker_completes_canonical_pipeline_without_legacy_provider_selection(processing, monkeypatch, tmp_path, reload_for_data_dir):
     from pathlib import Path
     from langchain_core.embeddings import Embeddings
-    from row_bot import document_jobs, documents, embedding_providers, knowledge_graph, wiki_vault
+    from row_bot import document_jobs, documents, embedding_providers, wiki_vault
     from row_bot.providers import runtime
     api,service,policy,batch,*_ = processing
-    kg = importlib.reload(knowledge_graph)
+    (kg,) = reload_for_data_dir(None, "row_bot.knowledge_graph")
     monkeypatch.setattr(wiki_vault,"is_enabled",lambda:False)
     monkeypatch.setattr(documents,"DOCUMENT_INDEX_DIR",tmp_path / "document-index")
     monkeypatch.setattr(document_jobs,"_notify_batch_complete",lambda *a:None)
@@ -962,11 +961,9 @@ def test_cancel_during_admitted_stage_stops_searchable_publication(processing, m
     assert service.get_batch(batch).status == "cancelled"
 
 
-def test_source_row_revocation_after_sqlite_admission_rolls_back(processing, monkeypatch):
-    import importlib
-    from row_bot import knowledge_graph
+def test_source_row_revocation_after_sqlite_admission_rolls_back(processing, monkeypatch, reload_for_data_dir):
     api,service,policy,batch,context,cfg,state = processing
-    kg = importlib.reload(knowledge_graph)
+    (kg,) = reload_for_data_dir(None, "row_bot.knowledge_graph")
     original = kg._get_conn
     class Connection:
         def __init__(self):
@@ -985,11 +982,10 @@ def test_source_row_revocation_after_sqlite_admission_rolls_back(processing, mon
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
 
 
-def test_wiki_projection_revocation_after_writer_admission_creates_no_files(processing, monkeypatch, tmp_path):
-    import importlib
-    from row_bot import knowledge_graph, wiki_vault
+def test_wiki_projection_revocation_after_writer_admission_creates_no_files(processing, monkeypatch, tmp_path, reload_for_data_dir):
+    from row_bot import wiki_vault
     api,service,policy,batch,context,cfg,state = processing
-    kg = importlib.reload(knowledge_graph)
+    (kg,) = reload_for_data_dir(None, "row_bot.knowledge_graph")
     monkeypatch.setattr(kg,"_skip_reindex",True)
     monkeypatch.setattr(wiki_vault,"is_enabled",lambda:False)
     entity = kg.save_entity("fact","Synthetic","Synthetic article long enough for the managed wiki projection to publish.")

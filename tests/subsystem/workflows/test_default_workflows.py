@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 
 import pytest
 
@@ -12,12 +11,11 @@ def case_dir(tmp_path):
     return path
 
 
-def test_default_workflow_templates_are_disabled_manual_and_mixed_complexity(monkeypatch, case_dir):
+def test_default_workflow_templates_are_disabled_manual_and_mixed_complexity(reload_for_data_dir, case_dir):
     data_dir = case_dir
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
     import row_bot.tasks as tasks
 
-    tasks = importlib.reload(tasks)
+    (tasks,) = reload_for_data_dir(data_dir, "row_bot.tasks")
 
     assert len(tasks._DEFAULT_TASKS) == 5
     assert sum(1 for t in tasks._DEFAULT_TASKS if t["complexity"] == "simple") == 3
@@ -62,12 +60,11 @@ def test_default_workflow_templates_are_disabled_manual_and_mixed_complexity(mon
     assert any(t.get("steps") for t in seeded)
 
 
-def test_existing_users_are_not_reseeded_automatically(monkeypatch, case_dir):
+def test_existing_users_are_not_reseeded_automatically(reload_for_data_dir, case_dir):
     data_dir = case_dir
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
     import row_bot.tasks as tasks
 
-    tasks = importlib.reload(tasks)
+    (tasks,) = reload_for_data_dir(data_dir, "row_bot.tasks")
     tasks.create_task(name="User workflow", prompts=["Do something"], enabled=False)
     tasks.seed_default_tasks()
 

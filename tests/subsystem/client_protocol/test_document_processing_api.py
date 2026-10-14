@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import importlib
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -168,9 +167,11 @@ def test_review_identity_and_current_policy_checked_before_service_admission(ser
 
 
 @pytest.mark.slow
-def test_actual_admission_runs_canonical_index_extract_finalize_with_captured_fakes(service, queue, providers, monkeypatch):
-    from row_bot import document_jobs, knowledge_graph
-    kg = importlib.reload(knowledge_graph)
+def test_actual_admission_runs_canonical_index_extract_finalize_with_captured_fakes(
+    service, queue, providers, monkeypatch, reload_for_data_dir,
+):
+    from row_bot import document_jobs
+    (kg,) = reload_for_data_dir(None, "row_bot.knowledge_graph")
     identifier = conversation()
     with _client(service) as client:
         _, headers = bootstrap(client)

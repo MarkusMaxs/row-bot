@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from types import SimpleNamespace
 
 
-def _fresh_command_modules(tmp_path, monkeypatch):
+def _fresh_command_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    _tasks, threads, _profiles, agent_runs, agent_commands, slash_commands, commands = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
@@ -17,29 +15,14 @@ def _fresh_command_modules(tmp_path, monkeypatch):
         "row_bot.agent_commands",
         "row_bot.slash_commands",
         "row_bot.channels.commands",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_commands as agent_commands
-    import row_bot.slash_commands as slash_commands
-    commands = importlib.import_module("row_bot.channels.commands")
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_runs = importlib.reload(agent_runs)
-    agent_commands = importlib.reload(agent_commands)
-    slash_commands = importlib.reload(slash_commands)
-    commands = importlib.reload(commands)
+    )
     return threads, agent_runs, agent_commands, slash_commands, commands
 
 
-def test_app_slash_profile_commands_set_clear_and_list(tmp_path, monkeypatch):
+def test_app_slash_profile_commands_set_clear_and_list(tmp_path, reload_for_data_dir):
     threads, _agent_runs, _agent_commands, slash_commands, commands = _fresh_command_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Profile slash")
     import row_bot.agent_profiles as agent_profiles
@@ -117,10 +100,10 @@ def test_app_slash_profile_commands_set_clear_and_list(tmp_path, monkeypatch):
     assert threads.get_thread_skills_override(thread_id) is None
 
 
-def test_direct_agent_parser_is_command_only_and_explicit_about_profiles(tmp_path, monkeypatch):
+def test_direct_agent_parser_is_command_only_and_explicit_about_profiles(tmp_path, reload_for_data_dir):
     _threads, _agent_runs, agent_commands, _slash_commands, commands = _fresh_command_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
 
     generic = agent_commands.parse_agent_spawn_text(
@@ -207,10 +190,10 @@ def test_direct_agent_parser_is_command_only_and_explicit_about_profiles(tmp_pat
     assert natural_worktree.use_worktree is True
 
 
-def test_direct_agent_commands_spawn_with_explicit_or_worker_profile(tmp_path, monkeypatch):
+def test_direct_agent_commands_spawn_with_explicit_or_worker_profile(tmp_path, monkeypatch, reload_for_data_dir):
     threads, _agent_runs, _agent_commands, _slash_commands, commands = _fresh_command_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Direct agent command")
 
@@ -272,10 +255,10 @@ def test_direct_agent_commands_spawn_with_explicit_or_worker_profile(tmp_path, m
     assert removed_response and "/agent [--worktree]" in removed_response
 
 
-def test_direct_agent_command_model_option_is_strict_and_validated(tmp_path, monkeypatch):
+def test_direct_agent_command_model_option_is_strict_and_validated(tmp_path, monkeypatch, reload_for_data_dir):
     threads, _agent_runs, _agent_commands, _slash_commands, commands = _fresh_command_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Direct agent command model")
 
@@ -330,10 +313,10 @@ def test_direct_agent_command_model_option_is_strict_and_validated(tmp_path, mon
     assert len(captured) == 1
 
 
-def test_channel_profile_commands_are_thread_scoped(tmp_path, monkeypatch):
+def test_channel_profile_commands_are_thread_scoped(tmp_path, reload_for_data_dir):
     threads, _agent_runs, _agent_commands, _slash_commands, commands = _fresh_command_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     first = threads.create_thread("Channel one")
     second = threads.create_thread("Channel two")
@@ -357,10 +340,10 @@ def test_channel_profile_commands_are_thread_scoped(tmp_path, monkeypatch):
     assert threads._get_thread_agent_profile(first) == {"id": "", "slug": ""}
 
 
-def test_agents_command_lists_current_thread_runs(tmp_path, monkeypatch):
+def test_agents_command_lists_current_thread_runs(tmp_path, reload_for_data_dir):
     threads, agent_runs, _agent_commands, _slash_commands, commands = _fresh_command_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     first = threads.create_thread("Agent parent")
     second = threads.create_thread("Other parent")

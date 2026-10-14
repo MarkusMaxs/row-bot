@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import os
 from pathlib import Path
@@ -16,11 +15,9 @@ from tests.subsystem.knowledge_graph.test_document_index_shards import FakeEmbed
 
 
 @pytest.fixture
-def index(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.document_index as document_index
+def index(tmp_path, monkeypatch, reload_for_data_dir):
 
-    module = importlib.reload(document_index)
+    (module,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     metadata = {"provider": "fake", "model": "fake", "dimension": 3}
     monkeypatch.setattr(module, "active_embedding_metadata", lambda: metadata)
     root = tmp_path / "index"

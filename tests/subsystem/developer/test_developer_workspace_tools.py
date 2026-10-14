@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import importlib
 import json
 import pathlib
 import subprocess
-import sys
 from types import SimpleNamespace
 
 
@@ -342,7 +340,6 @@ def test_developer_tool_exposes_write_and_command_tools(tmp_path, monkeypatch, r
 
 def test_status_reports_developer_enabled_for_new_install_when_active(tmp_path, monkeypatch, reload_for_data_dir):
     storage, tool_context, _edits, _ledger, _sandbox_runtime, _developer_tool = _fresh_modules(tmp_path, reload_for_data_dir)
-    sys.modules.pop("tools.row_bot_status_tool", None)
     import row_bot.tools.row_bot_status_tool as row_bot_status_tool
 
     repo = tmp_path / "repo"
@@ -369,12 +366,8 @@ def test_developer_guides_and_skills_are_bundled():
     assert (root / "bundled_skills" / "developer_custom_tools" / "SKILL.md").exists()
 
 
-def test_developer_skill_prompt_is_scoped_to_developer_mode(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    sys.modules.pop("skills", None)
-
-    import row_bot.skills as skills
-    importlib.reload(skills)
+def test_developer_skill_prompt_is_scoped_to_developer_mode(tmp_path, reload_for_data_dir):
+    (skills,) = reload_for_data_dir(tmp_path / "data", "row_bot.skills")
     skills.load_skills()
 
     regular_prompt = skills.get_skills_prompt([], active_tool_names=[])

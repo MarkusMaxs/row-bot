@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import importlib
 import pathlib
 import sqlite3
 
@@ -13,16 +12,14 @@ import pytest
 pytestmark = pytest.mark.platform
 
 
-def _service(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.document_jobs as document_jobs
+def _service(tmp_path, monkeypatch, reload_for_data_dir):
 
-    jobs = importlib.reload(document_jobs)
+    (jobs,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_jobs")
     return jobs, jobs.DocumentJobService(tmp_path / "data")
 
 
-def test_queue_is_durable_and_fifo(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_queue_is_durable_and_fifo(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     first = service.create_staging_job(batch, 0, "first.txt")
     second = service.create_staging_job(batch, 1, "second.txt")
@@ -37,8 +34,8 @@ def test_queue_is_durable_and_fifo(tmp_path, monkeypatch):
     ]
 
 
-def test_upload_stream_is_bounded_and_hashes_incrementally(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_upload_stream_is_bounded_and_hashes_incrementally(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     from row_bot.document_uploads import stage_upload
 
     class Stream:
@@ -68,8 +65,8 @@ def test_upload_stream_is_bounded_and_hashes_incrementally(tmp_path, monkeypatch
     assert job.content_sha256 == hashlib.sha256(b"abcdef").hexdigest()
 
 
-def test_illegal_job_transition_is_rejected(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_illegal_job_transition_is_rejected(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     job = service.create_staging_job(batch, 0, "notes.txt")
 
@@ -90,8 +87,8 @@ def _queue_local_file(service, batch, sequence, name, content):
     )
 
 
-def test_partial_and_corrupt_schema_recover(tmp_path, monkeypatch):
-    jobs, _service_instance = _service(tmp_path, monkeypatch)
+def test_partial_and_corrupt_schema_recover(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, _service_instance = _service(tmp_path, monkeypatch, reload_for_data_dir)
     partial_dir = tmp_path / "partial"
     db_dir = partial_dir / "document_ingestion"
     db_dir.mkdir(parents=True)
@@ -113,8 +110,8 @@ def test_partial_and_corrupt_schema_recover(tmp_path, monkeypatch):
     assert list(corrupt_db_dir.glob("jobs.corrupt-*.db"))
 
 
-def test_fifo_claims_index_all_documents_before_extraction(tmp_path, monkeypatch):
-    _jobs, service = _service(tmp_path, monkeypatch)
+def test_fifo_claims_index_all_documents_before_extraction(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     first_batch = service.create_batch()
     first = _queue_local_file(service, first_batch, 0, "one.txt", b"one")
     second = _queue_local_file(service, first_batch, 1, "two.txt", b"two")
@@ -140,8 +137,8 @@ def test_fifo_claims_index_all_documents_before_extraction(tmp_path, monkeypatch
     assert claimed.id == later.id
 
 
-def test_single_flight_lease_and_expiry(tmp_path, monkeypatch):
-    jobs, _ = _service(tmp_path, monkeypatch)
+def test_single_flight_lease_and_expiry(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, _ = _service(tmp_path, monkeypatch, reload_for_data_dir)
     clock = [100.0]
     service = jobs.DocumentJobService(
         tmp_path / "lease-data",
@@ -159,8 +156,8 @@ def test_single_flight_lease_and_expiry(tmp_path, monkeypatch):
     assert service.claim_next("owner-b", lease_seconds=5).id == queued.id
 
 
-def test_pause_resume_and_cancellation_persist(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_pause_resume_and_cancellation_persist(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     first = _queue_local_file(service, batch, 0, "one.txt", b"one")
     second = _queue_local_file(service, batch, 1, "two.txt", b"two")
@@ -178,8 +175,8 @@ def test_pause_resume_and_cancellation_persist(tmp_path, monkeypatch):
     assert reloaded.cancel_batch(batch).status == "cancelled"
 
 
-def test_retry_failed_resets_work_and_requeues_batch(tmp_path, monkeypatch):
-    _jobs, service = _service(tmp_path, monkeypatch)
+def test_retry_failed_resets_work_and_requeues_batch(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     job = _queue_local_file(service, batch, 0, "one.txt", b"one")
     service.finish_batch_staging(batch)
@@ -198,8 +195,8 @@ def test_retry_failed_resets_work_and_requeues_batch(tmp_path, monkeypatch):
     assert service.get_batch(batch).status == "queued"
 
 
-def test_clear_finished_preserves_active_batches_and_dedup_records(tmp_path, monkeypatch):
-    _jobs, service = _service(tmp_path, monkeypatch)
+def test_clear_finished_preserves_active_batches_and_dedup_records(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     finished_batch = service.create_batch()
     finished = _queue_local_file(service, finished_batch, 0, "done.txt", b"done")
     service.finish_batch_staging(finished_batch)
@@ -218,8 +215,8 @@ def test_clear_finished_preserves_active_batches_and_dedup_records(tmp_path, mon
     assert service.list_document_records()[0]["document_id"] == finished.id
 
 
-def test_recovery_restarts_index_resumes_extraction_and_fails_missing(tmp_path, monkeypatch):
-    _jobs, service = _service(tmp_path, monkeypatch)
+def test_recovery_restarts_index_resumes_extraction_and_fails_missing(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     indexing = _queue_local_file(service, batch, 0, "index.txt", b"index")
     extracting = _queue_local_file(service, batch, 1, "extract.txt", b"extract")
@@ -257,8 +254,9 @@ def test_recovery_restarts_index_resumes_extraction_and_fails_missing(tmp_path, 
 def test_duplicate_content_skips_but_same_name_different_content_coexists(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _jobs, service = _service(tmp_path, monkeypatch)
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     first_batch = service.create_batch()
     first = _queue_local_file(service, first_batch, 0, "same.txt", b"alpha")
     service.finish_batch_staging(first_batch)
@@ -277,8 +275,9 @@ def test_duplicate_content_skips_but_same_name_different_content_coexists(
 def test_duplicate_selected_in_same_batch_is_skipped_before_second_index(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _jobs, service = _service(tmp_path, monkeypatch)
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     first = _queue_local_file(service, batch, 0, "first.txt", b"identical")
     second = _queue_local_file(service, batch, 1, "second.txt", b"identical")
@@ -306,8 +305,9 @@ def test_filename_sanitization_is_contained(
     monkeypatch,
     name,
     expected_fragment,
+    reload_for_data_dir,
 ):
-    _jobs, service = _service(tmp_path, monkeypatch)
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     batch = service.create_batch()
     job = service.create_staging_job(batch, 0, name)
 
@@ -315,8 +315,8 @@ def test_filename_sanitization_is_contained(
     assert service.staging_root.resolve() in pathlib.Path(job.staged_path).resolve().parents
 
 
-def test_upload_exact_limit_accepted_and_limit_plus_one_rejected(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_upload_exact_limit_accepted_and_limit_plus_one_rejected(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     from row_bot.document_uploads import UploadRejected, stage_upload
 
     class SizedStream:
@@ -360,8 +360,8 @@ def test_upload_exact_limit_accepted_and_limit_plus_one_rejected(tmp_path, monke
         )
 
 
-def test_upload_reserve_and_interruption_remove_only_own_temp(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_upload_reserve_and_interruption_remove_only_own_temp(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     from row_bot.document_uploads import UploadRejected, stage_upload
 
     class Interrupted:
@@ -407,8 +407,8 @@ def test_upload_reserve_and_interruption_remove_only_own_temp(tmp_path, monkeypa
     assert not list(service.staging_root.rglob("*.uploading"))
 
 
-def test_repeated_ui_initialization_starts_one_supervisor(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_repeated_ui_initialization_starts_one_supervisor(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     starts = []
 
     class FakeSupervisor:
@@ -431,8 +431,8 @@ def test_repeated_ui_initialization_starts_one_supervisor(tmp_path, monkeypatch)
     assert starts == [service]
 
 
-def test_restart_loaded_jobs_keep_user_visible_status(tmp_path, monkeypatch):
-    jobs, service = _service(tmp_path, monkeypatch)
+def test_restart_loaded_jobs_keep_user_visible_status(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
 
     batch = service.create_batch()
     job = _queue_local_file(service, batch, 0, "queued.txt", b"queued")
@@ -442,8 +442,8 @@ def test_restart_loaded_jobs_keep_user_visible_status(tmp_path, monkeypatch):
     assert reloaded.get_job(job.id).status == "queued"
 
 
-def test_recovery_retires_orphans_and_health_reports_clean_state(tmp_path, monkeypatch):
-    _jobs, service = _service(tmp_path, monkeypatch)
+def test_recovery_retires_orphans_and_health_reports_clean_state(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, service = _service(tmp_path, monkeypatch, reload_for_data_dir)
     orphan_staging = service.staging_root / "unknown"
     orphan_work = service.work_root / "unknown"
     orphan_staging.mkdir(parents=True)

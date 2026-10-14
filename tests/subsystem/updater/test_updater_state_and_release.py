@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from datetime import datetime, timezone
 
 import pytest
@@ -11,12 +9,9 @@ import pytest
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
-def _reload_updater(monkeypatch, tmp_path):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    sys.modules.pop("row_bot.updater", None)
-    import row_bot.updater as updater
-
-    return importlib.reload(updater)
+def _reload_updater(reload_for_data_dir, tmp_path):
+    (updater,) = reload_for_data_dir(tmp_path, "row_bot.updater")
+    return updater
 
 
 def _release(version: str, *, prerelease: bool = False, asset_name: str = "Row-Bot-9.0.0-Windows-x64.exe") -> dict:
@@ -44,16 +39,16 @@ def _release(version: str, *, prerelease: bool = False, asset_name: str = "Row-B
     }
 
 
-def test_import_and_cached_read_do_not_create_a_fresh_profile(tmp_path, monkeypatch) -> None:
+def test_import_and_cached_read_do_not_create_a_fresh_profile(tmp_path, reload_for_data_dir) -> None:
     profile = tmp_path / "fresh-profile"
-    updater = _reload_updater(monkeypatch, profile)
+    updater = _reload_updater(reload_for_data_dir, profile)
     assert not profile.exists()
     assert updater.get_update_state().available is None
     assert not profile.exists()
 
 
-def test_load_state_normalizes_invalid_fields_and_state_mutators_notify(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_load_state_normalizes_invalid_fields_and_state_mutators_notify(tmp_path, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
     updater._CONFIG_PATH.write_text(
         json.dumps(
             {
@@ -102,8 +97,8 @@ def test_load_state_normalizes_invalid_fields_and_state_mutators_notify(tmp_path
     assert seen[-1] == ("stable", ["9.0.0"], ["7.0.0", "9.0.0"], None)
 
 
-def test_parse_release_selects_platform_asset_and_summarizes_notes(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_parse_release_selects_platform_asset_and_summarizes_notes(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
     monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
 
     info = updater._parse_release(_release("9.0.0"), "stable")
@@ -118,8 +113,8 @@ def test_parse_release_selects_platform_asset_and_summarizes_notes(tmp_path, mon
     assert updater._parse_release({**_release("9.0.0"), "tag_name": ""}, "stable") is None
 
 
-def test_check_for_updates_filters_channel_versions_and_fetch_failures(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_check_for_updates_filters_channel_versions_and_fetch_failures(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
     monkeypatch.setattr(updater.platform, "system", lambda: "Windows")
     monkeypatch.setattr(updater, "__version__", "4.0.0")
     state = updater.get_update_state()
@@ -169,8 +164,8 @@ def test_a_skip_only_holds_back_the_release_on_offer(tmp_path, monkeypatch, relo
     assert updater.skipped_release() is None
 
 
-def test_check_for_updates_debounce_returns_cached_update_without_fetching(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_check_for_updates_debounce_returns_cached_update_without_fetching(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
     state = updater.get_update_state()
     state.available = updater.UpdateInfo(
         version="9.0.0",
@@ -195,8 +190,8 @@ def test_check_for_updates_debounce_returns_cached_update_without_fetching(tmp_p
     assert updater.check_for_updates(force=False) is state.available
 
 
-def test_scheduler_is_idempotent_and_disabled_for_dev_installs(tmp_path, monkeypatch) -> None:
-    updater = _reload_updater(monkeypatch, tmp_path)
+def test_scheduler_is_idempotent_and_disabled_for_dev_installs(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    updater = _reload_updater(reload_for_data_dir, tmp_path)
     monkeypatch.setattr(updater, "is_dev_install", lambda: True)
 
     updater.start_update_scheduler()

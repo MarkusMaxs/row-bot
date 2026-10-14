@@ -7,7 +7,6 @@ the same "no model yet" answer instead of running on a built-in model.
 from __future__ import annotations
 
 import contextvars
-import importlib
 import json
 import sys
 import types
@@ -56,18 +55,15 @@ def test_chat_turn_without_a_model_is_refused_before_running(no_model, monkeypat
         list(agent.stream_agent("hello", [], {"configurable": {"thread_id": "chat-thread"}}))
 
 
-def _fresh_task_modules(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in ("row_bot.tasks", "row_bot.threads", "row_bot.agent_profiles", "row_bot.agent_runs"):
-        sys.modules.pop(name, None)
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-
-    return importlib.reload(tasks), importlib.reload(threads)
+def _fresh_task_modules(tmp_path: Path, reload_for_data_dir):
+    tasks, threads, _profiles, _runs = reload_for_data_dir(
+        tmp_path / "data", "row_bot.tasks", "row_bot.threads", "row_bot.agent_profiles", "row_bot.agent_runs"
+    )
+    return tasks, threads
 
 
-def test_workflow_run_fails_with_the_reason_and_no_retries(tmp_path, monkeypatch, no_model):
-    tasks, threads = _fresh_task_modules(tmp_path, monkeypatch)
+def test_workflow_run_fails_with_the_reason_and_no_retries(tmp_path, monkeypatch, no_model, reload_for_data_dir):
+    tasks, threads = _fresh_task_modules(tmp_path, reload_for_data_dir)
     calls: list[str] = []
     fake_agent = types.ModuleType("row_bot.agent")
 

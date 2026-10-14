@@ -89,8 +89,9 @@ pages:
     security: Invitations grant full owner access; network access and public links
       widen who can reach Row-Bot.
   updates:
-    description: Choose the update channel and check for new versions.
-    docs_route: /docs/operations/
+    description: See your version, download updates in the background, restart
+      into them, go back with Repair, and choose the update channel.
+    docs_route: /docs/operations/updates
   data:
     description: Back up and restore Row-Bot data, import from another assistant, and
       run irreversible clean-up.

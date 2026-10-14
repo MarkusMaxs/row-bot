@@ -11,8 +11,8 @@ from tests.fixtures.memory_stack import fresh_memory_stack
 pytestmark = pytest.mark.subsystem
 
 
-def test_extract_from_conversation_handles_response_shapes_and_invalid_payloads(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_extract_from_conversation_handles_response_shapes_and_invalid_payloads(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
 
     class ListResponse:
@@ -63,7 +63,7 @@ def test_extract_from_conversation_handles_response_shapes_and_invalid_payloads(
     assert memory_extraction._extract_from_conversation("User: offline") == []
 
 
-def test_extraction_runs_on_the_default_model_and_reads_a_schema_reply(tmp_path, monkeypatch) -> None:
+def test_extraction_runs_on_the_default_model_and_reads_a_schema_reply(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     """WP C1: an unattended job uses the default chat model even when a turn runs
     on another model, asks for its entities and relations as a JSON schema with a
     bounded reply, and drops the fields a schema reply had to fill."""
@@ -72,7 +72,7 @@ def test_extraction_runs_on_the_default_model_and_reads_a_schema_reply(tmp_path,
     from row_bot import models
     from row_bot.providers import background
 
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
     calls = []
 
@@ -114,8 +114,8 @@ def test_extraction_runs_on_the_default_model_and_reads_a_schema_reply(tmp_path,
         "relation_type", "source_subject", "target_subject", "confidence"]
 
 
-def test_entry_properties_preserve_source_context_evidence_confidence_and_method(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_entry_properties_preserve_source_context_evidence_confidence_and_method(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
 
     props = memory_extraction._entry_properties(
@@ -143,8 +143,8 @@ def test_entry_properties_preserve_source_context_evidence_confidence_and_method
     assert props["memory_tier"] == "resource"
 
 
-def test_merge_properties_combines_aliases_tags_and_evidence_without_clobbering(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_merge_properties_combines_aliases_tags_and_evidence_without_clobbering(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
 
     merged = memory_extraction._merge_properties(
@@ -175,8 +175,8 @@ def test_merge_properties_combines_aliases_tags_and_evidence_without_clobbering(
     assert merged["source_context"]["thread_id"] == "thread-1"
 
 
-def test_dedup_save_creates_updates_and_links_with_provenance(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_dedup_save_creates_updates_and_links_with_provenance(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
     memory_extraction = stack["memory_extraction"]
 
@@ -235,8 +235,8 @@ def test_dedup_save_creates_updates_and_links_with_provenance(tmp_path, monkeypa
     assert kg._skip_reindex is True
 
 
-def test_dedup_save_skips_invalid_low_confidence_vague_and_missing_endpoint_relations(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_dedup_save_skips_invalid_low_confidence_vague_and_missing_endpoint_relations(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
     memory_extraction = stack["memory_extraction"]
 

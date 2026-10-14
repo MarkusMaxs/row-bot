@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import importlib
 import json
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.knowledge_graph as knowledge_graph
-    import row_bot.memory as memory
-    import row_bot.memory_evolution as memory_evolution
+def _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir):
 
-    kg = importlib.reload(knowledge_graph)
-    importlib.reload(memory)
-    evo = importlib.reload(memory_evolution)
+    (kg,) = reload_for_data_dir(tmp_path / "data", "row_bot.knowledge_graph")
+    reload_for_data_dir(tmp_path / "data", "row_bot.memory")
+    (evo,) = reload_for_data_dir(tmp_path / "data", "row_bot.memory_evolution")
     kg._skip_reindex = True
     monkeypatch.setattr(kg, "semantic_search", lambda *args, **kwargs: [])
     return kg, evo
@@ -23,8 +18,8 @@ def _props(entity: dict) -> dict:
     return json.loads(raw or "{}") if isinstance(raw, str) else dict(raw or {})
 
 
-def test_normalize_and_merge_properties_preserves_authority(tmp_path, monkeypatch):
-    _kg, evo = _fresh_modules(tmp_path, monkeypatch)
+def test_normalize_and_merge_properties_preserves_authority(tmp_path, monkeypatch, reload_for_data_dir):
+    _kg, evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     merged = evo.merge_properties(
         {
             "status": "needs_review",
@@ -48,8 +43,8 @@ def test_normalize_and_merge_properties_preserves_authority(tmp_path, monkeypatc
     assert merged["source_context"]["actor"] == "extraction"
 
 
-def test_mark_needs_review_and_journal(tmp_path, monkeypatch):
-    kg, evo = _fresh_modules(tmp_path, monkeypatch)
+def test_mark_needs_review_and_journal(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     entity = kg.save_entity("fact", "Current city", "User lives in London.", source="live")
 
     updated = evo.mark_needs_review(
@@ -68,8 +63,8 @@ def test_mark_needs_review_and_journal(tmp_path, monkeypatch):
     assert journal[-1]["actor"] == "extraction"
 
 
-def test_mark_superseded_links_entities(tmp_path, monkeypatch):
-    kg, evo = _fresh_modules(tmp_path, monkeypatch)
+def test_mark_superseded_links_entities(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     old = kg.save_entity("fact", "Current city", "User lives in London.", source="live")
     new = kg.save_entity("fact", "Current city now", "User lives in Paris.", source="live")
 
@@ -80,8 +75,8 @@ def test_mark_superseded_links_entities(tmp_path, monkeypatch):
     assert old["id"] in _props(updated_new)["supersedes"]
 
 
-def test_mark_user_modified_restores_active_and_sets_actor(tmp_path, monkeypatch):
-    kg, evo = _fresh_modules(tmp_path, monkeypatch)
+def test_mark_user_modified_restores_active_and_sets_actor(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     entity = kg.save_entity(
         "fact",
         "Current city",
@@ -100,11 +95,11 @@ def test_mark_user_modified_restores_active_and_sets_actor(tmp_path, monkeypatch
     assert props["source_context"]["vault_path"] == "wiki/fact/Current city.md"
 
 
-def test_memory_tool_conflict_marks_existing_needs_review(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
+def test_memory_tool_conflict_marks_existing_needs_review(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.tools.memory_tool as memory_tool
 
-    memory_tool = importlib.reload(memory_tool)
+    (memory_tool,) = reload_for_data_dir(None, "row_bot.tools.memory_tool")
     existing = kg.save_entity("fact", "Current city", "User lives in London.", source="live")
     monkeypatch.setattr(memory_tool, "_check_contradiction", lambda old, new, subject: "City conflict")
 
@@ -117,11 +112,11 @@ def test_memory_tool_conflict_marks_existing_needs_review(tmp_path, monkeypatch)
     assert props["review_candidate"]["content"] == "User lives in Paris."
 
 
-def test_memory_tool_update_marks_manual_authority_and_search_shows_status(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
+def test_memory_tool_update_marks_manual_authority_and_search_shows_status(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.tools.memory_tool as memory_tool
 
-    memory_tool = importlib.reload(memory_tool)
+    (memory_tool,) = reload_for_data_dir(None, "row_bot.tools.memory_tool")
     entity = kg.save_entity(
         "fact",
         "Current city",
@@ -144,11 +139,10 @@ def test_memory_tool_update_marks_manual_authority_and_search_shows_status(tmp_p
     assert rows[0]["content"] == "User lives in Paris."
 
 
-def test_extraction_document_source_sets_resource_provenance(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
-    import row_bot.memory_extraction as memory_extraction
+def test_extraction_document_source_sets_resource_provenance(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
-    extraction = importlib.reload(memory_extraction)
+    (extraction,) = reload_for_data_dir(None, "row_bot.memory_extraction")
     saved = extraction._dedup_and_save(
         [{"category": "concept", "subject": "Atlas", "content": "Atlas appears in the document."}],
         source="document:atlas.pdf",
@@ -165,13 +159,12 @@ def test_extraction_document_source_sets_resource_provenance(tmp_path, monkeypat
     assert props["source_context"]["window_count"] == 2
 
 
-def test_extraction_conflict_marks_review_without_overwrite(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
-    import row_bot.memory_extraction as memory_extraction
+def test_extraction_conflict_marks_review_without_overwrite(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.tools.memory_tool as memory_tool
 
-    extraction = importlib.reload(memory_extraction)
-    memory_tool = importlib.reload(memory_tool)
+    (extraction,) = reload_for_data_dir(None, "row_bot.memory_extraction")
+    (memory_tool,) = reload_for_data_dir(None, "row_bot.tools.memory_tool")
     existing = kg.save_entity(
         "fact",
         "Current city",
@@ -195,13 +188,11 @@ def test_extraction_conflict_marks_review_without_overwrite(tmp_path, monkeypatc
     assert props["review_reason"] == "City conflict"
 
 
-def test_document_extraction_hub_and_entities_get_document_context(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
-    import row_bot.document_extraction as document_extraction
-    import row_bot.memory_extraction as memory_extraction
+def test_document_extraction_hub_and_entities_get_document_context(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
-    doc = importlib.reload(document_extraction)
-    importlib.reload(memory_extraction)
+    (doc,) = reload_for_data_dir(None, "row_bot.document_extraction")
+    reload_for_data_dir(None, "row_bot.memory_extraction")
     file_path = tmp_path / "atlas.txt"
     file_path.write_text("Atlas document body " * 120, encoding="utf-8")
     monkeypatch.setattr("row_bot.documents.load_document_text", lambda path: ("Atlas document body " * 120, ""))
@@ -239,11 +230,10 @@ def test_document_extraction_hub_and_entities_get_document_context(tmp_path, mon
     assert extracted_props["source_context"]["document_title"] == "atlas"
 
 
-def test_wiki_import_marks_high_authority_user_edit(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
-    import row_bot.wiki_vault as wiki_vault
+def test_wiki_import_marks_high_authority_user_edit(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
-    wiki = importlib.reload(wiki_vault)
+    (wiki,) = reload_for_data_dir(None, "row_bot.wiki_vault")
     vault = tmp_path / "vault"
     wiki.set_vault_path(str(vault))
     wiki.set_enabled(True)
@@ -269,11 +259,10 @@ def test_wiki_import_marks_high_authority_user_edit(tmp_path, monkeypatch):
     assert "review_reason" not in props
 
 
-def test_wiki_export_does_not_create_false_sync(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
-    import row_bot.wiki_vault as wiki_vault
+def test_wiki_export_does_not_create_false_sync(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
-    wiki = importlib.reload(wiki_vault)
+    (wiki,) = reload_for_data_dir(None, "row_bot.wiki_vault")
     wiki.set_vault_path(str(tmp_path / "vault"))
     wiki.set_enabled(True)
     entity = kg.save_entity("fact", "Current city", "User lives in London.", source="live")
@@ -282,11 +271,10 @@ def test_wiki_export_does_not_create_false_sync(tmp_path, monkeypatch):
     assert wiki.check_vault_sync() == []
 
 
-def test_policy_skips_needs_review_and_superseded_by_default(tmp_path, monkeypatch):
-    kg, _evo = _fresh_modules(tmp_path, monkeypatch)
-    import row_bot.memory_policy as memory_policy
+def test_policy_skips_needs_review_and_superseded_by_default(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _evo = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
-    policy = importlib.reload(memory_policy)
+    (policy,) = reload_for_data_dir(None, "row_bot.memory_policy")
     review = kg.save_entity(
         "fact",
         "Current city",

@@ -8,8 +8,8 @@ from tests.fixtures.tasks import fresh_tasks_module, sample_workflow_steps
 pytestmark = pytest.mark.subsystem
 
 
-def test_workflow_steps_are_canonicalized_and_renderable(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_workflow_steps_are_canonicalized_and_renderable(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     steps = sample_workflow_steps()
 
     task_id = tasks.create_task(
@@ -34,8 +34,8 @@ def test_workflow_steps_are_canonicalized_and_renderable(tmp_path, monkeypatch) 
     assert "approval_1" in mermaid
 
 
-def test_delegate_agent_steps_keep_helper_profile_and_render(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_delegate_agent_steps_keep_helper_profile_and_render(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     steps = [
         {
             "type": "delegate_agent",
@@ -66,9 +66,9 @@ def test_delegate_agent_steps_keep_helper_profile_and_render(tmp_path, monkeypat
 
 def test_new_and_seeded_workflows_default_to_default_profile_without_old_overrides(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
 
     task_id = tasks.create_task("Profile default", prompts=["say hi"])
     task = tasks.get_task(task_id)
@@ -89,8 +89,8 @@ def test_new_and_seeded_workflows_default_to_default_profile_without_old_overrid
     assert all(item["skills_override"] is None for item in seeded)
 
 
-def test_subtask_cycle_detection_uses_current_unsaved_steps(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_subtask_cycle_detection_uses_current_unsaved_steps(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     parent_id = tasks.create_task("Parent", steps=[], apply_default_skills=False)
     child_id = tasks.create_task(
         "Child",
@@ -105,8 +105,8 @@ def test_subtask_cycle_detection_uses_current_unsaved_steps(tmp_path, monkeypatc
     assert child_id in cycle
 
 
-def test_workflow_run_keeps_memory_fallback_warning_at_finish(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_workflow_run_keeps_memory_fallback_warning_at_finish(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     run_id = tasks._record_run_start(
         "task-1",
         "thread-1",
@@ -134,9 +134,9 @@ def test_workflow_run_keeps_memory_fallback_warning_at_finish(tmp_path, monkeypa
     assert "Retry local load" in run["status_message"]
 
 
-def test_variables_expand_with_or_without_inner_spaces(tmp_path, monkeypatch) -> None:
+def test_variables_expand_with_or_without_inner_spaces(tmp_path, reload_for_data_dir) -> None:
     """The step editor accepts `{{ step.x.output }}`, so running expands it too (parity row 19)."""
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     text = tasks.expand_template_vars(
         "A {{ prev_output }} B {{step.fetch.output}} C {{ step.fetch.output }} D {{ year }}",
         prev_output="previous", step_outputs={"fetch": "fetched"},

@@ -13,8 +13,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def saved(tmp_path, monkeypatch):
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def saved(tmp_path, reload_for_data_dir):
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
 
     def seed(count=1):
         conn = tasks._get_conn()

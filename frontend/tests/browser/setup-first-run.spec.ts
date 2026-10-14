@@ -103,6 +103,66 @@ test('no runtime yet: Setup opens, Ollama appears by itself, the pick becomes th
   }
 });
 
+test('an installed Row-Bot says once that updates download in the background', async ({
+  page,
+}, testInfo) => {
+  // The fixture server is a source checkout, which never updates itself and
+  // says nothing; an installed one answers mode "self" (D2).
+  await openFresh(page);
+  await expect(
+    page.getByRole('link', { name: 'Settings › Updates' }),
+  ).toHaveCount(0);
+  await page.route('**/api/v1/system/updates', (route) =>
+    route.fulfill({
+      json: {
+        schema_version: 1,
+        revision: 'd'.repeat(64),
+        channel: 'stable',
+        current_version: '98.0.0',
+        last_check: null,
+        last_success: null,
+        skipped_versions: [],
+        available: null,
+        dev_install: false,
+        mode: 'self',
+        auto_check: true,
+        auto_download: true,
+        engine: {
+          phase: 'idle',
+          version: null,
+          step: null,
+          message: null,
+          error: null,
+          retryable: false,
+          apply_when: null,
+          full_installer_url: null,
+          downloaded: 0,
+          total: 0,
+        },
+        previous_version: null,
+        legacy_install: false,
+        host: null,
+        active_work: [],
+        held_back: null,
+        feed_url: null,
+      },
+    }),
+  );
+  await page.reload();
+  const link = page.getByRole('link', { name: 'Settings › Updates' });
+  await expect(link).toBeVisible();
+  await expect(
+    page.getByText('Row-Bot downloads updates in the background.'),
+  ).toBeVisible();
+  await screenshot(page, testInfo, 'background-updates');
+  await assertNoOverflow(page);
+  await link.click();
+  await expect(page).toHaveURL(/\/app-v2\/settings\/updates$/);
+  await expect(
+    page.getByRole('switch', { name: 'Download updates automatically' }),
+  ).toBeChecked();
+});
+
 test('API key: recommended first, a key link, checked before it is saved', async ({
   page,
 }, testInfo) => {

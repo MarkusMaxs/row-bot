@@ -1,27 +1,17 @@
 from __future__ import annotations
 
-import importlib
 import sqlite3
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    for name in [
-        "row_bot.threads",
-        "row_bot.developer.storage",
-        "row_bot.developer.worktrees",
-        "row_bot.tasks",
-    ]:
-        sys.modules.pop(name, None)
-    import row_bot.threads as threads
-    import row_bot.developer.storage as storage
-
-    return importlib.reload(threads), importlib.reload(storage)
+def _fresh_modules(tmp_path, reload_for_data_dir):
+    threads, storage, _worktrees, _tasks = reload_for_data_dir(
+        tmp_path, "row_bot.threads", "row_bot.developer.storage", "row_bot.developer.worktrees", "row_bot.tasks"
+    )
+    return threads, storage
 
 
-def test_latest_workspace_thread_follows_updated_at(tmp_path, monkeypatch):
-    threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_latest_workspace_thread_follows_updated_at(tmp_path, reload_for_data_dir):
+    threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     workspace = storage.add_or_update_local_workspace(str(repo))

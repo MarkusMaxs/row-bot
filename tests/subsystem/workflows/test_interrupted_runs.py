@@ -12,8 +12,8 @@ CUTOFF = datetime(2026, 9, 26, 18, 0)
 
 
 @pytest.fixture
-def runs(tmp_path, monkeypatch):
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def runs(tmp_path, reload_for_data_dir):
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     conn = tasks._get_conn()
     try:
         conn.execute(

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,9 +25,9 @@ class FakeTelegramChat:
         return type("Message", (), {"message_id": len(self.sent)})()
 
 
-def _fresh_goal_runtime(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    for name in (
+def _fresh_goal_runtime(tmp_path, reload_for_data_dir):
+    tasks, threads, agent_runs, goals, registry, _notifications, runtime = reload_for_data_dir(
+        tmp_path / "row-bot-data",
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_runs",
@@ -37,14 +35,7 @@ def _fresh_goal_runtime(tmp_path, monkeypatch):
         "row_bot.channels.registry",
         "row_bot.channels.thread_notifications",
         "row_bot.channels.runtime",
-    ):
-        sys.modules.pop(name, None)
-    tasks = importlib.import_module("row_bot.tasks")
-    threads = importlib.import_module("row_bot.threads")
-    agent_runs = importlib.import_module("row_bot.agent_runs")
-    goals = importlib.import_module("row_bot.goals")
-    registry = importlib.import_module("row_bot.channels.registry")
-    runtime = importlib.import_module("row_bot.channels.runtime")
+    )
     registry._reset()
     return tasks, threads, agent_runs, goals, registry, runtime
 
@@ -233,8 +224,8 @@ def test_telegram_goal_first_interrupt_uses_inline_card(monkeypatch: pytest.Monk
     assert approval_cards[0]["message_thread_id"] == 77
 
 
-def test_channel_goal_terminal_notification_waits_until_answer_send(tmp_path, monkeypatch):
-    tasks, threads, _agent_runs, goals, registry, runtime = _fresh_goal_runtime(tmp_path, monkeypatch)
+def test_channel_goal_terminal_notification_waits_until_answer_send(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks, threads, _agent_runs, goals, registry, runtime = _fresh_goal_runtime(tmp_path, reload_for_data_dir)
     from tests.fixtures.channels import FakeChannel
 
     channel = FakeChannel(name="fake")
@@ -276,8 +267,8 @@ def test_channel_goal_terminal_notification_waits_until_answer_send(tmp_path, mo
     ]
 
 
-def test_goal_completed_during_channel_turn_counts_the_turn(tmp_path, monkeypatch):
-    _tasks, threads, _agent_runs, goals, _registry, runtime = _fresh_goal_runtime(tmp_path, monkeypatch)
+def test_goal_completed_during_channel_turn_counts_the_turn(tmp_path, reload_for_data_dir):
+    _tasks, threads, _agent_runs, goals, _registry, runtime = _fresh_goal_runtime(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Goal accounting")
     start = runtime.prepare_channel_goal_start("/goal finish accounting", thread_id)
     assert start is not None

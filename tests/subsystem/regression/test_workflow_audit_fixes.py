@@ -25,8 +25,8 @@ def test_shell_command_classification_regressions() -> None:
     assert _strip_quoted("ls -la") == "ls -la"
 
 
-def test_delete_task_and_finish_run_clean_up_pipeline_state(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_delete_task_and_finish_run_clean_up_pipeline_state(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
 
     task_id = tasks.create_task(name="cleanup test", prompts=["test"], apply_default_skills=False)
     conn = tasks._get_conn()
@@ -80,8 +80,8 @@ def test_delete_task_and_finish_run_clean_up_pipeline_state(tmp_path, monkeypatc
     assert finished_state is None
 
 
-def test_get_task_channels_distinguishes_none_from_empty_list(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_get_task_channels_distinguishes_none_from_empty_list(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.channels import registry
 
     class RunningChannel:
@@ -110,8 +110,8 @@ def test_get_task_channels_distinguishes_none_from_empty_list(tmp_path, monkeypa
     registry._reset()
 
 
-def test_a_channel_without_a_target_is_a_failed_delivery_not_a_send(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_a_channel_without_a_target_is_a_failed_delivery_not_a_send(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.channels import registry
 
     untargeted = FakeChannel(name="untargeted", display_name="Untargeted", default_target="")

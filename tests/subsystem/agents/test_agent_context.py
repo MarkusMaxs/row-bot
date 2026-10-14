@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 
 
 def _profile(max_context_tokens: int = 0, default_context_mode: str = "focused") -> dict:
@@ -40,10 +39,8 @@ def _patch_parent_context(monkeypatch, messages=None, summary="Parent summary.")
     )
 
 
-def test_focused_context_excludes_parent_transcript(monkeypatch):
-    import row_bot.agent_context as agent_context
-
-    agent_context = importlib.reload(agent_context)
+def test_focused_context_excludes_parent_transcript(monkeypatch, reload_for_data_dir, tmp_path):
+    (agent_context,) = reload_for_data_dir(tmp_path, "row_bot.agent_context")
     _patch_parent_context(monkeypatch)
 
     packet = agent_context.build_child_agent_prompt(
@@ -61,10 +58,8 @@ def test_focused_context_excludes_parent_transcript(monkeypatch):
     assert "Please inspect auth" not in packet["prompt"]
 
 
-def test_recent_context_includes_summary_and_recent_turns(monkeypatch):
-    import row_bot.agent_context as agent_context
-
-    agent_context = importlib.reload(agent_context)
+def test_recent_context_includes_summary_and_recent_turns(monkeypatch, reload_for_data_dir, tmp_path):
+    (agent_context,) = reload_for_data_dir(tmp_path, "row_bot.agent_context")
     _patch_parent_context(monkeypatch)
 
     packet = agent_context.build_child_agent_prompt(
@@ -82,10 +77,8 @@ def test_recent_context_includes_summary_and_recent_turns(monkeypatch):
     assert "User: Focus on token handling." in packet["prompt"]
 
 
-def test_child_prompt_includes_runtime_model_boundary(monkeypatch):
-    import row_bot.agent_context as agent_context
-
-    agent_context = importlib.reload(agent_context)
+def test_child_prompt_includes_runtime_model_boundary(monkeypatch, reload_for_data_dir, tmp_path):
+    (agent_context,) = reload_for_data_dir(tmp_path, "row_bot.agent_context")
     _patch_parent_context(monkeypatch)
 
     packet = agent_context.build_child_agent_prompt(
@@ -101,10 +94,8 @@ def test_child_prompt_includes_runtime_model_boundary(monkeypatch):
     assert "Do not call row_bot_update_setting(setting='model')" in packet["prompt"]
 
 
-def test_full_context_falls_back_to_recent_when_over_budget(monkeypatch):
-    import row_bot.agent_context as agent_context
-
-    agent_context = importlib.reload(agent_context)
+def test_full_context_falls_back_to_recent_when_over_budget(monkeypatch, reload_for_data_dir, tmp_path):
+    (agent_context,) = reload_for_data_dir(tmp_path, "row_bot.agent_context")
     messages = [
         {"role": "user", "content": "x" * 4000},
         {"role": "assistant", "content": "y" * 4000},
@@ -125,10 +116,8 @@ def test_full_context_falls_back_to_recent_when_over_budget(monkeypatch):
     assert "FULL PARENT TRANSCRIPT" not in packet["prompt"]
 
 
-def test_empty_and_auto_modes(monkeypatch):
-    import row_bot.agent_context as agent_context
-
-    agent_context = importlib.reload(agent_context)
+def test_empty_and_auto_modes(monkeypatch, reload_for_data_dir, tmp_path):
+    (agent_context,) = reload_for_data_dir(tmp_path, "row_bot.agent_context")
     _patch_parent_context(monkeypatch)
 
     empty = agent_context.build_child_agent_prompt(

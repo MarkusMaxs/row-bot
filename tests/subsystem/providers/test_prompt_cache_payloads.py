@@ -11,7 +11,6 @@ checked get nothing. Fake Messages, OpenRouter and Requesty APIs answer through
 
 from __future__ import annotations
 
-import importlib
 import json
 import sqlite3
 from contextlib import closing
@@ -48,11 +47,9 @@ def _fresh_cache_memory(monkeypatch):
     monkeypatch.setattr(cache_breakpoints, "_REJECTED_ROUTES", set())
 
 
-def _fresh_agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.agent as agent
+def _fresh_agent(tmp_path, monkeypatch, reload_for_data_dir):
 
-    return importlib.reload(agent)
+    return reload_for_data_dir(tmp_path / "data", "row_bot.agent")[0]
 
 
 def _has_cache_control(message) -> bool:
@@ -149,9 +146,9 @@ def _agent_request(
     ],
 )
 def test_each_claude_route_gets_only_the_cache_instructions_it_documents(
-    tmp_path, monkeypatch, provider_id, model_id, uses_anthropic_messages, system_breakpoint, tail
+    tmp_path, monkeypatch, provider_id, model_id, uses_anthropic_messages, system_breakpoint, tail, reload_for_data_dir
 ):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+    agent = _fresh_agent(tmp_path, monkeypatch, reload_for_data_dir)
     model_ref = _quiet_agent(agent, monkeypatch, provider_id, model_id)
     monkeypatch.setattr(
         agent,
@@ -174,9 +171,9 @@ def test_each_claude_route_gets_only_the_cache_instructions_it_documents(
 
 
 def test_openrouter_gets_the_system_prompt_as_blocks_with_the_breakpoint_on_the_last_stable_one(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, reload_for_data_dir
 ):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+    agent = _fresh_agent(tmp_path, monkeypatch, reload_for_data_dir)
     model_ref = _quiet_agent(agent, monkeypatch, "openrouter", "anthropic/claude-sonnet-4-5")
 
     result = _agent_request(agent, model_ref, messages=[HumanMessage(content="hello")])
@@ -192,8 +189,8 @@ def test_openrouter_gets_the_system_prompt_as_blocks_with_the_breakpoint_on_the_
     assert blocks[-1]["cache_control"] == ONE_HOUR
 
 
-def test_computer_guide_is_a_tool_belt_bound_stable_section(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_computer_guide_is_a_tool_belt_bound_stable_section(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.skills as skills
 
     skills.load_skills()
@@ -280,8 +277,8 @@ def test_computer_guide_is_a_tool_belt_bound_stable_section(tmp_path, monkeypatc
         ("normal_chat", True, None, FIVE_MINUTES),
     ],
 )
-def test_the_cache_lifetime_follows_the_conversation(tmp_path, monkeypatch, surface, background, config, expected):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_the_cache_lifetime_follows_the_conversation(tmp_path, monkeypatch, surface, background, config, expected, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, monkeypatch, reload_for_data_dir)
     model_ref = _quiet_agent(agent, monkeypatch, "anthropic", "claude-opus-5-5")
     monkeypatch.setattr(agent, "is_background_workflow", lambda: background)
 

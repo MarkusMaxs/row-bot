@@ -47,6 +47,10 @@ SECRET_PATTERNS = [
     re.compile(r"C:\\Users\\"),
     re.compile(r"/Users/[^/\s]+"),
 ]
+# The Linux install lives in the home folder's XDG `.local` (`~/.local/share`,
+# `~/.local/bin`, systemd's `%h/.local/bin`); any other `.local/` is the
+# checkout's private folder.
+HOME_DOT_LOCAL = re.compile(r"(?:~|\$HOME|%h)/\.local/")
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -98,7 +102,7 @@ def _relative(path: Path) -> str:
 def _scan_text(path: Path, text: str) -> list[str]:
     errors: list[str] = []
     rel = _relative(path)
-    if ".local/" in text.replace("\\", "/"):
+    if ".local/" in HOME_DOT_LOCAL.sub("", text.replace("\\", "/")):
         errors.append(f"{rel} references .local")
     lowered = text.lower()
     normalized = text.replace("\\", "/")

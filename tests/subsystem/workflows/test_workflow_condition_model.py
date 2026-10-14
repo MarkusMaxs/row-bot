@@ -43,8 +43,8 @@ class _ConditionModel(BaseChatModel):
 
 
 @pytest.fixture
-def workflow(tmp_path, monkeypatch):
-    tasks, threads, _profiles, _runs, _skills = _fresh_modules(tmp_path, monkeypatch)
+def workflow(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks, threads, _profiles, _runs, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     calls: list[dict] = []
     _install_fake_agent(monkeypatch, calls)
     _run_workflow_synchronously(monkeypatch, tasks)

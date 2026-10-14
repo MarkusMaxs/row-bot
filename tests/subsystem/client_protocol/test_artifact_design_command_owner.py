@@ -3,7 +3,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
-import importlib
 import json
 import sqlite3
 import threading
@@ -386,14 +385,14 @@ def test_corrupt_private_checkpoint_never_exposes_or_executes_paths(owner, monke
     assert '_artifact_design' not in result and 'outside' not in json.dumps(result)
 
 
-def test_confirmed_checkpoint_survives_module_reload_and_policy_withdrawal(owner, monkeypatch):
+def test_confirmed_checkpoint_survives_module_reload_and_policy_withdrawal(owner, monkeypatch, reload_for_data_dir):
     body, complete = owner.body(), admissions.complete_command
     monkeypatch.setattr(admissions, 'complete_command', lambda *_: (_ for _ in ()).throw(OSError('synthetic completion fault')))
     owner.execute(body)
     monkeypatch.setattr(admissions, 'complete_command', complete)
     with sqlite3.connect(owner.threads.DB_PATH) as conn:
         conn.execute("UPDATE thread_meta SET approval_mode='block' WHERE thread_id='chat'")
-    importlib.reload(commands)
+    reload_for_data_dir(None, 'row_bot.application.artifact_design_commands')
     monkeypatch.setattr(controls, 'apply_control', lambda *_a, **_kw: pytest.fail('Recovery repeated blocked effect'))
     assert owner.execute(body)['artifact_design']['status'] == 'saved'
 

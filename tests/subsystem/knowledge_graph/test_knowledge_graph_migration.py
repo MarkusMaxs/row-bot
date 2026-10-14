@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import sqlite3
 from contextlib import closing
@@ -12,7 +11,7 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def test_legacy_memories_table_migrates_to_entities(tmp_path, monkeypatch) -> None:
+def test_legacy_memories_table_migrates_to_entities(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     data_dir = tmp_path / "row-bot-data"
     data_dir.mkdir(parents=True)
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
@@ -41,7 +40,7 @@ def test_legacy_memories_table_migrates_to_entities(tmp_path, monkeypatch) -> No
 
     import row_bot.knowledge_graph as kg
 
-    kg = importlib.reload(kg)
+    (kg,) = reload_for_data_dir(data_dir, "row_bot.knowledge_graph")
     kg._skip_reindex = True
     migrated = kg.get_entity("legacy-1")
     tables_conn = sqlite3.connect(db_path)
@@ -56,10 +55,10 @@ def test_legacy_memories_table_migrates_to_entities(tmp_path, monkeypatch) -> No
     assert "memories" not in tables
 
 
-def test_fresh_knowledge_graph_uses_isolated_data_dir(tmp_path, monkeypatch) -> None:
+def test_fresh_knowledge_graph_uses_isolated_data_dir(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     from tests.fixtures.knowledge_graph import fresh_knowledge_graph
 
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     entity = kg.save_entity("project", "Row-Bot", "Local-first assistant", source="test")
 
     assert kg.DB_PATH.startswith(str(tmp_path))
@@ -67,10 +66,10 @@ def test_fresh_knowledge_graph_uses_isolated_data_dir(tmp_path, monkeypatch) -> 
     assert kg.get_entity(entity["id"])["subject"] == "Row-Bot"
 
 
-def test_recall_stamps_move_out_of_saved_properties_and_keep_decay_order(tmp_path, monkeypatch) -> None:
+def test_recall_stamps_move_out_of_saved_properties_and_keep_decay_order(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     from tests.fixtures.knowledge_graph import fresh_knowledge_graph
 
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     old = (datetime.now() - timedelta(days=120)).isoformat()
     recent = (datetime.now() - timedelta(days=1)).isoformat()
     # Saved by an earlier version, which kept the recall stamp in properties.
@@ -86,7 +85,7 @@ def test_recall_stamps_move_out_of_saved_properties_and_keep_decay_order(tmp_pat
             )
         conn.commit()
 
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)  # the next start migrates
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)  # the next start migrates
 
     assert json.loads(kg.get_entity("recalled")["properties"]) == {"status": "active"}
     assert kg.get_entity("recalled")["updated_at"] == old

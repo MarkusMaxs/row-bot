@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib
 import sqlite3
-import sys
 import threading
 import time
 
@@ -12,25 +10,17 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path, monkeypatch):
+def _fresh_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    tasks, _profiles, _settings, agent_runs, orchestrator = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.agent_profiles",
         "row_bot.agent_settings",
         "row_bot.agent_runs",
         "row_bot.agent_orchestrator",
-    ):
-        sys.modules.pop(name, None)
-    import row_bot.tasks as tasks
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_orchestrator as orchestrator
-
-    tasks = importlib.reload(tasks)
-    agent_runs = importlib.reload(agent_runs)
-    orchestrator = importlib.reload(orchestrator)
+    )
     return tasks, agent_runs, orchestrator
 
 
@@ -58,7 +48,7 @@ def _run(agent_runs, run_id: str, *, status: str = "running"):
     )
 
 
-def test_schema_repairs_partial_orchestration_tables(tmp_path, monkeypatch):
+def test_schema_repairs_partial_orchestration_tables(tmp_path, monkeypatch, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
@@ -70,7 +60,7 @@ def test_schema_repairs_partial_orchestration_tables(tmp_path, monkeypatch):
         )
         conn.commit()
 
-    _tasks, agent_runs, _orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, _orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     agent_runs.ensure_agent_run_schema(force=True)
 
     with sqlite3.connect(db_path) as conn:
@@ -121,9 +111,9 @@ def test_schema_repairs_partial_orchestration_tables(tmp_path, monkeypatch):
 
 def test_corrupt_orchestration_json_repairs_to_safe_empty_values(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     conn = orchestrator._conn()
     try:
@@ -144,9 +134,9 @@ def test_corrupt_orchestration_json_repairs_to_safe_empty_values(
 
 def test_orchestration_display_counts_separate_approval_and_active_work(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     statuses = {
         "queued-child": "queued",
@@ -183,9 +173,9 @@ def test_orchestration_display_counts_separate_approval_and_active_work(
 
 def test_orchestration_counts_reconcile_terminal_run_before_member_callback(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     agent_runs.create_agent_run(
         run_id="stopped-before-member-callback",
@@ -213,9 +203,9 @@ def test_orchestration_counts_reconcile_terminal_run_before_member_callback(
 
 def test_generation_is_single_and_members_are_required_optional_and_waved(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     same = _orchestration(orchestrator)
     assert same["id"] == orchestration["id"]
@@ -243,9 +233,9 @@ def test_generation_is_single_and_members_are_required_optional_and_waved(
 
 def test_concurrent_generation_creation_returns_one_orchestration(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     barrier = threading.Barrier(5)
     identifiers: list[str] = []
 
@@ -266,9 +256,9 @@ def test_concurrent_generation_creation_returns_one_orchestration(
 
 def test_terminal_events_claim_one_synthesis_after_required_barrier(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     first = _run(agent_runs, "first")
     second = _run(agent_runs, "second")
@@ -327,9 +317,9 @@ def test_terminal_events_claim_one_synthesis_after_required_barrier(
 
 def test_transient_failure_retries_once_and_preserves_logical_barrier(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     original = _run(agent_runs, "original")
     orchestrator.register_member(orchestration["id"], original["id"], required=True)
@@ -383,9 +373,9 @@ def test_transient_failure_retries_once_and_preserves_logical_barrier(
 
 def test_lifecycle_snapshots_are_fixed_and_illegal_transitions_fail(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id="snapshot-parent",
         parent_generation_id="snapshot-generation",
@@ -428,9 +418,9 @@ def test_lifecycle_snapshots_are_fixed_and_illegal_transitions_fail(
 
 def test_dependencies_are_same_group_and_wake_from_terminal_event(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     first = _run(agent_runs, "dependency", status="running")
     second = _run(agent_runs, "dependent", status="queued")
@@ -468,9 +458,9 @@ def test_dependencies_are_same_group_and_wake_from_terminal_event(
 
 def test_optional_members_are_durable_nonblocking_and_keep_legacy_delivery(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     required = _run(agent_runs, "required")
     optional = _run(agent_runs, "optional")
@@ -522,9 +512,9 @@ def test_transient_failure_classification(status, error, expected):
 
 def test_result_packet_is_ordered_bounded_and_reports_worktrees(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator)
     for index, summary in enumerate(("first-" + "a" * 200, "second-" + "b" * 200)):
         run = agent_runs.create_agent_run(
@@ -551,9 +541,9 @@ def test_result_packet_is_ordered_bounded_and_reports_worktrees(
 
 def test_v2_child_completion_wakes_original_parent_without_synthesis(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "joined-child")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -624,9 +614,9 @@ def test_v2_child_completion_wakes_original_parent_without_synthesis(
 
 def test_v2_later_delegation_wave_keeps_same_parent_turn(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     first = _run(agent_runs, "wave-one")
     orchestrator.register_member(orchestration["id"], first["id"], required=True)
@@ -680,9 +670,9 @@ def test_v2_later_delegation_wave_keeps_same_parent_turn(
 
 def test_v2_multiple_children_complete_out_of_order_before_one_final(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     first = _run(agent_runs, "ordered-first")
     second = _run(agent_runs, "ordered-second")
@@ -733,9 +723,9 @@ def test_v2_multiple_children_complete_out_of_order_before_one_final(
 
 def test_timed_out_group_wait_falls_back_once_when_child_later_finishes(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "timeout-fallback-child")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -776,9 +766,9 @@ def test_timed_out_group_wait_falls_back_once_when_child_later_finishes(
 
 def test_parent_steering_wakes_promptly_while_child_events_stay_coalesced(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     fast = _run(agent_runs, "steering-fast")
     slow = _run(agent_runs, "steering-slow")
@@ -831,9 +821,9 @@ def test_parent_steering_wakes_promptly_while_child_events_stay_coalesced(
 
 def test_v2_child_approval_does_not_freeze_original_parent(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "approval-child")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -871,9 +861,9 @@ def test_v2_child_approval_does_not_freeze_original_parent(
 
 def test_v2_transient_retry_returns_replacement_to_same_parent(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     original = _run(agent_runs, "retry-original")
     orchestrator.register_member(orchestration["id"], original["id"], required=True)
@@ -947,8 +937,9 @@ def test_v2_transient_retry_returns_replacement_to_same_parent(
 def test_required_group_wait_follows_retry_replacement_and_excludes_superseded(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     original = _run(agent_runs, "group-retry-original")
     orchestrator.register_member(orchestration["id"], original["id"], required=True)
@@ -1003,8 +994,8 @@ def test_required_group_wait_follows_retry_replacement_and_excludes_superseded(
     }
 
 
-def test_v2_detached_child_does_not_block_parent_final(tmp_path, monkeypatch):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_v2_detached_child_does_not_block_parent_final(tmp_path, reload_for_data_dir):
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     detached = _run(agent_runs, "detached")
     orchestrator.register_member(
@@ -1037,10 +1028,10 @@ def test_v2_detached_child_does_not_block_parent_final(tmp_path, monkeypatch):
 @pytest.mark.parametrize("approved", [True, False])
 def test_v2_background_parent_approval_resumes_same_checkpoint(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
     approved,
 ):
-    tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "approval-source")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -1115,8 +1106,9 @@ def test_v2_background_parent_approval_resumes_same_checkpoint(
 def test_v2_parent_approval_resume_applies_decision_to_regenerated_interrupt_group(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "approval-source")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -1206,9 +1198,9 @@ def test_v2_parent_approval_resume_applies_decision_to_regenerated_interrupt_gro
 
 def test_handled_parent_approval_is_not_reused_for_a_new_interrupt(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     first = {
         "type": "interrupt",
@@ -1263,8 +1255,9 @@ def test_handled_parent_approval_is_not_reused_for_a_new_interrupt(
 def test_parent_resume_failure_becomes_resume_required_not_phantom_approval(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     interrupt = {
         "type": "interrupt",
@@ -1311,8 +1304,9 @@ def test_parent_resume_failure_becomes_resume_required_not_phantom_approval(
 def test_parent_pass_records_authoritative_checkpoint_identity(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     monkeypatch.setattr(
         orchestrator,
@@ -1343,9 +1337,9 @@ def test_parent_pass_records_authoritative_checkpoint_identity(
 
 def test_v2_user_steering_and_child_completion_share_ordered_parent_inbox(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "steered-child")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -1409,8 +1403,8 @@ def test_v2_user_steering_and_child_completion_share_ordered_parent_inbox(
     assert "Windows result" in calls[-1][0]
 
 
-def test_v2_stop_all_wakes_parent_for_natural_final(tmp_path, monkeypatch):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_v2_stop_all_wakes_parent_for_natural_final(tmp_path, monkeypatch, reload_for_data_dir):
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "stop-v2")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -1457,8 +1451,9 @@ def test_v2_stop_all_wakes_parent_for_natural_final(tmp_path, monkeypatch):
 def test_v2_individual_stop_then_stop_all_wakes_parent_for_natural_final(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     first = _run(agent_runs, "stop-first-v2")
     second = _run(agent_runs, "stop-second-v2")
@@ -1503,8 +1498,8 @@ def test_v2_individual_stop_then_stop_all_wakes_parent_for_natural_final(
     )
 
 
-def test_v2_parent_lease_serializes_one_thread_runner(tmp_path, monkeypatch):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_v2_parent_lease_serializes_one_thread_runner(tmp_path, reload_for_data_dir):
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     orchestrator.arm_parent_wait(
         orchestration["id"],
@@ -1529,8 +1524,8 @@ def test_v2_parent_lease_serializes_one_thread_runner(tmp_path, monkeypatch):
     orchestrator._release_parent_lease(orchestration["id"], lease_owner)
 
 
-def test_v2_provider_failure_keeps_event_for_bounded_retry(tmp_path, monkeypatch):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_v2_provider_failure_keeps_event_for_bounded_retry(tmp_path, reload_for_data_dir):
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     orchestrator.arm_parent_wait(
         orchestration["id"],
@@ -1580,9 +1575,9 @@ def test_v2_provider_failure_keeps_event_for_bounded_retry(tmp_path, monkeypatch
 
 def test_v2_parent_outbox_retry_reuses_key_and_records_attempts(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     calls: list[str] = []
 
@@ -1618,8 +1613,8 @@ def test_v2_parent_outbox_retry_reuses_key_and_records_attempts(
     assert calls == [first["id"], first["id"]]
 
 
-def test_v2_duplicate_callbacks_enqueue_one_parent_event(tmp_path, monkeypatch):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_v2_duplicate_callbacks_enqueue_one_parent_event(tmp_path, reload_for_data_dir):
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "duplicate-child", status="running")
     orchestrator.register_member(orchestration["id"], child["id"], required=True)
@@ -1653,8 +1648,8 @@ def test_v2_duplicate_callbacks_enqueue_one_parent_event(tmp_path, monkeypatch):
     ) == 1
 
 
-def test_v2_joining_already_terminal_run_materializes_event(tmp_path, monkeypatch):
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_v2_joining_already_terminal_run_materializes_event(tmp_path, reload_for_data_dir):
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = _orchestration(orchestrator, version=2)
     child = _run(agent_runs, "already-done", status="completed")
     orchestrator.set_test_executors(parent=lambda *_args: "Used the earlier result.")
@@ -1680,8 +1675,9 @@ def test_v2_joining_already_terminal_run_materializes_event(tmp_path, monkeypatc
 def test_v2_parent_wake_rebinds_exact_designer_project_and_rejects_drift(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, _agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     import row_bot.designer.session as designer_session
     import row_bot.threads as threads
 
@@ -1721,9 +1717,9 @@ def test_v2_parent_wake_rebinds_exact_designer_project_and_rejects_drift(
         orchestrator._bind_recorded_parent_resources(orchestration, config)
 
 
-def test_optional_helpers_finishing_tell_buddy_the_agent_work_is_done(tmp_path, monkeypatch):
+def test_optional_helpers_finishing_tell_buddy_the_agent_work_is_done(tmp_path, monkeypatch, reload_for_data_dir):
     """B302: Buddy kept saying "Agents working" after every helper had finished."""
-    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     from row_bot.buddy import events as buddy_events
 
     emitted: list[str] = []

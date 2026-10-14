@@ -12,8 +12,8 @@ from tests.fixtures.memory_stack import fresh_memory_stack
 pytestmark = pytest.mark.subsystem
 
 
-def test_memory_tool_exposes_expected_subtools_and_delete_is_destructive(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_tool_exposes_expected_subtools_and_delete_is_destructive(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     tool = stack["memory_tool"].MemoryTool()
 
     subtools = {subtool.name for subtool in tool.as_langchain_tools()}
@@ -50,8 +50,8 @@ def test_optional_tool_import_failures_are_isolated(monkeypatch) -> None:
         tools_pkg._import_tool_module("row_bot.tools.required_broken", optional=False)
 
 
-def test_memory_tool_save_list_update_delete_uses_isolated_memory_store(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_tool_save_list_update_delete_uses_isolated_memory_store(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_tool = stack["memory_tool"]
     monkeypatch.setattr(memory_tool, "_check_contradiction", lambda *_args, **_kwargs: None)
 
@@ -137,8 +137,8 @@ def test_memory_tool_saves_without_a_local_search_model_and_indexes_later(
     assert diagnostics["semantic_status"] == "used"
 
 
-def test_memory_tool_search_formats_properties_and_graph_context(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_tool_search_formats_properties_and_graph_context(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_tool = stack["memory_tool"]
     touched: list[list[str]] = []
 
@@ -200,8 +200,8 @@ def test_memory_tool_search_formats_properties_and_graph_context(tmp_path, monke
     ]
 
 
-def test_memory_tool_links_and_explores_connections_by_subject(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_tool_links_and_explores_connections_by_subject(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_tool = stack["memory_tool"]
     monkeypatch.setattr(memory_tool, "_check_contradiction", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -224,8 +224,8 @@ def test_memory_tool_links_and_explores_connections_by_subject(tmp_path, monkeyp
     assert "```mermaid" in explore_result
 
 
-def test_memory_tool_missing_link_endpoint_is_reported_without_raising(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_tool_missing_link_endpoint_is_reported_without_raising(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_tool = stack["memory_tool"]
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
 

@@ -596,6 +596,22 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* D2: the one line saying updates download in the background, and where. */
+.first-run-note {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-13);
+}
+.first-run-note svg {
+  flex: none;
+  align-self: center;
+}
+.first-run-note a {
+  color: var(--text-link);
+}
 .home-gate {
   min-height: 60vh;
 }
@@ -624,11 +640,13 @@
   .first-run-model,
   .first-run-provider,
   .first-run-later,
-  .first-run-footer a {
+  .first-run-footer a,
+  .first-run-note a {
     min-height: 44px;
   }
   .first-run-later,
-  .first-run-footer a {
+  .first-run-footer a,
+  .first-run-note a {
     display: inline-flex;
     align-items: center;
   }

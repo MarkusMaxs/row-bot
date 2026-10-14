@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 
 import pytest
 
@@ -16,19 +15,16 @@ def _chosen_model(monkeypatch):
     monkeypatch.setattr(models, "_current_model", "model:ollama:fixture-model")
 
 
-def fresh_dream_cycle(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    import row_bot.knowledge_graph as kg
-    import row_bot.dream_cycle as dream_cycle
+def fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir):
 
-    importlib.reload(kg)
-    return importlib.reload(dream_cycle)
+    reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.knowledge_graph")
+    return reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.dream_cycle")[0]
 
 
-def test_should_dream_requires_enabled_idle_window_and_no_turn_in_flight(tmp_path, monkeypatch) -> None:
+def test_should_dream_requires_enabled_idle_window_and_no_turn_in_flight(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     from row_bot.runtime import executions
 
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
     registry = executions.GenerationRuntimeRegistry()
     monkeypatch.setattr(executions, "generation_registry", registry)
 
@@ -51,8 +47,8 @@ def test_should_dream_requires_enabled_idle_window_and_no_turn_in_flight(tmp_pat
     assert dream_cycle._should_dream() is False
 
 
-def test_run_dream_cycle_below_minimum_records_journal_skip(tmp_path, monkeypatch) -> None:
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+def test_run_dream_cycle_below_minimum_records_journal_skip(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
 
     summary = dream_cycle.run_dream_cycle()
     journal = dream_cycle.get_journal(limit=1)
