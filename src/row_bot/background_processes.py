@@ -747,6 +747,13 @@ def list_processes(conversation_id: str | None = None) -> list[BackgroundProcess
     return sorted(records, key=lambda item: (not item.running, -item.started_at))
 
 
+def running_commands() -> list[BackgroundProcess]:
+    """Long commands carrying on in the background now (not servers): Buddy shows them as work."""
+    with _LOCK:
+        return [record for record in _RECORDS.values()
+                if record.running and not record.inline and record.kind == "command"]
+
+
 def wait(record: BackgroundProcess, timeout: float | None) -> bool:
     """Wait for a process to end and its cleanup to finish; True when it has."""
     tracked = record.tracked

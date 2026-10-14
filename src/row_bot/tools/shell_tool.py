@@ -790,7 +790,7 @@ class ShellTool(BaseTool):
         """The approval a classified command needs, as run_command asks it: (refusal or None, approval line).
 
         Safe commands run without asking; the private data folder needs its setting and then
-        asks (the reviewer under Auto, allowed under Full autonomy); anything else asks by the
+        asks (the reviewer under Auto, allowed under Hands-off); anything else asks by the
         conversation's approval level. Blocked patterns never reach here.
         """
         approval = APPROVAL_NOT_NEEDED_SAFE
@@ -801,7 +801,7 @@ class ShellTool(BaseTool):
             if mode == "block":
                 return f"BLOCKED: this command reads Row-Bot's private data folder: {command}", ""
             # Asked under Ask; under Auto the reviewer approves it only when the person clearly asked
-            # for it; Full autonomy allows it (the setting above still has to be on).
+            # for it; Hands-off allows it (the setting above still has to be on).
             outcome, approval = resolve_approval_line(
                 {**payload, "label": "Read Row-Bot's private data?", "description": private_description},
                 approval_mode=mode,
