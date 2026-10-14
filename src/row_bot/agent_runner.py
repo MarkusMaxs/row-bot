@@ -368,6 +368,41 @@ def _filter_child_tools(
     return filtered
 
 
+def _with_code_folder_reads(
+    profile_snapshot: Mapping[str, Any],
+    *,
+    parent_workspace_id: str,
+    child_workspace_id: str,
+) -> dict[str, Any]:
+    """A read-only helper can read the code folder of the chat that delegated it (B335).
+
+    A chat with a code folder leaves the general file and shell tools out of its
+    turns (its code goes through the Developer tools), and the built-in read-only
+    profiles list no Developer tools, so a review helper could not open the folder it
+    was asked to check. Such a helper now gets the Developer tools on that same folder,
+    and only their reads: its read-only capability refuses every write, delete,
+    branch, commit, push, pull request, import and command at dispatch, before any
+    approval, whatever the chat's approval mode. Write-capable profiles gain nothing,
+    and a person's own profile keeps the tool list they chose for it.
+    """
+    snapshot = dict(profile_snapshot)
+    tool_policy = snapshot.get("tool_policy_json")
+    if (
+        not parent_workspace_id
+        or child_workspace_id != parent_workspace_id
+        or snapshot.get("source") != "builtin"
+        or not isinstance(tool_policy, Mapping)
+        or str(tool_policy.get("capability") or "read_only") != "read_only"
+    ):
+        return snapshot
+    allow = [str(name) for name in tool_policy.get("allow_tools") or []]
+    deny = [str(name) for name in tool_policy.get("deny_tools") or []]
+    if not allow or "developer" in allow or "developer" in deny:
+        return snapshot
+    snapshot["tool_policy_json"] = {**tool_policy, "allow_tools": [*allow, "developer"]}
+    return snapshot
+
+
 def _profile_child_skills(
     _parent_skills_override: Sequence[str] | None,
     profile_snapshot: Mapping[str, Any],
@@ -716,6 +751,11 @@ def spawn_agent_run(
         workspace_path = str(worktree_allocation.get("worktree_path") or "")
         if not effective_developer_workspace_id or not workspace_path:
             raise AgentRunnerError("Worktree did not return a usable workspace.")
+    profile_snapshot = _with_code_folder_reads(
+        profile_snapshot,
+        parent_workspace_id=str(parent_defaults.get("developer_workspace_id") or ""),
+        child_workspace_id=effective_developer_workspace_id,
+    )
 
     packet = build_child_agent_prompt(
         objective=objective,
