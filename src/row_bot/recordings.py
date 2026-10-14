@@ -278,8 +278,8 @@ def finished(record: Recording, reason: str, video: Path | None) -> None:
     """The backend's call when capture has ended: save the video to the conversation's files."""
 
     with _LOCK:
-        if record.status not in {"recording", "saving"}:
-            return
+        if record.status != "recording":
+            return  # Already being saved (a second end, from a stop that failed and its capture).
         record.status = "saving"
         record.stopped_by = record.stopped_by or _stopped_by(reason)
         record.ended_at = time.time()

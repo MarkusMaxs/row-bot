@@ -207,3 +207,10 @@ def test_the_screenshot_tool_shows_the_picture_in_the_chat_without_asking(monkey
     assert tools["browser_viewport"].func("tablet").startswith("The page now shows at tablet size")
     assert asked == []
     session._closed = True
+
+
+def test_a_page_with_too_many_protected_fields_to_cover_is_not_saved():
+    page = _Page("https://example.com/", image=_png(), boxes=[[1, 1, 2, 2, 1]] * 201)
+    image, words = _session(page).capture_page("chat")
+
+    assert image is None and words.startswith("The screenshot couldn't be taken.")

@@ -82,7 +82,7 @@ def _cover(image: bytes, boxes: list[Any], *, jpeg: bool) -> bytes:
 
     picture = Image.open(io.BytesIO(image)).convert("RGB")
     draw = ImageDraw.Draw(picture)
-    for box in boxes[:200]:
+    for box in boxes:
         try:
             x, y, width, height, ratio = (float(value) for value in box)
         except (TypeError, ValueError):
@@ -1416,6 +1416,8 @@ class ManagedBrowserService:
             )
         except Exception:
             return None  # Unknown: never save a picture that might show one uncovered.
+        if not isinstance(boxes, list) or len(boxes) > 200:
+            return None  # Too many to be sure every one is covered: no picture.
         return _cover(data, boxes, jpeg=jpeg) if boxes else data
 
     def start_recording(

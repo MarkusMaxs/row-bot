@@ -169,10 +169,22 @@ test('a recording shows live with Stop, then as a video in the chat', async ({
   await expect(saved).toBeVisible();
   await expect(saved).toContainText('Stopped by you');
   await expect(saved.getByRole('button', { name: 'Stop' })).toHaveCount(0);
-  await expect(saved.locator('video')).toHaveCount(1);
-  await everywhere(page, info, 'recording-saved', () =>
-    saved.scrollIntoViewIfNeeded(),
-  );
+  const player = saved.locator('video');
+  await expect(player).toHaveCount(1);
+  // Its first picture, where the browser can play H.264 (Chromium builds without it show the player).
+  const firstPicture = () =>
+    player.evaluate(
+      (video: HTMLVideoElement) =>
+        new Promise<void>((done) => {
+          if (video.readyState >= 2) return done();
+          video.addEventListener('loadeddata', () => done(), { once: true });
+          setTimeout(done, 5000);
+        }),
+    );
+  await everywhere(page, info, 'recording-saved', async () => {
+    await saved.scrollIntoViewIfNeeded();
+    await firstPicture();
+  });
 });
 
 test('recording the screen without Computer use says what it needs', async ({
