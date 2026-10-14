@@ -84,6 +84,8 @@ def test_mcp_langchain_wrappers_are_built_from_injected_catalog(monkeypatch) -> 
     ("search_docs", "Run a search over the docs", None, "read_only", False),
     ("append_insight", "Add a business insight to the memo", None, "mutation", False),
     ("save_purchase_orders", "Save purchase orders to the ledger", {"readOnlyHint": False}, "mutation", False),
+    # A server that says a tool is not read-only outweighs a read verb in its name (B306 addendum): it asks first.
+    ("list_purchase_orders", "List purchase orders", {"readOnlyHint": False}, "unknown", False),
     ("write_query", "Execute an INSERT, UPDATE, or DELETE query on the SQLite database", None, "mutation", True),
     # ...unless the server says it isn't destructive: a change's description then can't make it high impact,
     ("create_pages", "Create pages and share them with your team", None, "mutation", True),

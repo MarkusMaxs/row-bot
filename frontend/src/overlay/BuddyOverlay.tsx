@@ -683,7 +683,7 @@ export default function BuddyOverlay({
       {phase === 'approval' && (
         <aside
           className="buddy-overlay-approval"
-          aria-label={`Approval required for ${actionLabel || 'requested action'}`}
+          aria-label={`Approval required for ${approval?.app?.tool || actionLabel || 'requested action'}${approval?.app?.tool ? ` in ${approval.app.name}` : ''}`}
           data-risk={approval?.risk_class ?? 'unknown'}
         >
           <ShieldAlert

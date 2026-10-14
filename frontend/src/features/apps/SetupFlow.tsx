@@ -555,7 +555,7 @@ export function PlanProgress({
             {plan.state === 'completed' ? 'Done' : 'Close'}
           </Button>
         )}
-        {plan.state === 'failed' && (
+        {(plan.state === 'failed' || plan.state === 'expired') && (
           <Button
             variant="primary"
             onClick={() => void control.review(plan.intent)}
