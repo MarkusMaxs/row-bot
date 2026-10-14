@@ -7,7 +7,7 @@ Public documentation index for Row-Bot.
 - [Getting Started](/docs/getting-started/)
   Route: /docs/getting-started/. Install Row-Bot, complete first launch, and learn the first choices that matter.
 - [Installation](/docs/getting-started/installation)
-  Route: /docs/getting-started/installation. Install Row-Bot from a release package or run it from source with clear next steps.
+  Route: /docs/getting-started/installation. Install Row-Bot on Windows, macOS or Linux, see where it keeps your data, move from 5.1, uninstall, or run it from source.
 - [First Launch](/docs/getting-started/first-launch)
   Route: /docs/getting-started/first-launch. Answer "How should Row-Bot think?" to choose your first model, then finish the rest at your own pace in Setup Center.
 - [Models And Providers](/docs/configuration/models-and-providers)
@@ -112,6 +112,8 @@ Public documentation index for Row-Bot.
   Route: /docs/extending/mcp-apps. For developers: how Row-Bot shows an app's ui:// view in chat, with the sandboxed frame, its Content-Security-Policy, declared domains, the bridge messages it answers, limits, and calls that go through approvals.
 - [Operations, Data, And Recovery](/docs/operations/)
   Route: /docs/operations/. Back up, restore, update, repair, and uninstall Row-Bot without losing track of local data and credentials.
+- [Updates](/docs/operations/updates)
+  Route: /docs/operations/updates. How Row-Bot downloads updates in the background, restarts into them, goes back with Repair, and what it contacts.
 - [Remote Access And Server Mode](/docs/operations/remote-access)
   Route: /docs/operations/remote-access. Use Row-Bot as one owner from trusted devices through Tailscale, LAN, SSH, Docker, or an HTTPS reverse proxy.
 - [Docker And VPS Operations](/docs/operations/docker)

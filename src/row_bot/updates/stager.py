@@ -8,7 +8,9 @@
 2. the changed and added wheels, installed by the clone's own pip from local
    files only: ``pip install --no-index --no-deps --require-hashes`` (D14);
 3. the code archive and, when they changed, the assets (otherwise the running
-   version's ``static/`` and ``sounds/`` are cloned);
+   version's ``static/`` and ``sounds/`` are cloned); then the staged
+   version's own ``payload_trim.py trim`` removes what pip brought back that
+   the installers leave out (reinstalled libraries' tests and launchers);
 4. deterministic, path-independent bytecode (``compileall -s <root>
    --invalidation-mode unchecked-hash``), like the installers ship;
 5. two self-tests with the staged Python, isolated from the running app:
@@ -53,6 +55,7 @@ LINUX_SHELL_SOURCES = {"row-bot": "bin/row-bot", "install.sh": "install.sh", "un
 SELF_TEST_TIMEOUT = 900.0
 PIP_TIMEOUT = 1800.0
 COMPILE_TIMEOUT = 900.0
+TRIM_TIMEOUT = 600.0
 _SCRUBBED_PREFIXES = ("PYTHON", "ROW_BOT_", "VIRTUAL_ENV", "UV_", "PIP_", "CONDA", "__PYVENV")
 
 SERVER_IMPORT = (
@@ -492,6 +495,11 @@ class Stager:
             self._check()
 
             started = time.monotonic()
+            self._trim_runtime(inputs, staging)
+            seconds["trim"] = round(time.monotonic() - started, 2)
+            self._check()
+
+            started = time.monotonic()
             self._on_step("compile")
             self._compile(inputs, staging)
             seconds["compile"] = round(time.monotonic() - started, 2)
@@ -633,6 +641,32 @@ class Stager:
                 (staging / "install_info.json").write_text(
                     json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n"
                 )
+
+    def _trim_runtime(self, inputs: StageInputs, staging: Path) -> None:
+        """Trim the libraries pip reinstalled with the staged version's own rules.
+
+        pip brings back a reinstalled library's test folders and console-script
+        launchers, which the installers leave out (``payload_trim.json``). The
+        rest of the clone was trimmed when it was built, so only pip's new files
+        go; unlinking them never touches the running version (a hard link loses
+        its staging entry, a clonefile copy is the staging's own).
+        """
+        if inputs.runtime.mode != "sync" or not inputs.runtime.wheels:
+            return
+        script = staging / "app" / "src" / "row_bot" / "payload_trim.py"
+        if not script.is_file():
+            return  # a version from before the shared rules
+        python = python_executable(staging, self.system)
+        # -I ignores PYTHONDONTWRITEBYTECODE, and nothing may write bytecode
+        # into a version folder outside the compile step: -B.
+        code = self._runner(
+            [str(python), "-B", "-I", "-S", str(script), "trim", "--python-root", str(staging / "python")],
+            env=runtime_environment(staging), cwd=staging, timeout=TRIM_TIMEOUT, log=self.log,
+        )
+        if code != 0:
+            # Leftover test folders cost space, not correctness; the self-test
+            # still checks the runtime.
+            logger.warning("Trimming the reinstalled libraries failed (exit %s); keeping them as installed", code)
 
     def _compile(self, inputs: StageInputs, staging: Path) -> None:
         python = python_executable(staging, self.system)
