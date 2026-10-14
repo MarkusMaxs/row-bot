@@ -4,11 +4,11 @@
 - **Auto**: the reviewer (``approval_review``) decides first; it approves what
   clearly matches the person's request and otherwise asks the person, with its
   reason on the card.
-- **Full autonomy**: approved without asking, and recorded.
+- **Hands-off**: approved without asking, and recorded.
 
 Every decision is recorded on the action's result as its approval line (B235),
 so the conversation's activity shows "Approved by the reviewer: …" or "Allowed
-by Full autonomy". Tools that cannot lead their own result with it get it from
+by Hands-off". Tools that cannot lead their own result with it get it from
 the agent's tool wrapper (``collect_decisions`` / ``with_decisions``).
 """
 
@@ -33,7 +33,7 @@ APPROVAL_NOT_NEEDED_READ_ONLY = "Approval: not needed (read-only)"
 APPROVAL_NOT_NEEDED_BY_PERSON = "Approval: not needed (you started it)"
 APPROVAL_GIVEN = "Approval: asked; approved by you"
 APPROVAL_DENIED = "Approval: asked; denied by you — did not run"
-APPROVAL_FULL_AUTONOMY = "Approval: allowed by Full autonomy"
+APPROVAL_FULL_AUTONOMY = "Approval: allowed by Hands-off"
 _APPROVAL_PREFIX = "Approval: "
 
 
@@ -229,7 +229,7 @@ def request_approval(
     """Get the approval an action needs, by the level; the answer, as ``interrupt()`` returns it.
 
     For callers that already know the action needs approval (a Developer push,
-    a settings change). True when Full autonomy or the reviewer gave it, else
+    a settings change). True when Hands-off or the reviewer gave it, else
     the person's answer. The decision is recorded on the tool's result.
     ``risks``: the risk flags the caller already worked out, in plain words,
     for the reviewer.
@@ -281,7 +281,7 @@ def resolve_approval(
     risks: Iterable[str] = (),
     approval_callback: Callable[[dict[str, Any]], bool | str] | None = None,
 ) -> GateOutcome:
-    """Resolve one action through the shared Block/Ask/Auto/Full autonomy levels.
+    """Resolve one action through the shared Block/Ask/Auto/Hands-off levels.
 
     The optional callback keeps deterministic subsystem tests independent from
     LangGraph. Shipped callers omit it and use the normal graph interrupt.

@@ -22,14 +22,14 @@ from row_bot.approval_policy import approval_label, legacy_safety_mode_to_approv
 logger = logging.getLogger(__name__)
 
 _FULL_AUTONOMY_REFUSAL = (
-    "Full autonomy can only be turned on by the person, in the workflow's settings in Row-Bot. "
+    "Hands-off can only be turned on by the person, in the workflow's settings in Row-Bot. "
     "Use approval_mode='auto' (reviewed) or 'approve', or ask the person to turn it on."
 )
 
 
 # ── Pydantic schemas ─────────────────────────────────────────────────────────
 
-# An agent never chooses Full autonomy for a workflow: only the person does, in the app.
+# An agent never chooses Hands-off for a workflow: only the person does, in the app.
 ApprovalModeChoice = Literal["block", "approve", "auto"]
 _SCHEDULE_FORMATS = (
     "'daily:HH:MM', 'weekly:DAY:HH:MM' (e.g. 'weekly:monday:09:00'), 'interval:H' (every H hours), "

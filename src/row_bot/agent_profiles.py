@@ -1141,7 +1141,7 @@ def _approval_rank(mode: str) -> int:
 
 
 def _effective_approval(parent_mode: str, profile_mode: str) -> tuple[str, str]:
-    """A profile narrows its parent's level, never widens it: a profile on Full autonomy under a chat on
+    """A profile narrows its parent's level, never widens it: a profile on Hands-off under a chat on
     Auto runs on Auto."""
     from row_bot.approval_policy import known_approval_mode
 

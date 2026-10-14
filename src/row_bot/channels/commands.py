@@ -228,7 +228,7 @@ _APPROVAL_WORDS = {
 def cmd_approval(channel_name: str, arg: str = "", *, thread_id: str | None = None) -> str:
     """Handle ``/approval [block|ask|auto]`` for channel conversations.
 
-    Full autonomy is never turned on from a channel: the person turns it on in the Row-Bot app, where a
+    Hands-off is never turned on from a channel: the person turns it on in the Row-Bot app, where a
     dialog says what it skips, and only for their own chats.
     """
     if not thread_id:
@@ -247,7 +247,7 @@ def cmd_approval(channel_name: str, arg: str = "", *, thread_id: str | None = No
         return f"Approvals here: **{approval_label(mode)}**: {_APPROVAL_WORDS[mode]}."
     mode = known_approval_mode(aliases.get(raw, raw))
     if mode == "full":
-        return ("Full autonomy can only be turned on in the Row-Bot app, for your own chats. "
+        return ("Hands-off can only be turned on in the Row-Bot app, for your own chats. "
                 "Here you can use `/approval block`, `/approval ask`, or `/approval auto`.")
     if mode not in {"block", "approve", "auto"}:
         return "Usage: `/approval block`, `/approval ask`, or `/approval auto`."

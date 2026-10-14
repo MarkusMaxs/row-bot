@@ -807,7 +807,7 @@ def test_tool_capsule_promotion_registers_plugin_tool_and_removes_safely(tmp_pat
     ("auto", "ask", True, False), ("auto", "approve", False, True), ("full", "ask", False, True)])
 def test_the_agent_asks_before_testing_or_turning_on_a_custom_tool(monkeypatch, mode, reviewer, asks, builds):
     """B292: a Custom Tool's commands run on this computer, so the agent can't test or enable one unasked:
-    the person approves under Ask, the reviewer first under Auto, Full autonomy under Full."""
+    the person approves under Ask, the reviewer first under Auto, the level itself under Hands-off."""
     from types import SimpleNamespace
 
     from row_bot.approval_review import ReviewVerdict

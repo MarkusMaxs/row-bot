@@ -33,7 +33,7 @@ export function taskSettings(
         task_id: task,
         task_revision: revision,
         ...(fields ? { fields, profile_revision: profileRevision } : {}),
-        // The person turned Full autonomy on in its one-time dialog just now.
+        // The person turned Hands-off on in its one-time dialog just now.
         ...(fields && confirmFullAutonomy
           ? { confirm_full_autonomy: true }
           : {}),

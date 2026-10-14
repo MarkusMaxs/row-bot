@@ -1,4 +1,4 @@
-"""The four approval levels: Block, Ask, Auto (model-reviewed) and Full autonomy (A0)."""
+"""The four approval levels: Block, Ask, Auto (model-reviewed) and Hands-off (A0)."""
 
 from __future__ import annotations
 
@@ -20,10 +20,13 @@ pytestmark = pytest.mark.subsystem
 
 def test_levels_and_their_labels():
     assert [approval_label(mode) for mode in ("block", "approve", "auto", "full")] == [
-        "Block", "Ask", "Auto", "Full autonomy"]
+        "Block", "Ask", "Auto", "Hands-off"]
     assert normalize_approval_mode("") == "approve"  # Ask stays the default.
     assert normalize_approval_mode("ask") == "approve"
     assert normalize_approval_mode("full") == "full"
+    # Hands-off by its name, as a person types it, is the same stored level.
+    for name in ("Hands-off", "hands off", "hands_off"):
+        assert normalize_approval_mode(name) == "full"
 
 
 @pytest.mark.parametrize("legacy", ["allow_all", "allow-all", "Allow All", "auto", "auto_edit", "agent_run"])
@@ -56,7 +59,7 @@ def test_an_unknown_value_is_not_a_level():
 @pytest.mark.parametrize(("mode", "decision"), [
     ("block", "block"),
     ("approve", "ask"),
-    # Auto and Full autonomy still need an approval; the reviewer, or the level itself, gives it.
+    # Auto and Hands-off still need an approval; the reviewer, or the level itself, gives it.
     ("auto", "ask"),
     ("full", "ask"),
     ("allow_all", "ask"),

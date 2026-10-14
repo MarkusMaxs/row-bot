@@ -776,7 +776,7 @@ class ShellTool(BaseTool):
             if mode == "block":
                 return f"BLOCKED: this command reads Row-Bot's private data folder: {command}"
             # Asked under Ask; under Auto the reviewer approves it only when the person clearly asked
-            # for it; Full autonomy allows it (the setting above still has to be on).
+            # for it; Hands-off allows it (the setting above still has to be on).
             outcome, approval = resolve_approval_line(
                 {
                     "tool": "run_command",

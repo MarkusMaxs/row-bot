@@ -5,7 +5,7 @@ import { composer, newConversation } from './unified-helpers';
 
 /*
  * A0 · approval levels: Ask, Auto (a reviewer approves what matches the
- * person's request), Full autonomy (on purpose, one dialog the first time)
+ * person's request), Hands-off (on purpose, one dialog the first time)
  * and Block. The fixture scripts the model; the approval control, the
  * one-time confirmation and the approval card run through the real server.
  * (Named to run after bootstrap.spec.ts, which needs a backend with no turns.)
@@ -39,7 +39,7 @@ async function forgetFullAutonomy(page: Page) {
   expect(reset.ok()).toBe(true);
 }
 
-test('Full autonomy is turned on once, on purpose, and reads in words while on', async ({
+test('Hands-off is turned on once, on purpose, and reads in words while on', async ({
   page,
 }, info) => {
   await forgetFullAutonomy(page);
@@ -53,7 +53,7 @@ test('Full autonomy is turned on once, on purpose, and reads in words while on',
   await expect(menu.getByRole('menuitem')).toHaveText([
     /^Ask/,
     /^Auto/,
-    /^Full autonomy/,
+    /^Hands-off/,
     /^Block/,
   ]);
   await expect(
@@ -61,24 +61,24 @@ test('Full autonomy is turned on once, on purpose, and reads in words while on',
   ).toBeVisible();
   await views(page, info, 'approval-levels-menu');
 
-  await menu.getByRole('menuitem', { name: /^Full autonomy/ }).click();
+  await menu.getByRole('menuitem', { name: /^Hands-off/ }).click();
   const dialog = page.getByRole('alertdialog', {
-    name: 'Turn on Full autonomy?',
+    name: 'Turn on Hands-off?',
   });
   await expect(dialog).toContainText('Screen and camera captures');
   await expect(dialog).toContainText(
     'Conversations shared with other people stay on Auto',
   );
-  await views(page, info, 'full-autonomy-dialog');
+  await views(page, info, 'hands-off-dialog');
   await dialog.getByRole('button', { name: 'Turn on', exact: true }).click();
   // Focus returns to the control; its hint is not part of the evidence.
   await page.evaluate(() =>
     (document.activeElement as HTMLElement | null)?.blur(),
   );
 
-  const on = page.getByRole('button', { name: 'Approvals: Full autonomy' });
-  await expect(on).toHaveText(/Full autonomy/);
-  await views(page, info, 'full-autonomy-on');
+  const on = page.getByRole('button', { name: 'Approvals: Hands-off' });
+  await expect(on).toHaveText(/Hands-off/);
+  await views(page, info, 'hands-off-on');
 
   // Saved with the conversation, and the dialog never shows again.
   await page.reload();
@@ -87,12 +87,12 @@ test('Full autonomy is turned on once, on purpose, and reads in words while on',
   await page.getByRole('menuitem', { name: /^Auto/ }).click();
   await expect(approvals).toBeVisible();
   await approvals.click();
-  await page.getByRole('menuitem', { name: /^Full autonomy/ }).click();
+  await page.getByRole('menuitem', { name: /^Hands-off/ }).click();
   await expect(on).toBeVisible();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
 });
 
-test('on a phone the levels sit under + and Full autonomy still shows', async ({
+test('on a phone the levels sit under + and Hands-off still shows', async ({
   page,
 }, info) => {
   await forgetFullAutonomy(page);
@@ -104,24 +104,24 @@ test('on a phone the levels sit under + and Full autonomy still shows', async ({
   await expect(levels.getByRole('menuitemradio')).toHaveText([
     /^Ask/,
     /^Auto/,
-    /^Full autonomy/,
+    /^Hands-off/,
     /^Block/,
   ]);
   await views(page, info, 'approval-levels-menu-phone');
-  await levels.getByRole('menuitemradio', { name: /^Full autonomy/ }).click();
+  await levels.getByRole('menuitemradio', { name: /^Hands-off/ }).click();
   const dialog = page.getByRole('alertdialog', {
-    name: 'Turn on Full autonomy?',
+    name: 'Turn on Hands-off?',
   });
-  await views(page, info, 'full-autonomy-dialog-phone');
+  await views(page, info, 'hands-off-dialog-phone');
   await dialog.getByRole('button', { name: 'Turn on', exact: true }).click();
   // Focus returns to the control; its hint is not part of the evidence.
   await page.evaluate(() =>
     (document.activeElement as HTMLElement | null)?.blur(),
   );
   await expect(
-    page.getByRole('status').filter({ hasText: 'Full autonomy' }),
+    page.getByRole('status').filter({ hasText: 'Hands-off' }),
   ).toBeVisible();
-  await views(page, info, 'full-autonomy-on-phone');
+  await views(page, info, 'hands-off-on-phone');
 });
 
 test('the reviewer’s decisions are visible but quiet', async ({
@@ -167,7 +167,7 @@ test('the reviewer’s decisions are visible but quiet', async ({
   const steps = transcript.getByText('Used 2 tools', { exact: true }).last();
   await steps.click();
   const reviewed = transcript.getByText('Reviewer approved', { exact: true });
-  const full = transcript.getByText('Full autonomy', { exact: true }).last();
+  const full = transcript.getByText('Hands-off', { exact: true }).last();
   await expect(reviewed).toBeVisible();
   await expect(full).toBeVisible();
   await reviewed.click();
@@ -178,7 +178,7 @@ test('the reviewer’s decisions are visible but quiet', async ({
   ).toBeVisible();
   await full.click();
   await expect(
-    transcript.getByText('Allowed by Full autonomy', { exact: true }),
+    transcript.getByText('Allowed by Hands-off', { exact: true }),
   ).toBeVisible();
   await views(page, info, 'activity-decided-without-asking');
   await page.setViewportSize(PHONE);

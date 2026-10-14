@@ -176,7 +176,7 @@ def test_a_tool_only_its_view_may_call_is_never_given_to_the_agent(app, monkeypa
     ("approve", "delete_counter", False, "ask"), ("block", "delete_counter", True, "refuse")])
 def test_a_call_from_a_view_is_gated_as_any_call_is(app, mode, tool, full_access, expected):
     """Destructive, high-impact and unknown tools ask in Ask and Auto (a view's call has no request of the
-    person's for the reviewer to judge), run under Full autonomy and are refused in Block; a routine change asks
+    person's for the reviewer to judge), run under Hands-off and are refused in Block; a routine change asks
     unless the app's access lets it run (Full access)."""
     if full_access:
         app.cfg["tools"]["run_without_asking"] = ["update_counter", "delete_counter"]
@@ -306,7 +306,7 @@ def test_a_look_alike_tool_name_never_shows_another_apps_identity(app, monkeypat
 
 
 def test_a_view_cannot_use_an_app_this_chat_has_switched_off(app):
-    """A hard limit no approval level changes: not even Full autonomy uses an app switched off in the chat."""
+    """A hard limit no approval level changes: not even Hands-off uses an app switched off in the chat."""
     render_id = views.render("chat-1", "call-1")["render_id"]
     app.off.add("mcp:counter")
     app.mode["value"] = "full"

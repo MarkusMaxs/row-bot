@@ -328,11 +328,11 @@ export function splitApproval(text: string): {
 /**
  * Who let a step run without the person (A0): the Auto reviewer, or Full
  * autonomy. Its approval line says so ("Approved by the reviewer: …",
- * "Allowed by Full autonomy"); the step's row shows a quiet tag for it.
+ * "Allowed by Hands-off"); the step's row shows a quiet tag for it.
  */
 export function approvedWithoutYou(approval: string): string | null {
   if (/^approved by the reviewer\b/i.test(approval)) return 'Reviewer approved';
-  if (/^allowed by full autonomy\b/i.test(approval)) return 'Full autonomy';
+  if (/^allowed by hands-off\b/i.test(approval)) return 'Hands-off';
   return null;
 }
 

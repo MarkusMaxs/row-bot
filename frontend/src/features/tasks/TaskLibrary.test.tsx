@@ -1268,11 +1268,11 @@ it('names the profile and approvals a run uses on the row, with Auto approvals s
   );
   const trusted = within(row('Trusted'));
   expect(trusted.getByText('Research')).toBeVisible();
-  // Reviewed Auto is calm; only Full autonomy carries the warning tone.
+  // Reviewed Auto is calm; only Hands-off carries the warning tone.
   expect(trusted.getByText('Auto approvals')).not.toHaveAttribute(
     'data-attention',
   );
-  expect(within(row('Unattended')).getByText('Full autonomy')).toHaveAttribute(
+  expect(within(row('Unattended')).getByText('Hands-off')).toHaveAttribute(
     'data-attention',
     'true',
   );

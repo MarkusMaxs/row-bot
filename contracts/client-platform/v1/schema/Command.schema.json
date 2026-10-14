@@ -2171,7 +2171,7 @@
     },
     "ConversationControlsPayload": {
       "additionalProperties": false,
-      "description": "The chat's controls as the person sets them. ``confirm_full_autonomy``: they turned Full autonomy on\nin its one-time dialog (needed the first time on this install).",
+      "description": "The chat's controls as the person sets them. ``confirm_full_autonomy``: they turned Hands-off on\nin its one-time dialog (needed the first time on this install).",
       "properties": {
         "approval_mode": {
           "default": "approve",

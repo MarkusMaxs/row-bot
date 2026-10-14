@@ -1285,7 +1285,7 @@ class ClientPlatformService:
             raise ClientPlatformError("invalid_command")
         config = {"configurable": {"thread_id": conversation_id, "runtime_surface": effective_surface,
                   "runtime_mode": runtime_mode, "generation_id": generation_id,
-                  # A conversation other people share runs on Auto at most, never Full autonomy.
+                  # A conversation other people share runs on Auto at most, never Hands-off.
                   "approval_mode": cap_for_conversation(conversation_id, normalize_approval_mode(row.get("approval_mode"))),
                   "agent_profile_id": row.get("agent_profile_id") or "",
                   "platform_submission_id": submission_id,

@@ -53,7 +53,7 @@ def test_unrelated_paths_are_unaffected(shell, command, expected):
 
 
 def test_reading_the_data_folder_is_refused_in_every_mode_without_asking(shell, monkeypatch):
-    """The setting is a hard limit: with it off, not even Full autonomy reads the folder, nor asks."""
+    """The setting is a hard limit: with it off, not even Hands-off reads the folder, nor asks."""
     shell_tool, _registry, _home = shell
     monkeypatch.setattr("langgraph.types.interrupt", lambda _payload: pytest.fail("must not ask"))
     monkeypatch.setattr("row_bot.approval_review.review", lambda *_a, **_k: pytest.fail("must not review"))
@@ -113,7 +113,7 @@ def test_with_the_setting_on_full_autonomy_reads_it_without_asking(shell, monkey
         "run_command": lambda self, command: {"output": "{}", "exit_code": 0, "duration": 0.01, "cwd": "."}})())
 
     assert shell_tool.ShellTool().execute("cat ~/.row-bot/settings.json").startswith(
-        "Approval: allowed by Full autonomy")
+        "Approval: allowed by Hands-off")
 
 
 def test_file_tools_refuse_paths_inside_the_data_folder(shell, reload_for_data_dir):

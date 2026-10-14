@@ -616,15 +616,15 @@ const CATALOG: Record<string, Entry> = {
     'review',
   ],
   full_autonomy_unconfirmed: [
-    'Turn on Full autonomy from its dialog the first time; it says what it skips.',
+    'Turn on Hands-off from its dialog the first time; it says what it skips.',
     'review',
   ],
   full_autonomy_shared_conversation: [
-    'Other people share this conversation, so it runs on Auto at most. Full autonomy is only for your own chats.',
+    'Other people share this conversation, so it runs on Auto at most. Hands-off is only for your own chats.',
     'none',
   ],
   full_autonomy_person_only: [
-    'Only you can turn on Full autonomy, in Row-Bot.',
+    'Only you can turn on Hands-off, in Row-Bot.',
     'none',
   ],
 

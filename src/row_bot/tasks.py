@@ -447,7 +447,7 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
         "ON task_runs(task_id, started_at DESC, id DESC)"
     )
     # Workflows saved before approval levels: the old "Auto" (allow almost everything) is reviewed Auto
-    # now. Nothing is moved to Full autonomy; only a person turns that on.
+    # now. Nothing is moved to Hands-off; only a person turns that on.
     conn.execute(
         "UPDATE tasks SET safety_mode = 'auto' WHERE safety_mode IS NULL "
         "OR safety_mode IN ('allow_all', 'allow-all', 'auto_edit', 'agent_run')"
@@ -4459,7 +4459,7 @@ def run_task_background(
                                     break
 
                                 # An interrupt reaching the run: the person is asked. Block refuses
-                                # it; Full autonomy approves it (an approval never asks under Full;
+                                # it; Hands-off approves it (an approval never asks under Hands-off;
                                 # anything else that waits, such as a setup card, goes on); under Ask,
                                 # and under Auto when the reviewer asked, the run pauses and notifies.
                                 if approval_mode == "block":
@@ -4480,7 +4480,7 @@ def run_task_background(
 
                                 if approval_mode == "full":
                                     logger.info(
-                                        "Task '%s' step %d: interrupt under Full autonomy — approving",
+                                        "Task '%s' step %d: interrupt under Hands-off — approving",
                                         task["name"], step_index + 1,
                                     )
                                     from row_bot.agent import resume_invoke_agent
@@ -6991,9 +6991,9 @@ def _resume_graph_interrupted(
                     logger.error("Block-mode resume denial failed: %s", exc2)
                 # Fall through to success path
             elif approval_mode == "full":
-                # Full autonomy approves the chained interrupt; under Auto it waits for the person.
+                # Hands-off approves the chained interrupt; under Auto it waits for the person.
                 logger.info(
-                    "Task '%s' graph resume: chained interrupt under Full autonomy — approving",
+                    "Task '%s' graph resume: chained interrupt under Hands-off — approving",
                     task["name"],
                 )
                 try:
@@ -7002,7 +7002,7 @@ def _resume_graph_interrupted(
                         approved=True, stop_event=_stop_event,
                     )
                 except Exception as exc2:
-                    logger.error("Full autonomy auto-resume failed: %s", exc2)
+                    logger.error("Hands-off auto-resume failed: %s", exc2)
                 # Fall through to success path
             else:
                 # Approve mode — create a new approval request

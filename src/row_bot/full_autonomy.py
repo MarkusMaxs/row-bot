@@ -1,10 +1,10 @@
-"""Full autonomy: the approval level a person turns on, never Row-Bot.
+"""Hands-off: the approval level a person turns on, never Row-Bot.
 
 - The first time on this install, turning it on needs the person's confirmation
   after a dialog that lists what it skips; after that it never asks again
   (``is_confirmed`` / ``confirm``).
 - A conversation other people share (a Slack or Discord channel thread, a group
-  chat) runs on reviewed Auto at most: Full autonomy is only for the person's own
+  chat) runs on reviewed Auto at most: Hands-off is only for the person's own
   chats (``is_shared_conversation`` / ``cap_for_conversation``).
 - Agent-facing tools never set it (``AGENT_SETTABLE_MODES``).
 """
@@ -24,16 +24,16 @@ from row_bot.approval_policy import ApprovalMode, normalize_approval_mode
 logger = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
-# Bump when what Full autonomy skips changes enough to ask again.
+# Bump when what Hands-off skips changes enough to ask again.
 NOTICE_VERSION = 1
-# The levels an agent may choose for a workflow or profile it saves: never Full autonomy.
+# The levels an agent may choose for a workflow or profile it saves: never Hands-off.
 AGENT_SETTABLE_MODES: tuple[ApprovalMode, ...] = ("block", "approve", "auto")
 
 SHARED_CONVERSATION_CAP: ApprovalMode = "auto"
 
 
 class FullAutonomyError(ValueError):
-    """Full autonomy can't be turned on here; ``code`` says why in a stable, client-safe word."""
+    """Hands-off can't be turned on here; ``code`` says why in a stable, client-safe word."""
 
     def __init__(self, code: str):
         self.code = code
@@ -67,14 +67,14 @@ def _write(settings: dict[str, Any]) -> None:
 
 
 def is_confirmed() -> bool:
-    """Whether the person turned Full autonomy on once on this install (no dialog again)."""
+    """Whether the person turned Hands-off on once on this install (no dialog again)."""
 
     with _LOCK:
         return int(_read().get("full_autonomy_confirmed_version") or 0) >= NOTICE_VERSION
 
 
 def confirm() -> None:
-    """Remember that the person read what Full autonomy skips and turned it on."""
+    """Remember that the person read what Hands-off skips and turned it on."""
 
     with _LOCK:
         settings = _read()
@@ -82,11 +82,11 @@ def confirm() -> None:
             return
         settings["full_autonomy_confirmed_version"] = NOTICE_VERSION
         _write(settings)
-    logger.info("Full autonomy confirmed on this install")
+    logger.info("Hands-off confirmed on this install")
 
 
 def require_choice(mode: object, *, confirmed: bool = False) -> ApprovalMode:
-    """The level a person chose, checked: Full autonomy needs the one-time confirmation.
+    """The level a person chose, checked: Hands-off needs the one-time confirmation.
 
     ``confirmed``: the person just turned it on in the dialog (remembered from now on).
     Raises ``FullAutonomyError("full_autonomy_unconfirmed")`` when it was never confirmed.
@@ -122,7 +122,7 @@ def is_shared_conversation(thread_id: str) -> bool:
 
 
 def cap_for_conversation(thread_id: str, mode: object) -> ApprovalMode:
-    """The level a conversation runs at: Full autonomy becomes Auto where others share it."""
+    """The level a conversation runs at: Hands-off becomes Auto where others share it."""
 
     normalized = normalize_approval_mode(mode)
     if normalized == "full" and is_shared_conversation(thread_id):
@@ -131,7 +131,7 @@ def cap_for_conversation(thread_id: str, mode: object) -> ApprovalMode:
 
 
 def agent_settable(mode: object) -> ApprovalMode:
-    """A level an agent asked for, for a workflow or profile it saves: Full autonomy is refused."""
+    """A level an agent asked for, for a workflow or profile it saves: Hands-off is refused."""
 
     normalized = normalize_approval_mode(mode)
     if normalized not in AGENT_SETTABLE_MODES:

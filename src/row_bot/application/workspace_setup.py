@@ -461,7 +461,7 @@ def conversation_workspace(service: Any, identity: str) -> dict:
     shared = full_autonomy.is_shared_conversation(identity)
     controls = {"model_selection": {"provider_id": parsed[0], "model_ref": model} if parsed else None,
                 "runtime_mode": row.get("client_runtime_mode") or "agent", "profile_id": row.get("agent_profile_id") or "",
-                # The level its turns run at: a shared conversation's Full autonomy is Auto.
+                # The level its turns run at: a shared conversation's Hands-off is Auto.
                 "approval_mode": full_autonomy.cap_for_conversation(identity, normalize_approval_mode(row.get("approval_mode")))}
     resources = []
     for binding in list_bindings(identity).bindings:

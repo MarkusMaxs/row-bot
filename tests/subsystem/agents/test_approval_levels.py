@@ -1,5 +1,5 @@
-"""Who gives an approval at each level (A0): the person under Ask, the reviewer first under Auto, Full autonomy
-itself under Full; Block refuses. Every decision is recorded on the action's result."""
+"""Who gives an approval at each level (A0): the person under Ask, the reviewer first under Auto, the level
+itself under Hands-off; Block refuses. Every decision is recorded on the action's result."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def test_full_autonomy_allows_without_asking_anyone_and_records_it(reviewer):
     asked, callback = _person(False)
     outcome, line = approval_gate.resolve_approval_line(dict(_PAYLOAD), approval_mode="full",
                                                         approval_callback=callback)
-    assert (outcome, line) == ("allow", "Approval: allowed by Full autonomy")
+    assert (outcome, line) == ("allow", "Approval: allowed by Hands-off")
     assert asked == [] and reviewer["seen"] == []
 
 
@@ -114,7 +114,7 @@ def test_the_reviewers_decision_is_recorded_on_a_tool_result_that_has_no_line_of
 
     with approval_gate.collect_decisions() as decisions:
         approval_gate.request_approval(dict(_PAYLOAD), approval_mode="full")
-    assert approval_gate.with_decisions(decisions, "Done.") == "Approval: allowed by Full autonomy\nDone."
+    assert approval_gate.with_decisions(decisions, "Done.") == "Approval: allowed by Hands-off\nDone."
 
 
 def test_a_resumed_run_takes_the_persons_answer_and_never_asks_the_reviewer_again(reviewer):
@@ -166,7 +166,7 @@ def test_the_activity_reads_who_let_an_action_run():
     """The conversation's activity shows the result's approval line apart from the result (B235)."""
     from row_bot.application.conversation_traces import classify_tool_result
 
-    for line in ("Approval: approved by the reviewer: You asked for it", "Approval: allowed by Full autonomy"):
+    for line in ("Approval: approved by the reviewer: You asked for it", "Approval: allowed by Hands-off"):
         assert classify_tool_result(f"{line}\nSent.") == "succeeded"
     assert classify_tool_result(
         "Approval: asked; denied by you — did not run. The reviewer asked you: Not asked\nAction cancelled by user."

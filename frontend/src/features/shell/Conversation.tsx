@@ -3179,7 +3179,7 @@ export default function Conversation({
                                   ? approvalEvent.event.payload
                                   : undefined
                               }
-                              // Offered under Ask only: Auto and Full autonomy
+                              // Offered under Ask only: Auto and Hands-off
                               // already decide without the person.
                               onAllowInChat={
                                 controls?.approval_mode !== 'approve' ||

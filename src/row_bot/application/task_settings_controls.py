@@ -39,7 +39,7 @@ class TaskSettingsSnapshot:
     profile_available: bool
     webhook_configured: bool
     conversation_id: str | None
-    # The person turned Full autonomy on once on this install: choosing it needs no dialog again.
+    # The person turned Hands-off on once on this install: choosing it needs no dialog again.
     full_autonomy_confirmed: bool = False
 
 
@@ -177,7 +177,7 @@ def update_saved_task_settings(
     record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
     confirm_full_autonomy: bool = False,
 ) -> TaskSettingsSnapshot:
-    """Save a workflow's reviewed settings. Turning Full autonomy on needs its one-time confirmation
+    """Save a workflow's reviewed settings. Turning Hands-off on needs its one-time confirmation
     (``confirm_full_autonomy``: the person turned it on in the dialog just now)."""
     _revision(expected_revision)
     _revision(expected_profile_revision)

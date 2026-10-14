@@ -74,7 +74,7 @@ def _analyze_image(
     if mode == "block":
         return f"BLOCKED: {label[:-1]} is unavailable while this conversation is in Block approval mode."
     # Asked under Ask (B327); under Auto the reviewer approves it only when the person clearly asked to
-    # be looked at; Full autonomy allows it.
+    # be looked at; Hands-off allows it.
     outcome, line = resolve_approval_line(
         {"tool": "analyze_image", "label": label, "description": description,
          "args": {"source": source, "question": question}},

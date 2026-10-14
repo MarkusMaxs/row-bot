@@ -2,7 +2,7 @@
 
 A page in Row-Bot's own browser or a workspace file needs no capture. The person's screen or camera can show
 anything, so capturing them needs approval every time and says what it captures: Ask asks, Auto's reviewer
-approves only a capture the person clearly asked for (A0), Full autonomy allows it, and Block refuses it.
+approves only a capture the person clearly asked for (A0), Hands-off allows it, and Block refuses it.
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ def test_a_source_that_is_not_offered_never_reaches_the_camera(setup, source) ->
 
 @pytest.mark.parametrize(("approval_mode", "first_line"), [
     ("auto", "Approval: approved by the reviewer: You asked what's on your screen"),
-    ("full", "Approval: allowed by Full autonomy"),
+    ("full", "Approval: allowed by Hands-off"),
 ])
 def test_a_capture_the_reviewer_approves_or_full_autonomy_allows_runs_without_asking(setup, monkeypatch, approval_mode,
                                                                                      first_line) -> None:

@@ -370,7 +370,7 @@ def review_workspace_import(resource_id: str, conversation_id: str, pending_chan
     patch, captured = _capture(workspace, row)
     policy = {"approval_mode": _get_thread_approval_mode(conversation_id), "workspace": workspace.to_dict()}
     git_policy = _git_policy(Path(workspace.path), list(captured))
-    # The person imports it themselves: Auto and Full autonomy need no further confirmation.
+    # The person imports it themselves: Auto and Hands-off need no further confirmation.
     decision = decide_action(policy["approval_mode"], "edit", by_person=True)
     # Contents remain server-only. Public review binds hashes and relative names.
     hosts = {path: {key: value for key, value in item.items() if key != "data"} for path, item in captured.items()}

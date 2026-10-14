@@ -128,8 +128,8 @@ _DEVELOPER_RISKS = {
 def _ask(payload: dict) -> object:
     """The approval a Developer action needs, by the conversation's approval level.
 
-    The person under Ask; the reviewer first under Auto (the person when it asks); Full autonomy
-    under Full. Returns what ``interrupt()`` would: True when approved.
+    The person under Ask; the reviewer first under Auto (the person when it asks); the level
+    itself under Hands-off. Returns what ``interrupt()`` would: True when approved.
     """
     from row_bot.tools.approval_gate import request_approval
 

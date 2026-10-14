@@ -4865,7 +4865,7 @@ def _enrich_description(tool_name: str, label: str, args_str: str, kwargs: dict)
 
 def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
     """Keep sync and async targets behind the same current approval decision, resolved by the approval level
-    (``approval_gate``): the person under Ask, the reviewer first under Auto, Full autonomy under Full.
+    (``approval_gate``): the person under Ask, the reviewer first under Auto, the level itself under Hands-off.
     ``always_ask``: an app tool its app's access says to ask about (a routine change without Full access, or a
     high-impact one); the reviewer is told so, and decides as for any other action."""
     from functools import wraps
@@ -5783,7 +5783,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             # Append tools from enabled plugins (totally separate registry)
             # Workflows and chats gate alike: block=strip destructive tools; every other level wraps them,
             # and the gate resolves each call by the level (the person under Ask, the reviewer first under
-            # Auto, Full autonomy under Full). A workflow run pauses when the person is asked.
+            # Auto, the level itself under Hands-off). A workflow run pauses when the person is asked.
             # run_command self-gates at runtime via classify_command.
             if approval_mode == "block":
                 lc_tools = [t for t in lc_tools

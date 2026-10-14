@@ -1,4 +1,4 @@
-"""Full autonomy (A0): chosen by the person once on this install, never by an agent or a migration, and only
+"""Hands-off (A0): chosen by the person once on this install, never by an agent or a migration, and only
 for the person's own chats."""
 
 from __future__ import annotations
@@ -47,13 +47,13 @@ def test_an_agent_cannot_create_or_switch_a_workflow_to_full_autonomy(tmp_path, 
     tasks, task_tool = reload_for_data_dir(tmp_path / "data", "row_bot.tasks", "row_bot.tools.task_tool")
 
     refused = task_tool._task_create("Nightly tidy", prompts=["Tidy the notes"], safety_mode="full")
-    assert refused.startswith("Full autonomy can only be turned on by the person")
+    assert refused.startswith("Hands-off can only be turned on by the person")
     assert tasks.list_tasks() == []
 
     task_tool._task_create("Nightly tidy", prompts=["Tidy the notes"], approval_mode="auto")
     [task] = tasks.list_tasks()
     assert task["safety_mode"] == "auto"
-    assert task_tool._task_update(task["id"], safety_mode="full").startswith("Full autonomy can only")
+    assert task_tool._task_update(task["id"], safety_mode="full").startswith("Hands-off can only")
     assert tasks.get_task(task["id"])["safety_mode"] == "auto"
 
 
@@ -96,7 +96,7 @@ def channel_threads(tmp_path, reload_for_data_dir, monkeypatch):
 
 
 def test_a_conversation_other_people_share_runs_on_auto_at_most(channel_threads):
-    """User decision 4: a shared Slack or Discord thread never runs on Full autonomy."""
+    """User decision 4: a shared Slack or Discord thread never runs on Hands-off."""
     from row_bot import full_autonomy
 
     tasks, threads = channel_threads
@@ -119,9 +119,10 @@ def test_full_autonomy_is_never_turned_on_from_a_channel(channel_threads, monkey
     _tasks, threads = channel_threads
     monkeypatch.setattr(agent, "clear_agent_cache", lambda: None)
 
-    reply = cmd_approval("Slack", "full", thread_id="slack-dm")
-    assert "only be turned on in the Row-Bot app" in reply
-    assert threads._get_thread_approval_mode("slack-dm") == "approve"
+    for name in ("full", "hands-off", "Hands off"):
+        reply = cmd_approval("Slack", name, thread_id="slack-dm")
+        assert reply.startswith("Hands-off can only be turned on in the Row-Bot app")
+        assert threads._get_thread_approval_mode("slack-dm") == "approve"
 
     assert "Auto" in cmd_approval("Slack", "auto", thread_id="slack-dm")
     assert threads._get_thread_approval_mode("slack-dm") == "auto"

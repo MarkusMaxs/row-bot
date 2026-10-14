@@ -50,12 +50,12 @@ import {
 /**
  * The composer's left cluster: a + menu (attach, add resource, skills, agent
  * profile, mode), the model pill with its picker, and an approval shield whose
- * glyph shows Ask/Auto/Full autonomy/Block. Full autonomy reads as words, in
+ * glyph shows Ask/Auto/Hands-off/Block. Hands-off reads as words, in
  * the warning tone, while it is on, and turning it on the first time asks
  * once. The server supplies exact-model choices; presentation never invents
  * efforts. A one-line composer (`singleLine`) keeps only the +: the model,
  * approvals and context usage move into it and the picker opens above the
- * field (Full autonomy still shows beside it).
+ * field (Hands-off still shows beside it).
  */
 /** How far a one-line composer's + submenus overlap the + menu (it sits at the screen's edge). */
 const SUBMENU_OVERLAP = 232;
@@ -139,7 +139,7 @@ export default function ComposerControls({
   const mode = approvalLevel(controls.approval_mode);
   const approval = APPROVAL_LABELS[mode];
   const Shield = APPROVAL_ICONS[mode];
-  // Shared channel conversations run on Auto at most; the first Full autonomy asks once.
+  // Shared channel conversations run on Auto at most; the first Hands-off asks once.
   const fullAvailable = workspace.approval?.full_autonomy_available !== false;
   const fullConfirmed = workspace.approval?.full_autonomy_confirmed === true;
   const currentModel = state.handshake?.models?.find(
@@ -199,7 +199,7 @@ export default function ComposerControls({
       setSaving(false);
     }
   }
-  /** Turns a level on; Full autonomy asks once on this install, after which it never asks again. */
+  /** Turns a level on; Hands-off asks once on this install, after which it never asks again. */
   function chooseLevel(level: ApprovalLevel, opener?: HTMLElement | null) {
     if (level === mode) return;
     if (level !== 'full' || fullConfirmed) {
@@ -628,10 +628,10 @@ export default function ComposerControls({
       />
       {!singleLine && (
         <Menu
-          label={mode === 'full' ? 'Approvals: Full autonomy' : 'Approvals'}
+          label={mode === 'full' ? 'Approvals: Hands-off' : 'Approvals'}
           hint={
             mode === 'full'
-              ? 'Full autonomy is on: nothing asks before it runs'
+              ? 'Hands-off is on: nothing asks before it runs'
               : `Approvals: ${approval}`
           }
           variant="ghost"
@@ -649,7 +649,7 @@ export default function ComposerControls({
         // Unmistakable while on, even when the control sits in the + menu.
         <span className="composer-full-autonomy" role="status">
           <Shield size={14} aria-hidden data-mode={mode} />
-          Full autonomy
+          Hands-off
         </span>
       )}
       {saving && (

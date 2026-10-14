@@ -381,7 +381,7 @@ def _get_thread_approval_mode_raw(thread_id: str) -> str:
 
 
 def _get_thread_approval_mode(thread_id: str) -> str:
-    """Return the approval level a thread runs at (Full autonomy is Auto where others share it)."""
+    """Return the approval level a thread runs at (Hands-off is Auto where others share it)."""
     from row_bot.full_autonomy import cap_for_conversation
 
     raw = _get_thread_approval_mode_raw(thread_id)

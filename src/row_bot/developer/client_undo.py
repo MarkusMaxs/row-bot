@@ -93,7 +93,7 @@ def review_workspace_undo(resource_id: str, conversation_id: str, change_set_id:
                           validate: Callable[[], None] = lambda: None,
                           by_person: bool = True) -> WorkspaceUndoReview:
     """The review of one guarded undo. ``by_person``: the person asked for it in the app (an agent's undo
-    passes False, so Auto and Full autonomy resolve its approval as for any agent action)."""
+    passes False, so Auto and Hands-off resolve its approval as for any agent action)."""
     validate()
     workspace, binding, change, revision = _source(resource_id, conversation_id, change_set_id)
     if change.reverted:

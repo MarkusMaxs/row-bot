@@ -581,7 +581,7 @@ it('offers rotation but not download for a saved webhook without a secret', asyn
   expect(callbacks.save).not.toHaveBeenCalled();
 });
 
-it('asks once before a workflow runs on Full autonomy, and saves the confirmation (A0)', async () => {
+it('asks once before a workflow runs on Hands-off, and saves the confirmation (A0)', async () => {
   const { OverlayProvider } = await import('../../ui/overlays');
   const callbacks = props();
   render(
@@ -594,7 +594,7 @@ it('asks once before a workflow runs on Full autonomy, and saves the confirmatio
     target: { value: 'full' },
   });
   const dialog = await screen.findByRole('alertdialog', {
-    name: 'Turn on Full autonomy?',
+    name: 'Turn on Hands-off?',
   });
   expect(screen.getByLabelText('Approval policy')).toHaveValue('block');
   await act(async () =>
@@ -616,7 +616,7 @@ it('asks once before a workflow runs on Full autonomy, and saves the confirmatio
   );
 });
 
-it('never asks again once Full autonomy was turned on on this install', async () => {
+it('never asks again once Hands-off was turned on on this install', async () => {
   const callbacks = props({
     load: vi
       .fn()
