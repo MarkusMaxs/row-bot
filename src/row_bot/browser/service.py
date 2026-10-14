@@ -987,7 +987,8 @@ class ManagedBrowserService:
     def evict_idle(self, ttl_seconds: float = 600.0) -> int:
         if not self._launched or self._closed:
             return 0
-        active = _active_generation_thread_ids() | set(self._recorders)
+        # A recording keeps its conversation's page (copied: the Playwright thread owns the map).
+        active = _active_generation_thread_ids() | set(dict(self._recorders))
         cutoff = time.monotonic() - ttl_seconds
         expired = [task for task, used in self._thread_pages_last_used.items() if task not in active and used < cutoff]
         for task in expired:

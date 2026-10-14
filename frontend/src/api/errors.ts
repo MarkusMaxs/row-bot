@@ -1934,7 +1934,7 @@ const CATALOG: Record<string, Entry> = {
     RETRY,
   ],
   browser_navigation_denied: [
-    "The managed browser can't open that address.",
+    "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
     'review',
   ],
   browser_outcome_uncertain: [

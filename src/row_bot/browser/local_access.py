@@ -130,6 +130,27 @@ def private_network_target(url: str) -> bool:
     return not address.is_loopback and not address.is_global
 
 
+def unspecified_refusal(url: str) -> str:
+    """A server's "every address" bind (0.0.0.0, [::]) isn't an address to open: say to use localhost.
+
+    Empty when *url* isn't one.
+    """
+
+    try:
+        parsed = urlsplit(str(url or "").strip())
+        address = ipaddress.ip_address((parsed.hostname or "").strip("[]"))
+        port = parsed.port
+    except (TypeError, ValueError):
+        return ""
+    if not address.is_unspecified:
+        return ""
+    where = f"localhost:{port}" if port else "localhost"
+    return (
+        f"BLOCKED: {parsed.hostname} means every address on this computer, not one to open. "
+        f"Open http://{where} instead."
+    )
+
+
 PRIVATE_NETWORK_REFUSAL = (
     "BLOCKED: Row-Bot's browser can't open addresses on your local network, such as other computers, "
     "routers or cloud metadata. Only addresses on this computer (like localhost:5173) can be allowed."

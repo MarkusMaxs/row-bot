@@ -227,3 +227,11 @@ def test_the_live_reload_socket_of_an_allowed_server_is_covered_too(browser):
     # Only reads: a grant never lets a page post forms or upload to the server.
     assert not policy.authorize("http://localhost:5173/api", browser_session_id=session_id, method="POST",
                                 scope="conversation-a").allowed
+
+
+@pytest.mark.parametrize("url", ["http://0.0.0.0:5173/", "http://[::]:5173/"])
+def test_an_every_address_bind_says_to_open_localhost(browser, url):
+    result = _open(url)
+
+    assert result.endswith("Open http://localhost:5173 instead.")
+    assert browser.asked == [] and browser.opened == []

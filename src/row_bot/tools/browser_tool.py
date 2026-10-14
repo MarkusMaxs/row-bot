@@ -132,6 +132,9 @@ def _local_address_refusal(session: BrowserSession, thread_id: str, url: str, to
 
     origin = _local.local_development_origin(url)
     if origin is None:
+        unspecified = _local.unspecified_refusal(url)
+        if unspecified:
+            return unspecified, ""
         return (_local.PRIVATE_NETWORK_REFUSAL, "") if _local.private_network_target(url) else (None, "")
     if _local.is_row_bot_origin(origin):
         return _local.row_bot_refusal(origin), ""

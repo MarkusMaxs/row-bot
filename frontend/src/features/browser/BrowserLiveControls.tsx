@@ -9,6 +9,7 @@ import {
   ScanEye,
 } from 'lucide-react';
 import type { BrowserPreview } from '../../api/types';
+import { clientError } from '../../api/errors';
 import { LocalAddresses, type LocalAddressesProps } from './LocalAddresses';
 import {
   Button,
@@ -389,13 +390,18 @@ export default function BrowserLiveControls({
       };
       session.update({ retained: attempt, busy: false, message: '' });
       await submit(attempt);
-    } catch {
-      if (!abort.signal.aborted)
+    } catch (cause) {
+      if (!abort.signal.aborted) {
+        const error = clientError(cause);
         session.update({
           busy: false,
+          // An address that never opens says why; anything else can be retried.
           message:
-            'The browser action could not be reviewed. Refresh and try again.',
+            error.code === 'browser_navigation_denied'
+              ? error.message
+              : 'The browser action could not be reviewed. Refresh and try again.',
         });
+      }
     } finally {
       session.endRead(abort);
     }
