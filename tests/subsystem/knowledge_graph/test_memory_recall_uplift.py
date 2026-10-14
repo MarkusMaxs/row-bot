@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import sys
 from types import SimpleNamespace
@@ -10,17 +9,12 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from row_bot.agent_budget import new_execution_budget
 
 
-def _fresh_memory_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.knowledge_graph as knowledge_graph
-    import row_bot.memory as memory
-    import row_bot.memory_policy as memory_policy
-    import row_bot.memory_extraction as memory_extraction
+def _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir):
 
-    kg = importlib.reload(knowledge_graph)
-    mem = importlib.reload(memory)
-    policy = importlib.reload(memory_policy)
-    extraction = importlib.reload(memory_extraction)
+    (kg,) = reload_for_data_dir(tmp_path / "data", "row_bot.knowledge_graph")
+    (mem,) = reload_for_data_dir(tmp_path / "data", "row_bot.memory")
+    (policy,) = reload_for_data_dir(tmp_path / "data", "row_bot.memory_policy")
+    (extraction,) = reload_for_data_dir(tmp_path / "data", "row_bot.memory_extraction")
     kg._skip_reindex = True
     monkeypatch.setattr(kg, "semantic_search", lambda *args, **kwargs: [])
     return kg, mem, policy, extraction
@@ -31,8 +25,8 @@ def _props(entity: dict) -> dict:
     return json.loads(raw or "{}") if isinstance(raw, str) else dict(raw or {})
 
 
-def test_candidate_retrieval_is_no_touch_and_keyword_fallback_finds_exact_subject(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_candidate_retrieval_is_no_touch_and_keyword_fallback_finds_exact_subject(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     target = kg.save_entity("fact", "Rosebud Code", "The user's code word is rosebud.", source="test")
     kg.save_entity("fact", "Unrelated", "The user likes green tea.", source="test")
@@ -51,8 +45,8 @@ def test_candidate_retrieval_is_no_touch_and_keyword_fallback_finds_exact_subjec
     assert set(kg.recall_stamps()) == {target["id"]}
 
 
-def test_fts_search_and_rebuild_are_no_touch(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_fts_search_and_rebuild_are_no_touch(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     target = kg.save_entity("fact", "Cerulean Pin", "The user's studio door code is cerulean.", source="test")
 
     kg._clear_fts_index()
@@ -65,8 +59,8 @@ def test_fts_search_and_rebuild_are_no_touch(tmp_path, monkeypatch):
     assert kg.recall_stamps() == {}
 
 
-def test_lexical_seed_expands_graph_without_semantic_seed(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_lexical_seed_expands_graph_without_semantic_seed(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     project = kg.save_entity("project", "Atlas Project", "The user is building Atlas.", source="test")
     deadline = kg.save_entity("event", "Atlas Review", "Atlas review is on Friday.", source="test")
     kg.add_relation(project["id"], deadline["id"], "has_deadline", confidence=0.9, source="test")
@@ -84,8 +78,8 @@ def test_lexical_seed_expands_graph_without_semantic_seed(tmp_path, monkeypatch)
     assert kg.recall_stamps() == {}
 
 
-def test_punctuated_exact_subject_outranks_shorter_parent_subject(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_punctuated_exact_subject_outranks_shorter_parent_subject(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     parent = kg.save_entity("concept", "Telegram", "The messaging service.", source="test")
     target = kg.save_entity("concept", "Telegram streaming", "Streaming responses through Telegram.", source="test")
 
@@ -100,8 +94,8 @@ def test_punctuated_exact_subject_outranks_shorter_parent_subject(tmp_path, monk
     assert candidates[0]["score"] > next(c["score"] for c in candidates if c["id"] == parent["id"])
 
 
-def test_alias_phrase_with_question_punctuation_outranks_tag_match(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_alias_phrase_with_question_punctuation_outranks_tag_match(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     tag_match = kg.save_entity("concept", "CLI Overview", "General CLI notes.", tags="secure CLI bridge", source="test")
     target = kg.save_entity(
         "concept",
@@ -122,8 +116,8 @@ def test_alias_phrase_with_question_punctuation_outranks_tag_match(tmp_path, mon
     assert candidates[0]["score"] > next(c["score"] for c in candidates if c["id"] == tag_match["id"])
 
 
-def test_graph_enhanced_recall_preserves_touching_wrapper_behavior(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_graph_enhanced_recall_preserves_touching_wrapper_behavior(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     target = kg.save_entity("fact", "Alias Target", "Important keyword alpha.", aliases="Secret Alias", source="test")
 
     results = kg.graph_enhanced_recall("Secret Alias", threshold=0.99, max_results=5)
@@ -132,8 +126,8 @@ def test_graph_enhanced_recall_preserves_touching_wrapper_behavior(tmp_path, mon
     assert target["id"] in kg.recall_stamps()
 
 
-def test_explicit_memory_search_touches_only_filtered_results(tmp_path, monkeypatch):
-    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_explicit_memory_search_touches_only_filtered_results(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     shown = kg.save_entity("fact", "Rosebud Code", "The user's code word is rosebud.", source="test")
     kg.save_entity("person", "Rosebud Person", "A person with the same keyword.", source="test")
 
@@ -146,8 +140,8 @@ def test_explicit_memory_search_touches_only_filtered_results(tmp_path, monkeypa
     assert set(kg.recall_stamps()) == {shown["id"]}
 
 
-def test_memory_policy_selects_concrete_memory_and_rejects_resource_without_anchor(tmp_path, monkeypatch):
-    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_memory_policy_selects_concrete_memory_and_rejects_resource_without_anchor(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     target = kg.save_entity("fact", "Rosebud Code", "The user's code word is rosebud.", source="test")
     resource = kg.save_entity(
         "media",
@@ -185,8 +179,8 @@ def test_memory_policy_selects_concrete_memory_and_rejects_resource_without_anch
     assert resource_decision.trace["rejected"][0]["reason"] == "resource_not_anchored"
 
 
-def test_memory_policy_skips_greetings_and_runtime_status(tmp_path, monkeypatch):
-    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_memory_policy_skips_greetings_and_runtime_status(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     kg.save_entity("fact", "Rosebud Code", "The user's code word is rosebud.", source="test")
 
     greeting = policy.build_auto_recall(
@@ -214,8 +208,8 @@ def test_memory_policy_skips_greetings_and_runtime_status(tmp_path, monkeypatch)
     assert runtime.reason == "runtime_status_request"
 
 
-def test_memory_policy_publishes_clear_fallback_warning_with_next_action(tmp_path, monkeypatch):
-    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_memory_policy_publishes_clear_fallback_warning_with_next_action(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     kg.save_entity("fact", "Atlas", "The user is building Atlas.", source="test")
     notifications = []
 
@@ -253,10 +247,10 @@ def test_memory_policy_publishes_clear_fallback_warning_with_next_action(tmp_pat
     assert notifications[0][1]["sound"] == "none"
 
 
-def test_a_recall_fallback_is_shown_once_with_the_cause_to_fix_first(tmp_path, monkeypatch):
+def test_a_recall_fallback_is_shown_once_with_the_cause_to_fix_first(tmp_path, monkeypatch, reload_for_data_dir):
     """Found live (a laptop without the search model): every reply showed the notice again, and it advised
     rebuilding the memory index, which can't work until the model is downloaded."""
-    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+    kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     kg.save_entity("fact", "Atlas", "The user is building Atlas.", source="test")
     notifications, status = [], {"semantic": "fallback"}
 
@@ -285,10 +279,9 @@ def test_a_recall_fallback_is_shown_once_with_the_cause_to_fix_first(tmp_path, m
     assert len(notifications) == 2  # so a later failure is shown again.
 
 
-def test_agent_pre_model_trim_injects_policy_block_and_touches_only_selected(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_agent_pre_model_trim_injects_policy_block_and_touches_only_selected(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.agent as agent
-    agent = importlib.reload(agent)
+    (agent,) = reload_for_data_dir(tmp_path / "data", "row_bot.agent")
 
     selected = [{
         "id": "mem123",
@@ -336,8 +329,8 @@ def test_agent_pre_model_trim_injects_policy_block_and_touches_only_selected(tmp
     assert touched == ["mem123"]
 
 
-def test_extraction_reads_checkpoint_messages_without_agent_graph(tmp_path, monkeypatch):
-    _kg, _mem, _policy, extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_extraction_reads_checkpoint_messages_without_agent_graph(tmp_path, monkeypatch, reload_for_data_dir):
+    _kg, _mem, _policy, extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     def _boom():
         raise AssertionError("get_agent_graph should not be called")
@@ -360,8 +353,8 @@ def test_extraction_reads_checkpoint_messages_without_agent_graph(tmp_path, monk
     ]
 
 
-def test_extracted_memory_stores_source_context_properties(tmp_path, monkeypatch):
-    kg, _mem, _policy, extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_extracted_memory_stores_source_context_properties(tmp_path, monkeypatch, reload_for_data_dir):
+    kg, _mem, _policy, extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     saved = extraction._dedup_and_save(
         [{"category": "project", "subject": "Atlas", "content": "User is building Atlas."}],
@@ -377,8 +370,8 @@ def test_extracted_memory_stores_source_context_properties(tmp_path, monkeypatch
     assert props["extraction_method"] == "extraction"
 
 
-def test_memory_policy_records_compact_recall_trace(tmp_path, monkeypatch):
-    _kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch)
+def test_memory_policy_records_compact_recall_trace(tmp_path, monkeypatch, reload_for_data_dir):
+    _kg, _mem, policy, _extraction = _fresh_memory_modules(tmp_path, monkeypatch, reload_for_data_dir)
     trace_path = tmp_path / "trace.json"
     monkeypatch.setattr(policy, "_RECALL_TRACE_FILE", trace_path)
     decision = policy.MemoryRecallDecision(

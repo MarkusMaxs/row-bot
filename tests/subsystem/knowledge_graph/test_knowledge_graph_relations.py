@@ -10,8 +10,8 @@ from tests.fixtures.knowledge_graph import fresh_knowledge_graph
 pytestmark = pytest.mark.subsystem
 
 
-def test_relation_contract_normalizes_aliases_and_rejects_unsafe_edges(tmp_path, monkeypatch) -> None:
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def test_relation_contract_normalizes_aliases_and_rejects_unsafe_edges(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice", "Alice leads the project.", source="test")
     project = kg.save_entity("project", "Row-Bot", "A local-first assistant.", source="test")
 
@@ -33,8 +33,8 @@ def test_relation_contract_normalizes_aliases_and_rejects_unsafe_edges(tmp_path,
     assert kg.add_relation(alice["id"], project["id"], "related_to") is None
 
 
-def test_graph_neighbors_paths_and_delete_cleanup_relations(tmp_path, monkeypatch) -> None:
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def test_graph_neighbors_paths_and_delete_cleanup_relations(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice", "Alice manages Bob.", source="test")
     bob = kg.save_entity("person", "Bob", "Bob works on Row-Bot.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project entity.", source="test")

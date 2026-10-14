@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import os
 from pathlib import Path
@@ -15,10 +14,8 @@ pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
 @pytest.fixture
-def owner(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    from row_bot import document_jobs
-    jobs = importlib.reload(document_jobs)
+def owner(tmp_path, monkeypatch, reload_for_data_dir):
+    (jobs,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_jobs")
     service = jobs.DocumentJobService(tmp_path / "data", now=lambda: "2026-09-10T00:00:00+00:00")
     batch = service.create_batch()
     job = service.create_staging_job(batch, 0, "synthetic.txt")

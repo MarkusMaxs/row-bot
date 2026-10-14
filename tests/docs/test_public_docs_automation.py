@@ -949,5 +949,23 @@ def test_validator_rejects_fake_docs_screenshot_route(monkeypatch) -> None:
     assert any("forbidden fake docs route" in error for error in validator.validate())
 
 
+def test_validator_allows_the_home_install_folders_but_not_the_checkouts_private_one() -> None:
+    import scripts.docs.validate_public_docs as validator
+
+    page = validator.DOCS_ROOT / "getting-started" / "example.mdx"
+    for allowed in (
+        "Installs under `~/.local/share/row-bot` and `~/.local/bin`.",
+        "ExecStart=%h/.local/bin/row-bot serve",
+        'export PATH="$HOME/.local/bin:$PATH"',
+    ):
+        assert validator._scan_text(page, allowed) == []
+    for refused in (
+        "See .local/plans/install-update-5.2/PLAN.md.",
+        "Open D:\\src\\row-bot\\.local\\notes.",
+        "The repo's row-bot/.local/ folder.",
+    ):
+        assert any("references .local" in error for error in validator._scan_text(page, refused))
+
+
 def test_public_docs_metadata_validates() -> None:
     assert validate() == []

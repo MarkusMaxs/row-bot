@@ -1,53 +1,36 @@
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 
 import pytest
 
 from tests.fixtures.goals import goal_modules, judge
 
 
-def _fresh_goal_modules(tmp_path, monkeypatch):
+def _fresh_goal_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
-        "row_bot.tasks",
-        "row_bot.threads",
-        "row_bot.agent_profiles",
-        "row_bot.agent_runs",
-        "row_bot.agent_orchestrator",
-        "row_bot.goals",
-        "row_bot.slash_commands",
-        "row_bot.channels.commands",
-        "row_bot.tools.goal_tool",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_runs as agent_runs
-    import row_bot.goals as goals
-    import row_bot.slash_commands as slash_commands
-    import row_bot.tools.goal_tool as goal_tool
-
-    commands = importlib.import_module("row_bot.channels.commands")
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_runs = importlib.reload(agent_runs)
-    goals = importlib.reload(goals)
-    slash_commands = importlib.reload(slash_commands)
-    commands = importlib.reload(commands)
-    goal_tool = importlib.reload(goal_tool)
+    _tasks, threads, _profiles, agent_runs, _orchestrator, goals, slash_commands, commands, goal_tool = (
+        reload_for_data_dir(
+            data_dir,
+            "row_bot.tasks",
+            "row_bot.threads",
+            "row_bot.agent_profiles",
+            "row_bot.agent_runs",
+            "row_bot.agent_orchestrator",
+            "row_bot.goals",
+            "row_bot.slash_commands",
+            "row_bot.channels.commands",
+            "row_bot.tools.goal_tool",
+        )
+    )
     return threads, agent_runs, goals, slash_commands, commands, goal_tool
 
 
-def test_goal_slash_lifecycle_and_channel_scope(tmp_path, monkeypatch):
+def test_goal_slash_lifecycle_and_channel_scope(tmp_path, reload_for_data_dir):
     threads, agent_runs, goals, slash_commands, commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal slash")
 
@@ -100,10 +83,10 @@ def test_goal_slash_lifecycle_and_channel_scope(tmp_path, monkeypatch):
     assert goals.get_current_goal(thread_id, include_terminal=True) is None
 
 
-def test_goal_tool_registers_and_updates_current_goal(tmp_path, monkeypatch):
+def test_goal_tool_registers_and_updates_current_goal(tmp_path, reload_for_data_dir):
     threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal tool")
     goals.start_goal(thread_id, "finish the tool test")
@@ -129,10 +112,10 @@ def test_goal_tool_registers_and_updates_current_goal(tmp_path, monkeypatch):
     assert status_payload["goal"]["objective"] == "finish the tool test"
 
 
-def test_goal_after_turn_uses_same_model_verifier_and_claims_once(tmp_path, monkeypatch):
+def test_goal_after_turn_uses_same_model_verifier_and_claims_once(tmp_path, monkeypatch, reload_for_data_dir):
     threads, agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal verifier")
     started_goal = goals.start_goal(thread_id, "keep going")
@@ -180,12 +163,12 @@ def test_goal_after_turn_uses_same_model_verifier_and_claims_once(tmp_path, monk
     assert goals.get_current_goal(thread_id)["turns_used"] == 1
 
 
-def test_goal_verifier_uses_the_goal_threads_model_with_a_bounded_structured_verdict(tmp_path, monkeypatch):
+def test_goal_verifier_uses_the_goal_threads_model_with_a_bounded_structured_verdict(tmp_path, monkeypatch, reload_for_data_dir):
     """WP C1: without a turn model, the verifier asks the goal thread's own model,
     at the lowest effort, for a schema verdict with a bounded reply."""
     threads, _agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal on a local model")
     threads._set_thread_model_override(thread_id, "model:ollama:qwen3:8b")
@@ -226,10 +209,10 @@ def test_goal_verifier_uses_the_goal_threads_model_with_a_bounded_structured_ver
         "progress", "no_progress", "done", "blocked"]
 
 
-def test_goal_verifier_failure_falls_back_to_continue(tmp_path, monkeypatch):
+def test_goal_verifier_failure_falls_back_to_continue(tmp_path, reload_for_data_dir):
     threads, _agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal fallback")
     goals.start_goal(thread_id, "survive verifier failure")
@@ -250,10 +233,10 @@ def test_goal_verifier_failure_falls_back_to_continue(tmp_path, monkeypatch):
     assert "Verifier unavailable" in current["last_reason"]
 
 
-def test_goal_verifier_receives_child_agent_dependency_evidence(tmp_path, monkeypatch):
+def test_goal_verifier_receives_child_agent_dependency_evidence(tmp_path, reload_for_data_dir):
     threads, agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal child evidence")
     goals.start_goal(thread_id, "finish delegated work")
@@ -288,10 +271,10 @@ def test_goal_verifier_receives_child_agent_dependency_evidence(tmp_path, monkey
     assert goals.get_current_goal(thread_id, include_terminal=True)["status"] == "completed"
 
 
-def test_goal_verifier_sees_unfinished_or_failed_child_agents(tmp_path, monkeypatch):
+def test_goal_verifier_sees_unfinished_or_failed_child_agents(tmp_path, reload_for_data_dir):
     threads, agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal child pending")
     goals.start_goal(thread_id, "wait for delegated work")
@@ -331,10 +314,10 @@ def test_goal_verifier_sees_unfinished_or_failed_child_agents(tmp_path, monkeypa
     assert goals.get_current_goal(thread_id)["status"] == "active"
 
 
-def test_repeated_same_blocker_marks_goal_blocked(tmp_path, monkeypatch):
+def test_repeated_same_blocker_marks_goal_blocked(tmp_path, reload_for_data_dir):
     threads, _agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     thread_id = threads.create_thread("Goal blocker")
     goals.start_goal(thread_id, "finish without credentials")
@@ -361,10 +344,10 @@ def test_repeated_same_blocker_marks_goal_blocked(tmp_path, monkeypatch):
     assert decision.status == "blocked"
 
 
-def test_goal_continuation_is_posted_to_shared_parent_runner(tmp_path, monkeypatch):
+def test_goal_continuation_is_posted_to_shared_parent_runner(tmp_path, monkeypatch, reload_for_data_dir):
     threads, _agent_runs, goals, _slash, _commands, _goal_tool = _fresh_goal_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     import row_bot.agent_orchestrator as orchestrator
 
@@ -542,9 +525,9 @@ def test_only_a_goal_waiting_on_the_person_resumes_when_they_write(tmp_path, rel
     assert goals.get_goal(blocked["id"])["status"] == "active"
 
 
-def test_an_agent_that_stops_to_wait_for_the_person_shows_needs_you(tmp_path, monkeypatch):
+def test_an_agent_that_stops_to_wait_for_the_person_shows_needs_you(tmp_path, reload_for_data_dir):
     """B316: in demo 5 the agent's own goal_update said "paused" while it waited for the launch date."""
-    threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(tmp_path, monkeypatch)
+    threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Launch")
     goal = goals.start_goal(thread_id, "Draft the launch post")
 
@@ -556,9 +539,9 @@ def test_an_agent_that_stops_to_wait_for_the_person_shows_needs_you(tmp_path, mo
     assert goals.resume_goal_for_answer(thread_id)["status"] == "active"
 
 
-def test_goal_tools_act_on_the_running_conversation_only(tmp_path, monkeypatch):
+def test_goal_tools_act_on_the_running_conversation_only(tmp_path, monkeypatch, reload_for_data_dir):
     """The conversation is not a model argument: a goal_update naming another thread updates this one (WP D1)."""
-    threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(tmp_path, monkeypatch)
+    threads, _agent_runs, goals, _slash, _commands, goal_tool = _fresh_goal_modules(tmp_path, reload_for_data_dir)
     here, elsewhere = threads.create_thread("Here"), threads.create_thread("Elsewhere")
     mine, theirs = goals.start_goal(here, "Ship the report"), goals.start_goal(elsewhere, "Plan the trip")
     monkeypatch.setattr(goal_tool, "_runtime_context", lambda: {"thread_id": here})

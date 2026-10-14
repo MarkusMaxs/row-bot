@@ -16,7 +16,7 @@ pytestmark = pytest.mark.contract
 
 
 @pytest.fixture
-def platform(tmp_path, monkeypatch):
+def platform(tmp_path, monkeypatch, reload_for_data_dir):
     from row_bot import threads, agent_profiles
     from row_bot.application import client_platform
     from row_bot.projection.conversation import ConversationProjection
@@ -25,7 +25,7 @@ def platform(tmp_path, monkeypatch):
     from row_bot.runtime import executions as runtime_owner
     from row_bot.tools import registry as tool_registry
 
-    fresh_tasks_module(tmp_path, monkeypatch)
+    fresh_tasks_module(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(agent_profiles, "_SCHEMA_READY", False)
     monkeypatch.setattr(threads, "DB_PATH", str(tmp_path / "threads.db"))
     monkeypatch.setattr(threads, "DATA_DIR", tmp_path)

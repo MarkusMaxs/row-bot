@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -11,21 +9,15 @@ from langchain_core.messages import AIMessage, HumanMessage
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    for name in (
-        "row_bot.data_paths",
-        "row_bot.threads",
-        "row_bot.channels.runtime",
-    ):
-        sys.modules.pop(name, None)
-    threads = importlib.import_module("row_bot.threads")
-    runtime = importlib.import_module("row_bot.channels.runtime")
+def _fresh_modules(tmp_path, reload_for_data_dir):
+    _paths, threads, runtime = reload_for_data_dir(
+        tmp_path / "row-bot-data", "row_bot.data_paths", "row_bot.threads", "row_bot.channels.runtime"
+    )
     return threads, runtime
 
 
-def test_channel_assistant_persistence_repairs_human_only_checkpoint(tmp_path, monkeypatch):
-    threads, runtime = _fresh_modules(tmp_path, monkeypatch)
+def test_channel_assistant_persistence_repairs_human_only_checkpoint(tmp_path, reload_for_data_dir):
+    threads, runtime = _fresh_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Channel fallback", thread_id="channel-fallback")
     threads.append_checkpoint_messages(thread_id, [HumanMessage(content="question")])
     delivery = SimpleNamespace(
@@ -65,8 +57,8 @@ def test_channel_assistant_persistence_repairs_human_only_checkpoint(tmp_path, m
     assert len(threads.get_latest_checkpoint_messages(thread_id)) == 2
 
 
-def test_channel_assistant_persistence_does_not_duplicate_graph_assistant(tmp_path, monkeypatch):
-    threads, runtime = _fresh_modules(tmp_path, monkeypatch)
+def test_channel_assistant_persistence_does_not_duplicate_graph_assistant(tmp_path, reload_for_data_dir):
+    threads, runtime = _fresh_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Channel success", thread_id="channel-success")
     threads.append_checkpoint_messages(
         thread_id,

@@ -10,8 +10,8 @@ from tests.fixtures.knowledge_graph import fresh_knowledge_graph
 pytestmark = pytest.mark.subsystem
 
 
-def test_json_relation_fts_and_surrogate_helpers(tmp_path, monkeypatch) -> None:
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def test_json_relation_fts_and_surrogate_helpers(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
 
     assert kg.extract_json_block('prefix {"a": ["[not close]", {"b": 2}]} suffix', "{") == '{"a": ["[not close]", {"b": 2}]}'
     assert kg.extract_json_block("[1, 2") is None
@@ -31,8 +31,8 @@ def test_json_relation_fts_and_surrogate_helpers(tmp_path, monkeypatch) -> None:
     assert kg.fts_search_entities("lexical subsystem", limit=5) == []
 
 
-def test_entity_crud_summaries_subjects_and_source_prefix_deletion(tmp_path, monkeypatch) -> None:
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def test_entity_crud_summaries_subjects_and_source_prefix_deletion(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     monkeypatch.setattr(kg, "rebuild_index", lambda: None)
 
     alice = kg.save_entity(
@@ -75,8 +75,8 @@ def test_entity_crud_summaries_subjects_and_source_prefix_deletion(tmp_path, mon
     assert kg.delete_entities_by_source("missing") == 0
 
 
-def test_semantic_duplicate_and_recall_touch_paths_are_deterministic(tmp_path, monkeypatch) -> None:
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def test_semantic_duplicate_and_recall_touch_paths_are_deterministic(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice Recall", "Alice coordinates recall tests.", source="test")
     project = kg.save_entity("project", "Recall Project", "Project linked to Alice.", source="test")
     kg.add_relation(alice["id"], project["id"], "works_on", confidence=0.9, source="test")
@@ -96,8 +96,8 @@ def test_semantic_duplicate_and_recall_touch_paths_are_deterministic(tmp_path, m
     assert kg.get_entity(alice["id"]) == alice
 
 
-def test_graph_stats_mermaid_vis_json_delete_all_and_consolidation(tmp_path, monkeypatch) -> None:
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+def test_graph_stats_mermaid_vis_json_delete_all_and_consolidation(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     monkeypatch.setattr(kg, "rebuild_index", lambda: None)
     monkeypatch.setattr(kg, "_upsert_index", lambda _entity_id: None)
     monkeypatch.setattr(kg, "_remove_from_index", lambda _entity_id: None)

@@ -13,8 +13,18 @@ const mock = vi.hoisted(() => ({
     modelCatalogPage: vi.fn(),
     refreshLiveProvider: vi.fn(),
     liveProviderRefresh: vi.fn(),
+    updates: vi.fn(),
   },
 }));
+
+/** The parts of /system/updates the first run reads. */
+const updates = (
+  mode: 'self' | 'external' | 'unavailable',
+  autoDownload = true,
+) => ({
+  mode,
+  auto_download: autoDownload,
+});
 
 vi.mock('../../runtime', async () => {
   const { createContext } = await import('react');
@@ -97,6 +107,7 @@ beforeEach(() => {
     elapsed_ms: 900,
   });
   mock.controller.refreshChoices.mockResolvedValue(undefined);
+  mock.controller.updates.mockResolvedValue(updates('unavailable'));
   sessionStorage.clear();
 });
 
@@ -223,6 +234,53 @@ it('lists recommended key providers first, the rest under More providers', async
   ).toEqual(['OpenAI', 'Anthropic', 'Google Gemini', 'OpenRouter']);
   expect(within(providers).getAllByText('Pay per use')).toHaveLength(4);
   expect(screen.getByText('More providers')).toBeVisible();
+});
+
+it('says once that an installed Row-Bot downloads updates in the background', async () => {
+  mock.controller.updates.mockResolvedValue(updates('self'));
+  show();
+  const link = await screen.findByRole('link', { name: 'Settings › Updates' });
+  expect(link).toHaveAttribute('href', '/settings/updates');
+  expect(link.closest('p')).toHaveTextContent(
+    'Row-Bot downloads updates in the background. You can turn this off in Settings › Updates.',
+  );
+  fireEvent.click(link);
+  expect(location()).toBe('/settings/updates');
+});
+
+it('says nothing about updates when this Row-Bot does not download them itself', async () => {
+  for (const state of [
+    updates('unavailable'),
+    updates('external'),
+    updates('self', false),
+  ]) {
+    mock.controller.updates.mockResolvedValue(state);
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/setup']}>
+        <FirstRun
+          snapshot={snapshot}
+          actions={{ choose: vi.fn(), finish: vi.fn() }}
+        />
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(mock.controller.updates).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByText(/downloads updates in the background/),
+    ).toBeNull();
+    unmount();
+    mock.controller.updates.mockClear();
+  }
+  // A failed read shows nothing either.
+  mock.controller.updates.mockRejectedValue(new Error('offline'));
+  show();
+  await vi.waitFor(() => expect(mock.controller.updates).toHaveBeenCalled());
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(screen.queryByText(/downloads updates in the background/)).toBeNull();
 });
 
 it('never traps the person: Set up later and the custom endpoint link', () => {

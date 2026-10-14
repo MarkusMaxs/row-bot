@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 from types import SimpleNamespace
 
@@ -8,9 +7,8 @@ import pytest
 
 
 @pytest.fixture()
-def evolution_env(tmp_path, monkeypatch):
+def evolution_env(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "row-bot-data"
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
 
     import row_bot.skills as skills
     import row_bot.insights as insights
@@ -18,11 +16,11 @@ def evolution_env(tmp_path, monkeypatch):
     import row_bot.evolution as evolution
     import row_bot.tools.row_bot_status_tool as status_tool
 
-    skills = importlib.reload(skills)
-    insights = importlib.reload(insights)
-    threads = importlib.reload(threads)
-    evolution = importlib.reload(evolution)
-    status_tool = importlib.reload(status_tool)
+    (skills,) = reload_for_data_dir(data_dir, "row_bot.skills")
+    (insights,) = reload_for_data_dir(data_dir, "row_bot.insights")
+    (threads,) = reload_for_data_dir(data_dir, "row_bot.threads")
+    (evolution,) = reload_for_data_dir(data_dir, "row_bot.evolution")
+    (status_tool,) = reload_for_data_dir(data_dir, "row_bot.tools.row_bot_status_tool")
     skills.load_skills()
 
     return SimpleNamespace(

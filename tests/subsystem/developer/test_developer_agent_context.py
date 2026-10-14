@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import importlib
 import subprocess
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in ["threads", "developer.storage", "developer.agent_context"]:
-        sys.modules.pop(name, None)
-    import row_bot.developer.storage as storage
-    import row_bot.developer.agent_context as agent_context
+def _fresh_modules(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(storage), importlib.reload(agent_context)
+    return tuple(reload_for_data_dir(tmp_path / "data", "row_bot.developer.storage", "row_bot.developer.agent_context"))
 
 
-def test_developer_agent_context_is_compact_and_policy_aware(tmp_path, monkeypatch):
-    storage, agent_context = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_agent_context_is_compact_and_policy_aware(tmp_path, reload_for_data_dir):
+    storage, agent_context = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "app.py").write_text("print('hello')\n", encoding="utf-8")
@@ -37,8 +30,8 @@ def test_developer_agent_context_is_compact_and_policy_aware(tmp_path, monkeypat
     assert "print('hello')" not in context
 
 
-def test_developer_agent_context_reports_git_state(tmp_path, monkeypatch):
-    storage, agent_context = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_agent_context_reports_git_state(tmp_path, reload_for_data_dir):
+    storage, agent_context = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True, text=True)
@@ -56,8 +49,8 @@ def test_developer_agent_context_reports_git_state(tmp_path, monkeypatch):
     assert "Git dirty: yes" in context
 
 
-def test_developer_identity_questions_are_answered_naturally_from_context(tmp_path, monkeypatch):
-    storage, agent_context = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_identity_questions_are_answered_naturally_from_context(tmp_path, reload_for_data_dir):
+    storage, agent_context = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True, text=True)

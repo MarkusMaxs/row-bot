@@ -1,4 +1,3 @@
-import importlib
 import json
 import threading
 import time
@@ -16,11 +15,9 @@ def case_dir(tmp_path):
     return path
 
 
-def _reload_embedding_config(monkeypatch, data_dir):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    import row_bot.embedding_config as embedding_config
+def _reload_embedding_config(reload_for_data_dir, data_dir):
 
-    return importlib.reload(embedding_config)
+    return reload_for_data_dir(data_dir, "row_bot.embedding_config")[0]
 
 
 def _pyproject():
@@ -40,9 +37,9 @@ def _dependency_names(entries):
     }
 
 
-def test_embedding_config_defaults_and_index_metadata(monkeypatch, case_dir):
+def test_embedding_config_defaults_and_index_metadata(reload_for_data_dir, case_dir):
     data_dir = case_dir
-    embedding_config = _reload_embedding_config(monkeypatch, data_dir)
+    embedding_config = _reload_embedding_config(reload_for_data_dir, data_dir)
 
     cfg = embedding_config.get_embedding_config()
     assert cfg["provider"] == "local"
@@ -61,9 +58,9 @@ def test_embedding_config_defaults_and_index_metadata(monkeypatch, case_dir):
     assert embedding_config.index_metadata_matches(vector_dir, active)
 
 
-def test_embedding_config_recovers_from_invalid_values(monkeypatch, case_dir):
+def test_embedding_config_recovers_from_invalid_values(reload_for_data_dir, case_dir):
     data_dir = case_dir
-    embedding_config = _reload_embedding_config(monkeypatch, data_dir)
+    embedding_config = _reload_embedding_config(reload_for_data_dir, data_dir)
     embedding_config.CONFIG_PATH.write_text(
         json.dumps(
             {

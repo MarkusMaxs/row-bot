@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-import importlib
 import pathlib
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    for name in [
-        "threads",
-        "developer.storage",
-    ]:
-        sys.modules.pop(name, None)
-    import row_bot.threads as threads
-    import row_bot.developer.storage as storage
+def _fresh_modules(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(threads), importlib.reload(storage)
+    return tuple(reload_for_data_dir(tmp_path, "row_bot.threads", "row_bot.developer.storage"))
 
 
-def test_developer_workspace_storage_keeps_user_path(tmp_path, monkeypatch):
-    _threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_workspace_storage_keeps_user_path(tmp_path, reload_for_data_dir):
+    _threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "already-cloned"
     repo.mkdir()
 
@@ -30,8 +20,8 @@ def test_developer_workspace_storage_keeps_user_path(tmp_path, monkeypatch):
     assert storage.list_workspaces()[0].id == workspace.id
 
 
-def test_developer_workspace_rejects_empty_path(tmp_path, monkeypatch):
-    _threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_workspace_rejects_empty_path(tmp_path, reload_for_data_dir):
+    _threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
 
     try:
         storage.add_or_update_local_workspace("")
@@ -41,8 +31,8 @@ def test_developer_workspace_rejects_empty_path(tmp_path, monkeypatch):
         raise AssertionError("empty workspace path should not resolve to the current working directory")
 
 
-def test_developer_workspace_remove_is_metadata_only(tmp_path, monkeypatch):
-    threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_workspace_remove_is_metadata_only(tmp_path, reload_for_data_dir):
+    threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     workspace = storage.add_or_update_local_workspace(str(repo))
@@ -64,8 +54,8 @@ def test_developer_workspace_remove_is_metadata_only(tmp_path, monkeypatch):
     assert restored.hidden is False
 
 
-def test_developer_clone_requires_explicit_destination(tmp_path, monkeypatch):
-    _threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_clone_requires_explicit_destination(tmp_path, reload_for_data_dir):
+    _threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
 
     assert storage.suggested_clone_name("https://github.com/example/project.git") == "project"
     try:
@@ -76,8 +66,8 @@ def test_developer_clone_requires_explicit_destination(tmp_path, monkeypatch):
         raise AssertionError("clone_repository must require an existing explicit destination folder")
 
 
-def test_developer_clone_reports_git_stderr(tmp_path, monkeypatch):
-    _threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_clone_reports_git_stderr(tmp_path, monkeypatch, reload_for_data_dir):
+    _threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
 
     def _fail_clone(*_args, **_kwargs):
         raise storage.subprocess.CalledProcessError(
@@ -99,8 +89,8 @@ def test_developer_clone_reports_git_stderr(tmp_path, monkeypatch):
         raise AssertionError("clone_repository should report git stderr on clone failure")
 
 
-def test_code_thread_metadata_and_classification(tmp_path, monkeypatch):
-    threads, storage = _fresh_modules(tmp_path, monkeypatch)
+def test_code_thread_metadata_and_classification(tmp_path, reload_for_data_dir):
+    threads, storage = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     workspace = storage.add_or_update_local_workspace(str(repo))
