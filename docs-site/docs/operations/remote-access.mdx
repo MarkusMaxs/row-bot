@@ -16,7 +16,7 @@ Reachability, authentication, and presentation are separate:
 - Every authenticated interactive browser represents the same owner.
 - Desktop or compact presentation changes layout only, never authority.
 
-Normal desktop launches remain local-first. They listen on loopback and keep the local owner experience unless you explicitly enable another route. Authenticated server mode is stricter: every browser must connect with a valid session, including a browser on the server itself.
+Normal desktop launches remain local-first. They listen on loopback, where the desktop app needs no sign-in, unless you explicitly enable another route. Authenticated server mode is stricter: every browser must connect with a valid session, including a browser on the server itself.
 
 <Screenshot id="settings-remote-access" alt="Row-Bot Remote Access settings." caption="Remote Access keeps trusted connection addresses separate from connected-device authorization. Tailscale is recommended; LAN remains an explicit, unencrypted option." />
 

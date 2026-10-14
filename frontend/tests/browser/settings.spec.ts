@@ -2446,6 +2446,9 @@ test('A ready update says Restart to update and restarts from Settings', async (
     });
   });
   await page.goto('/app-v2/');
+  // Below the desktop width the indicator is in the navigation drawer.
+  if (page.viewportSize()!.width < 1024)
+    await page.getByRole('button', { name: 'Toggle navigation' }).click();
   const pill = page.getByRole('link', {
     name: 'Restart to update to 99.0.0. Open Updates',
   });
