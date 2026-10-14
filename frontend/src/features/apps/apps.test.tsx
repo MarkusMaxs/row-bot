@@ -981,6 +981,141 @@ it('checks an unfinished change again when no plan owns it, and never starts a n
   expect(controller.reviewInstallPlan).not.toHaveBeenCalled();
 });
 
+it('after an abandoned sign-in, Retry leads back to one clear way to finish connecting (B338)', async () => {
+  const blocker = (code: string) => ({
+    code,
+    severity: 'blocking' as const,
+    message: '',
+    subject: '',
+  });
+  const installed = {
+    id: 'mcp:sentry',
+    name: 'Sentry',
+    installed: true,
+    lifecycle: 'installed' as const,
+  };
+  const stuck = entry({
+    ...installed,
+    readiness: 'attention',
+    blockers: [
+      blocker('configuration_recovery'),
+      blocker('tools_not_accepted'),
+    ],
+    next_action: { kind: 'retry', label: 'Retry' },
+  });
+  const ready = plan({
+    item_id: 'mcp:sentry',
+    name: 'Sentry',
+    intent: 'fix',
+    next_action: { kind: 'continue_setup', label: 'Continue setup' },
+  });
+  const controller = {
+    integrationDetail: vi.fn(async () => detail({ entry: stuck, plan: ready })),
+    settleIntegration: vi
+      .fn()
+      // A sign-in still inside its five minutes: Retry says it is still finishing.
+      .mockResolvedValueOnce(detail({ entry: stuck, plan: ready }))
+      .mockResolvedValue(
+        detail({
+          entry: entry({
+            ...installed,
+            readiness: 'needs_setup',
+            blockers: [blocker('tools_not_accepted')],
+            next_action: { kind: 'continue_setup', label: 'Continue setup' },
+          }),
+          plan: ready,
+        }),
+      ),
+    reviewInstallPlan: vi.fn(async () => ready),
+  };
+  show('/settings/apps/item?id=mcp%3Asentry', controller);
+  expect(await screen.findByText('Finishing your last change…')).toBeVisible();
+  expect(
+    screen.queryByRole('button', { name: 'Continue setup' }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(
+    await screen.findByText(
+      'Still finishing your last change. Try again in a minute.',
+    ),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  const next = await screen.findByRole('button', { name: 'Continue setup' });
+  expect(screen.queryByText(/finishing your last change/i)).toBeNull();
+  expect(
+    screen.getByText(
+      'Setup stopped before it finished. Anything already done is kept.',
+    ),
+  ).toBeVisible();
+  expect(screen.getByText('Finish setup')).toBeVisible();
+  expect(document.body).not.toHaveTextContent(
+    /configuration_recovery|tools_not_accepted/,
+  );
+  fireEvent.click(next);
+  await waitFor(() =>
+    expect(controller.reviewInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ item_id: 'mcp:sentry' }),
+    ),
+  );
+});
+
+it('a setup whose sign-in ran out of time says so and offers to try again (B338)', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const waiting = plan({
+    plan_id: 'b1b1b1b1-0000-4000-8000-000000000338',
+    state: 'paused',
+    pause: 'sign_in',
+    current_step: 'sign_in',
+    steps: [
+      step('consent', 'done'),
+      step('sign_in', 'waiting', {
+        sign_in: {
+          method: 'oauth_dcr',
+          authorization_url: 'https://auth.example.test/authorize',
+        },
+      }),
+      step('access', 'pending'),
+      step('enable', 'pending'),
+    ],
+  });
+  const expired = plan({
+    ...waiting,
+    state: 'expired',
+    pause: null,
+    message:
+      "The sign-in wasn't finished in time. Anything already done is kept.",
+    steps: [
+      step('consent', 'done'),
+      step('sign_in', 'failed', { message: 'Not finished in time.' }),
+      step('access', 'pending'),
+      step('enable', 'pending'),
+    ],
+  });
+  const controller = {
+    integrationDetail: vi.fn(async () => detail({ plan: waiting })),
+    reviewInstallPlan: vi
+      .fn()
+      .mockResolvedValueOnce(waiting)
+      .mockResolvedValue(plan()),
+    installPlan: vi.fn(async () => expired),
+  };
+  show('/settings/apps/item?id=mcp%3Acurated%3Anotion', controller);
+  expect(
+    await screen.findByText(/Finish signing in to Notion in your browser/),
+  ).toBeVisible();
+  await act(() => vi.advanceTimersByTimeAsync(800));
+  expect(
+    await screen.findByText(
+      "The sign-in wasn't finished in time. Anything already done is kept.",
+    ),
+  ).toBeVisible();
+  expect(screen.getByText('Not finished in time.')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(
+    await screen.findByRole('dialog', { name: 'Connect Notion' }),
+  ).toBeVisible();
+});
+
 it('offers the presets to an app that overlaps Row-Bot, with a one-line note', async () => {
   const onAllow = vi.fn();
   render(

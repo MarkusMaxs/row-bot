@@ -53,8 +53,7 @@ _MESSAGES = {
     "plan_changed": "Something changed since you agreed. Review it again.",
     "plan_cancelled": "Stopped. Anything already done is kept.",
     "plan_expired": "This setup waited too long, so Row-Bot stopped it. Anything already done is kept.",
-    "sign_in_expired": "The sign-in wasn't finished in time, so Row-Bot stopped. Anything already done is kept; "
-                       "try again to sign in.",
+    "sign_in_expired": "The sign-in wasn't finished in time. Anything already done is kept.",
     "revision_conflict": "The settings changed while setting up. Start again.",
     "mcp_connection_failed": "The connection test failed. Check the details and try again.",
     "change_unconfirmed": "Your last change didn't finish. Retry to check it again.",
@@ -568,9 +567,12 @@ def _read(ctx: Context, plan_id: str) -> dict:
                 seen = "uncertain"
         if seen == "resume":
             record.update(state="paused", pause="resume", message="")
-        elif seen in {"failed", "expired"}:
+        elif seen == "failed":
             step["state"] = "failed"
-            record.update(state=seen, pause=None, message=step["message"] or "This step could not finish.")
+            record.update(state="failed", pause=None, message=step["message"] or "This step could not finish.")
+        elif seen == "expired":
+            step["state"] = "failed"
+            record.update(state="expired", pause=None, message=_MESSAGES["sign_in_expired"])
         elif seen == "uncertain" and record["state"] != "uncertain":
             record.update(state="uncertain", pause=None, message=_MESSAGES["change_unconfirmed"])
         if seen in {"failed", "expired"} or json.dumps(record, sort_keys=True) != before:
@@ -781,7 +783,7 @@ def _observe_sign_in(ctx: Context, record: dict, step: dict) -> str:
         from row_bot.application.client_mcp_auth import cancel_auth
         cancel_auth(owner_id=ctx.owner_id, command_id=record[key], validate=ctx.validate)
         step["sign_in"]["authorization_url"] = None
-        step["message"] = _MESSAGES["sign_in_expired"]
+        step["message"] = "Not finished in time."
         return "expired"
     if result["state"] in {"failed", "cancelled", "disconnected"}:
         step["message"] = result["message"][:512]
@@ -1097,7 +1099,9 @@ def _mcp_sign_in(ctx: Context, record: dict, step: dict) -> str:
     key = _auth_key(step)
     if record.get(key):
         seen = _observe_sign_in(ctx, record, step)
-        if seen in {"failed", "expired"}:
+        if seen == "expired":
+            raise PlanError("sign_in_expired")
+        if seen == "failed":
             raise PlanError("sign_in_failed", step["message"] or "Sign-in didn't finish. Try again.")
         if seen == "resume" and step["type"] == "allow_changes":
             # Signed in to make changes: check the connection with it, then what it can do now.
