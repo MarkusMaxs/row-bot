@@ -15,6 +15,7 @@ from row_bot.browser.history import (
     get_browser_history as _get_history,
 )
 from row_bot.browser.history import HISTORY_PATH as _DEFAULT_HISTORY_PATH
+from row_bot.browser import local_access as _local
 from row_bot.browser.policy import (
     consequential_browser_target as _consequential_browser_target,
     history_url as _history_url,
@@ -100,8 +101,49 @@ def _normalise_url(url: str) -> tuple[str | None, str]:
     if selected.casefold().startswith("javascript:"):
         return None, "Error: javascript: URLs are not allowed."
     if not selected.casefold().startswith(("http://", "https://")):
-        selected = "https://" + selected
+        # A local development server is plain http unless the person says otherwise.
+        bare = "http://" + selected
+        selected = bare if _local.local_development_origin(bare) else "https://" + selected
     return selected, ""
+
+
+def _local_address_refusal(session: BrowserSession, thread_id: str, url: str, tool: str) -> tuple[str | None, str]:
+    """Whether a local or private-network address may open: (refusal, note).
+
+    An address on this computer opens once allowed for this conversation: by
+    the person through the approval gate (or the level: the reviewer under
+    Auto, Hands-off), or without asking when a server Row-Bot started here
+    listens on it. Other private-network addresses never open.
+    """
+
+    origin = _local.local_development_origin(url)
+    if origin is None:
+        return (_local.PRIVATE_NETWORK_REFUSAL, "") if _local.private_network_target(url) else (None, "")
+    if _local.is_row_bot_origin(origin):
+        return _local.row_bot_refusal(origin), ""
+    if session.local_address_grant(thread_id, origin) is not None:
+        return None, ""
+    label = _local.address_label(origin)
+    if _local.row_bot_server(origin, thread_id):
+        session.allow_local_address(thread_id, origin, source="row_bot_server")
+        return None, f"Opened without asking: Row-Bot started the server at {label} in this chat."
+    from row_bot.tools.approval_gate import approval_check
+
+    session.mark_waiting_approval(thread_id, "Approve a local address")
+    refusal, line = approval_check(
+        _local.approval_request(origin, tool=tool),
+        risks=(_local.LOCAL_ADDRESS_RISK,),
+        blocked_message=(
+            f"BLOCKED: Opening {label} needs approval, and this chat is on Block. "
+            "Ask the person to allow it or change the approval level."
+        ),
+        cancelled_message=f"The person didn't allow {label}; it wasn't opened.",
+    )
+    if refusal:
+        session.end_activity(thread_id)
+        return refusal, ""
+    session.allow_local_address(thread_id, origin, source=_local.source_of(line))
+    return None, ""
 
 
 class BrowserTool(BaseTool):
@@ -151,7 +193,11 @@ class BrowserTool(BaseTool):
             policy, reason = _navigation_policy(selected, session.current_url(thread_id))
             if policy == "block":
                 return f"BLOCKED: {reason}"
-            if policy == "ask":
+            local = _local.local_development_origin(selected) is not None
+            refusal, note = _local_address_refusal(session, thread_id, selected, "browser_navigate")
+            if refusal:
+                return refusal
+            if policy == "ask" and not (local and reason.startswith("Navigation targets a local")):
                 from row_bot.tools.approval_gate import gate_action
 
                 session.mark_waiting_approval(thread_id, "Approve website navigation")
@@ -166,7 +212,7 @@ class BrowserTool(BaseTool):
             append_browser_history(thread_id, {
                 "action": "navigate", "url": _history_url(selected), "timestamp": datetime.now().isoformat(),
             })
-            return result
+            return f"{note}\n{result}" if note else result
 
         def browser_click(ref: str) -> str:
             """Click one exact opaque target from the current managed-browser observation."""
@@ -287,11 +333,16 @@ class BrowserTool(BaseTool):
                 url = selected
             thread_id = _get_thread_id()
             session = _session_manager.get_session(thread_id)
+            note = ""
             if action == "new" and url:
                 policy, reason = _navigation_policy(url, session.current_url(thread_id))
                 if policy == "block":
                     return f"BLOCKED: {reason}"
-                if policy == "ask":
+                local = _local.local_development_origin(url) is not None
+                refusal, note = _local_address_refusal(session, thread_id, url, "browser_tab")
+                if refusal:
+                    return refusal
+                if policy == "ask" and not (local and reason.startswith("Navigation targets a local")):
                     from row_bot.tools.approval_gate import gate_action
 
                     session.mark_waiting_approval(thread_id, "Approve new task tab")
@@ -307,7 +358,7 @@ class BrowserTool(BaseTool):
                 "action": f"tab_{action}", "tab_id": tab_id,
                 "url": _history_url(url) if url else None, "timestamp": datetime.now().isoformat(),
             })
-            return result
+            return f"{note}\n{result}" if note else result
 
         return [
             StructuredTool.from_function(

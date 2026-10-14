@@ -28,7 +28,20 @@ from row_bot.browser.observation import (
     StaleBrowserObservation,
     target_fingerprint,
 )
-from row_bot.browser.network_security import BrowserNetworkSecurity, LocalDevelopmentGrant
+from row_bot.browser.local_access import (
+    GRANT_SOURCES,
+    GrantSource,
+    LocalAddressGrant,
+    address_label,
+    is_row_bot_origin,
+    local_development_origin,
+    socket_origin,
+)
+from row_bot.browser.network_security import (
+    MAX_LOCAL_DEVELOPMENT_GRANT_SECONDS,
+    BrowserNetworkSecurity,
+    LocalDevelopmentGrant,
+)
 from row_bot.browser.network_proxy import PinnedNetworkProxy
 from row_bot.browser.policy import history_url
 from row_bot.browser.runtime import (
@@ -43,6 +56,8 @@ from row_bot.data_paths import get_row_bot_data_dir
 logger = logging.getLogger(__name__)
 PROFILE_DIR = get_row_bot_data_dir() / "browser_profile"
 VIEWPORT = {"width": 1280, "height": 900}
+# How long a local address stays allowed in a conversation (the grant's maximum).
+LOCAL_ADDRESS_SECONDS = MAX_LOCAL_DEVELOPMENT_GRANT_SECONDS
 
 
 def browser_runs_headless() -> bool:
@@ -150,6 +165,8 @@ class ManagedBrowserService:
         self._network_security = network_security or BrowserNetworkSecurity()
         self._browser_security_session_id = uuid.uuid4().hex
         self._network_proxy: PinnedNetworkProxy | None = None
+        self._local_lock = threading.RLock()
+        self._local_grants: dict[str, LocalAddressGrant] = {}
 
     def grant_local_development_origin(
         self,
@@ -157,18 +174,132 @@ class ManagedBrowserService:
         *,
         intended_use: str,
         ttl_seconds: float,
+        scope: str | None = None,
     ) -> LocalDevelopmentGrant:
-        """Grant one exact local-development origin for this browser session."""
+        """Grant one exact local-development origin for this browser session.
+
+        With *scope*, only that conversation's pages may reach it.
+        """
 
         return self._network_security.grant_local_development(
             browser_session_id=self._browser_security_session_id,
             origin=origin,
             intended_use=intended_use,
             ttl_seconds=ttl_seconds,
+            scope=scope,
         )
 
     def revoke_local_development_grant(self, grant_id: str) -> bool:
         return self._network_security.revoke_grant(grant_id)
+
+    # ---- Local addresses (F4) ---------------------------------------------------------
+
+    def allow_local_address(
+        self,
+        conversation_id: str,
+        origin: str,
+        *,
+        source: GrantSource,
+    ) -> LocalAddressGrant:
+        """Let one conversation's pages open one address on this computer, for an hour.
+
+        It covers the server's pages and its live-reload WebSocket (same host
+        and port); a new grant for the same address replaces the old one.
+        Row-Bot's own app is never granted.
+        """
+
+        conversation = str(conversation_id or "").strip()
+        canonical = local_development_origin(origin)
+        if not conversation or canonical is None or canonical != origin:
+            raise ValueError("an exact local address and a conversation are required")
+        if is_row_bot_origin(canonical):
+            raise ValueError("Row-Bot's own app cannot be opened in its browser")
+        if source not in GRANT_SOURCES:
+            raise ValueError("unknown grant source")
+        label = address_label(canonical)
+        with self._local_lock:
+            for existing in [
+                grant for grant in self._local_grants.values()
+                if grant.conversation_id == conversation and grant.origin == canonical
+            ]:
+                self._drop_local_grant(existing)
+            network_ids: list[str] = []
+            try:
+                for target in (canonical, socket_origin(canonical)):
+                    network_ids.append(self.grant_local_development_origin(
+                        target,
+                        intended_use=f"Open {label} in one conversation",
+                        ttl_seconds=LOCAL_ADDRESS_SECONDS,
+                        scope=conversation,
+                    ).id)
+            except BaseException:
+                for grant_id in network_ids:
+                    self._network_security.revoke_grant(grant_id)
+                raise
+            now = time.time()
+            grant = LocalAddressGrant(
+                id=uuid.uuid4().hex,
+                conversation_id=conversation,
+                origin=canonical,
+                address=label,
+                source=source,
+                granted_at=now,
+                expires_at=now + LOCAL_ADDRESS_SECONDS,
+                network_grant_ids=tuple(network_ids),
+            )
+            self._local_grants[grant.id] = grant
+        logger.info("Local address allowed in one conversation (%s)", source)
+        return grant
+
+    def _drop_local_grant(self, grant: LocalAddressGrant) -> None:
+        self._local_grants.pop(grant.id, None)
+        for grant_id in grant.network_grant_ids:
+            self._network_security.revoke_grant(grant_id)
+
+    def local_address_grants(self, conversation_id: str) -> list[LocalAddressGrant]:
+        """The local addresses one conversation may open now, oldest first."""
+
+        conversation = str(conversation_id or "")
+        live = {
+            grant.id
+            for grant in self._network_security.active_grants(
+                self._browser_security_session_id, conversation
+            )
+        }
+        with self._local_lock:
+            stale = [
+                item for item in self._local_grants.values()
+                if item.conversation_id == conversation and not set(item.network_grant_ids) <= live
+            ]
+            for grant in stale:
+                # Expired or revoked underneath: gone for the person too.
+                self._drop_local_grant(grant)
+            return sorted(
+                (grant for grant in self._local_grants.values() if grant.conversation_id == conversation),
+                key=lambda grant: grant.granted_at,
+            )
+
+    def local_address_grant(self, conversation_id: str, origin: str) -> LocalAddressGrant | None:
+        return next(
+            (grant for grant in self.local_address_grants(conversation_id) if grant.origin == origin),
+            None,
+        )
+
+    def revoke_local_address(self, conversation_id: str, grant_id: str) -> bool:
+        with self._local_lock:
+            grant = self._local_grants.get(str(grant_id or ""))
+            if grant is None or grant.conversation_id != str(conversation_id or ""):
+                return False
+            self._drop_local_grant(grant)
+        return True
+
+    def revoke_local_addresses(self, conversation_id: str) -> int:
+        with self._local_lock:
+            grants = [grant for grant in self._local_grants.values() if grant.conversation_id == str(conversation_id)]
+            for grant in grants:
+                self._drop_local_grant(grant)
+        self._network_security.revoke_scope(self._browser_security_session_id, str(conversation_id))
+        return len(grants)
 
     def performance_snapshot(self) -> dict[str, int]:
         return {
@@ -336,6 +467,19 @@ class ManagedBrowserService:
             self._receipt("click", revision, effect="confirmed", verified=True)
             + "\nPage-change receipt: "
             + json.dumps(page_facts, sort_keys=True)
+        )
+
+    @staticmethod
+    def _blocked_navigation(url: str) -> str:
+        origin = local_development_origin(url)
+        if origin:
+            return (
+                f"BLOCKED: {address_label(origin)} isn't allowed in this chat (or its hour ran out). "
+                "Open it again with browser_navigate to ask the person."
+            )
+        return (
+            "BLOCKED: The page was blocked: Row-Bot's browser doesn't open addresses on your local network "
+            "(other computers, routers, cloud metadata). Only addresses on this computer can be allowed."
         )
 
     @staticmethod
@@ -564,6 +708,8 @@ class ManagedBrowserService:
             self._context,
             browser_session_id=self._browser_security_session_id,
             on_allowed=proxy.approve_request,
+            # Each request is authorized for the conversation whose page sent it.
+            page_scope=lambda page: self._page_owners.get(page),
         )
         self._context_generation += 1
         self._launched = True
@@ -792,6 +938,8 @@ class ManagedBrowserService:
         self._invalidate_all()
         self._closed = True
         self._network_security.revoke_session(self._browser_security_session_id)
+        with self._local_lock:
+            self._local_grants.clear()
         with self._activity_lock:
             self._pending_approval_proofs.clear()
         for task in list(self._activity_by_thread):
@@ -862,12 +1010,21 @@ class ManagedBrowserService:
             page = self._get_page_for_thread(thread_id)
             page.bring_to_front()
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 self._bump_navigation(page)
                 result = self._observe(page, thread_id)
                 self._publish_activity(thread_id, state="observing", action="Opened website", page=page)
+                origin = local_development_origin(url)
+                if origin and getattr(response, "status", 0) == 502:
+                    # The pinned proxy answers 502 when nothing accepts the connection.
+                    result = (
+                        f"Nothing answered at {address_label(origin)}: the server may not be running yet.\n"
+                        + result
+                    )
                 return result
             except BaseException as exc:
+                if "ERR_BLOCKED_BY_CLIENT" in str(exc):
+                    return self._blocked_navigation(url)
                 return self._error("navigate", exc)
         return self._run_activity(thread_id, "Open website", action)
 
@@ -1163,6 +1320,22 @@ class BrowserSessionManager:
             session = self._shared_session
         if session:
             session.release_thread(thread_id)
+
+    # Local addresses (F4): passive reads never start a browser.
+    def local_address_grants(self, conversation_id: str) -> list[LocalAddressGrant]:
+        with self._lock:
+            session = self._shared_session
+        return session.local_address_grants(conversation_id) if session else []
+
+    def revoke_local_address(self, conversation_id: str, grant_id: str) -> bool:
+        with self._lock:
+            session = self._shared_session
+        return bool(session and session.revoke_local_address(conversation_id, grant_id))
+
+    def revoke_local_addresses(self, conversation_id: str) -> int:
+        with self._lock:
+            session = self._shared_session
+        return session.revoke_local_addresses(conversation_id) if session else 0
 
     def kill_all(self) -> None:
         with self._lock:

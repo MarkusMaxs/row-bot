@@ -240,6 +240,13 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
         logger.debug("Could not clear browser state for %s", thread_id, exc_info=True)
 
     try:
+        from row_bot.tools.browser_tool import get_session_manager as get_browser_session_manager
+
+        get_browser_session_manager().revoke_local_addresses(thread_id)  # Its local-address grants (F4).
+    except Exception:
+        logger.debug("Could not remove local-address grants for %s", thread_id, exc_info=True)
+
+    try:
         from row_bot.computer_use.service import get_computer_use_service
 
         get_computer_use_service().close_for_thread(thread_id)
