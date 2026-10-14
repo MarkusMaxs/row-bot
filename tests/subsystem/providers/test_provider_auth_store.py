@@ -115,6 +115,8 @@ def test_provider_auth_store_reports_keyring_for_a_saved_key_kept_out_of_the_env
         assert get_provider_secret("openai") == "sk-saved-secret"
         assert provider_secret_status("openai")["source"] == "keyring"
 
+        # monkeypatch.setenv undoes to "not set": the saved key never went into the environment, and
+        # delete_key below leaves the environment alone, so a plain assignment would outlive the test.
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env-secret")
         assert get_provider_secret("openai") == "sk-env-secret"
         assert provider_secret_status("openai")["source"] == "environment"

@@ -10,8 +10,8 @@ from tests.fixtures.tasks import fresh_tasks_module
 pytestmark = pytest.mark.subsystem
 
 
-def test_condition_operator_matrix(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_condition_operator_matrix(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     evaluate = tasks.evaluate_condition
 
     assert evaluate("true", {"prev_output": ""}) is True
@@ -38,8 +38,8 @@ def test_condition_operator_matrix(tmp_path, monkeypatch) -> None:
             evaluate(unreadable, numeric_context)
 
 
-def test_json_and_compound_conditions(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_json_and_compound_conditions(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     evaluate = tasks.evaluate_condition
     context = {
         "prev_output": '{"status": "active", "score": 85, "items": [{"name": "a"}, {"name": "b"}]}',
@@ -62,8 +62,8 @@ def test_json_and_compound_conditions(tmp_path, monkeypatch) -> None:
     assert tasks._split_compound("a,or:[b,c],d") == ["a", "or:[b,c]", "d"]
 
 
-def test_llm_condition_prompt_and_response_handling(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_llm_condition_prompt_and_response_handling(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     captured: list[list] = []
 
     class FakeChatModel:
@@ -116,8 +116,8 @@ def test_llm_condition_prompt_and_response_handling(tmp_path, monkeypatch) -> No
     assert len(long_prompt) < 40_000
 
 
-def test_condition_step_id_and_mermaid_helpers(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_condition_step_id_and_mermaid_helpers(tmp_path, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
 
     steps = [
         {"id": "old_a", "type": "prompt", "prompt": "a"},

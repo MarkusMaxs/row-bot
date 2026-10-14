@@ -1,35 +1,22 @@
 from __future__ import annotations
 
-import importlib
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 
-def _fresh_agent_approval_modules(tmp_path, monkeypatch):
+def _fresh_agent_approval_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    tasks, threads, _profiles, agent_runs, _context, agent_runner = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
         "row_bot.agent_runs",
         "row_bot.agent_context",
         "row_bot.agent_runner",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_runner as agent_runner
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_runs = importlib.reload(agent_runs)
-    agent_runner = importlib.reload(agent_runner)
+    )
     return tasks, threads, agent_runs, agent_runner
 
 
@@ -38,10 +25,10 @@ def _approval_columns(db_path: str) -> set[str]:
         return {row[1] for row in conn.execute("PRAGMA table_info(approval_requests)")}
 
 
-def test_approval_schema_has_agent_routing_columns(tmp_path, monkeypatch):
+def test_approval_schema_has_agent_routing_columns(tmp_path, reload_for_data_dir):
     tasks, _threads, _agent_runs, _agent_runner = _fresh_agent_approval_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
 
     tasks.ensure_task_schema(force=True)
@@ -59,10 +46,11 @@ def test_approval_schema_has_agent_routing_columns(tmp_path, monkeypatch):
 def test_agent_interrupt_creates_approval_and_resume_routes_to_agent_runner(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
     tasks, threads, agent_runs, agent_runner = _fresh_agent_approval_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     parent_thread_id = threads.create_thread("Parent", approval_mode="approve")
 
@@ -160,10 +148,11 @@ def test_agent_interrupt_creates_approval_and_resume_routes_to_agent_runner(
 def test_agent_resume_uses_langgraph_interrupt_ids_for_multi_interrupts(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
     tasks, threads, _agent_runs, agent_runner = _fresh_agent_approval_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     parent_thread_id = threads.create_thread("Parent", approval_mode="approve")
 
@@ -200,10 +189,10 @@ def test_agent_resume_uses_langgraph_interrupt_ids_for_multi_interrupts(
     assert final["summary"] == "approved child result"
 
 
-def test_agent_resume_error_marks_run_failed(tmp_path, monkeypatch):
+def test_agent_resume_error_marks_run_failed(tmp_path, monkeypatch, reload_for_data_dir):
     tasks, threads, _agent_runs, agent_runner = _fresh_agent_approval_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     parent_thread_id = threads.create_thread("Parent", approval_mode="approve")
 
@@ -237,10 +226,10 @@ def test_agent_resume_error_marks_run_failed(tmp_path, monkeypatch):
     assert "provider exploded" in final["error"]
 
 
-def test_agent_approval_denial_stops_child_run(tmp_path, monkeypatch):
+def test_agent_approval_denial_stops_child_run(tmp_path, monkeypatch, reload_for_data_dir):
     tasks, threads, _agent_runs, agent_runner = _fresh_agent_approval_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     parent_thread_id = threads.create_thread("Parent", approval_mode="approve")
 
@@ -269,10 +258,10 @@ def test_agent_approval_denial_stops_child_run(tmp_path, monkeypatch):
     assert final["status_message"] == "Approval denied by user"
 
 
-def test_legacy_workflow_approval_still_routes_to_pipeline(tmp_path, monkeypatch):
+def test_legacy_workflow_approval_still_routes_to_pipeline(tmp_path, monkeypatch, reload_for_data_dir):
     tasks, _threads, _agent_runs, _agent_runner = _fresh_agent_approval_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     calls = []
     monkeypatch.setattr(

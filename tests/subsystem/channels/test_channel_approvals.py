@@ -11,8 +11,8 @@ from tests.fixtures.tasks import fresh_tasks_module
 pytestmark = pytest.mark.subsystem
 
 
-def test_cross_channel_approval_resolution_updates_other_channels(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_cross_channel_approval_resolution_updates_other_channels(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.channels import registry
 
     registry._reset()
@@ -51,14 +51,13 @@ def test_channel_approval_helpers_round_trip_interrupt_text() -> None:
     assert is_approval_text(text) is None
 
 
-def test_child_agent_approval_routes_to_parent_channel(tmp_path, monkeypatch) -> None:
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_child_agent_approval_routes_to_parent_channel(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.channels import registry
     from row_bot.channels.thread_notifications import notify_agent_run_approval
-    import row_bot.threads as threads
     import row_bot.agent_runner as agent_runner
 
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.threads")
 
     registry._reset()
     source = FakeChannel(name="source")
@@ -149,19 +148,16 @@ _ADAPTERS = [
 ]
 
 
-def _thread_in_block_mode(tmp_path, monkeypatch) -> dict:
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.threads as threads
-
-    threads = importlib.reload(threads)
+def _thread_in_block_mode(tmp_path, reload_for_data_dir) -> dict:
+    (threads,) = reload_for_data_dir(tmp_path / "data", "row_bot.threads")
     threads._save_thread_meta("channel-thread", "Channel thread")
     threads._set_thread_approval_mode("channel-thread", "block")
     return {"configurable": {"thread_id": "channel-thread"}}
 
 
 @pytest.mark.parametrize("module,streams", _ADAPTERS)
-def test_channel_turns_carry_the_thread_approval_mode(tmp_path, monkeypatch, module, streams) -> None:
-    base = _thread_in_block_mode(tmp_path, monkeypatch)
+def test_channel_turns_carry_the_thread_approval_mode(tmp_path, reload_for_data_dir, module, streams) -> None:
+    base = _thread_in_block_mode(tmp_path, reload_for_data_dir)
     adapter = importlib.import_module(f"row_bot.channels.{module}")
 
     message = adapter.build_channel_runtime_config(base, "message")["configurable"]
@@ -181,7 +177,7 @@ def test_channel_turns_carry_the_thread_approval_mode(tmp_path, monkeypatch, mod
     assert message["thread_id"] == approval["thread_id"] == "channel-thread"
 
 
-def test_a_channel_approval_resumes_with_the_thread_approval_mode(tmp_path, monkeypatch) -> None:
+def test_a_channel_approval_resumes_with_the_thread_approval_mode(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     import sys
     import types
 
@@ -189,7 +185,7 @@ def test_a_channel_approval_resumes_with_the_thread_approval_mode(tmp_path, monk
     from row_bot.channels.approval import resume_agent_sync
     from row_bot.tools import registry
 
-    base = _thread_in_block_mode(tmp_path, monkeypatch)
+    base = _thread_in_block_mode(tmp_path, reload_for_data_dir)
     seen = []
 
     def resume_stream_agent(enabled, config, approved, interrupt_ids=None):

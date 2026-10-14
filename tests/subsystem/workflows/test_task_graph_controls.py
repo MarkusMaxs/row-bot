@@ -11,8 +11,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def owner(tmp_path, monkeypatch):
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def owner(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(control, "tasks", tasks)
     monkeypatch.setattr(tasks, "_canonicalize_agent_profile_reference", lambda value: value)
     monkeypatch.setattr(tasks, "_canonicalize_workflow_model_override", lambda value: value)

@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import pathlib
+import re
 import socket
 import sqlite3
 import sys
@@ -277,34 +278,84 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     items[:] = [item for item in items if paths[item.path] in kept_files]
 
 
-_ROW_BOT_MODULES_BEFORE = pytest.StashKey[dict[str, Any]]()
+# ── Each test leaves the row_bot modules as it found them ────────────────────────────────────────
+# Test files bind modules when they are collected, and product code keeps references to the module
+# objects (and finds some, like row_bot.agent, through sys.modules). A test that popped a module and
+# imported it again, or reloaded it in place, left later tests on the same worker patching one copy
+# while the code ran another (the stale developer.storage of B215; the live-eval runner of #440; the
+# untrusted-results read-back) or reading the previous test's data folder. These are hooks, not a
+# fixture: the check runs after every fixture of the test has torn down, monkeypatch's undo included.
+_ROW_BOT_MODULES = pytest.StashKey[dict[str, tuple[types.ModuleType, Any]]]()
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_setup(item: pytest.Item):
-    item.stash[_ROW_BOT_MODULES_BEFORE] = {name: module for name, module in sys.modules.items()
-                                           if name == "row_bot" or name.startswith("row_bot.")}
-    yield
+def _row_bot_modules() -> dict[str, tuple[types.ModuleType, Any]]:
+    return {name: (module, getattr(module, "__spec__", None)) for name, module in list(sys.modules.items())
+            if (name == "row_bot" or name.startswith("row_bot.")) and module is not None}
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
-    """Put back the row_bot module objects a test popped and imported again.
-
-    Some tests re-import modules for a fresh data folder. Product modules keep
-    references to the original objects, so a later test that patched the new copy
-    would patch nothing (the stale developer.storage of B215). This runs after every
-    fixture has finished: a test that popped row_bot.agent by hand and then set a fake
-    with monkeypatch.setitem had monkeypatch delete the module on its way out, after a
-    fixture had put it back, and a later test patched a copy nothing used.
-    """
-    yield
-    for name, module in item.stash.get(_ROW_BOT_MODULES_BEFORE, {}).items():
+def _put_back_row_bot_modules(before: dict[str, tuple[types.ModuleType, Any]]) -> str:
+    """Put back the module objects a test replaced; describe what it left behind ("" when nothing)."""
+    replaced: list[str] = []
+    reloaded: list[str] = []
+    for name, (module, spec) in before.items():
         if sys.modules.get(name) is not module:
+            replaced.append(name)
             sys.modules[name] = module
-            parent, _, child = name.rpartition(".")
-            if parent in sys.modules:
-                setattr(sys.modules[parent], child, module)
+        elif getattr(module, "__spec__", None) is not spec:
+            reloaded.append(name)  # importlib.reload: same object, the test's namespace
+        parent, _, child = name.rpartition(".")
+        bound = getattr(sys.modules.get(parent), child, None)
+        if type(bound) is types.ModuleType and bound is not module and bound.__name__ == name:
+            setattr(sys.modules[parent], child, module)  # a copy imported under monkeypatch.delitem
+    if not (replaced or reloaded):
+        return ""
+    found = [f"{name} (a different module object; the original was put back)" for name in sorted(replaced)]
+    found += [f"{name} (reloaded in place; its namespace is still the test's)" for name in sorted(reloaded)]
+    return (
+        "The test left re-imported row_bot modules behind: " + "; ".join(found) + ". Use the "
+        "reload_for_data_dir fixture, which puts each module's namespace back, or monkeypatch.setitem/"
+        "delitem on sys.modules; never sys.modules.pop or importlib.reload by hand."
+    )
+
+
+# Credentials in the environment are put back too. Saving a key writes os.environ outside
+# monkeypatch, so a test that saved one left it to every later test on the worker: a later
+# compaction built a real OpenAI client with it and called the provider (PR #438).
+_CREDENTIAL_ENV = pytest.StashKey[dict[str, str]]()
+_CREDENTIAL_NAME = re.compile(r"(API_KEY|_TOKEN|_SECRET|_PASSWORD)$")
+
+
+def _credential_env() -> dict[str, str]:
+    return {name: value for name, value in os.environ.items() if _CREDENTIAL_NAME.search(name)}
+
+
+def _put_back_credential_env(before: dict[str, str]) -> None:
+    for name in set(_credential_env()) - set(before):
+        del os.environ[name]
+    for name, value in before.items():
+        if os.environ.get(name) != value:
+            os.environ[name] = value
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    item.stash[_ROW_BOT_MODULES] = _row_bot_modules()
+    item.stash[_CREDENTIAL_ENV] = _credential_env()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
+    before = item.stash.get(_ROW_BOT_MODULES, {})
+    try:
+        result = yield
+    except BaseException:
+        _put_back_row_bot_modules(before)
+        raise
+    finally:
+        _put_back_credential_env(item.stash.get(_CREDENTIAL_ENV, _credential_env()))
+    if message := _put_back_row_bot_modules(before):
+        pytest.fail(message, pytrace=False)
+    return result
 
 
 @pytest.fixture(autouse=True)
@@ -433,30 +484,41 @@ def _small_registry_snapshot(_registry_fixture_snapshot: Path, monkeypatch: pyte
 def reload_for_data_dir(monkeypatch: pytest.MonkeyPatch):
     """Reload modules that bind ROW_BOT_DATA_DIR paths at import, for a test's folder.
 
+    ``reload(data_dir, *names)`` returns the reloaded modules; a data_dir of None
+    reloads them under the folder the test already uses (a fresh module state only).
     Afterwards each module gets back exactly the namespace it had (its classes,
     singletons and paths), because other modules keep references to those:
     reloading them back is not enough (a reloaded dataclass no longer compares
     equal to the one other modules imported; B215). A module first imported by
     the test is reloaded under the session's data folder instead.
+
+    The namespace is recorded through monkeypatch just before the first reload, so
+    the undo puts it back in order: after undoing the patches the test made to the
+    reloaded module (which would otherwise write the test's values back over it) and
+    before undoing any it made earlier.
     """
-    saved: dict[str, dict[str, Any]] = {}
+    kept: dict[str, tuple[Any, set[str]]] = {}
     first_imported: list[str] = []
 
-    def reload(data_dir: Path, *names: str) -> list[Any]:
-        monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
+    def reload(data_dir: Path | None, *names: str) -> list[Any]:
+        if data_dir is not None:
+            monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
         for name in names:
             module = sys.modules.get(name)
             if module is None:
                 if name not in first_imported:
                     first_imported.append(name)
-            elif name not in saved and name not in first_imported:
-                saved[name] = dict(module.__dict__)
+            elif name not in kept and name not in first_imported:
+                namespace = vars(module)
+                kept[name] = (module, set(namespace))
+                for key, value in list(namespace.items()):
+                    monkeypatch.setitem(namespace, key, value)
             importlib.reload(importlib.import_module(name))
         return [sys.modules[name] for name in names]
 
     yield reload
     threads = sys.modules.get("row_bot.threads")
-    if threads is not None and ("row_bot.threads" in saved or "row_bot.threads" in first_imported):
+    if threads is not None and ("row_bot.threads" in kept or "row_bot.threads" in first_imported):
         # A background page refresh may still be reading the connection closed below.
         settle = getattr(sys.modules.get("row_bot.application.client_platform"), "settle_background", None)
         if callable(settle):
@@ -465,10 +527,10 @@ def reload_for_data_dir(monkeypatch: pytest.MonkeyPatch):
             threads.conn.close()  # the test's connection; the restored one stays open
         except Exception:
             pass
-    for name, namespace in saved.items():
-        module = sys.modules[name]
-        module.__dict__.clear()
-        module.__dict__.update(namespace)
     monkeypatch.undo()
+    for module, keys in kept.values():
+        namespace = vars(module)
+        for key in set(namespace) - keys:  # names only the reloaded copy defined
+            del namespace[key]
     for name in first_imported:
         importlib.reload(sys.modules[name])

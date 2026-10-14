@@ -13,8 +13,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def saved(tmp_path, monkeypatch):
-    tasks, threads, _runs, registry, notifications = _fresh_modules(tmp_path, monkeypatch)
+def saved(tmp_path, reload_for_data_dir):
+    tasks, threads, _runs, registry, notifications = _fresh_modules(tmp_path, reload_for_data_dir)
     channel = FakeChannel()
     channel._running = True
     registry.register(channel)
@@ -168,17 +168,16 @@ def test_reconciliation_preserves_destination_order_and_other_destinations_progr
     assert [text for target, text in calls if target == "slow"] == ["first", "second"]
 
 
-def orchestrator_for(saved, monkeypatch):
-    from row_bot import agent_orchestrator
+def orchestrator_for(saved, monkeypatch, reload_for_data_dir):
     from tests.subsystem.agents.test_agent_orchestration import _orchestration
 
-    module = importlib.reload(agent_orchestrator)
+    (module,) = reload_for_data_dir(None, "row_bot.agent_orchestrator")
     monkeypatch.setattr(module, "_DELIVERY_EXECUTOR", None)
     return module, _orchestration(module)
 
 
-def test_orchestration_dispatch_does_not_hold_global_lock(saved, monkeypatch):
-    orchestrator, row = orchestrator_for(saved, monkeypatch)
+def test_orchestration_dispatch_does_not_hold_global_lock(saved, monkeypatch, reload_for_data_dir):
+    orchestrator, row = orchestrator_for(saved, monkeypatch, reload_for_data_dir)
     blocked, release, fast = threading.Event(), threading.Event(), threading.Event()
     calls = []
 
@@ -206,8 +205,8 @@ def test_orchestration_dispatch_does_not_hold_global_lock(saved, monkeypatch):
     assert len(calls) == 2
 
 
-def test_orchestration_exception_is_uncertain_without_blind_retry(saved, monkeypatch):
-    orchestrator, row = orchestrator_for(saved, monkeypatch)
+def test_orchestration_exception_is_uncertain_without_blind_retry(saved, monkeypatch, reload_for_data_dir):
+    orchestrator, row = orchestrator_for(saved, monkeypatch, reload_for_data_dir)
     calls = []
 
     def deliver(*args):
@@ -223,9 +222,9 @@ def test_orchestration_exception_is_uncertain_without_blind_retry(saved, monkeyp
     assert len(calls) == 1
 
 
-def test_downstream_receipt_repairs_orchestration_publication_without_resend(saved, monkeypatch):
+def test_downstream_receipt_repairs_orchestration_publication_without_resend(saved, monkeypatch, reload_for_data_dir):
     tasks, _threads, _registry, _notifications, channel = saved
-    orchestrator, row = orchestrator_for(saved, monkeypatch)
+    orchestrator, row = orchestrator_for(saved, monkeypatch, reload_for_data_dir)
     tasks.record_thread_channel_ref(row["parent_thread_id"], channel="fake", target="destination-1")
     original = orchestrator._complete_delivery_attempt
 
@@ -242,9 +241,9 @@ def test_downstream_receipt_repairs_orchestration_publication_without_resend(sav
     assert orchestrator.list_messages(row["id"])[0]["delivery_status"] == "delivered"
 
 
-def test_orchestration_reconciliation_is_bounded_and_destinations_independent(saved, monkeypatch):
+def test_orchestration_reconciliation_is_bounded_and_destinations_independent(saved, monkeypatch, reload_for_data_dir):
     tasks, *_ = saved
-    orchestrator, first = orchestrator_for(saved, monkeypatch)
+    orchestrator, first = orchestrator_for(saved, monkeypatch, reload_for_data_dir)
     second = orchestrator.create_or_get_orchestration(
         parent_thread_id="other-parent", parent_generation_id="other-generation",
         root_objective="Synthetic", model_ref="provider:model", approval_mode="block",

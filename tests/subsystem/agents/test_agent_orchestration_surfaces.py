@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
-import sys
 import threading
 
 import pytest
@@ -13,33 +11,25 @@ from langchain_core.messages import ToolMessage
 pytestmark = pytest.mark.subsystem
 
 
-def _fresh_modules(tmp_path, monkeypatch):
+def _fresh_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    _tasks, _profiles, _settings, agent_runs, orchestrator = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.agent_profiles",
         "row_bot.agent_settings",
         "row_bot.agent_runs",
         "row_bot.agent_orchestrator",
-    ):
-        sys.modules.pop(name, None)
-    import row_bot.tasks as tasks
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_orchestrator as orchestrator
-
-    importlib.reload(tasks)
-    agent_runs = importlib.reload(agent_runs)
-    orchestrator = importlib.reload(orchestrator)
+    )
     return agent_runs, orchestrator
 
 
 def test_acknowledgement_and_final_delivery_are_idempotent_without_polling(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id="channel-thread",
         parent_generation_id="channel-generation",
@@ -81,13 +71,10 @@ def test_acknowledgement_and_final_delivery_are_idempotent_without_polling(
 
 def test_local_chat_delivery_is_complete_without_a_channel_binding(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
-    sys.modules.pop("row_bot.threads", None)
-    import row_bot.threads as threads
-
-    threads = importlib.reload(threads)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
+    (threads,) = reload_for_data_dir(tmp_path / "data", "row_bot.threads")
     parent_thread_id = threads.create_thread("Local orchestration")
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id=parent_thread_id,
@@ -125,8 +112,9 @@ def test_local_chat_delivery_is_complete_without_a_channel_binding(
 def test_group_message_stop_and_result_packet_keep_worktree_reference(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id="parent",
         parent_generation_id="generation",
@@ -165,9 +153,9 @@ def test_group_message_stop_and_result_packet_keep_worktree_reference(
 
 def test_channel_runtime_owns_acknowledgement_and_final_after_suspension(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     from row_bot.channels import runtime as channel_runtime
 
     config = channel_runtime.prepare_channel_turn_config(
@@ -276,9 +264,9 @@ def test_channel_stream_sentinel_cleans_preview_without_sending_a_draft():
 
 def test_failed_delivery_retries_once_without_duplicate_success(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id="delivery-parent",
         parent_generation_id="delivery-generation",
@@ -323,8 +311,8 @@ def test_failed_delivery_retries_once_without_duplicate_success(
     assert len({key for _kind, key in attempts}) == 2
 
 
-def test_group_stop_wins_synthesis_race(tmp_path, monkeypatch):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+def test_group_stop_wins_synthesis_race(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     orchestration = orchestrator.create_or_get_orchestration(
         parent_thread_id="stop-parent",
         parent_generation_id="stop-generation",
@@ -408,8 +396,9 @@ def test_agent_entrypoints_route_later_input_without_starting_another_graph(
 def test_checkpointed_group_wait_consumes_joined_events_before_foreground_final(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     import row_bot.agent as agent
 
     orchestration = orchestrator.create_or_get_orchestration(
@@ -476,8 +465,9 @@ def test_checkpointed_group_wait_consumes_joined_events_before_foreground_final(
 def test_uncheckpointed_or_mismatched_group_wait_leaves_events_for_recovery(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     import row_bot.agent as agent
 
     orchestration = orchestrator.create_or_get_orchestration(
@@ -528,8 +518,9 @@ def test_uncheckpointed_or_mismatched_group_wait_leaves_events_for_recovery(
 def test_required_group_join_stays_in_one_streamed_parent_generation(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     import row_bot.agent as agent
 
     orchestration = orchestrator.create_or_get_orchestration(
@@ -626,8 +617,9 @@ def test_required_group_join_stays_in_one_streamed_parent_generation(
 def test_second_foreground_wave_group_waits_without_reviving_first_wave(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_runs, orchestrator = _fresh_modules(tmp_path, monkeypatch)
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
     import row_bot.agent as agent
 
     orchestration = orchestrator.create_or_get_orchestration(

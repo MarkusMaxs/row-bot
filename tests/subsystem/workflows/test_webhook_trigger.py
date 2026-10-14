@@ -9,8 +9,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def tasks(tmp_path, monkeypatch):
-    module = fresh_tasks_module(tmp_path, monkeypatch)
+def tasks(tmp_path, monkeypatch, reload_for_data_dir):
+    module = fresh_tasks_module(tmp_path, reload_for_data_dir)
     started = []
     monkeypatch.setattr(module, "run_task_background", lambda task_id, *a, **k: started.append(task_id))
     monkeypatch.setattr(module, "_prepare_task_thread", lambda task: "thread-1")

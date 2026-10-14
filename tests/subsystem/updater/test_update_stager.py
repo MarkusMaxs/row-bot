@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import io
+import json
 import os
 import sys
 import tarfile
@@ -17,9 +19,22 @@ from row_bot.install_layout import InstallLayout
 from row_bot.updates import stager as stager_module
 from row_bot.updates.engine import UpdateEngine
 from row_bot.updates.stager import StageCancelled, StageError, Stager, clone_tree, run_command, unpack
-from tests.fixtures.updates import FakeRunner, FakeTransport, make_install, make_release, serve, sha256
+from tests.fixtures.updates import (
+    FakeRunner,
+    FakeTransport,
+    Release,
+    add_dist,
+    make_install,
+    make_release,
+    serve,
+    sha256,
+    site_packages,
+    tree_fingerprint,
+)
 
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
+
+ROW_BOT_SOURCE = Path(__file__).resolve().parents[3] / "src" / "row_bot"
 
 
 def _tar(path: Path, members: list[tuple[tarfile.TarInfo, bytes | None]]) -> Path:
@@ -94,9 +109,16 @@ def test_unpack_caps_entries_and_size_and_accepts_a_dot_root(tmp_path, monkeypat
         unpack(big, tmp_path / "big")
 
 
-def _stage_with(tmp_path: Path, runner: FakeRunner, work_name: str = "work") -> tuple[InstallLayout, UpdateEngine]:
-    layout = make_install(tmp_path)
-    release = make_release()
+def _stage_with(
+    tmp_path: Path,
+    runner: FakeRunner,
+    work_name: str = "work",
+    *,
+    release: Release | None = None,
+    layout: InstallLayout | None = None,
+) -> tuple[InstallLayout, UpdateEngine]:
+    layout = layout or make_install(tmp_path)
+    release = release or make_release()
     work_parent = tmp_path / work_name
     engine = UpdateEngine(
         layout,
@@ -129,6 +151,100 @@ def test_pip_installs_only_hashed_binary_wheels_from_relative_paths(tmp_path):
     assert all("#" not in line.split(" --hash=")[0] for line in runner.pip_lines)
     assert all(" --hash=sha256:" in line for line in runner.pip_lines)
     assert "#" in str(runner.pip_cwd)
+
+
+class _TrimmingRunner(FakeRunner):
+    """pip brings back each wheel's tests and launcher; the staged trim runs in this process."""
+
+    def __init__(self, **kwargs) -> None:  # noqa: ANN003
+        super().__init__(**kwargs)
+        self.trims: list[list[str]] = []
+
+    def __call__(self, command, *, env, cwd, timeout, log):  # noqa: ANN001
+        parts = [str(part) for part in command]
+        code = super().__call__(command, env=env, cwd=cwd, timeout=timeout, log=log)
+        if self.label(parts) == "pip":
+            python = Path(parts[0])
+            site = site_packages((python.parent if python.name == "python.exe" else python.parent.parent).parent)
+            launchers = "../../Scripts" if os.name == "nt" else "../../../bin"
+            for line in self.pip_lines:
+                stem = Path(line.split(" --hash=")[0]).name.split("-")
+                folder = stem[0].lower()
+                add_dist(site, stem[0].replace("_", "-"), stem[1], {
+                    f"{folder}/__init__.py": b"",
+                    f"{folder}/tests/test_it.py": b"",
+                    f"{folder}/only_in_the_new_rules/data.txt": b"",
+                    f"{launchers}/{folder}{'.exe' if os.name == 'nt' else ''}": b"launcher",
+                })
+        if "trim" in parts and code == 0:
+            self.trims.append(parts)
+            # The staged interpreter is a stand-in: load the staged script itself.
+            name = "staged_payload_trim"
+            spec = importlib.util.spec_from_file_location(name, parts[parts.index("-S") + 1])
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module  # dataclasses look their module up while it loads
+            try:
+                spec.loader.exec_module(module)
+                return module.main(parts[parts.index("trim"):])
+            finally:
+                sys.modules.pop(name, None)
+        return code
+
+
+def _release_with_trim_rules(lock: bytes = b"lock-2") -> Release:
+    """A release whose code carries payload_trim, with one test-folder name the running rules lack."""
+    rules = json.loads((ROW_BOT_SOURCE / "payload_trim.json").read_text(encoding="utf-8"))
+    rules["site_packages"]["test_directories"]["names"].append("only_in_the_new_rules")
+    return make_release(lock=lock, code={
+        "launcher.py": b"# launcher 2\n",
+        "src/row_bot/version.py": b'__version__ = "5.2.1"\n',
+        "src/row_bot/payload_trim.py": (ROW_BOT_SOURCE / "payload_trim.py").read_bytes(),
+        "src/row_bot/payload_trim.json": json.dumps(rules).encode(),
+        "uv.lock": lock,
+    })
+
+
+def test_libraries_pip_reinstalls_are_trimmed_with_the_staged_versions_own_rules(tmp_path):
+    runner = _TrimmingRunner()
+    layout = make_install(tmp_path)
+    running = tree_fingerprint(layout.version_root)
+    _layout, engine = _stage_with(tmp_path, runner, release=_release_with_trim_rules(), layout=layout)
+    assert engine.status().phase == "ready", engine.status()
+
+    # The staged interpreter runs the staged version's script on the staged
+    # runtime, without writing bytecode (-I alone ignores PYTHONDONTWRITEBYTECODE).
+    [trim] = runner.trims
+    staging = layout.versions_dir / "5.2.1.staging"
+    assert Path(trim[0]).is_relative_to(staging / "python")
+    assert trim[1:4] == ["-B", "-I", "-S"]
+    assert Path(trim[4]) == staging / "app" / "src" / "row_bot" / "payload_trim.py"
+    assert trim[5:] == ["trim", "--python-root", str(staging / "python")]
+    labels = runner.labels()
+    assert labels.index("pip") < labels.index("other") < labels.index("compile")
+
+    site = site_packages(layout.versions_dir / "5.2.1")
+    scripts = site.parents[1] / "Scripts" if os.name == "nt" else site.parents[2] / "bin"
+    for library in ("alpha", "added"):
+        assert (site / library / "__init__.py").is_file()
+        assert not (site / library / "tests").exists()
+        assert not (site / library / "only_in_the_new_rules").exists()  # the release's rules, not the running ones
+        assert not (scripts / f"{library}{'.exe' if os.name == 'nt' else ''}").exists()
+        assert any(site.glob(f"{library}-*.dist-info/RECORD"))
+    assert tree_fingerprint(layout.version_root) == running
+
+
+@pytest.mark.parametrize("case", ["no script in the release", "runtime reused", "trim fails"])
+def test_the_trim_never_stops_an_update(tmp_path, case):
+    if case == "no script in the release":
+        runner, release = _TrimmingRunner(), make_release()
+    elif case == "runtime reused":  # the running version's lock: nothing reinstalled, nothing to trim
+        runner, release = _TrimmingRunner(), _release_with_trim_rules(lock=b"lock-1")
+    else:
+        runner, release = _TrimmingRunner(fail="other"), _release_with_trim_rules()
+    _layout, engine = _stage_with(tmp_path, runner, release=release)
+    assert engine.status().phase == "ready", engine.status()
+    assert runner.trims == []
+    assert ("other" in runner.labels()) is (case == "trim fails")
 
 
 def test_quitting_stops_a_running_stage_command_and_the_engine(tmp_path):

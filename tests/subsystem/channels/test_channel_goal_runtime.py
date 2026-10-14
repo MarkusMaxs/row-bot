@@ -1,38 +1,18 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 
-def _fresh_channel_goal_modules(tmp_path, monkeypatch):
+def _fresh_channel_goal_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
-        "row_bot.tasks",
-        "row_bot.threads",
-        "row_bot.agent_runs",
-        "row_bot.goals",
-        "row_bot.channels.runtime",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_runs as agent_runs
-    import row_bot.goals as goals
-    import row_bot.channels.runtime as runtime
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_runs = importlib.reload(agent_runs)
-    goals = importlib.reload(goals)
-    runtime = importlib.reload(runtime)
+    _tasks, threads, agent_runs, goals, runtime = reload_for_data_dir(
+        data_dir, "row_bot.tasks", "row_bot.threads", "row_bot.agent_runs", "row_bot.goals", "row_bot.channels.runtime"
+    )
     return threads, agent_runs, goals, runtime
 
 
-def test_channel_goal_start_runs_initial_turn_and_continuation(tmp_path, monkeypatch):
-    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, monkeypatch)
+def test_channel_goal_start_runs_initial_turn_and_continuation(tmp_path, monkeypatch, reload_for_data_dir):
+    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Channel goal")
 
     start = runtime.prepare_channel_goal_start("/goal finish channel parity", thread_id)
@@ -76,8 +56,8 @@ def test_channel_goal_start_runs_initial_turn_and_continuation(tmp_path, monkeyp
     assert goals.get_current_goal(thread_id, include_terminal=True)["status"] == "completed"
 
 
-def test_channel_goal_loop_stops_on_approval_interrupt(tmp_path, monkeypatch):
-    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, monkeypatch)
+def test_channel_goal_loop_stops_on_approval_interrupt(tmp_path, reload_for_data_dir):
+    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Channel approval goal")
     start = runtime.prepare_channel_goal_start("/goal request approval safely", thread_id)
     assert start is not None
@@ -104,11 +84,10 @@ def test_channel_goal_loop_stops_on_approval_interrupt(tmp_path, monkeypatch):
 def test_channel_goal_delivers_real_progress_then_waits_for_unified_parent(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, monkeypatch)
-    import row_bot.agent_orchestrator as orchestrator
-
-    orchestrator = importlib.reload(orchestrator)
+    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, reload_for_data_dir)
+    (orchestrator,) = reload_for_data_dir(tmp_path / "data", "row_bot.agent_orchestrator")
     thread_id = threads.create_thread("Channel child progress")
     generation_id = "channel-generation"
     config = {
@@ -155,8 +134,8 @@ def test_channel_goal_delivers_real_progress_then_waits_for_unified_parent(
     assert sent == ["I delegated the research and will continue when it returns."]
 
 
-def test_channel_goal_approval_grant_resumes_and_continues(tmp_path, monkeypatch):
-    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, monkeypatch)
+def test_channel_goal_approval_grant_resumes_and_continues(tmp_path, monkeypatch, reload_for_data_dir):
+    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Channel approval resume")
     start = runtime.prepare_channel_goal_start("/goal continue after approval", thread_id)
     assert start is not None
@@ -201,8 +180,8 @@ def test_channel_goal_approval_grant_resumes_and_continues(tmp_path, monkeypatch
     assert goals.get_current_goal(thread_id, include_terminal=True)["status"] == "completed"
 
 
-def test_channel_goal_approval_denial_blocks_goal(tmp_path, monkeypatch):
-    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, monkeypatch)
+def test_channel_goal_approval_denial_blocks_goal(tmp_path, reload_for_data_dir):
+    threads, _agent_runs, goals, runtime = _fresh_channel_goal_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Channel approval denial")
     start = runtime.prepare_channel_goal_start("/goal stop after denial", thread_id)
     assert start is not None

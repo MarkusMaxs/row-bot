@@ -104,6 +104,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'operations/index',
+        'operations/updates',
         'operations/remote-access',
         'operations/docker',
         'privacy-safety/index',

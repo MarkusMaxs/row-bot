@@ -46,9 +46,9 @@ uv run python scripts/run_test_matrix.py nightly    # everything, slow tests inc
 - Mark tests of about a second or more, or that start real processes,
   `@pytest.mark.slow` (nightly). Mark tests of OS-sensitive code
   `pytest.mark.platform` (checked).
-- `tests/conftest.py` fails a test that reaches the network or writes live user
-  data, stops git at the checkout's `.tmp`, and gives pytest-xdist workers their
-  own data folders.
+- `tests/conftest.py` fails a test that reaches the network, writes live user
+  data or leaves a re-imported or reloaded `row_bot` module behind, stops git at
+  the checkout's `.tmp`, and gives pytest-xdist workers their own data folders.
 - Snapshots are committed; record one with `ROW_BOT_UPDATE_SNAPSHOTS=1`.
 - Security-sensitive behaviour keeps a behaviour test in the PR lane.
 

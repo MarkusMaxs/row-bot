@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
@@ -23,12 +21,9 @@ REQUIRED_TABLES = {
 }
 
 
-def _fresh_tasks(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    sys.modules.pop("tasks", None)
-    import row_bot.tasks as tasks
+def _fresh_tasks(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(tasks)
+    return reload_for_data_dir(tmp_path, "row_bot.tasks")[0]
 
 
 def _tables(db_path: Path) -> set[str]:
@@ -41,14 +36,14 @@ def _tables(db_path: Path) -> set[str]:
         }
 
 
-def test_empty_data_dir_creates_required_task_tables(tmp_path, monkeypatch):
-    tasks = _fresh_tasks(tmp_path, monkeypatch)
+def test_empty_data_dir_creates_required_task_tables(tmp_path, reload_for_data_dir):
+    tasks = _fresh_tasks(tmp_path, reload_for_data_dir)
 
     assert tasks.diagnose_task_schema()["ok"] is True
     assert REQUIRED_TABLES <= _tables(tmp_path / "tasks.db")
 
 
-def test_partial_tasks_db_repairs_missing_task_runs_and_preserves_rows(tmp_path, monkeypatch):
+def test_partial_tasks_db_repairs_missing_task_runs_and_preserves_rows(tmp_path, reload_for_data_dir):
     db_path = tmp_path / "tasks.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -62,14 +57,14 @@ def test_partial_tasks_db_repairs_missing_task_runs_and_preserves_rows(tmp_path,
         )
         conn.commit()
 
-    tasks = _fresh_tasks(tmp_path, monkeypatch)
+    tasks = _fresh_tasks(tmp_path, reload_for_data_dir)
     rows = tasks.list_tasks()
 
     assert REQUIRED_TABLES <= _tables(db_path)
     assert any(row["id"] == "task-1" and row["name"] == "Keep Me" for row in rows)
 
 
-def test_get_recent_runs_repairs_missing_task_runs(tmp_path, monkeypatch):
+def test_get_recent_runs_repairs_missing_task_runs(tmp_path, reload_for_data_dir):
     db_path = tmp_path / "tasks.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -79,19 +74,19 @@ def test_get_recent_runs_repairs_missing_task_runs(tmp_path, monkeypatch):
         )
         conn.commit()
 
-    tasks = _fresh_tasks(tmp_path, monkeypatch)
+    tasks = _fresh_tasks(tmp_path, reload_for_data_dir)
 
     assert tasks.get_recent_runs() == []
     assert "task_runs" in _tables(db_path)
 
 
-def test_corrupt_tasks_db_is_backed_up_and_recreated(tmp_path, monkeypatch):
+def test_corrupt_tasks_db_is_backed_up_and_recreated(tmp_path, reload_for_data_dir):
     db_path = tmp_path / "tasks.db"
     db_path.write_bytes(b"not a sqlite database")
     (tmp_path / "tasks.db-wal").write_text("wal", encoding="utf-8")
     (tmp_path / "tasks.db-shm").write_text("shm", encoding="utf-8")
 
-    tasks = _fresh_tasks(tmp_path, monkeypatch)
+    tasks = _fresh_tasks(tmp_path, reload_for_data_dir)
     diag = tasks.diagnose_task_schema()
     backups = list((tmp_path / "recovery").glob("tasks-db-corrupt-*"))
 
@@ -102,7 +97,7 @@ def test_corrupt_tasks_db_is_backed_up_and_recreated(tmp_path, monkeypatch):
     assert (backups[0] / "tasks.db-shm").exists()
 
 
-def test_workflow_migration_skips_malformed_rows_after_schema_exists(tmp_path, monkeypatch):
+def test_workflow_migration_skips_malformed_rows_after_schema_exists(tmp_path, reload_for_data_dir):
     old_db = tmp_path / "workflows.db"
     with sqlite3.connect(old_db) as conn:
         conn.execute(
@@ -121,7 +116,7 @@ def test_workflow_migration_skips_malformed_rows_after_schema_exists(tmp_path, m
         )
         conn.commit()
 
-    tasks = _fresh_tasks(tmp_path, monkeypatch)
+    tasks = _fresh_tasks(tmp_path, reload_for_data_dir)
     rows = tasks.list_tasks()
 
     assert any(row["id"] == "good" for row in rows)

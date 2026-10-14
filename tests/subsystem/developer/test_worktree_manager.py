@@ -165,8 +165,7 @@ def test_thread_deletion_removes_clean_worktree_but_retains_branch_and_repositor
 @pytest.mark.slow
 def test_child_delete_captures_owned_allocation_before_purging_run(tmp_path, monkeypatch, reload_for_data_dir):
     _tasks, threads, storage, worktrees = _fresh_modules(tmp_path, reload_for_data_dir)
-    importlib.reload(importlib.import_module("row_bot.agent_profiles"))
-    runs = importlib.reload(importlib.import_module("row_bot.agent_runs"))
+    _profiles, runs = reload_for_data_dir(None, "row_bot.agent_profiles", "row_bot.agent_runs")
     from row_bot.developer.state import DeveloperWorkspace
     from row_bot.thread_cleanup import delete_thread
 

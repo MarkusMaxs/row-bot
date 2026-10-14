@@ -12,8 +12,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def tool(tmp_path, monkeypatch):
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def tool(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.tools import task_tool
 
     monkeypatch.setattr(task_tool, "tasks_db", tasks)

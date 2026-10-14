@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 from pathlib import Path
 
 import pytest
@@ -29,17 +27,14 @@ def test_filesystem_guide_preserves_conversational_save_confirmation() -> None:
 def test_explicit_save_confirmation_survives_restart_then_writes_once(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
     data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in ("row_bot.tasks", "row_bot.threads"):
-        sys.modules.pop(name, None)
-
     from langchain_core.messages import AIMessage, HumanMessage
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
+
+    tasks, threads = reload_for_data_dir(data_dir, "row_bot.tasks", "row_bot.threads")
 
     threads.append_checkpoint_messages(
         "confirmation-thread",
@@ -57,7 +52,7 @@ def test_explicit_save_confirmation_survives_restart_then_writes_once(
     assert tasks.get_pending_approvals(parent_thread_id="confirmation-thread") == []
 
     # A fresh module/checkpointer observes the pending conversational turn.
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(data_dir, "row_bot.threads")
     restored = threads.get_latest_checkpoint_messages("confirmation-thread")
     assert [str(message.content) for message in restored[-2:]] == [
         "Prepare the checklist, but ask me before saving it.",

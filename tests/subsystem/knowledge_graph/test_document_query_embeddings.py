@@ -1,7 +1,6 @@
 """Request-local query reuse through real safe FAISS stores and counting fakes."""
 from __future__ import annotations
 
-import importlib
 import json
 
 import pytest
@@ -27,13 +26,11 @@ class CountingEmbeddings(FakeEmbeddings):
 
 
 @pytest.fixture
-def stores(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    from row_bot import document_index
+def stores(tmp_path, monkeypatch, reload_for_data_dir):
     from row_bot.embedding_config import write_index_metadata
     from langchain_community.vectorstores import FAISS
 
-    module = importlib.reload(document_index)
+    (module,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     active = {"provider": "fake", "model": "v1", "dimension": 3}
     monkeypatch.setattr(module, "active_embedding_metadata", lambda: active)
     embedding = CountingEmbeddings()

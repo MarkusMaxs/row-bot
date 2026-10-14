@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 import pytest
 
@@ -9,24 +7,12 @@ import pytest
 pytestmark = pytest.mark.platform
 
 
-def _fresh_shell_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in (
-        "row_bot.tools.approval_gate",
-        "row_bot.tools.shell_tool",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tools.approval_gate as approval_gate
-    import row_bot.tools.shell_tool as shell_tool
-
-    approval_gate = importlib.reload(approval_gate)
-    shell_tool = importlib.reload(shell_tool)
-    return approval_gate, shell_tool
+def _fresh_shell_modules(tmp_path, reload_for_data_dir):
+    return tuple(reload_for_data_dir(tmp_path / "data", "row_bot.tools.approval_gate", "row_bot.tools.shell_tool"))
 
 
-def test_shell_block_policy_ignores_model_authored_reason(tmp_path, monkeypatch):
-    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, monkeypatch)
+def test_shell_block_policy_ignores_model_authored_reason(tmp_path, monkeypatch, reload_for_data_dir):
+    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "block")
 
     def fail_interrupt(_payload):
@@ -43,8 +29,8 @@ def test_shell_block_policy_ignores_model_authored_reason(tmp_path, monkeypatch)
     assert "approve it automatically" not in output
 
 
-def test_shell_ask_policy_includes_reason_in_interrupt_payload(tmp_path, monkeypatch):
-    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, monkeypatch)
+def test_shell_ask_policy_includes_reason_in_interrupt_payload(tmp_path, monkeypatch, reload_for_data_dir):
+    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "approve")
     captured: dict = {}
 
@@ -66,8 +52,8 @@ def test_shell_ask_policy_includes_reason_in_interrupt_payload(tmp_path, monkeyp
     assert captured["args"]["command"] == "python -c \"print('hi')\""
 
 
-def test_shell_auto_policy_runs_without_interrupt(tmp_path, monkeypatch):
-    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, monkeypatch)
+def test_shell_auto_policy_runs_without_interrupt(tmp_path, monkeypatch, reload_for_data_dir):
+    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "allow_all")
 
     def fail_interrupt(_payload):
@@ -111,10 +97,10 @@ def test_shell_auto_policy_runs_without_interrupt(tmp_path, monkeypatch):
     ],
 )
 def test_shell_results_say_whether_approval_was_needed_and_given(
-    tmp_path, monkeypatch, command, mode, answer, first_line
+    tmp_path, monkeypatch, command, mode, answer, first_line, reload_for_data_dir
 ):
     """The model can tell what happened instead of guessing (B235)."""
-    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, monkeypatch)
+    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: mode)
 
     def interrupt(_payload):

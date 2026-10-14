@@ -11,8 +11,8 @@ pytestmark = pytest.mark.subsystem
 
 
 @pytest.fixture
-def owner(tmp_path, monkeypatch):
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def owner(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     # Adjacent agent fixtures replace sys.modules entries. Bind the application
     # projection to this test's actual isolated canonical owner, not that prior module.
     monkeypatch.setattr(control, "tasks", tasks)

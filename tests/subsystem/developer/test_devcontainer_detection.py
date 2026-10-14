@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    sys.modules.pop("developer.devcontainer", None)
-    import row_bot.developer.devcontainer as devcontainer
+def _fresh_modules(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(devcontainer)
+    return reload_for_data_dir(tmp_path / "data", "row_bot.developer.devcontainer")[0]
 
 
-def test_devcontainer_detection_absent(tmp_path, monkeypatch):
-    devcontainer = _fresh_modules(tmp_path, monkeypatch)
+def test_devcontainer_detection_absent(tmp_path, reload_for_data_dir):
+    devcontainer = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -23,8 +18,8 @@ def test_devcontainer_detection_absent(tmp_path, monkeypatch):
     assert "No devcontainer" in info.message
 
 
-def test_devcontainer_detection_reads_basic_config(tmp_path, monkeypatch):
-    devcontainer = _fresh_modules(tmp_path, monkeypatch)
+def test_devcontainer_detection_reads_basic_config(tmp_path, reload_for_data_dir):
+    devcontainer = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     config_dir = repo / ".devcontainer"
     config_dir.mkdir(parents=True)
@@ -40,8 +35,8 @@ def test_devcontainer_detection_reads_basic_config(tmp_path, monkeypatch):
     assert info.image.startswith("mcr.microsoft.com")
 
 
-def test_devcontainer_docker_detection_handles_missing_binary(tmp_path, monkeypatch):
-    devcontainer = _fresh_modules(tmp_path, monkeypatch)
+def test_devcontainer_docker_detection_handles_missing_binary(tmp_path, monkeypatch, reload_for_data_dir):
+    devcontainer = _fresh_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(devcontainer, "resolve_docker", lambda: "")
 
     assert devcontainer.detect_docker() is False

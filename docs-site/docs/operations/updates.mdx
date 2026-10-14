@@ -1,0 +1,133 @@
+---
+title: "Updates"
+description: "How Row-Bot downloads updates in the background, restarts into them, goes back with Repair, and what it contacts."
+---
+
+# Updates
+
+Row-Bot keeps itself up to date. It looks for a new release about once a day, downloads only what changed in the background, and prepares it next to the version you are using. Nothing changes until Row-Bot restarts: choose **Restart to update**, or simply quit Row-Bot and the update is installed then.
+
+Everything on this page is in **Settings › Updates**.
+
+## What Happens In The Background
+
+1. **Check.** About once a day, Row-Bot asks GitHub whether a newer release is out on your **Channel**: **Stable**, or **Beta** to get new features first. **Check now** checks straight away.
+2. **Download.** Only what changed is downloaded: Row-Bot's own code (about 8 MB), its images and sounds only when they changed, and only the libraries whose versions changed. Every file is checked before it is used.
+3. **Prepare.** Row-Bot builds the new version in its own folder next to the one you are using and tests that it starts. The version you are using is never changed. This takes a minute or two on Windows and less on macOS and Linux, and Row-Bot keeps working meanwhile.
+4. **Ready.** The sidebar shows **Restart to update**, the tray menu (the menu bar on macOS) shows **Restart to Update**, and Settings › Updates shows the new version with **What's new** and **Restart now**.
+
+If preparing fails, nothing changes: Settings › Updates says what happened and offers **Try again**.
+
+## Turn Background Updates Off
+
+Background checks and downloads are on by default. Two switches in Settings › Updates change that:
+
+- **Check for updates automatically**: turned off, Row-Bot checks only when you choose **Check now**.
+- **Download updates automatically**: turned off, a new release is only offered; choose **Download** to prepare it.
+
+The first launch of an installed Row-Bot mentions this once, with a link to Settings › Updates.
+
+## Restart To Update
+
+Choose **Restart to update** in the sidebar, **Restart now** in Settings › Updates, or **Restart to Update** in the tray. Row-Bot closes, switches to the new version and opens again, usually within seconds.
+
+You don't have to restart now. If you leave it, the update is installed the next time you quit Row-Bot, and the new version opens the next time you start it.
+
+When Row-Bot is busy (a reply is being written, a workflow is running, a channel message is being delivered or a document is being processed), **Restart now** asks first:
+
+- **Restart when idle**: Row-Bot restarts by itself as soon as nothing is running.
+- **When I quit**: the update is installed the next time you quit Row-Bot.
+- **Restart anyway**: stops the work and restarts now.
+
+The tray item on Windows (and on Linux, when Row-Bot runs with a tray icon) waits too: while Row-Bot is busy, it says Row-Bot will restart when its current work finishes. On macOS the menu bar item restarts straight away; use Settings › Updates to wait for running work.
+
+Goals that were working carry on by themselves after a restart Row-Bot makes to install an update. After a quit, they come back paused as usual (see [Profiles, Goals, And Agents](/docs/profiles-goals-agents/)).
+
+Any device signed in to your Row-Bot, such as your phone, can see the update status and choose **Restart now**; the same check for running work applies.
+
+## If An Update Doesn't Start
+
+If the new version fails to start twice, Row-Bot goes back to the version you had by itself. Settings › Updates then says **Version X didn't start**. Row-Bot doesn't download that version again by itself: choose **Download again** only if you want to retry it. A newer release is offered as usual.
+
+## Go Back To The Previous Version
+
+If a new version misbehaves, **Repair** in Settings › Updates offers **Go back to X.Y.Z**, the version you had before. Choose **Go back and restart**; your data stays as it is.
+
+The version you left stays installed, and Row-Bot doesn't switch back to it by itself. When Settings › Updates offers it again, it says you went back from it; choose **Download** and it is ready at once, without downloading anything. Repair is for a version that misbehaves; it is not a backup (see [Back Up](/docs/operations/#back-up)).
+
+## When You Need The Full Installer
+
+Most updates download in the background. A few can't, and Settings › Updates shows **Version X needs the full installer** with **Download the full installer**, which downloads the installer for your system from GitHub. This happens when:
+
+- the release moves Row-Bot to a newer version of Python,
+- a library that changed has no ready-made package for your system, or
+- your version is too old to update in place.
+
+Run the installer as you did the first time. Your data and settings stay.
+
+## What Updates Contact
+
+- **GitHub**: `api.github.com` to check for releases, and GitHub's release file hosts (`github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`) to download them.
+- **Library downloads**, only when a release changes libraries: the Python Package Index's file host `files.pythonhosted.org`, and `download.pytorch.org` (which hands over to `download-r2.pytorch.org`) for PyTorch.
+
+Downloads use HTTPS to these hosts only. Every file is checked against a SHA-256 checksum before it is used: Row-Bot's own files against the list published with each release, and every library against the exact checksum recorded for that release. Libraries are only ever installed from ready-made packages, never built on your computer. Update checks and downloads send no telemetry: no account, usage or personal data.
+
+## Where Versions Live
+
+| System | Versions |
+| --- | --- |
+| Windows | `%LocalAppData%\Programs\Row-Bot\versions` |
+| macOS | `Row-Bot.app` itself, plus `~/Library/Application Support/Row-Bot/versions` for updates |
+| Linux | `~/.local/share/row-bot/releases` |
+
+Row-Bot keeps the version you use and the one before it, for Repair, and removes older ones in the background. Your data never lives in these folders; see [Installation](/docs/getting-started/installation#where-row-bot-keeps-things).
+
+## Linux Servers And systemd
+
+`row-bot serve` installs updates the same way. When it restarts to update, it keeps its arguments, so `row-bot serve --port 8080` comes back on port 8080. Run by systemd, Row-Bot leaves the restart to the service: it exits with code 75, so use `Restart=always`, or add `RestartForceExitStatus=75` to your own restart policy. `systemctl stop` installs a ready update, and the next start runs it. See [Installation](/docs/getting-started/installation#run-as-a-server).
+
+## Docker And Hosts That Update Row-Bot
+
+Row-Bot in Docker never updates itself: the official image sets `ROW_BOT_UPDATES=external`. Row-Bot then runs no checks, downloads or preparation, and the agent has no update tool. Settings › Updates says the host installs updates; for Docker, pull a newer image and start the container again (see [Explicit Upgrade And Rollback](/docs/operations/docker#explicit-upgrade-and-rollback)).
+
+A program on the host that updates Row-Bot can show its state in Settings › Updates and take requests from it. Both sides share one folder: `ROW_BOT_UPDATES_DIR`, or `host-updates` in the data folder by default.
+
+The host writes `status.json`:
+
+```json
+{
+  "schema": 1,
+  "state": "idle",
+  "current_version": "5.2.1",
+  "available_version": "5.2.2",
+  "message": "One sentence for people",
+  "notes_url": "https://github.com/siddsachar/row-bot/releases/tag/v5.2.2",
+  "updated_at": "2026-10-11T12:00:00Z",
+  "handled_request": "id of the last request it acted on"
+}
+```
+
+- `state` is one of `idle`, `checking`, `downloading`, `ready`, `applying`, `failed` or `paused`.
+- `available_version`, `message`, `notes_url` and `handled_request` are optional (`available_version` may be `null`). `notes_url` must start with `https://`.
+- The file must be at most 16 KB. A missing or unreadable file counts as no status, and Settings › Updates then says to pull a newer image.
+
+When someone chooses **Update now**, **Skip**, **Pause updates**, **Resume updates** or **Check now**, Row-Bot writes `request.json`:
+
+```json
+{
+  "schema": 1,
+  "id": "a UUID",
+  "action": "update_now",
+  "version": "5.2.2",
+  "requested_at": "2026-10-11T12:00:00Z"
+}
+```
+
+- `action` is one of `check`, `update_now`, `skip`, `pause` or `resume`; `version` may be `null`.
+- Row-Bot replaces the file atomically, and a newer request replaces one the host hasn't handled yet. The host reads it, deletes it, acts on it, and names its `id` in `handled_request`.
+
+Row-Bot never runs anything on the host's behalf; this folder is the whole interface.
+
+## Source Checkouts
+
+A Row-Bot started from a source checkout never updates itself; Settings › Updates says so. Update it with `git pull` and `uv sync --locked --all-extras --group test`, then rebuild the client (see [Installation](/docs/getting-started/installation#run-from-source)).

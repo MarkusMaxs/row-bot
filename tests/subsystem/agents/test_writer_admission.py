@@ -394,11 +394,11 @@ def test_capacity_change_wakes_earliest_eligible_without_poll(
 
 @pytest.mark.parametrize("failure", ["event-publication", "stop"])
 def test_real_writer_commit_is_released_before_failed_admission_returns(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, reload_for_data_dir
 ):
     from tests.fixtures.tasks import fresh_tasks_module
 
-    fresh_tasks_module(tmp_path, monkeypatch)
+    fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot import agent_runner as runner, agent_runs, agent_settings
 
     monkeypatch.setattr(
@@ -466,10 +466,11 @@ def test_worker_teardown_drains_capacity_after_real_release_failure(
     monkeypatch,
     resume,
     failure,
+    reload_for_data_dir,
 ):
     from tests.fixtures.tasks import fresh_tasks_module
 
-    fresh_tasks_module(tmp_path, monkeypatch)
+    fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot import agent_runner as runner, agent_runs
 
     monkeypatch.setattr(

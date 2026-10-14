@@ -1,28 +1,16 @@
 from __future__ import annotations
 
-import importlib
 import sys
 from types import SimpleNamespace
 
 import pytest
 
 
-def _fresh_modules(tmp_path, monkeypatch, *, offline_fallback=True):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in [
-        "plugins.registry",
-        "plugins.state",
-        "plugins.loader",
-        "developer.storage",
-        "developer.tool_capsules",
-        "tools.custom_tool_builder_tool",
-    ]:
-        sys.modules.pop(name, None)
-    import row_bot.developer.storage as storage
+def _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir, *, offline_fallback=True):
     import row_bot.developer.tool_capsules as capsules
 
-    importlib.reload(storage)
-    capsules = importlib.reload(capsules)
+    reload_for_data_dir(tmp_path / "data", "row_bot.developer.storage")
+    (capsules,) = reload_for_data_dir(tmp_path / "data", "row_bot.developer.tool_capsules")
     if offline_fallback:
         # Builder paths request AI by default; exercise their offline fallback.
         def unavailable_proposal(*_args, **_kwargs):
@@ -32,8 +20,8 @@ def _fresh_modules(tmp_path, monkeypatch, *, offline_fallback=True):
     return capsules
 
 
-def test_tool_capsules_register_public_sources_without_hidden_gate(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsules_register_public_sources_without_hidden_gate(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "tool"
     install_path.mkdir()
 
@@ -48,8 +36,8 @@ def test_tool_capsules_register_public_sources_without_hidden_gate(tmp_path, mon
     assert capsules.list_capsules()[0].id == capsule.id
 
 
-def test_tool_capsules_register_disable_and_remove_in_isolated_state(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsules_register_disable_and_remove_in_isolated_state(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
 
@@ -67,8 +55,8 @@ def test_tool_capsules_register_disable_and_remove_in_isolated_state(tmp_path, m
     assert capsules.list_capsules() == []
 
 
-def test_tool_capsules_parse_manifest_commands(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsules_parse_manifest_commands(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
     (install_path / "row-bot-capsule.json").write_text(
@@ -95,8 +83,8 @@ def test_tool_capsules_parse_manifest_commands(tmp_path, monkeypatch):
     assert capsule.commands[0]["command"] == "python --version"
 
 
-def test_tool_capsules_read_row_bot_manifest_commands(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsules_read_row_bot_manifest_commands(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "legacy-capsule"
     install_path.mkdir()
     (install_path / "row-bot-capsule.json").write_text(
@@ -122,8 +110,8 @@ def test_tool_capsules_read_row_bot_manifest_commands(tmp_path, monkeypatch):
     assert capsule.commands[0]["command"] == "python --version"
 
 
-def test_tool_capsule_generator_infers_gitignore_repo_commands(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsule_generator_infers_gitignore_repo_commands(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "gitignore"
     install_path.mkdir()
     (install_path / "README.md").write_text("# Gitignore templates\n", encoding="utf-8")
@@ -147,8 +135,8 @@ def test_tool_capsule_generator_infers_gitignore_repo_commands(tmp_path, monkeyp
     assert parsed["commands"][0]["name"] == proposal.commands[0]["name"]
 
 
-def test_tool_capsule_generate_and_register_writes_manifest(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsule_generate_and_register_writes_manifest(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "repo-helper"
     install_path.mkdir()
     (install_path / "README.md").write_text("# Helper\n", encoding="utf-8")
@@ -164,8 +152,8 @@ def test_tool_capsule_generate_and_register_writes_manifest(tmp_path, monkeypatc
     assert capsules.list_capsules()[0].id == capsule.id
 
 
-def test_custom_tool_generator_infers_tldr_repo_commands(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_generator_infers_tldr_repo_commands(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "tldr"
     (install_path / "pages" / "common").mkdir(parents=True)
     (install_path / "pages" / "common" / "tar.md").write_text("# tar\n\n> Archive utility.\n", encoding="utf-8")
@@ -188,8 +176,8 @@ def test_custom_tool_generator_infers_tldr_repo_commands(tmp_path, monkeypatch):
     assert "List gitignore templates" not in command_names
 
 
-def test_custom_tool_ai_generator_uses_repo_brief_and_validates_commands(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch, offline_fallback=False)
+def test_custom_tool_ai_generator_uses_repo_brief_and_validates_commands(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir, offline_fallback=False)
     install_path = tmp_path / "public-apis"
     install_path.mkdir()
     (install_path / "README.md").write_text(
@@ -269,8 +257,8 @@ def test_custom_tool_ai_generator_uses_repo_brief_and_validates_commands(tmp_pat
     assert not any("\\bformat\\b" in warning for warning in proposal.warnings)
 
 
-def test_custom_tool_public_source_writes_manifest_without_hidden_gate(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_public_source_writes_manifest_without_hidden_gate(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "repo-helper"
     install_path.mkdir()
     (install_path / "README.md").write_text("# Helper\n", encoding="utf-8")
@@ -285,8 +273,8 @@ def test_custom_tool_public_source_writes_manifest_without_hidden_gate(tmp_path,
     assert capsules.list_capsules()[0].id == capsule.id
 
 
-def test_custom_tool_local_source_does_not_need_public_gate(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_local_source_does_not_need_public_gate(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "local-helper"
     install_path.mkdir()
     (install_path / "README.md").write_text("# Local Helper\n", encoding="utf-8")
@@ -300,8 +288,8 @@ def test_custom_tool_local_source_does_not_need_public_gate(tmp_path, monkeypatc
     assert (install_path / "row-bot-custom-tool.json").exists()
 
 
-def test_custom_tool_builder_manages_draft_lifecycle(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_manages_draft_lifecycle(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "local-helper"
     install_path.mkdir()
 
@@ -348,8 +336,8 @@ def test_custom_tool_builder_manages_draft_lifecycle(tmp_path, monkeypatch):
     assert capsules.get_custom_tool_draft(draft_id).status == "enabled"
 
 
-def test_custom_tool_builder_starts_from_repo_url_with_clone_parent(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_starts_from_repo_url_with_clone_parent(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     clone_parent = tmp_path / "clones"
     clone_parent.mkdir()
     cloned = clone_parent / "gitignore"
@@ -375,8 +363,8 @@ def test_custom_tool_builder_starts_from_repo_url_with_clone_parent(tmp_path, mo
     assert started["draft"]["commands"]
 
 
-def test_custom_tool_builder_accepts_ssh_repo_url_with_clone_parent(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_accepts_ssh_repo_url_with_clone_parent(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     clone_parent = tmp_path / "clones"
     clone_parent.mkdir()
     cloned = clone_parent / "gitignore"
@@ -403,8 +391,8 @@ def test_custom_tool_builder_accepts_ssh_repo_url_with_clone_parent(tmp_path, mo
     assert started["draft"]["source_url"] == "ssh://git@github.com/github/gitignore.git"
 
 
-def test_custom_tool_builder_recovers_clone_parent_passed_as_source_path(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_recovers_clone_parent_passed_as_source_path(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     clone_parent = tmp_path / "custom-tool-test"
     clone_parent.mkdir()
     cloned = clone_parent / "gitignore"
@@ -432,8 +420,8 @@ def test_custom_tool_builder_recovers_clone_parent_passed_as_source_path(tmp_pat
     assert started["draft"]["commands"]
 
 
-def test_custom_tool_builder_reuses_existing_scp_git_target(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_reuses_existing_scp_git_target(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     clone_parent = tmp_path / "custom-tool-test"
     cloned = clone_parent / "gitignore"
     cloned.mkdir(parents=True)
@@ -456,8 +444,8 @@ def test_custom_tool_builder_reuses_existing_scp_git_target(tmp_path, monkeypatc
     assert started["draft"]["commands"]
 
 
-def test_custom_tool_builder_missing_clone_parent_requires_create_approval(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_missing_clone_parent_requires_create_approval(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     missing_parent = tmp_path / "missing-parent"
     cloned = missing_parent / "gitignore"
 
@@ -486,8 +474,8 @@ def test_custom_tool_builder_missing_clone_parent_requires_create_approval(tmp_p
     assert started["draft"]["installed_path"] == str(cloned.resolve())
 
 
-def test_custom_tool_clone_reports_git_stderr(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_clone_reports_git_stderr(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     def _fail_clone(*_args, **_kwargs):
         raise capsules.subprocess.CalledProcessError(
@@ -509,8 +497,8 @@ def test_custom_tool_clone_reports_git_stderr(tmp_path, monkeypatch):
         raise AssertionError("Custom Tool clone should report git stderr on clone failure")
 
 
-def test_custom_tool_builder_empty_draft_actions_are_friendly(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_empty_draft_actions_are_friendly(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     for action in ("show", "refine", "update", "test", "setup", "create", "enable", "promote"):
         result = capsules.custom_tool_builder(action, draft_id="")
@@ -519,8 +507,8 @@ def test_custom_tool_builder_empty_draft_actions_are_friendly(tmp_path, monkeypa
         assert "No Custom Tool draft is active yet" in result["message"]
 
 
-def test_tool_capsule_clone_requires_explicit_parent(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsule_clone_requires_explicit_parent(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     try:
         capsules.clone_capsule_repository("https://github.com/example/repo", str(tmp_path / "missing"))
@@ -530,8 +518,8 @@ def test_tool_capsule_clone_requires_explicit_parent(tmp_path, monkeypatch):
         raise AssertionError("clone should require an existing explicit parent folder")
 
 
-def test_custom_tool_clone_reuses_existing_target_folder(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_clone_reuses_existing_target_folder(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     target = tmp_path / "repo"
     target.mkdir()
 
@@ -540,8 +528,8 @@ def test_custom_tool_clone_reuses_existing_target_folder(tmp_path, monkeypatch):
     assert cloned == target.resolve()
 
 
-def test_suggested_clone_name_handles_git_url_variants(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_suggested_clone_name_handles_git_url_variants(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     assert capsules.suggested_clone_name("git@github.com:owner/repo.git") == "repo"
     assert capsules.suggested_clone_name("ssh://git@github.com/owner/repo.git") == "repo"
@@ -549,8 +537,8 @@ def test_suggested_clone_name_handles_git_url_variants(tmp_path, monkeypatch):
     assert capsules.suggested_clone_name("https://github.com/owner/repo.git#main") == "repo"
 
 
-def test_tool_capsule_runner_uses_capsule_path_and_policy(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsule_runner_uses_capsule_path_and_policy(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
 
@@ -568,8 +556,8 @@ def test_tool_capsule_runner_uses_capsule_path_and_policy(tmp_path, monkeypatch)
     assert result.cwd == str(install_path.resolve())
 
 
-def test_custom_tool_card_test_runner_requires_one_time_approval(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_card_test_runner_requires_one_time_approval(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
 
@@ -607,8 +595,8 @@ def test_custom_tool_card_test_runner_requires_one_time_approval(tmp_path, monke
     assert approved.execution_mode == "local"
 
 
-def test_custom_tool_test_runner_substitutes_query_placeholder(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_test_runner_substitutes_query_placeholder(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
 
@@ -633,8 +621,8 @@ def test_custom_tool_test_runner_substitutes_query_placeholder(tmp_path, monkeyp
     assert "'python'.lower()" in captured["command"]
 
 
-def test_custom_tool_draft_test_substitutes_query_placeholder(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_draft_test_substitutes_query_placeholder(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
     draft = capsules.CustomToolDraft(
@@ -666,8 +654,8 @@ def test_custom_tool_draft_test_substitutes_query_placeholder(tmp_path, monkeypa
     assert "'python'.lower()" in captured["command"]
 
 
-def test_custom_tool_query_substitution_quotes_urls_with_shell_characters(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_query_substitution_quotes_urls_with_shell_characters(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     command = capsules.substitute_custom_tool_query(
         "python -m pyseoanalyzer {query}",
@@ -677,8 +665,8 @@ def test_custom_tool_query_substitution_quotes_urls_with_shell_characters(tmp_pa
     assert command == 'python -m pyseoanalyzer "https://example.com?a=1&b=2"'
 
 
-def test_custom_tool_draft_test_blocks_row_bot_pip_install(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_draft_test_blocks_row_bot_pip_install(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
     draft = capsules.CustomToolDraft(
@@ -710,8 +698,8 @@ def test_custom_tool_draft_test_blocks_row_bot_pip_install(tmp_path, monkeypatch
     assert saved.status == "test_failed"
 
 
-def test_custom_tool_builder_setup_python_uses_tool_venv_and_syncs_created_tool(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_setup_python_uses_tool_venv_and_syncs_created_tool(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "python-seo-analyzer"
     install_path.mkdir()
     (install_path / "pyproject.toml").write_text("[project]\nname = \"python-seo-analyzer\"\n", encoding="utf-8")
@@ -771,8 +759,8 @@ def test_custom_tool_builder_setup_python_uses_tool_venv_and_syncs_created_tool(
     assert created["tool"]["commands"][0]["command"] == command
 
 
-def test_tool_capsule_promotion_registers_plugin_tool_and_removes_safely(tmp_path, monkeypatch):
-    capsules = _fresh_modules(tmp_path, monkeypatch)
+def test_tool_capsule_promotion_registers_plugin_tool_and_removes_safely(tmp_path, monkeypatch, reload_for_data_dir):
+    capsules = _fresh_modules(tmp_path, monkeypatch, reload_for_data_dir)
     install_path = tmp_path / "capsule"
     install_path.mkdir()
     (install_path / "row-bot-capsule.json").write_text(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import pathlib
 from types import SimpleNamespace
 
@@ -13,10 +12,10 @@ import pytest
 pytestmark = pytest.mark.platform
 
 
-def test_rolling_windows_preserve_order_and_overlap(monkeypatch):
+def test_rolling_windows_preserve_order_and_overlap(reload_for_data_dir):
     import row_bot.document_extraction as extraction
 
-    extraction = importlib.reload(extraction)
+    (extraction,) = reload_for_data_dir(None, "row_bot.document_extraction")
     pages = [
         Document(page_content="abcdefgh"),
         Document(page_content="ijklmnop"),
@@ -33,13 +32,11 @@ def test_rolling_windows_preserve_order_and_overlap(monkeypatch):
     assert windows == ["abcdefghij", "hijklmnop"]
 
 
-def _extracting_job(tmp_path, monkeypatch, name="notes.txt", content=b"notes"):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.document_jobs as document_jobs
+def _extracting_job(tmp_path, monkeypatch, reload_for_data_dir, name="notes.txt", content=b"notes"):
     import row_bot.document_extraction as extraction
 
-    jobs = importlib.reload(document_jobs)
-    extraction = importlib.reload(extraction)
+    (jobs,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_jobs")
+    (extraction,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_extraction")
     service = jobs.DocumentJobService(tmp_path / "data")
     batch = service.create_batch()
     job = service.create_staging_job(batch, 0, name)
@@ -68,8 +65,8 @@ def _patch_extraction_side_effects(extraction, monkeypatch):
     monkeypatch.setattr(documents, "iter_document_pages", lambda _path: iter(()))
 
 
-def test_persisted_map_result_resumes_at_next_window(tmp_path, monkeypatch):
-    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+def test_persisted_map_result_resumes_at_next_window(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     windows = ["window zero", "window one", "window two"]
     monkeypatch.setattr(extraction, "iter_extraction_windows", lambda _pages, **_bounds: iter(windows))
@@ -99,8 +96,9 @@ def test_persisted_map_result_resumes_at_next_window(tmp_path, monkeypatch):
 def test_hierarchical_reduction_resumes_and_never_exceeds_group_bound(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     for index in range(17):
         service.store_map_summary(job.id, index, f"summary {index}")
     service.store_reduce_summary(job.id, 1, 0, "existing first group")
@@ -124,8 +122,8 @@ def test_hierarchical_reduction_resumes_and_never_exceeds_group_bound(
     assert service.count_reduce_summaries(job.id, 2) == 1
 
 
-def test_cancellation_between_provider_calls_prevents_more_calls(tmp_path, monkeypatch):
-    jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+def test_cancellation_between_provider_calls_prevents_more_calls(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     monkeypatch.setattr(
         extraction,
@@ -147,8 +145,8 @@ def test_cancellation_between_provider_calls_prevents_more_calls(tmp_path, monke
     assert calls == ["one"]
 
 
-def test_provider_failure_isolated_and_next_job_remains_claimable(tmp_path, monkeypatch):
-    jobs, extraction, service, first = _extracting_job(tmp_path, monkeypatch)
+def test_provider_failure_isolated_and_next_job_remains_claimable(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, extraction, service, first = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     monkeypatch.setattr(extraction, "iter_extraction_windows", lambda _pages, **_bounds: iter(("one",)))
     monkeypatch.setattr(
@@ -177,13 +175,12 @@ def test_provider_failure_isolated_and_next_job_remains_claimable(tmp_path, monk
     assert service.claim_next("owner").id == second.id
 
 
-def test_wiki_raw_copy_uses_stored_name_and_metadata(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+def test_wiki_raw_copy_uses_stored_name_and_metadata(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_extraction as extraction
     import row_bot.wiki_vault as wiki_vault
 
-    extraction = importlib.reload(extraction)
-    wiki_vault = importlib.reload(wiki_vault)
+    (extraction,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_extraction")
+    (wiki_vault,) = reload_for_data_dir(tmp_path / "data", "row_bot.wiki_vault")
     wiki_vault.set_vault_path(str(tmp_path / "vault"))
     wiki_vault.set_enabled(True)
     source = tmp_path / "source.txt"
@@ -204,8 +201,8 @@ def test_wiki_raw_copy_uses_stored_name_and_metadata(tmp_path, monkeypatch):
     assert '"original_name": "source.txt"' in metadata
 
 
-def test_graph_and_wiki_finalization_occurs_once_per_batch(tmp_path, monkeypatch):
-    jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+def test_graph_and_wiki_finalization_occurs_once_per_batch(tmp_path, monkeypatch, reload_for_data_dir):
+    jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     service.mark_completed(job.id)
     calls = []
     def refresh(*, cancelled):
@@ -224,17 +221,13 @@ def test_graph_and_wiki_finalization_occurs_once_per_batch(tmp_path, monkeypatch
     assert service.get_batch(job.batch_id).status == "completed"
 
 
-def test_document_hub_commit_is_idempotent_by_document_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.knowledge_graph as knowledge_graph
-    import row_bot.memory as memory
-    import row_bot.memory_evolution as memory_evolution
+def test_document_hub_commit_is_idempotent_by_document_id(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_extraction as extraction
 
-    kg = importlib.reload(knowledge_graph)
-    importlib.reload(memory)
-    importlib.reload(memory_evolution)
-    extraction = importlib.reload(extraction)
+    (kg,) = reload_for_data_dir(tmp_path / "data", "row_bot.knowledge_graph")
+    reload_for_data_dir(tmp_path / "data", "row_bot.memory")
+    reload_for_data_dir(tmp_path / "data", "row_bot.memory_evolution")
+    (extraction,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_extraction")
     kg._skip_reindex = True
     monkeypatch.setattr(extraction, "_extract_from_summary", lambda *_args: [])
     job = SimpleNamespace(
@@ -300,8 +293,8 @@ def test_map_window_is_a_quarter_of_the_models_input_within_bounds():
     assert extraction.map_window_for(950_000) == (60_000, 5_000)
 
 
-def test_a_long_document_takes_far_fewer_map_calls_and_every_character_is_read(tmp_path, monkeypatch):
-    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+def test_a_long_document_takes_far_fewer_map_calls_and_every_character_is_read(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
     text = "".join(f"{index:07d} " for index in range(15_000))  # 120,000 characters
@@ -318,8 +311,8 @@ def test_a_long_document_takes_far_fewer_map_calls_and_every_character_is_read(t
     assert rebuilt == text
 
 
-def test_a_resumed_job_keeps_the_windows_it_started_with(tmp_path, monkeypatch):
-    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+def test_a_resumed_job_keeps_the_windows_it_started_with(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
     text = "".join(f"{index:07d} " for index in range(15_000))
@@ -333,8 +326,8 @@ def test_a_resumed_job_keeps_the_windows_it_started_with(tmp_path, monkeypatch):
     assert mapped == extraction._split_into_windows(text, 50_000, 4_166)[1:]
 
 
-def test_a_job_started_before_windows_scaled_finishes_with_6k_windows(tmp_path, monkeypatch):
-    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+def test_a_job_started_before_windows_scaled_finishes_with_6k_windows(tmp_path, monkeypatch, reload_for_data_dir):
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
     text = "".join(f"{index:07d} " for index in range(3_750))  # 30,000 characters
@@ -350,13 +343,13 @@ def test_a_job_started_before_windows_scaled_finishes_with_6k_windows(tmp_path, 
     assert service.last_map_window(job.id) == len(legacy) - 1
 
 
-def test_a_batch_without_a_reviewed_policy_calls_the_background_model(tmp_path, monkeypatch):
+def test_a_batch_without_a_reviewed_policy_calls_the_background_model(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.document_extraction as extraction
     import row_bot.documents as documents
     from row_bot import models
     from row_bot.providers import background
 
-    extraction = importlib.reload(extraction)
+    (extraction,) = reload_for_data_dir(None, "row_bot.document_extraction")
     calls = []
     monkeypatch.setattr(
         background, "invoke_background",
@@ -387,10 +380,10 @@ def test_the_map_summary_length_grows_with_the_section():
     assert extraction.map_summary_length(60_000).startswith("30-50 sentences")
 
 
-def test_each_map_call_asks_for_a_summary_as_long_as_its_section_needs(tmp_path, monkeypatch):
+def test_each_map_call_asks_for_a_summary_as_long_as_its_section_needs(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.documents as documents
 
-    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    _jobs, extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     _patch_extraction_side_effects(extraction, monkeypatch)
     monkeypatch.setattr(extraction, "_reduce_summaries", lambda _title, summaries: "x" * 80)
     text = "".join(f"{index:07d} " for index in range(15_000))  # 120,000 characters

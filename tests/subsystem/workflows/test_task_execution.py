@@ -15,8 +15,8 @@ _REAL_THREAD = threading.Thread
 
 
 @pytest.fixture
-def runtime(tmp_path, monkeypatch):
-    tasks, threads, profiles, agent_runs, _ = _fresh_modules(tmp_path, monkeypatch)
+def runtime(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks, threads, profiles, agent_runs, _ = _fresh_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(execution, "tasks", tasks)
     monkeypatch.setattr(execution, "AgentProfileError", profiles.AgentProfileError)
     monkeypatch.setattr(tasks, "_canonicalize_workflow_model_override", lambda value: value)
@@ -46,8 +46,8 @@ def start(runtime, reviewed=None, **overrides):
 
 
 @pytest.fixture
-def delivery_runtime(tmp_path, monkeypatch):
-    tasks, threads, profiles, agent_runs, _ = _fresh_modules(tmp_path, monkeypatch)
+def delivery_runtime(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks, threads, profiles, agent_runs, _ = _fresh_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(execution, "tasks", tasks)
     monkeypatch.setattr(execution, "AgentProfileError", profiles.AgentProfileError)
     calls = []
@@ -882,8 +882,9 @@ def test_a_subtask_interrupt_is_denied_unless_the_child_allows_all(delivery_runt
 
 @pytest.mark.parametrize("mode_at_approval,second", [("approve", None), ("block", False), ("allow_all", True)])
 def test_a_chained_interrupt_on_a_scheduled_run_follows_the_current_mode(tmp_path, monkeypatch, mode_at_approval,
-                                                                          second):
-    tasks, threads, *_ = _fresh_modules(tmp_path, monkeypatch)
+                                                                          second,
+                                                                          reload_for_data_dir):
+    tasks, threads, *_ = _fresh_modules(tmp_path, reload_for_data_dir)
     _install_fake_agent(monkeypatch, [])
     _run_workflow_synchronously(monkeypatch, tasks)
     from row_bot import notifications

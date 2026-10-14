@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-import importlib
 import subprocess
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in ["developer.todos", "developer.review", "developer.storage"]:
-        sys.modules.pop(name, None)
-    import row_bot.developer.todos as todos
-    import row_bot.developer.review as review
-    import row_bot.developer.storage as storage
+def _fresh_modules(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(todos), importlib.reload(review), importlib.reload(storage)
+    return tuple(reload_for_data_dir(tmp_path / "data", "row_bot.developer.todos", "row_bot.developer.review", "row_bot.developer.storage"))
 
 
 def _git(repo, *args):
@@ -35,8 +27,8 @@ def _init_repo(repo):
     _git(repo, "commit", "-m", "init")
 
 
-def test_developer_todos_persist_by_thread(tmp_path, monkeypatch):
-    todos, _review, _storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_todos_persist_by_thread(tmp_path, reload_for_data_dir):
+    todos, _review, _storage = _fresh_modules(tmp_path, reload_for_data_dir)
 
     created = todos.replace_todos_from_labels("thread-1", ["Scan repo", "Run tests"])
     assert len(created) == 2
@@ -47,8 +39,8 @@ def test_developer_todos_persist_by_thread(tmp_path, monkeypatch):
     assert todos.list_todos("missing") == []
 
 
-def test_developer_review_lists_changes_and_diff(tmp_path, monkeypatch):
-    _todos, review, _storage = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_review_lists_changes_and_diff(tmp_path, reload_for_data_dir):
+    _todos, review, _storage = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     _init_repo(repo)
 
