@@ -297,3 +297,25 @@ def test_the_view_says_what_runs_where_in_plain_fields(launched, tmp_path):
         "name": "Dev server", "kind": "process", "status": "running", "conversation_title": "Fix the login page",
         "local_urls": ["http://localhost:3000"], "env_names": ["PORT"], "exit_code": None, "ended_at": None}
     assert "3000" not in str(view["env_names"])  # Names only; values stay out of every list.
+
+
+def test_without_process_containment_a_command_still_runs_in_the_turn(launched, tmp_path, monkeypatch):
+    """An old Linux kernel can't contain processes: run_command falls back to a plain subprocess."""
+    from row_bot.process_cancellation import ProcessRunResult
+    from row_bot.tools import shell_tool
+
+    real_launch = runtime.launch_tracked_process
+
+    def refused(*args, **kwargs):
+        tracked = real_launch(*args, **kwargs)
+        tracked.code = "process_containment_unavailable"
+        tracked.exit(126)
+        return tracked
+
+    monkeypatch.setattr(runtime, "launch_tracked_process", refused)
+    monkeypatch.setattr(shell_tool, "run_cancellable_subprocess",
+                        lambda args, **_kw: ProcessRunResult(args, 0, stdout="plain"))
+
+    result = shell_tool.ShellSession(str(tmp_path)).run_command("echo plain")
+
+    assert (result["exit_code"], result["output"]) == (0, "plain")

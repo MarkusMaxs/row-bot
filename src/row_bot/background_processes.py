@@ -51,6 +51,8 @@ MAX_ENV_VALUE_CHARS = 8 * 1024
 MAX_NAME_CHARS = 80
 
 REGISTRY_KEY = "row-bot:background-processes"
+# The worker refused before running anything: no process containment on this computer.
+_CONTAINMENT_UNAVAILABLE = frozenset({"process_containment_unavailable", "process_owner_unavailable"})
 PROCESS_ID = re.compile(r"proc-[0-9a-f]{8}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 _FOLDER = "processes"
@@ -952,6 +954,9 @@ def run_command(
                           earlier_output_dropped=dropped, limit_message=refusal or "")
     text, dropped = record.log.text()
     _forget(record)
+    if not text and getattr(record.tracked, "code", "") in _CONTAINMENT_UNAVAILABLE:
+        # This computer can't contain processes (an old Linux kernel): the caller runs it plainly.
+        raise ProcessStartError("Row-Bot can't keep processes in the background on this computer.")
     exit_code = 130 if cancelled else record.exit_code
     return CommandRun(record, finished=True, exit_code=exit_code, output=text, earlier_output_dropped=dropped,
                       cancelled=cancelled)
