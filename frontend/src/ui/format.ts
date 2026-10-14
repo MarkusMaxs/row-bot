@@ -10,17 +10,38 @@ const RELATIVE_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', Number.POSITIVE_INFINITY],
 ];
 
+// The server's UTC offset in minutes, from the handshake; null until it's known.
+let serverUtcOffsetMinutes: number | null = null;
+
 /**
- * Parse an ISO-8601 timestamp or epoch seconds. Offset-less date-times are
- * local wall-clock values (the backend writes `datetime.now().isoformat()`),
- * which is how JavaScript parses them. Fractions are trimmed to milliseconds
- * because some engines reject microsecond precision.
+ * Offset-less times the server sends are its own wall clock. A device in another
+ * timezone (a phone over remote access) reads them with the server's offset (B341).
+ */
+export function setServerUtcOffset(minutes: number | null | undefined) {
+  serverUtcOffsetMinutes =
+    typeof minutes === 'number' && Number.isFinite(minutes) ? minutes : null;
+}
+
+const OFFSET_LESS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/;
+
+/**
+ * Parse an ISO-8601 timestamp or epoch seconds. Offset-less date-times are the
+ * server's wall-clock values (the backend writes `datetime.now().isoformat()`):
+ * read with the server's offset once the handshake gave it, else as this
+ * device's local time. Fractions are trimmed to milliseconds because some
+ * engines reject microsecond precision.
  */
 export function parseTimestamp(value: string | number | null | undefined) {
   if (value == null || value === '') return null;
   if (typeof value === 'number')
     return Number.isFinite(value) ? new Date(value * 1000) : null;
   const text = value.trim().replace(/(\.\d{3})\d+/, '$1');
+  if (serverUtcOffsetMinutes !== null && OFFSET_LESS.test(text)) {
+    const wall = new Date(`${text}Z`).getTime();
+    return Number.isNaN(wall)
+      ? null
+      : new Date(wall - serverUtcOffsetMinutes * 60_000);
+  }
   const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }

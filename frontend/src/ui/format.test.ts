@@ -8,6 +8,7 @@ import {
   maskedTail,
   parseTimestamp,
   relativeTime,
+  setServerUtcOffset,
   shortcutKeys,
 } from './format';
 
@@ -23,6 +24,36 @@ it('parses local backend timestamps with microseconds and epoch seconds', () => 
   expect(parseTimestamp(0)?.toISOString()).toBe('1970-01-01T00:00:00.000Z');
   expect(parseTimestamp('not a date')).toBeNull();
   expect(parseTimestamp(undefined)).toBeNull();
+});
+
+it('reads offset-less times as the server clock on a device in another timezone (B341)', () => {
+  // The server is an hour ahead of UTC; this device's own timezone doesn't matter.
+  setServerUtcOffset(60);
+  try {
+    expect(parseTimestamp('2026-10-14T14:00:00.123456')?.toISOString()).toBe(
+      '2026-10-14T13:00:00.123Z',
+    );
+    expect(parseTimestamp('2026-10-14T14:00')?.toISOString()).toBe(
+      '2026-10-14T13:00:00.000Z',
+    );
+    // A time that says its offset is read as written.
+    expect(parseTimestamp('2026-10-14T14:00:00Z')?.toISOString()).toBe(
+      '2026-10-14T14:00:00.000Z',
+    );
+    expect(parseTimestamp('2026-10-14T14:00:00+05:30')?.toISOString()).toBe(
+      '2026-10-14T08:30:00.000Z',
+    );
+    // A chat the server saved a moment ago is "just now", never "in 60 minutes".
+    expect(
+      relativeTime('2026-10-14T14:00:00', new Date('2026-10-14T13:00:20Z')),
+    ).toBe('just now');
+  } finally {
+    setServerUtcOffset(null);
+  }
+  // Without the server's offset, an offset-less time is this device's local time.
+  expect(parseTimestamp('2026-10-14T14:00:00')?.getTime()).toBe(
+    new Date(2026, 9, 14, 14, 0, 0).getTime(),
+  );
 });
 
 it.each([
