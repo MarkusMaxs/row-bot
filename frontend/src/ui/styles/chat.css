@@ -687,6 +687,10 @@
   height: 10px;
   fill: currentColor;
 }
+/* An outline glyph: filled, scissors read as blots. */
+.turn-chip[data-kind='cut-short'] svg {
+  fill: none;
+}
 
 /* ------------------------------------------------------- tool activity */
 

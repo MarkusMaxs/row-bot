@@ -278,7 +278,7 @@ class BlobReader:
             return None
         fields = self.fields(
             self.end(class_position),
-            {"id", "content", "tool_calls", "tool_call_id", "additional_kwargs", "artifact"},
+            {"id", "content", "tool_calls", "tool_call_id", "additional_kwargs", "artifact", "response_metadata"},
         )
         identity = self.text(fields["id"]) if "id" in fields else ""
         if not identity:
@@ -357,12 +357,26 @@ class BlobReader:
                     candidate = self.text(metadata["platform_media_error"], 80)
                     if candidate in {"payload_too_large", "media_unavailable"}:
                         media_error = candidate
+        cut_short = name == "AIMessage" and "response_metadata" in fields and self.cut_short(fields["response_metadata"])
         return {"message_id": identity, "role": roles[name], "content_position": content_position,
                 "tool_call_ids": tool_ids, "tool_calls": tool_calls,
                 "tool_calls_position": fields.get("tool_calls"), "tool_ids_lazy": tool_ids_lazy,
                 "tool_call_id": self.text(fields["tool_call_id"]) if "tool_call_id" in fields else "",
                 "attachments": attachments, "media": media, "media_error": media_error, "note": note,
-                "approval_id": approval_id, "chart_position": chart_position, "chart_label": chart_label}
+                "approval_id": approval_id, "chart_position": chart_position, "chart_label": chart_label,
+                "cut_short": cut_short}
+
+    def cut_short(self, position: int) -> bool:
+        """Whether a reply's provider metadata says the output token limit ended it (F17)."""
+        from row_bot.providers.stop_reason import stop_reason, stopped_at_output_limit
+
+        keys = self.fields(position, {"stop_reason", "done_reason", "finish_reason", "status", "incomplete_details"})
+        metadata: dict[str, Any] = {key: self.text(keys[key], 64)
+                                    for key in keys.keys() - {"incomplete_details"}}
+        if "incomplete_details" in keys:
+            details = self.fields(keys["incomplete_details"], {"reason"})
+            metadata["incomplete_details"] = {"reason": self.text(details["reason"], 64)} if details else {}
+        return stopped_at_output_limit(stop_reason(metadata))
 
     def chart_artifact(self, position: int) -> tuple[int | None, str]:
         """Where a tool result's chart figure is, and its label, when its artifact holds one (WP D2).
@@ -535,6 +549,8 @@ class BlobReader:
             row["note"] = record["note"]
         if record.get("approval_id"):
             row["approval_id"] = record["approval_id"]
+        if record.get("cut_short"):
+            row["cut_short"] = True
         content = bytearray()
         for chunk in self.content_chunks(record):
             if len(content) + len(chunk) > maximum:

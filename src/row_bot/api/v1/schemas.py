@@ -6826,6 +6826,9 @@ class TranscriptRow(WireModel):
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
+    # The provider stopped this reply at its output token limit: the client
+    # says so under it. The saved reply itself is the model's own text.
+    cut_short: bool = False
 
 
 class Snapshot(WireModel):

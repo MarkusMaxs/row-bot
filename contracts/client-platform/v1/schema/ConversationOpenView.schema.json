@@ -2141,6 +2141,11 @@
           "default": null,
           "title": "Content Status"
         },
+        "cut_short": {
+          "default": false,
+          "title": "Cut Short",
+          "type": "boolean"
+        },
         "id": {
           "maxLength": 1024,
           "minLength": 1,
