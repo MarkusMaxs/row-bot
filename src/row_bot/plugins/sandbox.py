@@ -358,7 +358,9 @@ def create_environment(environment: pathlib.Path) -> None:
     if embedded is not None:
         _create_private_runtime(environment, embedded)
     else:
-        argv = [sys.executable, "-I", "-m", "venv", "--copies"]
+        # -B: the base runtime is an installed version or the signed macOS
+        # bundle, and -I ignores PYTHONDONTWRITEBYTECODE.
+        argv = [sys.executable, "-I", "-B", "-m", "venv", "--copies"]
         if importlib.util.find_spec("ensurepip") is None:
             # Packaged macOS and Linux runtimes ship without ensurepip. Plugin
             # environments install no dependencies, so they need no pip.
@@ -454,7 +456,7 @@ def _resolve_dependencies(plugin_deps: list[str], environment: pathlib.Path) -> 
             constraint, report = root / "constraints.txt", root / "report.json"
             constraint.write_text(_constraint_text(core), encoding="utf-8")
             if values:
-                _run([str(python), "-I", "-m", "pip", "--isolated", "install", "--dry-run", "--ignore-installed", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--constraint", str(constraint), "--report", str(report), *values], cwd=root, timeout=60)
+                _run([str(python), "-I", "-B", "-m", "pip", "--isolated", "install", "--dry-run", "--ignore-installed", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--constraint", str(constraint), "--report", str(report), *values], cwd=root, timeout=60)
                 distributions = _validated_distributions(_read_report(report), values, core)
             else:
                 distributions = ()
@@ -527,7 +529,7 @@ def install_dependencies(plugin_deps: list[str], *, environment: pathlib.Path | 
             requirements = root / "requirements.txt"
             requirements.write_text("".join(f"{name}=={version} --hash=sha256:{digest}\n" for name, version, digest in plan.distributions), encoding="utf-8")
             if plan.distributions:
-                _run([str(python), "-I", "-m", "pip", "--isolated", "install", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--no-deps", "--require-hashes", "--constraint", str(constraints), "--requirement", str(requirements)], cwd=root, timeout=300)
+                _run([str(python), "-I", "-B", "-m", "pip", "--isolated", "install", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--no-deps", "--require-hashes", "--constraint", str(constraints), "--requirement", str(requirements)], cwd=root, timeout=300)
         if _target(environment)[1] != identity:
             raise EnvironmentError("environment_changed")
         expected = baseline | {name: version for name, version, _ in plan.distributions}

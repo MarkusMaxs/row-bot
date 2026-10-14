@@ -31,7 +31,7 @@ def test_environments_need_ensurepip_only_when_the_runtime_has_it(plugin_modules
     monkeypatch.setattr(sandbox, "_run", create)
     sandbox.create_environment(environment)
 
-    assert seen[0][:5] == [sys.executable, "-I", "-m", "venv", "--copies"]
+    assert seen[0][:6] == [sys.executable, "-I", "-B", "-m", "venv", "--copies"]
     assert ("--without-pip" in seen[0]) is not has_ensurepip
     sandbox._target(environment)
 
