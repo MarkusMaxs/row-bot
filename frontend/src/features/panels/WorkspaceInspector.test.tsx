@@ -562,6 +562,71 @@ describe('Developer inspector', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps an open earlier agent change open across a re-read, focus mode and a reload (B337)', async () => {
+    const options = {
+      ...props(),
+      resourceId: 'workspace-b337',
+      changes: vi.fn(async () => ({
+        items: [{ path: 'other.txt', status: 'M', additions: 1, deletions: 0 }],
+        total: 1,
+        snapshot_revision: '1',
+        next_cursor: null,
+      })),
+      changeSets: vi.fn(async () => ({
+        items: [
+          {
+            id: 'set-dates',
+            summary: 'Fix the date contract',
+            reviewed: true,
+            reverted: false,
+            file_count: 1,
+            undoable: false,
+          },
+        ],
+        next_cursor: null,
+        snapshot_revision: '1',
+        total: 1,
+      })),
+      changeSetFiles: vi.fn(async (identifier: string) => ({
+        items: [
+          {
+            path: 'src/dates.py',
+            action: 'update',
+            patch: '@@ -1 +1 @@\n-return day\n+return day.strip()\n',
+          },
+        ],
+        change_set_id: identifier,
+        next_cursor: null,
+        snapshot_revision: '1',
+        total: 1,
+      })),
+    } satisfies WorkspaceInspectorProps;
+    const diff = () =>
+      screen.findByRole('region', { name: 'Diff of src/dates.py' });
+    const view = render(<WorkspaceInspector {...options} />);
+    fireEvent.click(await screen.findByText('Earlier agent changes'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Fix the date contract' }),
+    );
+    expect(await diff()).toBeInTheDocument();
+
+    // The agent works on (or Refresh): the inspector reads the folder again.
+    view.rerender(<WorkspaceInspector {...options} refreshToken={1} />);
+    await waitFor(() => expect(options.load).toHaveBeenCalledTimes(2));
+    expect(await diff()).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Fix the date contract' }),
+    ).toHaveAttribute('aria-expanded', 'true');
+
+    // Focus mode or a reload mounts the inspector afresh.
+    view.unmount();
+    render(<WorkspaceInspector {...options} />);
+    expect(await diff()).toBeVisible();
+    expect(
+      screen.getByText('Earlier agent changes').closest('details'),
+    ).toHaveAttribute('open');
+  });
+
   it('marks a file an agent change created as added, and one it deleted as deleted', async () => {
     const options = props();
     options.load = vi.fn(async () => ({

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import pathlib
 import subprocess
 from typing import Literal
@@ -22,15 +23,19 @@ from row_bot.developer.git import (
     pull_request_text,
     switch_branch,
 )
-from row_bot.developer.github import create_pull_request, push_current_branch
+from row_bot.developer.github import create_pull_request, push_current_branch, record_pull_request_result
 from row_bot.developer.sandbox import ApprovalDecision, decide_action
 from row_bot.developer.review import get_file_diff, get_file_diff_stats, list_changed_files
 from row_bot.developer.runtime import detect_project_commands, run_workspace_command, run_workspace_shell_command
 from row_bot.developer.sandbox_runtime import (
+    _client_file_patch,
     apply_patch_in_docker_sandbox,
+    carry_over_pending_change,
     get_pending_change,
     list_pending_changes,
     mark_pending_change_imported,
+    restore_shadow_files,
+    set_pending_change_aside,
     write_file_in_docker_sandbox,
 )
 from row_bot.developer.storage import get_workspace
@@ -46,6 +51,8 @@ from row_bot.tool_outputs import (
 )
 from row_bot.tools import registry
 from row_bot.tools.base import BaseTool
+
+logger = logging.getLogger(__name__)
 
 
 def _active_workspace(*, write: bool = False):
@@ -471,6 +478,7 @@ def _create_pull_request(title: str = "", body: str = "", draft: bool = True) ->
         title = suggested["title"]
         body = body.strip() or suggested["body"]
     title, body = title.strip()[:200], body.strip()[:8000]
+    branch = get_git_status(workspace.path).branch or ""
     result = create_pull_request(workspace.path, _active_approval_mode(), title=title, body=body, draft=draft)
     if result.decision and result.decision.requires_approval:
         approval = interrupt({
@@ -484,6 +492,15 @@ def _create_pull_request(title: str = "", body: str = "", draft: bool = True) ->
         result = create_pull_request(
             workspace.path, _active_approval_mode(), title=title, body=body, draft=draft, confirmed=True
         )
+    # The Git tab shows the branch's pull request instead of an empty form (B336).
+    try:
+        known = record_pull_request_result(workspace.id, workspace.path, branch, result, title=title, draft=draft)
+    except OSError:
+        logger.warning("The opened pull request was not remembered", exc_info=True)
+        known = None
+    if known and not result.ok:
+        return compact_json({"ok": True, "url": known["url"], "already_open": True,
+                             "message": f"This branch already has pull request #{known['number']}."})
     if result.ran and not result.ok and "push" in result.stderr.lower():
         return "GitHub needs the branch first: push it with developer_push_current_branch, then open the pull request."
     return compact_json({
@@ -525,13 +542,16 @@ class _ImportSandboxInput(BaseModel):
 
 
 def _import_sandbox_changes(pending_change_id: str = "", summary: str = "") -> str:
-    workspace, _root = _active_workspace(write=True)
+    workspace, root = _active_workspace(write=True)
     thread_id = get_thread_id()
     pending = get_pending_change(pending_change_id) if pending_change_id else None
     if pending_change_id and (pending is None or pending.workspace_id != workspace.id):
         raise ValueError(f"Sandbox pending change not found: {pending_change_id}")
     if pending is not None and pending.imported:
         return f"Sandbox change {pending_change_id} was already imported."
+    if pending is not None and pending.set_aside:
+        return (f"Sandbox change {pending_change_id} was set aside, not imported: its files changed in the code "
+                "folder after the sandbox made it. Make the change again.")
     # Each sandbox change builds on the ones before it, so they go in oldest first (B303), and one approval
     # covers all of this conversation's pending changes rather than a card each (F21).
     batch = sorted(list_pending_changes(workspace_id=workspace.id, thread_id=pending.thread_id if pending else thread_id),
@@ -554,28 +574,80 @@ def _import_sandbox_changes(pending_change_id: str = "", summary: str = "") -> s
         if not approval:
             return "Sandbox import cancelled by user."
         confirmed = True
-    lines = []
-    for change in batch:
+    lines: list[str] = []
+    set_aside: list = []
+    # Files of a change that was set aside: a later change to them built on it, so it stays out too.
+    held: set[str] = set()
+
+    def apply(change, patch: str):
+        return developer_edits.apply_patch_to_workspace(
+            workspace_id=workspace.id,
+            thread_id=thread_id,
+            patch=patch,
+            approval_mode=_active_approval_mode(),
+            summary=(summary if change is batch[-1] else "") or f"Import sandbox changes from: {change.command[:80]}",
+            confirmed=confirmed,
+        )
+
+    def carry_over(change):
+        """The code folder changed since the sandbox made this change (B334): merge it into the files as they are."""
+        merged = carry_over_pending_change(change, root)
+        if merged is None:
+            return None, None, "set_aside"
+        current = {path: _host_text(root, path) for path in merged}
+        patch = "".join(_client_file_patch(path, current[path], merged[path])
+                        for path in change.files if current[path] != merged[path])
+        if not patch:
+            return None, None, "already"
         try:
-            change_set, decision = developer_edits.apply_patch_to_workspace(
-                workspace_id=workspace.id,
-                thread_id=thread_id,
-                patch=change.patch,
-                approval_mode=_active_approval_mode(),
-                summary=(summary if change is batch[-1] else "") or f"Import sandbox changes from: {change.command[:80]}",
-                confirmed=confirmed,
-            )
+            change_set, decision = apply(change, patch)
         except ValueError:
-            done = f" {len(lines)} earlier change(s) were imported first." if lines else ""
-            return (f"Sandbox change {change.id} ({', '.join(change.files)}) couldn't be applied: those files "
-                    f"changed in the code folder since the sandbox made it.{done} Compare the files, then make the "
-                    "edit again in the code folder or re-run it in the sandbox.")
-        if change_set is None:
-            return decision.reason
-        mark_pending_change_imported(change.id)
-        lines.append(f"Imported sandbox change {change.id} as change set {change_set.id}.\n"
-                     + "\n".join(f"- {item.action} {item.path}" for item in change_set.files))
+            return None, None, "set_aside"
+        return change_set, decision, "carried"
+
+    for change in batch:
+        change_set, decision, outcome = None, None, "set_aside"
+        if held.isdisjoint(change.files):
+            try:
+                change_set, decision = apply(change, change.patch)
+                outcome = "imported"
+            except ValueError:
+                change_set, decision, outcome = carry_over(change)
+        if outcome == "already":
+            mark_pending_change_imported(change.id)
+            lines.append(f"Sandbox change {change.id} was already in the code folder.")
+            continue
+        if outcome != "set_aside":
+            if change_set is None:
+                return "\n".join([*lines, decision.reason])
+            mark_pending_change_imported(change.id)
+            how = " (carried over onto the code folder's newer copy of its files)" if outcome == "carried" else ""
+            lines.append(f"Imported sandbox change {change.id} as change set {change_set.id}{how}.\n"
+                         + "\n".join(f"- {item.action} {item.path}" for item in change_set.files))
+            continue
+        # Never left waiting once it can't go in: set aside, and said so (B334).
+        set_pending_change_aside(change.id, "code_folder_changed")
+        held.update(change.files)
+        set_aside.append(change)
+    if set_aside:
+        files = list(dict.fromkeys(path for change in set_aside for path in change.files))
+        try:
+            restore_shadow_files(workspace, files)
+            restored = " The sandbox's copies of those files now match the code folder again."
+        except (OSError, ValueError):
+            logger.warning("Sandbox copies were not restored after a set-aside import", exc_info=True)
+            restored = ""
+        names = ", ".join(change.id for change in set_aside)
+        lines.append(
+            f"Set aside, not imported: sandbox change {names} ({', '.join(files)}). Those files changed in the code "
+            f"folder after the sandbox made the change, in the same lines, so it couldn't be carried over.{restored} "
+            "Make the change again, or tell the person it wasn't made.")
     return "\n".join(lines)
+
+
+def _host_text(root: pathlib.Path, path: str) -> str | None:
+    target = _inside(root, path)
+    return target.read_text(encoding="utf-8", errors="replace") if target.is_file() else None
 
 
 class _PatchInput(BaseModel):
@@ -870,7 +942,7 @@ class DeveloperTool(BaseTool):
             StructuredTool.from_function(func=changes(_switch_branch), name="developer_switch_branch", description="Switch Git branches in the active Developer workspace using the thread approval mode.", args_schema=_GitBranchInput),
             StructuredTool.from_function(func=changes(_commit_changes), name="developer_commit_changes", description="Create a Git commit in the active Developer workspace using the thread approval mode.", args_schema=_GitCommitInput),
             StructuredTool.from_function(func=changes(_push_current_branch), name="developer_push_current_branch", description="Push the current branch to origin using the thread approval mode."),
-            StructuredTool.from_function(func=_create_pull_request, name="developer_create_pull_request", description="Open a GitHub pull request for the current branch once it is pushed. Runs the GitHub CLI on this computer, never in the sandbox, and asks first by the thread approval mode. Draft by default; leave title and body empty to describe the branch's own commits and files.", args_schema=_PullRequestInput),
+            StructuredTool.from_function(func=changes(_create_pull_request), name="developer_create_pull_request", description="Open a GitHub pull request for the current branch once it is pushed. Runs the GitHub CLI on this computer, never in the sandbox, and asks first by the thread approval mode. Draft by default; leave title and body empty to describe the branch's own commits and files.", args_schema=_PullRequestInput),
             StructuredTool.from_function(func=changes(_fast_forward_merge), name="developer_fast_forward_merge", description="Fast-forward merge another branch into the current branch using the thread approval mode.", args_schema=_GitFastForwardInput),
             StructuredTool.from_function(func=_diff, name="developer_get_diff", description="List changed files with added/removed line counts, or show one file's diff in pages.", args_schema=_DiffInput),
             StructuredTool.from_function(func=_update_todos, name="developer_update_todos", description="Create or update the visible Developer todo plan for this code thread. Keep it current: mark an item in_progress when you start it and completed when it is done, including work a helper agent finished, before you end your turn.", args_schema=_TodoInput),

@@ -11,6 +11,8 @@ export type WorkspaceImportSummary = {
   file_count: number;
   imported: boolean;
   created_at: string;
+  /** Not imported, and no longer waiting: its files changed in the code folder since (B334). */
+  set_aside?: boolean;
 };
 export type WorkspaceImportPage = {
   items: WorkspaceImportSummary[];
@@ -418,7 +420,10 @@ export default function WorkspaceImports(props: WorkspaceImportsProps) {
   const locked = state.busy || state.reading || !!state.pending;
   const waiting =
     props.waiting ??
-    state.page?.items.filter((row) => !row.imported).length ??
+    state.page?.items.filter((row) => !row.imported && !row.set_aside).length ??
+    0;
+  const setAside =
+    state.page?.items.filter((row) => !row.imported && row.set_aside).length ??
     0;
   return (
     <section
@@ -461,6 +466,7 @@ export default function WorkspaceImports(props: WorkspaceImportsProps) {
           {waiting
             ? `${waiting} waiting for your approval to import · `
             : 'None waiting to import · '}
+          {setAside ? `${setAside} not imported · ` : ''}
           {state.page.total} saved in all
         </p>
       )}
@@ -474,7 +480,12 @@ export default function WorkspaceImports(props: WorkspaceImportsProps) {
               }
               onClick={() => void session.select(props, row)}
             >
-              {row.imported ? 'Imported' : 'Pending'} · {row.file_count} file
+              {row.imported
+                ? 'Imported'
+                : row.set_aside
+                  ? 'Not imported'
+                  : 'Pending'}{' '}
+              · {row.file_count} file
               {row.file_count === 1 ? '' : 's'} ·{' '}
               <When value={row.created_at} fallback={row.pending_change_id} />
             </Button>
@@ -491,6 +502,14 @@ export default function WorkspaceImports(props: WorkspaceImportsProps) {
       )}
       {state.patch && state.selected && (
         <>
+          {state.selected.set_aside && !state.selected.imported && (
+            <p role="status">
+              Not imported: its files changed in the code folder after the
+              sandbox made this change, in the same lines. The sandbox's copies
+              were put back to match the code folder, so the change can be made
+              again.
+            </p>
+          )}
           <Field label="Saved patch">
             <textarea
               className="input code-sample"
@@ -528,12 +547,14 @@ export default function WorkspaceImports(props: WorkspaceImportsProps) {
                 Next patch page
               </Button>
             )}
-            <Button
-              disabled={locked || state.selected.imported || state.stale}
-              onClick={() => void session.start(props)}
-            >
-              Import selected changes
-            </Button>
+            {!state.selected.set_aside && (
+              <Button
+                disabled={locked || state.selected.imported || state.stale}
+                onClick={() => void session.start(props)}
+              >
+                Import selected changes
+              </Button>
+            )}
           </div>
         </>
       )}

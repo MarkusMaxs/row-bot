@@ -61,6 +61,7 @@ import type {
 } from '../settings/GoalProfileSettings';
 import { DEFAULT_PROFILE_ID, openAgentProfiles } from './agent-profiles';
 import { useAgentFavourites } from './agent-favourites';
+import { agentWorkLabel } from './agent-activity';
 import { ConversationGlyph } from './ConversationGlyph';
 import {
   CONVERSATION_TYPES,
@@ -264,18 +265,11 @@ function activityLabel(
     states.some((item) => item.status === 'waiting_approval' && !item.quiesced)
   )
     return { label: 'Waiting for approval', spin: false };
-  if (activityState === 'active') {
-    const label =
-      {
-        background: 'Background agents working',
-        child_running: 'Child agents working',
-        approval_wait: 'Agent group needs approval',
-        retry: 'Retrying agent work',
-        stopping: 'Stopping agent work',
-        later_wave_parent: 'Preparing agent work',
-      }[activityPhase ?? ''] ?? 'Agents working';
-    return { label, spin: activityPhase !== 'approval_wait' };
-  }
+  if (activityState === 'active')
+    return {
+      label: agentWorkLabel(activityPhase),
+      spin: activityPhase !== 'approval_wait',
+    };
   if (activityState === 'attention')
     return {
       label:

@@ -81,11 +81,14 @@ def test_sandbox_import_rejects_pending_change_for_other_workspace(tmp_path, mon
 
 
 def test_a_sandbox_change_that_no_longer_fits_is_explained_in_words(tmp_path, monkeypatch) -> None:
-    """B303: a real conflict reads as what happened, not as git's patch error."""
+    """B303: a real conflict reads as what happened, not as git's patch error; B334: it is set aside, not
+    left waiting, and the sandbox's copies of its files are put back."""
     from row_bot.tools import developer_tool
 
     workspace = fake_workspace(tmp_path)
     pending = fake_pending_change(workspace.id)
+    aside: list[tuple[str, str]] = []
+    restored: list[list[str]] = []
 
     def conflict(**_kwargs):
         raise ValueError("error: patch failed: app.py:27\nerror: app.py: patch does not apply")
@@ -95,9 +98,14 @@ def test_a_sandbox_change_that_no_longer_fits_is_explained_in_words(tmp_path, mo
     monkeypatch.setattr(developer_tool, "get_thread_id", lambda: "thread-1")
     monkeypatch.setattr(developer_tool, "get_pending_change", lambda change_id: pending)
     monkeypatch.setattr(developer_tool, "list_pending_changes", lambda **_kwargs: [pending])
+    monkeypatch.setattr(developer_tool, "set_pending_change_aside", lambda *args: aside.append(args))
+    monkeypatch.setattr(developer_tool, "restore_shadow_files", lambda _workspace, files: restored.append(files))
     monkeypatch.setattr(developer_tool.developer_edits, "apply_patch_to_workspace", conflict)
 
     result = developer_tool._import_sandbox_changes(pending.id)
 
-    assert result.startswith(f"Sandbox change {pending.id} (app.py) couldn't be applied: those files changed")
+    assert result.startswith(f"Set aside, not imported: sandbox change {pending.id} (app.py). Those files changed")
+    assert "Make the change again" in result
     assert "patch failed" not in result
+    assert aside == [(pending.id, "code_folder_changed")]
+    assert restored == [["app.py"]]

@@ -1,5 +1,6 @@
 import { expect, screenshot, test } from './evidence';
 import { openFixture } from './fixture';
+import { openPanel } from './panel-helpers';
 
 test('simplified shell keeps controls and Home reachable', async ({
   page,
@@ -79,4 +80,60 @@ test('simplified shell keeps controls and Home reachable', async ({
   await expect(
     page.getByRole('dialog', { name: 'Workspace commands' }),
   ).toBeVisible();
+});
+
+test('the sidebar comes back as it was after a phone-width window (B340)', async ({
+  page,
+}, info) => {
+  test.skip(
+    page.viewportSize()!.width < 1024,
+    'Starts and ends at a desktop width.',
+  );
+  const desktop = page.viewportSize()!;
+  await openFixture(page);
+  const pane = page.locator('.navigation-pane');
+  const expanded = page.getByRole('navigation', {
+    name: 'Workspace navigation',
+  });
+  const rail = page.getByRole('navigation', { name: 'Collapsed navigation' });
+  await expect(expanded).toBeVisible();
+  const width = async () => Math.round((await pane.boundingBox())?.width ?? 0);
+  const before = await width();
+  expect(before).toBeGreaterThanOrEqual(200);
+
+  // Snapped narrow and back: the full sidebar, at the width it had.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(expanded).toBeHidden();
+  await page.setViewportSize(desktop);
+  await expect(expanded).toBeVisible();
+  await expect.poll(width).toBe(before);
+  await expect(rail).toHaveCount(0);
+  await screenshot(page, info, 'b340-desktop-after-phone');
+
+  // Collapsed by the person, it comes back as the icon rail.
+  await page.getByRole('button', { name: 'Toggle navigation' }).click();
+  await expect(rail).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(rail).toBeHidden();
+  await page.setViewportSize(desktop);
+  await expect(rail).toBeVisible();
+  await expect(expanded).toHaveCount(0);
+  await expect.poll(width).toBe(48);
+  await screenshot(page, info, 'b340-rail-after-phone');
+  await page.getByRole('button', { name: 'Expand navigation' }).click();
+  await expect(expanded).toBeVisible();
+  await expect.poll(width).toBe(before);
+
+  // An open side panel comes back open too.
+  await openPanel(page);
+  const side = page.locator('#side-pane');
+  const sideWidth = async () =>
+    Math.round((await side.boundingBox())?.width ?? 0);
+  const sideBefore = await sideWidth();
+  expect(sideBefore).toBeGreaterThanOrEqual(320);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(sideWidth).toBe(0);
+  await page.setViewportSize(desktop);
+  await expect.poll(sideWidth).toBe(sideBefore);
+  await expect.poll(width).toBe(before);
 });

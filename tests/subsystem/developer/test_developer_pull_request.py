@@ -119,3 +119,48 @@ def test_a_branch_with_nothing_new_has_nothing_to_open(branch, tmp_path) -> None
 
     assert "adds no commits" in developer_tool._create_pull_request()
     assert approvals == [] and pr_creates(gh) == []
+
+
+def git_tab(developer_tool, monkeypatch):
+    """What the Git tab reads for the workspace's current branch."""
+    from row_bot.application.developer_repository_commands import CanonicalDeveloperRepositoryBackend
+    from row_bot.developer import review
+
+    monkeypatch.setattr(review, "workspace_has_custom_read_hooks", lambda _path: False)
+    workspace = developer_tool.get_workspace(developer_tool.get_workspace_id())
+    return CanonicalDeveloperRepositoryBackend().repository(workspace)[0]
+
+
+def test_the_git_tab_shows_the_pull_request_the_agent_opened(branch, monkeypatch, tmp_path) -> None:
+    """B336: the Git tab showed an empty new-pull-request form after the agent opened one."""
+    developer_tool, gh, _approvals, _answer, mode = branch
+    mode("allow_all")
+    assert git_tab(developer_tool, monkeypatch)["open_pull_request"] is None
+
+    developer_tool._create_pull_request()
+    shown = git_tab(developer_tool, monkeypatch)["open_pull_request"]
+
+    assert {key: shown[key] for key in ("number", "title", "url", "draft")} == {
+        "number": 12, "title": "Quote CSV fields that contain commas", "url": PR_URL, "draft": True}
+    assert shown["opened_at"]
+    # Reading the tab never contacts GitHub.
+    assert [call for call in gh.calls() if call[:2] == ["pr", "view"]] == []
+    git(tmp_path / "shop", "switch", "main")
+    assert git_tab(developer_tool, monkeypatch)["open_pull_request"] is None
+
+
+def test_a_branch_that_already_has_a_pull_request_shows_that_one(tmp_path, monkeypatch, branch) -> None:
+    developer_tool, _gh, _approvals, _answer, mode = branch
+    mode("allow_all")
+    earlier = "https://github.com/example/shop/pull/9"
+    gh = install_fake_gh(tmp_path / "existing", monkeypatch, existing={
+        "number": 9, "title": "Quote CSV fields", "url": earlier, "isDraft": False, "state": "OPEN"})
+
+    result = json.loads(developer_tool._create_pull_request(title="Again"))
+
+    assert result["ok"] is True and result["url"] == earlier
+    assert "already has pull request #9" in result["message"]
+    assert [call[:3] for call in gh.calls() if call[:2] == ["pr", "view"]] == [["pr", "view", "fix/csv-escaping"]]
+    shown = git_tab(developer_tool, monkeypatch)["open_pull_request"]
+    assert (shown["number"], shown["title"], shown["url"], shown["draft"]) == (9, "Quote CSV fields", earlier, False)
+

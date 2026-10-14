@@ -199,6 +199,49 @@ function readDiffMode(): DiffMode {
   }
 }
 
+/**
+ * Whether "Earlier agent changes" is open, and which of them shows its diff.
+ * Kept per code folder across a re-read (the agent working, Refresh, focus
+ * mode) and a reload, so what the person opened stays open (B337).
+ */
+type EarlierState = { open: boolean; change: string | null };
+const EARLIER_KEY = 'row-bot.earlier-agent-changes.v1:';
+const earlierKept = new Map<string, EarlierState>();
+function readEarlier(resource: string): EarlierState {
+  const kept = earlierKept.get(resource);
+  if (kept) return kept;
+  try {
+    const value: unknown = JSON.parse(
+      window.sessionStorage.getItem(EARLIER_KEY + resource) ?? 'null',
+    );
+    if (
+      value &&
+      typeof value === 'object' &&
+      typeof (value as EarlierState).open === 'boolean' &&
+      ((value as EarlierState).change === null ||
+        typeof (value as EarlierState).change === 'string')
+    )
+      return {
+        open: (value as EarlierState).open,
+        change: (value as EarlierState).change,
+      };
+  } catch {
+    /* Nothing kept for this folder. */
+  }
+  return { open: false, change: null };
+}
+function keepEarlier(resource: string, state: EarlierState) {
+  earlierKept.set(resource, state);
+  try {
+    window.sessionStorage.setItem(
+      EARLIER_KEY + resource,
+      JSON.stringify(state),
+    );
+  } catch {
+    /* Kept for this page only. */
+  }
+}
+
 type ChecksState = { tone: Tone; label: string; pulse: boolean };
 /** One status for the detected checks from the processes that ran them. */
 export function checksStatus(
@@ -277,7 +320,27 @@ export function WorkspaceInspector(props: WorkspaceInspectorProps) {
   const [diffPath, setDiffPath] = useState('');
   const [diffOffset, setDiffOffset] = useState(0);
   const [diffMode, setDiffModeState] = useState<DiffMode>(readDiffMode);
-  const [openEarlier, setOpenEarlier] = useState<string | null>(null);
+  const [earlier, setEarlierState] = useState(() => ({
+    owner: props.resourceId,
+    ...readEarlier(props.resourceId),
+  }));
+  const earlierView =
+    earlier.owner === props.resourceId
+      ? earlier
+      : { owner: props.resourceId, ...readEarlier(props.resourceId) };
+  const openEarlier = earlierView.change;
+  function setEarlier(update: (value: EarlierState) => Partial<EarlierState>) {
+    const resource = props.resourceId;
+    setEarlierState((value) => {
+      const base =
+        value.owner === resource
+          ? value
+          : { owner: resource, ...readEarlier(resource) };
+      const next = { ...base, ...update(base) };
+      keepEarlier(resource, { open: next.open, change: next.change });
+      return next;
+    });
+  }
   const [ledger, setLedger] = useState<WorkspaceChangeSetPage | null>(null);
   const [ledgerFiles, setLedgerFiles] = useState<
     Record<string, WorkspaceChangeSetFiles>
@@ -511,6 +574,10 @@ export function WorkspaceInspector(props: WorkspaceInspectorProps) {
               : value,
           );
         const eager = live.slice(0, cursor ? 0 : EAGER_CHANGE_SETS);
+        // An earlier change the person had open reads its files again too (B337).
+        const kept = readEarlier(callbacks.current.resourceId).change;
+        const open = live.find((item) => item.id === kept);
+        if (open && !eager.includes(open)) eager.push(open);
         setCollapsed((value) => {
           const next = new Set(value);
           live
@@ -1005,6 +1072,10 @@ export function WorkspaceInspector(props: WorkspaceInspectorProps) {
             summary="Earlier agent changes"
             meta={String(earlierGroups.length)}
             className="dev-disclosure"
+            open={earlierView.open}
+            onOpenChange={(open) => {
+              if (open !== earlierView.open) setEarlier(() => ({ open }));
+            }}
           >
             <p className="dev-muted-line">
               Their files are committed or back to how they were.
@@ -1019,9 +1090,9 @@ export function WorkspaceInspector(props: WorkspaceInspectorProps) {
                     className="dev-group-title dev-earlier-open"
                     aria-expanded={openEarlier === set.id}
                     onClick={() =>
-                      setOpenEarlier((value) =>
-                        value === set.id ? null : set.id,
-                      )
+                      setEarlier((value) => ({
+                        change: value.change === set.id ? null : set.id,
+                      }))
                     }
                   >
                     {set.summary || 'Agent change'}

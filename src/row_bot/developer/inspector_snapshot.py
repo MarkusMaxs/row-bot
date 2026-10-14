@@ -195,6 +195,13 @@ def _store_snapshot(snapshot: InspectorSnapshot) -> None:
     _snapshots[(snapshot.workspace_id, snapshot.thread_id)] = replace(snapshot, version=_version)
 
 
+def _branch_pull_request(snapshot: InspectorSnapshot) -> dict | None:
+    from row_bot.developer.github import branch_pull_request
+
+    branch = str((snapshot.git_summary or {}).get("branch") or "")
+    return branch_pull_request(snapshot.workspace_id, branch) if branch else None
+
+
 def _fingerprint_snapshot(snapshot: InspectorSnapshot) -> str:
     payload = {
         "workspace": {
@@ -211,6 +218,8 @@ def _fingerprint_snapshot(snapshot: InspectorSnapshot) -> str:
             "hidden": snapshot.workspace.hidden,
         },
         "git": snapshot.git_summary,
+        # A pull request the branch opened changes what the Git tab shows (B336).
+        "pull_request": _branch_pull_request(snapshot),
         "todos": [
             {
                 "id": todo.id,

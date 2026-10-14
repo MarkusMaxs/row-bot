@@ -171,7 +171,7 @@ class CanonicalDeveloperRepositoryBackend:
         return _scope(resource_id, conversation_id, validate)
 
     def repository(self, workspace: Any) -> tuple[dict[str, Any], dict[str, Any]]:
-        from row_bot.developer import git, review
+        from row_bot.developer import git, github, review
 
         root = Path(workspace.path).absolute()
         identity = _directory_identity(root)
@@ -205,6 +205,9 @@ class CanonicalDeveloperRepositoryBackend:
             "branches": branches,
             # Built from the branch's own commits and files against its base (B301).
             "pull_request": git.pull_request_text(branch, git.branch_changes(str(root))) if status.is_git else None,
+            # The pull request this branch opened through Row-Bot, shown instead of the form (B336).
+            "open_pull_request": (github.branch_pull_request(str(getattr(workspace, "id", "") or ""), branch)
+                                  if status.is_git else None),
         }
         private = {
             **public,
@@ -268,7 +271,9 @@ class CanonicalDeveloperRepositoryBackend:
         for row in pending_rows:
             if not isinstance(row, dict):
                 raise _error("sandbox_history_unavailable")
-            if row.get("workspace_id") == workspace.id and row.get("thread_id") == conversation_id and row.get("imported") is not True:
+            # A change set aside (B334) is no longer waiting to import.
+            if (row.get("workspace_id") == workspace.id and row.get("thread_id") == conversation_id
+                    and row.get("imported") is not True and not row.get("set_aside")):
                 pending += 1
                 if pending > 100:
                     raise _error("sandbox_history_unavailable")
@@ -333,6 +338,16 @@ class CanonicalDeveloperRepositoryBackend:
                 draft=normalized["draft"],
                 confirmed=True,
             )
+            try:
+                known = github.record_pull_request_result(
+                    context["resource_id"], root, repository_private["branch"], result,
+                    title=normalized["title"], draft=normalized["draft"],
+                )
+            except OSError:
+                known = None  # Opened all the same; the tab shows the form until it is remembered.
+            if known and not result.ok:
+                # The branch already had one: the Git tab now shows it.
+                return {"external_url": _text(known["url"], 2048)}
             if not result.ran or not result.ok:
                 raise _error(_pull_request_error(result))
             return {"external_url": _text(result.url, 2048)}

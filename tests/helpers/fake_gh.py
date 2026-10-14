@@ -5,8 +5,9 @@
     assert gh.calls() == [["pr", "create", "--draft", ...]]
 
 ``gh auth status`` succeeds (or fails with ``signed_in=False``), ``gh pr create`` prints ``pr_url``,
-anything else exits 0 with no output. Every call's arguments are recorded; a ``--body-file`` path is
-recorded as ``"@" + its contents``.
+anything else exits 0 with no output. With ``existing`` (``gh pr view --json`` fields), the branch
+already has that pull request: ``gh pr create`` fails as gh does and ``gh pr view`` prints it. Every
+call's arguments are recorded; a ``--body-file`` path is recorded as ``"@" + its contents``.
 """
 
 from __future__ import annotations
@@ -35,8 +36,19 @@ if args[:2] == ["auth", "status"]:
         sys.exit(0)
     print("You are not logged into any GitHub hosts.", file=sys.stderr)
     sys.exit(1)
+existing = config.get("existing")
+if args[:2] == ["pr", "create"] and existing:
+    print('a pull request for branch "branch" into branch "main" already exists:', file=sys.stderr)
+    print(existing["url"], file=sys.stderr)
+    sys.exit(1)
 if args[:2] == ["pr", "create"]:
     print(config["pr_url"])
+    sys.exit(0)
+if args[:2] == ["pr", "view"]:
+    if not existing:
+        print("no pull requests found for branch", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(existing))
     sys.exit(0)
 if args[:1] == ["--version"]:
     print("gh version 2.99.0 (fake)")
@@ -61,12 +73,14 @@ def install_fake_gh(
     *,
     pr_url: str = "https://github.com/example/repo/pull/1",
     signed_in: bool = True,
+    existing: dict | None = None,
 ) -> FakeGh:
     bin_dir = tmp_path / "fake-gh-bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     log = bin_dir / "calls.jsonl"
     config = bin_dir / "config.json"
-    config.write_text(json.dumps({"log": str(log), "pr_url": pr_url, "signed_in": signed_in}), encoding="utf-8")
+    config.write_text(json.dumps({"log": str(log), "pr_url": pr_url, "signed_in": signed_in, "existing": existing}),
+                      encoding="utf-8")
     script = bin_dir / "fake_gh.py"
     script.write_text(_SCRIPT, encoding="utf-8")
     if os.name == "nt":

@@ -2417,6 +2417,17 @@ button.dev-process-main:hover {
   font-family: var(--font-mono);
   font-size: var(--text-12);
 }
+/* The branch's pull request (B336): the transcript card, its link under the
+   title in a narrow panel. */
+@container dev (max-width: 420px) {
+  .dev-pr-card {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .dev-pr-card .transcript-card-actions {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+  }
+}
 .dev-confirm {
   display: grid;
   gap: 8px;

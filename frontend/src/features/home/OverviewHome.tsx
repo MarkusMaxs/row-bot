@@ -56,9 +56,10 @@ import {
   InlineEmpty,
   StatusDot,
 } from '../../ui/primitives';
-import { humanizeToken, parseTimestamp, relativeTime } from '../../ui/format';
+import { parseTimestamp, relativeTime } from '../../ui/format';
 import { useReducedMotion } from '../buddy/BuddyAvatar';
 import { ConversationGlyph } from '../shell/ConversationGlyph';
+import { agentWorkLabel } from '../shell/agent-activity';
 import { AppIcon } from '../apps/parts';
 import {
   conversationKinds,
@@ -1569,14 +1570,13 @@ export default function OverviewHome({
                 const kinds = conversationKinds(row);
                 const agents = view.agents.get(row.id) ?? [];
                 const live = working(row);
-                const phase = humanizeToken(row.activity_phase);
                 const line = waitingApproval(row)
                   ? interruptedWork(row)
                     ? 'Agent work was interrupted'
                     : 'Waiting for you'
                   : live
                     ? row.activity_state === 'active'
-                      ? `Agents working${phase ? ` · ${phase}` : ''}`
+                      ? agentWorkLabel(row.activity_phase)
                       : 'Replying'
                     : kinds.length
                       ? capitalize(
