@@ -382,6 +382,12 @@ def command_kind(command_type: str) -> str:
     return "plugin" if command_type.startswith("plugin.lifecycle.") else "skill" if command_type.startswith("skill.hub.") else "mcp"
 
 
+def own(command_owner: str, owner_id: str, mcp_owner_id: str) -> bool:
+    """Whether a command is the caller's: their own, or one a signed-in device of theirs started before every
+    device became the same owner (5.1 named those ``<instance>:device:<id>``; B338)."""
+    return command_owner == owner_id or command_owner.startswith(mcp_owner_id + ":device:")
+
+
 def settle(row: dict, owner_id: str, mcp_owner_id: str, validate: Callable[[], None]) -> None:
     """Check one item's unfinished changes again because the person asked. Each settles only when its
     owner proves how it ended; nothing is sent again. Only the caller's own commands (and this
@@ -390,7 +396,8 @@ def settle(row: dict, owner_id: str, mcp_owner_id: str, validate: Callable[[], N
     for target in _pending_targets(row):
         for command in pending.get(target, []):
             kind = command_kind(command["type"])
-            if command["owner_id"] != owner_id and not (kind == "mcp" and command["owner_id"] == mcp_owner_id):
+            if not own(command["owner_id"], owner_id, mcp_owner_id) and not (
+                    kind == "mcp" and command["owner_id"] == mcp_owner_id):
                 continue
             try:
                 reconcile_command(command["owner_id"], command["command_id"], kind, validate, explicit=True)

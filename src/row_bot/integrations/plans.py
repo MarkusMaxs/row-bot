@@ -53,6 +53,8 @@ _MESSAGES = {
     "plan_changed": "Something changed since you agreed. Review it again.",
     "plan_cancelled": "Stopped. Anything already done is kept.",
     "plan_expired": "This setup waited too long, so Row-Bot stopped it. Anything already done is kept.",
+    "sign_in_expired": "The sign-in wasn't finished in time, so Row-Bot stopped. Anything already done is kept; "
+                       "try again to sign in.",
     "revision_conflict": "The settings changed while setting up. Start again.",
     "mcp_connection_failed": "The connection test failed. Check the details and try again.",
     "change_unconfirmed": "Your last change didn't finish. Retry to check it again.",
@@ -566,16 +568,16 @@ def _read(ctx: Context, plan_id: str) -> dict:
                 seen = "uncertain"
         if seen == "resume":
             record.update(state="paused", pause="resume", message="")
-        elif seen == "failed":
+        elif seen in {"failed", "expired"}:
             step["state"] = "failed"
-            record.update(state="failed", pause=None, message=step["message"] or "This step could not finish.")
+            record.update(state=seen, pause=None, message=step["message"] or "This step could not finish.")
         elif seen == "uncertain" and record["state"] != "uncertain":
             record.update(state="uncertain", pause=None, message=_MESSAGES["change_unconfirmed"])
-        if seen == "failed" or json.dumps(record, sort_keys=True) != before:
+        if seen in {"failed", "expired"} or json.dumps(record, sort_keys=True) != before:
             latest = _load(ctx.owner_id, plan_id)[0]
             if latest.get("_save_id") != save_id:  # The plan moved on meanwhile: report that, never overwrite it.
                 return view(latest)
-            _save(record, terminal=seen == "failed")
+            _save(record, terminal=seen in {"failed", "expired"})
     return view(record)
 
 
@@ -773,7 +775,15 @@ def _observe_sign_in(ctx: Context, record: dict, step: dict) -> str:
     step["sign_in"]["authorization_url"] = result.get("authorization_url")
     if result["state"] == "signed_in":
         return "resume"
-    if result["state"] in {"failed", "expired", "cancelled", "disconnected"}:
+    if result["state"] == "expired":
+        # Left past its time, or a restart ended it: it can never finish. Ending it here (nothing is sent) keeps it
+        # from holding up every other change, so connecting again can sign in afresh (B338).
+        from row_bot.application.client_mcp_auth import cancel_auth
+        cancel_auth(owner_id=ctx.owner_id, command_id=record[key], validate=ctx.validate)
+        step["sign_in"]["authorization_url"] = None
+        step["message"] = _MESSAGES["sign_in_expired"]
+        return "expired"
+    if result["state"] in {"failed", "cancelled", "disconnected"}:
         step["message"] = result["message"][:512]
         return "failed"
     return ""
@@ -1087,7 +1097,7 @@ def _mcp_sign_in(ctx: Context, record: dict, step: dict) -> str:
     key = _auth_key(step)
     if record.get(key):
         seen = _observe_sign_in(ctx, record, step)
-        if seen == "failed":
+        if seen in {"failed", "expired"}:
             raise PlanError("sign_in_failed", step["message"] or "Sign-in didn't finish. Try again.")
         if seen == "resume" and step["type"] == "allow_changes":
             # Signed in to make changes: check the connection with it, then what it can do now.
@@ -1418,6 +1428,8 @@ def _mcp_change(ctx: Context, record: dict, step: dict) -> str:
         _policy(ctx, record, "enable:off", {"operation": "server_enabled", "server_id": record["server_id"], "enabled": False})
         return _disconnect(ctx, record)
     from row_bot.application import capability_configuration_controls as configuration
+    if "enable:remove" not in record["_commands"]:
+        _end_own_sign_ins(ctx, record)
 
     def build():
         revision = _revision(ctx, record)
@@ -1428,6 +1440,28 @@ def _mcp_change(ctx: Context, record: dict, step: dict) -> str:
     _completed(configuration.execute_mcp_configuration_command(owner_id=ctx.mcp_owner_id, key=command["command_id"],
         command=command, validate=ctx.validate, validate_review=_bound(review)))
     return "done"
+
+
+def _end_own_sign_ins(ctx: Context, record: dict) -> None:
+    """Removing an app ends its own unfinished sign-in first: otherwise that sign-in, which can only ever save to
+    the app being removed, holds up the removal as if another app were being set up (B338). Nothing is sent;
+    a sign-in that may already have saved its account is recorded as such, and any other app's change still
+    refuses the removal."""
+    from row_bot.application.client_mcp_auth import cancel_auth
+    from row_bot.mcp_client import targets
+    from row_bot.mcp_client.auth import McpAuthError
+    from row_bot.runtime import admissions
+    pending = admissions.read_unfinished_target_commands(targets.admission_target(record["target"]))
+    for command in pending["items"]:
+        if command["type"] != "mcp.auth.start" or not facts.own(command["owner_id"], ctx.owner_id, ctx.mcp_owner_id):
+            continue
+        receipt = admissions.read_command_receipt(command["owner_id"], command["command_id"]) or {}
+        if receipt.get("server_id") != record["server_id"]:
+            continue
+        try:
+            cancel_auth(owner_id=command["owner_id"], command_id=command["command_id"], validate=ctx.validate)
+        except McpAuthError:
+            pass  # Unreadable: it stays unfinished, and the removal says another change must finish first.
 
 
 def _disconnect(ctx: Context, record: dict, name: str = "enable:disconnect") -> str:
