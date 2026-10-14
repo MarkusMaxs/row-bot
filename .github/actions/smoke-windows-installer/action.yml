@@ -131,6 +131,10 @@ runs:
           -- "$launcher" --server --no-open --no-splash --no-ollama --port $layoutPort
         if ($LASTEXITCODE -ne 0) { throw "Installed launcher layout smoke failed." }
 
+        # Worker plugins load from a private environment made by the installed runtime.
+        & $pythonExe -I -B scripts/smoke_plugin_environment.py --app "$appDir"
+        if ($LASTEXITCODE -ne 0) { throw "Installed plugin environment smoke failed." }
+
         if ($env:BACKGROUND_UPDATE -eq "true") {
           # A real background update to the next version, then Restart now.
           $updatePort = [int]$env:SMOKE_PORT + 2

@@ -54,11 +54,13 @@ def setup(plugin_modules, tmp_path, monkeypatch):
     def run(argv, *, cwd, timeout):
         calls.append(list(argv))
         if "venv" in argv:
-            assert argv[:4] == [sys.executable, "-I", "-m", "venv"]
+            # -B: nothing may write bytecode into the installed runtime or the signed bundle.
+            assert argv[:5] == [sys.executable, "-I", "-B", "-m", "venv"]
             assert "--copies" in argv
             fake_venv(Path(argv[-1]))
             return
         assert Path(argv[0]).name in {"python", "python.exe"}
+        assert argv[1:5] == ["-I", "-B", "-m", "pip"]
         assert Path(argv[0]) != Path(sys.executable)
         assert "--isolated" in argv and "--only-binary=:all:" in argv
         assert argv[argv.index("--keyring-provider") + 1] == "disabled"

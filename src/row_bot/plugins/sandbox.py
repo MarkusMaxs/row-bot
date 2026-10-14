@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import importlib.util
 import json
 import pathlib
 import os
+import platform
+import shutil
 import stat
 import uuid
 import re
@@ -285,13 +288,85 @@ def _normalise_created_environment(environment: pathlib.Path) -> None:
     alias.unlink()
 
 
+def _embedded_runtime() -> pathlib.Path | None:
+    """The folder of a Windows embeddable runtime (the packaged Windows app), else None.
+
+    Its ``pythonXY._pth`` fixes sys.path to the app's own site-packages and code,
+    and it has no venv module. A venv made from it would still read that file, so
+    a plugin worker could import Row-Bot's libraries.
+    """
+    if os.name != "nt":
+        return None
+    base = pathlib.Path(sys.executable).resolve().parent
+    pth = base / f"python{sys.version_info.major}{sys.version_info.minor}._pth"
+    return base if pth.is_file() else None
+
+
+def _create_private_runtime(environment: pathlib.Path, base: pathlib.Path) -> None:
+    """A private copy of the embeddable interpreter whose ._pth names only its own files.
+
+    Laid out as a venv (Scripts/python.exe, Lib/site-packages, pyvenv.cfg) so
+    readiness checks and the worker treat it the same way. pyvenv.cfg has no
+    ``home``, so nothing points back at Row-Bot's runtime.
+    """
+    stdlib = f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    scripts = environment / "Scripts"
+    environment.mkdir()
+    scripts.mkdir()
+    (environment / "Lib" / "site-packages").mkdir(parents=True)
+    for source in sorted(base.iterdir()):
+        name = source.name.lower()
+        if source.is_symlink() or not source.is_file():
+            continue
+        if name in {"python.exe", "pythonw.exe", stdlib} or source.suffix.lower() in {".dll", ".pyd"}:
+            shutil.copy2(source, scripts / source.name)
+    if not (scripts / "python.exe").is_file() or not (scripts / stdlib).is_file():
+        raise EnvironmentError("environment_runtime_unavailable")
+    (scripts / f"python{sys.version_info.major}{sys.version_info.minor}._pth").write_text(
+        f"{stdlib}\n.\n", encoding="utf-8", newline="\n")
+    (environment / "pyvenv.cfg").write_text(
+        "include-system-site-packages = false\n"
+        f"version = {platform.python_version()}\n"
+        "row-bot-runtime = private-copy\n", encoding="utf-8", newline="\n")
+
+
+def _copy_shared_library(environment: pathlib.Path) -> None:
+    """Give a copied macOS interpreter the libpython it loads from beside itself.
+
+    The packaged macOS runtime links ``@rpath/libpythonX.Y.dylib`` with
+    ``@executable_path/../lib`` as its rpath, so the interpreter ``venv --copies``
+    makes cannot start without its own copy. A framework build links an absolute
+    path and keeps a symlink there instead; it needs nothing.
+    """
+    if sys.platform != "darwin":
+        return
+    name = f"libpython{sys.version_info.major}.{sys.version_info.minor}.dylib"
+    source = pathlib.Path(sys.executable).resolve().parent.parent / "lib" / name
+    if source.is_symlink() or not source.is_file():
+        return
+    _checked_path(environment, environment / "lib")
+    shutil.copy2(source, environment / "lib" / name)
+
+
 def create_environment(environment: pathlib.Path) -> None:
     """Create a fresh fixed-location candidate, never a host or shared target."""
     environment = _candidate_location(environment)
     _checked_path(pathlib.Path(environment.anchor), environment.parent)
     if environment.exists() or environment.is_symlink():
         raise EnvironmentError("environment_already_exists")
-    _run([sys.executable, "-I", "-m", "venv", "--copies", str(environment)], cwd=environment.parent, timeout=120)
+    embedded = _embedded_runtime()
+    if embedded is not None:
+        _create_private_runtime(environment, embedded)
+    else:
+        # -B: the base runtime is an installed version or the signed macOS
+        # bundle, and -I ignores PYTHONDONTWRITEBYTECODE.
+        argv = [sys.executable, "-I", "-B", "-m", "venv", "--copies"]
+        if importlib.util.find_spec("ensurepip") is None:
+            # Packaged macOS and Linux runtimes ship without ensurepip. Plugin
+            # environments install no dependencies, so they need no pip.
+            argv.append("--without-pip")
+        _run([*argv, str(environment)], cwd=environment.parent, timeout=120)
+        _copy_shared_library(environment)
     _normalise_created_environment(environment)
     _target(environment)
 
@@ -381,7 +456,7 @@ def _resolve_dependencies(plugin_deps: list[str], environment: pathlib.Path) -> 
             constraint, report = root / "constraints.txt", root / "report.json"
             constraint.write_text(_constraint_text(core), encoding="utf-8")
             if values:
-                _run([str(python), "-I", "-m", "pip", "--isolated", "install", "--dry-run", "--ignore-installed", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--constraint", str(constraint), "--report", str(report), *values], cwd=root, timeout=60)
+                _run([str(python), "-I", "-B", "-m", "pip", "--isolated", "install", "--dry-run", "--ignore-installed", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--constraint", str(constraint), "--report", str(report), *values], cwd=root, timeout=60)
                 distributions = _validated_distributions(_read_report(report), values, core)
             else:
                 distributions = ()
@@ -454,7 +529,7 @@ def install_dependencies(plugin_deps: list[str], *, environment: pathlib.Path | 
             requirements = root / "requirements.txt"
             requirements.write_text("".join(f"{name}=={version} --hash=sha256:{digest}\n" for name, version, digest in plan.distributions), encoding="utf-8")
             if plan.distributions:
-                _run([str(python), "-I", "-m", "pip", "--isolated", "install", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--no-deps", "--require-hashes", "--constraint", str(constraints), "--requirement", str(requirements)], cwd=root, timeout=300)
+                _run([str(python), "-I", "-B", "-m", "pip", "--isolated", "install", "--no-input", "--keyring-provider", "disabled", "--disable-pip-version-check", "--no-cache-dir", "--only-binary=:all:", "--no-deps", "--require-hashes", "--constraint", str(constraints), "--requirement", str(requirements)], cwd=root, timeout=300)
         if _target(environment)[1] != identity:
             raise EnvironmentError("environment_changed")
         expected = baseline | {name: version for name, version, _ in plan.distributions}
