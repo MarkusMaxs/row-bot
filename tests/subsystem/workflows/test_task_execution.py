@@ -365,7 +365,7 @@ def test_captured_prompt_and_policy_survive_edit_after_claim(runtime, monkeypatc
     tasks = runtime[0]
     original = tasks.run_task_background
     def race(*args, **kwargs):
-        tasks.update_task(runtime[3], prompts=["Unreviewed replacement"], safety_mode="allow_all")
+        tasks.update_task(runtime[3], prompts=["Unreviewed replacement"], safety_mode="full")
         return original(*args, **kwargs)
     monkeypatch.setattr(tasks, "run_task_background", race)
     result = start(runtime)
@@ -506,7 +506,7 @@ def test_approval_resumes_captured_steps_policy_once_after_later_task_edit(runti
     approval = pause(runtime)
     assert approval.response_available and approval.approval_mode == "block"
     assert "resume_token" not in json.dumps(asdict(approval))
-    runtime[0].update_task(runtime[3], steps=[{"id": "new", "type": "prompt", "prompt": "Unreviewed replacement"}], safety_mode="allow_all")
+    runtime[0].update_task(runtime[3], steps=[{"id": "new", "type": "prompt", "prompt": "Unreviewed replacement"}], safety_mode="full")
     result = execution.respond_task_approval(runtime[3], "reviewed-run", approval.id,
         expected_revision=approval.revision, approved=True, validate=lambda: None)
     assert result.run.status == "completed"
@@ -723,7 +723,7 @@ def test_graph_interrupt_resume_keeps_captured_policy_and_one_owner_through_rema
     runtime[0].update_task(runtime[3], prompts=["First graph prompt", "Captured tail"], safety_mode="approve")
     assert start(runtime).run.status == "paused"
     card = execution.list_task_approvals(runtime[3], "reviewed-run").items[0]
-    runtime[0].update_task(runtime[3], prompts=["Replacement"], safety_mode="allow_all")
+    runtime[0].update_task(runtime[3], prompts=["Replacement"], safety_mode="full")
     result = execution.respond_task_approval(runtime[3], "reviewed-run", card.id,
         expected_revision=card.revision, approved=True, validate=lambda: None)
     assert result.run.status == "completed"

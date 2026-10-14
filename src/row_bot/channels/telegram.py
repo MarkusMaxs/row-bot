@@ -963,6 +963,12 @@ def _format_interrupt(data) -> str:
         elif args:
             for k, v in args.items():
                 parts.append(f"• <b>{_escape_html(str(k))}</b>: {_escape_html(str(v))}")
+        # Under Auto: why the reviewer asked rather than approving it.
+        from row_bot.approval_messages import reviewer_note
+
+        note = reviewer_note(item)
+        if note:
+            parts.append(_escape_html(note))
 
     return "\n".join(parts)
 

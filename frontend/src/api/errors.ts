@@ -615,6 +615,18 @@ const CATALOG: Record<string, Entry> = {
     'An approval is waiting in this conversation. Answer it first.',
     'review',
   ],
+  full_autonomy_unconfirmed: [
+    'Turn on Full autonomy from its dialog the first time; it says what it skips.',
+    'review',
+  ],
+  full_autonomy_shared_conversation: [
+    'Other people share this conversation, so it runs on Auto at most. Full autonomy is only for your own chats.',
+    'none',
+  ],
+  full_autonomy_person_only: [
+    'Only you can turn on Full autonomy, in Row-Bot.',
+    'none',
+  ],
 
   // Conversations, sending and waiting messages
   checkpoint_unavailable: [

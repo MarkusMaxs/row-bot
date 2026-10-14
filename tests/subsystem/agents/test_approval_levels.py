@@ -149,3 +149,25 @@ def test_a_resumed_run_takes_the_persons_answer_and_never_asks_the_reviewer_agai
     final = graph.invoke(Command(resume=False), config)
     assert final["results"] == [False]
     assert len(reviewer["seen"]) == 1
+
+
+def test_the_card_and_a_paused_runs_message_say_why_the_reviewer_asked():
+    from row_bot.application.approval_projection import project_approval_context
+    from row_bot.approval_messages import compact_message, normalize_interrupts
+
+    asked = {**_PAYLOAD, "review": {"decision": "ask", "reason": "You asked for a draft, not to send it."}}
+    assert project_approval_context(asked)["reviewer_reason"] == "You asked for a draft, not to send it."
+    assert "reviewer_reason" not in project_approval_context(dict(_PAYLOAD))  # Ask: nothing to say.
+    message = compact_message(normalize_interrupts([asked], source_label="Helper"))
+    assert "The reviewer asked you: You asked for a draft, not to send it." in message
+
+
+def test_the_activity_reads_who_let_an_action_run():
+    """The conversation's activity shows the result's approval line apart from the result (B235)."""
+    from row_bot.application.conversation_traces import classify_tool_result
+
+    for line in ("Approval: approved by the reviewer: You asked for it", "Approval: allowed by Full autonomy"):
+        assert classify_tool_result(f"{line}\nSent.") == "succeeded"
+    assert classify_tool_result(
+        "Approval: asked; denied by you — did not run. The reviewer asked you: Not asked\nAction cancelled by user."
+    ) == "cancelled"

@@ -236,6 +236,7 @@ export default function BuddyOverlay({
     state.workspace?.actions.find((action) => action.action === 'send')?.ready,
   );
   const turnInFlight = live || phase === 'approval';
+  const fullAutonomy = turnInFlight && controls?.approval_mode === 'full';
   const canSend =
     Boolean(id && conversation) &&
     state.status === 'ready' &&
@@ -573,7 +574,13 @@ export default function BuddyOverlay({
         </span>
         <div className="buddy-overlay-heading">
           <h1 title={title}>{title}</h1>
-          <p>{statusLine}</p>
+          <p>
+            {statusLine}
+            {fullAutonomy && (
+              // Running work on Full autonomy says so, in the warning tone.
+              <span className="buddy-overlay-full"> · Full autonomy</span>
+            )}
+          </p>
         </div>
         <div
           className="buddy-overlay-actions"

@@ -654,7 +654,7 @@ class McpClientFoundationTests(unittest.TestCase):
                      patch.object(agent, "get_agent_system_prompt", return_value="test prompt"), \
                      patch.object(agent, "create_react_agent", side_effect=_capture_agent), \
                      patch.object(agent, "interrupt", side_effect=lambda payload: interrupt_calls.append(payload) or True), \
-                     patch.object(approval_review, "review", side_effect=review), \
+                     patch.object(approval_review, "review", side_effect=review),                      patch.object(agent, "register_exact_tool_request", return_value="allow"), \
                      patch.object(mcp_runtime, "get_langchain_tools", return_value=[tool]), \
                      patch.object(mcp_runtime, "_get_effective_config",
                                   return_value={"enabled": True, "servers": {"Manual": cfg}}):

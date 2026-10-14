@@ -5256,6 +5256,8 @@ class TaskSettingsSnapshot(WireModel):
     profile_available: bool
     webhook_configured: bool
     conversation_id: OpaqueId | None
+    # The person turned Full autonomy on once on this install: choosing it needs no dialog again.
+    full_autonomy_confirmed: bool = False
 
 
 class TaskSettingsUpdatePayload(WireModel):

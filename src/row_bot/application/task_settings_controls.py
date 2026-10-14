@@ -39,6 +39,8 @@ class TaskSettingsSnapshot:
     profile_available: bool
     webhook_configured: bool
     conversation_id: str | None
+    # The person turned Full autonomy on once on this install: choosing it needs no dialog again.
+    full_autonomy_confirmed: bool = False
 
 
 def _identity(value: str) -> None:
@@ -103,7 +105,14 @@ def _snapshot(task_id: str, task: dict, revision: str, profile: dict | None,
         bool(profile and profile["profile"].get("enabled", True)),
         bool(isinstance(trigger, dict) and trigger.get("type") == "webhook" and trigger.get("secret")),
         conversation,
+        _full_autonomy_confirmed(),
     )
+
+
+def _full_autonomy_confirmed() -> bool:
+    from row_bot.full_autonomy import is_confirmed
+
+    return is_confirmed()
 
 
 def _read(task_id: str, values: dict | None = None) -> tuple[dict, str, dict | None]:
