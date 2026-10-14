@@ -22,6 +22,8 @@ from typing import Iterable
 logger = logging.getLogger(__name__)
 
 PENDING_DIR = ".restore-pending"
+# An archive sent from another device waits here to be checked and staged.
+UPLOADS_DIR = ".restore-uploads"
 PENDING_MARKER = "restore-pending.json"
 RESULT_FILE = "restore-result.json"
 ASIDE_PREFIX = "before-restore-"
@@ -39,7 +41,7 @@ LOCAL_ENTRIES = frozenset({
     "cache", "font_cache", "vector_store", "memory_vectors", "document_index", "node",
     "runtimes", "piper", "kokoro", "logs", "plugin_logs", "crashes", "feedback_reports",
     "recovery", "evolution_backups", "migration-backups", "migration_reports", "backups",
-    "doc_staging", "stale_plugins", "document_ingestion", ".checkpoint-locks", PENDING_DIR,
+    "doc_staging", "stale_plugins", "document_ingestion", ".checkpoint-locks", PENDING_DIR, UPLOADS_DIR,
     "backup_state.json", RESULT_FILE, "launcher_state.json",
 })
 LOCAL_NAMES = re.compile(

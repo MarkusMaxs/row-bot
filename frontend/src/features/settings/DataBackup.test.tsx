@@ -49,6 +49,15 @@ function owner(first: DataBackupState = idle) {
     read: vi.fn(async () => first),
     send: vi.fn(async () => receipt(first)),
     pick: vi.fn(async () => 'grant-1' as string | null | 'unavailable'),
+    download: vi.fn(async (_name: string) => null as string | null),
+    upload: vi.fn(
+      async (
+        _file: File,
+        _progress: (sent: number) => void,
+        _signal: AbortSignal,
+      ) => 'upload-1',
+    ),
+    discard: vi.fn(async (_upload: string) => undefined),
   } satisfies DataBackupOwner;
 }
 
@@ -198,16 +207,17 @@ it('refused archives and other devices explain themselves', async () => {
   );
   view.unmount();
 
-  const browser = owner();
-  render(<DataBackup owner={browser} canPick={false} />);
-  expect(
-    await screen.findByText(
-      'Restoring picks the backup file in the Row-Bot desktop app on the computer Row-Bot runs on.',
-    ),
-  ).toBeVisible();
-  expect(
-    screen.queryByRole('button', { name: 'Restore from backup…' }),
-  ).toBeNull();
+  // The desktop app's picker couldn't open.
+  const desktop = owner();
+  desktop.pick.mockResolvedValueOnce('unavailable');
+  render(<DataBackup owner={desktop} />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Restore from backup…' }),
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Restoring picks the backup file in the Row-Bot desktop app on the computer Row-Bot runs on.',
+  );
+  expect(desktop.send).not.toHaveBeenCalled();
 });
 
 it('another device backs up too, without the file manager of the computer it runs on', async () => {
@@ -249,6 +259,175 @@ it('another device backs up too, without the file manager of the computer it run
       { exact: false },
     ),
   ).toBeVisible();
-  // Show in folder opens the file manager on that computer's screen.
+  // Show in folder opens the file manager on that computer's screen; this
+  // device downloads the backup instead.
   expect(screen.queryByRole('button', { name: 'Show in folder' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Download' })).toBeEnabled();
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+const away: DataBackupState = {
+  ...idle,
+  reveal_available: false,
+  last_backup_at: '2026-10-11T09:00:00',
+  last_backup_name: 'Row-Bot backup 2026-10-11 0900.zip',
+};
+
+it('downloads the last backup by its name where the folder is out of reach', async () => {
+  const fake = owner(away);
+  const saving = deferred<string | null>();
+  fake.download.mockReturnValueOnce(saving.promise);
+  render(<DataBackup owner={fake} canPick={false} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
+  expect(fake.download).toHaveBeenCalledWith(
+    'Row-Bot backup 2026-10-11 0900.zip',
+  );
+  expect(screen.getByRole('button', { name: 'Downloading…' })).toBeDisabled();
+  await act(async () => saving.resolve(null));
+  expect(screen.getByRole('button', { name: 'Download' })).toBeEnabled();
+  expect(screen.queryByRole('alert')).toBeNull();
+  // The browser refused to save without a click: it says what to do.
+  fake.download.mockResolvedValueOnce('user_gesture_required');
+  fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Click Download again to save the backup.',
+  );
+});
+
+it('a backup gone since it was shown is said so, and the page catches up', async () => {
+  const fake = owner(away);
+  fake.download.mockRejectedValueOnce({ code: 'backup_unavailable' });
+  render(<DataBackup owner={fake} canPick={false} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Download' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    "That backup isn't in the Backups folder any more.",
+  );
+  expect(fake.read).toHaveBeenCalledTimes(2);
+});
+
+it('the computer Row-Bot runs on shows the folder rather than downloading', async () => {
+  render(<DataBackup owner={owner({ ...away, reveal_available: true })} />);
+  expect(await screen.findByText(/Last backup:/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
+});
+
+it('another device sends a backup, then restores it on restart only after confirming', async () => {
+  const fake = owner();
+  const sending = deferred<string>();
+  fake.upload.mockImplementationOnce(async (_file, progress) => {
+    progress(1024 * 1024);
+    return sending.promise;
+  });
+  render(<DataBackup owner={fake} canPick={false} />);
+  expect(
+    await screen.findByText(
+      /Sends the backup file to Row-Bot and checks it first\./,
+    ),
+  ).toBeVisible();
+  const file = new File([new Uint8Array(4 * 1024 * 1024)], 'Phone backup.zip', {
+    type: 'application/zip',
+  });
+  fireEvent.change(screen.getByLabelText('Backup file to restore'), {
+    target: { files: [file] },
+  });
+  expect(
+    await screen.findByText(/Sending the backup… 25% of 4\.0 MB/),
+  ).toBeVisible();
+  expect(fake.upload.mock.calls[0][0]).toBe(file);
+  expect(fake.send).not.toHaveBeenCalled();
+
+  fake.send.mockResolvedValueOnce(
+    receipt(idle, { review: { ...review, source_name: 'Phone backup.zip' } }),
+  );
+  await act(async () => sending.resolve('upload-7'));
+  const group = await screen.findByRole('group', {
+    name: 'Restore this backup?',
+  });
+  expect(fake.send).toHaveBeenCalledWith('inspect_restore', {
+    upload_id: 'upload-7',
+  });
+  expect(group).toHaveTextContent('Restore “Phone backup.zip”?');
+  const pending: DataBackupState = {
+    ...idle,
+    pending_restore: {
+      created_at: '2026-10-11T09:05:00',
+      source_name: 'Phone backup.zip',
+      sign_in_again: [],
+    },
+  };
+  fake.send.mockResolvedValueOnce(receipt(pending, { status: 'accepted' }));
+  fireEvent.click(
+    within(group).getByRole('button', { name: 'Restore on restart' }),
+  );
+  expect(
+    await screen.findByText(/will apply the next time Row-Bot starts\.$/),
+  ).toBeVisible();
+  expect(fake.send).toHaveBeenLastCalledWith('restore', {
+    review_id: review.review_id,
+  });
+  // Row-Bot deletes a staged archive itself.
+  expect(fake.discard).not.toHaveBeenCalled();
+});
+
+it('a stopped, refused or dismissed backup that was sent is let go', async () => {
+  const fake = owner();
+  render(<DataBackup owner={fake} canPick={false} />);
+  const choose = async (name: string) => {
+    fireEvent.change(await screen.findByLabelText('Backup file to restore'), {
+      target: { files: [new File(['zip'], name)] },
+    });
+  };
+  // Stopped while sending: no complaint, and nothing to check.
+  fake.upload.mockImplementationOnce(
+    (_file, _progress, signal) =>
+      new Promise((_resolve, reject) =>
+        signal.addEventListener('abort', () =>
+          reject(new DOMException('Cancelled', 'AbortError')),
+        ),
+      ),
+  );
+  await choose('first.zip');
+  fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+  expect(
+    await screen.findByRole('button', { name: 'Restore from backup…' }),
+  ).toBeEnabled();
+  expect(fake.upload.mock.calls[0][2].aborted).toBe(true);
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(fake.send).not.toHaveBeenCalled();
+
+  // Not a Row-Bot backup: said so, and let go.
+  fake.upload.mockResolvedValueOnce('upload-2');
+  fake.send.mockRejectedValueOnce({ code: 'backup_not_row_bot' });
+  await choose('photos.zip');
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    "That file isn't a Row-Bot backup.",
+  );
+  expect(fake.discard).toHaveBeenLastCalledWith('upload-2');
+
+  // Checked, then not wanted.
+  fake.upload.mockResolvedValueOnce('upload-3');
+  fake.send.mockResolvedValueOnce(receipt(idle, { review }));
+  await choose('old.zip');
+  const group = await screen.findByRole('group', {
+    name: 'Restore this backup?',
+  });
+  fireEvent.click(within(group).getByRole('button', { name: 'Cancel' }));
+  expect(fake.discard).toHaveBeenLastCalledWith('upload-3');
+
+  // Too large for Row-Bot to restore: said before anything is checked.
+  fake.upload.mockRejectedValueOnce({ code: 'backup_too_large' });
+  await choose('huge.zip');
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'That backup is larger than Row-Bot can restore.',
+  );
+  expect(fake.send).toHaveBeenCalledTimes(2);
 });

@@ -50,6 +50,19 @@
       ],
       "default": null,
       "title": "Review Id"
+    },
+    "upload_id": {
+      "anyOf": [
+        {
+          "format": "uuid",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Upload Id"
     }
   },
   "required": [

@@ -450,10 +450,16 @@ settings, read through SQLite's backup API — and never keys, sign-ins,
 browser or channel sessions, caches, logs or runtime files; webhook secrets
 and MCP headers/env are blanked, and the archive's manifest lists what to set
 up again. The page shows the last backup time and, in the desktop app on this
-computer, Show in folder (it opens the file manager there). A backup never
-holds its own folder, the workspace or, when the home folder is the data
-folder (Docker), the home's hidden files; a restore leaves them where they
-are. Restore from backup is desktop-only: one picked .zip (a one-use grant, never a path)
+computer, Show in folder (it opens the file manager there); any other device
+gets Download instead, which streams the last backup (by the name on screen,
+only from the Backups folder, the session checked before each 1 MiB chunk). A
+backup never holds its own folder, the workspace or, when the home folder is
+the data folder (Docker), the home's hidden files; a restore leaves them where
+they are. Restore from backup takes one .zip: in the desktop app a picked file
+(a one-use grant, never a path); on any other device the file is sent in
+1 MiB chunks to a private staging file in the data folder's kept-in-place
+`.restore-uploads` (at most the largest restorable backup, deleted when
+cancelled, refused, staged or expired). Either way it
 is checked (foreign, newer, unsafe or secret-bearing archives are refused),
 described with what to sign in to again, and staged only after "Restore on
 restart" confirms that exact review; a staged restore can be cancelled. On

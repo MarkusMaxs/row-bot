@@ -11,7 +11,9 @@ workflows. The manifest lists what will need signing in again.
 A restore validates the archive (a Row-Bot backup, not newer than this app,
 safe paths, no secrets) before anything is staged, and only a confirmed
 command stages it; it is applied on the next start with the current profile
-kept aside (``profile_restore.apply_pending``).
+kept aside (``profile_restore.apply_pending``). An archive sent from another
+device is validated the same way, from a staging file in the kept-in-place
+``profile_restore.UPLOADS_DIR`` that no backup holds and no restore touches.
 """
 from __future__ import annotations
 

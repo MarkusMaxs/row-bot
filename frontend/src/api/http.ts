@@ -1984,6 +1984,81 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
+  downloadDataBackup(name: string, signal?: AbortSignal) {
+    return wire.downloadDataBackup(this.base, this.session(), name, signal);
+  }
+  /** Send an archive to restore from, chunk by chunk; resolves to its upload id. */
+  async uploadDataBackup(
+    file: File,
+    progress?: (sent: number) => void,
+    signal?: AbortSignal,
+  ) {
+    if (file.size < 1) throw { code: 'backup_not_row_bot' };
+    const proof = this.session();
+    signal?.throwIfAborted();
+    const name =
+      [...file.name.replace(/[\\/:\p{Cc}]/gu, '_')].slice(0, 200).join('') ||
+      'backup.zip';
+    const upload = await wire.beginDataBackupUpload(
+      this.base,
+      proof,
+      {
+        client_session_id: proof.client_session_id,
+        name,
+        size_bytes: file.size,
+      },
+      signal,
+    );
+    const step = upload.chunk_bytes ?? 1048576;
+    let sent = upload.received_bytes;
+    let failures = 0;
+    try {
+      while (sent < file.size) {
+        try {
+          const view = await wire.uploadDataBackupChunk(
+            this.base,
+            proof,
+            upload.upload_id,
+            sent,
+            file.slice(sent, sent + step),
+            signal,
+          );
+          sent = view.received_bytes;
+          failures = 0;
+          progress?.(sent);
+        } catch (error) {
+          // A dropped connection or a busy server: carry on from what it has.
+          const retry =
+            error instanceof TypeError ||
+            (error as { retryable?: unknown }).retryable === true;
+          if (signal?.aborted || !retry || ++failures > 3) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 1000 * failures));
+          sent = (
+            await wire.getDataBackupUpload(
+              this.base,
+              proof,
+              upload.upload_id,
+              signal,
+            )
+          ).received_bytes;
+        }
+      }
+      return upload.upload_id;
+    } catch (error) {
+      await wire
+        .cancelDataBackupUpload(this.base, proof, upload.upload_id)
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+  cancelDataBackupUpload(upload: string, signal?: AbortSignal) {
+    return wire.cancelDataBackupUpload(
+      this.base,
+      this.session(),
+      upload,
+      signal,
+    );
+  }
   insights(signal?: AbortSignal) {
     return wire.getInsights(this.base, this.session(), signal);
   }

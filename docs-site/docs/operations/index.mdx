@@ -19,6 +19,8 @@ Remote access remains off by default in ordinary desktop launches. Server operat
 
 **Settings › Data › Back up and restore** makes a copy of your Row-Bot on this computer, without passwords or sign-ins. Choose **Back up now**; the command palette finds it as "back up". Files a reply was still uploading are left out, and a file that can't be read is named in the result ("Left out a file that couldn't be read: …") instead of stopping the backup.
 
+The backup is saved in the workspace's Backups folder. In the desktop app on the computer Row-Bot runs on, **Show in folder** opens it there. On any other device, such as a phone, another computer's browser, or a server or Docker install, **Download** saves the last backup on that device.
+
 To copy everything by hand instead:
 
 1. Stop running workflows, channels, servers, and active replies.
@@ -29,7 +31,9 @@ To copy everything by hand instead:
 
 ## Restore
 
-**Restore from backup** on the same page restores a backup made there; it needs the Row-Bot desktop app and lists what to set up again afterwards, such as passwords and sign-ins. To restore a hand-made copy, restore related databases and files as one set while Row-Bot is closed. Point a test launch at the restored directory first, then check conversations, providers, workflows, Knowledge, documents, designs, code folders, plugins, MCP, and channels. Reconnect secrets that were stored in an OS keychain and were not included in the backup.
+**Restore from backup** on the same page restores a backup made there. In the desktop app you pick the file; on any other device you choose it in the browser, and it's sent to Row-Bot first (**Stop** cancels the transfer). Row-Bot checks the file, refuses one that isn't a Row-Bot backup, comes from a newer Row-Bot, or is damaged, and lists what to set up again afterwards, such as passwords and sign-ins. Nothing changes until you choose **Restore on restart**: the restore applies the next time Row-Bot starts, with your current profile kept aside in a `before-restore-<time>` folder. A sent file you don't restore is deleted.
+
+To restore a hand-made copy, restore related databases and files as one set while Row-Bot is closed. Point a test launch at the restored directory first, then check conversations, providers, workflows, Knowledge, documents, designs, code folders, plugins, MCP, and channels. Reconnect secrets that were stored in an OS keychain and were not included in the backup.
 
 ## Import From Another Assistant
 
