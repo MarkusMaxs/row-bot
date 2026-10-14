@@ -494,19 +494,24 @@ def read_item(*, owner_id: str, item_id: str, revision: str = "", intent: str = 
     """One entry with its unfinished plan, or the plan for its next action (or a requested
     intent). The second value is the plan still to consent to; reading never sends a command."""
     validate()
+    context = context or plans.Context(owner_id, owner_id, validate)
+    # Its open plan is read first: reading settles what the owners can prove (a sign-in left past its time ends,
+    # B338), so the item then reads as it now is.
+    current = plans.open_plan(context, item_id)
     try:
         row, reference = _resolve(owner_id, item_id, revision, validate)
     except ClientPlatformError as error:
         # Gone, but with a change of this owner's left unfinished on it: the page shows that change.
-        left = next((found for found in plans.left_behind(context or plans.Context(owner_id, owner_id, validate),
-                                                          lambda i: i != item_id) if found[0]["id"] == item_id), None)
+        left = next((found for found in plans.left_behind(context, lambda i: i != item_id) if found[0]["id"] == item_id),
+                    None)
         if error.code != "not_found" or left is None:
             raise
         about = {"license": "", "source_url": "", "pin": "", "identifier": item_id, "destination": "", "runs_locally": False,
                  "saved_key": False, "signs_in": False, "signed_in": False, "requirements": [], "access": None, "package": "",
                  "files": [], "profiles": [], "ways": [], "actions": [], "settings": [], "views": None}
         return {"entry": entry(left[0]), "plan": left[1], "about": about}, None
-    current = plans.open_plan(context or plans.Context(owner_id, owner_id, validate), row["id"])
+    if row["id"] != item_id:  # A catalog entry already set up here: its saved connection's plan.
+        current = plans.open_plan(context, row["id"])
     if current is not None:
         return {"entry": entry(row), "plan": current, "about": _about(row, validate, current, reference.get("cfg"))}, None
     plan = plans.compute(row, reference, intent=intent, cleanup=cleanup)

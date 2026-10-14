@@ -82,13 +82,13 @@ def hosted(owner, monkeypatch):
     secret_store._set_backend_for_tests(None)
 
 
-def context(redirect_uri=CALLBACK, **fields):
-    return plans.Context(owner_id="owner", mcp_owner_id="owner", validate=lambda: None,
+def context(redirect_uri=CALLBACK, owner_id="owner", **fields):
+    return plans.Context(owner_id=owner_id, mcp_owner_id="owner", validate=lambda: None,
                          redirect_uri=redirect_uri, **fields)
 
 
-def item_id():
-    return next(row for row in facts.inventory()[0] if row["name"] == "Notes")["id"]
+def item_id(name="Notes"):
+    return next(row for row in facts.inventory()[0] if row["name"] == name)["id"]
 
 
 def approve(plan):
@@ -108,9 +108,9 @@ def signed_in(plan_id):
     raise AssertionError("sign-in did not finish")
 
 
-def until_waiting(plan_id, kind="sign_in"):
+def until_waiting(plan_id, kind="sign_in", ctx=None):
     for _ in range(200):
-        plan = plans.read_plan(context(), plan_id)
+        plan = plans.read_plan(ctx or context(), plan_id)
         step = next(s for s in plan["steps"] if s["type"] == kind)
         if step["sign_in"]["authorization_url"]:
             return plan
@@ -151,14 +151,17 @@ def test_a_check_that_times_out_says_so(hosted, monkeypatch):
     assert failed["state"] == "failed" and "didn't answer in time" in failed["message"]
 
 
-def test_retry_ends_a_sign_in_a_restart_interrupted_so_other_apps_can_be_added(hosted):
+@pytest.mark.parametrize("started_by", ["owner", "owner:device:phone"])
+def test_retry_ends_a_sign_in_a_restart_interrupted_so_other_apps_can_be_added(hosted, started_by):
     """Live: Row-Bot restarted while Stripe waited for its browser sign-in. The sign-in could never finish,
-    Retry left it unfinished, and every other app's setup was refused until it was cancelled."""
+    Retry left it unfinished, and every other app's setup was refused until it was cancelled. B338: one a
+    signed-in device started in 5.1, when each device's changes had their own owner, is the owner's too."""
     hosted(dcr=True)
-    _, plan = api.read_item(owner_id="owner", item_id=item_id())
+    starter = context(owner_id=started_by)
+    _, plan = api.read_item(owner_id=started_by, item_id=item_id())
     waiting = str(uuid4())
-    api.start_plan(context(), plan_id=waiting, item_id=item_id(), digest=plan["digest"])
-    until_waiting(waiting)
+    api.start_plan(starter, plan_id=waiting, item_id=item_id(), digest=plan["digest"])
+    until_waiting(waiting, ctx=starter)
     with client_mcp_auth._LOCK:
         flows = dict(client_mcp_auth._FLOWS)
         client_mcp_auth._FLOWS.clear()  # A restart: the browser step's flow is gone with the old process.
@@ -171,6 +174,100 @@ def test_retry_ends_a_sign_in_a_restart_interrupted_so_other_apps_can_be_added(h
         for flow in flows.values():  # The old process's browser wait ends with it.
             flow.state = "cancelled"
             flow.event.set()
+
+
+RECOVERING = {"configuration_recovery", "change_unconfirmed", "change_in_progress"}
+
+
+def waiting_flow(owner_id="owner"):
+    """The sign-in this test waits on (earlier tests' finished ones stay listed until a new sign-in prunes them)."""
+    with client_mcp_auth._LOCK:
+        return next(f for f in client_mcp_auth._FLOWS.values() if f.owner_id == owner_id and f.state == "waiting")
+
+
+def test_a_sign_in_left_past_its_time_stops_the_setup_and_connecting_again_signs_in_afresh(hosted):
+    """B338: Sentry's sign-in was left unfinished (its window is 5 minutes). The app then stayed on "Finishing your
+    last change…", and a fresh connect was refused as if another app were being signed in to."""
+    hosted(dcr=True)
+    _, plan = api.read_item(owner_id="owner", item_id=item_id())
+    first = str(uuid4())
+    api.start_plan(context(), plan_id=first, item_id=item_id(), digest=plan["digest"])
+    until_waiting(first)
+    waiting_flow().created -= client_mcp_auth._TTL + 1  # Five minutes pass without the person finishing.
+    found, fresh = api.read_item(owner_id="owner", item_id=item_id())  # They come back to the app's page.
+    stopped = plans.read_plan(context(), first)
+    assert stopped["state"] == "expired" and "wasn't finished in time" in stopped["message"]
+    assert not {b["code"] for b in found["entry"]["blockers"]} & RECOVERING  # No stuck banner.
+    assert found["entry"]["next_action"]["kind"] == "continue_setup" and fresh is not None  # Its setup is offered.
+    assert not config.configuration_recovery_required()
+    again = str(uuid4())
+    api.start_plan(context(), plan_id=again, item_id=item_id(), digest=fresh["digest"])
+    try:
+        until_waiting(again)  # A new sign-in page opens.
+    finally:
+        plans.cancel(context(), again)
+
+
+def test_retry_ends_a_sign_in_whose_end_could_not_be_saved(hosted, monkeypatch):
+    """B338: a sign-in that ended while its end couldn't be recorded stayed unfinished, and Retry never ended it
+    while Row-Bot kept running."""
+    hosted(dcr=True)
+    _, plan = api.read_item(owner_id="owner", item_id=item_id())
+    waiting = str(uuid4())
+    api.start_plan(context(), plan_id=waiting, item_id=item_id(), digest=plan["digest"])
+    until_waiting(waiting)
+    flow = waiting_flow()
+    complete = admissions.complete_command
+
+    def lost(owner_id, key, result):
+        if key == flow.command_id:
+            raise OSError("lost completion")
+        return complete(owner_id, key, result)
+    with monkeypatch.context() as fault:
+        fault.setattr(admissions, "complete_command", lost)
+        client_mcp_auth.accept_callback(state=flow.oauth_state, error="access_denied")  # Declined in the browser.
+        for _ in range(200):
+            if flow.finished:
+                break
+            time.sleep(0.02)
+    assert flow.finished and config.configuration_recovery_required()
+    found = api.settle_item(context(), item_id=item_id())  # The person presses Retry.
+    assert not config.configuration_recovery_required()
+    assert not {b["code"] for b in found["entry"]["blockers"]} & RECOVERING
+    assert not config.read_saved_configuration().document["servers"]["Notes"].get("auth")  # Nothing saved.
+
+
+@pytest.mark.parametrize("whose", ["its own", "another app's"])
+def test_removing_an_app_ends_its_own_unfinished_sign_in_but_not_another_apps(hosted, whose):
+    """B338: Remove was refused with "Another app is still being set up or signed in to" while the only sign-in
+    left unfinished was the app's own (one a 5.1 device started, its setup out of this device's sight)."""
+    server = hosted(dcr=True)
+    document = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
+    document["servers"]["Docs"] = dict(document["servers"]["Notes"])
+    config.CONFIG_PATH.write_text(json.dumps(document), encoding="utf-8")
+    facts.invalidate()
+    phone = context(owner_id="owner:device:phone")
+    signing = item_id("Notes" if whose == "its own" else "Docs")
+    _, plan = api.read_item(owner_id=phone.owner_id, item_id=signing)
+    waiting = str(uuid4())
+    api.start_plan(phone, plan_id=waiting, item_id=signing, digest=plan["digest"])
+    until_waiting(waiting, ctx=phone)
+    flow = waiting_flow(phone.owner_id)
+    _, remove = api.read_item(owner_id="owner", item_id=item_id(), intent="remove")
+    try:
+        result = api.start_plan(context(), plan_id=str(uuid4()), item_id=item_id(), intent="remove",
+                                digest=remove["digest"])
+        servers = config.read_saved_configuration().document["servers"]
+        if whose == "its own":
+            assert result["state"] == "completed" and "Notes" not in servers
+            assert admissions.read_command_receipt(flow.owner_id, flow.command_id)["state"] == "cancelled"
+            assert not config.configuration_recovery_required()
+            assert not any(str(r.url).startswith(ISSUER + "/token") for r in server.seen)  # Nothing was signed in.
+        else:  # Another app's sign-in still holds every app's settings, as before.
+            assert result["state"] == "failed" and "Another app is still being set up" in result["message"]
+            assert "Notes" in servers and flow.state == "waiting"
+    finally:
+        plans.cancel(phone, waiting)
 
 
 @pytest.mark.parametrize(("mode", "client"), [("cimd", auth.CLIENT_METADATA_URL), ("dcr", "registered-client")])

@@ -1655,6 +1655,47 @@ it('says to download the search model rather than show documents as searchable',
   expect(screen.queryByText('0 searchable')).toBeNull();
 });
 
+it.each([
+  ['missing', 'Not built yet'],
+  ['not_checked', 'Not checked'],
+  ['pending', 'Updating…'],
+  ['ready', 'Ready'],
+  ['current', 'Up to date'],
+  ['stale', 'Needs a rebuild'],
+  ['partial', 'Partly built'],
+  ['failed', 'Needs a rebuild'],
+  ['unavailable', "Couldn't be checked"],
+  ['loading', 'Loading…'],
+  ['inactive', 'Not in use'],
+  ['idle', 'Not loaded'],
+  ['cached', 'Downloaded'],
+] as const)(
+  'says a memory index that is %s in words, never as its id (B339)',
+  (state, words) => {
+    mutation.page = 'documents';
+    render(
+      <DocumentEmbeddingSnapshot
+        snapshot={{
+          ...snapshot.documents,
+          document_vectors: { state: 'stale', detail: 'Rebuild it.' },
+          local_runtime: { state: 'missing', detail: 'Not downloaded yet.' },
+          memory_index: { state, detail: 'Its help.' },
+        }}
+        mutation={mutation}
+      />,
+    );
+    fireEvent.click(screen.getByText('Advanced'));
+    const memory = screen.getByText('Its help.').parentElement!;
+    expect(within(memory).getByText(words)).toBeVisible();
+    // The search model is downloaded, not built; the document index here needs a rebuild.
+    expect(screen.getAllByText('Not downloaded')[0]).toBeVisible();
+    expect(screen.getAllByText('Needs a rebuild')[0]).toBeVisible();
+    expect(document.body).not.toHaveTextContent(
+      /not_checked|Memory index: |Local model: |Document index: /,
+    );
+  },
+);
+
 it('renders editable document, tool, and preference owners', async () => {
   mutation.page = 'documents';
   const documents = render(
@@ -1678,8 +1719,8 @@ it('renders editable document, tool, and preference owners', async () => {
     'open',
   );
   fireEvent.click(screen.getByText('Advanced'));
-  expect(screen.getByText(/Local model: cached/)).toBeVisible();
-  expect(screen.getByText(/Memory index: pending/)).toBeVisible();
+  expect(screen.getAllByText('Downloaded')[0]).toBeVisible();
+  expect(screen.getByText('Updating…')).toBeVisible();
   expect(
     screen.getByRole('button', { name: 'Rebuild document index' }),
   ).toBeEnabled();

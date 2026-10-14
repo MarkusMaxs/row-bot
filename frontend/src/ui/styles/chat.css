@@ -1087,6 +1087,19 @@
 .turn-notice-text span {
   color: var(--text-secondary);
 }
+/* An app tool's labelled fields keep their own line breaks (B332): the card shows the first lines, Details all. */
+.approval-card-reason[data-fields] {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+}
+.approval-detail-reason {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .approval-card-argument {
   overflow: hidden;
   text-overflow: ellipsis;

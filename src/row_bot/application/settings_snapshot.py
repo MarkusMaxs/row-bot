@@ -1136,12 +1136,12 @@ def _document_vector_status(root: Path, config: Mapping[str, Any]) -> dict[str, 
     except OSError:
         return {
             "state": "unavailable",
-            "detail": "Saved document vector health could not be read.",
+            "detail": "Row-Bot couldn't read the document index.",
         }
     if not corpus_exists and not legacy_exists:
         return {
             "state": "current",
-            "detail": "Nothing is indexed with another search model.",
+            "detail": "No document is indexed with another search model.",
         }
     active = _active_embedding_metadata(config)
     stale = False
@@ -1153,13 +1153,13 @@ def _document_vector_status(root: Path, config: Mapping[str, Any]) -> dict[str, 
         ):
             return {
                 "state": "unavailable",
-                "detail": "Saved document vector metadata is unsupported.",
+                "detail": "Row-Bot couldn't read the document index. Rebuild to make it again.",
             }
         documents = corpus["documents"]
         if len(documents) > _MAX_DOCUMENT_INDEX_ITEMS:
             return {
                 "state": "unavailable",
-                "detail": "Saved document vector metadata exceeds the passive read limit.",
+                "detail": "The document index is too large to check here.",
             }
         for entry in documents:
             if not isinstance(entry, Mapping):
@@ -1273,7 +1273,7 @@ def _memory_index_status(path: Path) -> dict[str, str]:
     if not path.is_file():
         return {
             "state": "missing",
-            "detail": "No saved knowledge store is available for a memory index.",
+            "detail": "Nothing to index yet: no memories are saved.",
         }
     try:
         connection = sqlite3.connect(
@@ -1293,7 +1293,7 @@ def _memory_index_status(path: Path) -> dict[str, str]:
             }.issubset(tables):
                 return {
                     "state": "not_checked",
-                    "detail": "Saved knowledge vector projection state is not available.",
+                    "detail": "It is set up when the first memories are saved.",
                 }
             state_columns = {
                 str(row[1])
@@ -1313,7 +1313,7 @@ def _memory_index_status(path: Path) -> dict[str, str]:
             ):
                 return {
                     "state": "unavailable",
-                    "detail": "Saved knowledge vector projection metadata is unsupported.",
+                    "detail": "Row-Bot couldn't read the memory index.",
                 }
             state_row = connection.execute(
                 "SELECT generation, vector_error FROM knowledge_projection_state "
@@ -1330,26 +1330,26 @@ def _memory_index_status(path: Path) -> dict[str, str]:
     except (OSError, sqlite3.Error, TypeError, ValueError):
         return {
             "state": "unavailable",
-            "detail": "Saved knowledge vector projection state could not be read.",
+            "detail": "Row-Bot couldn't read the memory index.",
         }
     if state_row is None or not state_row[0]:
         return {
             "state": "missing",
-            "detail": "The memory vector index needs a complete rebuild.",
+            "detail": "Rebuild to make it from your saved memories.",
         }
     if state_row[1]:
         return {
             "state": "failed",
-            "detail": "The saved memory vector projection reports a failure.",
+            "detail": "Building it failed. Rebuild to try again.",
         }
     if pending:
         return {
             "state": "pending",
-            "detail": "Saved knowledge has pending semantic projection work.",
+            "detail": "New memories are being added to it.",
         }
     return {
         "state": "not_checked",
-        "detail": "Saved projection bookkeeping is current; vector coverage was not loaded or probed.",
+        "detail": "Its records are up to date. The index itself is checked when memories are searched.",
     }
 
 

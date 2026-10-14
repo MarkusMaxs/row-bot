@@ -932,19 +932,19 @@ class DocumentSettingsSnapshot(WireModel):
     document_vectors: DocumentRuntimeStatus = Field(
         default_factory=lambda: DocumentRuntimeStatus(
             state="unavailable",
-            detail="Saved document vector health is unavailable.",
+            detail="Row-Bot couldn't read the document index.",
         )
     )
     local_runtime: DocumentRuntimeStatus = Field(
         default_factory=lambda: DocumentRuntimeStatus(
             state="unavailable",
-            detail="Saved local model runtime state is unavailable.",
+            detail="Row-Bot couldn't check the search model.",
         )
     )
     memory_index: DocumentRuntimeStatus = Field(
         default_factory=lambda: DocumentRuntimeStatus(
             state="unavailable",
-            detail="Saved memory index state is unavailable.",
+            detail="Row-Bot couldn't read the memory index.",
         )
     )
 

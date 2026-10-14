@@ -43,6 +43,8 @@ class Flow:
     document: bool = False  # Name Row-Bot by its client ID metadata document (the plan's choice).
     read_only: bool = False  # Ask only for the reads of what the server lists ("Look things up").
     ref: str = field(default_factory=lambda: uuid4().hex)
+    # Its sign-in thread has ended: what it recorded is final, so its receipt and saved settings say how it ended.
+    finished: bool = False
 
     def active_authority(self) -> None:
         self.validate()
@@ -209,6 +211,15 @@ def _finish_oauth(flow: Flow, label: str, client: dict | None):
             flow.state = "uncertain"
     finally:
         flow.code = flow.oauth_state = flow.authorization_url = ""
+        flow.finished = True
+
+
+def _running(owner_id: str, command_id: str) -> Flow | None:
+    """The sign-in still running in this process for a command. One whose thread ended without recording its
+    end (B338: its receipt couldn't be saved) is read like one a restart interrupted, so Retry can end it."""
+    with _LOCK:
+        flow = _FLOWS.get((owner_id, command_id))
+    return flow if flow is not None and not flow.finished else None
 
 
 def execute_auth(*, owner_id: str, command_id: str, server_id: str, configuration_revision: str,
@@ -288,8 +299,7 @@ def execute_auth(*, owner_id: str, command_id: str, server_id: str, configuratio
 
 def auth_status(*, owner_id: str, command_id: str, validate: Callable[[], None] = lambda: None) -> dict:
     validate()
-    with _LOCK:
-        flow = _FLOWS.get((owner_id, command_id))
+    flow = _running(owner_id, command_id)
     if flow:
         if flow.state in {"waiting", "starting"} and time.monotonic() - flow.created >= _TTL:
             return {**_receipt(flow), "state": "expired", "authorization_url": None, "message": "Sign-in expired. Start a new sign-in."}
@@ -332,9 +342,8 @@ def _disconnect_cleanup(cleanup: dict) -> None:
 
 
 def _settle_recovered(owner_id: str, command_id: str, result: dict) -> None:
-    with _LOCK:
-        if (owner_id, command_id) in _FLOWS:
-            return
+    if _running(owner_id, command_id):
+        return
     if result["state"] in {"signed_in", "disconnected", "cancelled"}:
         saved = admissions.read_command_receipt(owner_id, command_id) or {}
         admissions.complete_command(owner_id, command_id,
@@ -353,7 +362,7 @@ def cancel_auth(*, owner_id: str, command_id: str, validate: Callable[[], None] 
             admissions.complete_command(owner_id, command_id, {**saved, **result, "_mcp_auth": {**private, "disconnect_cleanup": None}})
             return result
     with _LOCK:
-        flow = _FLOWS.get((owner_id, command_id))
+        flow = _running(owner_id, command_id)
         if flow and flow.state in {"starting", "waiting"}:
             flow.state, flow.authorization_url = "cancelled", ""
             flow.event.set()

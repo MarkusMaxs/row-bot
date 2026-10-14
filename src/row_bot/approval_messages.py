@@ -198,6 +198,100 @@ def channel_message(payload: Mapping[str, Any] | None, *, max_chars: int = 420) 
     return compact_message(payload, max_chars=max_chars)
 
 
+def readable_value(value: object, nested: bool = False) -> str:
+    """A structured argument in words: ``[{"sku": "A1", "qty": 2}]`` reads "sku A1, qty 2". Every key and value
+    is kept, an empty one too (it is still sent: it can clear a field); only the code punctuation goes, and a
+    list item holding a separator is quoted."""
+    if isinstance(value, Mapping):
+        text = ", ".join(f"{str(key).replace('_', ' ')} {readable_value(item, True)}" for key, item in value.items())
+        return f"({text})" if nested else text
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        structured = any(isinstance(item, (Mapping, list, tuple, set)) for item in items)
+        text = ("; " if structured else ", ").join(
+            f'"{item}"' if isinstance(item, str) and ("," in item or ";" in item) else readable_value(item)
+            for item in items)
+        return f"({text})" if nested and structured else text
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return "empty" if value is None else str(value)
+
+
+# A key whose value is a secret: an approval says one is sent, never what it is.
+_SECRET_WORDS = {"password", "passwd", "secret", "token", "authorization", "credential", "credentials", "apikey"}
+_ACRONYMS = {"id", "ids", "url", "urls", "uri", "api", "ip", "sql", "html", "json", "csv", "pdf", "sku"}
+_BLOCK = 80  # A longer value, or one over several lines, starts on its own line under its label.
+
+
+def _key_words(key: object) -> list[str]:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(key)).replace("_", " ").replace("-", " ").lower().split()
+
+
+def _field_label(key: object) -> str:
+    text = " ".join(word.upper() if word in _ACRONYMS else word for word in _key_words(key))[:64]
+    return text[:1].upper() + text[1:] or "Value"
+
+
+def _field_value(key: object, value: object) -> str:
+    words = _key_words(key)
+    if (_SECRET_WORDS & set(words) or "api key" in " ".join(words)) and value not in (None, ""):
+        return f"hidden ({len(str(value)):,} characters)"
+    if not isinstance(value, str):
+        return readable_value(value)
+    text = "".join(c for c in value.replace("\r\n", "\n").replace("\r", "\n") if c in "\n\t" or ord(c) >= 32)
+    return text.strip("\n").rstrip() or "empty"
+
+
+def approval_fields(args: Mapping[str, object], *, max_chars: int = 1000) -> str:
+    """An app tool's call in words for its approval card (B332): one labelled line per argument ("Title: Daily
+    summary crashes"), and a long or multi-line value (a Markdown body) under its label with its own line
+    breaks, never an escaped dump of the call. Every argument given is named, so nothing that will be sent goes
+    unmentioned: when they don't all fit in ``max_chars`` the longest values are shortened alike, each saying
+    how long it is in all. Short values come first, so a long body never pushes them out of sight. An argument
+    left unset (None) is not part of the call."""
+    fields = [(_field_label(key), _field_value(key, value)) for key, value in args.items() if value is not None]
+    if not fields:
+        return ""
+    fields = ([f for f in fields if "\n" not in f[1] and len(f[1]) <= _BLOCK]
+              + [f for f in fields if "\n" in f[1] or len(f[1]) > _BLOCK])
+    labels, values = [label for label, _ in fields], [value for _, value in fields]
+    block = ["\n" in value or len(value) > _BLOCK for value in values]
+
+    def render(shown: list[str]) -> str:
+        return "\n".join(f"{label}:\n{value}" if own_line else f"{label}: {value}"
+                         for label, value, own_line in zip(labels, shown, block))
+
+    def capped(cap: int) -> list[str]:
+        return [value if len(value) <= cap else f"{value[:cap].rstrip()}… ({len(value):,} characters in all)"
+                for value in values]
+
+    text = render(values)
+    if len(text) <= max_chars:
+        return text
+    low, high = 0, max(len(value) for value in values)
+    while low < high:  # The most of each long value that lets every argument show.
+        middle = (low + high + 1) // 2
+        if len(render(capped(middle))) <= max_chars:
+            low = middle
+        else:
+            high = middle - 1
+    text = render(capped(low))
+    if len(text) <= max_chars:
+        return text
+    # More arguments than the card can show values for: the first ones with short values, the rest by name.
+    lines, rest = [], list(labels)
+    for label, value in zip(labels, capped(24)):
+        line = f"{label}: {' '.join(value.split())}"
+        if sum(len(kept) + 1 for kept in lines) + len(line) > max_chars // 2:
+            break
+        lines.append(line)
+        rest.pop(0)
+    if rest:
+        lines.append("Also sent: " + ", ".join(rest))
+    text = "\n".join(lines)
+    return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
+
+
 def plain_tool_call(tool: str, args: object, *, label: str = "", max_chars: int = 220) -> str:
     """A tool call in words for an approval message, never a Python dump of its arguments (B312).
 

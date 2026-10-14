@@ -298,6 +298,13 @@ export default function ItemPage({
   );
 }
 
+/** An item's last change hasn't finished: Retry checks it again. */
+const RECOVERING = [
+  'change_unconfirmed',
+  'configuration_recovery',
+  'change_in_progress',
+];
+
 function Detail({
   kind,
   itemId,
@@ -322,6 +329,8 @@ function Detail({
   const [search, setSearch] = useSearchParams();
   const fixing = useRef(search.get('fix') === '1');
   const [settling, setSettling] = useState(false);
+  // Retry checked the last change again and it hasn't finished yet: say so, rather than look unchanged.
+  const [still, setStill] = useState(false);
   const load = useCallback(
     (signal?: AbortSignal) =>
       controller.integrationDetail({ item_id: itemId, revision }, signal).then(
@@ -343,7 +352,9 @@ function Detail({
   const settle = async () => {
     setSettling(true);
     try {
-      setDetail(await controller.settleIntegration({ item_id: itemId }));
+      const settled = await controller.settleIntegration({ item_id: itemId });
+      setDetail(settled);
+      setStill(settled.entry.blockers.some((b) => RECOVERING.includes(b.code)));
       setError('');
     } catch (cause) {
       setError(clientError(cause).message);
@@ -416,13 +427,7 @@ function Detail({
   const app = entry.app ? catalog.get(entry.app.id) : undefined;
   const status = statusOf(entry);
   const action = entry.next_action;
-  const recovering = entry.blockers.some((b) =>
-    [
-      'change_unconfirmed',
-      'configuration_recovery',
-      'change_in_progress',
-    ].includes(b.code),
-  );
+  const recovering = entry.blockers.some((b) => RECOVERING.includes(b.code));
   const tryIt = () => {
     const prompt =
       entry.kind === 'skill'
@@ -541,12 +546,25 @@ function Detail({
       )}
       {recovering && !control.plan && (
         <div className="app-banner" role="status">
-          <span>Finishing your last change…</span>
+          <span>
+            {still
+              ? 'Still finishing your last change. Try again in a minute.'
+              : 'Finishing your last change…'}
+          </span>
           <Button disabled={settling} onClick={() => void settle()}>
             Retry
           </Button>
         </div>
       )}
+      {!recovering &&
+        !control.plan &&
+        !builtIn &&
+        entry.installed &&
+        action.kind === 'continue_setup' && (
+          <p className="settings-help" role="status">
+            Setup stopped before it finished. Anything already done is kept.
+          </p>
+        )}
       {error && <p role="alert">{error}</p>}
       {detail.plan && !detail.plan.supported && !detail.plan.plan_id && (
         <p className="settings-help" role="status">

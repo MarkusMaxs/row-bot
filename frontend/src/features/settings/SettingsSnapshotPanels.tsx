@@ -69,6 +69,7 @@ import ConnectedAccountAuth, { type AccountAuth } from './AccountAuthControls';
 import { ConnectSheet, type ConnectStep } from './ConnectSheet';
 import { ACCOUNT_LINKS } from './connect-guides';
 import type {
+  DocumentRuntimeStatus,
   SettingsMutationReceipt,
   SettingsMutationRequest,
   SettingsMutationReview,
@@ -4637,13 +4638,38 @@ export function DocumentModelSetting({
 }
 
 /** A saved health state in words: "cached" → "Cached". */
-function healthWords(state: string) {
-  return humanizeToken(state);
+// Every state an index or the search model reports, in words (B339); the server's ids never show.
+const INDEX_WORDS: Record<DocumentRuntimeStatus['state'], string> = {
+  current: 'Up to date',
+  ready: 'Ready',
+  stale: 'Needs a rebuild',
+  partial: 'Partly built',
+  missing: 'Not built yet',
+  pending: 'Updating…',
+  loading: 'Loading…',
+  failed: 'Needs a rebuild',
+  not_checked: 'Not checked',
+  unavailable: "Couldn't be checked",
+  inactive: 'Not in use',
+  idle: 'Not loaded',
+  cached: 'Downloaded',
+};
+// The search model is downloaded and loaded rather than built.
+const MODEL_WORDS: Partial<Record<DocumentRuntimeStatus['state'], string>> = {
+  missing: 'Not downloaded',
+  ready: 'Loaded',
+  failed: "Couldn't load",
+};
+function healthWords(state: string, model = false) {
+  const key = state as DocumentRuntimeStatus['state'];
+  return (
+    (model && MODEL_WORDS[key]) || INDEX_WORDS[key] || humanizeToken(state)
+  );
 }
 function healthTone(state: string): 'success' | 'warning' | undefined {
   return ['current', 'cached', 'ready', 'loaded'].includes(state)
     ? 'success'
-    : ['unavailable', 'stale', 'missing', 'failed', 'pending'].includes(state)
+    : ['unavailable', 'stale', 'partial', 'missing', 'failed'].includes(state)
       ? 'warning'
       : undefined;
 }
@@ -4684,15 +4710,15 @@ export function DocumentEmbeddingSnapshot({
       : `${embedding.cloud_model} (cloud)`);
   const vectors = snapshot.document_vectors ?? {
     state: 'unavailable',
-    detail: 'Saved document vector health is unavailable.',
+    detail: "Row-Bot couldn't read the document index.",
   };
   const localRuntime = snapshot.local_runtime ?? {
     state: 'unavailable',
-    detail: 'Saved local model runtime state is unavailable.',
+    detail: "Row-Bot couldn't check the search model.",
   };
   const memoryIndex = snapshot.memory_index ?? {
     state: 'unavailable',
-    detail: 'Saved memory index state is unavailable.',
+    detail: "Row-Bot couldn't read the memory index.",
   };
   const local = provider === 'local';
   // Searching needs the search model on this computer: until it is downloaded the header says so.
@@ -4765,7 +4791,7 @@ export function DocumentEmbeddingSnapshot({
             row={{
               status: (
                 <StatusLine tone={healthTone(localRuntime.state)}>
-                  {healthWords(localRuntime.state)}
+                  {healthWords(localRuntime.state, true)}
                 </StatusLine>
               ),
             }}
@@ -4807,7 +4833,7 @@ export function DocumentEmbeddingSnapshot({
             bind={false}
             status={
               <StatusLine tone={healthTone(vectors.state)}>
-                Document index: {vectors.state}
+                {healthWords(vectors.state)}
               </StatusLine>
             }
             control={
@@ -4828,7 +4854,7 @@ export function DocumentEmbeddingSnapshot({
             status={
               local ? (
                 <StatusLine tone={healthTone(memoryIndex.state)}>
-                  Memory index: {memoryIndex.state}
+                  {healthWords(memoryIndex.state)}
                 </StatusLine>
               ) : undefined
             }
@@ -4850,7 +4876,7 @@ export function DocumentEmbeddingSnapshot({
               bind={false}
               status={
                 <StatusLine tone={healthTone(localRuntime.state)}>
-                  Local model: {localRuntime.state}
+                  {healthWords(localRuntime.state, true)}
                 </StatusLine>
               }
               control={
