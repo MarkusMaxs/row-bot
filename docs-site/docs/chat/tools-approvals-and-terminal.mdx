@@ -96,6 +96,35 @@ A command that is still running after 2 minutes, such as a long build or a downl
 
 An app that a finished command opened (an editor, say) keeps running, as before; stopping a command that is still running ends everything it started.
 
+## Row-Bot's Browser
+
+Row-Bot's browser is its own managed browser profile, separate from yours. Besides opening websites, it can open apps you run on this computer, take screenshots, show a page at a phone or tablet size, and record what it does.
+
+### Apps On This Computer
+
+An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, opens only once it's allowed in that conversation. **Ask** asks ("Allow Row-Bot's browser to open localhost:5173 in this chat?"), **Auto**'s reviewer decides or asks, **Hands-off** allows it, and **Block** refuses. A server Row-Bot started in the same conversation, and that is listening on that port, opens without asking; an address a program only printed doesn't count.
+
+- **One address, one conversation, one hour.** Another port, or another conversation, asks again. The server's live-reload connection (same address) is included.
+- **The list and Remove**: the conversation's **⋯ › Manage browser** panel lists each allowed address, who allowed it and when it ends, with **Remove**.
+- **Pages can be read and clicked**, but forms that post or upload to a local address stay blocked.
+- **Never allowed**: other computers and devices on your network (routers, printers, file servers), cloud metadata addresses, and Row-Bot's own app. Row-Bot says so instead of asking.
+
+### Screenshots And Page Sizes
+
+Ask for a screenshot and Row-Bot saves a picture of the page (what's on screen, or the whole page) to the conversation's files and shows it in the chat. Password, one-time code and card fields are covered. Very long pages stop at about 10,000 pixels.
+
+Row-Bot can also show the page at **phone**, **tablet** or **desktop** size (and another device scale) to check a responsive layout. The size stays until it's changed. Screenshots and page sizes only read Row-Bot's own browser, so they need no approval.
+
+### Recordings
+
+Ask Row-Bot to record what it does in its browser and it asks first, then records the conversation's page to a video saved to the conversation's files. Recording the whole screen works through [Computer Use](/docs/computer-use) and needs it set up.
+
+- **While it records**, the conversation shows **Recording · 0:42** with **Stop**, and Buddy shows **Recording the browser** (or **the screen**).
+- **It stops** when Row-Bot or you stop it, at its time limit (5 minutes unless asked otherwise; at most 15 for the browser and 10 for the screen), before the video gets too large for the chat (25 MB), when its conversation is deleted, and when Row-Bot quits. Stopping needs no approval.
+- **The video** (MP4) then shows in the conversation with a player, and in the conversation's files.
+- **Hidden in browser recordings**: pages with a password, one-time code or card field, and anything shown while you've taken over the browser, record as a blank frame.
+- Recording needs Row-Bot's video support, which comes with the full install; Row-Bot says so if it's missing.
+
 ## Interactive Terminal
 
 In the Row-Bot desktop app, a conversation can open a real interactive terminal docked at the bottom of the window. Open or close it with the terminal button in the header, **Open panel › Interactive terminal**, the command palette (**Toggle terminal**), or Ctrl+`.
@@ -123,3 +152,5 @@ The terminal is for you: what you type runs as your own commands on this compute
 - If the terminal says it needs the Row-Bot desktop app, open the conversation there; the button is not offered on other devices.
 - If you denied by mistake, ask Row-Bot to try again and review the next approval.
 - If a background process won't start because too many are running, stop one in **Home › Monitor › Background processes**.
+- If a local app shows "Nothing answered at localhost:5173", start its server first; if Row-Bot started it, check its card in the conversation.
+- If Row-Bot asks again for a local address you allowed, its hour ran out or it was removed; allow it again.
