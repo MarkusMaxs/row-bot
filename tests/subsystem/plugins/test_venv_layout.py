@@ -36,6 +36,41 @@ def test_environments_need_ensurepip_only_when_the_runtime_has_it(plugin_modules
     sandbox._target(environment)
 
 
+@pytest.mark.parametrize("bundled_library", [True, False])
+def test_a_copied_macos_interpreter_gets_the_libpython_it_loads_beside_itself(plugin_modules, monkeypatch, tmp_path,
+                                                                               bundled_library):
+    """The packaged macOS python loads @executable_path/../lib/libpythonX.Y.dylib; a copy without it cannot start."""
+    from row_bot.plugins import sandbox
+
+    installer = plugin_modules["installer"]
+    name = f"libpython{sys.version_info.major}.{sys.version_info.minor}.dylib"
+    runtime = tmp_path / "Row-Bot.app" / "Contents" / "Resources" / "python"
+    (runtime / "bin").mkdir(parents=True)
+    (runtime / "lib").mkdir()
+    (runtime / "bin" / "python3").write_bytes(b"interpreter")
+    if bundled_library:
+        (runtime / "lib" / name).write_bytes(b"shared library")
+    environment = installer._generation_path("sample-plugin", str(uuid4()), create=True)
+    monkeypatch.setattr(sandbox, "_embedded_runtime", lambda: None)
+
+    def create(argv, *, cwd, timeout):
+        venv.EnvBuilder(with_pip=False, symlinks=False).create(environment)
+        # From here on, the packaged macOS app's runtime made it.
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(sys, "executable", str(runtime / "bin" / "python3"))
+
+    monkeypatch.setattr(sandbox, "_run", create)
+    sandbox.create_environment(environment)
+
+    copied = environment / "lib" / name
+    if bundled_library:
+        assert copied.read_bytes() == b"shared library" and not copied.is_symlink()
+    else:
+        assert not os.path.lexists(copied)
+    assert installer._tree_revision(environment, source=False)
+    sandbox._target(environment)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="the private copy is for the Windows embeddable runtime")
 def test_the_packaged_windows_runtime_gets_a_private_isolated_copy(plugin_modules, monkeypatch, tmp_path):
     """A venv of the embeddable runtime would read its ._pth and see Row-Bot's own libraries."""

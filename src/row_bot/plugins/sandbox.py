@@ -330,6 +330,24 @@ def _create_private_runtime(environment: pathlib.Path, base: pathlib.Path) -> No
         "row-bot-runtime = private-copy\n", encoding="utf-8", newline="\n")
 
 
+def _copy_shared_library(environment: pathlib.Path) -> None:
+    """Give a copied macOS interpreter the libpython it loads from beside itself.
+
+    The packaged macOS runtime links ``@rpath/libpythonX.Y.dylib`` with
+    ``@executable_path/../lib`` as its rpath, so the interpreter ``venv --copies``
+    makes cannot start without its own copy. A framework build links an absolute
+    path and keeps a symlink there instead; it needs nothing.
+    """
+    if sys.platform != "darwin":
+        return
+    name = f"libpython{sys.version_info.major}.{sys.version_info.minor}.dylib"
+    source = pathlib.Path(sys.executable).resolve().parent.parent / "lib" / name
+    if source.is_symlink() or not source.is_file():
+        return
+    _checked_path(environment, environment / "lib")
+    shutil.copy2(source, environment / "lib" / name)
+
+
 def create_environment(environment: pathlib.Path) -> None:
     """Create a fresh fixed-location candidate, never a host or shared target."""
     environment = _candidate_location(environment)
@@ -346,6 +364,7 @@ def create_environment(environment: pathlib.Path) -> None:
             # environments install no dependencies, so they need no pip.
             argv.append("--without-pip")
         _run([*argv, str(environment)], cwd=environment.parent, timeout=120)
+        _copy_shared_library(environment)
     _normalise_created_environment(environment)
     _target(environment)
 
