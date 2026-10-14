@@ -143,9 +143,11 @@ def _is_durable_approval_activity(active: _Activity) -> bool:
     payload = active.payload
     if active.source in {"tasks", "tasks.reconcile"}:
         return True
+    if active.source == "client_platform" and payload.get("approval_id"):
+        # A chat's approval names its saved request: gone from the waiting list, it is answered (B333).
+        return True
     return bool(
-        payload.get("approval_id")
-        or payload.get("resume_token")
+        payload.get("resume_token")
         or payload.get("request_id")
         or payload.get("run_id")
         or payload.get("step_id")
