@@ -10,7 +10,6 @@ import hashlib
 import html
 import json
 import logging
-import os
 import pathlib
 import re
 import secrets
@@ -685,10 +684,14 @@ class XTool(BaseTool):
     # ── Auth helpers ─────────────────────────────────────────────────────────
 
     def _get_client_id(self) -> str:
-        return os.environ.get("X_CLIENT_ID", "")
+        from row_bot.api_keys import get_key
+
+        return get_key("X_CLIENT_ID")
 
     def _get_client_secret(self) -> str:
-        return os.environ.get("X_CLIENT_SECRET", "")
+        from row_bot.api_keys import get_key
+
+        return get_key("X_CLIENT_SECRET")
 
     def has_credentials(self) -> bool:
         """Check if Client ID and Secret are configured."""

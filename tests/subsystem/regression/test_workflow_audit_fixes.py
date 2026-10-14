@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
 def test_shell_command_classification_regressions() -> None:
-    from row_bot.tools.shell_tool import _strip_quoted, classify_command
+    from row_bot.tools.shell_tool import classify_command
 
     assert classify_command('echo "hello > world"') == "safe"
     assert classify_command("echo 'hello | world'") == "safe"
@@ -19,10 +19,10 @@ def test_shell_command_classification_regressions() -> None:
     assert classify_command("echo safe\nrm -rf /") == "blocked"
     assert classify_command("ls\npwd\nwhoami") == "safe"
     assert classify_command("ls\npip install foo") == "needs_approval"
-    assert ">" not in _strip_quoted('echo "hello \\" > world"')
-    assert isinstance(_strip_quoted('echo "unterminated'), str)
-    assert _strip_quoted("") == ""
-    assert _strip_quoted("ls -la") == "ls -la"
+    # PowerShell ends the string at \" and would redirect, so this asks.
+    assert classify_command('echo "hello \\" > world"') == "needs_approval"
+    assert classify_command('echo "unterminated') == "needs_approval"
+    assert classify_command("ls -la") == "safe"
 
 
 def test_delete_task_and_finish_run_clean_up_pipeline_state(tmp_path, reload_for_data_dir) -> None:

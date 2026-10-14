@@ -407,7 +407,7 @@ def launch_tracked_process(root: pathlib.Path, argv: list[str], command: str, *,
                 raise ValueError("process_limit")
             entries.remove(old)
         kwargs = {"cwd": key, "stdin": subprocess.PIPE, "stdout": subprocess.PIPE,
-                  "stderr": subprocess.PIPE, "shell": False, "close_fds": True}
+                  "stderr": subprocess.PIPE, "shell": False, "close_fds": True, "env": _command_environment()}
         if os.name != "nt":
             kwargs["start_new_session"] = True
         process = subprocess.Popen(bootstrap_argv or [_worker_interpreter(), "-I", "-S", "-B",
@@ -554,6 +554,13 @@ def _unresolved_workspace_result(
         stderr=reason,
         decision=ApprovalDecision("block", reason),
     )
+
+
+def _command_environment() -> dict[str, str]:
+    """A workspace command's environment: Row-Bot's, without saved keys or Row-Bot's own secrets."""
+    from row_bot.api_keys import child_environment
+
+    return child_environment()
 
 
 def split_command(command: str) -> list[str]:
@@ -820,6 +827,7 @@ def run_workspace_command(
         cwd=str(root),
         timeout=timeout,
         text=True,
+        env=_command_environment(),
     )
     if completed.timed_out:
         return CommandResult(
@@ -925,6 +933,7 @@ def run_workspace_shell_command(
         cwd=str(root),
         timeout=timeout,
         text=True,
+        env=_command_environment(),
     )
     if completed.timed_out:
         return CommandResult(

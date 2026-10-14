@@ -354,6 +354,34 @@ def test_claude_subscription_streams_text_deltas(tmp_path, monkeypatch):
     assert "stream" not in client.messages.stream_calls[0]
 
 
+@pytest.mark.parametrize(("stop_reason", "cut_short"), [("max_tokens", True), ("end_turn", False)])
+def test_claude_subscription_stream_says_why_the_reply_ended(tmp_path, monkeypatch, stop_reason, cut_short):
+    """The last chunk carries the stop reason, so a reply cut off at the output limit says so (F17)."""
+    from langchain_core.messages import HumanMessage
+    from row_bot.providers import stop_reason as stop_reasons
+    from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
+
+    monkeypatch.setattr(provider_config, "CONFIG_PATH", tmp_path / "providers.json")
+    _set_backend_for_tests(_MemoryKeyring())
+    _save_runtime_tokens()
+    client = _FakeAnthropicClient(streams=[[
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "The first half"}},
+        {"type": "message_delta", "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+         "usage": {"output_tokens": 24}},
+        {"type": "message_stop"},
+    ]])
+    model = ChatClaudeSubscriptionMessages(model_name="claude-sonnet-4-6", anthropic_client=client)
+    try:
+        chunks = list(model._stream([HumanMessage(content="hello")]))
+    finally:
+        _set_backend_for_tests(None)
+
+    assert "".join(str(chunk.message.content) for chunk in chunks) == "The first half"
+    reason = stop_reasons.stop_reason(chunks[-1].message.response_metadata)
+    assert reason == stop_reason
+    assert stop_reasons.stopped_at_output_limit(reason) is cut_short
+
+
 def test_claude_subscription_streams_tool_call_chunks_with_runtime_name(tmp_path, monkeypatch):
     from langchain_core.messages import HumanMessage
     import row_bot.providers.transports.claude_subscription_messages as claude_transport

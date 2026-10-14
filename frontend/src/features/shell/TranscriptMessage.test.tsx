@@ -91,6 +91,22 @@ const ask = {
   role: 'user',
 } as unknown as TranscriptRow;
 
+it('says when the output limit cut a reply short', () => {
+  const { rerender } = render(
+    <TranscriptMessage
+      row={{ ...reply, cut_short: true }}
+      conversationId="conversation-a"
+    />,
+  );
+  expect(screen.getByText('Here is the plan.')).toBeInTheDocument();
+  expect(screen.getByText('Cut short by the output limit')).toHaveAttribute(
+    'title',
+    'Ask to continue, or for a shorter answer.',
+  );
+  rerender(<TranscriptMessage row={reply} conversationId="conversation-a" />);
+  expect(screen.queryByText('Cut short by the output limit')).toBeNull();
+});
+
 function speaking(speakers: Speakers, row: TranscriptRow, turnStart: boolean) {
   return (
     <SpeakersContext.Provider value={speakers}>

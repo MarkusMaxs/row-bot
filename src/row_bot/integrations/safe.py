@@ -21,6 +21,9 @@ _REDIRECTS = {301, 302, 303, 307, 308}
 _CREDENTIALS = {"authorization", "cookie", "proxy-authorization"}
 # IPv6 forms that carry an IPv4 address: NAT64 and the deprecated IPv4-compatible block.
 _EMBEDDED = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
+# A cloud host service on an otherwise global address: Azure's wire server. The other metadata services
+# (169.254.169.254, fd00:ec2::254, 100.100.100.200, ...) are link-local, private or shared, so not global.
+_HOST_SERVICES = frozenset({ipaddress.ip_address("168.63.129.16")})
 # The check of the work a fetch belongs to (a plan step): its stop or a sign-out ends the download.
 _CHECK: ContextVar[Callable[[], None] | None] = ContextVar("row_bot_fetch_check", default=None)
 
@@ -49,13 +52,13 @@ def public_url(value: object, *, limit: int = 2048) -> str:
 
 
 def _global(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if not address.is_global:
+    if not address.is_global or address in _HOST_SERVICES:
         return False
     if address.version == 6:
         embedded = address.ipv4_mapped
         if embedded is None and any(address in network for network in _EMBEDDED):
             embedded = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
-        if embedded is not None and not embedded.is_global:
+        if embedded is not None and (not embedded.is_global or embedded in _HOST_SERVICES):
             return False
     return True
 

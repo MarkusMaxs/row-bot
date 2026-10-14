@@ -27,7 +27,7 @@ def providers(monkeypatch, tmp_path, queue):
     from langchain_core.embeddings import Embeddings
     from row_bot import embedding_config, embedding_providers, documents, document_jobs, wiki_vault
     from row_bot.providers import runtime, auth_store, saved_model_settings
-    state = {"secret": "synthetic-processing-credential", "embed": [], "chat": [], "factory": [], "start": []}
+    state = {"secret": "synthetic-processing-credential", "embed": [], "chat": [], "factory": [], "start": [], "usage": []}
     config = {**embedding_config.DEFAULT_CONFIG, "provider": "cloud",
         "cloud_model": "openai:text-embedding-3-small", "dimension": 1536}
     monkeypatch.setattr(embedding_config, "get_embedding_config", lambda: dict(config))
@@ -51,8 +51,9 @@ def providers(monkeypatch, tmp_path, queue):
         validate()
         yield embedding_providers._CapturedEmbeddings(Fake(), validate)
     @contextmanager
-    def chat(capture, *, validate):
+    def chat(capture, *, validate, usage_purpose="", usage_thread_id=""):
         state["factory"].append(("chat", capture.resolved.selection_ref))
+        state["usage"].append((usage_purpose, usage_thread_id))
         validate()
         def invoke(messages):
             validate()
@@ -196,6 +197,8 @@ def test_actual_admission_runs_canonical_index_extract_finalize_with_captured_fa
         assert queue.service.get_batch(batch).status == "completed"
         assert providers["embed"][0] == ["reviewed source bytes"] and len(providers["chat"]) == 3
         assert ("chat", "model:openai:gpt-4o") in providers["factory"]
+        # Document calls are attributed to their conversation in the usage ledger.
+        assert providers["usage"] and set(providers["usage"]) == {("document", identifier)}
         assert kg.memory_vector_status()["ready"]
         assert Path(queue.service.get_job(indexing.id).staged_path).read_bytes() == b"reviewed source bytes"
         assert "_document_processing" not in result.text
