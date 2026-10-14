@@ -50,7 +50,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 
 # One PR browser pass: boot, first run, shell, overlays, a turn's lifecycle, chat,
 # providers, restart recovery, the desktop Buddy window, the UI primitives and the
-# approval levels (Full autonomy's one-time dialog, the reviewer's notes).
+# approval levels (Full autonomy's one-time dialog, the reviewer's notes) and background
+# processes (start, view output, stop).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -64,6 +65,7 @@ BROWSER_SMOKE_SPECS = (
     "polish-foundation",
     "apps-and-skills",
     "conversation-approvals",
+    "conversation-processes",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (

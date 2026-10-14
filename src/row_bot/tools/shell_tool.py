@@ -1226,15 +1226,17 @@ class _StopProcessInput(BaseModel):
 def start_process_approval(
     command: str, folder: str, variables: dict[str, str], name: str, approval_reason: str,
 ) -> dict[str, Any]:
-    """The approval request for starting a background process: what runs, where, with what."""
-    description = f"Start in the background in {folder}: {command}"
+    """The approval request for starting a background process: what runs, with what, and where.
+
+    The command leads; the folder comes last, where a long path doesn't hide the rest.
+    """
+    what = f"Start “{name}” in the background" if name else "Start in the background"
+    description = f"{what}: {command}"
     if variables:
         shown = ", ".join(f"{key}={value[:40]}{'…' if len(value) > 40 else ''}" for key, value in variables.items())
-        description += f" (with {shown})"
-    description += ". It keeps running after this reply until it's stopped or Row-Bot quits."
+        description += f" with {shown}"
+    description += f". It keeps running after this reply until it's stopped or Row-Bot quits. Folder: {folder}"
     args: dict[str, Any] = {"command": command, "folder": folder}
-    if name:
-        args["name"] = name
     if variables:
         args["env"] = sorted(variables)
     return {

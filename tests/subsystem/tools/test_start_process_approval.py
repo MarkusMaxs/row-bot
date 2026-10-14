@@ -91,10 +91,10 @@ def test_ask_shows_what_starts_where_and_with_what(tools, monkeypatch):
     payload = asked[0]
     assert payload["tool"] == "start_process"
     assert payload["approval_reason"] == "To preview the site."
-    assert payload["args"] == {"command": "npm run dev", "folder": str(tools.tmp.resolve()), "name": "Dev server",
-                               "env": ["PORT"]}
-    assert "npm run dev" in payload["description"] and "PORT=3000" in payload["description"]
-    assert "until it's stopped or Row-Bot quits" in payload["description"]
+    assert payload["args"] == {"command": "npm run dev", "folder": str(tools.tmp.resolve()), "env": ["PORT"]}
+    assert payload["description"] == (
+        "Start “Dev server” in the background: npm run dev with PORT=3000. It keeps running after this reply "
+        f"until it's stopped or Row-Bot quits. Folder: {tools.tmp.resolve()}")
     assert result.startswith("Approval: asked; approved by you\nBackground process proc-")
     assert tools.started[0]["env"] == {"PORT": "3000"}
     assert "Serving: http://localhost:5173" in result

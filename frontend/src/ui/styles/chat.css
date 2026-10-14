@@ -1322,8 +1322,8 @@
   width: min(560px, calc(100vw - 24px));
 }
 .process-output {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   height: 100%;
   min-height: 0;
@@ -1352,6 +1352,7 @@
   font-size: var(--text-13);
 }
 .process-log {
+  flex: 1 1 auto;
   min-height: 160px;
   margin: 0;
   padding: 8px 10px;
