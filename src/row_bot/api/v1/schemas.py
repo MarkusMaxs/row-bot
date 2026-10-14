@@ -5318,6 +5318,7 @@ class WorkspaceImportSummary(WireModel):
     file_count: int = Field(ge=0, le=100)
     imported: bool
     created_at: str = Field(max_length=80)
+    set_aside: bool = False
 
 
 class WorkspaceImportPage(WireModel):

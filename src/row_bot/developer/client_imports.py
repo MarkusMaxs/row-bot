@@ -29,6 +29,8 @@ class WorkspaceImportSummary:
     file_count: int
     imported: bool
     created_at: str
+    # Not imported and no longer waiting: its files changed in the code folder since (B334).
+    set_aside: bool = False
 
 
 @dataclass(frozen=True)
@@ -185,7 +187,8 @@ def list_workspace_imports(resource_id: str, conversation_id: str, *, cursor: st
     scope = resource_id + ":" + conversation_id
     offset = _cursor(cursor, scope, revision)
     page = tuple(WorkspaceImportSummary(row["id"], sandbox_runtime.pending_change_revision(row), len(row["files"]),
-        row.get("imported", False), str(row.get("created_at", ""))[:80]) for row in rows[offset:offset + limit])
+        row.get("imported", False), str(row.get("created_at", ""))[:80],
+        bool(row.get("set_aside")) and not row.get("imported", False)) for row in rows[offset:offset + limit])
     next_offset = offset + len(page)
     continuation = base64.urlsafe_b64encode(json.dumps([scope, revision, next_offset]).encode()).decode() if next_offset < len(rows) else None
     validate()
@@ -361,6 +364,9 @@ def review_workspace_import(resource_id: str, conversation_id: str, pending_chan
     row = _pending(rows, pending_change_id)
     if row.get("imported"):
         raise ValueError("sandbox_change_already_imported")
+    if row.get("set_aside"):
+        # Its sandbox files were put back to the code folder's: it can't go in any more (B334).
+        raise ValueError("sandbox_change_unavailable")
     patch, captured = _capture(workspace, row)
     policy = {"approval_mode": _get_thread_approval_mode(conversation_id), "workspace": workspace.to_dict()}
     git_policy = _git_policy(Path(workspace.path), list(captured))

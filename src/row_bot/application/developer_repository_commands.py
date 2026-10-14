@@ -268,7 +268,9 @@ class CanonicalDeveloperRepositoryBackend:
         for row in pending_rows:
             if not isinstance(row, dict):
                 raise _error("sandbox_history_unavailable")
-            if row.get("workspace_id") == workspace.id and row.get("thread_id") == conversation_id and row.get("imported") is not True:
+            # A change set aside (B334) is no longer waiting to import.
+            if (row.get("workspace_id") == workspace.id and row.get("thread_id") == conversation_id
+                    and row.get("imported") is not True and not row.get("set_aside")):
                 pending += 1
                 if pending > 100:
                     raise _error("sandbox_history_unavailable")

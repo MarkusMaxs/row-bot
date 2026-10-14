@@ -71,6 +71,8 @@ def prepared_shadow_workspace(workspace: DeveloperWorkspace) -> pathlib.Path:
 
 SESSIONS_PATH = SANDBOX_ROOT / "sessions.json"
 _TEXT_LIMIT = 1_000_000
+# The before/after copies a pending change keeps so it can be carried over (B334).
+_CARRY_TEXT_LIMIT = 512 * 1024
 _COPY_SKIP_DIRS = {
     ".row-bot-edit-recovery",
     ".mypy_cache",
@@ -170,9 +172,14 @@ class SandboxPendingChange:
     files: list[str]
     created_at: str
     imported: bool = False
+    # Why it was not imported, once set aside (B334); a set-aside change is no longer waiting.
+    set_aside: str = ""
+    # Each file as the sandbox had it before and after, so the change can be carried over
+    # onto a code folder that changed since (B334). Empty when too large to keep.
+    texts: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        row = {
             "id": self.id,
             "workspace_id": self.workspace_id,
             "thread_id": self.thread_id,
@@ -182,6 +189,11 @@ class SandboxPendingChange:
             "created_at": self.created_at,
             "imported": self.imported,
         }
+        if self.set_aside:
+            row["set_aside"] = self.set_aside
+        if self.texts:
+            row["texts"] = {path: dict(sides) for path, sides in self.texts.items()}
+        return row
 
     @classmethod
     def from_dict(cls, raw: dict) -> "SandboxPendingChange":
@@ -194,7 +206,28 @@ class SandboxPendingChange:
             files=[str(item) for item in raw.get("files", []) if str(item or "").strip()],
             created_at=str(raw.get("created_at", "")),
             imported=bool(raw.get("imported", False)),
+            set_aside=str(raw.get("set_aside") or ""),
+            texts=_saved_texts(raw.get("texts")),
         )
+
+    @property
+    def waiting(self) -> bool:
+        return not self.imported and not self.set_aside
+
+
+def _saved_texts(value: object) -> dict:
+    """The saved before/after copies, or nothing when any of them is malformed."""
+    if not isinstance(value, dict):
+        return {}
+    texts: dict[str, dict[str, str | None]] = {}
+    for path, sides in value.items():
+        if not isinstance(path, str) or not isinstance(sides, dict):
+            return {}
+        before, after = sides.get("before"), sides.get("after")
+        if not all(item is None or isinstance(item, str) for item in (before, after)):
+            return {}
+        texts[path] = {"before": before, "after": after}
+    return texts
 
 
 def detect_container_runtime() -> SandboxProbe:
@@ -296,7 +329,7 @@ def list_pending_changes(*, workspace_id: str, thread_id: str | None = None, inc
             continue
         if thread_id is not None and change.thread_id != thread_id:
             continue
-        if change.imported and not include_imported:
+        if not change.waiting and not include_imported:
             continue
         rows.append(change)
     rows.sort(key=lambda item: item.created_at, reverse=True)
@@ -336,6 +369,84 @@ def mark_pending_change_imported(change_id: str, *, expected_revision: str | Non
     if validate:
         validate()
     _save_pending_payload(payload)
+
+
+@_pending_mutation
+def set_pending_change_aside(change_id: str, reason: str) -> None:
+    """Take a change that can't be imported off the waiting list, saying why (B334)."""
+    payload = _load_pending_payload()
+    for raw in payload.get("changes", []):
+        if isinstance(raw, dict) and raw.get("id") == change_id and not raw.get("imported"):
+            raw["set_aside"] = str(reason or "code_folder_changed")
+            _save_pending_payload(payload)
+            return
+
+
+def carry_over_pending_change(change: SandboxPendingChange, host_root: pathlib.Path) -> dict[str, str | None] | None:
+    """The code folder's files with this change merged in, or None when it can't be carried over (B334).
+
+    A three-way merge of each file: the code folder's copy now, the sandbox's copy before
+    the change, and the sandbox's copy after it. A change that removes or creates a file the
+    code folder has since changed, an overlapping edit, or a change saved without its copies
+    can't be carried over.
+    """
+    if not change.texts or set(change.texts) != set(change.files):
+        return None
+    merged: dict[str, str | None] = {}
+    for rel_path in change.files:
+        base, theirs = change.texts[rel_path]["before"], change.texts[rel_path]["after"]
+        target = _validate_shadow_relative_path(host_root, rel_path)
+        if target.exists() and not target.is_file():
+            return None
+        ours = target.read_text(encoding="utf-8", errors="replace") if target.is_file() else None
+        if ours == theirs or ours == base:
+            merged[rel_path] = theirs
+            continue
+        if ours is None or base is None or theirs is None:
+            return None
+        result = _merge_text(ours, base, theirs)
+        if result is None:
+            return None
+        merged[rel_path] = result
+    return merged
+
+
+def _merge_text(ours: str, base: str, theirs: str) -> str | None:
+    with tempfile.TemporaryDirectory(prefix="row-bot-merge-") as folder:
+        names = []
+        for name, value in (("ours", ours), ("base", base), ("theirs", theirs)):
+            target = pathlib.Path(folder) / name
+            target.write_bytes(value.encode("utf-8"))
+            names.append(str(target))
+        try:
+            merged = subprocess.run(["git", "merge-file", "-p", "--quiet", *names],
+                                    capture_output=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+    if merged.returncode != 0:
+        return None
+    return merged.stdout.decode("utf-8", errors="replace")
+
+
+def restore_shadow_files(workspace: DeveloperWorkspace, paths: list[str]) -> None:
+    """Put the sandbox's copies of these files back to the code folder's (B334).
+
+    A change that was set aside stays out of the code folder; with its files as the code
+    folder has them, the sandbox agrees again and the change can be made afresh.
+    """
+    shadow = sandbox_shadow_path(workspace.id)
+    if not shadow.is_dir():
+        return
+    host_root = pathlib.Path(workspace.path).expanduser().resolve()
+    shadow_root = shadow.resolve()
+    for rel_path in paths:
+        source = _validate_shadow_relative_path(host_root, rel_path)
+        target = _validate_shadow_relative_path(shadow_root, rel_path)
+        if source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        elif target.is_file():
+            target.unlink()
 
 
 def pending_change_revision(raw: dict) -> str:
@@ -1097,6 +1208,9 @@ def _record_pending_change(
     combined_patch = ("".join(patch_parts) if command_id else "\n".join(patch_parts).strip() + "\n") if patch_parts else ""
     if not combined_patch:
         return None
+    texts = {path: {"before": before.get(path), "after": after.get(path)} for path in changed}
+    if sum(len(sides["before"] or "") + len(sides["after"] or "") for sides in texts.values()) > _CARRY_TEXT_LIMIT:
+        texts = {}
     change_id = ("sbox_" + uuid.uuid5(uuid.NAMESPACE_URL, "row-bot:client-edit:" + command_id).hex if command_id
                  else f"sbox_{hashlib.sha1((workspace.id + command + str(time.time())).encode('utf-8')).hexdigest()[:12]}")
     payload = _load_client_pending() if command_id else _load_pending_payload()
@@ -1115,6 +1229,7 @@ def _record_pending_change(
         patch=combined_patch,
         files=changed,
         created_at=datetime.now().isoformat(),
+        texts=texts,
     )
     payload.setdefault("changes", []).append(change.to_dict())
     _save_pending_payload(payload)

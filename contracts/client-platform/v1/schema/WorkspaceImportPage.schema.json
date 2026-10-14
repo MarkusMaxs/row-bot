@@ -29,6 +29,11 @@
           "pattern": "^[0-9a-f]{64}$",
           "title": "Revision",
           "type": "string"
+        },
+        "set_aside": {
+          "default": false,
+          "title": "Set Aside",
+          "type": "boolean"
         }
       },
       "required": [

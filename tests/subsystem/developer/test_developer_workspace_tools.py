@@ -1020,3 +1020,99 @@ def test_an_agent_branch_switch_makes_the_workspace_card_read_the_folder_again(t
         tool_context.reset_context(tokens)
 
     assert list(inspector_snapshot._snapshots) == [("other", thread_id)]
+
+
+_DATES = "line one\nline two\nline three\nline four\nline five\nline six\nline seven\n"
+
+
+def _change_made_before_the_first_was_imported(tmp_path, monkeypatch, reload_for_data_dir, second):
+    """B334: change A fixes line two; the sandbox is then rebuilt from the code folder while A still waits,
+    and change B is made there. So B was made before A was imported, not on top of it."""
+    storage, tool_context, _edits, _ledger, sandbox_runtime, developer_tool = _fresh_modules(tmp_path, reload_for_data_dir)
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    (repo / "dates.txt").write_text(_DATES, encoding="utf-8", newline="\n")
+    workspace = storage.add_or_update_local_workspace(str(repo))
+    storage.set_workspace_execution_settings(workspace.id, execution_mode="docker")
+    storage.set_workspace_approval_mode(workspace.id, "allow_all")
+    workspace = storage.get_workspace(workspace.id)
+    thread_id = storage.ensure_workspace_thread(workspace.id)
+    monkeypatch.setattr(sandbox_runtime, "detect_container_runtime",
+                        lambda: sandbox_runtime.SandboxProbe(True, binary="docker", version="Docker version test"))
+    real_subprocess_run = subprocess.run
+    docker = {"exists": False, "shadow": "", "writes": [_DATES.replace("line two", "line TWO fixed"), second]}
+
+    def fake_run(args, **kwargs):
+        if args[:1] == ["git"]:
+            return real_subprocess_run(args, **kwargs)
+        if args[:2] == ["docker", "inspect"]:
+            return SimpleNamespace(returncode=0 if docker["exists"] else 1, stdout="true\n" if docker["exists"] else "",
+                                   stderr="")
+        if args[:2] == ["docker", "rm"]:
+            docker["exists"] = False
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[:2] == ["docker", "run"]:
+            docker["shadow"] = args[args.index("-v") + 1].split(":/workspace", 1)[0]
+            docker["exists"] = True
+            return SimpleNamespace(returncode=0, stdout="container\n", stderr="")
+        if args[:2] == ["docker", "exec"]:
+            pathlib.Path(docker["shadow"], "dates.txt").write_text(docker["writes"].pop(0), encoding="utf-8",
+                                                                  newline="\n")
+            return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(sandbox_runtime.subprocess, "run", fake_run)
+    first = sandbox_runtime.run_docker_sandbox_command(workspace, "python fix.py", thread_id=thread_id)
+    sandbox_runtime.ensure_docker_sandbox(workspace, rebuild=True)
+    later = sandbox_runtime.run_docker_sandbox_command(workspace, "python tidy.py", thread_id=thread_id)
+    tokens = tool_context.set_context(workspace_id=workspace.id, thread_id=thread_id)
+    shadow = pathlib.Path(docker["shadow"], "dates.txt")
+    return (repo, workspace, thread_id, sandbox_runtime, developer_tool, first, later, shadow, docker,
+            lambda: tool_context.reset_context(tokens))
+
+
+def test_a_later_sandbox_change_is_carried_over_onto_the_imported_one(tmp_path, monkeypatch, reload_for_data_dir):
+    """B334: B's lines don't overlap A's, so it goes in on top of A instead of failing."""
+    repo, workspace, thread_id, sandbox_runtime, developer_tool, first, later, _shadow, _docker, reset = (
+        _change_made_before_the_first_was_imported(
+            tmp_path, monkeypatch, reload_for_data_dir, _DATES.replace("line four", "line FOUR")))
+    try:
+        result = developer_tool._import_sandbox_changes()
+    finally:
+        reset()
+
+    assert (repo / "dates.txt").read_text(encoding="utf-8") == (
+        _DATES.replace("line two", "line TWO fixed").replace("line four", "line FOUR"))
+    assert "carried over" in result
+    assert all(sandbox_runtime.get_pending_change(change.pending_change_id).imported for change in (first, later))
+    assert sandbox_runtime.list_pending_changes(workspace_id=workspace.id, thread_id=thread_id) == []
+
+
+def test_a_later_sandbox_change_that_can_t_be_carried_over_is_set_aside_and_said(tmp_path, monkeypatch,
+                                                                                  reload_for_data_dir):
+    """B334: an overlapping change is never left waiting: it is set aside, the sandbox agrees with the code
+    folder again, the agent is told to make it again, and making it again goes in."""
+    repo, workspace, thread_id, sandbox_runtime, developer_tool, first, later, shadow, docker, reset = (
+        _change_made_before_the_first_was_imported(
+            tmp_path, monkeypatch, reload_for_data_dir, _DATES.replace("line two", " line two")))
+    fixed = _DATES.replace("line two", "line TWO fixed")
+    try:
+        result = developer_tool._import_sandbox_changes()
+        assert (repo / "dates.txt").read_text(encoding="utf-8") == fixed
+        assert sandbox_runtime.get_pending_change(first.pending_change_id).imported
+        aside = sandbox_runtime.get_pending_change(later.pending_change_id)
+        assert not aside.imported and aside.set_aside
+        assert sandbox_runtime.list_pending_changes(workspace_id=workspace.id, thread_id=thread_id) == []
+        assert f"Set aside, not imported: sandbox change {later.pending_change_id} (dates.txt)" in result
+        assert "Make the change again" in result
+        # The sandbox's copy matches the code folder again, so the change can be made afresh.
+        assert shadow.read_text(encoding="utf-8") == fixed
+        assert "set aside" in developer_tool._import_sandbox_changes(later.pending_change_id)
+
+        docker["writes"].append(fixed.replace("line three", "line THREE"))
+        again = sandbox_runtime.run_docker_sandbox_command(workspace, "python tidy.py", thread_id=thread_id)
+        developer_tool._import_sandbox_changes(again.pending_change_id)
+    finally:
+        reset()
+
+    assert (repo / "dates.txt").read_text(encoding="utf-8") == fixed.replace("line three", "line THREE")

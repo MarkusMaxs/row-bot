@@ -374,3 +374,30 @@ it('reads the list again when the waiting count changes, so both agree (B305)', 
     await screen.findByText(/4 waiting for your approval to import/),
   ).toBeInTheDocument();
 });
+
+it('lists a change that was set aside as not imported, says why and offers no import (B334)', async () => {
+  const aside = {
+    ...row,
+    pending_change_id: 'pending-aside',
+    created_at: minute(2),
+    set_aside: true,
+  };
+  const p = props({
+    load: vi.fn().mockResolvedValue({ ...page, items: [aside, row], total: 2 }),
+  });
+  render(<WorkspaceImports {...p} />);
+  await screen.findByText(
+    '1 waiting for your approval to import · 1 not imported · 2 saved in all',
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: /Not imported · 1 file/ }),
+  );
+  await screen.findByLabelText('Saved patch');
+  expect(screen.getByRole('status')).toHaveTextContent(
+    /files changed in the code folder after the sandbox made this change/,
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Import selected changes' }),
+  ).toBeNull();
+  expect(p.review).not.toHaveBeenCalled();
+});

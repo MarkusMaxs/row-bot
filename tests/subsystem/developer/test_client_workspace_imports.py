@@ -485,6 +485,20 @@ def imports(domain, monkeypatch, tmp_path):
     return domain
 
 
+def test_a_set_aside_change_is_listed_as_not_imported_and_can_t_be_imported(imports):
+    """B334: a change set aside is no longer waiting; the list says so and import refuses it."""
+    d = imports
+    pending = d.pending({"file.txt": "before\n"}, {"file.txt": "after\n"})
+    d.sandbox.set_pending_change_aside(pending.id, "code_folder_changed")
+    page = d.imports.list_workspace_imports(d.workspace.id, "chat")
+    assert [(item.pending_change_id, item.imported, item.set_aside) for item in page.items] == [
+        (pending.id, False, True)]
+    assert d.sandbox.list_pending_changes(workspace_id=d.workspace.id, thread_id="chat") == []
+    with pytest.raises(ValueError, match="sandbox_change_unavailable"):
+        d.imports.review_workspace_import(d.workspace.id, "chat", pending.id)
+    assert (d.root / "file.txt").read_bytes() == b"before\n"
+
+
 def test_passive_pending_list_and_paged_patch_do_not_run_git_or_write_host(imports, monkeypatch):
     d = imports
     pending = d.pending({"file.txt": "before\n"}, {"file.txt": "after\n"})
