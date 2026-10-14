@@ -237,3 +237,26 @@ it('reads the step that left a process running as its card', () => {
     'Checked a background process',
   );
 });
+
+it('keeps the output open when the settled card replaces the live one', async () => {
+  const processes = io([view({ name: 'Dev server' })]);
+  const first = renderCard(processes);
+  const card = await screen.findByRole('group', {
+    name: /Background process Dev server/,
+  });
+  fireEvent.click(within(card).getByRole('button', { name: 'View output' }));
+  expect(
+    await screen.findByRole('dialog', { name: 'Dev server' }),
+  ).toBeInTheDocument();
+
+  first.unmount();
+  renderCard(processes);
+
+  expect(
+    await screen.findByRole('dialog', { name: 'Dev server' }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Close output' }));
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+  );
+});

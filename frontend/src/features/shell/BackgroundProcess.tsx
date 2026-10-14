@@ -29,6 +29,7 @@ import {
   shortAddress,
   useBackgroundProcesses,
   useNow,
+  useOpenOutput,
   type ProcessIo,
 } from './background-processes';
 
@@ -285,7 +286,7 @@ export function ProcessCard({
   const { want } = feed;
   useEffect(() => want(processId), [want, processId]);
   const view = feed.items.find((item) => item.process_id === processId);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useOpenOutput(processId);
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
   const running = view ? processLive(view) : false;

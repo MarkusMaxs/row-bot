@@ -155,6 +155,9 @@ test('a failed process and a long command that finishes in the background', asyn
   });
   await expect(failed).toBeVisible();
   await expect(failed).not.toContainText('exit code');
+  await expect(
+    transcript.getByText('The tests failed: one assertion in test_login.py.'),
+  ).toBeVisible();
   await failed
     .getByRole('button', { name: 'View output', exact: true })
     .click();

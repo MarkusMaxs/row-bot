@@ -219,6 +219,41 @@ export function useBackgroundProcesses(
   return { ...state, want, merge, refresh };
 }
 
+/**
+ * Which process's output is open from the conversation. It lives outside the
+ * card: when the turn settles, the live card is replaced by the settled one,
+ * and the open output must stay open across that swap.
+ */
+let openOutput = '';
+const openListeners = new Set<() => void>();
+function subscribeOpenOutput(listener: () => void) {
+  openListeners.add(listener);
+  return () => {
+    openListeners.delete(listener);
+  };
+}
+export function setOpenOutput(processId: string) {
+  if (openOutput === processId) return;
+  openOutput = processId;
+  openListeners.forEach((listener) => listener());
+}
+/** Whether this process's output is open, and a way to open or close it. */
+export function useOpenOutput(processId: string) {
+  const open = useSyncExternalStore(
+    subscribeOpenOutput,
+    () => openOutput === processId,
+    () => false,
+  );
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (next) setOpenOutput(processId);
+      else if (openOutput === processId) setOpenOutput('');
+    },
+    [processId],
+  );
+  return [open, setOpen] as const;
+}
+
 /** The time now, once a second while `ticking` (a running time on screen). */
 export function useNow(ticking: boolean) {
   const [now, setNow] = useState(() => Date.now());
