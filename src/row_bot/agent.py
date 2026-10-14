@@ -6253,7 +6253,7 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                     if text.strip():
                         logger.info("invoke_agent: completed in %.1fs, response_len=%d",
                                     time.monotonic() - _invoke_t0, len(text))
-                        return text
+                        return text + _invoked_output_limit_notice(msg, text)
         logger.warning("invoke_agent: no response generated (%.1fs)",
                        time.monotonic() - _invoke_t0)
         finalized = _finalize_tool_result_answer_text(agent, config)
@@ -6283,7 +6283,7 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
             if text.strip():
                 logger.info("invoke_agent: completed in %.1fs, response_len=%d",
                             time.monotonic() - _invoke_t0, len(text))
-                return text
+                return text + _invoked_output_limit_notice(msg, text)
     logger.warning("invoke_agent: no response generated (%.1fs)",
                    time.monotonic() - _invoke_t0)
     finalized = _finalize_tool_result_answer_text(agent, config)
@@ -7153,10 +7153,14 @@ def stream_chat_only(
                 )
         except Exception:
             logger.debug("Settled Chat Only context snapshot failed", exc_info=True)
+    # As in Agent mode: the saved reply stays the model's own text.
+    output_limit_notice = _output_limit_notice(provider_stop_reason(latest_response_metadata), answer)
+    if output_limit_notice:
+        yield ("token", output_limit_notice)
     yield from _reasoning_notice_events(thread_id)
     if thread_id and answer:
         yield from _platform_output_binding_events(config, output_message)
-    yield ("done", answer)
+    yield ("done", answer + output_limit_notice)
 
 
 def _memory_recall_warning_events(config: dict):
@@ -7702,6 +7706,28 @@ def _latest_ai_text_from_state(agent, config: dict) -> str:
 def _joined_visible_answer(parts: list[str]) -> str:
     text = "".join(str(part or "") for part in parts)
     return text if text.strip() else ""
+
+
+# Ends a reply the provider cut off at its output token limit (F17). The saved
+# message keeps the model's own text; the client marks that row instead.
+_OUTPUT_LIMIT_NOTICE = (
+    "\n\n⚠️ *This response was cut short by the model's output token "
+    "limit. You can ask me to continue or rephrase for a shorter answer.*"
+)
+
+
+def _output_limit_notice(stop_reason: str, answer: str) -> str:
+    """The notice a visible reply that stopped at the output limit ends with, else ""."""
+    if not (stopped_at_output_limit(stop_reason) and str(answer or "").strip()):
+        return ""
+    logger.warning("Model output truncated (finish_reason=%s) — "
+                   "response was cut short by the provider's output token limit", stop_reason)
+    return _OUTPUT_LIMIT_NOTICE
+
+
+def _invoked_output_limit_notice(message: Any, text: str) -> str:
+    """The notice for a workflow or delegated agent's final reply, read from its saved message."""
+    return _output_limit_notice(provider_stop_reason(getattr(message, "response_metadata", None)), text)
 
 
 def _latest_ai_message_from_state(agent, config: dict):
@@ -8609,6 +8635,7 @@ def _stream_graph(agent, input_data, config: dict,
     latest_ai_message = _latest_ai_message_from_state(agent, config)
 
     visible_answer = _joined_visible_answer(full_answer)
+    answer_streamed = bool(visible_answer)
     if not visible_answer:
         fallback_text = _latest_ai_text_from_state(agent, config)
         if fallback_text:
@@ -8688,15 +8715,14 @@ def _stream_graph(agent, input_data, config: dict,
         yield ("error", _reasoning_only_msg)
         return
 
-    # Warn if the model stopped due to output token limit
-    visible_answer = _joined_visible_answer(full_answer)
-    if stopped_at_output_limit(_finish_reason) and visible_answer:
-        logger.warning("Model output truncated (finish_reason=%s) — "
-                       "response was cut short by the provider's output token limit", _finish_reason)
-        full_answer.append(
-            "\n\n⚠️ *This response was cut short by the model's output token "
-            "limit. You can ask me to continue or rephrase for a shorter answer.*"
-        )
+    # Say so when the model stopped at its output token limit.
+    output_limit_notice = _output_limit_notice(_finish_reason, _joined_visible_answer(full_answer))
+    if output_limit_notice:
+        full_answer.append(output_limit_notice)
+        if answer_streamed:
+            # A reply assembled from tokens (channels) ends with it too. An
+            # answer read back from the checkpoint arrives whole in "done".
+            yield ("token", output_limit_notice)
 
     try:
         preparation_inputs = _last_preparation_inputs(config)

@@ -5,6 +5,7 @@ import {
   Repeat2,
   RotateCcw,
   CircleStop,
+  Scissors,
   TriangleAlert,
   Volume2,
   VolumeX,
@@ -331,6 +332,18 @@ export const TranscriptMessage = memo(function TranscriptMessage({
           <span className="turn-chip" data-tone="neutral">
             <CircleStop aria-hidden />
             {stop.label}
+          </span>
+        )}
+        {row.cut_short && (
+          // The provider stopped this reply at its output token limit.
+          <span
+            className="turn-chip"
+            data-tone="neutral"
+            data-kind="cut-short"
+            title="Ask to continue, or for a shorter answer."
+          >
+            <Scissors aria-hidden />
+            Cut short by the output limit
           </span>
         )}
         {children}
