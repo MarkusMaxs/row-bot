@@ -2568,10 +2568,8 @@ class ComputerUseService:
                 code="approval_denied",
             )
         with self._lock:
-            from row_bot.approval_policy import normalize_approval_mode
-
-            if normalize_approval_mode(approval_mode) == "approve":
-                self._approved_apps.add(permission_key)
+            # Approved for this session, by the person, the reviewer or Full autonomy.
+            self._approved_apps.add(permission_key)
             self._state = SessionState.OBSERVING
         self._notify()
 
@@ -2628,10 +2626,8 @@ class ComputerUseService:
                 code="approval_denied",
             )
         with self._lock:
-            from row_bot.approval_policy import normalize_approval_mode
-
-            if normalize_approval_mode(approval_mode) == "approve":
-                self._approved_apps.add(permission_key)
+            # Approved for this session, by the person, the reviewer or Full autonomy.
+            self._approved_apps.add(permission_key)
             self._state = SessionState.OBSERVING
         self._notify()
 
