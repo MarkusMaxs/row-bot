@@ -1,32 +1,18 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 import pytest
 
 
-def _fresh_agent_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    for name in (
-        "row_bot.tasks",
-        "row_bot.threads",
-        "row_bot.agent_profiles",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_profiles as agent_profiles
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_profiles = importlib.reload(agent_profiles)
+def _fresh_agent_modules(tmp_path, reload_for_data_dir):
+    tasks, threads, agent_profiles = reload_for_data_dir(
+        tmp_path / "data", "row_bot.tasks", "row_bot.threads", "row_bot.agent_profiles"
+    )
     return agent_profiles, tasks, threads
 
 
-def test_builtin_agent_profile_registry(tmp_path, monkeypatch):
-    agent_profiles, tasks, _threads = _fresh_agent_modules(tmp_path, monkeypatch)
+def test_builtin_agent_profile_registry(tmp_path, reload_for_data_dir):
+    agent_profiles, tasks, _threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     profiles = agent_profiles.list_agent_profiles()
     slugs = {profile["slug"] for profile in profiles}
@@ -173,8 +159,8 @@ def test_builtin_agent_profile_registry(tmp_path, monkeypatch):
     assert "memory_policy_json" not in columns
 
 
-def test_db_backed_profile_crud_and_duplicate_builtin(tmp_path, monkeypatch):
-    agent_profiles, _tasks, _threads = _fresh_agent_modules(tmp_path, monkeypatch)
+def test_db_backed_profile_crud_and_duplicate_builtin(tmp_path, reload_for_data_dir):
+    agent_profiles, _tasks, _threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     saved = agent_profiles.save_agent_profile(
         slug="release_reviewer",
@@ -227,8 +213,8 @@ def test_db_backed_profile_crud_and_duplicate_builtin(tmp_path, monkeypatch):
     assert agent_profiles.require_agent_profile("quality_reviewer")["id"] == alias_override["id"]
 
 
-def test_profile_snapshot_is_immutable_after_edit(tmp_path, monkeypatch):
-    agent_profiles, _tasks, _threads = _fresh_agent_modules(tmp_path, monkeypatch)
+def test_profile_snapshot_is_immutable_after_edit(tmp_path, reload_for_data_dir):
+    agent_profiles, _tasks, _threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     saved = agent_profiles.save_agent_profile(
         slug="triage_helper",
@@ -255,8 +241,8 @@ def test_profile_snapshot_is_immutable_after_edit(tmp_path, monkeypatch):
     assert snapshot["snapshot_profile_id"] == saved["id"]
 
 
-def test_profile_resolution_cannot_broaden_parent_approval(tmp_path, monkeypatch):
-    agent_profiles, _tasks, _threads = _fresh_agent_modules(tmp_path, monkeypatch)
+def test_profile_resolution_cannot_broaden_parent_approval(tmp_path, reload_for_data_dir):
+    agent_profiles, _tasks, _threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     saved = agent_profiles.save_agent_profile(
         slug="too_open",
@@ -278,8 +264,8 @@ def test_profile_resolution_cannot_broaden_parent_approval(tmp_path, monkeypatch
     assert resolved["warnings"]
 
 
-def test_thread_profile_pointer_helpers(tmp_path, monkeypatch):
-    agent_profiles, _tasks, threads = _fresh_agent_modules(tmp_path, monkeypatch)
+def test_thread_profile_pointer_helpers(tmp_path, reload_for_data_dir):
+    agent_profiles, _tasks, threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     tid = threads.create_thread("Profiled thread")
     stored = threads._set_thread_agent_profile(tid, "quality_reviewer")
@@ -297,8 +283,8 @@ def test_thread_profile_pointer_helpers(tmp_path, monkeypatch):
         threads._set_thread_agent_profile(tid, "missing_profile")
 
 
-def test_workflow_profile_fields_strip_step_profile_policy(tmp_path, monkeypatch):
-    agent_profiles, tasks, _threads = _fresh_agent_modules(tmp_path, monkeypatch)
+def test_workflow_profile_fields_strip_step_profile_policy(tmp_path, reload_for_data_dir):
+    agent_profiles, tasks, _threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     task_id = tasks.create_task(
         "Review workflow",

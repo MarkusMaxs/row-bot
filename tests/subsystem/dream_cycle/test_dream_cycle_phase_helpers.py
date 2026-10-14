@@ -9,19 +9,18 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def fresh_dream_and_kg(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
+def fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.knowledge_graph as kg
     import row_bot.dream_cycle as dream_cycle
 
-    kg = importlib.reload(kg)
+    (kg,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.knowledge_graph")
     kg._skip_reindex = True
-    dream_cycle = importlib.reload(dream_cycle)
+    (dream_cycle,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.dream_cycle")
     return dream_cycle, kg
 
 
-def test_find_merge_candidates_uses_similarity_type_and_subject_guards(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_find_merge_candidates_uses_similarity_type_and_subject_guards(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     alice = {"id": "a", "entity_type": "person", "subject": "Alice", "description": "Writes tests"}
     bob = {"id": "b", "entity_type": "person", "subject": "Bob", "description": "Also writes tests"}
     project = {"id": "p", "entity_type": "project", "subject": "Alice", "description": "Wrong type"}
@@ -46,8 +45,8 @@ def test_find_merge_candidates_uses_similarity_type_and_subject_guards(tmp_path,
     assert candidates == [(alice, {**bob, "score": 0.99}, 0.99)]
 
 
-def test_enrichment_input_helpers_filter_merged_and_noisy_entities(tmp_path, monkeypatch) -> None:
-    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_enrichment_input_helpers_filter_merged_and_noisy_entities(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     entities = [
         {"id": "old", "subject": "Old", "description": "short", "aliases": "O", "updated_at": "1"},
         {"id": "merged", "subject": "Merged", "description": "tiny", "aliases": "", "updated_at": "0"},
@@ -65,8 +64,8 @@ def test_enrichment_input_helpers_filter_merged_and_noisy_entities(tmp_path, mon
     assert other_subjects == {"old", "long"}
 
 
-def test_extract_relevant_sentences_and_conversation_mentions(tmp_path, monkeypatch) -> None:
-    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_extract_relevant_sentences_and_conversation_mentions(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
 
     text = "User: Alice likes tea. Bob deploys. Assistant: Alice writes tests! Other sentence."
     assert dream_cycle._extract_relevant_sentences(text, {"alice"}) == (
@@ -94,8 +93,8 @@ def test_extract_relevant_sentences_and_conversation_mentions(tmp_path, monkeypa
     ]
 
 
-def test_validate_enrichment_allows_related_subjects_and_rejects_unrelated(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_validate_enrichment_allows_related_subjects_and_rejects_unrelated(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     entity = {"id": "alice", "subject": "Alice"}
 
     monkeypatch.setattr(kg, "get_relations", lambda *_args, **_kwargs: [{"peer_subject": "Bob"}])
@@ -104,8 +103,8 @@ def test_validate_enrichment_allows_related_subjects_and_rejects_unrelated(tmp_p
     assert dream_cycle._validate_enrichment("Alice owns Carol deployment facts.", entity, {"carol"}) is False
 
 
-def test_cooccurring_pairs_ignore_rejections_existing_edges_and_duplicate_subjects(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_cooccurring_pairs_ignore_rejections_existing_edges_and_duplicate_subjects(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     alice = {"id": "alice", "entity_type": "person", "subject": "Alice", "aliases": "A.", "description": ""}
     bob = {"id": "bob", "entity_type": "person", "subject": "Bob", "aliases": "", "description": ""}
     carol = {"id": "carol", "entity_type": "person", "subject": "Carol", "aliases": "", "description": ""}
@@ -131,8 +130,8 @@ def test_cooccurring_pairs_ignore_rejections_existing_edges_and_duplicate_subjec
     assert pairs == []
 
 
-def test_relation_inference_handles_invalid_json_model_failure_and_reverse_direction(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_relation_inference_handles_invalid_json_model_failure_and_reverse_direction(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice", "Alice tests.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project.", source="test")
 
@@ -165,8 +164,8 @@ def test_relation_inference_handles_invalid_json_model_failure_and_reverse_direc
     assert kg.get_relations(project["id"], direction="outgoing")[0]["relation_type"] == "maintains"
 
 
-def test_insights_phase_stores_added_and_merged_insights(tmp_path, monkeypatch) -> None:
-    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_insights_phase_stores_added_and_merged_insights(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     statuses: list[str] = []
 
     import row_bot.insights as insights
@@ -214,10 +213,10 @@ def test_insights_phase_stores_added_and_merged_insights(tmp_path, monkeypatch) 
     assert statuses[-1] == "Insights phase: 1 new, 1 merged"
 
 
-def test_insights_phase_reads_a_schema_reply_with_its_own_cap(tmp_path, monkeypatch) -> None:
+def test_insights_phase_reads_a_schema_reply_with_its_own_cap(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     """WP C1: insights come back as ``{"insights": [...]}`` where the provider takes a
     schema; an insight without a skill draft carries ``null``, never an empty draft."""
-    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+    dream_cycle, _kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.insights as insights
 
     reply = {"insights": [{

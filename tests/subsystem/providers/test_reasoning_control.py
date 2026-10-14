@@ -98,7 +98,7 @@ def test_llm_cache_isolated_by_reasoning_fingerprint(monkeypatch) -> None:
         "create_chat_model",
         lambda model, provider, reasoning_plan=None: created.append(reasoning_plan.fingerprint) or object(),
     )
-    models._override_llm_cache.clear()
+    monkeypatch.setattr(models, "_override_llm_cache", {})  # the stand-in clients stay with this test
 
     low_first = models._get_cloud_llm("model:openai:gpt-5", reasoning_plan=low)
     low_second = models._get_cloud_llm("model:openai:gpt-5", reasoning_plan=low)

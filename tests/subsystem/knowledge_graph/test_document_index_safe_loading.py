@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import hashlib
 import json
 import pickle
@@ -13,12 +12,10 @@ from tests.subsystem.knowledge_graph.test_document_index_shards import FakeEmbed
 
 
 @pytest.fixture
-def codec(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.document_index as document_index
+def codec(tmp_path, monkeypatch, reload_for_data_dir):
     from langchain_community.vectorstores import FAISS
 
-    module = importlib.reload(document_index)
+    (module,) = reload_for_data_dir(tmp_path / "data", "row_bot.document_index")
     embedding = FakeEmbeddings()
     store = FAISS.from_documents([
         Document(page_content="first", metadata={"source": "first.txt", "nested": [1, True, None]}),

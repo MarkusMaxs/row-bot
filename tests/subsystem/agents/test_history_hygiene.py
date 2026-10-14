@@ -176,6 +176,7 @@ def test_large_results_in_older_turns_wait_for_compaction_instead_of_shrinking(m
 
     contents = tool_contents(conversation.request())
 
+    assert conversation.summarizer.requests  # compaction is asked to make the room (it fails here)
     assert all("[Tool result shortened" not in contents[call] for call in calls)
 
 

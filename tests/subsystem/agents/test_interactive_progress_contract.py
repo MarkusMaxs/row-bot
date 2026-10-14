@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import importlib
 from types import SimpleNamespace
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
-def _fresh_agent(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.agent as agent
-
-    return importlib.reload(agent)
+def _fresh_agent(tmp_path, reload_for_data_dir):
+    (agent,) = reload_for_data_dir(tmp_path / "data", "row_bot.agent")
+    return agent
 
 
 def _quiet_prompt_dependencies(agent, monkeypatch) -> None:
@@ -55,8 +52,8 @@ def _prompt_for(agent, *, surface: str, selected_mode: str = "agent", channel_st
     )
 
 
-def test_interactive_progress_contract_is_injected_for_interactive_agent_surfaces(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_interactive_progress_contract_is_injected_for_interactive_agent_surfaces(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
     _quiet_prompt_dependencies(agent, monkeypatch)
 
     # remote_client: a chat on another of the owner's signed-in devices.
@@ -67,8 +64,8 @@ def test_interactive_progress_contract_is_injected_for_interactive_agent_surface
         assert "do not narrate every tool call" in prompt
 
 
-def test_streaming_channel_gets_sparse_progress_contract(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_streaming_channel_gets_sparse_progress_contract(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
     _quiet_prompt_dependencies(agent, monkeypatch)
 
     prompt = _prompt_for(agent, surface="channel", channel_streaming=True)
@@ -77,8 +74,8 @@ def test_streaming_channel_gets_sparse_progress_contract(tmp_path, monkeypatch):
     assert "keep progress updates especially sparse" in prompt
 
 
-def test_progress_contract_is_omitted_for_noninteractive_or_nonstreaming_paths(tmp_path, monkeypatch):
-    agent = _fresh_agent(tmp_path, monkeypatch)
+def test_progress_contract_is_omitted_for_noninteractive_or_nonstreaming_paths(tmp_path, monkeypatch, reload_for_data_dir):
+    agent = _fresh_agent(tmp_path, reload_for_data_dir)
     _quiet_prompt_dependencies(agent, monkeypatch)
 
     assert "INTERACTIVE PROGRESS:" not in _prompt_for(agent, surface="approval")

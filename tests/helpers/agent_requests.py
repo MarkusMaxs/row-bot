@@ -69,6 +69,21 @@ def tool_contents(messages: list[BaseMessage]) -> dict[str, str]:
     }
 
 
+class UnavailableSummarizer:
+    """The compaction model: records each request and fails, as a summarizer that can't be reached.
+
+    Compaction never builds a provider client here: with a key left in the environment (or a client
+    cached) by another test, that client called the real provider (PR #438).
+    """
+
+    def __init__(self) -> None:
+        self.requests: list[list[BaseMessage]] = []
+
+    def invoke(self, messages: list[BaseMessage], *args: Any, **kwargs: Any) -> AIMessage:
+        self.requests.append(list(messages))
+        raise RuntimeError("This test has no summarizer.")
+
+
 class AgentConversation:
     """One thread on a fixed OpenAI-chat model, through the real Agent preparation path."""
 
@@ -84,6 +99,7 @@ class AgentConversation:
         create_thread: bool = True,
     ) -> None:
         self.agent = agent
+        self.summarizer = UnavailableSummarizer()
         self.thread_id = thread_id or f"agent-requests-{uuid.uuid4().hex[:10]}"
         if create_thread:
             from row_bot import threads
@@ -105,6 +121,7 @@ class AgentConversation:
         monkeypatch.setattr(agent, "is_cloud_model", lambda model: True)
         monkeypatch.setattr(agent, "get_cloud_provider", lambda model: "openai")
         monkeypatch.setattr(agent, "is_background_workflow", lambda: False)
+        monkeypatch.setattr(agent, "_compaction_model", lambda inputs, output_tokens: self.summarizer)
         monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block", lambda: "SELF KNOWLEDGE")
         monkeypatch.setattr("row_bot.self_knowledge.build_dynamic_self_knowledge_block", lambda: "STATE")
         monkeypatch.setattr("row_bot.skills.get_skills_prompt", lambda *args, **kwargs: "")

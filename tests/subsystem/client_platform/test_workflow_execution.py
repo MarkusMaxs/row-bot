@@ -7,8 +7,8 @@ import threading
 from tests.fixtures.tasks import fresh_tasks_module
 
 
-def test_f_r02_resumed_workflow_stop_reaches_scope_and_retains_owner(tmp_path, monkeypatch):
-    tasks = fresh_tasks_module(tmp_path, monkeypatch)
+def test_f_r02_resumed_workflow_stop_reaches_scope_and_retains_owner(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot import threads
     # The module the workflow imports at call time: patching an older module
     # object let the real resume run (no model chosen) in a full run.

@@ -11,11 +11,8 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def _reload_logging_config(monkeypatch, tmp_path):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    sys.modules.pop("row_bot.logging_config", None)
-    import row_bot.logging_config as logging_config
-
+def _reload_logging_config(reload_for_data_dir, tmp_path):
+    (logging_config,) = reload_for_data_dir(tmp_path, "row_bot.logging_config")
     return logging_config
 
 
@@ -27,8 +24,8 @@ def _detach_file_handler(logging_config) -> None:
         logging_config._file_handler = None
 
 
-def test_json_formatter_preserves_core_extra_and_exception_fields(monkeypatch, tmp_path) -> None:
-    logging_config = _reload_logging_config(monkeypatch, tmp_path)
+def test_json_formatter_preserves_core_extra_and_exception_fields(reload_for_data_dir, tmp_path) -> None:
+    logging_config = _reload_logging_config(reload_for_data_dir, tmp_path)
     formatter = logging_config.JsonFormatter()
 
     record = logging.LogRecord("test.logger", logging.INFO, "test.py", 1, "Hello %s", ("world",), None)
@@ -54,8 +51,8 @@ def test_json_formatter_preserves_core_extra_and_exception_fields(monkeypatch, t
     assert "ValueError" in parsed_failed["exc"]
 
 
-def test_setup_is_idempotent_and_recent_log_stats_are_structured(monkeypatch, tmp_path) -> None:
-    logging_config = _reload_logging_config(monkeypatch, tmp_path)
+def test_setup_is_idempotent_and_recent_log_stats_are_structured(reload_for_data_dir, tmp_path) -> None:
+    logging_config = _reload_logging_config(reload_for_data_dir, tmp_path)
     try:
         logging_config.setup_file_logging()
         logging_config.setup_file_logging()

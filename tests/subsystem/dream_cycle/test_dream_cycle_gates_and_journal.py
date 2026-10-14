@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -17,17 +16,14 @@ def _chosen_model(monkeypatch):
     monkeypatch.setattr(models, "_current_model", "model:ollama:fixture-model")
 
 
-def fresh_dream_cycle(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    import row_bot.knowledge_graph as kg
-    import row_bot.dream_cycle as dream_cycle
+def fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir):
 
-    importlib.reload(kg)
-    return importlib.reload(dream_cycle)
+    reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.knowledge_graph")
+    return reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.dream_cycle")[0]
 
 
-def test_config_defaults_persist_and_invalid_windows_are_rejected(tmp_path, monkeypatch) -> None:
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+def test_config_defaults_persist_and_invalid_windows_are_rejected(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
 
     assert dream_cycle.get_config()["enabled"] is True
     dream_cycle.set_enabled(False)
@@ -45,8 +41,8 @@ def test_config_defaults_persist_and_invalid_windows_are_rejected(tmp_path, monk
     assert dream_cycle.get_config()["enabled"] is True
 
 
-def test_journal_is_append_only_capped_and_status_reports_last_run(tmp_path, monkeypatch) -> None:
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+def test_journal_is_append_only_capped_and_status_reports_last_run(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
 
     for idx in range(105):
         dream_cycle._append_journal(
@@ -67,8 +63,8 @@ def test_journal_is_append_only_capped_and_status_reports_last_run(tmp_path, mon
     assert status["last_summary"] == "summary 104"
 
 
-def test_rejection_cache_keys_unordered_pairs_on_their_evidence_and_expires(tmp_path, monkeypatch) -> None:
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+def test_rejection_cache_keys_unordered_pairs_on_their_evidence_and_expires(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
     pair = dream_cycle._pair_key("b", "a")
 
     dream_cycle._record_rejection("infer", pair, "prompt with the evidence")
@@ -83,8 +79,8 @@ def test_rejection_cache_keys_unordered_pairs_on_their_evidence_and_expires(tmp_
     assert not dream_cycle._rejected_with_same_evidence("infer", pair, "prompt with the evidence")
 
 
-def test_time_only_rejections_from_before_are_asked_again(tmp_path, monkeypatch) -> None:
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+def test_time_only_rejections_from_before_are_asked_again(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
     dream_cycle._REJECTION_CACHE_FILE.write_text(
         '{"a|b": "%s"}' % datetime.now(timezone.utc).isoformat(), encoding="utf-8")
 
@@ -92,8 +88,8 @@ def test_time_only_rejections_from_before_are_asked_again(tmp_path, monkeypatch)
     assert not dream_cycle._rejected_with_same_evidence("infer", "a|b", "any prompt")
 
 
-def test_window_and_today_checks_use_persisted_journal(tmp_path, monkeypatch) -> None:
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+def test_window_and_today_checks_use_persisted_journal(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
 
     class FixedDateTime(datetime):
         @classmethod
@@ -116,10 +112,10 @@ def test_window_and_today_checks_use_persisted_journal(tmp_path, monkeypatch) ->
     assert dream_cycle._already_ran_today() is False
 
 
-def test_should_dream_rejects_each_gate_and_accepts_clean_path(tmp_path, monkeypatch) -> None:
+def test_should_dream_rejects_each_gate_and_accepts_clean_path(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     from row_bot.runtime import executions
 
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
     registry = executions.GenerationRuntimeRegistry()
     monkeypatch.setattr(executions, "generation_registry", registry)
 
@@ -152,7 +148,7 @@ def test_should_dream_rejects_each_gate_and_accepts_clean_path(tmp_path, monkeyp
     assert dream_cycle._should_dream() is True
 
 
-def test_a_loaded_but_idle_local_model_does_not_hold_dream_back(tmp_path, monkeypatch) -> None:
+def test_a_loaded_but_idle_local_model_does_not_hold_dream_back(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     """F48: Ollama keeps a model loaded for its keep-alive after every reply, and ``/api/ps``
     has no count of requests in flight, so a loaded model was read as "busy" and Dream never
     ran while one was resident. Row-Bot's own idle and generation state decide instead."""
@@ -161,7 +157,7 @@ def test_a_loaded_but_idle_local_model_does_not_hold_dream_back(tmp_path, monkey
 
     from row_bot.runtime import executions
 
-    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch)
+    dream_cycle = fresh_dream_cycle(tmp_path, monkeypatch, reload_for_data_dir)
     monkeypatch.setattr(executions, "generation_registry", executions.GenerationRuntimeRegistry())
     for gate in ("is_enabled", "_in_dream_window", "_is_idle"):
         monkeypatch.setattr(dream_cycle, gate, lambda: True)

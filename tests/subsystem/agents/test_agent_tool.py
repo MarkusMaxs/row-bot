@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from types import SimpleNamespace
 
 import pytest
 
 
-def _fresh_agent_tool_modules(tmp_path, monkeypatch):
+def _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    *_, agent_runs, _context, _runner, _storage, agent_tool = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
@@ -21,16 +19,7 @@ def _fresh_agent_tool_modules(tmp_path, monkeypatch):
         "row_bot.agent_runner",
         "row_bot.developer.storage",
         "row_bot.tools.agent_tool",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.agent_runs as agent_runs
-    import row_bot.tools.agent_tool as agent_tool
-
-    tasks = importlib.reload(tasks)
-    agent_runs = importlib.reload(agent_runs)
-    agent_tool = importlib.reload(agent_tool)
+    )
     # Nothing is preset since v4 onboarding (B147): delegation needs the chat
     # model the person chose, so these tests choose one (B158).
     import row_bot.models as models
@@ -59,8 +48,8 @@ def _chat_snapshot() -> dict:
     }
 
 
-def test_agents_tool_registers_expected_subtools(tmp_path, monkeypatch):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_agents_tool_registers_expected_subtools(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     from row_bot.tools import registry
 
     registered = registry.get_tool("agents")
@@ -81,8 +70,8 @@ def test_agents_tool_registers_expected_subtools(tmp_path, monkeypatch):
     assert registered.enabled_by_default is True
 
 
-def test_delegate_work_uses_runner_and_returns_public_run(tmp_path, monkeypatch):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_delegate_work_uses_runner_and_returns_public_run(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     calls = {}
 
     def fake_spawn(objective, **kwargs):
@@ -135,8 +124,8 @@ def test_delegate_work_uses_runner_and_returns_public_run(tmp_path, monkeypatch)
     assert "continue useful independent work" in payload["next_action"].lower()
 
 
-def test_delegate_work_persists_initial_parent_continuation(tmp_path, monkeypatch):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_delegate_work_persists_initial_parent_continuation(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     monkeypatch.setattr(
         agent_tool,
@@ -238,8 +227,9 @@ def test_checkpoint_repair_closes_only_orphaned_tool_calls() -> None:
 def test_optional_background_child_is_still_a_durable_member(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     calls = {}
 
     def fake_spawn(objective, **kwargs):
@@ -270,8 +260,8 @@ def test_optional_background_child_is_still_a_durable_member(
     assert calls["kwargs"]["orchestration_required"] is False
 
 
-def test_delegate_work_registers_workspace_path_and_forwards_id(tmp_path, monkeypatch):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_delegate_work_registers_workspace_path_and_forwards_id(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     workspace_folder = tmp_path / "independent-child"
     workspace_folder.mkdir()
     calls = {}
@@ -309,8 +299,9 @@ def test_delegate_work_registers_workspace_path_and_forwards_id(tmp_path, monkey
 def test_delegate_work_rejects_conflicting_workspace_inputs_without_spawning(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     workspace_folder = tmp_path / "conflicting-child"
     workspace_folder.mkdir()
     calls = {"count": 0}
@@ -337,8 +328,9 @@ def test_delegate_work_rejects_conflicting_workspace_inputs_without_spawning(
 def test_delegate_work_rejects_missing_workspace_path_without_spawning(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     missing_folder = tmp_path / "missing-child"
     calls = {"count": 0}
 
@@ -361,7 +353,7 @@ def test_delegate_work_rejects_missing_workspace_path_without_spawning(
     assert missing_folder.exists() is False
 
 
-def test_delegate_work_resolves_optional_model_to_canonical_ref(tmp_path, monkeypatch):
+def test_delegate_work_resolves_optional_model_to_canonical_ref(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "claude-sonnet-4-5",
@@ -369,7 +361,7 @@ def test_delegate_work_resolves_optional_model_to_canonical_ref(tmp_path, monkey
         display_name="Claude Work",
         capabilities_snapshot=_chat_snapshot(),
     )
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     calls = {}
 
     def fake_spawn(objective, **kwargs):
@@ -402,7 +394,7 @@ def test_delegate_work_resolves_optional_model_to_canonical_ref(tmp_path, monkey
     assert payload["run"]["model_override"] == "model:anthropic:claude-sonnet-4-5"
 
 
-def test_delegate_work_rejects_unknown_or_ambiguous_model_without_spawning(tmp_path, monkeypatch):
+def test_delegate_work_rejects_unknown_or_ambiguous_model_without_spawning(tmp_path, monkeypatch, reload_for_data_dir):
     selection = _isolated_model_choices(tmp_path, monkeypatch)
     selection.add_quick_choice_for_model(
         "lab-chat",
@@ -416,7 +408,7 @@ def test_delegate_work_rejects_unknown_or_ambiguous_model_without_spawning(tmp_p
         display_name="Shared Model",
         capabilities_snapshot=_chat_snapshot(),
     )
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     calls = {"count": 0}
 
     def fake_spawn(objective, **kwargs):
@@ -441,9 +433,9 @@ def test_delegate_work_rejects_unknown_or_ambiguous_model_without_spawning(tmp_p
     assert calls["count"] == 0
 
 
-def test_delegate_work_rejects_unpinned_canonical_model_without_spawning(tmp_path, monkeypatch):
+def test_delegate_work_rejects_unpinned_canonical_model_without_spawning(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_model_choices(tmp_path, monkeypatch)
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     calls = {"count": 0}
 
     def fake_spawn(objective, **kwargs):
@@ -524,8 +516,8 @@ def test_agent_wait_schema_accepts_exactly_one_target() -> None:
         })
 
 
-def test_agent_wait_group_rejects_another_parent_thread(tmp_path, monkeypatch):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_agent_wait_group_rejects_another_parent_thread(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.agent_orchestrator as orchestrator
 
     orchestration = orchestrator.create_or_get_orchestration(
@@ -554,8 +546,9 @@ def test_agent_wait_group_rejects_another_parent_thread(tmp_path, monkeypatch):
 def test_agent_wait_group_returns_ordered_terminal_results_and_events(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.agent_orchestrator as orchestrator
 
     orchestration = orchestrator.create_or_get_orchestration(
@@ -603,8 +596,9 @@ def test_agent_wait_group_returns_ordered_terminal_results_and_events(
 def test_agent_wait_group_timeout_reports_outstanding_without_completion(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ):
-    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.agent_orchestrator as orchestrator
 
     orchestration = orchestrator.create_or_get_orchestration(
@@ -643,8 +637,8 @@ def test_agent_wait_group_timeout_reports_outstanding_without_completion(
     assert payload["child_event_ids"] == []
 
 
-def test_delegate_work_wait_timeout_message_is_explicit(tmp_path, monkeypatch):
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_delegate_work_wait_timeout_message_is_explicit(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     def fake_spawn(objective, **kwargs):
         return {
@@ -666,8 +660,8 @@ def test_delegate_work_wait_timeout_message_is_explicit(tmp_path, monkeypatch):
     assert payload["message"] == "Child Agent is still running after the wait timeout."
 
 
-def test_agent_status_profiles_and_profile_save(tmp_path, monkeypatch):
-    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_agent_status_profiles_and_profile_save(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
 
     run = agent_runs.create_agent_run(
         run_id="status-run",
@@ -719,8 +713,8 @@ def test_agent_status_profiles_and_profile_save(tmp_path, monkeypatch):
     assert saved_payload["profile"]["skills"] == ["release_notes"]
 
 
-def test_agent_promote_creates_profile_and_disabled_workflow(tmp_path, monkeypatch):
-    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_agent_promote_creates_profile_and_disabled_workflow(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     import row_bot.tasks as tasks
 
     run = agent_runs.create_agent_run(
@@ -758,8 +752,8 @@ def test_agent_promote_creates_profile_and_disabled_workflow(tmp_path, monkeypat
     assert "Release checklist passed." in task["steps"][0]["prompt"]
 
 
-def test_agent_message_records_parent_steering_for_nonterminal_run(tmp_path, monkeypatch):
-    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+def test_agent_message_records_parent_steering_for_nonterminal_run(tmp_path, monkeypatch, reload_for_data_dir):
+    agent_tool, agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     queued = agent_runs.create_agent_run(
         run_id="queued-message",
         kind="subagent",
@@ -784,9 +778,9 @@ def test_agent_message_records_parent_steering_for_nonterminal_run(tmp_path, mon
     assert "cannot be steered" in terminal["message"]
 
 
-def test_delegate_work_takes_its_parent_from_the_running_turn_not_from_the_model(tmp_path, monkeypatch):
+def test_delegate_work_takes_its_parent_from_the_running_turn_not_from_the_model(tmp_path, monkeypatch, reload_for_data_dir):
     """The parent thread, run and orchestration are runtime facts; the model can't name or forge them (WP D1)."""
-    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch)
+    agent_tool, _agent_runs = _fresh_agent_tool_modules(tmp_path, monkeypatch, reload_for_data_dir)
     calls = {}
 
     def fake_spawn(objective, **kwargs):

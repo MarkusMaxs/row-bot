@@ -113,7 +113,9 @@ def test_provider_auth_store_reports_keyring_when_saved_key_is_loaded_into_env(t
         assert os.environ.get("OPENAI_API_KEY") == "sk-saved-secret"
         assert provider_secret_status("openai")["source"] == "keyring"
 
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-env-secret")
+        # Not monkeypatch.setenv: it would put the saved key back into the environment
+        # when it undoes, after delete_key below had removed it.
+        os.environ["OPENAI_API_KEY"] = "sk-env-secret"
         assert get_provider_secret("openai") == "sk-env-secret"
         assert provider_secret_status("openai")["source"] == "environment"
     finally:

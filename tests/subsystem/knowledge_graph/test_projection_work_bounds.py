@@ -72,10 +72,10 @@ def test_empty_rebuild_does_not_load_embedding_provider(projection_stack, monkey
     assert kg.memory_vector_status()["ready"]
 
 
-def test_projection_enumeration_exceeds_historic_cap_without_embedding_dimensions(tmp_path, monkeypatch):
+def test_projection_enumeration_exceeds_historic_cap_without_embedding_dimensions(tmp_path, monkeypatch, reload_for_data_dir):
     from tests.fixtures.knowledge_graph import fresh_knowledge_graph
 
-    kg = fresh_knowledge_graph(tmp_path, monkeypatch)
+    kg = fresh_knowledge_graph(tmp_path, monkeypatch, reload_for_data_dir)
     monkeypatch.setattr(kg, "_get_embedding_model", lambda **_kw: pytest.fail("enumeration must not load models"))
     conn = kg._get_conn()
     try:
@@ -316,10 +316,10 @@ def test_retirement_sweep_bounds_numeric_bytes_and_resumes_validation(projection
     assert kg.memory_vector_status()["ready"]
 
 
-def test_document_batch_projection_failure_requires_explicit_resume(tmp_path, monkeypatch):
+def test_document_batch_projection_failure_requires_explicit_resume(tmp_path, monkeypatch, reload_for_data_dir):
     from tests.subsystem.knowledge_graph.test_document_extraction_resume import _extracting_job
 
-    jobs, _extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    jobs, _extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     service.mark_completed(job.id)
     calls = []
 
@@ -345,10 +345,10 @@ def test_document_batch_projection_failure_requires_explicit_resume(tmp_path, mo
     assert service.get_batch(job.batch_id).status == "completed"
 
 
-def test_document_batch_with_remaining_projection_work_is_not_completed(tmp_path, monkeypatch):
+def test_document_batch_with_remaining_projection_work_is_not_completed(tmp_path, monkeypatch, reload_for_data_dir):
     from tests.subsystem.knowledge_graph.test_document_extraction_resume import _extracting_job
 
-    jobs, _extraction, service, job = _extracting_job(tmp_path, monkeypatch)
+    jobs, _extraction, service, job = _extracting_job(tmp_path, monkeypatch, reload_for_data_dir)
     service.mark_completed(job.id)
     monkeypatch.setattr(jobs, "_finalize_shared_knowledge_indexes", lambda **_kw: False)
     monkeypatch.setattr(jobs, "_notify_batch_complete", lambda *_args: pytest.fail("pending batch cannot announce completion"))

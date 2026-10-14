@@ -1,4 +1,3 @@
-import importlib
 import contextvars
 import pathlib
 import sqlite3
@@ -32,13 +31,12 @@ def _isolated_provider_config(tmp_path, monkeypatch):
     })
 
 
-def _isolated_tasks_module(tmp_path, monkeypatch):
+def _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    import row_bot.tasks as tasks
     import row_bot.threads as threads
 
     monkeypatch.setattr(threads, "DB_PATH", str(tmp_path / "data" / "threads.db"))
-    return importlib.reload(tasks)
+    return reload_for_data_dir(tmp_path / "data", "row_bot.tasks")[0]
 
 
 def test_phase0_diagnostics_reports_full_custom_provider_ref(tmp_path, monkeypatch):
@@ -82,11 +80,10 @@ def test_phase0_bare_custom_looking_model_currently_resolves_to_ollama(tmp_path,
     assert resolved.provider_id == "ollama"
 
 
-def test_phase3_telegram_thread_reload_keeps_full_model_ref(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "threads"))
+def test_phase3_telegram_thread_reload_keeps_full_model_ref(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.threads as threads
 
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(tmp_path / "threads", "row_bot.threads")
     ref = "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
     threads._save_thread_meta("tg_123_abc", "Telegram 123")
     threads._set_thread_model_override("tg_123_abc", ref)
@@ -97,12 +94,11 @@ def test_phase3_telegram_thread_reload_keeps_full_model_ref(tmp_path, monkeypatc
     assert row[4] == ref
 
 
-def test_telegram_refresh_thread_model_override_syncs_cached_config(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "threads"))
+def test_telegram_refresh_thread_model_override_syncs_cached_config(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.threads as threads
     from row_bot.channels.telegram import _refresh_thread_model_override
 
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(tmp_path / "threads", "row_bot.threads")
     thread_id = "tg_123_abc"
     threads._save_thread_meta(thread_id, "Telegram 123")
     threads._set_thread_model_override(thread_id, "model:openai:gpt-4o-mini")
@@ -122,11 +118,10 @@ def test_telegram_refresh_thread_model_override_syncs_cached_config(tmp_path, mo
     assert "model_override" not in refreshed["configurable"]
 
 
-def test_phase0_workflow_delivery_status_is_separate_from_routing(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+def test_phase0_workflow_delivery_status_is_separate_from_routing(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.tasks as tasks
 
-    tasks = importlib.reload(tasks)
+    (tasks,) = reload_for_data_dir(tmp_path, "row_bot.tasks")
     task = {"name": "Delivery Only", "delivery_channel": "", "channels": []}
 
     assert tasks._deliver_to_channels(task, "done") == ("", "")
@@ -191,9 +186,9 @@ def test_phase1_unknown_workflow_bare_model_fails_clearly(tmp_path, monkeypatch)
         canonicalize_model_selection("totally-unknown-local-name", "workflow")
 
 
-def test_phase2_create_task_stores_full_custom_ref(tmp_path, monkeypatch):
+def test_phase2_create_task_stores_full_custom_ref(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
 
     task_id = tasks.create_task(
         "Full ref workflow",
@@ -204,9 +199,9 @@ def test_phase2_create_task_stores_full_custom_ref(tmp_path, monkeypatch):
     assert tasks.get_task(task_id)["model_override"] == "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
 
 
-def test_phase2_create_task_canonicalizes_unique_custom_bare_model(tmp_path, monkeypatch):
+def test_phase2_create_task_canonicalizes_unique_custom_bare_model(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
 
     task_id = tasks.create_task(
         "Bare custom workflow",
@@ -217,9 +212,9 @@ def test_phase2_create_task_canonicalizes_unique_custom_bare_model(tmp_path, mon
     assert tasks.get_task(task_id)["model_override"] == "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
 
 
-def test_phase2_update_task_canonicalizes_model_override(tmp_path, monkeypatch):
+def test_phase2_update_task_canonicalizes_model_override(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     task_id = tasks.create_task("Update workflow", prompts=["say hi"])
 
     tasks.update_task(task_id, model_override="qwen3.6-35b-a3b")
@@ -227,9 +222,9 @@ def test_phase2_update_task_canonicalizes_model_override(tmp_path, monkeypatch):
     assert tasks.get_task(task_id)["model_override"] == "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
 
 
-def test_phase2_step_level_model_override_canonicalizes(tmp_path, monkeypatch):
+def test_phase2_step_level_model_override_canonicalizes(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
 
     task_id = tasks.create_task(
         "Step model workflow",
@@ -239,7 +234,7 @@ def test_phase2_step_level_model_override_canonicalizes(tmp_path, monkeypatch):
     assert tasks.get_task(task_id)["steps"][0]["model_override"] == "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
 
 
-def test_phase2_ambiguous_bare_workflow_model_fails_on_save(tmp_path, monkeypatch):
+def test_phase2_ambiguous_bare_workflow_model_fails_on_save(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
     cfg = provider_config.load_provider_config()
     cfg["custom_endpoints"].append({
@@ -250,7 +245,7 @@ def test_phase2_ambiguous_bare_workflow_model_fails_on_save(tmp_path, monkeypatc
         "models": [{"model_id": "qwen3.6-35b-a3b"}],
     })
     provider_config.save_provider_config(cfg)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
 
     with pytest.raises(ModelSelectionError, match="Ambiguous model selection"):
         tasks.create_task(
@@ -260,9 +255,9 @@ def test_phase2_ambiguous_bare_workflow_model_fails_on_save(tmp_path, monkeypatc
         )
 
 
-def test_phase4_explicit_workflow_model_failure_does_not_pop_override(tmp_path, monkeypatch):
+def test_phase4_explicit_workflow_model_failure_does_not_pop_override(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     ref = "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
     message = tasks._workflow_model_failure_message(ref, RuntimeError("model failed to load"))
 
@@ -272,9 +267,9 @@ def test_phase4_explicit_workflow_model_failure_does_not_pop_override(tmp_path, 
     assert "runtime_model=qwen3.6-35b-a3b" in message
 
 
-def test_phase4_failed_custom_workflow_does_not_retry_default_provider(tmp_path, monkeypatch):
+def test_phase4_failed_custom_workflow_does_not_retry_default_provider(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     ref = "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
     task_id = tasks.create_task(
         "No fallback workflow",
@@ -325,9 +320,9 @@ def test_phase4_failed_custom_workflow_does_not_retry_default_provider(tmp_path,
     assert "not retrying with the default provider" in runs[0]["status_message"]
 
 
-def test_phase5_delivery_failure_is_separate_from_execution_success(tmp_path, monkeypatch):
+def test_phase5_delivery_failure_is_separate_from_execution_success(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     task_id = tasks.create_task(
         "Delivery failure workflow",
         prompts=["say hi"],
@@ -424,9 +419,9 @@ def test_phase6_shared_model_command_ambiguous_bare_fails_clearly(tmp_path, monk
     assert "model:custom_openai_llamacpp:qwen3.6-35b-a3b" in response
 
 
-def test_phase9_legacy_model_diagnostics_are_read_only(tmp_path, monkeypatch):
+def test_phase9_legacy_model_diagnostics_are_read_only(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch)
+    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     task_id = tasks.create_task("Legacy task", prompts=["hi"])
     db_path = pathlib.Path(tmp_path / "data" / "tasks.db")
     legacy_steps = '[{"id":"step_1","type":"prompt","prompt":"hi","model_override":"missing-model"}]'
@@ -439,7 +434,7 @@ def test_phase9_legacy_model_diagnostics_are_read_only(tmp_path, monkeypatch):
 
     import row_bot.threads as threads
 
-    threads = importlib.reload(threads)
+    (threads,) = reload_for_data_dir(None, "row_bot.threads")
     threads._save_thread_meta("tg_legacy", "Telegram legacy")
     threads._set_thread_model_override("tg_legacy", "qwen3.6-35b-a3b")
 

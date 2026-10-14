@@ -19,8 +19,8 @@ def _chosen_model(monkeypatch):
     monkeypatch.setattr(models, "_current_model", "model:ollama:fixture-model")
 
 
-def test_memory_entity_crud_relations_aliases_and_delete_cascade(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_entity_crud_relations_aliases_and_delete_cascade(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
     memory = stack["memory"]
 
@@ -67,8 +67,8 @@ def test_memory_entity_crud_relations_aliases_and_delete_cascade(tmp_path, monke
         memory.save_memory("invalid_type", "Bad", "Should fail.")
 
 
-def test_memory_edge_cases_and_data_integrity(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_edge_cases_and_data_integrity(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
     memory = stack["memory"]
 
@@ -110,9 +110,9 @@ def test_memory_edge_cases_and_data_integrity(tmp_path, monkeypatch) -> None:
 
 
 def test_dedup_and_save_merges_entities_aliases_relations_and_preserves_external_reindex_override(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, reload_for_data_dir
 ) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
     memory_extraction = stack["memory_extraction"]
     monkeypatch.setattr(stack["memory_tool"], "_check_contradiction", lambda *_args, **_kwargs: None)
@@ -164,8 +164,8 @@ def test_dedup_and_save_merges_entities_aliases_relations_and_preserves_external
     assert props["source_context"]["thread_id"] == "thread-1"
 
 
-def test_full_extraction_flow_uses_thread_messages_filters_and_dedups(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_full_extraction_flow_uses_thread_messages_filters_and_dedups(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
     memory_extraction = stack["memory_extraction"]
     monkeypatch.setattr(
@@ -214,8 +214,9 @@ def test_full_extraction_flow_uses_thread_messages_filters_and_dedups(tmp_path, 
 def test_extract_from_conversation_parses_json_filters_invalid_and_handles_failures(
     tmp_path,
     monkeypatch,
+    reload_for_data_dir,
 ) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
 
     class FakeResponse:
@@ -257,8 +258,8 @@ def test_extract_from_conversation_parses_json_filters_invalid_and_handles_failu
     assert memory_extraction._extract_from_conversation("User: no facts") == []
 
 
-def test_memory_repair_maintenance_contracts(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_memory_repair_maintenance_contracts(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
 
     assert not callable(getattr(kg, "repair_graph_islands", None))
@@ -268,8 +269,8 @@ def test_memory_repair_maintenance_contracts(tmp_path, monkeypatch) -> None:
     assert kg.add_relation(source["id"], target["id"], "related_to", source="test") is None
 
 
-def test_json_block_parser_handles_nested_blocks_and_greedy_traps(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_json_block_parser_handles_nested_blocks_and_greedy_traps(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     kg = stack["kg"]
 
     assert kg.extract_json_block("[1, 2, 3]") == "[1, 2, 3]"

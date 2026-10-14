@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-import importlib
 
 LEGACY_STATUS_TOOL_ID = "thoth_status"
 LEGACY_UPDATER_TOOL_ID = "thoth_updater"
 LEGACY_UPDATE_SETTING_ID = "thoth_update_setting"
 
 
-def test_row_bot_agent_visible_tool_ids_are_registered(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
+def test_row_bot_agent_visible_tool_ids_are_registered(tmp_path, monkeypatch, reload_for_data_dir):
 
     import row_bot.tools as tools # noqa: F401
-    import row_bot.tools.row_bot_status_tool as row_bot_status_tool
     import row_bot.tools.updater_tool as updater_tool
     from row_bot.tools import registry
 
-    importlib.reload(row_bot_status_tool)
-    importlib.reload(updater_tool)
+    reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.tools.row_bot_status_tool")
+    reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.tools.updater_tool")
 
     status_tool = registry.get_tool("row_bot_status")
     updater_tool = registry.get_tool("row_bot_updater")
