@@ -86,11 +86,6 @@ def decide_action(mode: ApprovalMode, action: DeveloperAction, *, by_person: boo
     return ApprovalDecision("ask", f"{mode_label} requires approval to {label}.")
 
 
-def action_risk(action: DeveloperAction) -> str:
-    """The action's risk in words, for the Auto reviewer."""
-    return f"Developer action: {_ACTION_LABELS[action]}"
-
-
 def action_needs_explicit_user_intent(action: DeveloperAction) -> bool:
     """Actions that should never be hidden behind a generic approval."""
     return action in {"delete", "run_install", "run_network", "git_commit", "git_push", "git_pr"}
