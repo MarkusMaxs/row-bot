@@ -137,3 +137,32 @@ def test_a_push_approved_for_the_turn_still_asks_next_time(platform, tools):
 
     assert done == ["push"]
     assert len(_cards(platform)) == 2
+
+
+def test_buddy_stops_saying_needs_approval_once_the_approval_is_answered(platform, tools):
+    """B333: after an answer, Buddy said "Needs approval" while the turn worked on."""
+    from row_bot.buddy.events import get_buddy_event_bus
+
+    bus = get_buddy_event_bus()
+    start = bus.latest().id if bus.latest() else 0
+    done, tool_list = tools
+    model = ProviderShapedModel(responses=[
+        _call("developer_commit_changes", "c1", message="one"),
+        _call("developer_commit_changes", "c2", message="two"),
+        AIMessage(content="Committed twice.", id="ai-done"),
+    ])
+    turns = RealGraphTurns(model, tool_list)
+
+    first = _submit(platform, turns, "buddy-commit-twice", "Commit twice")
+    _approve(platform, first.approval_id, "buddy-commit-turn", scope="turn")
+
+    assert done == ["one", "two"]
+    events = [str(event.type) for event in bus.recent(after_id=start, limit=200)
+              if event.payload.get("thread_id") == "conversation-a"]
+    # The first commit asked; the person's answer and the standing grant's
+    # answer each clear it at once, and the granted commit never asked.
+    assert events.count("approval.needed") == 1
+    asked = events.index("approval.needed")
+    answered = events.index("approval.approved", asked)
+    assert "generation.started" not in events[asked:answered]
+    assert events.count("approval.approved") == 2

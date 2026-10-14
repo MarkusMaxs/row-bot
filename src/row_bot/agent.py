@@ -6292,6 +6292,22 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
     return "I wasn't able to generate a response."
 
 
+def _collect_read_runs(payload: dict, read_runs: dict[str, str]) -> None:
+    """Record each helper run an agent_wait/agent_status result showed, with its status."""
+
+    runs: list[Any] = [payload.get("run")]
+    if isinstance(payload.get("runs"), list):
+        runs.extend(payload["runs"])
+    orchestration = payload.get("orchestration")
+    if isinstance(orchestration, dict) and isinstance(orchestration.get("members"), list):
+        runs.extend(
+            member.get("run") for member in orchestration["members"] if isinstance(member, dict)
+        )
+    for run in runs:
+        if isinstance(run, dict) and str(run.get("id") or ""):
+            read_runs[str(run["id"])] = str(run.get("status") or "")
+
+
 def _checkpoint_joined_child_event_ids(
     parent_thread_id: str,
     orchestration_id: str,
@@ -6299,22 +6315,30 @@ def _checkpoint_joined_child_event_ids(
     """Read durable group-wait acknowledgements from the parent checkpoint."""
 
     try:
-        from row_bot.agent_orchestrator import sanitize_pending_child_event_ids
+        from row_bot.agent_orchestrator import (
+            read_child_event_ids,
+            sanitize_pending_child_event_ids,
+        )
         from row_bot.threads import get_latest_checkpoint_messages
 
         reported_ids: list[str] = []
+        read_runs: dict[str, str] = {}
         for message in get_latest_checkpoint_messages(parent_thread_id):
             if not isinstance(message, ToolMessage):
                 continue
-            if str(getattr(message, "name", "") or "") != "agent_wait":
+            name = str(getattr(message, "name", "") or "")
+            if name not in {"agent_wait", "agent_status"}:
                 continue
             content = _content_to_str(getattr(message, "content", ""))
             try:
                 payload = json.loads(content)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
+            if isinstance(payload, dict) and payload.get("ok"):
+                _collect_read_runs(payload, read_runs)
             if (
-                not isinstance(payload, dict)
+                name != "agent_wait"
+                or not isinstance(payload, dict)
                 or not payload.get("ok")
                 or str(payload.get("orchestration_id") or "") != orchestration_id
                 or "barrier_complete" not in payload
@@ -6326,7 +6350,10 @@ def _checkpoint_joined_child_event_ids(
                 for event_id in payload["child_event_ids"]
                 if str(event_id or "")
             )
-        return sanitize_pending_child_event_ids(orchestration_id, reported_ids)
+        joined = sanitize_pending_child_event_ids(orchestration_id, reported_ids)
+        # A helper's finished answer the parent read itself needs no second pass (B333).
+        read = read_child_event_ids(orchestration_id, read_runs)
+        return joined + [event_id for event_id in read if event_id not in joined]
     except Exception:
         logger.exception(
             "Could not read joined child events from parent checkpoint: thread=%s orchestration=%s",

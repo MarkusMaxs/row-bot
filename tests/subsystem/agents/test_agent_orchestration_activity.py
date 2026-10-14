@@ -261,3 +261,125 @@ def test_activity_query_stop_all_becomes_terminal_only_after_durable_stop(
     ]
     assert stopped["state"] == "terminal"
     assert stopped["phase"] in {"completed", "completed_partial"}
+
+
+def test_optional_helper_that_finished_mid_turn_leaves_no_running_state(
+    tmp_path,
+    monkeypatch,
+    reload_for_data_dir,
+):
+    """B333: a helper that finished before its chat's reply kept the row spinning."""
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
+    from row_bot.buddy import events as buddy_events
+
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        buddy_events,
+        "emit_buddy_event",
+        lambda event_type, **_kwargs: emitted.append(event_type.value),
+    )
+    orchestration = _orchestration(orchestrator, "review-thread", "generation-4")
+    helper = _run(agent_runs, "review-thread", "review-helper")
+    orchestrator.register_member(orchestration["id"], helper["id"], required=False)
+    orchestrator.set_test_executors(
+        parent=lambda *_args: pytest.fail("nothing is left for a second pass"),
+    )
+    agent_runs.finish_agent_run(helper["id"], "completed", summary="Dates look right")
+
+    result = orchestrator.complete_parent_pass(
+        orchestration["id"],
+        "The fix is in, and the review agent agreed.",
+        foreground=True,
+    )
+
+    assert result.waiting is False
+    assert orchestrator.get_orchestration(orchestration["id"])["status"] == "completed"
+    activity = orchestrator.get_thread_orchestration_activity(["review-thread"])[
+        "review-thread"
+    ]
+    assert activity["state"] == "terminal"
+    assert buddy_events.BuddyEventType.ORCHESTRATION_DONE.value in emitted
+
+
+def test_required_helper_whose_result_the_reply_read_leaves_no_running_state(
+    tmp_path,
+    monkeypatch,
+    reload_for_data_dir,
+):
+    """B333: the reply had read the finished helper's answer, yet a second pass was queued."""
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
+    import json
+
+    from langchain_core.messages import ToolMessage
+
+    import row_bot.agent as agent
+
+    orchestration = _orchestration(orchestrator, "read-thread", "generation-5")
+    helper = _run(agent_runs, "read-thread", "read-helper")
+    orchestrator.register_member(orchestration["id"], helper["id"], required=True)
+    orchestrator.set_test_executors(
+        parent=lambda *_args: pytest.fail("the reply already read the helper's answer"),
+    )
+    finished = agent_runs.finish_agent_run(
+        helper["id"], "completed", summary="Dates look right"
+    )
+    read_results = [
+        ToolMessage(
+            name="agent_wait",
+            tool_call_id="wait-call",
+            content=json.dumps({"ok": True, "run": {
+                "id": helper["id"], "status": finished["status"],
+                "summary": "Dates look right",
+            }}),
+        ),
+    ]
+    monkeypatch.setattr(
+        "row_bot.threads.get_latest_checkpoint_messages",
+        lambda _thread_id: read_results,
+    )
+
+    result = agent._complete_unified_parent_pass(
+        "The review agent agreed: the dates are right.",
+        ["agents"],
+        {"configurable": {"thread_id": "read-thread", "generation_id": "generation-5"}},
+    )
+
+    assert result.waiting is False
+    assert orchestrator.pending_thread_events(orchestration["id"]) == []
+    assert orchestrator.get_thread_orchestration_activity(["read-thread"])[
+        "read-thread"
+    ]["state"] == "terminal"
+
+
+def test_helper_result_the_reply_never_read_still_wakes_the_parent(
+    tmp_path,
+    monkeypatch,
+    reload_for_data_dir,
+):
+    """The B333 fix keeps the parent's report on a required helper it never read."""
+    _tasks, agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
+    import row_bot.agent as agent
+
+    orchestration = _orchestration(orchestrator, "unread-thread", "generation-6")
+    helper = _run(agent_runs, "unread-thread", "unread-helper")
+    orchestrator.register_member(orchestration["id"], helper["id"], required=True)
+    calls: list[str] = []
+    orchestrator.set_test_executors(
+        parent=lambda _row, context, *_args: calls.append(context) or "Reported.",
+        delivery=lambda *_args: True,
+    )
+    agent_runs.finish_agent_run(helper["id"], "completed", summary="Unread evidence")
+    monkeypatch.setattr(
+        "row_bot.threads.get_latest_checkpoint_messages", lambda _thread_id: []
+    )
+
+    result = agent._complete_unified_parent_pass(
+        "I started a helper.",
+        ["agents"],
+        {"configurable": {"thread_id": "unread-thread", "generation_id": "generation-6"}},
+    )
+    final = orchestrator.wait_for_parent(orchestration["id"], minimum_attempts=1)
+
+    assert result.waiting is True
+    assert final["status"] == "completed"
+    assert "Unread evidence" in calls[0]

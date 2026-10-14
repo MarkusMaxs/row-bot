@@ -127,7 +127,7 @@ def _buddy(conversation_id: str, event_type: str, label: str, **payload: Any) ->
         _LOG.debug("Buddy event failed for %s", conversation_id, exc_info=True)
 
 
-def _buddy_follows(conversation_id: str, event: tuple) -> None:
+def _buddy_follows(conversation_id: str, event: tuple, handle: Any = None) -> None:
     kind, payload = event[0], event[1] if len(event) > 1 else None
     if kind == "tool_call":
         name = str(getattr(payload, "get", lambda *_: "")("name") or "")
@@ -138,8 +138,11 @@ def _buddy_follows(conversation_id: str, event: tuple) -> None:
         from row_bot.application.client_computer_controls import pause_item
         if pause_item(payload) is not None:
             _buddy(conversation_id, "generation.interrupted", "Waiting for you")
-        else:
-            _buddy(conversation_id, "approval.needed", "Approval pending")
+        elif not getattr(handle, "approval_granted", False):
+            # An action the person already approved for this turn asks
+            # nobody, so Buddy never says "Needs approval" for it (B333).
+            _buddy(conversation_id, "approval.needed", "Approval pending",
+                   approval_id=str(getattr(handle, "approval_id", "") or ""))
     elif kind == "done":
         _buddy(conversation_id, "generation.done", "Done")
     elif kind == "error":
@@ -1419,7 +1422,7 @@ class ClientPlatformService:
                         if self.stream_factory is not None and event[0] in {"token", "tool_start", "tool_done", "output_binding"}:
                             client_queue.acknowledge_consumed(handle)
                         self.observe_event(conversation_id, event, handle)
-                        _buddy_follows(conversation_id, event)
+                        _buddy_follows(conversation_id, event, handle)
                         if event[0] == "done":
                             status = "completed"
                             final_text = str(event[1] or "") if len(event) > 1 else ""
@@ -1756,6 +1759,10 @@ class ClientPlatformService:
                 raise
             from row_bot.application.conversation_followups import after_approval
             after_approval(conversation_id, approved=approved)
+            # Answered, by the person or by what they approved for this turn:
+            # Buddy stops saying "Needs approval" now, not when the turn ends (B333).
+            _buddy(conversation_id, "approval.approved" if approved else "approval.denied",
+                   "Approved" if approved else "Denied", approval_id=approval_id)
             interrupt = stored.get("interrupt")
             if approved and payload.get("scope") == "turn":
                 from row_bot.application import approval_grants

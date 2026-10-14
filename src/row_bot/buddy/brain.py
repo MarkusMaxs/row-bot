@@ -144,7 +144,8 @@ def _is_durable_approval_activity(active: _Activity) -> bool:
     if active.source in {"tasks", "tasks.reconcile"}:
         return True
     return bool(
-        payload.get("resume_token")
+        payload.get("approval_id")
+        or payload.get("resume_token")
         or payload.get("request_id")
         or payload.get("run_id")
         or payload.get("step_id")

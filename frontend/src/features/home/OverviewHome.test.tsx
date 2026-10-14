@@ -1179,7 +1179,7 @@ it('continues from four top-level conversations as cards in list order', () => {
     }),
     conversation('working', 'Quarterly brief', {
       activity_state: 'active',
-      activity_phase: 'tool_call',
+      activity_phase: 'child_running',
     }),
     conversation('agent-1', 'Researcher', {
       parent_conversation_id: 'working',
@@ -1204,8 +1204,9 @@ it('continues from four top-level conversations as cards in list order', () => {
   const button = (name: string) => within(cards).getByRole('button', { name });
   expect(button('Open Solstice poster')).toHaveTextContent('Design');
   expect(button('Open Solstice poster')).toHaveTextContent('Pinned');
+  // The sidebar's words for agent work, never the phase's own name (B333).
   expect(button('Open Quarterly brief')).toHaveTextContent(
-    'Agents working · Tool call',
+    'Child agents working',
   );
   expect(button('Open Quarterly brief')).toHaveTextContent('1 agent');
   expect(button('Open Bakery website')).toHaveTextContent('Code folder');

@@ -1047,3 +1047,36 @@ def test_buddy_rive_asset_install_uses_user_static_dir(monkeypatch, tmp_path):
     assert pack.riv_path.exists()
     assert assets_mod.pack_static_url(pack) == "/_buddy/packs/glyph/buddy.riv"
     assert assets_mod.load_buddy_pack("glyph").status == "available"
+
+
+def test_buddy_reconcile_clears_a_chat_approval_answered_elsewhere(monkeypatch):
+    """B333: a chat's approval names its request, so an answer from anywhere clears it."""
+    import row_bot.buddy.brain as brain_mod
+    from row_bot.buddy.brain import BuddyBrain
+    from row_bot.buddy.events import BuddyEvent, BuddyEventType
+    import row_bot.tasks as tasks
+
+    now = 1000.0
+    monkeypatch.setattr(
+        brain_mod,
+        "get_buddy_config",
+        lambda: {"enabled": True, "mode": "sidebar", "pack_id": "glyph"},
+    )
+    monkeypatch.setattr(brain_mod.time, "time", lambda: now)
+    # Answered (on a phone, say) before Buddy next read the waiting approvals.
+    monkeypatch.setattr(tasks, "get_pending_approvals", lambda: [])
+    brain = BuddyBrain()
+
+    brain.resolve(BuddyEvent(BuddyEventType.GENERATION_STARTED, source="client_platform",
+                             payload={"thread_id": "thread-1", "label": "Thinking"}, id=60))
+    brain.resolve(BuddyEvent(
+        BuddyEventType.APPROVAL_NEEDED,
+        source="client_platform",
+        payload={"thread_id": "thread-1", "label": "Approval pending", "approval_id": "chat-approval"},
+        id=61,
+    ))
+    now = 1003.0
+    working = brain.resolve(None)
+
+    assert working.animation == "lean_in"
+    assert working.message == "Thinking"

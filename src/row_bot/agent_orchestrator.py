@@ -1531,6 +1531,40 @@ def sanitize_pending_child_event_ids(
     ]
 
 
+_READ_RESULT_EVENT_KINDS = {
+    "child_terminal",
+    "child_approval_requested",
+    "child_approval_resolved",
+}
+
+
+def read_child_event_ids(
+    orchestration_id: str,
+    read_runs: Mapping[str, str] | None,
+) -> list[str]:
+    """Pending events of helpers whose finished result the parent already read.
+
+    A parent that read a helper's final answer in its own turn (agent_wait or
+    agent_status on that run) has nothing left to be woken for: those events
+    count as consumed when its reply ends, so no second pass is queued and the
+    chat stops showing agent work (B333). Only runs read in a terminal state
+    count; a helper read while still running is waited for as before.
+    """
+
+    finished = {
+        str(run_id)
+        for run_id, status in (read_runs or {}).items()
+        if str(run_id) and str(status or "") in TERMINAL_MEMBER_STATUSES
+    }
+    if not finished:
+        return []
+    return [
+        event.id
+        for event in pending_thread_events(orchestration_id)
+        if event.kind in _READ_RESULT_EVENT_KINDS and event.run_id in finished
+    ]
+
+
 def _required_group_event_ids(
     orchestration_id: str,
     members: Sequence[Mapping[str, Any]],
@@ -1919,10 +1953,13 @@ def complete_parent_pass(
     if not text:
         raise OrchestrationError("The original parent returned no output.")
 
+    # The parent waits only for something that will wake it. An optional
+    # helper's result that arrived mid-turn never wakes it on its own, so
+    # waiting on it left the chat "working" after the reply ended (B333).
     waiting = (
         _joined_work_pending(orchestration_id)
         or _joined_terminal_events_unaccounted(orchestration_id)
-        or bool(pending_thread_events(orchestration_id))
+        or _parent_wake_ready(orchestration_id)
     )
     current = get_orchestration(orchestration_id) or orchestration
     attempt = int(current.get("parent_attempt") or 0)
