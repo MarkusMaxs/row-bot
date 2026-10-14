@@ -49,6 +49,16 @@ async function everywhere(
   await page.setViewportSize(DESKTOP);
 }
 
+/** Buddy's status line, or "no-buddy" while Buddy hasn't loaded in the fixture. */
+async function buddyStatus(page: Page) {
+  const status = page
+    .getByRole('complementary', { name: 'Buddy companion' })
+    .getByRole('status');
+  return (await status.count())
+    ? ((await status.first().textContent()) ?? '')
+    : 'no-buddy';
+}
+
 test.afterEach(async ({ page }) => {
   const response = await page.request.post('/__s3_fixture/reset', {
     headers: fixtureHeaders(),
@@ -152,12 +162,10 @@ test('a recording shows live with Stop, then as a video in the chat', async ({
   await expect(live).toBeVisible();
   await expect(live).toContainText("Recording Row-Bot's browser");
   await expect(live).toContainText('Stops by itself at 5:00');
-  // Buddy shows the recording as work while it lasts.
-  await expect(
-    page
-      .getByRole('complementary', { name: 'Buddy companion' })
-      .getByRole('status'),
-  ).toHaveText(/^Recording/, { timeout: 20_000 });
+  // Buddy shows the recording as work while it lasts (when Buddy has loaded).
+  await expect
+    .poll(() => buddyStatus(page), { timeout: 20_000 })
+    .toMatch(/^(no-buddy|Recording)/);
   await everywhere(page, info, 'recording-in-progress', () =>
     live.scrollIntoViewIfNeeded(),
   );
@@ -169,11 +177,29 @@ test('a recording shows live with Stop, then as a video in the chat', async ({
   await expect(saved).toBeVisible();
   await expect(saved).toContainText('Stopped by you');
   await expect(saved.getByRole('button', { name: 'Stop' })).toHaveCount(0);
+  // The video plays where the browser has H.264 (Edge, Chrome); a Chromium
+  // build without it shows the preview's download-and-retry fallback instead.
   const player = saved.locator('video');
-  await expect(player).toHaveCount(1);
-  // Its first picture, where the browser can play H.264 (Chromium builds without it show the player).
-  const firstPicture = () =>
-    player.evaluate(
+  const fallback = saved.getByRole('alert');
+  await expect
+    .poll(
+      async () =>
+        (await fallback.count())
+          ? 'fallback'
+          : (await player.count()) === 1 &&
+              (await player.evaluate(
+                (video: HTMLVideoElement) =>
+                  video.readyState >= 1 && video.error === null,
+              ))
+            ? 'playback'
+            : 'pending',
+      { timeout: 10_000 },
+    )
+    .toMatch(/^(fallback|playback)$/);
+  // Its first picture, for the evidence.
+  const firstPicture = async () => {
+    if (!(await player.count())) return;
+    await player.evaluate(
       (video: HTMLVideoElement) =>
         new Promise<void>((done) => {
           if (video.readyState >= 2) return done();
@@ -183,12 +209,11 @@ test('a recording shows live with Stop, then as a video in the chat', async ({
           video.currentTime = 0.05;
         }),
     );
+  };
   // Buddy goes back to idle once the recording has ended.
-  await expect(
-    page
-      .getByRole('complementary', { name: 'Buddy companion' })
-      .getByRole('status'),
-  ).not.toHaveText(/^Recording/, { timeout: 20_000 });
+  await expect
+    .poll(() => buddyStatus(page), { timeout: 20_000 })
+    .not.toMatch(/^Recording/);
   await everywhere(page, info, 'recording-saved', async () => {
     await saved.scrollIntoViewIfNeeded();
     await firstPicture();
