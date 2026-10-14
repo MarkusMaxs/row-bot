@@ -390,6 +390,40 @@ describe('BuddyOverlay', () => {
     );
   });
 
+  it('says Full autonomy while the conversation works on it (A0)', async () => {
+    const running = {
+      rows: [row('u1', 'user', 'Plan')],
+      generation: generation({
+        status: 'running',
+        quiesced: false,
+        can_stop: true,
+      }),
+    } as ClientState['projection'];
+    const controller = fakeController({
+      projection: running,
+      workspace: {
+        conversation_id: 'c1',
+        controls: {
+          model_selection: { model_ref: 'fixture:model' },
+          approval_mode: 'full',
+        },
+        actions: [{ action: 'send', ready: true }],
+        resources: [],
+      } as unknown as ClientState['workspace'],
+    });
+    renderOverlay(controller);
+    expect(await screen.findByText('· Full autonomy')).toBeVisible();
+    // Only while work runs: at rest the status line is plain again.
+    act(() =>
+      controller.set({
+        projection: { ...running!, generation: generation() },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText('· Full autonomy')).toBeNull(),
+    );
+  });
+
   it('never shows an older answer for a turn stopped before its reply', async () => {
     const controller = fakeController({
       projection: {
