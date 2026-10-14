@@ -214,6 +214,8 @@ class RecordedProtocolTrace:
             return {name: self.normalize(item, key=name) for name, item in value.items()}
         if isinstance(value, (list, tuple)):
             return [self.normalize(item) for item in value]
+        if key == "server_utc_offset_minutes" and isinstance(value, int):
+            return 0  # The recording machine's timezone; portable fixtures are in UTC (B341).
         if not isinstance(value, str):
             return value
         if key == "policy_revision":

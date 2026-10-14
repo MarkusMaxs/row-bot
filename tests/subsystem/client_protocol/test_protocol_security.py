@@ -177,6 +177,22 @@ def test_handshake_separates_application_and_presentation_capabilities():
     assert remote_view["native_adapter"]["available"] is False
 
 
+def test_handshake_tells_a_device_the_server_clock_offset():
+    """Saved times are the server's wall clock without an offset; a remote device in another
+    timezone reads them with this (B341)."""
+    from datetime import datetime
+
+    remote, _, _ = client_app(remote=True)
+    with remote:
+        view = remote.post(
+            "/api/v1/handshake",
+            headers={"Origin": "http://localhost"},
+            json={"client_build": "row-bot-client-v2/5.0.0", "presentation_features": []},
+        ).json()
+    expected = round(datetime.now().astimezone().utcoffset().total_seconds() / 60)
+    assert view["server_utc_offset_minutes"] == expected
+
+
 @pytest.mark.parametrize(
     ("build", "status"),
     [("row-bot-client-v1", 426), ("row-bot-client-v3", 200), ("unknown", 200)],
