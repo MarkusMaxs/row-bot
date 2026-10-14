@@ -703,6 +703,9 @@ export default function BuddyOverlay({
             title={[
               approvalQuestion(actionLabel, approval?.app),
               argument || approval?.reason || hint?.reason,
+              // Under Auto: why the reviewer asked, quietly, in the one-line overlay.
+              approval?.reviewer_reason &&
+                `The reviewer asked you: ${approval.reviewer_reason}`,
             ]
               .filter(Boolean)
               .join(' · ')}

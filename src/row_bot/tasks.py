@@ -7002,7 +7002,7 @@ def _resume_graph_interrupted(
                         approved=True, stop_event=_stop_event,
                     )
                 except Exception as exc2:
-                    logger.error("Allow-all auto-resume failed: %s", exc2)
+                    logger.error("Full autonomy auto-resume failed: %s", exc2)
                 # Fall through to success path
             else:
                 # Approve mode — create a new approval request

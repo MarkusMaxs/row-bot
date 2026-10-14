@@ -8,7 +8,8 @@ frame the client creates with ``sandbox="allow-scripts"`` only: an opaque origin
 storage, page or API. A view's calls reach only its own app's tools that allow it (visibility ``app``), at
 most 20 a minute, and go through the chat's agent profile, the app's access and the chat's approvals as
 any other call does: destructive, high-impact and unknown tools always ask, and a routine change asks
-unless the person let it run (Full access, or that one tool), in Allow all too; Block refuses either.
+unless the person let it run (Full access, or that one tool), under Ask and Auto alike; Full autonomy runs
+them and Block refuses either.
 """
 from __future__ import annotations
 
