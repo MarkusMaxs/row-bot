@@ -4827,22 +4827,10 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
 
 
 def _readable(value, nested: bool = False) -> str:
-    """A structured argument in words for the approval line: ``[{"sku": "A1", "qty": 2}]`` reads
-    "sku A1, qty 2". Every key and value is kept, an empty one too (it is still sent: it can clear a field);
-    only the code punctuation goes, and a list item holding a separator is quoted."""
-    if isinstance(value, dict):
-        text = ", ".join(f"{str(key).replace('_', ' ')} {_readable(item, True)}" for key, item in value.items())
-        return f"({text})" if nested else text
-    if isinstance(value, (list, tuple, set)):
-        items = list(value)
-        structured = any(isinstance(item, (dict, list, tuple, set)) for item in items)
-        text = ("; " if structured else ", ").join(
-            f'"{item}"' if isinstance(item, str) and ("," in item or ";" in item) else _readable(item)
-            for item in items)
-        return f"({text})" if nested and structured else text
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    return "empty" if value is None else str(value)
+    """A structured argument in words for the approval line (``approval_messages.readable_value``)."""
+    from row_bot.approval_messages import readable_value
+
+    return readable_value(value, nested)
 
 
 def _argument(value) -> str:
@@ -4903,12 +4891,23 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
             return None, APPROVAL_NOT_NEEDED_AUTO
         # What the person reads names what was given: an option left unset (None) is not part of the action.
         given = {key: value for key, value in kwargs.items() if value is not None}
-        args_str = ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
-        if args:
-            args_str = _argument(args[0]) if len(args) == 1 else _argument(args)
-            if given:
-                args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
-        description = _enrich_description(tool.name, label, args_str, kwargs)
+        if tool.name.startswith("mcp_"):
+            # An app's tool: its card names the app and the tool's own title, so this says only what is sent,
+            # as labelled fields with their own line breaks; never its internal name or an escaped dump (B332).
+            from row_bot.approval_messages import approval_fields
+
+            sent = dict(given)
+            if args:
+                sent = {**(args[0] if len(args) == 1 and isinstance(args[0], dict)
+                           else {"input": args[0] if len(args) == 1 else list(args)}), **sent}
+            description = approval_fields(sent) or "Nothing else is sent with it."
+        else:
+            args_str = ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
+            if args:
+                args_str = _argument(args[0]) if len(args) == 1 else _argument(args)
+                if given:
+                    args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
+            description = _enrich_description(tool.name, label, args_str, kwargs)
         try:
             from row_bot.tools.discovery import is_external_discovery_invocation
             external_discovery_active = is_external_discovery_invocation()

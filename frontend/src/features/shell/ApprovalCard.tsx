@@ -64,13 +64,24 @@ function plainArguments(summary: string): string[] {
   return [summary];
 }
 
+/** An app tool's reason is written in words already, as labelled fields (B332); others read their call in words. */
+function reasonWords(view: ApprovalView): string {
+  const reason = view.reason || view.summary || '';
+  return fieldsWritten(view) ? reason : plainApprovalReason(reason);
+}
+
+/** Whether the server wrote an app tool's arguments as labelled fields (one from before names its tool first). */
+function fieldsWritten(view: ApprovalView): boolean {
+  return Boolean(view.app?.tool && !/^mcp_/.test(view.reason || ''));
+}
+
 function ApprovalDetails({ view }: { view: ApprovalView }) {
   const risk = RISK[view.risk_class ?? ''];
-  const reason = view.reason || view.summary;
+  const reason = reasonWords(view);
   return (
     <div className="approval-detail stack">
-      <p>
-        {reason ? plainApprovalReason(reason) : 'Row-Bot needs your go-ahead.'}
+      <p className="approval-detail-reason">
+        {reason || 'Row-Bot needs your go-ahead.'}
       </p>
       <dl>
         <dt>Action</dt>
@@ -83,7 +94,7 @@ function ApprovalDetails({ view }: { view: ApprovalView }) {
         )}
         <dt>Affects</dt>
         <dd>{plainScope(view.scope)}</dd>
-        {view.safe_argument_summary && (
+        {view.safe_argument_summary && !fieldsWritten(view) && (
           <>
             <dt>With</dt>
             <dd>
@@ -234,7 +245,9 @@ export default function ApprovalCard({
   // The app asking, shown as the catalog knows it.
   const app = view?.app ?? null;
   const risk = view?.risk_class || hint?.risk_class || 'unknown';
-  const argument = keyArgument(view?.safe_argument_summary);
+  // The reason names every field already when an app's tool asks; the key argument would repeat one.
+  const argument =
+    view && fieldsWritten(view) ? '' : keyArgument(view?.safe_argument_summary);
   if (answered)
     return (
       <p className="approval-card-answered">
@@ -308,7 +321,7 @@ export default function ApprovalCard({
   return (
     <aside
       className="approval-card"
-      aria-label={`Approval required for ${action || 'requested action'}${app ? ` in ${app.name}` : ''}`}
+      aria-label={`Approval required for ${app?.tool || action || 'requested action'}${app ? ` in ${app.name}` : ''}`}
       data-risk={risk}
     >
       <span className="approval-card-icon" aria-hidden>
@@ -319,8 +332,11 @@ export default function ApprovalCard({
           <div className="approval-card-context">
             {app && <span className="approval-card-app">{app.name}</span>}
             <strong>{approvalQuestion(view.action_label || '', app)}</strong>
-            <span className="approval-card-reason">
-              {plainApprovalReason(view.reason || view.summary || '')}
+            <span
+              className="approval-card-reason"
+              data-fields={fieldsWritten(view) || undefined}
+            >
+              {reasonWords(view)}
             </span>
             {argument && (
               <code className="approval-card-argument">{argument}</code>

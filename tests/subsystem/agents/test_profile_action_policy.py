@@ -654,8 +654,44 @@ def test_an_approval_names_what_was_given_not_every_unset_option(runtime, monkey
     runtime._approval_mode_var.set("approve")
     monkeypatch.setattr(runtime, "interrupt", lambda request: asked.append(request) or False)
     tool.invoke({"title": "Approval check", "team": "RBTest", "description": None, "cycle": None})
-    assert "title='Approval check'" in asked[0]["description"] and "team='RBTest'" in asked[0]["description"]
-    assert "None" not in asked[0]["description"]
+    assert asked[0]["description"] == "Title: Approval check\nTeam: RBTest"
+
+
+def test_an_app_tools_approval_reads_as_labelled_fields_with_its_own_line_breaks(runtime, monkeypatch):
+    """B332: Linear's card read ``mcp_linear_mcp_save_issue: title='Daily summary crashes…', description="## Failure\\n
+    The riverside-shop…``: the tool's internal name, and its Markdown body escaped and cut off. Each argument is a
+    labelled field, the body keeps its own line breaks, and a body too long for the card says how long it is."""
+    from row_bot.application.approval_projection import project_approval_context
+
+    asked = []
+
+    def save_issue(title: str, team: str, description: str | None = None) -> str:
+        return "saved"
+
+    tool = StructuredTool.from_function(func=save_issue, name="mcp_linear_mcp_save_issue", description="Save an issue")
+    runtime._wrap_with_interrupt_gate(tool)
+    runtime._approval_mode_var.set("approve")
+    monkeypatch.setattr(runtime, "interrupt", lambda request: asked.append(request) or False)
+    body = "## Failure\nThe riverside-shop summary crashed.\n\n## Evidence\n" + "- one more event\n" * 80
+    tool.invoke({"title": "Daily summary crashes", "team": "RBT", "description": body})
+    shown = asked[0]["description"]
+    assert shown.startswith("Title: Daily summary crashes\nTeam: RBT\nDescription:\n## Failure\n"
+                            "The riverside-shop summary crashed.\n\n## Evidence\n- one more event\n")
+    assert "mcp_" not in shown and "\\n" not in shown and "'" not in shown
+    assert len(shown) <= 1000 and shown.endswith(f"… ({len(body.rstrip()):,} characters in all)")
+    assert project_approval_context(asked[0])["reason"] == shown  # The card reads it as it is, within its bound.
+
+
+def test_an_app_tools_approval_names_every_argument_and_hides_only_secrets():
+    """Nothing that will be sent goes unmentioned: a secret is said to be sent, never shown, and arguments too
+    many for the card are still named."""
+    from row_bot.approval_messages import approval_fields
+
+    assert approval_fields({"api_key": "sk-synthetic", "max_tokens": 200, "pageId": "p-1"}) == (
+        "API key: hidden (12 characters)\nMax tokens: 200\nPage ID: p-1")
+    many = approval_fields({f"field_{index}": "a value " * 12 for index in range(60)})
+    assert len(many) <= 1000 and "Field 0: a value" in many and many.splitlines()[-1].endswith("Field 59")
+    assert approval_fields({}) == ""
 
 
 def test_an_approval_reads_structured_arguments_in_words(runtime, monkeypatch):
@@ -672,8 +708,8 @@ def test_an_approval_reads_structured_arguments_in_words(runtime, monkeypatch):
     monkeypatch.setattr(runtime, "interrupt", lambda request: asked.append(request) or False)
     tool.invoke({"orders": [{"sku": "A1", "qty": 2, "ship_to": {"city": "Leeds"}}, {"sku": "B2", "qty": 1}],
                  "note": "first batch", "rush": True})
-    assert asked[0]["description"] == ("mcp_shop_save_orders: orders='sku A1, qty 2, ship to (city Leeds); "
-                                       "sku B2, qty 1', note='first batch', rush=True")
+    assert asked[0]["description"] == ("Orders: sku A1, qty 2, ship to (city Leeds); sku B2, qty 1\n"
+                                       "Note: first batch\nRush: yes")
 
 
 def test_an_approval_shows_an_empty_nested_value_and_keeps_list_items_apart(runtime, monkeypatch):
@@ -689,8 +725,7 @@ def test_an_approval_shows_an_empty_nested_value_and_keeps_list_items_apart(runt
     runtime._approval_mode_var.set("approve")
     monkeypatch.setattr(runtime, "interrupt", lambda request: asked.append(request) or False)
     tool.invoke({"items": [{"title": "Done", "status": None}], "tags": ["a, b", "c"]})
-    assert asked[0]["description"] == ("mcp_shop_update_items: items='title Done, status empty', "
-                                       "tags='\"a, b\", c'")
+    assert asked[0]["description"] == 'Items: title Done, status empty\nTags: "a, b", c'
 
 
 def test_an_approval_locked_app_tool_asks_even_under_allow_all(runtime, monkeypatch):

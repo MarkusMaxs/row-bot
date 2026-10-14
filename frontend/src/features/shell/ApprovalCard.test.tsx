@@ -204,6 +204,44 @@ it('shows which app asks, with its logo and name, and still needs the person', a
   expect(intent).not.toHaveBeenCalled();
 });
 
+it('reads an app tool’s call as labelled fields with their own line breaks, never its internal name (B332)', async () => {
+  const reason =
+    'Title: Daily summary crashes\nTeam: RBT\nDescription:\n## Failure\nThe riverside-shop summary crashed.';
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'mcp_linear_mcp_save_issue',
+    reason,
+    safe_argument_summary: '{"name": "Daily summary crashes"}',
+    app: {
+      item_id: 'mcp:linear',
+      name: 'Linear',
+      icon: 'letter:L',
+      tool: 'Save issue',
+    },
+  });
+  await renderCard();
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required for Save issue in Linear',
+  });
+  expect(within(card).getByText('Allow Linear to save issue?')).toBeVisible();
+  // Real line breaks, as the server wrote them: nothing re-read, escaped or repeated.
+  expect(
+    within(card).getByText(/^Title: Daily summary crashes/).textContent,
+  ).toBe(reason);
+  expect(within(card).getAllByText(/Daily summary crashes/)).toHaveLength(1);
+  expect(card).not.toHaveTextContent(/mcp_|\\n/);
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  const details = open.mock.calls[0][0];
+  expect(details.title).toBe('Allow Linear to save issue?');
+  render(details.content);
+  expect(screen.getByText('Linear · Save issue')).toBeVisible();
+  expect(
+    screen
+      .getAllByText(/^Title: Daily summary crashes/)
+      .map((node) => node.textContent),
+  ).toEqual([reason, reason]);
+});
+
 it('re-reads the waiting approvals at once after an answer (B302)', async () => {
   pendingApprovals.mockResolvedValue({ items: [], next_cursor: null });
   function Sidebar() {
