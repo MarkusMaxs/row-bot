@@ -503,7 +503,7 @@ it('offers the four levels, each with what it does', async () => {
   );
   expect(
     approvals.getByText(
-      'A reviewer approves what matches your request; the rest asks',
+      'A reviewer approves what you asked for; the rest asks',
     ),
   ).toBeVisible();
   expect(

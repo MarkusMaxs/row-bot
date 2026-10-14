@@ -33,7 +33,7 @@ export const APPROVAL_LABELS: Record<ApprovalLevel, string> = {
 /** One line under each level in the menus that choose it. */
 export const APPROVAL_DESCRIPTIONS: Record<ApprovalLevel, string> = {
   approve: 'Asks before anything that makes changes',
-  auto: 'A reviewer approves what matches your request; the rest asks',
+  auto: 'A reviewer approves what you asked for; the rest asks',
   full: 'Nothing asks; every action runs and is recorded',
   block: 'Nothing that makes changes runs',
 };
@@ -71,7 +71,7 @@ export const SHARED_CONVERSATION_NOTE =
 export function FullAutonomyNotice() {
   return (
     <div className="full-autonomy-notice stack">
-      <p>Row-Bot acts without asking you first. It skips:</p>
+      <p>What it skips:</p>
       <ul>
         <li>
           Every approval card: commands, file changes, messages and emails,
@@ -86,7 +86,7 @@ export function FullAutonomyNotice() {
         </li>
         <li>Pauses in workflows and goals that run while you&rsquo;re away</li>
       </ul>
-      <p>Still in place:</p>
+      <p>What stays in place:</p>
       <ul>
         <li>
           Blocked commands, settings you&rsquo;ve switched off and apps you

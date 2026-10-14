@@ -8,6 +8,7 @@ import json
 import pytest
 
 from tests.contracts.client_platform.test_headless_lifecycle import platform, command  # noqa: F401
+from tests.contracts.client_platform.test_protocol_boundaries import client, protocol_clock  # noqa: F401
 from tests.helpers.client_platform_fakes import fixture_id
 
 pytestmark = pytest.mark.subsystem
@@ -78,3 +79,36 @@ def test_a_conversation_other_people_share_can_not_turn_on_full_autonomy(platfor
         save_level(platform, "shared-full", "full", confirm_full_autonomy=True)
     save_level(platform, "shared-auto", "auto")
     assert level(platform) == "auto"
+
+
+def test_the_card_says_why_the_reviewer_asked(platform, client):
+    """Under Auto, an action the reviewer handed to the person carries its reason to the approval card."""
+    from langchain_core.messages import AIMessage
+
+    from tests.helpers.client_platform_fakes import CheckpointCommit, ScriptedAgentStream
+
+    tool_id, tool_ai_id = fixture_id("reviewed-tool"), fixture_id("reviewed-tool-ai")
+    reason = "You asked to tidy the notes, not to delete any."
+    fake = ScriptedAgentStream((
+        CheckpointCommit((AIMessage(content="", id=tool_ai_id,
+                                    tool_calls=[{"id": tool_id, "name": "workspace_file_delete", "args": {}}]),),
+                         tool_ai_id),
+        ("tool_call", {"id": tool_id, "message_id": tool_ai_id}),
+        ("interrupt", [{"__interrupt_id": fixture_id("reviewed-interrupt"), "tool": "workspace_file_delete",
+                        "description": "Delete file: notes/old-draft.md", "args": {},
+                        "review": {"decision": "ask", "reason": reason}}]),
+    ), ())
+    platform.stream_factory, platform.resume_factory = fake.stream, fake.resume
+    body = command("conversation.submit", "reviewed-submit", {
+        "submission_id": fixture_id("reviewed-submit"), "text": "Tidy my notes", "attachment_refs": [],
+        "model_selection": {"provider_id": "fixture", "model_ref": "fixture/model"}})
+    body["client_session_id"] = client.headers["X-Client-Session"]
+    pending = client.post("/api/v1/conversations/conversation-a/commands", json=body,
+                          headers={"Idempotency-Key": fixture_id("reviewed-submit:key")})
+    assert pending.status_code == 202, pending.text
+    paused = platform.registry.get(pending.json()["execution_id"])
+    assert paused.producer_done.wait(10) and paused.status == "waiting_approval"
+
+    view = client.get("/api/v1/approvals/" + paused.approval_id)
+    assert view.status_code == 200, view.text
+    assert view.json()["reviewer_reason"] == reason

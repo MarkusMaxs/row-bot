@@ -173,7 +173,6 @@ def _remember_asked(key: str, reason: str) -> None:
         _ASKED_REASONS.pop(next(iter(_ASKED_REASONS)))
 
 
-
 def _interrupt(payload: dict[str, Any]) -> Any:
     from langgraph.types import interrupt
 

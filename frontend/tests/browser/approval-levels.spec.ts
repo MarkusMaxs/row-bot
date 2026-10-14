@@ -56,9 +56,7 @@ test('Full autonomy is turned on once, on purpose, and reads in words while on',
     /^Block/,
   ]);
   await expect(
-    menu.getByText(
-      'A reviewer approves what matches your request; the rest asks',
-    ),
+    menu.getByText('A reviewer approves what you asked for; the rest asks'),
   ).toBeVisible();
   await views(page, info, 'approval-levels-menu');
 
@@ -72,6 +70,10 @@ test('Full autonomy is turned on once, on purpose, and reads in words while on',
   );
   await views(page, info, 'full-autonomy-dialog');
   await dialog.getByRole('button', { name: 'Turn on', exact: true }).click();
+  // Focus returns to the control; its hint is not part of the evidence.
+  await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.blur(),
+  );
 
   const on = page.getByRole('button', { name: 'Approvals: Full autonomy' });
   await expect(on).toHaveText(/Full autonomy/);
@@ -111,6 +113,10 @@ test('on a phone the levels sit under + and Full autonomy still shows', async ({
   });
   await views(page, info, 'full-autonomy-dialog-phone');
   await dialog.getByRole('button', { name: 'Turn on', exact: true }).click();
+  // Focus returns to the control; its hint is not part of the evidence.
+  await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.blur(),
+  );
   await expect(
     page.getByRole('status').filter({ hasText: 'Full autonomy' }),
   ).toBeVisible();
@@ -121,6 +127,9 @@ test('the reviewer’s decisions are visible but quiet', async ({
   page,
 }, info) => {
   await newConversation(page);
+  // The chat runs on Auto: the reviewer decides first.
+  await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^Auto/ }).click();
   await send(page, 'Tidy my notes reviewer asked fixture');
   const card = page.getByRole('complementary', {
     name: /^Approval required/,
@@ -128,13 +137,19 @@ test('the reviewer’s decisions are visible but quiet', async ({
   await expect(card).toContainText(
     'The reviewer asked you: You asked to tidy the notes, not to delete any.',
   );
+  // Already on Auto: nothing to switch to.
+  await expect(
+    card.getByRole('button', { name: 'Use Auto in this chat' }),
+  ).toHaveCount(0);
   await views(page, info, 'reviewer-asked-card');
   await page.setViewportSize(PHONE);
   await views(page, info, 'reviewer-asked-card-phone');
   await page.setViewportSize({ width: 1280, height: 900 });
   await card.getByRole('button', { name: 'Deny', exact: true }).click();
   await expect(
-    page.getByText('Synthetic approval rejected.', { exact: true }),
+    page.getByText('The requested action was denied. No action was taken.', {
+      exact: true,
+    }),
   ).toBeVisible();
 
   await send(page, 'Save and commit decided without asking fixture');

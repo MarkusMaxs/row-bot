@@ -57,6 +57,9 @@ import {
  * approvals and context usage move into it and the picker opens above the
  * field (Full autonomy still shows beside it).
  */
+/** How far a one-line composer's + submenus overlap the + menu (it sits at the screen's edge). */
+const SUBMENU_OVERLAP = 232;
+
 // The start-up handshake just read the list; later opens re-read it.
 let choicesReadAt = Date.now();
 /** Re-read the model list when the picker opens, at most every 30 s. */
@@ -208,6 +211,9 @@ export default function ComposerControls({
       opener ?? shieldRef.current ?? plusRef.current,
     );
   }
+  // A narrow composer's + menu leaves no room beside it: its submenus open over it
+  // instead of running off the screen.
+  const submenuOffset = singleLine ? -SUBMENU_OVERLAP : 4;
   const levelActions = APPROVAL_LEVELS.map((value) => {
     const unavailable = value === 'full' && !fullAvailable;
     const Icon = APPROVAL_ICONS[value];
@@ -341,7 +347,7 @@ export default function ComposerControls({
                   <Dropdown.Portal>
                     <Dropdown.SubContent
                       className="menu surface-effect"
-                      sideOffset={4}
+                      sideOffset={submenuOffset}
                       collisionPadding={12}
                     >
                       <Dropdown.RadioGroup
@@ -433,7 +439,7 @@ export default function ComposerControls({
                 <Dropdown.Portal>
                   <Dropdown.SubContent
                     className="menu surface-effect composer-apps-menu"
-                    sideOffset={4}
+                    sideOffset={submenuOffset}
                     collisionPadding={12}
                     aria-label="Apps in this chat"
                   >
@@ -499,7 +505,7 @@ export default function ComposerControls({
               <Dropdown.Portal>
                 <Dropdown.SubContent
                   className="menu surface-effect"
-                  sideOffset={4}
+                  sideOffset={submenuOffset}
                   collisionPadding={12}
                 >
                   <Dropdown.RadioGroup
@@ -549,7 +555,7 @@ export default function ComposerControls({
               <Dropdown.Portal>
                 <Dropdown.SubContent
                   className="menu surface-effect"
-                  sideOffset={4}
+                  sideOffset={submenuOffset}
                   collisionPadding={12}
                 >
                   <Dropdown.RadioGroup
