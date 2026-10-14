@@ -4174,21 +4174,21 @@ class BackgroundProcessView(WireModel):
     process_id: ProcessId
     conversation_id: str = Field(min_length=1, max_length=256)
     # The conversation it belongs to, as the list names it ("" when that conversation has no title).
-    conversation_title: str = Field(default="", max_length=200)
+    conversation_title: str = Field(max_length=200)
     command: str = Field(max_length=4096)
-    name: str = Field(default="", max_length=80)
+    name: str = Field(max_length=80)
     folder: str = Field(max_length=4096)
     kind: Literal["process", "command"]
     status: Literal["running", "stopping", "finished", "failed", "stopped"]
-    exit_code: int | None = None
+    exit_code: int | None
     started_at: str = Field(max_length=80)
-    ended_at: str | None = Field(default=None, max_length=80)
+    ended_at: str | None = Field(max_length=80)
     runtime_seconds: float = Field(ge=0)
     # Local addresses it printed or listens on (http://localhost:5173).
-    local_urls: list[str] = Field(default_factory=list, max_length=8)
-    pid: int | None = None
-    stopped_by: Literal["", "you", "agent", "quit", "restart", "conversation", "limit"] = ""
-    env_names: list[str] = Field(default_factory=list, max_length=64)
+    local_urls: list[str] = Field(max_length=8)
+    pid: int | None
+    stopped_by: Literal["", "you", "agent", "quit", "restart", "conversation", "limit"]
+    env_names: list[str] = Field(max_length=64)
     output_size: int = Field(ge=0)
 
 

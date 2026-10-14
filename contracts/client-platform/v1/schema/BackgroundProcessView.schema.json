@@ -14,7 +14,6 @@
       "type": "string"
     },
     "conversation_title": {
-      "default": "",
       "maxLength": 200,
       "title": "Conversation Title",
       "type": "string"
@@ -29,7 +28,6 @@
           "type": "null"
         }
       ],
-      "default": null,
       "title": "Ended At"
     },
     "env_names": {
@@ -49,7 +47,6 @@
           "type": "null"
         }
       ],
-      "default": null,
       "title": "Exit Code"
     },
     "folder": {
@@ -74,7 +71,6 @@
       "type": "array"
     },
     "name": {
-      "default": "",
       "maxLength": 80,
       "title": "Name",
       "type": "string"
@@ -93,7 +89,6 @@
           "type": "null"
         }
       ],
-      "default": null,
       "title": "Pid"
     },
     "process_id": {
@@ -123,7 +118,6 @@
       "type": "string"
     },
     "stopped_by": {
-      "default": "",
       "enum": [
         "",
         "you",
@@ -140,12 +134,20 @@
   "required": [
     "process_id",
     "conversation_id",
+    "conversation_title",
     "command",
+    "name",
     "folder",
     "kind",
     "status",
+    "exit_code",
     "started_at",
+    "ended_at",
     "runtime_seconds",
+    "local_urls",
+    "pid",
+    "stopped_by",
+    "env_names",
     "output_size"
   ],
   "title": "BackgroundProcessView",
