@@ -1495,6 +1495,11 @@ def create_router(
                 ),
                 "policy_revision": security.policy_revision,
                 "session_ttl_seconds": max(0, int(current.expires - security.clock())),
+                # Most saved times are this computer's wall clock without an offset; a device
+                # in another timezone reads them with this (B341).
+                "server_utc_offset_minutes": round(
+                    datetime.now().astimezone().utcoffset().total_seconds() / 60
+                ),
                 "native_adapter": {
                     "available": local_owner,
                     "proof_required": True,

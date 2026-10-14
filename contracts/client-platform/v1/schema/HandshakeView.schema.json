@@ -342,6 +342,20 @@
       "title": "Server Epoch",
       "type": "string"
     },
+    "server_utc_offset_minutes": {
+      "anyOf": [
+        {
+          "maximum": 1440,
+          "minimum": -1440,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Server Utc Offset Minutes"
+    },
     "session_ttl_seconds": {
       "maximum": 43200,
       "minimum": 0,
