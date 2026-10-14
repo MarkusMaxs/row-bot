@@ -1117,6 +1117,20 @@ export default function Workspace() {
     sideRef,
     bottomRef,
   ]);
+  // The panel library reads a width change's new limits only when it next
+  // measures, so the resize above can be clamped to the old ones: back from a
+  // phone width the open sidebar stayed folded to 48 px with its content
+  // clipped. Whatever the library settles on, the columns follow the layout
+  // again (B340).
+  function restoreColumns() {
+    if (!desktop) return;
+    const nav = navRef.current;
+    if (nav && nav.isCollapsed() !== layout.navigation.collapsed)
+      nav.resize(layout.navigation.collapsed ? 48 : layout.navigation.size);
+    const side = sideRef.current;
+    if (side && side.isCollapsed() === sideVisible)
+      side.resize(sideVisible ? layout.side.size : 0);
+  }
   useEffect(() => {
     terminalRef.current?.resize(terminalDocked ? terminal.height : 0);
   }, [terminalDocked, terminal.height, terminalRef]);
@@ -1756,7 +1770,7 @@ export default function Workspace() {
                 if (sideVisible) next = settleResize(next, 'side', side);
                 return next;
               });
-            }
+            } else if (desktop) queueMicrotask(restoreColumns);
           }}
         >
           <Panel
