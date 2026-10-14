@@ -4,7 +4,7 @@ from __future__ import annotations
 import io
 import json
 import random
-import time
+import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,12 +51,19 @@ def _command(client, headers, action, **extra):
 
 
 def _settled(client, headers):
-    for _ in range(200):
-        state = client.get("/api/v1/data/backup", headers=headers).json()
-        if not state["job"] or state["job"]["status"] != "running":
-            return state
-        time.sleep(0.02)
-    raise AssertionError("the job did not finish")
+    """The page's state once the background backup or restore has finished.
+
+    Waits on the job's thread instead of polling: fast polls ran into the
+    query lane's rate limit when a job took over half a second.
+    """
+    for thread in threading.enumerate():
+        if thread.name.startswith("row-bot-data-"):
+            thread.join(timeout=60)
+    answer = client.get("/api/v1/data/backup", headers=headers)
+    assert answer.status_code == 200, answer.text
+    state = answer.json()
+    assert not state["job"] or state["job"]["status"] != "running", "the job did not finish"
+    return state
 
 
 def _pick(client, proof, path: Path) -> str:
