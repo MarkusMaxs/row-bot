@@ -178,9 +178,17 @@ test('a recording shows live with Stop, then as a video in the chat', async ({
         new Promise<void>((done) => {
           if (video.readyState >= 2) return done();
           video.addEventListener('loadeddata', () => done(), { once: true });
+          video.addEventListener('seeked', () => done(), { once: true });
           setTimeout(done, 5000);
+          video.currentTime = 0.05;
         }),
     );
+  // Buddy goes back to idle once the recording has ended.
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Buddy companion' })
+      .getByRole('status'),
+  ).not.toHaveText(/^Recording/, { timeout: 20_000 });
   await everywhere(page, info, 'recording-saved', async () => {
     await saved.scrollIntoViewIfNeeded();
     await firstPicture();
