@@ -37,7 +37,7 @@ def _approval_level(value: Any) -> Any:
     return value
 
 
-# Block, Ask ("approve"), Auto (model-reviewed) and Full autonomy.
+# Block, Ask ("approve"), Auto (model-reviewed) and Hands-off.
 ApprovalLevel = Annotated[Literal["block", "approve", "auto", "full"], BeforeValidator(_approval_level)]
 ProfileApprovalLevel = Annotated[
     Literal["inherit", "block", "approve", "auto", "full"], BeforeValidator(_approval_level)
@@ -110,16 +110,16 @@ class ConversationControls(WireModel):
 
 
 class ConversationControlsPayload(ConversationControls):
-    """The chat's controls as the person sets them. ``confirm_full_autonomy``: they turned Full autonomy on
+    """The chat's controls as the person sets them. ``confirm_full_autonomy``: they turned Hands-off on
     in its one-time dialog (needed the first time on this install)."""
 
     confirm_full_autonomy: bool = False
 
 
 class ConversationApprovalView(WireModel):
-    """What the chat's approval control needs to offer Full autonomy."""
+    """What the chat's approval control needs to offer Hands-off."""
 
-    # The person turned Full autonomy on once on this install: no dialog again.
+    # The person turned Hands-off on once on this install: no dialog again.
     full_autonomy_confirmed: bool
     # False where other people share the conversation (a channel thread): Auto at most.
     full_autonomy_available: bool
@@ -5302,7 +5302,7 @@ class TaskSettingsSnapshot(WireModel):
     profile_available: bool
     webhook_configured: bool
     conversation_id: OpaqueId | None
-    # The person turned Full autonomy on once on this install: choosing it needs no dialog again.
+    # The person turned Hands-off on once on this install: choosing it needs no dialog again.
     full_autonomy_confirmed: bool = False
 
 
@@ -5311,7 +5311,7 @@ class TaskSettingsUpdatePayload(WireModel):
     task_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     profile_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     fields: TaskSettingsFields
-    # The person turned Full autonomy on in its one-time dialog (needed the first time on this install).
+    # The person turned Hands-off on in its one-time dialog (needed the first time on this install).
     confirm_full_autonomy: bool = False
 
 

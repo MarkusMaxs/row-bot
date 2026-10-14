@@ -695,9 +695,9 @@ class McpClientFoundationTests(unittest.TestCase):
             self.assertEqual(_build_graph_and_call("auto", "delete_note", full_access, background), asked)
             interrupt_calls.clear()
             reviewed.clear()
-            # Full autonomy allows even the high-impact one, asks no one, and records it.
+            # Hands-off allows even the high-impact one, asks no one, and records it.
             self.assertEqual(_build_graph_and_call("full", "delete_note", full_access, background),
-                             "Approval: allowed by Full autonomy\nran")
+                             "Approval: allowed by Hands-off\nran")
             self.assertEqual((interrupt_calls, reviewed), ([], []))
         # Ask asks the person, never the reviewer.
         self.assertEqual(_build_graph_and_call("approve", "update_note", {}), "Approval: asked; approved by you\nran")

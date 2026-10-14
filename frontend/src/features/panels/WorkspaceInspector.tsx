@@ -285,7 +285,7 @@ const APPROVAL_WORDS: Record<string, string> = {
   block: 'Blocked',
   approve: 'Ask first',
   auto: 'Reviewed, then asks if unsure',
-  full: 'Full autonomy',
+  full: 'Hands-off',
 };
 const BOUNDARY_WORDS: Record<string, string> = {
   use_workspace_setup: 'Clone a repository through Add resource.',

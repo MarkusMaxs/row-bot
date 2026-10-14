@@ -358,7 +358,7 @@ def resources(x_fixture_token: str = Header(default="")) -> dict:
 
 @app.post("/__a0_fixture/full-autonomy/reset")
 def reset_full_autonomy(x_fixture_token: str = Header(default="")) -> dict:
-    """Forget that Full autonomy was turned on, so its one-time dialog shows again (A0)."""
+    """Forget that Hands-off was turned on, so its one-time dialog shows again (A0)."""
     predecessor._authorize(x_fixture_token)
     from row_bot.full_autonomy import _settings_path
 
@@ -625,7 +625,7 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
             call["quiesced"] = True
         return
     if "decided without asking fixture" in text:
-        # Auto and Full autonomy (A0): steps that ran without asking say who let them run.
+        # Auto and Hands-off (A0): steps that ran without asking say who let them run.
         from row_bot.threads import append_checkpoint_messages
         call = predecessor._record("submit", config, "decided-without-asking")
         thread = call["conversation_id"]
@@ -635,7 +635,7 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
              "Approval: approved by the reviewer: You asked to save the summary to your notes\n"
              "Wrote notes/summary.md"),
             ("run_command", {"command": "git commit -am \"Tidy notes\""},
-             "Approval: allowed by Full autonomy\n$ git commit -am \"Tidy notes\"\n\n"
+             "Approval: allowed by Hands-off\n$ git commit -am \"Tidy notes\"\n\n"
              "[Exit code: 0 | Duration: 0.21s]"),
         )
         try:

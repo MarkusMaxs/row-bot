@@ -252,7 +252,7 @@ def test_running_code_asks_in_ask_is_refused_in_block_and_read_only_commands_run
 
     assert (blocked.ran, blocked.decision.decision) == (False, "block")
     assert (asked.ran, asked.decision.decision) == (False, "ask")
-    # Under Auto and Full autonomy an agent's command still needs an approval, which the level gives.
+    # Under Auto and Hands-off an agent's command still needs an approval, which the level gives.
     assert decide_action("auto", "run_command").requires_approval
     assert decide_action("full", "run_command").requires_approval
     assert all(decide_action(mode, "run_safe_command").allowed for mode in ("block", "approve", "auto", "full"))

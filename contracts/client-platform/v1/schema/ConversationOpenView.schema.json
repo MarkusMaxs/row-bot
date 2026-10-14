@@ -544,7 +544,7 @@
     },
     "ConversationApprovalView": {
       "additionalProperties": false,
-      "description": "What the chat's approval control needs to offer Full autonomy.",
+      "description": "What the chat's approval control needs to offer Hands-off.",
       "properties": {
         "full_autonomy_available": {
           "title": "Full Autonomy Available",

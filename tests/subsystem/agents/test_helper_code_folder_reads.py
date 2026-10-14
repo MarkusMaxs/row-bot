@@ -151,7 +151,7 @@ def _helper_dispatch(observed: dict):
 def test_read_only_helper_reads_the_chats_code_folder_and_changes_nothing(
     tmp_path, monkeypatch, reload_for_data_dir, approval_mode
 ):
-    """B335, and a hard limit no approval level changes: not even Full autonomy lets a read-only helper write."""
+    """B335, and a hard limit no approval level changes: not even Hands-off lets a read-only helper write."""
     agent_runner, threads, _profiles = _modules(tmp_path, monkeypatch, reload_for_data_dir)
     chat, folder = _code_chat(tmp_path, threads, approval_mode)
     before = _fingerprint(folder)
@@ -172,7 +172,7 @@ def test_read_only_helper_reads_the_chats_code_folder_and_changes_nothing(
     assert "- src/" in results["developer_list_files"]
     assert "FORMAT = '%Y-%m-%d'" in results["developer_read_file"]
     # Every Developer action that is not a reviewed read is refused before it runs or asks,
-    # although the chat is on Auto or Full autonomy.
+    # although the chat is on Auto or Hands-off.
     refused = {name: text for name, text in results.items() if name not in _READS}
     assert {
         "developer_write_file", "developer_apply_patch", "developer_run_command",

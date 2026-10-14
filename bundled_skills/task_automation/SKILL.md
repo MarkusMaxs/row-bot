@@ -126,7 +126,7 @@ Every task has an approval level (`approval_mode`) that controls actions that ne
 - `block` (default) — destructive tools are removed entirely. Safest for automated runs.
 - `approve` — destructive tools are available, but the pipeline pauses for human approval before executing them. The user approves from the Activity tab.
 - `auto` — a reviewer approves actions that clearly match the workflow's own instructions; anything else pauses the run for the person, as `approve` does.
-- Full autonomy (`full`) runs every action without asking. Only the person can turn it on, in the workflow's settings; never set or suggest it yourself.
+- Hands-off (`full`) runs every action without asking. Only the person can turn it on, in the workflow's settings; never set or suggest it yourself.
 
 ### Pipeline Step Examples
 

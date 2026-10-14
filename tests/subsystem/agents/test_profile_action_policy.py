@@ -602,7 +602,7 @@ def test_actual_graph_retains_exact_repeat_admission_once_per_dispatch(
     [
         ("approve", True, "Approval: asked; approved by you\nDeleted notes.txt"),
         ("approve", False, "Approval: asked; denied by you — did not run\nAction cancelled by user."),
-        ("full", None, "Approval: allowed by Full autonomy\nDeleted notes.txt"),
+        ("full", None, "Approval: allowed by Hands-off\nDeleted notes.txt"),
     ],
 )
 def test_gated_results_say_whether_approval_was_needed_and_given(
@@ -730,7 +730,7 @@ def test_an_approval_shows_an_empty_nested_value_and_keeps_list_items_apart(runt
 
 def test_an_approval_locked_app_tool_goes_to_the_reviewer_under_auto_and_runs_under_full(runtime, monkeypatch):
     """An app tool that is destructive or of unknown effect: under Auto the reviewer is told its app's access
-    says to ask, and the person is asked when the reviewer asks; Full autonomy runs it; Block refuses it."""
+    says to ask, and the person is asked when the reviewer asks; Hands-off runs it; Block refuses it."""
     from row_bot.approval_review import ReviewVerdict
 
     asked, deleted, reviewed = [], [], []
@@ -746,7 +746,7 @@ def test_an_approval_locked_app_tool_goes_to_the_reviewer_under_auto_and_runs_un
     assert asked[0]["review"]["reason"] == "You didn't ask to delete a page."
     assert any("app's access says to ask" in risk for risk in reviewed[0])
     runtime._approval_mode_var.set("full")
-    assert tool.invoke({"page": "Plans"}) == "Approval: allowed by Full autonomy\nDeleted"
+    assert tool.invoke({"page": "Plans"}) == "Approval: allowed by Hands-off\nDeleted"
     assert deleted == ["Plans"] and len(asked) == 1 and len(reviewed) == 1
     runtime._approval_mode_var.set("block")
     assert tool.invoke({"page": "Plans"}).startswith("BLOCKED") and len(asked) == 1

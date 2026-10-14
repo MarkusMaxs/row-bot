@@ -909,7 +909,7 @@ def test_a_chained_interrupt_on_a_scheduled_run_follows_the_current_mode(tmp_pat
     if second is None:  # Ask (and Auto, whose reviewer asked) asks again; never runs the second tool unapproved
         assert resumed == [True]
         assert len(pending) == 1 and pending[0]["id"] != first["id"]
-    else:  # Block refuses and Full autonomy approves; neither asks
+    else:  # Block refuses and Hands-off approves; neither asks
         assert resumed == [True, second]
         assert pending == []
 

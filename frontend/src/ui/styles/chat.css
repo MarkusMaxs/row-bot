@@ -2697,7 +2697,7 @@ button.attachment-tile-face:hover {
 .composer-shield svg[data-mode='block'] {
   color: var(--text-secondary);
 }
-/* Full autonomy is unmistakable while on: the level in words, in the warning tone. */
+/* Hands-off is unmistakable while on: the level in words, in the warning tone. */
 .composer-shield.composer-shield-full.button {
   width: auto;
   gap: 6px;

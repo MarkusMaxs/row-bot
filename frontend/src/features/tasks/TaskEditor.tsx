@@ -80,7 +80,7 @@ function approvalLabel(mode: string) {
     approve: 'Ask before actions',
     block: 'Block actions',
     auto: 'Auto, reviewed within the profile',
-    full: 'Full autonomy',
+    full: 'Hands-off',
   }[approvalLevel(mode)];
 }
 

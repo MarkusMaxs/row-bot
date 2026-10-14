@@ -40,12 +40,12 @@ def test_developer_approval_policy_modes(tmp_path, reload_for_data_dir):
     assert sandbox.decide_action("ask", "edit").decision == "ask"
     assert sandbox.decide_action("block", "edit").decision == "block"
     assert sandbox.decide_action("approve", "edit").decision == "ask"
-    # An agent's push, install or server under Auto or Full autonomy still needs an approval: the reviewer,
-    # or Full autonomy itself, gives it (tools.approval_gate). The legacy modes are reviewed Auto.
+    # An agent's push, install or server under Auto or Hands-off still needs an approval: the reviewer,
+    # or Hands-off itself, gives it (tools.approval_gate). The legacy modes are reviewed Auto.
     for mode in ("auto_edit", "agent_run", "allow_all", "auto", "full"):
         for action in ("edit", "git_push", "start_server", "run_install"):
             assert sandbox.decide_action(mode, action).decision == "ask"
-    # The person's own click in the app needs nothing more under Auto or Full autonomy; Ask still confirms.
+    # The person's own click in the app needs nothing more under Auto or Hands-off; Ask still confirms.
     assert sandbox.decide_action("auto", "git_push", by_person=True).decision == "allow"
     assert sandbox.decide_action("full", "git_pr", by_person=True).decision == "allow"
     assert sandbox.decide_action("approve", "git_push", by_person=True).decision == "ask"

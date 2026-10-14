@@ -1,4 +1,4 @@
-"""The chat's approval control (A0): four levels; Full autonomy needs its one-time confirmation and is only for
+"""The chat's approval control (A0): four levels; Hands-off needs its one-time confirmation and is only for
 the person's own chats; an older client's "allow_all" is reviewed Auto."""
 
 from __future__ import annotations

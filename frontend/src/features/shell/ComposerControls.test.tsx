@@ -498,7 +498,7 @@ it('offers the four levels, each with what it does', async () => {
   render(<ComposerControls onError={vi.fn()} />);
   const approvals = await menu('Approvals');
   const levels = approvals.getAllByRole('menuitem');
-  ['Ask', 'Auto', 'Full autonomy', 'Block'].forEach((label, index) =>
+  ['Ask', 'Auto', 'Hands-off', 'Block'].forEach((label, index) =>
     expect(levels[index].textContent).toMatch(new RegExp(`^${label}`)),
   );
   expect(
@@ -515,7 +515,7 @@ it('offers the four levels, each with what it does', async () => {
   expect(mock.controller.intent.mock.calls[0][2].approval_mode).toBe('auto');
 });
 
-it('asks once before Full autonomy, then turns it on with the confirmation', async () => {
+it('asks once before Hands-off, then turns it on with the confirmation', async () => {
   withApproval('approve');
   render(
     <OverlayProvider>
@@ -524,12 +524,10 @@ it('asks once before Full autonomy, then turns it on with the confirmation', asy
   );
   const approvals = await menu('Approvals');
   await act(async () =>
-    fireEvent.click(
-      approvals.getByRole('menuitem', { name: /^Full autonomy/ }),
-    ),
+    fireEvent.click(approvals.getByRole('menuitem', { name: /^Hands-off/ })),
   );
   const dialog = await screen.findByRole('alertdialog', {
-    name: 'Turn on Full autonomy?',
+    name: 'Turn on Hands-off?',
   });
   // Nothing changes until the person turns it on.
   expect(mock.controller.intent).not.toHaveBeenCalled();
@@ -546,7 +544,7 @@ it('asks once before Full autonomy, then turns it on with the confirmation', asy
   });
 });
 
-it('never shows the dialog again once Full autonomy was turned on', async () => {
+it('never shows the dialog again once Hands-off was turned on', async () => {
   withApproval('auto', {
     full_autonomy_confirmed: true,
     full_autonomy_available: true,
@@ -558,9 +556,7 @@ it('never shows the dialog again once Full autonomy was turned on', async () => 
   );
   const approvals = await menu('Approvals');
   await act(async () =>
-    fireEvent.click(
-      approvals.getByRole('menuitem', { name: /^Full autonomy/ }),
-    ),
+    fireEvent.click(approvals.getByRole('menuitem', { name: /^Hands-off/ })),
   );
   expect(screen.queryByRole('alertdialog')).toBeNull();
   expect(mock.controller.intent.mock.calls[0][2].approval_mode).toBe('full');
@@ -569,36 +565,36 @@ it('never shows the dialog again once Full autonomy was turned on', async () => 
   );
 });
 
-it('reads Full autonomy in words while it is on', () => {
+it('reads Hands-off in words while it is on', () => {
   withApproval('full', {
     full_autonomy_confirmed: true,
     full_autonomy_available: true,
   });
   render(<ComposerControls onError={vi.fn()} />);
   const control = screen.getByRole('button', {
-    name: 'Approvals: Full autonomy',
+    name: 'Approvals: Hands-off',
   });
-  expect(control).toHaveTextContent('Full autonomy');
+  expect(control).toHaveTextContent('Hands-off');
   expect(control).toHaveClass('composer-shield-full');
 });
 
-it('keeps Full autonomy on view in a one-line composer too', () => {
+it('keeps Hands-off on view in a one-line composer too', () => {
   withApproval('full', {
     full_autonomy_confirmed: true,
     full_autonomy_available: true,
   });
   render(<ComposerControls onError={vi.fn()} singleLine contextUsage={null} />);
-  expect(screen.getByRole('status')).toHaveTextContent('Full autonomy');
+  expect(screen.getByRole('status')).toHaveTextContent('Hands-off');
 });
 
-it('does not offer Full autonomy in a conversation other people share', async () => {
+it('does not offer Hands-off in a conversation other people share', async () => {
   withApproval('auto', {
     full_autonomy_confirmed: true,
     full_autonomy_available: false,
   });
   render(<ComposerControls onError={vi.fn()} />);
   const approvals = await menu('Approvals');
-  const full = approvals.getByRole('menuitem', { name: /^Full autonomy/ });
+  const full = approvals.getByRole('menuitem', { name: /^Hands-off/ });
   expect(full).toHaveAttribute('aria-disabled', 'true');
   expect(
     approvals.getByText(

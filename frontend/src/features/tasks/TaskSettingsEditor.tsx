@@ -41,7 +41,7 @@ export interface TaskSettingsEditorProps {
     revision: string,
     profileRevision: string,
     fields: TaskSettingsFields,
-    /** The person turned Full autonomy on in its one-time dialog just now. */
+    /** The person turned Hands-off on in its one-time dialog just now. */
     confirmFullAutonomy?: boolean,
   ) => Promise<TaskSettingsSnapshot>;
   rotate: (taskId: string, revision: string) => Promise<TaskSettingsSnapshot>;
@@ -69,7 +69,7 @@ function approvalWords(mode: string | null) {
     approve:
       'Approvals: Ask. This workflow asks you before anything that changes something.',
     auto: "Approvals: Auto. A reviewer approves what matches this workflow's steps; anything else pauses the run for you.",
-    full: 'Approvals: Full autonomy. This workflow makes every change without asking; each one is recorded.',
+    full: 'Approvals: Hands-off. This workflow makes every change without asking; each one is recorded.',
   }[approvalLevel(mode)];
 }
 
@@ -146,7 +146,7 @@ export default function TaskSettingsEditor({
     true,
   );
   const [reload, setReload] = useTaskEditValue(session, 'reload', 0);
-  // Full autonomy was turned on in its dialog during this edit: the save says so once.
+  // Hands-off was turned on in its dialog during this edit: the save says so once.
   const [fullConfirmedNow, setFullConfirmedNow] = useTaskEditValue(
     session,
     'fullConfirmedNow',
@@ -513,7 +513,7 @@ export default function TaskSettingsEditor({
               >
                 <option value="approve">Ask before actions</option>
                 <option value="auto">Auto, reviewed</option>
-                <option value="full">Full autonomy</option>
+                <option value="full">Hands-off</option>
                 <option value="block">Block actions</option>
               </Select>
             </SettingRow>

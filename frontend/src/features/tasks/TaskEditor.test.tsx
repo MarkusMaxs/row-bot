@@ -874,7 +874,7 @@ it.each([
   ['block', 'Block actions'],
   ['approve', 'Ask before actions'],
   ['auto', 'Auto, reviewed within the profile'],
-  ['full', 'Full autonomy'],
+  ['full', 'Hands-off'],
   // A workflow saved before approval levels: the old Auto is reviewed Auto.
   ['allow_all', 'Auto, reviewed within the profile'],
   // An unset policy follows the global setting; it is not "Ask".

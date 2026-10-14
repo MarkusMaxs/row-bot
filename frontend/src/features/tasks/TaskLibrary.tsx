@@ -883,7 +883,7 @@ export function SavedTasks({
                             </span>
                             <span
                               className="workflow-tag"
-                              // Only Full autonomy carries the warning tone.
+                              // Only Hands-off carries the warning tone.
                               data-attention={
                                 approvalLevel(task.approval_mode) === 'full'
                                   ? 'true'

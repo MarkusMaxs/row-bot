@@ -111,7 +111,7 @@ def _turn_on(group: str, label: str, why: str) -> bool:
         return True
     from row_bot.tools.approval_gate import request_approval
 
-    # By the approval level: the person under Ask (and Block), the reviewer first under Auto, Full autonomy.
+    # By the approval level: the person under Ask (and Block), the reviewer first under Auto, Hands-off.
     approved = request_approval(
         {
             "tool": "row_bot_update_setting",

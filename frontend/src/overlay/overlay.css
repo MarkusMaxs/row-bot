@@ -501,7 +501,7 @@ html[data-platform='macos'] .buddy-overlay {
     background: none;
   }
 }
-/* Running work on Full autonomy: unmistakable, in the warning tone. */
+/* Running work on Hands-off: unmistakable, in the warning tone. */
 .buddy-overlay-full {
   color: var(--status-warning-text);
   font-weight: var(--weight-medium);

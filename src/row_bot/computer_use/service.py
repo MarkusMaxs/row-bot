@@ -1023,7 +1023,7 @@ def current_owner() -> LeaseOwner:
 
 
 def _waits_for_approval(approval_mode: object) -> bool:
-    """Whether the session shows itself waiting while an approval is decided: never under Full autonomy,
+    """Whether the session shows itself waiting while an approval is decided: never under Hands-off,
     which gives it at once (the person, or the Auto reviewer first, otherwise)."""
     from row_bot.approval_policy import normalize_approval_mode
 
@@ -2544,7 +2544,7 @@ class ComputerUseService:
 
     def _remember_app_approval(self, permission_key: str, line: str) -> None:
         """Remember an app's approval for this session by who gave it: the person (every level), or the
-        Auto reviewer (Auto only). Full autonomy needs nothing remembered."""
+        Auto reviewer (Auto only). Hands-off needs nothing remembered."""
         from row_bot.tools.approval_gate import APPROVAL_FULL_AUTONOMY
 
         if line == APPROVAL_FULL_AUTONOMY:

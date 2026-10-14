@@ -577,8 +577,8 @@ export default function BuddyOverlay({
           <p>
             {statusLine}
             {fullAutonomy && (
-              // Running work on Full autonomy says so, in the warning tone.
-              <span className="buddy-overlay-full"> · Full autonomy</span>
+              // Running work on Hands-off says so, in the warning tone.
+              <span className="buddy-overlay-full"> · Hands-off</span>
             )}
           </p>
         </div>

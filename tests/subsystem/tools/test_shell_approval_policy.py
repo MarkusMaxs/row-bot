@@ -121,7 +121,7 @@ def test_a_blocked_command_stays_blocked_under_full_autonomy(tmp_path, monkeypat
     [
         ("git status", "approve", None, "Approval: not needed (safe command)"),
         ("New-Item notes.txt", "approve", True, "Approval: asked; approved by you"),
-        ("New-Item notes.txt", "full", None, "Approval: allowed by Full autonomy"),
+        ("New-Item notes.txt", "full", None, "Approval: allowed by Hands-off"),
         ("New-Item notes.txt", "auto", None, "Approval: approved by the reviewer: You asked to run it"),
     ],
 )

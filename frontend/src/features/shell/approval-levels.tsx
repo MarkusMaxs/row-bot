@@ -26,7 +26,7 @@ export const APPROVAL_LEVELS: readonly ApprovalLevel[] = [
 export const APPROVAL_LABELS: Record<ApprovalLevel, string> = {
   approve: 'Ask',
   auto: 'Auto',
-  full: 'Full autonomy',
+  full: 'Hands-off',
   block: 'Block',
 };
 
@@ -53,13 +53,13 @@ export function approvalLevel(value: string | null | undefined): ApprovalLevel {
   return 'approve';
 }
 
-/** A workflow's or run's level as a short tag ("Full autonomy" carries the warning tone). */
+/** A workflow's or run's level as a short tag ("Hands-off" carries the warning tone). */
 export function approvalTag(value: string | null | undefined): string {
   const level = approvalLevel(value);
   return {
     approve: 'Asks before actions',
     auto: 'Auto approvals',
-    full: 'Full autonomy',
+    full: 'Hands-off',
     block: 'Blocks actions',
   }[level];
 }
@@ -67,7 +67,7 @@ export function approvalTag(value: string | null | undefined): string {
 export const SHARED_CONVERSATION_NOTE =
   'Other people share this conversation, so it runs on Auto at most.';
 
-/** What Full autonomy skips and what still holds: the one-time dialog's body. */
+/** What Hands-off skips and what still holds: the one-time dialog's body. */
 export function FullAutonomyNotice() {
   return (
     <div className="full-autonomy-notice stack">
@@ -112,7 +112,7 @@ function useOverlayIfAny() {
 }
 
 /**
- * Asks the person to turn Full autonomy on (the first time on this install):
+ * Asks the person to turn Hands-off on (the first time on this install):
  * a warning dialog with Cancel and Turn on. `onConfirm` runs on Turn on.
  */
 export function useConfirmFullAutonomy() {
@@ -123,9 +123,9 @@ export function useConfirmFullAutonomy() {
       kind: 'alert',
       key: 'full-autonomy',
       returnFocusTo,
-      title: 'Turn on Full autonomy?',
+      title: 'Turn on Hands-off?',
       description:
-        'Every action runs without asking you. Only choose it for work you trust Row-Bot to do unattended.',
+        'With Hands-off on, every action runs without asking you. Only choose it for work you trust Row-Bot to do unattended.',
       content: <FullAutonomyNotice />,
       confirmLabel: 'Turn on',
       onConfirm,

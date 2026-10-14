@@ -65,9 +65,9 @@ def decide_action(mode: ApprovalMode, action: DeveloperAction, *, by_person: boo
 
     "ask" means the action needs an approval; an agent-driven caller gets it
     through ``tools.approval_gate.request_approval``, which resolves it by the
-    level (the person under Ask, the reviewer first under Auto, Full autonomy
-    under Full). ``by_person``: the person started it in the app, so Auto and
-    Full autonomy need nothing more (Ask still confirms).
+    level (the person under Ask, the reviewer first under Auto, the level
+    itself under Hands-off). ``by_person``: the person started it in the app, so Auto and
+    Hands-off need nothing more (Ask still confirms).
     """
     label = _ACTION_LABELS[action]
     normalized = normalize_approval_mode(mode)
@@ -82,7 +82,7 @@ def decide_action(mode: ApprovalMode, action: DeveloperAction, *, by_person: boo
     if normalized == "auto":
         return ApprovalDecision("ask", f"Auto asks the reviewer before it will {label}.")
     if normalized == "full":
-        return ApprovalDecision("ask", f"Full autonomy approves attempts to {label}.")
+        return ApprovalDecision("ask", f"Hands-off approves attempts to {label}.")
     return ApprovalDecision("ask", f"{mode_label} requires approval to {label}.")
 
 

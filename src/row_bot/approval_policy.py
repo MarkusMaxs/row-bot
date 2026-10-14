@@ -1,4 +1,4 @@
-"""The shared approval levels: Block, Ask, Auto (reviewed) and Full autonomy.
+"""The shared approval levels: Block, Ask, Auto (reviewed) and Hands-off.
 
 An action that needs approval is decided by the level the person chose:
 
@@ -6,7 +6,7 @@ An action that needs approval is decided by the level the person chose:
 - **Ask** (``approve``, the default): the person approves each one.
 - **Auto** (``auto``): a reviewer model approves what clearly matches the person's
   request and asks the person about everything else (``approval_review``).
-- **Full autonomy** (``full``): approved without asking, and still recorded.
+- **Hands-off** (``full``): approved without asking, and still recorded.
 
 ``decision_for_action`` says only whether an action *needs* an approval ("ask");
 who gives it is the level's business, resolved in one place
@@ -33,7 +33,7 @@ APPROVAL_MODE_LABELS: dict[ApprovalMode, str] = {
     "block": "Block",
     "approve": "Ask",
     "auto": "Auto",
-    "full": "Full autonomy",
+    "full": "Hands-off",
 }
 
 # How much each level lets run without the person: a profile or helper may
@@ -65,6 +65,8 @@ _LEGACY_APPROVAL_ALIASES: dict[str, ApprovalMode] = {
     "agent_run": "auto",
     # Only ever chosen by a person.
     "full": "full",
+    "hands_off": "full",
+    "hands off": "full",
     "full_autonomy": "full",
     "full autonomy": "full",
 }
@@ -98,7 +100,7 @@ def approval_label(mode: object) -> str:
 
 
 def approval_rank(mode: object) -> int:
-    """How much a level lets run without the person (Block lowest, Full autonomy highest)."""
+    """How much a level lets run without the person (Block lowest, Hands-off highest)."""
 
     return _APPROVAL_RANKS[normalize_approval_mode(mode)]
 
@@ -120,9 +122,9 @@ def decision_for_action(
 
     "ask" means it needs an approval. Who gives it depends on the level: the
     person under Ask, the reviewer (then the person when it asks) under Auto,
-    Full autonomy itself under Full. Agent-driven callers resolve "ask" through
+    the level itself under Hands-off. Agent-driven callers resolve "ask" through
     ``tools.approval_gate``. ``by_person``: the person started this action
-    themselves (a button in the app), so under Auto or Full autonomy it needs no
+    themselves (a button in the app), so under Auto or Hands-off it needs no
     further approval; under Ask it still does.
     """
 

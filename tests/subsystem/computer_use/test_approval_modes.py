@@ -114,7 +114,7 @@ def test_full_autonomy_and_an_approving_reviewer_skip_the_consequential_prompt_b
     )
 
     assert prompts == []
-    # Under Auto the reviewer saw the app's access and the consequential click; Full autonomy asks no one.
+    # Under Auto the reviewer saw the app's access and the consequential click; Hands-off asks no one.
     assert reviewer["seen"] == reviewed
     assert [name for name, _args in fake_transport.calls].count("click") == 1
     with pytest.raises(ComputerUseError, match="cannot be targeted"):

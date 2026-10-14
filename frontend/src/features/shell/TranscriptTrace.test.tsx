@@ -731,9 +731,9 @@ it.each([
     'Approved by the reviewer: You asked to make the notes file',
   ],
   [
-    'Approval: allowed by Full autonomy\n$ New-Item notes.txt',
-    'Full autonomy',
-    'Allowed by Full autonomy',
+    'Approval: allowed by Hands-off\n$ New-Item notes.txt',
+    'Hands-off',
+    'Allowed by Hands-off',
   ],
 ])(
   'records who let a step run without asking you (A0): %#',

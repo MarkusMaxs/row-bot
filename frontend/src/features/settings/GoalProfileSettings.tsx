@@ -594,7 +594,7 @@ const APPROVAL_MODES: Record<ProfileDraft['approval_mode'], string> = {
   inherit: 'Same as the chat',
   approve: 'Ask',
   auto: 'Auto',
-  full: 'Full autonomy, where the chat allows it',
+  full: 'Hands-off, where the chat allows it',
   block: 'Block',
 };
 
