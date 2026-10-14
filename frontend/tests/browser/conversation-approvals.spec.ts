@@ -8,6 +8,7 @@ import { composer, newConversation } from './unified-helpers';
  * person's request), Full autonomy (on purpose, one dialog the first time)
  * and Block. The fixture scripts the model; the approval control, the
  * one-time confirmation and the approval card run through the real server.
+ * (Named to run after bootstrap.spec.ts, which needs a backend with no turns.)
  */
 
 const PHONE = { width: 390, height: 844 };
@@ -146,33 +147,38 @@ test('the reviewer’s decisions are visible but quiet', async ({
   await views(page, info, 'reviewer-asked-card-phone');
   await page.setViewportSize({ width: 1280, height: 900 });
   await card.getByRole('button', { name: 'Deny', exact: true }).click();
+  // The conversation itself: Buddy's companion can show the latest reply too.
+  const transcript = page.getByRole('log', { name: 'Conversation' });
   await expect(
-    page.getByText('The requested action was denied. No action was taken.', {
-      exact: true,
-    }),
+    transcript.getByText(
+      'The requested action was denied. No action was taken.',
+      {
+        exact: true,
+      },
+    ),
   ).toBeVisible();
 
   await send(page, 'Save and commit decided without asking fixture');
   await expect(
-    page.getByText('Saved the summary and committed the tidy-up.', {
+    transcript.getByText('Saved the summary and committed the tidy-up.', {
       exact: true,
     }),
   ).toBeVisible();
-  const steps = page.getByText('Used 2 tools', { exact: true }).last();
+  const steps = transcript.getByText('Used 2 tools', { exact: true }).last();
   await steps.click();
-  const reviewed = page.getByText('Reviewer approved', { exact: true });
-  const full = page.getByText('Full autonomy', { exact: true }).last();
+  const reviewed = transcript.getByText('Reviewer approved', { exact: true });
+  const full = transcript.getByText('Full autonomy', { exact: true }).last();
   await expect(reviewed).toBeVisible();
   await expect(full).toBeVisible();
   await reviewed.click();
   await expect(
-    page.getByText(
+    transcript.getByText(
       'Approved by the reviewer: You asked to save the summary to your notes',
     ),
   ).toBeVisible();
   await full.click();
   await expect(
-    page.getByText('Allowed by Full autonomy', { exact: true }),
+    transcript.getByText('Allowed by Full autonomy', { exact: true }),
   ).toBeVisible();
   await views(page, info, 'activity-decided-without-asking');
   await page.setViewportSize(PHONE);

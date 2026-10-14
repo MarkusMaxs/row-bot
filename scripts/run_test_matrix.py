@@ -63,7 +63,7 @@ BROWSER_SMOKE_SPECS = (
     "buddy-overlay",
     "polish-foundation",
     "apps-and-skills",
-    "approval-levels",
+    "conversation-approvals",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
