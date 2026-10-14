@@ -18,8 +18,8 @@ def _chosen_model(monkeypatch):
     monkeypatch.setattr(models, "_current_model", "model:ollama:fixture-model")
 
 
-def test_active_thread_tracking_and_idle_detection_use_fake_monotonic(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_active_thread_tracking_and_idle_detection_use_fake_monotonic(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
     now = {"value": 1000.0}
 
@@ -40,15 +40,15 @@ def test_active_thread_tracking_and_idle_detection_use_fake_monotonic(tmp_path, 
         assert memory_extraction._active_threads == set()
 
 
-def test_state_and_journal_survive_reload_and_corrupt_files_fall_back(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_state_and_journal_survive_reload_and_corrupt_files_fall_back(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
 
     memory_extraction._save_state({"last_extraction": "2026-06-23T00:00:00", "threads_scanned": 2, "entities_saved": 3})
     for idx in range(105):
         memory_extraction._append_extraction_journal({"id": idx})
 
-    reloaded = fresh_memory_stack(tmp_path, monkeypatch)["memory_extraction"]
+    reloaded = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)["memory_extraction"]
     assert reloaded.get_extraction_status()["threads_scanned"] == 2
     assert len(reloaded._load_extraction_journal()) == 100
     assert reloaded._load_extraction_journal()[-1] == {"id": 104}
@@ -59,8 +59,8 @@ def test_state_and_journal_survive_reload_and_corrupt_files_fall_back(tmp_path, 
     assert reloaded._load_extraction_journal() == []
 
 
-def test_get_thread_messages_normalizes_langchain_content_blocks(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_get_thread_messages_normalizes_langchain_content_blocks(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
 
     @dataclass
@@ -86,8 +86,8 @@ def test_get_thread_messages_normalizes_langchain_content_blocks(tmp_path, monke
     assert messages[2] == {"role": "user", "content": "{'not': 'text'}"}
 
 
-def test_format_conversation_truncates_assistant_and_skips_malformed_messages(tmp_path, monkeypatch) -> None:
-    memory_extraction = fresh_memory_stack(tmp_path, monkeypatch)["memory_extraction"]
+def test_format_conversation_truncates_assistant_and_skips_malformed_messages(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    memory_extraction = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)["memory_extraction"]
 
     text = memory_extraction._format_conversation(
         [
@@ -105,8 +105,8 @@ def test_format_conversation_truncates_assistant_and_skips_malformed_messages(tm
     assert "missing role" not in text
 
 
-def test_run_extraction_if_idle_and_idle_scheduler_use_active_thread_exclusions(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_run_extraction_if_idle_and_idle_scheduler_use_active_thread_exclusions(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
     calls: list[set[str] | None] = []
 
@@ -130,8 +130,8 @@ def test_run_extraction_if_idle_and_idle_scheduler_use_active_thread_exclusions(
     memory_extraction.stop_periodic_extraction()
 
 
-def test_run_extraction_handles_no_threads_and_excludes_active_threads(tmp_path, monkeypatch) -> None:
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def test_run_extraction_handles_no_threads_and_excludes_active_threads(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     memory_extraction = stack["memory_extraction"]
     statuses: list[str] = []
 

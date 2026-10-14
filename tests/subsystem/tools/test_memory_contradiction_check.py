@@ -40,8 +40,8 @@ class _Checker(BaseChatModel):
 
 
 @pytest.fixture
-def memory(tmp_path, monkeypatch):
-    stack = fresh_memory_stack(tmp_path, monkeypatch)
+def memory(tmp_path, monkeypatch, reload_for_data_dir):
+    stack = fresh_memory_stack(tmp_path, monkeypatch, reload_for_data_dir)
     from row_bot import models
     from row_bot.providers import background, usage_ledger
 

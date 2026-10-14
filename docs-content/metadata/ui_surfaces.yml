@@ -599,11 +599,11 @@ surfaces:
     app_route: Windows and macOS native packages
     state: requires clean machines or virtual machines and signed release candidates
     scenario: release-manual
-    docs_page: /docs/operations/
+    docs_page: /docs/operations/updates
     no_image_reason: Packaging, signing, repair, and notarisation are outside isolated browser capture.
     capture_type: manual
     status: ready
-    source_files: [installer, src/row_bot/updater.py]
+    source_files: [installer, src/row_bot/updater.py, src/row_bot/updates]
   settings_apps:
     title: Apps
     app_route: /app-v2/settings/apps

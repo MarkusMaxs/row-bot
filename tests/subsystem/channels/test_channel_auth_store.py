@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import os
 from types import SimpleNamespace
 
@@ -19,15 +18,10 @@ def data_dir(tmp_path):
     yield path
 
 
-def _reload_auth_modules(monkeypatch, data_dir):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    import row_bot.secret_store as secret_store
-    import row_bot.api_keys as api_keys
-    import row_bot.channels.auth_store as channel_auth
-
-    secret_store = importlib.reload(secret_store)
-    api_keys = importlib.reload(api_keys)
-    channel_auth = importlib.reload(channel_auth)
+def _reload_auth_modules(reload_for_data_dir, data_dir):
+    secret_store, api_keys, channel_auth = reload_for_data_dir(
+        data_dir, "row_bot.secret_store", "row_bot.api_keys", "row_bot.channels.auth_store"
+    )
     backend = FakeKeyring()
     secret_store._set_backend_for_tests(backend)
     return secret_store, api_keys, channel_auth, backend
@@ -35,10 +29,10 @@ def _reload_auth_modules(monkeypatch, data_dir):
 
 def test_channel_secret_uses_channel_namespace_not_legacy_api_keys(
     data_dir,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     secret_store, api_keys, channel_auth, backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
 
     channel_auth.set_channel_secret(
@@ -59,9 +53,9 @@ def test_channel_secret_uses_channel_namespace_not_legacy_api_keys(
     ) == "tg-secret-1234"
 
 
-def test_channel_secret_falls_back_to_legacy_api_keys(data_dir, monkeypatch):
+def test_channel_secret_falls_back_to_legacy_api_keys(data_dir, monkeypatch, reload_for_data_dir):
     _secret_store, api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
 
     api_keys.set_key("SLACK_BOT_TOKEN", "legacy-slack-token")
@@ -80,9 +74,10 @@ def test_channel_secret_falls_back_to_legacy_api_keys(data_dir, monkeypatch):
 def test_channel_status_detects_legacy_keyring_without_metadata(
     data_dir,
     monkeypatch,
+    reload_for_data_dir,
 ):
     secret_store, api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     secret_store.set_secret("TELEGRAM_BOT_TOKEN", "orphan-legacy-9999")
@@ -98,9 +93,9 @@ def test_channel_status_detects_legacy_keyring_without_metadata(
     assert status["fingerprint"] == "****9999"
 
 
-def test_channel_keyring_takes_precedence_over_environment(data_dir, monkeypatch):
+def test_channel_keyring_takes_precedence_over_environment(data_dir, monkeypatch, reload_for_data_dir):
     _secret_store, _api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "env-discord-token")
     channel_auth.set_channel_secret(
@@ -120,9 +115,9 @@ def test_channel_keyring_takes_precedence_over_environment(data_dir, monkeypatch
     )["source"] == "channel keyring"
 
 
-def test_channel_secret_status_reports_environment_fallback(data_dir, monkeypatch):
+def test_channel_secret_status_reports_environment_fallback(data_dir, monkeypatch, reload_for_data_dir):
     _secret_store, _api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "env-telegram-1234")
 
@@ -133,9 +128,9 @@ def test_channel_secret_status_reports_environment_fallback(data_dir, monkeypatc
     assert status["fingerprint"] == "****1234"
 
 
-def test_channel_secret_status_reports_env_when_keyring_fails(data_dir, monkeypatch):
+def test_channel_secret_status_reports_env_when_keyring_fails(data_dir, monkeypatch, reload_for_data_dir):
     secret_store, _api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     secret_store._set_backend_for_tests(FakeKeyring(fail=True))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "env-telegram-5678")
@@ -149,10 +144,10 @@ def test_channel_secret_status_reports_env_when_keyring_fails(data_dir, monkeypa
 
 def test_migrate_legacy_channel_secrets_copies_without_deleting_legacy(
     data_dir,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     secret_store, _api_keys, channel_auth, backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     channel = SimpleNamespace(
         name="telegram",
@@ -177,10 +172,10 @@ def test_migrate_legacy_channel_secrets_copies_without_deleting_legacy(
 
 def test_migrate_legacy_channel_secrets_does_not_overwrite_channel_keyring(
     data_dir,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     secret_store, _api_keys, channel_auth, backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     channel = SimpleNamespace(
         name="slack",
@@ -207,9 +202,10 @@ def test_migrate_legacy_channel_secrets_does_not_overwrite_channel_keyring(
 def test_migrate_legacy_channel_secrets_never_persists_environment(
     data_dir,
     monkeypatch,
+    reload_for_data_dir,
 ):
     secret_store, _api_keys, channel_auth, backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     channel = SimpleNamespace(
         name="discord",
@@ -231,10 +227,10 @@ def test_migrate_legacy_channel_secrets_never_persists_environment(
 
 def test_migrate_legacy_channel_secrets_is_quiet_without_legacy_evidence(
     data_dir,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     secret_store, _api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     channel = SimpleNamespace(
         name="telegram",
@@ -249,9 +245,9 @@ def test_migrate_legacy_channel_secrets_is_quiet_without_legacy_evidence(
     assert stats == {"migrated": 0, "skipped": 1, "failed": 0}
 
 
-def test_channel_secret_delete_does_not_delete_legacy_key(data_dir, monkeypatch):
+def test_channel_secret_delete_does_not_delete_legacy_key(data_dir, reload_for_data_dir):
     _secret_store, api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     api_keys.set_key("DISCORD_BOT_TOKEN", "legacy-discord-token")
     channel_auth.set_channel_secret(
@@ -270,13 +266,11 @@ def test_channel_secret_delete_does_not_delete_legacy_key(data_dir, monkeypatch)
     ) == "legacy-discord-token"
 
 
-def test_runtime_getter_reads_channel_namespace(data_dir, monkeypatch):
+def test_runtime_getter_reads_channel_namespace(data_dir, reload_for_data_dir):
     _secret_store, _api_keys, channel_auth, _backend = _reload_auth_modules(
-        monkeypatch, data_dir,
+        reload_for_data_dir, data_dir,
     )
     channel_auth.set_channel_secret("telegram", "TELEGRAM_BOT_TOKEN", "tg-runtime")
 
-    import row_bot.channels.telegram as telegram
-
-    telegram = importlib.reload(telegram)
+    (telegram,) = reload_for_data_dir(data_dir, "row_bot.channels.telegram")
     assert telegram._get_bot_token() == "tg-runtime"

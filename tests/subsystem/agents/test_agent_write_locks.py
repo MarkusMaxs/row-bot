@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import importlib
-import sys
 import threading
 import time
 
 
-def _fresh_lock_modules(tmp_path, monkeypatch):
+def _fresh_lock_modules(tmp_path, reload_for_data_dir):
     data_dir = tmp_path / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(data_dir))
-    for name in (
+    _tasks, threads, _profiles, agent_runs, _context, agent_runner, _storage = reload_for_data_dir(
+        data_dir,
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_profiles",
@@ -18,23 +16,12 @@ def _fresh_lock_modules(tmp_path, monkeypatch):
         "row_bot.agent_context",
         "row_bot.agent_runner",
         "row_bot.developer.storage",
-    ):
-        sys.modules.pop(name, None)
-
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    import row_bot.agent_runs as agent_runs
-    import row_bot.agent_runner as agent_runner
-
-    tasks = importlib.reload(tasks)
-    threads = importlib.reload(threads)
-    agent_runs = importlib.reload(agent_runs)
-    agent_runner = importlib.reload(agent_runner)
+    )
     return threads, agent_runs, agent_runner
 
 
-def test_agent_write_lock_helpers_are_single_owner(tmp_path, monkeypatch):
-    _threads, agent_runs, _agent_runner = _fresh_lock_modules(tmp_path, monkeypatch)
+def test_agent_write_lock_helpers_are_single_owner(tmp_path, reload_for_data_dir):
+    _threads, agent_runs, _agent_runner = _fresh_lock_modules(tmp_path, reload_for_data_dir)
 
     assert agent_runs.acquire_agent_write_lock("thread:parent", "run-1") is True
     assert agent_runs.acquire_agent_write_lock("thread:parent", "run-2") is False
@@ -48,8 +35,8 @@ def test_agent_write_lock_helpers_are_single_owner(tmp_path, monkeypatch):
     assert agent_runs.release_agent_write_lock(run_id="run-2") is True
 
 
-def test_write_capable_agents_queue_until_lock_released(tmp_path, monkeypatch):
-    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, monkeypatch)
+def test_write_capable_agents_queue_until_lock_released(tmp_path, monkeypatch, reload_for_data_dir):
+    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, reload_for_data_dir)
     parent_thread_id = threads.create_thread("Parent")
     first_started = threading.Event()
     release_first = threading.Event()
@@ -100,8 +87,8 @@ def test_write_capable_agents_queue_until_lock_released(tmp_path, monkeypatch):
     assert second_final["write_lock_key"] == f"thread:{parent_thread_id}"
 
 
-def test_distinct_developer_workspaces_allow_concurrent_writers(tmp_path, monkeypatch):
-    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, monkeypatch)
+def test_distinct_developer_workspaces_allow_concurrent_writers(tmp_path, monkeypatch, reload_for_data_dir):
+    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, reload_for_data_dir)
     from row_bot.developer.state import DeveloperWorkspace
     from row_bot.developer.storage import save_workspace
     for workspace_id in ("dev-first-folder", "dev-second-folder"):
@@ -164,8 +151,8 @@ def test_distinct_developer_workspaces_allow_concurrent_writers(tmp_path, monkey
     assert agent_runs.list_agent_write_locks() == []
 
 
-def test_queued_parent_message_is_applied_before_agent_starts(tmp_path, monkeypatch):
-    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, monkeypatch)
+def test_queued_parent_message_is_applied_before_agent_starts(tmp_path, monkeypatch, reload_for_data_dir):
+    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, reload_for_data_dir)
     parent_thread_id = threads.create_thread("Parent")
     release_first = threading.Event()
     captured_prompts: list[str] = []
@@ -207,8 +194,8 @@ def test_queued_parent_message_is_applied_before_agent_starts(tmp_path, monkeypa
     assert "Use the narrow patch." in second_prompt
 
 
-def test_read_only_agents_do_not_take_writer_lock(tmp_path, monkeypatch):
-    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, monkeypatch)
+def test_read_only_agents_do_not_take_writer_lock(tmp_path, monkeypatch, reload_for_data_dir):
+    threads, agent_runs, agent_runner = _fresh_lock_modules(tmp_path, reload_for_data_dir)
     parent_thread_id = threads.create_thread("Parent")
 
     monkeypatch.setattr(

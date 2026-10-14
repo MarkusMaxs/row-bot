@@ -110,6 +110,30 @@ function useLocalRuntime() {
   return runtime;
 }
 
+/**
+ * Whether this install downloads its updates by itself (D2: on by default and
+ * said once in the first run). Development checkouts and installs whose host
+ * applies updates don't, so they show nothing.
+ */
+function useBackgroundUpdates() {
+  const { controller } = useRuntime();
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const abort = new AbortController();
+    void (async () => {
+      try {
+        const updates = await controller.updates(abort.signal);
+        if (!abort.signal.aborted)
+          setOn(updates?.mode === 'self' && updates.auto_download === true);
+      } catch {
+        /* Settings › Updates says the same; this line is only a pointer. */
+      }
+    })();
+    return () => abort.abort();
+  }, [controller]);
+  return on;
+}
+
 function useProviderCards() {
   const { controller } = useRuntime();
   const [cards, setCards] = useState<ProviderLiveCard[]>([]);
@@ -459,6 +483,7 @@ export default function FirstRun({
     useRuntime();
   const navigate = useNavigate();
   const runtime = useLocalRuntime();
+  const backgroundUpdates = useBackgroundUpdates();
   const { cards, reload } = useProviderCards();
   const [path, setPath] = useState<Path | null>(null);
   const [subscription, setSubscription] = useState<Subscription>('codex');
@@ -785,6 +810,15 @@ export default function FirstRun({
           Set up later
         </button>
       </footer>
+      {backgroundUpdates && (
+        <p className="first-run-note">
+          <Download size={14} aria-hidden />
+          <span>
+            Row-Bot downloads updates in the background. You can turn this off
+            in <Link to="/settings/updates">Settings › Updates</Link>.
+          </span>
+        </p>
+      )}
     </section>
   );
 }

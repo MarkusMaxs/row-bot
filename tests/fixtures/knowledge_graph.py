@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import Any
 
 
-def fresh_knowledge_graph(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    import row_bot.knowledge_graph as kg
-
-    kg = importlib.reload(kg)
+def fresh_knowledge_graph(tmp_path: Path, monkeypatch, reload_for_data_dir):
+    (kg,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.knowledge_graph")
     kg._skip_reindex = True
     monkeypatch.setattr(kg, "semantic_search", lambda *_args, **_kwargs: [])
     return kg

@@ -28,11 +28,10 @@ class CountingEmbedding:
 
 
 @pytest.fixture
-def projection_stack(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    from row_bot import knowledge_graph, embedding_config, wiki_vault
+def projection_stack(tmp_path, monkeypatch, reload_for_data_dir):
+    from row_bot import embedding_config, wiki_vault
 
-    kg = importlib.reload(knowledge_graph)
+    (kg,) = reload_for_data_dir(tmp_path / "data", "row_bot.knowledge_graph")
     embedding = CountingEmbedding()
     fingerprint = {"version": 1, "provider": "fake", "model": "review-v1", "dimension": 3, "normalize": True}
     config = {"batch_size": 32}

@@ -16,8 +16,8 @@ REORDER = "Does step prompt_1's output contain at least one item below its reord
 
 
 @pytest.fixture
-def runtime(tmp_path, monkeypatch):
-    tasks, threads, _profiles, _runs, _skills = _fresh_modules(tmp_path, monkeypatch)
+def runtime(tmp_path, monkeypatch, reload_for_data_dir):
+    tasks, threads, _profiles, _runs, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
     from row_bot.tools import task_tool
 
     monkeypatch.setattr(task_tool, "tasks_db", tasks)

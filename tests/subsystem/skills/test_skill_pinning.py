@@ -1,45 +1,30 @@
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
 
-def _reload_skill_pinning_modules(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    modules = (
+def _reload_skill_pinning_modules(tmp_path: Path, reload_for_data_dir):
+    skills, activation, threads, tasks, _storage = reload_for_data_dir(
+        tmp_path,
         "row_bot.skills",
         "row_bot.skills_activation",
         "row_bot.threads",
         "row_bot.tasks",
         "row_bot.developer.storage",
     )
-    for name in modules:
-        if name in sys.modules:
-            importlib.reload(sys.modules[name])
-        else:
-            importlib.import_module(name)
-
-    import row_bot.skills as skills
-    import row_bot.skills_activation as activation
-    import row_bot.threads as threads
-    import row_bot.tasks as tasks
-
     return skills, activation, threads, tasks
 
 
-def _reload_status_tool_module():
-    name = "row_bot.tools.row_bot_status_tool"
-    if name in sys.modules:
-        return importlib.reload(sys.modules[name])
-    return importlib.import_module(name)
+def _reload_status_tool_module(reload_for_data_dir):
+    (status_tool,) = reload_for_data_dir(None, "row_bot.tools.row_bot_status_tool")
+    return status_tool
 
 
-def test_default_pin_is_persisted_and_enabled(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_default_pin_is_persisted_and_enabled(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
 
     skills.load_skills()
 
@@ -53,8 +38,8 @@ def test_default_pin_is_persisted_and_enabled(tmp_path, monkeypatch):
     assert saved[skills.SKILL_PINS_CONFIG_KEY] is True
 
 
-def test_pin_auto_enables_and_disabling_clears_pin(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_pin_auto_enables_and_disabling_clears_pin(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
 
     skills.set_enabled("meeting_notes", False)
@@ -70,8 +55,8 @@ def test_pin_auto_enables_and_disabling_clears_pin(tmp_path, monkeypatch):
     assert "meeting_notes" not in skills.get_pinned_skill_names()
 
 
-def test_tool_guides_cannot_be_pinned(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_tool_guides_cannot_be_pinned(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
 
     guide = next(skill for skill in skills.get_all_skills() if skills.is_tool_guide(skill))
@@ -80,8 +65,8 @@ def test_tool_guides_cannot_be_pinned(tmp_path, monkeypatch):
     assert guide.name not in skills.get_pinned_skill_names()
 
 
-def test_new_threads_snapshot_pins_without_retroactive_resolution(tmp_path, monkeypatch):
-    skills, activation, threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_new_threads_snapshot_pins_without_retroactive_resolution(tmp_path, reload_for_data_dir):
+    skills, activation, threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
 
     legacy_id = threads.create_thread(
@@ -105,8 +90,8 @@ def test_new_threads_snapshot_pins_without_retroactive_resolution(tmp_path, monk
     ]
 
 
-def test_profile_based_tasks_do_not_snapshot_pinned_skills(tmp_path, monkeypatch):
-    skills, _activation, _threads, tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_profile_based_tasks_do_not_snapshot_pinned_skills(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
 
     task_id = tasks.create_task(name="Pinned task", prompts=["say hi"])
@@ -133,8 +118,8 @@ def test_profile_based_tasks_do_not_snapshot_pinned_skills(tmp_path, monkeypatch
     assert tasks.get_task(notify_id)["skills_override"] is None
 
 
-def test_surface_defaults_are_additive_for_designer_and_developer(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_surface_defaults_are_additive_for_designer_and_developer(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
 
     assert skills.get_default_active_skill_names("designer") == [
@@ -155,8 +140,8 @@ def test_surface_defaults_are_additive_for_designer_and_developer(tmp_path, monk
     ]
 
 
-def test_task_advanced_mode_is_persisted(tmp_path, monkeypatch):
-    _skills, _activation, _threads, tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_task_advanced_mode_is_persisted(tmp_path, reload_for_data_dir):
+    _skills, _activation, _threads, tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
 
     advanced_id = tasks.create_task(
         name="Prompt-only advanced task",
@@ -175,8 +160,8 @@ def test_task_advanced_mode_is_persisted(tmp_path, monkeypatch):
     assert tasks.get_task(stepped_id)["advanced_mode"] is True
 
 
-def test_custom_tool_builder_uses_tool_guide_not_manual_skill(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_custom_tool_builder_uses_tool_guide_not_manual_skill(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
 
     guide = skills.get_skill("custom_tool_builder_guide")
@@ -197,8 +182,8 @@ def test_custom_tool_builder_uses_tool_guide_not_manual_skill(tmp_path, monkeypa
     )
 
 
-def test_developer_guidance_is_tool_bound_not_extra_manual_injection(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_developer_guidance_is_tool_bound_not_extra_manual_injection(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
     from row_bot.skill_discovery import tool_skill_records
 
@@ -216,10 +201,10 @@ def test_developer_guidance_is_tool_bound_not_extra_manual_injection(tmp_path, m
     assert {skill.name for skill in skills.get_manual_skills()}.isdisjoint(offered)  # Not a manual skill to pin.
 
 
-def test_row_bot_status_skill_query_reports_pins_and_surface_defaults(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_row_bot_status_skill_query_reports_pins_and_surface_defaults(tmp_path, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
-    status_mod = _reload_status_tool_module()
+    status_mod = _reload_status_tool_module(reload_for_data_dir)
 
     block = status_mod._row_bot_status("skills")
 
@@ -235,10 +220,10 @@ def test_row_bot_status_skill_query_reports_pins_and_surface_defaults(tmp_path, 
     assert "Tool guides are separate tool instructions" in block
 
 
-def test_row_bot_status_tool_can_pin_and_unpin_skills(tmp_path, monkeypatch):
-    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, monkeypatch)
+def test_row_bot_status_tool_can_pin_and_unpin_skills(tmp_path, monkeypatch, reload_for_data_dir):
+    skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()
-    status_mod = _reload_status_tool_module()
+    status_mod = _reload_status_tool_module(reload_for_data_dir)
 
     import row_bot.tools.approval_gate as approval_gate
 

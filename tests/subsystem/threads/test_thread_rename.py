@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 
-def _fresh_threads(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    sys.modules.pop("threads", None)
-    import row_bot.threads as threads
+def _fresh_threads(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(threads)
+    return reload_for_data_dir(tmp_path / "data", "row_bot.threads")[0]
 
 
-def test_list_threads_detail_indexes_are_append_only(tmp_path, monkeypatch):
-    threads = _fresh_threads(tmp_path, monkeypatch)
+def test_list_threads_detail_indexes_are_append_only(tmp_path, reload_for_data_dir):
+    threads = _fresh_threads(tmp_path, reload_for_data_dir)
 
     tid = threads.create_thread(
         "Code task",

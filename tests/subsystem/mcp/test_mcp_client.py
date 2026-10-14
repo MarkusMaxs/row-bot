@@ -8,7 +8,6 @@ stdio servers are unavailable.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import os
 import subprocess
 import sys
@@ -60,9 +59,17 @@ class McpClientFoundationTests(unittest.TestCase):
             os.environ["ROW_BOT_DATA_DIR"] = self._old_data_dir
         self._tmp.cleanup()
 
+    @pytest.fixture(autouse=True)
+    def _module_reloads(self, reload_for_data_dir):
+        # Modules reloaded under this test's folder get their namespaces back afterwards.
+        self._reload_modules = reload_for_data_dir
+
+    def _reload(self, module):
+        return self._reload_modules(None, module.__name__)[0]
+
     def _reload_config(self):
         import row_bot.mcp_client.config as cfg
-        return importlib.reload(cfg)
+        return self._reload(cfg)
 
     def test_bad_config_degrades_to_empty_disabled_config(self) -> None:
         cfg = self._reload_config()
@@ -130,7 +137,7 @@ class McpClientFoundationTests(unittest.TestCase):
 
     def test_recommended_catalog_excludes_memory_and_marks_overlaps(self) -> None:
         import row_bot.mcp_client.marketplace as marketplace
-        importlib.reload(marketplace)
+        self._reload(marketplace)
         from row_bot.mcp_client.conflicts import conflicts_for_entry
 
         recommended = [entry for entry in marketplace.CURATED_STARTER_CATALOG if entry.recommended]
@@ -144,7 +151,7 @@ class McpClientFoundationTests(unittest.TestCase):
 
     def test_xquik_catalog_entry_is_disabled_high_risk_and_approval_gated(self) -> None:
         import row_bot.mcp_client.marketplace as marketplace
-        importlib.reload(marketplace)
+        self._reload(marketplace)
         from row_bot.mcp_client.conflicts import conflicts_for_entry, overlap_note
         from row_bot.mcp_client.safety import is_destructive_tool
 
@@ -168,7 +175,7 @@ class McpClientFoundationTests(unittest.TestCase):
 
     def test_marketplace_import_preserves_trust_risk_and_overlap_metadata(self) -> None:
         import row_bot.mcp_client.marketplace as marketplace
-        importlib.reload(marketplace)
+        self._reload(marketplace)
 
         playwright = next(entry for entry in marketplace.CURATED_STARTER_CATALOG if entry.id == "microsoft-playwright")
         cfg = marketplace.entry_to_server_config(playwright)
@@ -315,9 +322,9 @@ class McpClientFoundationTests(unittest.TestCase):
     def test_stdio_command_resolution_handles_missing_launchers(self) -> None:
         self._reload_config()
         import row_bot.mcp_client.requirements as requirements
-        requirements = importlib.reload(requirements)
+        requirements = self._reload(requirements)
         import row_bot.mcp_client.runtime as runtime
-        runtime = importlib.reload(runtime)
+        runtime = self._reload(runtime)
 
         command_name = "fake-mcp"
         executable_name = "fake-mcp.cmd" if os.name == "nt" else "fake-mcp"
@@ -348,7 +355,7 @@ class McpClientFoundationTests(unittest.TestCase):
     def test_runtime_requirements_infer_non_curated_and_install_known_runtimes(self) -> None:
         self._reload_config()
         import row_bot.mcp_client.requirements as requirements
-        requirements = importlib.reload(requirements)
+        requirements = self._reload(requirements)
 
         server_cfg = {"transport": "stdio", "command": "npx", "args": ["-y", "unknown-server"]}
         checks = requirements.check_server_requirements(server_cfg, {"PATH": ""})
@@ -436,7 +443,7 @@ class McpClientFoundationTests(unittest.TestCase):
     def test_playwright_browser_accepts_image_bundled_environment(self) -> None:
         self._reload_config()
         import row_bot.mcp_client.requirements as requirements
-        requirements = importlib.reload(requirements)
+        requirements = self._reload(requirements)
 
         browsers_dir = Path(self._tmp.name, "image-browsers")
         system = requirements.platform.system().lower()
@@ -476,7 +483,7 @@ class McpClientFoundationTests(unittest.TestCase):
     def test_playwright_chrome_install_handles_empty_process_output(self) -> None:
         self._reload_config()
         import row_bot.mcp_client.requirements as requirements
-        requirements = importlib.reload(requirements)
+        requirements = self._reload(requirements)
 
         npx_path = str(Path(self._tmp.name, "npx.cmd" if os.name == "nt" else "npx"))
         completed = subprocess.CompletedProcess([npx_path], 1, stdout=None, stderr=None)
@@ -490,7 +497,7 @@ class McpClientFoundationTests(unittest.TestCase):
     def test_playwright_browser_install_uses_user_space_chromium(self) -> None:
         self._reload_config()
         import row_bot.mcp_client.requirements as requirements
-        requirements = importlib.reload(requirements)
+        requirements = self._reload(requirements)
 
         def _fake_run(command, **kwargs):
             browsers_dir = Path(kwargs["env"]["PLAYWRIGHT_BROWSERS_PATH"])
@@ -561,7 +568,7 @@ class McpClientFoundationTests(unittest.TestCase):
         cfg.save_config(next_config)
 
         runtime.shutdown()
-        runtime = importlib.reload(runtime)
+        runtime = self._reload(runtime)
         runtime.discover_enabled_servers()
 
         deadline = time.monotonic() + 10
@@ -718,7 +725,7 @@ class McpClientFoundationTests(unittest.TestCase):
     def test_row_bot_status_mcp_tool_toggle_controls_global_client(self) -> None:
         cfg = self._reload_config()
         import row_bot.mcp_client.runtime as runtime
-        runtime = importlib.reload(runtime)
+        runtime = self._reload(runtime)
         import row_bot.tools.mcp_tool # noqa: F401 - registers the MCP parent tool
         from row_bot import tools
         from row_bot.tools import registry as tool_registry
@@ -770,7 +777,7 @@ class McpClientFoundationTests(unittest.TestCase):
         cfg.save_config(next_config)
 
         runtime.shutdown()
-        runtime = importlib.reload(runtime)
+        runtime = self._reload(runtime)
         runtime.discover_enabled_servers()
 
         deadline = time.monotonic() + 10

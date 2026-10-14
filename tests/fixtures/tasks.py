@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 
-def fresh_tasks_module(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    import row_bot.tasks as tasks
-
-    return importlib.reload(tasks)
+def fresh_tasks_module(tmp_path: Path, reload_for_data_dir):
+    (tasks,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.tasks")
+    return tasks
 
 
 def sample_workflow_steps() -> list[dict]:

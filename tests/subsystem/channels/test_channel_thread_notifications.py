@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import sys
 
 import pytest
 
@@ -22,29 +20,22 @@ def _reset_channel_registry_after_test():
         pass
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
-    for name in (
+def _fresh_modules(tmp_path, reload_for_data_dir):
+    tasks, threads, agent_runs, registry, thread_notifications, _messages = reload_for_data_dir(
+        tmp_path / "row-bot-data",
         "row_bot.tasks",
         "row_bot.threads",
         "row_bot.agent_runs",
         "row_bot.channels.registry",
         "row_bot.channels.thread_notifications",
         "row_bot.agent_run_messages",
-    ):
-        sys.modules.pop(name, None)
-
-    tasks = importlib.import_module("row_bot.tasks")
-    threads = importlib.import_module("row_bot.threads")
-    agent_runs = importlib.import_module("row_bot.agent_runs")
-    registry = importlib.import_module("row_bot.channels.registry")
-    thread_notifications = importlib.import_module("row_bot.channels.thread_notifications")
+    )
     registry._reset()
     return tasks, threads, agent_runs, registry, thread_notifications
 
 
-def test_child_agent_terminal_notification_delivers_once_and_persists_checkpoint(tmp_path, monkeypatch):
-    tasks, threads, agent_runs, registry, thread_notifications = _fresh_modules(tmp_path, monkeypatch)
+def test_child_agent_terminal_notification_delivers_once_and_persists_checkpoint(tmp_path, reload_for_data_dir):
+    tasks, threads, agent_runs, registry, thread_notifications = _fresh_modules(tmp_path, reload_for_data_dir)
     channel = FakeChannel(name="fake")
     channel._running = True
     registry.register(channel)
@@ -86,11 +77,11 @@ def test_child_agent_terminal_notification_delivers_once_and_persists_checkpoint
 
 def test_unified_parent_final_uses_fake_channel_outbox_exactly_once(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     tasks, threads, _agent_runs, registry, notifications = _fresh_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     channel = FakeChannel(name="fake")
     channel._running = True
@@ -144,11 +135,11 @@ def test_unified_parent_final_uses_fake_channel_outbox_exactly_once(
 
 def test_unified_parent_delivery_never_invents_missing_checkpoint_output(
     tmp_path,
-    monkeypatch,
+    reload_for_data_dir,
 ):
     tasks, threads, _agent_runs, registry, notifications = _fresh_modules(
         tmp_path,
-        monkeypatch,
+        reload_for_data_dir,
     )
     channel = FakeChannel(name="fake")
     channel._running = True
@@ -175,8 +166,8 @@ def test_unified_parent_delivery_never_invents_missing_checkpoint_output(
     ) is None
 
 
-def test_pending_terminal_notification_retries_after_channel_starts(tmp_path, monkeypatch):
-    tasks, _threads, agent_runs, registry, thread_notifications = _fresh_modules(tmp_path, monkeypatch)
+def test_pending_terminal_notification_retries_after_channel_starts(tmp_path, reload_for_data_dir):
+    tasks, _threads, agent_runs, registry, thread_notifications = _fresh_modules(tmp_path, reload_for_data_dir)
     channel = FakeChannel(name="fake")
     registry.register(channel)
     tasks.record_thread_channel_ref(
@@ -209,8 +200,8 @@ def test_pending_terminal_notification_retries_after_channel_starts(tmp_path, mo
     assert notification and notification["status"] == "delivered"
 
 
-def test_wait_mode_child_result_is_not_announced_again(tmp_path, monkeypatch):
-    tasks, threads, agent_runs, registry, _thread_notifications = _fresh_modules(tmp_path, monkeypatch)
+def test_wait_mode_child_result_is_not_announced_again(tmp_path, reload_for_data_dir):
+    tasks, threads, agent_runs, registry, _thread_notifications = _fresh_modules(tmp_path, reload_for_data_dir)
     from langchain_core.messages import ToolMessage
 
     channel = FakeChannel(name="fake")
@@ -246,8 +237,8 @@ def test_wait_mode_child_result_is_not_announced_again(tmp_path, monkeypatch):
     assert tasks.get_channel_thread_notification("agent_run_terminal:wait-child") is None
 
 
-def test_goal_terminal_notification_is_compact_and_deduped(tmp_path, monkeypatch):
-    tasks, threads, agent_runs, registry, thread_notifications = _fresh_modules(tmp_path, monkeypatch)
+def test_goal_terminal_notification_is_compact_and_deduped(tmp_path, reload_for_data_dir):
+    tasks, threads, agent_runs, registry, thread_notifications = _fresh_modules(tmp_path, reload_for_data_dir)
     channel = FakeChannel(name="fake")
     channel._running = True
     registry.register(channel)

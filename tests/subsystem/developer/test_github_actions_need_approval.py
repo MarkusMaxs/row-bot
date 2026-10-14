@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-import importlib
 import subprocess
-import sys
 
 
-def _fresh_modules(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
-    sys.modules.pop("developer.github", None)
-    import row_bot.developer.github as github
+def _fresh_modules(tmp_path, reload_for_data_dir):
 
-    return importlib.reload(github)
+    return reload_for_data_dir(tmp_path / "data", "row_bot.developer.github")[0]
 
 
-def test_developer_gh_status_handles_missing_cli(tmp_path, monkeypatch):
-    github = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_gh_status_handles_missing_cli(tmp_path, monkeypatch, reload_for_data_dir):
+    github = _fresh_modules(tmp_path, reload_for_data_dir)
     monkeypatch.setattr(github, "resolve_github_cli", lambda: "")
 
     status = github.get_gh_status()
@@ -24,8 +19,8 @@ def test_developer_gh_status_handles_missing_cli(tmp_path, monkeypatch):
     assert "not installed" in status.message
 
 
-def test_developer_push_requires_approval_until_user_confirms(tmp_path, monkeypatch):
-    github = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_push_requires_approval_until_user_confirms(tmp_path, monkeypatch, reload_for_data_dir):
+    github = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     calls: list[list[str]] = []
@@ -46,8 +41,8 @@ def test_developer_push_requires_approval_until_user_confirms(tmp_path, monkeypa
     assert calls == [["git", "push", "-u", "origin", "HEAD"]]
 
 
-def test_developer_pr_uses_gh_cli_after_confirmed_approval(tmp_path, monkeypatch):
-    github = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_pr_uses_gh_cli_after_confirmed_approval(tmp_path, monkeypatch, reload_for_data_dir):
+    github = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(github, "resolve_github_cli", lambda: "gh")
@@ -69,8 +64,8 @@ def test_developer_pr_uses_gh_cli_after_confirmed_approval(tmp_path, monkeypatch
     assert result.url == "https://github.com/example/repo/pull/12"
 
 
-def test_developer_pr_is_blocked_in_block_even_when_clicked(tmp_path, monkeypatch):
-    github = _fresh_modules(tmp_path, monkeypatch)
+def test_developer_pr_is_blocked_in_block_even_when_clicked(tmp_path, monkeypatch, reload_for_data_dir):
+    github = _fresh_modules(tmp_path, reload_for_data_dir)
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(github, "resolve_github_cli", lambda: "gh")

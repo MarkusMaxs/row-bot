@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 
 import pytest
@@ -9,19 +8,18 @@ import pytest
 pytestmark = pytest.mark.subsystem
 
 
-def fresh_dream_and_kg(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "row-bot-data"))
+def fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.knowledge_graph as kg
     import row_bot.dream_cycle as dream_cycle
 
-    kg = importlib.reload(kg)
+    (kg,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.knowledge_graph")
     kg._skip_reindex = True
-    dream_cycle = importlib.reload(dream_cycle)
+    (dream_cycle,) = reload_for_data_dir(tmp_path / "row-bot-data", "row_bot.dream_cycle")
     return dream_cycle, kg
 
 
-def test_duplicate_merge_repoints_relations_and_deletes_duplicate(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_duplicate_merge_repoints_relations_and_deletes_duplicate(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     survivor = kg.save_entity("person", "Alice", "Alice writes tests.", aliases="A.", source="test")
     duplicate = kg.save_entity("person", "Alice", "Alice writes deterministic subsystem tests.", aliases="Al", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project under test.", source="test")
@@ -43,8 +41,8 @@ def test_duplicate_merge_repoints_relations_and_deletes_duplicate(tmp_path, monk
     assert kg.get_relations(survivor["id"], direction="outgoing")[0]["relation_type"] == "works_on"
 
 
-def test_enrichment_accepts_grounded_update_and_rejects_cross_entity_contamination(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_enrichment_accepts_grounded_update_and_rejects_cross_entity_contamination(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice", "Alice likes tea.", source="test")
     excerpts = ["Alice likes tea and writes tests for Row-Bot during late work."]
 
@@ -68,8 +66,8 @@ def test_enrichment_accepts_grounded_update_and_rejects_cross_entity_contaminati
     assert dream_cycle._enrich_entity(alice, excerpts, other_subjects={"Bob"}) is None
 
 
-def test_relation_inference_accepts_high_confidence_json_and_tracks_evidence(tmp_path, monkeypatch) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_relation_inference_accepts_high_confidence_json_and_tracks_evidence(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project under test.", source="test")
     monkeypatch.setattr(
@@ -105,8 +103,8 @@ def test_relation_inference_accepts_high_confidence_json_and_tracks_evidence(tmp
         {"has_relation": False, "relation_type": "works_on", "confidence": 0.95},
     ],
 )
-def test_relation_inference_rejects_vague_low_confidence_or_negative_results(tmp_path, monkeypatch, payload) -> None:
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+def test_relation_inference_rejects_vague_low_confidence_or_negative_results(tmp_path, monkeypatch, payload, reload_for_data_dir) -> None:
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     alice = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project under test.", source="test")
     monkeypatch.setattr(dream_cycle, "_llm_call", lambda _prompt, **_kwargs: json.dumps(payload))
@@ -152,11 +150,11 @@ def dream_model(monkeypatch):
 
 
 def test_dream_merge_reads_a_schema_description_and_never_stores_a_cut_short_one(
-        tmp_path, monkeypatch, dream_model) -> None:
+        tmp_path, monkeypatch, dream_model, reload_for_data_dir) -> None:
     """WP C1: Dream asks the default model for ``{"description": ...}`` with a bounded reply."""
     from row_bot.providers import background
 
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     model, asked = dream_model
     survivor = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
     duplicate = kg.save_entity("person", "Alice", "Alice writes deterministic subsystem tests.", source="test")
@@ -174,10 +172,10 @@ def test_dream_merge_reads_a_schema_description_and_never_stores_a_cut_short_one
     assert request["response_format"]["json_schema"]["schema"]["required"] == ["description"]
 
 
-def test_dream_inference_asks_for_its_relation_schema_with_a_small_cap(tmp_path, monkeypatch, dream_model) -> None:
+def test_dream_inference_asks_for_its_relation_schema_with_a_small_cap(tmp_path, monkeypatch, dream_model, reload_for_data_dir) -> None:
     from row_bot.providers import background
 
-    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch)
+    dream_cycle, kg = fresh_dream_and_kg(tmp_path, monkeypatch, reload_for_data_dir)
     model, _asked = dream_model
     alice = kg.save_entity("person", "Alice", "Alice writes tests.", source="test")
     project = kg.save_entity("project", "Row-Bot", "Project under test.", source="test")

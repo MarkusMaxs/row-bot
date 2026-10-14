@@ -201,7 +201,7 @@ Set `ROW_BOT_IMAGE` to the recorded image before restoring. On PowerShell, resol
 
 ## Explicit Upgrade And Rollback
 
-Upgrades are never automatic. Take an offline backup, choose the new version or digest, pull it explicitly, recreate, and run checks:
+Upgrades are never automatic. The image sets `ROW_BOT_UPDATES=external`, so Row-Bot in a container never downloads updates itself, and Settings › Updates says the host installs them ([Updates](/docs/operations/updates#docker-and-hosts-that-update-row-bot) describes the folder a host updater can use). Take an offline backup, choose the new version or digest, pull it explicitly, recreate, and run checks:
 
 ```bash
 export ROW_BOT_IMAGE='ghcr.io/siddsachar/row-bot:NEW_VERSION'
