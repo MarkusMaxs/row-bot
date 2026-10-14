@@ -210,6 +210,7 @@ OPERATIONS = (
     ("post", "/accounts/github/access/commands", "GitHubAccessCommand", "GitHubAccessReceipt"),
     ("get", "/accounts/github/access/commands/{command_id}", None, "GitHubAccessReceipt"),
     ("get", "/accounts/{account}/auth", None, "AccountAuthSnapshot"),
+    ("get", "/accounts/{account}/auth/callback", None, "bytes"),
     ("post", "/accounts/{account}/auth/commands", "AccountAuthCommand", "AccountAuthReceipt"),
     ("get", "/accounts/{account}/auth/commands/{command_id}", None, "AccountAuthReceipt"),
     ("post", "/accounts/{account}/auth/commands/{command_id}/cancel", None, "AccountAuthReceipt"),
@@ -1668,6 +1669,7 @@ def outputs() -> dict[Path, str]:
             "/native/authorize",
             "/native/revoke",
             "/settings/mcp/auth/callback",
+            "/accounts/{account}/auth/callback",
             "/native/selections/complete",
             "/native/terminal/open",
             "/native/attachments/{reference}",
@@ -1689,7 +1691,7 @@ def outputs() -> dict[Path, str]:
         elif suffix == "/integrations/detail":
             query_parameters = [("item_id", True, {"type": "string", "minLength": 1, "maxLength": 512}),
                                 ("revision", False, {"type": "string", "maxLength": 64})]
-        elif suffix == "/settings/mcp/auth/callback":
+        elif suffix in {"/settings/mcp/auth/callback", "/accounts/{account}/auth/callback"}:
             query_parameters = [(name, False, {"type": "string", "maxLength": 4096}) for name in ("state", "code", "error")]
         elif suffix == "/settings/mcp/configuration":
             query_parameters = [("query", False, {"type": "string", "maxLength": 128}),
