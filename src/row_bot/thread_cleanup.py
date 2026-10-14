@@ -174,6 +174,9 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.background_processes import delete_conversation_logs
 
     removed += delete_conversation_logs(thread_id)  # Its background processes' logs.
+    from row_bot.recordings import delete_conversation as delete_recordings
+
+    removed += delete_recordings(thread_id)  # Its recordings' records (the videos are its media).
     return removed
 
 
@@ -221,6 +224,13 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
         stop_conversation(thread_id)  # Each with everything it started; waits for them to end.
     except Exception:
         logger.debug("Could not stop background processes for %s", thread_id, exc_info=True)
+
+    try:
+        from row_bot import recordings
+
+        recordings.stop_conversation(thread_id)  # Its recordings stop with it (F2).
+    except Exception:
+        logger.debug("Could not stop recordings for %s", thread_id, exc_info=True)
 
     try:
         from row_bot.tools.shell_tool import clear_shell_history, get_session_manager

@@ -167,6 +167,12 @@
       "title": "Policy Revision",
       "type": "string"
     },
+    "question": {
+      "default": "",
+      "maxLength": 240,
+      "title": "Question",
+      "type": "string"
+    },
     "reason": {
       "default": "",
       "maxLength": 1024,
