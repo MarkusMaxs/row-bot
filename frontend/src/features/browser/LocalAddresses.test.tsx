@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { LocalAddressGrantView, LocalAddressPage } from '../../api/types';
-import { LocalAddresses } from './LocalAddresses';
+import { LocalAddresses, timeLeft } from './LocalAddresses';
 
 afterEach(cleanup);
 
@@ -61,7 +61,7 @@ it('lists what this chat may open, who allowed it and when it ends', async () =>
   const rows = within(list).getAllByRole('listitem');
   expect(rows).toHaveLength(3);
   expect(rows[0]).toHaveTextContent('localhost:5173');
-  expect(rows[0]).toHaveTextContent('Allowed by you · ends in 42 minutes');
+  expect(rows[0]).toHaveTextContent('Allowed by you · 42 min left');
   expect(rows[1]).toHaveTextContent('Row-Bot started this server');
   expect(rows[2]).toHaveTextContent('Allowed by the reviewer');
   expect(load).toHaveBeenCalledWith('conversation-a', expect.anything());
@@ -93,6 +93,13 @@ it('removes one and says what that means', async () => {
   expect(
     screen.getByText(/No addresses on this computer are open/),
   ).toBeInTheDocument();
+});
+
+it('words the time left plainly', () => {
+  const now = Date.parse('2026-10-14T10:00:00Z');
+  expect(timeLeft('2026-10-14T10:42:00+00:00', now)).toBe('42 min left');
+  expect(timeLeft('2026-10-14T11:00:00+00:00', now)).toBe('1 hour left');
+  expect(timeLeft('2026-10-14T10:00:20+00:00', now)).toBe('1 min left');
 });
 
 it('says when nothing is allowed, and offers Try again when it cannot check', async () => {

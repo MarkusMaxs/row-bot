@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Laptop } from 'lucide-react';
 import type { LocalAddressGrantView, LocalAddressPage } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { relativeTime } from '../../ui/format';
+import { parseTimestamp } from '../../ui/format';
 import {
   Button,
   EntityList,
@@ -32,6 +32,14 @@ export type LocalAddressesProps = {
     grantId: string,
   ) => Promise<LocalAddressPage>;
 };
+
+/** "42 min left", "1 hour left": how long the address stays allowed. */
+export function timeLeft(expiresAt: string, now = Date.now()) {
+  const ends = parseTimestamp(expiresAt)?.getTime();
+  if (ends === undefined) return '';
+  const minutes = Math.max(1, Math.ceil((ends - now) / 60_000));
+  return minutes >= 60 ? '1 hour left' : `${minutes} min left`;
+}
 
 function visible() {
   return (
@@ -133,7 +141,7 @@ export function LocalAddresses({
                 key={item.grant_id}
                 title={item.address}
                 icon={<Laptop size={16} />}
-                meta={`${SOURCE[item.source]} · ends ${relativeTime(item.expires_at)}`}
+                meta={`${SOURCE[item.source]} · ${timeLeft(item.expires_at)}`}
                 action={
                   <Button
                     variant="ghost"
