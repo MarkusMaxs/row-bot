@@ -7675,7 +7675,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
             if hasattr(msg, "type") and msg.type == "ai" and msg.content:
                 text = _content_to_str(msg.content)
                 if text.strip():
-                    return text
+                    return text + _invoked_output_limit_notice(msg, text)
     return "I wasn't able to generate a response."
 
 

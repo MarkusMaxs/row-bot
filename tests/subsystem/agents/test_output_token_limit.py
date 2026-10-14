@@ -173,7 +173,7 @@ def test_chat_only_reply_that_finished_normally_has_no_notice(tmp_path, monkeypa
     assert [payload for event_type, payload in events if event_type == "done"] == ["The first half"]
 
 
-@pytest.mark.parametrize("stoppable", [False, True])
+@pytest.mark.parametrize("path", ["invoke", "invoke_stoppable", "resume_after_approval"])
 @pytest.mark.parametrize(
     ("response_metadata", "cut_short"),
     [
@@ -182,7 +182,7 @@ def test_chat_only_reply_that_finished_normally_has_no_notice(tmp_path, monkeypa
         ({"stop_reason": "end_turn"}, False),
     ],
 )
-def test_a_workflow_or_delegated_agents_reply_says_when_it_was_cut_short(monkeypatch, stoppable, response_metadata,
+def test_a_workflow_or_delegated_agents_reply_says_when_it_was_cut_short(monkeypatch, path, response_metadata,
                                                                          cut_short):
     import threading
 
@@ -209,13 +209,15 @@ def test_a_workflow_or_delegated_agents_reply_says_when_it_was_cut_short(monkeyp
 
     monkeypatch.setattr(agent, "get_agent_graph", lambda *args, **kwargs: FakeGraph())
     monkeypatch.setattr(agent, "_new_agent_graph_input", lambda text, config, **kwargs: (config, {"messages": []}))
+    monkeypatch.setattr(agent, "_resume_agent_graph_config", lambda graph, config: config)
+    config = {"configurable": {"thread_id": "thread-workflow", "model_override": "model:ollama:fixture-model"}}
 
-    result = agent._invoke_agent_graph(
-        "write it all",
-        [],
-        {"configurable": {"thread_id": "thread-workflow", "model_override": "model:ollama:fixture-model"}},
-        stop_event=threading.Event() if stoppable else None,
-    )
+    if path == "resume_after_approval":
+        result = agent._resume_invoke_agent_graph([], config, True)
+    else:
+        result = agent._invoke_agent_graph(
+            "write it all", [], config, stop_event=threading.Event() if path == "invoke_stoppable" else None,
+        )
 
     assert result.startswith("The first half")
     assert (CUT_SHORT in result) is cut_short
