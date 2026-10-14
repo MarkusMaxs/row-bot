@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 from dataclasses import dataclass, field
 import json
@@ -70,6 +71,31 @@ MAX_FULL_PAGE_CSS = 10_000
 MAX_FULL_PAGE_DEVICE = 16_384
 # Screenshots larger than this are saved as JPEG instead, and refused beyond it.
 MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024
+
+
+def _cover(image: bytes, boxes: list[Any], *, jpeg: bool) -> bytes:
+    """Paint over protected fields (CSS-pixel boxes with their device ratio) in a screenshot."""
+
+    import io
+
+    from PIL import Image, ImageDraw
+
+    picture = Image.open(io.BytesIO(image)).convert("RGB")
+    draw = ImageDraw.Draw(picture)
+    for box in boxes[:200]:
+        try:
+            x, y, width, height, ratio = (float(value) for value in box)
+        except (TypeError, ValueError):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+        draw.rectangle(
+            [x * ratio - 2, y * ratio - 2, (x + width) * ratio + 2, (y + height) * ratio + 2],
+            fill=(38, 40, 46),
+        )
+    output = io.BytesIO()
+    picture.save(output, format="JPEG" if jpeg else "PNG", **({"quality": 80} if jpeg else {"optimize": False}))
+    return output.getvalue()
 
 
 def browser_runs_headless() -> bool:
@@ -1300,8 +1326,9 @@ class ManagedBrowserService:
     def capture_page(self, thread_id: str = "default", *, full_page: bool = False) -> tuple[bytes | None, str]:
         """A PNG (JPEG when very large) of this conversation's page, and what it shows in words.
 
-        Password, one-time-code and card fields are masked. A full-page picture of a very long
-        page stops at a bounded height.
+        Captured through Chromium's own screenshot (CDP), so a phone or tablet size stays as it
+        is (Playwright's screenshot would put its own size back). Password, one-time-code and
+        card fields are covered. A full-page picture of a very long page stops at a bounded height.
         """
 
         def action() -> tuple[bytes | None, str]:
@@ -1318,22 +1345,17 @@ class ManagedBrowserService:
                 ratio = float(ratio) or 1.0
             except Exception:
                 width, height, scroll_height, ratio = 0, 0, 0, 1.0
-            options: dict[str, Any] = {
-                "type": "png", "animations": "disabled", "caret": "hide",
-                "mask": [page.locator(PROTECTED_FIELDS)], "mask_color": "#26282E",
-            }
             cut = 0
-            if full_page:
+            clip: dict[str, Any] | None = None
+            if full_page and width:
                 limit = max(height, min(MAX_FULL_PAGE_CSS, int(MAX_FULL_PAGE_DEVICE / max(ratio, 1.0))))
-                if width and scroll_height > limit:
-                    options["clip"] = {"x": 0, "y": 0, "width": width, "height": limit}
-                    cut = limit
-                else:
-                    options["full_page"] = True
-            image = page.screenshot(**options)
-            if len(image) > MAX_SCREENSHOT_BYTES:
-                options.update(type="jpeg", quality=80)
-                image = page.screenshot(**options)
+                cut = limit if scroll_height > limit else 0
+                clip = {"x": 0, "y": 0, "width": width, "height": min(scroll_height, limit) or height, "scale": 1}
+            image = self._cdp_screenshot(page, clip=clip, document=full_page)
+            if image is not None and len(image) > MAX_SCREENSHOT_BYTES:
+                image = self._cdp_screenshot(page, clip=clip, document=full_page, jpeg=True)
+            if image is None:
+                return None, "The screenshot couldn't be taken. Try again in a moment."
             if len(image) > MAX_SCREENSHOT_BYTES:
                 return None, "The page is too large to save as one picture; take a screenshot of what's on screen instead."
             viewport = self._viewports.get(page)
@@ -1343,12 +1365,57 @@ class ManagedBrowserService:
             self._publish_activity(thread_id, state="observing", action="Took a screenshot", page=page)
             return image, (
                 f"Screenshot of {history_url(str(page.url))} ({what}, {size} at {ratio:g}× scale). "
-                "Password and card fields are masked."
+                "Password and card fields are covered."
             )
 
         result = self._run_activity(thread_id, "Take a screenshot", action)
         # A failure or a stop comes back as words.
         return result if isinstance(result, tuple) else (None, str(result))
+
+    def _cdp_screenshot(
+        self,
+        page: Any,
+        *,
+        clip: dict[str, Any] | None = None,
+        document: bool = False,
+        jpeg: bool = False,
+        cover: bool = True,
+    ) -> bytes | None:
+        """Chromium's own screenshot of a page (device pixels), with protected fields covered."""
+
+        held = self._viewports.get(page)
+        cdp = held[0] if held else self._context.new_cdp_session(page)
+        try:
+            params: dict[str, Any] = {"format": "jpeg" if jpeg else "png"}
+            if jpeg:
+                params["quality"] = 80
+            if clip is not None:
+                params["clip"] = clip
+                params["captureBeyondViewport"] = True
+            data = base64.b64decode(str(cdp.send("Page.captureScreenshot", params).get("data") or ""))
+        except Exception:
+            logger.debug("A page screenshot failed", exc_info=True)
+            return None
+        finally:
+            if not held:
+                try:
+                    cdp.detach()
+                except Exception:
+                    pass
+        if not data or not cover:
+            return data or None
+        try:
+            boxes = page.evaluate(
+                "([selector, documentCoordinates]) => Array.from(document.querySelectorAll(selector)).map(element => {"
+                " const r = element.getBoundingClientRect();"
+                " const x = documentCoordinates ? r.left + window.scrollX : r.left;"
+                " const y = documentCoordinates ? r.top + window.scrollY : r.top;"
+                " return [x, y, r.width, r.height, window.devicePixelRatio || 1]; })",
+                [PROTECTED_FIELDS, bool(document)],
+            )
+        except Exception:
+            return None  # Unknown: never save a picture that might show one uncovered.
+        return _cover(data, boxes, jpeg=jpeg) if boxes else data
 
     def start_recording(
         self,
@@ -1444,6 +1511,9 @@ class ManagedBrowserService:
                 if protected is not None:
                     return None, True
                 self._preview_capture_count += 1
+                if page in self._viewports:
+                    # Playwright's screenshot would put its own page size back.
+                    return self._cdp_screenshot(page, cover=False), False
                 return page.screenshot(type="png"), False
             image, shielded = self._run_on_pw_thread(capture)
             if thread_id is not None:
