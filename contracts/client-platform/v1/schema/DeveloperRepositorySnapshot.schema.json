@@ -33,6 +33,17 @@
           "title": "Is Root",
           "type": "boolean"
         },
+        "open_pull_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeveloperOpenPullRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "pull_request": {
           "anyOf": [
             {
@@ -73,6 +84,46 @@
         "tracking_summary"
       ],
       "title": "DeveloperGitState",
+      "type": "object"
+    },
+    "DeveloperOpenPullRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "draft": {
+          "title": "Draft",
+          "type": "boolean"
+        },
+        "number": {
+          "maximum": 999999999,
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "opened_at": {
+          "maxLength": 80,
+          "title": "Opened At",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 2048,
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]{1,9}$",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "title",
+        "url",
+        "draft",
+        "opened_at"
+      ],
+      "title": "DeveloperOpenPullRequest",
       "type": "object"
     },
     "DeveloperPullRequestText": {

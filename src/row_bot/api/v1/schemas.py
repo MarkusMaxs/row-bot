@@ -3530,6 +3530,14 @@ class DeveloperPullRequestText(WireModel):
     body: str = Field(max_length=8000)
 
 
+class DeveloperOpenPullRequest(WireModel):
+    number: int = Field(ge=1, le=999999999)
+    title: str = Field(max_length=200)
+    url: str = Field(max_length=2048, pattern=r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]{1,9}$")
+    draft: bool
+    opened_at: str = Field(max_length=80)
+
+
 class DeveloperGitState(WireModel):
     state: Literal["ready", "plain_folder"]
     is_git: bool
@@ -3543,6 +3551,7 @@ class DeveloperGitState(WireModel):
         default_factory=list, max_length=50
     )
     pull_request: DeveloperPullRequestText | None = None
+    open_pull_request: DeveloperOpenPullRequest | None = None
 
 
 class DeveloperWorktreeState(WireModel):

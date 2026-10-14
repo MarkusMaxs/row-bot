@@ -23,7 +23,7 @@ from row_bot.developer.git import (
     pull_request_text,
     switch_branch,
 )
-from row_bot.developer.github import create_pull_request, push_current_branch
+from row_bot.developer.github import create_pull_request, push_current_branch, record_pull_request_result
 from row_bot.developer.sandbox import ApprovalDecision, decide_action
 from row_bot.developer.review import get_file_diff, get_file_diff_stats, list_changed_files
 from row_bot.developer.runtime import detect_project_commands, run_workspace_command, run_workspace_shell_command
@@ -478,6 +478,7 @@ def _create_pull_request(title: str = "", body: str = "", draft: bool = True) ->
         title = suggested["title"]
         body = body.strip() or suggested["body"]
     title, body = title.strip()[:200], body.strip()[:8000]
+    branch = get_git_status(workspace.path).branch or ""
     result = create_pull_request(workspace.path, _active_approval_mode(), title=title, body=body, draft=draft)
     if result.decision and result.decision.requires_approval:
         approval = interrupt({
@@ -491,6 +492,15 @@ def _create_pull_request(title: str = "", body: str = "", draft: bool = True) ->
         result = create_pull_request(
             workspace.path, _active_approval_mode(), title=title, body=body, draft=draft, confirmed=True
         )
+    # The Git tab shows the branch's pull request instead of an empty form (B336).
+    try:
+        known = record_pull_request_result(workspace.id, workspace.path, branch, result, title=title, draft=draft)
+    except OSError:
+        logger.warning("The opened pull request was not remembered", exc_info=True)
+        known = None
+    if known and not result.ok:
+        return compact_json({"ok": True, "url": known["url"], "already_open": True,
+                             "message": f"This branch already has pull request #{known['number']}."})
     if result.ran and not result.ok and "push" in result.stderr.lower():
         return "GitHub needs the branch first: push it with developer_push_current_branch, then open the pull request."
     return compact_json({
@@ -932,7 +942,7 @@ class DeveloperTool(BaseTool):
             StructuredTool.from_function(func=changes(_switch_branch), name="developer_switch_branch", description="Switch Git branches in the active Developer workspace using the thread approval mode.", args_schema=_GitBranchInput),
             StructuredTool.from_function(func=changes(_commit_changes), name="developer_commit_changes", description="Create a Git commit in the active Developer workspace using the thread approval mode.", args_schema=_GitCommitInput),
             StructuredTool.from_function(func=changes(_push_current_branch), name="developer_push_current_branch", description="Push the current branch to origin using the thread approval mode."),
-            StructuredTool.from_function(func=_create_pull_request, name="developer_create_pull_request", description="Open a GitHub pull request for the current branch once it is pushed. Runs the GitHub CLI on this computer, never in the sandbox, and asks first by the thread approval mode. Draft by default; leave title and body empty to describe the branch's own commits and files.", args_schema=_PullRequestInput),
+            StructuredTool.from_function(func=changes(_create_pull_request), name="developer_create_pull_request", description="Open a GitHub pull request for the current branch once it is pushed. Runs the GitHub CLI on this computer, never in the sandbox, and asks first by the thread approval mode. Draft by default; leave title and body empty to describe the branch's own commits and files.", args_schema=_PullRequestInput),
             StructuredTool.from_function(func=changes(_fast_forward_merge), name="developer_fast_forward_merge", description="Fast-forward merge another branch into the current branch using the thread approval mode.", args_schema=_GitFastForwardInput),
             StructuredTool.from_function(func=_diff, name="developer_get_diff", description="List changed files with added/removed line counts, or show one file's diff in pages.", args_schema=_DiffInput),
             StructuredTool.from_function(func=_update_todos, name="developer_update_todos", description="Create or update the visible Developer todo plan for this code thread. Keep it current: mark an item in_progress when you start it and completed when it is done, including work a helper agent finished, before you end your turn.", args_schema=_TodoInput),

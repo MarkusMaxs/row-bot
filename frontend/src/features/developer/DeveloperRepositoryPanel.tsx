@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { clientError } from '../../api/errors';
 import { humanizeToken } from '../../ui/format';
+import { When } from '../../ui/When';
 import {
   Button,
   Disclosure,
@@ -86,6 +87,14 @@ export type DeveloperRepositorySnapshot = {
     branches?: string[];
     /** Suggested pull request text from the branch's commits and files (B301). */
     pull_request?: { title: string; body: string } | null;
+    /** The pull request this branch opened through Row-Bot (B336). */
+    open_pull_request?: {
+      number: number;
+      title: string;
+      url: string;
+      draft: boolean;
+      opened_at: string;
+    } | null;
   };
   worktrees: {
     worktree_id: string;
@@ -668,6 +677,7 @@ export default function DeveloperRepositoryPanel(
       : null;
   const place = placeOf(confirm?.review.action ?? lastAction);
   const pullRequestNumber = pullRequestUrl?.match(/\/pull\/(\d+)/)?.[1];
+  const openPull = repo.open_pull_request ?? null;
   const disclosureWords: Record<string, string> = {
     'developer.repository.push': 'Push the current branch',
     'developer.repository.pull_request': 'Open a pull request',
@@ -963,113 +973,148 @@ export default function DeveloperRepositoryPanel(
               </span>
             </div>
             {place === 'push' && notices}
-            <Disclosure
-              summary="Pull request"
-              className="dev-disclosure"
-              meta={repo.remote_configured ? undefined : 'Needs a remote'}
-            >
-              {github && (
-                <div
-                  className="transcript-card"
-                  data-kind="connect"
-                  role="group"
-                  aria-label="Connect GitHub"
-                >
-                  <Link2 className="transcript-card-icon" aria-hidden />
-                  <div className="transcript-card-text">
-                    <span>
-                      {github === 'github_cli_missing'
-                        ? 'Pull requests go through the GitHub command-line tool (gh). Install it, then connect GitHub.'
-                        : 'Sign in to GitHub on this computer to open pull requests.'}
-                    </span>
-                  </div>
-                  <div className="transcript-card-actions">
-                    <AppLink
-                      className="button primary"
-                      to="/settings/apps/github"
-                    >
-                      Connect GitHub
-                    </AppLink>
-                  </div>
+            {openPull ? (
+              // The branch's pull request, whoever opened it here (B336).
+              <div
+                className="transcript-card dev-pr-card"
+                role="group"
+                aria-label="Pull request"
+              >
+                <GitPullRequest className="transcript-card-icon" aria-hidden />
+                <div className="transcript-card-text">
+                  <strong>
+                    {openPull.title || `Pull request #${openPull.number}`}
+                  </strong>
+                  <p className="dev-git-meta">
+                    #{openPull.number} · {openPull.draft ? 'Draft' : 'Open'}
+                    {openPull.opened_at && (
+                      <>
+                        {' '}
+                        · opened <When value={openPull.opened_at} fallback="" />
+                      </>
+                    )}
+                  </p>
                 </div>
-              )}
-              <div className="dev-pr-form">
-                <div className="dev-git-row">
-                  <Input
-                    aria-label="Pull request title"
-                    placeholder="Title"
-                    value={state.drafts.pullTitle}
-                    disabled={locked}
-                    onChange={(event) =>
-                      patchDrafts({ pullTitle: event.target.value })
-                    }
-                  />
-                  <IconButton
-                    size="sm"
-                    label="Suggest pull request text"
-                    disabled={locked || !repo.pull_request}
-                    onClick={() => {
-                      // From the branch's commits and files against its base (B301).
-                      const suggestion = repo.pull_request;
-                      if (suggestion)
-                        patchDrafts({
-                          pullTitle: suggestion.title,
-                          pullBody: suggestion.body,
-                        });
-                    }}
+                <div className="transcript-card-actions">
+                  <a
+                    className="button primary"
+                    href={openPull.url}
+                    target="_blank"
+                    rel="noreferrer"
                   >
-                    <Sparkles size={14} aria-hidden />
-                  </IconButton>
+                    Open on GitHub
+                  </a>
                 </div>
-                <textarea
-                  className="input"
-                  aria-label="Pull request body"
-                  placeholder="What changed and how it was tested"
-                  rows={5}
-                  value={state.drafts.pullBody}
-                  disabled={locked}
-                  onChange={(event) =>
-                    patchDrafts({ pullBody: event.target.value })
-                  }
-                />
-                <label className="dev-toggle-row">
-                  <Toggle
-                    label="Create as draft"
-                    checked={state.drafts.pullDraft}
-                    disabled={locked}
-                    onChange={(event) =>
-                      patchDrafts({ pullDraft: event.target.checked })
-                    }
-                  />
-                  <span>Create as draft</span>
-                </label>
-                <div className="dev-git-row">
-                  <Button
-                    disabled={
-                      locked ||
-                      !available('developer.repository.pull_request') ||
-                      !state.drafts.pullTitle.trim()
-                    }
-                    onClick={() =>
-                      void prepare('developer.repository.pull_request', {
-                        title: state.drafts.pullTitle.trim(),
-                        body: state.drafts.pullBody,
-                        draft: state.drafts.pullDraft,
-                      })
-                    }
-                  >
-                    <GitPullRequest size={14} aria-hidden />
-                    Open pull request
-                  </Button>
-                  {!available('developer.repository.pull_request') && (
-                    <span className="dev-git-reason">
-                      {reason('developer.repository.pull_request')}
-                    </span>
-                  )}
-                </div>
-                {place === 'pull_request' && notices}
               </div>
-            </Disclosure>
+            ) : (
+              <Disclosure
+                summary="Pull request"
+                className="dev-disclosure"
+                meta={repo.remote_configured ? undefined : 'Needs a remote'}
+              >
+                {github && (
+                  <div
+                    className="transcript-card"
+                    data-kind="connect"
+                    role="group"
+                    aria-label="Connect GitHub"
+                  >
+                    <Link2 className="transcript-card-icon" aria-hidden />
+                    <div className="transcript-card-text">
+                      <span>
+                        {github === 'github_cli_missing'
+                          ? 'Pull requests go through the GitHub command-line tool (gh). Install it, then connect GitHub.'
+                          : 'Sign in to GitHub on this computer to open pull requests.'}
+                      </span>
+                    </div>
+                    <div className="transcript-card-actions">
+                      <AppLink
+                        className="button primary"
+                        to="/settings/apps/github"
+                      >
+                        Connect GitHub
+                      </AppLink>
+                    </div>
+                  </div>
+                )}
+                <div className="dev-pr-form">
+                  <div className="dev-git-row">
+                    <Input
+                      aria-label="Pull request title"
+                      placeholder="Title"
+                      value={state.drafts.pullTitle}
+                      disabled={locked}
+                      onChange={(event) =>
+                        patchDrafts({ pullTitle: event.target.value })
+                      }
+                    />
+                    <IconButton
+                      size="sm"
+                      label="Suggest pull request text"
+                      disabled={locked || !repo.pull_request}
+                      onClick={() => {
+                        // From the branch's commits and files against its base (B301).
+                        const suggestion = repo.pull_request;
+                        if (suggestion)
+                          patchDrafts({
+                            pullTitle: suggestion.title,
+                            pullBody: suggestion.body,
+                          });
+                      }}
+                    >
+                      <Sparkles size={14} aria-hidden />
+                    </IconButton>
+                  </div>
+                  <textarea
+                    className="input"
+                    aria-label="Pull request body"
+                    placeholder="What changed and how it was tested"
+                    rows={5}
+                    value={state.drafts.pullBody}
+                    disabled={locked}
+                    onChange={(event) =>
+                      patchDrafts({ pullBody: event.target.value })
+                    }
+                  />
+                  <label className="dev-toggle-row">
+                    <Toggle
+                      label="Create as draft"
+                      checked={state.drafts.pullDraft}
+                      disabled={locked}
+                      onChange={(event) =>
+                        patchDrafts({ pullDraft: event.target.checked })
+                      }
+                    />
+                    <span>Create as draft</span>
+                  </label>
+                  <div className="dev-git-row">
+                    <Button
+                      disabled={
+                        locked ||
+                        !available('developer.repository.pull_request') ||
+                        !state.drafts.pullTitle.trim()
+                      }
+                      onClick={() =>
+                        void prepare('developer.repository.pull_request', {
+                          title: state.drafts.pullTitle.trim(),
+                          body: state.drafts.pullBody,
+                          draft: state.drafts.pullDraft,
+                        })
+                      }
+                    >
+                      <GitPullRequest size={14} aria-hidden />
+                      Open pull request
+                    </Button>
+                    {!available('developer.repository.pull_request') && (
+                      <span className="dev-git-reason">
+                        {reason('developer.repository.pull_request')}
+                      </span>
+                    )}
+                  </div>
+                  {place === 'pull_request' && notices}
+                </div>
+              </Disclosure>
+            )}
           </section>
         </>
       )}

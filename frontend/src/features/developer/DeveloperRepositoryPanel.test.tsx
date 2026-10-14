@@ -549,3 +549,35 @@ it('confirms a pull request beside its button and links the result (B300)', asyn
     within(remote).getByRole('link', { name: 'Open it on GitHub' }),
   ).toHaveAttribute('href', 'https://github.com/example/csv-kit/pull/12');
 });
+
+it("shows the branch's pull request instead of an empty new-PR form (B336)", async () => {
+  const props = options();
+  props.load.mockResolvedValue({
+    ...page,
+    repository: {
+      ...page.repository,
+      branch: 'fix/rbt-9-dates',
+      open_pull_request: {
+        number: 11,
+        title: 'Fix the date contract',
+        url: 'https://github.com/example/shop/pull/11',
+        draft: true,
+        opened_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    },
+  });
+  render(<DeveloperRepositoryPanel {...props} />);
+  await ready();
+  const remote = screen.getByRole('region', { name: 'Remote' });
+  const card = within(remote).getByRole('group', { name: 'Pull request' });
+  expect(card).toHaveTextContent('Fix the date contract');
+  expect(card).toHaveTextContent('#11 · Draft');
+  expect(
+    within(card).getByRole('link', { name: 'Open on GitHub' }),
+  ).toHaveAttribute('href', 'https://github.com/example/shop/pull/11');
+  expect(screen.queryByLabelText('Pull request title')).toBeNull();
+  expect(
+    screen.queryByText('Pull request', { selector: 'summary' }),
+  ).toBeNull();
+  expect(props.review).not.toHaveBeenCalled();
+});
