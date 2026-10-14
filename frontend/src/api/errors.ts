@@ -55,6 +55,7 @@ const BUDDY = open('buddy', 'Buddy', 'buddy-look');
 const MIGRATION = open('data', 'Import', 'migration');
 const UPDATES = open('updates', 'Updates', 'updates.channel');
 const TUNNEL = open('access', 'Tunnel', 'tunnel');
+const REMOTE_ACCESS = open('access', 'Devices & remote access');
 
 const CANT_DO_FROM_HERE: Entry = [
   "Row-Bot can't do that from here yet. Ask for it in the conversation instead.",
@@ -386,6 +387,17 @@ const CATALOG: Record<string, Entry> = {
     'Add the account credentials before signing in.',
     'review',
     ACCOUNTS,
+  ],
+  // Signing in from another device returns to Row-Bot's public address.
+  account_callback_unavailable: [
+    'Signing in from here needs Row-Bot’s public HTTPS address. Add it in Devices & remote access, or sign in from the Row-Bot desktop app on the computer it runs on.',
+    'review',
+    REMOTE_ACCESS,
+  ],
+  account_redirect_mismatch: [
+    'This Google client doesn’t list Row-Bot’s sign-in address. Create a Web application client with the redirect address Google’s guide shows, then choose its file.',
+    'review',
+    GOOGLE,
   ],
   invalid_account_command: [
     "That account step isn't valid. Start it again from Accounts.",

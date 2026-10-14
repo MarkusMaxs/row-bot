@@ -1574,6 +1574,7 @@ it('updates the Accounts header after Check without reloading the page (B263)', 
     configured: true,
     state: 'saved_unchecked',
     token_files: account === 'google' ? 2 : 1,
+    sign_in: 'this_computer',
   });
   const state = { handshake: { authentication_kind: 'local_owner' } };
   const controller = {

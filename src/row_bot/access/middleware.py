@@ -13,7 +13,12 @@ from typing import Awaitable, Callable, Mapping, Protocol
 from urllib.parse import quote
 
 from row_bot.access.config import AccessConfig, DeploymentMode
-from row_bot.access.policy import AccessPolicy, RouteClassification, RouteKind
+from row_bot.access.policy import (
+    OAUTH_CALLBACK_PATHS,
+    AccessPolicy,
+    RouteClassification,
+    RouteKind,
+)
 from row_bot.access.request_context import (
     ACCESS_CONTEXT_SCOPE_KEY,
     PROVENANCE_SCOPE_KEY,
@@ -39,10 +44,14 @@ logger = logging.getLogger(__name__)
 
 
 class _OAuthCallbackLogFilter(logging.Filter):
+    """An OAuth callback's query (its code and state) never reaches the access log."""
+
+    _PREFIXES = tuple(path + "?" for path in OAUTH_CALLBACK_PATHS)
+
     def filter(self, record):
         if isinstance(record.args, tuple):
             record.args = tuple(value.split("?", 1)[0] if isinstance(value, str)
-                and value.startswith("/api/v1/settings/mcp/auth/callback?") else value for value in record.args)
+                and value.startswith(self._PREFIXES) else value for value in record.args)
         return True
 
 _REJECTION_CACHE_MAX = 128
