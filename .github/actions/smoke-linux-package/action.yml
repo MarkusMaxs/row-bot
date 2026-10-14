@@ -80,6 +80,8 @@ runs:
         # The wrapper relaunches `serve` on exit code 75 and rolls back after two failed starts.
         python3 scripts/smoke_install_layout.py --root "$ROOT" --kind linux --port "$LAYOUT_PORT" \
           -- "$HOME/.local/bin/row-bot" --no-ollama serve --port "$LAYOUT_PORT"
+        # Worker plugins load from a private environment made by the installed runtime.
+        "$ROOT/current/python/bin/python3" -I -B scripts/smoke_plugin_environment.py --app "$ROOT/current/app"
         if [ "$BACKGROUND_UPDATE" = "true" ]; then
           # A real background update to the next version, then Restart now.
           UPDATE_PORT="$((SMOKE_PORT + 3))"

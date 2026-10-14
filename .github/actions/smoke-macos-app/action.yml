@@ -91,6 +91,9 @@ runs:
         python3 scripts/smoke_install_layout.py --root "$ROW_BOT_INSTALL_ROOT" --kind macos --port "$LAYOUT_PORT" \
           --seed "$RESOURCES" --seed-version "$VERSION" \
           -- "$APP_EXEC" -- --server --no-open --no-splash --no-ollama --port "$LAYOUT_PORT"
+        # Worker plugins load from a private environment made by the bundled runtime
+        # (-B: nothing may write bytecode into the signed bundle).
+        "$RESOURCES/python/bin/python3" -I -B scripts/smoke_plugin_environment.py --app "$RESOURCES/app"
         if [ "$BACKGROUND_UPDATE" = "true" ]; then
           # A real background update to the next version, staged next to the
           # bundle (the seed), then Restart now through the tray host.
