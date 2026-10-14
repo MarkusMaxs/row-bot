@@ -113,3 +113,76 @@ def test_tool_classification_weighs_annotations_then_names_then_descriptions(nam
     tool = {"annotations": annotations} if annotations else None
     assert classify_tool_effect(name, description, tool) == effect
     assert is_destructive_tool(name, description, tool) is high_impact
+
+
+def _stdio_launch_environment(monkeypatch, cfg: dict) -> dict[str, str]:
+    """The environment a stdio server would start with, captured instead of starting it."""
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from row_bot.mcp_client import runtime
+
+    monkeypatch.setattr(runtime, "_resolve_stdio_command", lambda command, _env: command)
+    captured = []
+
+    @asynccontextmanager
+    async def stdio(params, errlog=None):
+        captured.append(params)
+        yield (object(), object())
+
+    class Session:
+        def __init__(self, *_args):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def initialize(self):
+            return None
+
+    monkeypatch.setattr(runtime, "stdio_client", stdio)
+    monkeypatch.setattr(runtime, "ClientSession", Session)
+    server = runtime.McpServerRuntime("fixture", {"command": "fixture-server", **cfg})
+
+    async def connect():
+        await server._connect()
+        await server.exit_stack.aclose()
+
+    asyncio.run(connect())
+    return dict(captured[0].env)
+
+
+@pytest.fixture
+def host_secrets(monkeypatch):
+    """Row-Bot's environment on a self-hosted install: provider and channel keys, and its own secret."""
+    for name, value in {"OPENAI_API_KEY": "sk-external-synthetic", "TELEGRAM_BOT_TOKEN": "telegram-synthetic",
+                        "ROW_BOT_LAUNCH_SECRET": "launch-secret-synthetic", "WORKSPACE_FLAVOUR": "kept"}.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_a_stdio_server_starts_without_row_bots_keys_unless_it_is_given_them(monkeypatch, host_secrets) -> None:
+    environment = _stdio_launch_environment(monkeypatch, {"env": {"SERVER_API_KEY": "explicit-synthetic"}})
+
+    assert not {"OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "ROW_BOT_LAUNCH_SECRET"} & set(environment)
+    assert environment["SERVER_API_KEY"] == "explicit-synthetic"  # Its own variables, given explicitly.
+    assert environment["WORKSPACE_FLAVOUR"] == "kept"
+
+
+def test_a_stdio_server_inherits_only_the_keys_it_opts_into(monkeypatch, host_secrets) -> None:
+    environment = _stdio_launch_environment(monkeypatch, {"inherit_env": ["OPENAI_API_KEY"]})
+
+    assert environment["OPENAI_API_KEY"] == "sk-external-synthetic"
+    assert "TELEGRAM_BOT_TOKEN" not in environment and "ROW_BOT_LAUNCH_SECRET" not in environment
+
+
+def test_a_servers_opt_in_keeps_only_variable_names() -> None:
+    from row_bot.mcp_client.config import normalize_server_config
+
+    cfg = normalize_server_config("fixture", {"command": "fixture-server",
+                                              "inherit_env": ["OPENAI_API_KEY", "BAD NAME", 7, "$(x)"]})
+
+    assert cfg["inherit_env"] == ["OPENAI_API_KEY"]
+    assert "inherit_env" not in normalize_server_config("fixture", {"command": "fixture-server"})

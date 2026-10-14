@@ -108,3 +108,22 @@ def test_file_tools_refuse_a_sibling_folder_named_like_the_workspace(shell, relo
         assert "private" not in tools["workspace_read_file"].invoke({"file_path": path})
     assert "outside the workspace" in tools["workspace_list_directory"].invoke({"dir_path": str(sibling)})
     assert "hello" in tools["workspace_read_file"].invoke({"file_path": str(workspace / "notes.txt")})
+
+
+def test_a_self_hosted_installs_secrets_folder_is_private_too(shell, monkeypatch, tmp_path, reload_for_data_dir):
+    shell_tool, registry, home = shell
+    secrets = tmp_path / "run-secrets"
+    secrets.mkdir()
+    (secrets / "OPENAI_API_KEY").write_text("sk-synthetic", encoding="utf-8")
+    monkeypatch.setenv("ROW_BOT_SECRETS_DIR", str(secrets))
+
+    assert shell_tool.classify_command(f"cat {secrets / 'OPENAI_API_KEY'}") == "private_data"
+    assert shell_tool.classify_command(f"ls {str(secrets).replace(chr(92), '/')}") == "private_data"
+    assert shell_tool.classify_command("echo $ROW_BOT_SECRETS_DIR") == "private_data"
+
+    (filesystem_tool,) = reload_for_data_dir(home / ".row-bot", "row_bot.tools.filesystem_tool")
+    registry.set_tool_config("filesystem", "workspace_root", str(tmp_path))
+    tools = {tool.name: tool for tool in filesystem_tool.FileSystemTool().as_langchain_tools()}
+    output = tools["workspace_read_file"].invoke({"file_path": "run-secrets/OPENAI_API_KEY"})
+    assert output.startswith("Error: this path is inside Row-Bot's private data folder")
+    assert "sk-synthetic" not in output

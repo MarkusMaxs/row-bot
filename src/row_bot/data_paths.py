@@ -22,14 +22,25 @@ def get_row_bot_data_dir(*, create: bool = True) -> Path:
     return get_row_bot_target_data_dir(create=create)
 
 
+def private_data_dirs() -> list[Path]:
+    """Row-Bot's data folder, and the server secrets folder when one is in use (a self-hosted install's keys)."""
+    from row_bot.secret_store import server_secrets_dir
+
+    folders = [get_row_bot_data_dir(create=False)]
+    secrets_dir = server_secrets_dir()
+    if secrets_dir is not None:
+        folders.append(secrets_dir)
+    return folders
+
+
 def is_private_data_path(path: str | os.PathLike[str]) -> bool:
-    """True when *path* is Row-Bot's data folder or inside it (conversations, settings, keys)."""
+    """True when *path* is Row-Bot's data folder or the server secrets folder, or inside one of them."""
     try:
         resolved = Path(path).expanduser().resolve()
-        data_dir = get_row_bot_data_dir(create=False).expanduser().resolve()
+        folders = [folder.expanduser().resolve() for folder in private_data_dirs()]
     except (OSError, ValueError):
         return False
-    return resolved == data_dir or data_dir in resolved.parents
+    return any(resolved == folder or folder in resolved.parents for folder in folders)
 
 
 def get_tasks_db_path(*, create_parent: bool = True) -> Path:

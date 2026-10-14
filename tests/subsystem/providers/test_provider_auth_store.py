@@ -102,7 +102,7 @@ def test_atlascloud_provider_auth_store_uses_environment(monkeypatch):
     monkeypatch.delenv("ATLASCLOUD_API_KEY", raising=False)
 
 
-def test_provider_auth_store_reports_keyring_when_saved_key_is_loaded_into_env(tmp_path, monkeypatch):
+def test_provider_auth_store_reports_keyring_for_a_saved_key_kept_out_of_the_environment(tmp_path, monkeypatch):
     monkeypatch.setattr(api_keys, "KEYS_PATH", tmp_path / "api_keys.json")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     backend = _MemoryKeyring()
@@ -110,12 +110,14 @@ def test_provider_auth_store_reports_keyring_when_saved_key_is_loaded_into_env(t
     try:
         api_keys.set_key("OPENAI_API_KEY", "sk-saved-secret")
 
-        assert os.environ.get("OPENAI_API_KEY") == "sk-saved-secret"
+        # Programs Row-Bot starts inherit its environment, so a saved key never goes there.
+        assert "OPENAI_API_KEY" not in os.environ
+        assert get_provider_secret("openai") == "sk-saved-secret"
         assert provider_secret_status("openai")["source"] == "keyring"
 
-        # Not monkeypatch.setenv: it would put the saved key back into the environment
-        # when it undoes, after delete_key below had removed it.
-        os.environ["OPENAI_API_KEY"] = "sk-env-secret"
+        # monkeypatch.setenv undoes to "not set": the saved key never went into the environment, and
+        # delete_key below leaves the environment alone, so a plain assignment would outlive the test.
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env-secret")
         assert get_provider_secret("openai") == "sk-env-secret"
         assert provider_secret_status("openai")["source"] == "environment"
     finally:

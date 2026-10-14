@@ -303,10 +303,12 @@ def test_slack_interrupt_button_resumes_shared_stream(monkeypatch: pytest.Monkey
     monkeypatch.setattr(slack, "_stream_agent_resume_to_slack", streamed_resume)
     monkeypatch.setattr(slack.ch_runtime, "resolve_goal_approval_for_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(slack.ch_runtime, "thread_id_from_config", lambda _config: None)
+    monkeypatch.setattr(slack, "get_channel_secret", lambda _channel, key: "U_OWNER" if key == "SLACK_USER_ID" else "")
 
     body = {
         "channel": {"id": "C1"},
         "message": {"ts": "approval-ts", "thread_ts": "root-ts"},
+        "user": {"id": "U_OWNER"},
     }
     asyncio.run(slack._handle_interrupt_button(body, client, approved=True))
 

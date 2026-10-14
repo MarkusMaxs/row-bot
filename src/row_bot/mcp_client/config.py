@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 import os
+import re
 import stat
 import threading
 import uuid
@@ -27,6 +28,7 @@ CONFIG_PATH = DATA_DIR / "mcp_servers.json"
 
 CURRENT_VERSION = 1
 VALID_TRANSPORTS = {"stdio", "http", "streamable_http", "streamable-http", "sse"}
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "version": CURRENT_VERSION,
@@ -259,6 +261,11 @@ def normalize_server_config(name: str, raw: dict[str, Any] | None) -> dict[str, 
     if "auth" in cfg:
         from row_bot.mcp_client.auth import validate_metadata
         cfg["auth"] = validate_metadata(cfg["auth"])
+    # Names of Row-Bot's keys this server may inherit from Row-Bot's environment (explicit opt-in).
+    inherit = raw.get("inherit_env")
+    if isinstance(inherit, list) and (names := [name for name in inherit
+                                                if isinstance(name, str) and _ENV_NAME.fullmatch(name)]):
+        cfg["inherit_env"] = names
     tools_cfg = cfg["tools"]
     tools_cfg["enabled"] = dict(tools_cfg.get("enabled") or {})
     tools_cfg["require_approval"] = list(tools_cfg.get("require_approval") or [])

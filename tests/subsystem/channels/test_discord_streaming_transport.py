@@ -259,8 +259,10 @@ def test_discord_interrupt_button_resumes_shared_stream(monkeypatch: pytest.Monk
     monkeypatch.setattr(discord_channel, "_stream_agent_resume_to_discord", streamed_resume)
     monkeypatch.setattr(discord_channel.ch_runtime, "resolve_goal_approval_for_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(discord_channel.ch_runtime, "thread_id_from_config", lambda _config: None)
+    monkeypatch.setattr(discord_channel, "get_channel_secret",
+                        lambda _channel, key: "1001" if key == "DISCORD_USER_ID" else "")
 
-    asyncio.run(discord_channel._handle_discord_interrupt_button(channel, message, approved=True))
+    asyncio.run(discord_channel._handle_discord_interrupt_button(channel, message, approved=True, user_id=1001))
 
     assert calls == [(True, ["i1", "i2"])]
     assert channel.operations[0] == (
@@ -308,3 +310,37 @@ def test_discord_streamed_turn_invokes_channel_checkpoint_persistence(
     assert calls == [
         ("partial answer\n\nWarning: Error: provider disconnected", "discord", True)
     ]
+
+
+def test_discord_approval_buttons_say_who_pressed_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The handlers answer only the paired owner, so every button hands over the person who pressed it."""
+    from types import SimpleNamespace
+
+    from row_bot.channels import discord_channel
+
+    pressed: list[tuple[str, bool, int | None]] = []
+
+    def recorder(kind: str):
+        async def handle(_channel, _message, *, approved: bool, user_id: int | None) -> None:
+            pressed.append((kind, approved, user_id))
+        return handle
+
+    monkeypatch.setattr(discord_channel, "_handle_discord_interrupt_button", recorder("interrupt"))
+    monkeypatch.setattr(discord_channel, "_handle_discord_task_approval_button", recorder("task"))
+
+    class Response:
+        async def defer(self) -> None:
+            return None
+
+    interaction = SimpleNamespace(user=SimpleNamespace(id=3003), channel=FakeDiscordChannel(), message=None,
+                                  response=Response())
+
+    async def press_every_button() -> None:
+        for make in (discord_channel._make_discord_interrupt_view, discord_channel._make_discord_task_approval_view):
+            for button in make().children:
+                await button.callback(interaction)
+
+    asyncio.run(press_every_button())
+
+    assert pressed == [("interrupt", True, 3003), ("interrupt", False, 3003),
+                       ("task", True, 3003), ("task", False, 3003)]

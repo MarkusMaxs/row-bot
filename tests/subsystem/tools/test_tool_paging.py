@@ -3,15 +3,12 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
 
 from row_bot import tool_outputs
+from tests.fixtures.public_web import PUBLIC_ADDRESS, public_web
 
 
 pytestmark = pytest.mark.subsystem
@@ -213,42 +210,28 @@ def test_developer_command_output_is_plain_text_and_its_rest_is_readable(develop
 
 # ── read_url ────────────────────────────────────────────────────────────────
 
-@contextmanager
-def _site(body: bytes) -> Iterator[str]:
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_args) -> None:
-            pass
-
-        def do_GET(self) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}/page"
-    finally:
-        server.shutdown()
-        server.server_close()
+@pytest.fixture
+def web(monkeypatch):
+    """read_url opens public pages only: a public name served from a loopback server."""
+    with public_web(monkeypatch) as site:
+        site.dns["articles.example"] = [PUBLIC_ADDRESS]
+        yield site
 
 
-def test_read_url_pages_a_long_page_to_its_end(data_dir):
+def test_read_url_pages_a_long_page_to_its_end(data_dir, web):
     from row_bot.tools.url_reader_tool import _read_url
 
     text = "".join(f"Paragraph {index:05d} of the long article.\n" for index in range(5_000))
-    with _site(text.encode("utf-8")) as url:
-        parts, offset = [], 0
-        while offset is not None:
-            result = _read_url(url, offset=offset)
-            assert result.startswith(f"SOURCE_URL: {url}\n\n")
-            body = result.split("\n\n", 1)[1]
-            page, _, footer = body.rpartition("\n\n[Characters ")
-            parts.append(page if footer else body)
-            offset = _continue_offset(footer)
+    url = "http://articles.example/page"
+    web.page(url, text.encode("utf-8"), "text/plain; charset=utf-8")
+    parts, offset = [], 0
+    while offset is not None:
+        result = _read_url(url, offset=offset)
+        assert result.startswith(f"SOURCE_URL: {url}\n\n")
+        body = result.split("\n\n", 1)[1]
+        page, _, footer = body.rpartition("\n\n[Characters ")
+        parts.append(page if footer else body)
+        offset = _continue_offset(footer)
 
     reassembled = "".join(parts) == text.strip()
     assert reassembled
