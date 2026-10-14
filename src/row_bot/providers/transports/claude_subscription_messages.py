@@ -102,6 +102,7 @@ class ChatClaudeSubscriptionMessages(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         request = self._request_kwargs(messages, stop=stop, **kwargs)
         tool_blocks: dict[int, dict[str, str]] = {}
+        stop_reason = ""
         scope = current_cancellation_scope()
         for event in self._stream_message_events(request):
             if scope is not None and scope.is_cancelled():
@@ -145,11 +146,21 @@ class ChatClaudeSubscriptionMessages(BaseChatModel):
                         "index": index,
                     }]))
                     continue
+            if event_type == "message_delta":
+                # Why the reply ended ("end_turn", "max_tokens", "tool_use"), for the cut-short notice (F17).
+                delta = _plain_data(payload.get("delta"))
+                if isinstance(delta, dict) and delta.get("stop_reason"):
+                    stop_reason = str(delta["stop_reason"])
+                continue
             if event_type == "error":
                 raise RuntimeError(f"Claude Subscription stream failed: {_event_error_message(payload)}")
         if scope is not None and scope.is_cancelled():
             return
-        yield ChatGenerationChunk(message=AIMessageChunk(content="", chunk_position="last"))
+        yield ChatGenerationChunk(message=AIMessageChunk(
+            content="",
+            chunk_position="last",
+            response_metadata={"stop_reason": stop_reason} if stop_reason else {},
+        ))
 
     def _request_kwargs(
         self,

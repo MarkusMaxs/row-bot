@@ -291,15 +291,24 @@ request that carried cache instructions is retried once without them. No other
 - A failure placing the system breakpoint is logged once per thread, and the
   request goes out without it.
 
-**Truncation.** An Agent reply that stopped at the output token limit gets the
-"cut short" notice. `providers/stop_reason.py` reads why a reply stopped from
+**Truncation.** A reply that stopped at the output token limit says so on every
+route, while the saved reply stays the model's own text, so the model's context
+does not change:
+
+- The desktop transcript shows a "Cut short by the output limit" chip under it.
+  The checkpoint reader reads the saved reply's stop reason (`cut_short`).
+- Agent mode and Chat Only stream the "cut short" notice as the reply's last
+  token, so channel replies end with it, and "done" carries it.
+- A workflow step or delegated agent's result ends with it (`invoke_agent`).
+
+`providers/stop_reason.py` reads why a reply stopped from
 every provider shape: OpenAI-style `finish_reason: "length"`, Ollama
 `done_reason: "length"`, Anthropic `stop_reason: "max_tokens"`, Gemini
 `finish_reason: "MAX_TOKENS"`, and, for Responses APIs (OpenAI, Codex, xAI
 OAuth), `status: "incomplete"` with `incomplete_details.reason:
-"max_output_tokens"`. Row-Bot's own transports (Codex, xAI OAuth, Ollama Cloud
-and the OpenAI-compatible routes, including Anthropic-shaped ones) end their
-stream with that reason.
+"max_output_tokens"`. Row-Bot's own transports (Codex, xAI OAuth, Ollama Cloud,
+Claude Subscription and the OpenAI-compatible routes, including Anthropic-shaped
+ones) end their stream with that reason.
 
 ## Tool set
 

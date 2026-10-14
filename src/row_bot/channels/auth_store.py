@@ -67,7 +67,10 @@ def get_channel_secret(channel_name: str, env_key: str) -> str:
 
 
 def set_channel_secret(channel_name: str, env_key: str, value: str) -> None:
-    """Persist a channel secret to a channel-specific keyring namespace."""
+    """Persist a channel secret to a channel-specific keyring namespace.
+
+    Never into this process's environment, which every program it starts would inherit.
+    """
     name = _credential_name(env_key)
     text = str(value or "").strip()
     if not name:
@@ -83,11 +86,10 @@ def set_channel_secret(channel_name: str, env_key: str, value: str) -> None:
         delete_channel_secret(channel_name, name)
         return
     secret_store.set_secret(name, text, namespace=_namespace(channel_name))
-    os.environ[name] = text
 
 
 def delete_channel_secret(channel_name: str, env_key: str) -> None:
-    """Delete a channel secret from the channel namespace and process env."""
+    """Delete a channel secret from the channel namespace."""
     name = _credential_name(env_key)
     if not name:
         return
@@ -102,7 +104,6 @@ def delete_channel_secret(channel_name: str, env_key: str) -> None:
         secret_store.delete_secret(name, namespace=_namespace(channel_name))
     except secret_store.SecretStoreError:
         pass
-    os.environ.pop(name, None)
 
 
 def migrate_legacy_channel_secrets(channels: list[Any]) -> dict[str, int]:

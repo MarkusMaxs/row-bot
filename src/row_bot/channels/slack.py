@@ -1543,8 +1543,23 @@ async def _handle_dm(
         )
 
 
+def _clicked_by_owner(body: dict) -> bool:
+    """Whether the person who pressed a button may answer it: the paired owner, as for messages.
+
+    Anyone in a channel can press a button the bot posted, so a press by anyone else is ignored and leaves
+    the approval pending.
+    """
+    user_id = str((body.get("user") or {}).get("id") or "")
+    if user_id and _is_authorised(user_id):
+        return True
+    log.warning("Ignored a Slack approval button pressed by someone other than the paired owner")
+    return False
+
+
 async def _handle_approval_button(body: dict, client, *, approved: bool) -> None:
     """Handle a Block Kit approval button press (task_approve / task_deny)."""
+    if not _clicked_by_owner(body):
+        return
     message = body.get("message", {})
     msg_ts = message.get("ts", "")
     channel_id = body.get("channel", {}).get("id", "")
@@ -1614,6 +1629,8 @@ async def _handle_approval_button(body: dict, client, *, approved: bool) -> None
 
 async def _handle_interrupt_button(body: dict, client, *, approved: bool) -> None:
     """Handle a Block Kit button press for a live/goal agent interrupt."""
+    if not _clicked_by_owner(body):
+        return
     message = body.get("message", {}) or {}
     msg_ts = str(message.get("ts") or "")
     channel_id = str(

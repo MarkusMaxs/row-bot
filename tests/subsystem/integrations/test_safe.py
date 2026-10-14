@@ -121,7 +121,8 @@ def test_exact_reviewed_migration_is_followed_once_and_only_once(http):
 
 
 @pytest.mark.parametrize("address", ["127.0.0.1", "10.0.0.8", "169.254.169.254", "192.168.1.1", "::1", "fd00::1",
-                                     "::ffff:127.0.0.1", "100.64.0.1", "64:ff9b::7f00:1", "64:ff9b::a00:1", "::7f00:1"])
+                                     "::ffff:127.0.0.1", "100.64.0.1", "64:ff9b::7f00:1", "64:ff9b::a00:1", "::7f00:1",
+                                     "168.63.129.16", "::ffff:168.63.129.16"])
 def test_open_fetch_refuses_names_that_reach_private_networks(http, address):
     sent = http(lambda request: pytest.fail("private address was contacted"), {"skills.example": ["1.1.1.1", address]})
     with pytest.raises(ValueError, match="refused"):

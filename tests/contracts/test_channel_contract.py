@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from row_bot.channels.streaming import ChannelDeliveryResult
 from tests.fixtures.channels import FakeChannel, approval_payload
 
 
@@ -69,3 +70,148 @@ def test_channel_base_thread_id_contract() -> None:
     assert channel.make_thread_id("abc123") == "slack_abc123"
     assert channel.get_default_target() == "fake-user"
     assert channel.config_fields[0].key == "fake_target"
+
+
+class _SlackClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def chat_update(self, **_kwargs) -> dict:
+        self.calls.append("update")
+        return {"ok": True}
+
+    async def chat_postMessage(self, **_kwargs) -> dict:
+        self.calls.append("post")
+        return {"ok": True}
+
+
+class _DiscordMessage:
+    id = 77
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def edit(self, **_kwargs) -> None:
+        self.calls.append("edit")
+
+
+class _DiscordChannel:
+    id = 42
+
+    async def send(self, *_args, **_kwargs) -> None:
+        return None
+
+
+def _slack_button(monkeypatch, kind: str):
+    """Slack with one pending approval of ``kind``: a press(user) coroutine, whether it is still pending,
+    and what a press touched."""
+    from row_bot.channels import slack
+
+    for name in ("_pending_interrupts", "_interrupt_by_message", "_interrupt_by_channel",
+                 "_pending_task_approvals", "_approval_by_channel"):
+        monkeypatch.setattr(slack, name, {})
+    monkeypatch.setattr(slack, "get_channel_secret", lambda _channel, key: "U_OWNER" if key == "SLACK_USER_ID" else "")
+    monkeypatch.setattr(slack.ch_auth, "is_user_approved", lambda _channel, user: user == "U_PAIRED")
+    client, resolved = _SlackClient(), []
+    if kind == "task":
+        slack._pending_task_approvals["approval-ts"] = {"resume_token": "resume-1", "task_name": "Send report",
+                                                        "dm_channel_id": "D1"}
+        monkeypatch.setattr("row_bot.tasks.respond_to_approval",
+                            lambda token, approved, **_kwargs: resolved.append((token, approved)) or True)
+        action = slack._handle_approval_button
+    else:
+        slack._store_slack_interrupt(channel_id="D1", interrupt_data=[{"__interrupt_id": "i1", "tool": "shell"}],
+                                     config={"configurable": {"thread_id": "t1"}}, thread_ts=None,
+                                     message_ts="approval-ts")
+
+        async def resume(_client, _channel, _config, approved, **_kwargs):
+            resolved.append(("interrupt", approved))
+            return "", None, [], [], ChannelDeliveryResult(delivered=True)
+
+        monkeypatch.setattr(slack, "_stream_agent_resume_to_slack", resume)
+        monkeypatch.setattr(slack.ch_runtime, "resolve_goal_approval_for_config", lambda *_args: None)
+        monkeypatch.setattr(slack.ch_runtime, "thread_id_from_config", lambda _config: None)
+        action = slack._handle_interrupt_button
+
+    def press(user: str | None) -> None:
+        body = {"channel": {"id": "D1"}, "message": {"ts": "approval-ts"}}
+        if user is not None:
+            body["user"] = {"id": user}
+        asyncio.run(action(body, client, approved=True))
+
+    def pending() -> bool:
+        return bool(slack._pending_task_approvals or slack._pending_interrupts)
+
+    return press, pending, resolved, client.calls
+
+
+def _discord_button(monkeypatch, kind: str):
+    from row_bot.channels import discord_channel
+
+    for name in ("_pending_interrupts", "_interrupt_by_message", "_interrupt_by_channel",
+                 "_pending_task_approvals", "_task_approval_by_channel"):
+        monkeypatch.setattr(discord_channel, name, {})
+    monkeypatch.setattr(discord_channel, "get_channel_secret",
+                        lambda _channel, key: "1001" if key == "DISCORD_USER_ID" else "")
+    monkeypatch.setattr(discord_channel.ch_auth, "is_user_approved", lambda _channel, user: user == "2002")
+    channel, message, resolved = _DiscordChannel(), _DiscordMessage(), []
+    if kind == "task":
+        discord_channel._pending_task_approvals[77] = {"resume_token": "resume-1", "task_name": "Send report",
+                                                       "dm_channel_id": 42}
+        monkeypatch.setattr("row_bot.tasks.respond_to_approval",
+                            lambda token, approved, **_kwargs: resolved.append((token, approved)) or True)
+        action = discord_channel._handle_discord_task_approval_button
+    else:
+        discord_channel._store_discord_interrupt(channel_id=42, interrupt_data=[{"__interrupt_id": "i1"}],
+                                                 config={"configurable": {"thread_id": "t1"}}, message_id=77)
+
+        async def resume(_channel, _config, approved, **_kwargs):
+            resolved.append(("interrupt", approved))
+            return "", None, [], [], ChannelDeliveryResult(delivered=True)
+
+        monkeypatch.setattr(discord_channel, "_stream_agent_resume_to_discord", resume)
+        monkeypatch.setattr(discord_channel.ch_runtime, "resolve_goal_approval_for_config", lambda *_args: None)
+        monkeypatch.setattr(discord_channel.ch_runtime, "thread_id_from_config", lambda _config: None)
+        action = discord_channel._handle_discord_interrupt_button
+
+    def press(user: str | None) -> None:
+        asyncio.run(action(channel, message, approved=True, user_id=None if user is None else int(user)))
+
+    def pending() -> bool:
+        return bool(discord_channel._pending_task_approvals or discord_channel._pending_interrupts)
+
+    return press, pending, resolved, message.calls
+
+
+CHANNEL_BUTTONS = {
+    # channel: (pending approval, owner, a DM-paired user, someone else in the channel)
+    "slack": (_slack_button, "U_OWNER", "U_PAIRED", "U_STRANGER"),
+    "discord": (_discord_button, "1001", "2002", "3003"),
+}
+
+
+@pytest.mark.parametrize("kind", ["task", "interrupt"])
+@pytest.mark.parametrize("channel_name", sorted(CHANNEL_BUTTONS))
+def test_an_approval_button_pressed_by_anyone_but_the_owner_changes_nothing(monkeypatch, channel_name, kind):
+    """Anyone in a channel can press the bot's buttons; only the paired owner's press answers an approval."""
+    setup, owner, _paired, stranger = CHANNEL_BUTTONS[channel_name]
+    press, pending, resolved, touched = setup(monkeypatch, kind)
+
+    press(stranger)
+    press(None)
+
+    assert pending() and resolved == [] and touched == []
+
+    press(owner)
+
+    assert not pending() and len(resolved) == 1
+
+
+@pytest.mark.parametrize("channel_name", sorted(CHANNEL_BUTTONS))
+def test_a_dm_paired_user_answers_like_the_configured_owner(monkeypatch, channel_name):
+    setup, _owner, paired, _stranger = CHANNEL_BUTTONS[channel_name]
+    press, pending, resolved, _touched = setup(monkeypatch, "task")
+
+    press(paired)
+
+    assert not pending() and resolved == [("resume-1", True)]

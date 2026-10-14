@@ -36,8 +36,9 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool
 from row_bot.approval_policy import normalize_approval_mode
 from row_bot.brand import APP_DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
-from row_bot.data_paths import get_row_bot_data_dir
+from row_bot.data_paths import get_row_bot_data_dir, private_data_dirs
 from row_bot.process_cancellation import run_cancellable_subprocess
+from row_bot.secret_store import SERVER_SECRETS_DIR_ENV
 from row_bot.tools.base import BaseTool
 from row_bot.tools import registry
 from row_bot.tools import approval_gate
@@ -85,75 +86,194 @@ _BLOCKED_PATTERNS: list[re.Pattern] = [
     ]
 ]
 
-# Command prefixes considered safe (auto-execute, no approval needed)
-_SAFE_PREFIXES: list[str] = [
+# Read-only commands that run without approval, by the command's own name (the first word, not a prefix of
+# it, so "fdisk" is not "fd"). The value lists the options that make the command write a file, delete or
+# run another program; with any of them the command asks like any other. A "--long" option also matches
+# an abbreviation of it, and a one-letter "-x" also matches inside a cluster such as "-Hx".
+# Not here: curl/wget (prompt injection vectors), env/printenv (they print every secret in the environment).
+_SAFE_COMMANDS: dict[str, tuple[str, ...]] = {
     # Navigation & listing
-    "ls", "dir", "pwd", "cd", "pushd", "popd", "tree",
-    "Get-Location", "Set-Location", "Get-ChildItem",
+    "ls": (), "dir": (), "pwd": (), "cd": (), "pushd": (), "popd": (), "tree": ("-o",),
+    "get-location": (), "set-location": (), "get-childitem": (),
     # Reading
-    "cat", "head", "tail", "less", "more", "type",
-    "Get-Content", "Select-String",
-    "wc", "file", "stat", "du", "df",
+    "cat": (), "head": (), "tail": (), "less": ("-o", "--log-file"), "more": (), "type": (),
+    "get-content": (), "select-string": (),
+    "wc": (), "file": ("-c", "--compile"), "stat": (), "du": (), "df": (),
     # Info
-    "echo", "date", "whoami", "hostname", "uname",
-    "which", "where", "command -v", "Get-Command",
-    "Write-Output", "Write-Host",
+    "echo": (), "whoami": (), "uname": (), "which": (), "where": (), "get-command": (),
+    "write-output": (), "write-host": (),
     # Search
-    "find", "grep", "rg", "fd", "ag",
-    # Version / package info
-    "python --version", "python3 --version", "node --version",
-    "npm --version", "pip --version", "pip list", "pip show",
-    "pip freeze", "conda list", "conda info",
-    # Git (read-only)
-    "git status", "git log", "git diff", "git branch",
-    "git remote", "git show", "git tag", "git stash list",
+    "find": ("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
+    "grep": (), "rg": ("--pre", "--hostname-bin"), "fd": ("-x", "--exec", "--exec-batch"), "ag": ("--pager",),
     # System info
-    "systeminfo", "ver", "lsb_release",
-    "top -l 1", "ps", "tasklist",
-    "ipconfig", "ifconfig", "ip addr",
-    "ping", "nslookup", "dig", "traceroute", "tracert",
-    # NOTE: curl/wget intentionally excluded — prompt injection vectors
-    # Env
-    "env", "printenv", "$env:",
-]
+    "systeminfo": (), "ver": (), "lsb_release": (), "ps": (), "tasklist": (),
+    "ping": (), "nslookup": (), "dig": (), "traceroute": (), "tracert": (),
+}
+# Exact read-only command lines.
+_VERSION_CHECKS = frozenset({
+    ("python", "--version"), ("python3", "--version"), ("node", "--version"), ("npm", "--version"),
+    ("pip", "--version"),
+})
+# Read-only subcommands, and the options that make them write or run another program.
+_READ_ONLY_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...]]] = {
+    "pip": (frozenset({"list", "show", "freeze"}), ("--log",)),
+    "conda": (frozenset({"list", "info"}), ()),
+}
+# Git subcommands come straight after "git": "git -c core.pager=... log" runs the pager it names.
+_READ_ONLY_GIT = frozenset({"status", "log", "diff", "show"})
+_GIT_WRITING_OPTIONS = ("--output", "--ext-diff", "--textconv")
+_GIT_LISTING_OPTIONS = {
+    "branch": frozenset({"-a", "-r", "-v", "-vv", "-l", "--all", "--remotes", "--list", "--show-current"}),
+    "remote": frozenset({"-v", "--verbose"}),
+    "tag": frozenset({"-l", "--list"}),
+}
+_HOSTNAME_READ_OPTIONS = frozenset({"-s", "-f", "-d", "-i", "-I", "-A", "--short", "--fqdn", "--long", "--domain",
+                                    "--ip-address", "--all-ip-addresses", "--all-fqdns"})
+# PowerShell resolves these to provider-aware cmdlets: a path such as "env:" lists environment variables
+# and "HKLM:" reads the registry, not files.
+_POWERSHELL_PATH_COMMANDS = frozenset({
+    "ls", "dir", "cat", "type", "more", "cd", "pushd",
+    "get-childitem", "get-content", "set-location", "select-string",
+})
+_PROVIDER_PATH = re.compile(r"^(env|variable|function|alias|cert|hklm|hkcu|wsman):|\w::", re.IGNORECASE)
+# \\server\share (or //server/share): reading it connects to that server and, on Windows, signs in to it.
+_NETWORK_PATH = re.compile(r"^(\\\\|//)[^\\/\s]")
+_OPTION_PREFIX = re.compile(r"^--?[\w-]+[=:]")
 
-# Operators that make any command potentially dangerous — if present,
-# skip safe-prefix matching and classify as needs_approval.
-# Catches: echo "x" > file, ls; rm -rf /, cat f | bash, $(cmd), `cmd`
-_UNSAFE_OPERATORS = re.compile(
-    r";|&&|\|\||[|]|>>?(?!/dev/null)"   # chain, pipe, redirect (except >/dev/null)
-    r"|\$\("                             # command substitution
-    r"|`"                                # backtick substitution
-)
+# Outside quotes, these chain, background, pipe, redirect, open a subshell or script block, or substitute.
+_OPERATOR_CHARACTERS = frozenset(";&|<>(){}`")
+# PowerShell also reads these as quotes, where sh reads them as plain characters.
+_LOOKALIKE_QUOTES = frozenset("\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f")
+# Discarding output is the one redirect a read-only command may use.
+_NULL_REDIRECT = re.compile(r">>?[ \t]*(/dev/null|\$null)(?=[ \t]|$)", re.IGNORECASE)
+_VARIABLE = re.compile(r"\$[\w{(@?:$!#*-]")
 
 
-def _strip_quoted(text: str) -> str:
-    """Remove single- and double-quoted strings from *text*.
+def _shell_words(line: str) -> list[str] | None:
+    """Split one command line into words, or ``None`` when it does more than run one program.
 
-    Returns the command with all quoted segments replaced by a
-    placeholder so that operators inside quotes (e.g. ``echo "a > b"``)
-    do not trigger the unsafe-operator check.  This is a lightweight
-    approach that covers the common case without a full shell parser.
+    The same text must mean the same thing to sh and to PowerShell, so anything either would read as
+    chaining, backgrounding, piping, redirecting (except to the null device), substitution, a script block
+    or a variable returns ``None``, as does quoting the two shells read differently.
     """
-    result: list[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch in ('"', "'"):
-            # Skip to matching close quote
-            quote = ch
+    words: list[str] = []
+    word: list[str] = []
+    in_word = False
+    i, end = 0, len(line)
+    while i < end:
+        char = line[i]
+        if char in " \t":
+            if in_word:
+                words.append("".join(word))
+                word, in_word = [], False
             i += 1
-            while i < n and text[i] != quote:
-                if text[i] == '\\' and quote == '"' and i + 1 < n:
-                    i += 1  # skip escaped char in double quotes
-                i += 1
-            i += 1  # skip closing quote
-            result.append("_Q_")  # placeholder
-        else:
-            result.append(ch)
-            i += 1
-    return "".join(result)
+            continue
+        if char.isspace() or char < " " or char == "\x7f" or char in _LOOKALIKE_QUOTES:
+            return None
+        if char == ">" and (null := _NULL_REDIRECT.match(line, i)):
+            if word not in ([], ["1"], ["2"], ["*"]):  # the stream number belongs to the redirect
+                words.append("".join(word))
+            word, in_word = [], False
+            i = null.end()
+            continue
+        if char in _OPERATOR_CHARACTERS or _VARIABLE.match(line, i):
+            return None
+        if char in "'\"":
+            close = line.find(char, i + 1)
+            if close < 0:
+                return None
+            body = line[i + 1:close]
+            # sh reads \" as an escaped quote and PowerShell as the end of the string; PowerShell reads a
+            # doubled quote as an escaped one and sh as two strings, and ends a string at a lookalike quote.
+            # Inside double quotes both still expand.
+            if line[close + 1:close + 2] == char or not _LOOKALIKE_QUOTES.isdisjoint(body):
+                return None
+            if char == '"' and (body.endswith("\\") or "`" in body or _VARIABLE.search(body)):
+                return None
+            word.append(body)
+            in_word = True
+            i = close + 1
+            continue
+        word.append(char)
+        in_word = True
+        i += 1
+    if in_word:
+        words.append("".join(word))
+    return words
+
+
+def _uses_option(args: list[str], options: tuple[str, ...]) -> bool:
+    for arg in args:
+        name = arg.split("=", 1)[0].lower()
+        for option in options:
+            if option.startswith("--"):
+                if len(name) > 2 and name.startswith("--") and (option.startswith(name) or name.startswith(option)):
+                    return True
+            elif len(option) == 2:
+                if name.startswith("-") and not name.startswith("--") and option[1] in name[1:]:
+                    return True
+            elif name == option:
+                return True
+    return False
+
+
+def _names_other_location(name: str, arg: str) -> bool:
+    path = _OPTION_PREFIX.sub("", arg)
+    if _NETWORK_PATH.match(path):
+        return True
+    return name in _POWERSHELL_PATH_COMMANDS and _PROVIDER_PATH.search(path) is not None
+
+
+def _is_read_only_git(args: list[str]) -> bool:
+    if not args:
+        return False
+    subcommand, rest = args[0], args[1:]
+    if subcommand in _GIT_LISTING_OPTIONS:
+        if subcommand == "remote" and rest[:1] in (["show"], ["get-url"]):
+            return True
+        if subcommand == "tag" and rest[:1] in (["-l"], ["--list"]):
+            return not any(arg.startswith("-") for arg in rest[1:])
+        return all(arg in _GIT_LISTING_OPTIONS[subcommand] for arg in rest)
+    if args[:2] == ["stash", "list"]:
+        return True
+    return subcommand in _READ_ONLY_GIT and not _uses_option(rest, _GIT_WRITING_OPTIONS)
+
+
+def _is_read_only(words: list[str]) -> bool:
+    """True for a command line that only reads: a safe command without an option that writes or runs."""
+    lowered = [word.lower() for word in words]
+    name, args = lowered[0].removesuffix(".exe"), lowered[1:]
+    if name in _SAFE_COMMANDS:
+        return not _uses_option(args, _SAFE_COMMANDS[name]) and not any(
+            _names_other_location(name, arg) for arg in words[1:])
+    if (name, *args) in _VERSION_CHECKS:
+        return True
+    if name == "git":
+        return _is_read_only_git(args)
+    if name in _READ_ONLY_SUBCOMMANDS:
+        subcommands, writing = _READ_ONLY_SUBCOMMANDS[name]
+        return bool(args) and args[0] in subcommands and not _uses_option(args[1:], writing)
+    if name == "command":
+        return args[:1] == ["-v"]
+    if name == "date":
+        # "date -s", "date --set" and BSD "date 0101..." set the clock.
+        return not _uses_option(args, ("-s", "--set")) and not any(re.fullmatch(r"[\d.]+", arg) for arg in args)
+    if name == "hostname":
+        # A name, "-F file" or "-b" sets it.
+        return all(word in _HOSTNAME_READ_OPTIONS for word in words[1:])
+    if name == "top":
+        return args[:2] == ["-l", "1"]
+    if name == "ip":
+        return args[:1] == ["addr"] and args[1:2] in ([], ["show"], ["list"])
+    if name == "ipconfig":
+        # Windows "/release", "/renew" and "/flushdns", or macOS "set", change the network.
+        return all(arg in ("/all", "/displaydns", "/?") for arg in args) or (
+            bool(args) and (args[0].startswith("get") or args[0] == "ifcount"))
+    if name == "ifconfig":
+        # An interface name followed by anything ("en0 down") changes it.
+        return all(arg in ("-a", "-l", "-s", "-v") for arg in args) or (
+            len(args) == 1 and not args[0].startswith("-"))
+    return False
 
 
 # Ways a command can name the home folder, so "~/.row-bot" and "$env:USERPROFILE\.row-bot" both match.
@@ -171,14 +291,15 @@ def _slashes(text: str) -> str:
 
 
 def names_private_data(command: str) -> bool:
-    """True when a command names Row-Bot's data folder: its path in any common spelling, or its variable."""
+    """True when a command names Row-Bot's data folder or the server secrets folder: a path in any common
+    spelling, or its variable."""
     text = _slashes(command)
-    if APP_DATA_DIR_ENV.lower() in text:
+    if APP_DATA_DIR_ENV.lower() in text or SERVER_SECRETS_DIR_ENV.lower() in text:
         return True
     home = _slashes(str(Path.home()))
     text = _HOME_REFERENCES.sub(lambda _match: home, text)
-    data_dir = _slashes(str(get_row_bot_data_dir(create=False).expanduser().resolve()))
-    return data_dir in text or _DATA_DIR_SEGMENT.search(text) is not None
+    folders = [_slashes(str(folder.expanduser().resolve())) for folder in private_data_dirs()]
+    return any(folder in text for folder in folders) or _DATA_DIR_SEGMENT.search(text) is not None
 
 
 def _append_process_note(output: str, note: str) -> str:
@@ -208,11 +329,16 @@ def classify_command(command: str, extra_blocked: list[re.Pattern] | None = None
     if '\n' in cmd:
         severities = {"blocked": 3, "private_data": 2, "needs_approval": 1, "safe": 0}
         worst = "safe"
-        for line in cmd.split('\n'):
+        lines = cmd.split('\n')
+        for index, line in enumerate(lines):
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
             line_class = classify_command(line, extra_blocked)
+            # A trailing backslash joins the next line onto this one in sh, so "find . -name \" and
+            # "ls -delete" are each safe but together delete.
+            if line_class == "safe" and line.endswith("\\") and index < len(lines) - 1:
+                line_class = "needs_approval"
             if severities.get(line_class, 0) > severities.get(worst, 0):
                 worst = line_class
             if worst == "blocked":
@@ -233,19 +359,11 @@ def classify_command(command: str, extra_blocked: list[re.Pattern] | None = None
     if names_private_data(cmd):
         return "private_data"
 
-    # Disqualify from "safe" if the command contains shell operators that
-    # can chain, redirect, or substitute — these make any prefix unsafe.
-    # e.g. "echo hello > /etc/passwd" or "ls; rm -rf /home"
-    # Strip quoted strings first so operators inside quotes don't trigger.
-    if _UNSAFE_OPERATORS.search(_strip_quoted(cmd)):
-        return "needs_approval"
-
-    # Check safe prefixes (only reached for simple, single commands)
-    cmd_lower = cmd.lower()
-    for prefix in _SAFE_PREFIXES:
-        if cmd_lower.startswith(prefix.lower()):
-            return "safe"
-
+    # Safe only when the line runs one read-only program: no chaining, backgrounding, pipes, redirects or
+    # substitution (operators inside quotes are plain text), and no option that writes or runs.
+    words = _shell_words(cmd)
+    if words and _is_read_only(words):
+        return "safe"
     return "needs_approval"
 
 
@@ -277,6 +395,8 @@ class ShellSession:
             ``{command, output, exit_code, cwd, duration}``
         """
         start = time.time()
+        # Saved keys and Row-Bot's own secrets stay out of the command's environment.
+        from row_bot.api_keys import child_environment
 
         with self._lock:
             try:
@@ -315,6 +435,7 @@ class ShellSession:
                         timeout=timeout,
                         text=True,
                         encoding="utf-8", errors="replace",
+                        env=child_environment(),
                     )
                 else:
                     # Unix: same idea — cwd marker goes to stderr
@@ -329,6 +450,7 @@ class ShellSession:
                         timeout=timeout,
                         text=True,
                         encoding="utf-8", errors="replace",
+                        env=child_environment(),
                     )
 
                 if proc.timed_out:

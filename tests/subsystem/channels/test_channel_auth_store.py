@@ -245,6 +245,20 @@ def test_migrate_legacy_channel_secrets_is_quiet_without_legacy_evidence(
     assert stats == {"migrated": 0, "skipped": 1, "failed": 0}
 
 
+def test_a_saved_channel_token_stays_out_of_the_environment_programs_inherit(
+    data_dir, monkeypatch, reload_for_data_dir,
+):
+    _secret_store, _api_keys, channel_auth, _backend = _reload_auth_modules(reload_for_data_dir, data_dir)
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+
+    channel_auth.set_channel_secret("slack", "SLACK_BOT_TOKEN", "xoxb-synthetic")
+
+    assert "SLACK_BOT_TOKEN" not in os.environ
+    assert channel_auth.get_channel_secret("slack", "SLACK_BOT_TOKEN") == "xoxb-synthetic"
+    channel_auth.delete_channel_secret("slack", "SLACK_BOT_TOKEN")
+    assert channel_auth.get_channel_secret("slack", "SLACK_BOT_TOKEN") == ""
+
+
 def test_channel_secret_delete_does_not_delete_legacy_key(data_dir, reload_for_data_dir):
     _secret_store, api_keys, channel_auth, _backend = _reload_auth_modules(
         reload_for_data_dir, data_dir,
