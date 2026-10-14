@@ -66,7 +66,8 @@ def _msvc_build(out_dir: Path) -> Path | None:
     exe = out_dir / "Row-Bot.exe"
     command = (f'"{vcvars}" >nul && cl /nologo /utf-8 /W4 /WX /O2 /MT /Fo"{out_dir / "launcher.obj"}" '
                f'/Fe"{exe}" "{SOURCE.resolve()}" /link /SUBSYSTEM:WINDOWS')
-    result = subprocess.run(["cmd.exe", "/d", "/c", command], capture_output=True, text=True, check=False)
+    # One string, not a list: a list escapes the quotes as \", which cmd.exe reads as part of the path.
+    result = subprocess.run(f'cmd.exe /d /s /c "{command}"', capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     return exe
 
