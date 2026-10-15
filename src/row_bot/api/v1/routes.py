@@ -1005,6 +1005,7 @@ _STATUS.update(
         "process_unavailable": 404,
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
+        "video_edit_unavailable": 404,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -5336,6 +5337,42 @@ def create_router(
         if result is None:
             raise ProtocolError("recording_unavailable", 404)
         return await respond(request, dto.RecordingView, result)
+
+    # Video edits (F3): a person sees and stops every one; stopping needs no approval.
+    def _edit_id(value: str) -> str:
+        from row_bot.video_edits import EDIT_ID
+
+        if not EDIT_ID.fullmatch(str(value or "")):
+            raise ProtocolError("video_edit_unavailable", 404)
+        return value
+
+    @router.get("/video-edits")
+    async def list_video_edits(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_edit_views import read_video_edits
+
+        result = await call(read_video_edits, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.VideoEditPage, result)
+
+    @router.get("/video-edits/{edit_id}")
+    async def video_edit(request: Request, edit_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_edit_views import read_video_edit
+
+        result = await call(read_video_edit, _edit_id(edit_id))
+        if result is None:
+            raise ProtocolError("video_edit_unavailable", 404)
+        return await respond(request, dto.VideoEditView, result)
+
+    @router.post("/video-edits/{edit_id}/stop")
+    async def stop_video_edit_route(request: Request, edit_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_edit_views import stop_video_edit
+
+        result = await call(stop_video_edit, _edit_id(edit_id))
+        if result is None:
+            raise ProtocolError("video_edit_unavailable", 404)
+        return await respond(request, dto.VideoEditView, result)
 
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:

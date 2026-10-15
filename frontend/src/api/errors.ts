@@ -1701,6 +1701,7 @@ const CATALOG: Record<string, Entry> = {
   ],
   process_unavailable: ['That command is no longer running.', 'none'],
   recording_unavailable: ['That recording is no longer listed.', 'none'],
+  video_edit_unavailable: ['That video edit is no longer listed.', 'none'],
   local_address_unavailable: [
     'That address was already removed or ran out.',
     'none',

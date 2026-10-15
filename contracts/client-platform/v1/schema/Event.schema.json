@@ -2616,6 +2616,13 @@
           "title": "Display Name",
           "type": "string"
         },
+        "edit_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(edit-[0-9a-f]{8})?$",
+          "title": "Edit Id",
+          "type": "string"
+        },
         "error_code": {
           "default": "",
           "maxLength": 80,
@@ -2638,7 +2645,8 @@
             "setup_needed",
             "connect_apps",
             "background_process",
-            "recording"
+            "recording",
+            "video_edit"
           ],
           "title": "Kind",
           "type": "string"
