@@ -299,10 +299,7 @@ class _Step(BaseModel):
     text: str = Field(default="", description="text: the words. captions: SRT.")
     position: Literal["top-left", "top", "top-right", "center", "bottom-left", "bottom", "bottom-right"] | None = None
     style: Literal["badge", "title", "caption"] | None = None
-    x: float | None = None
-    y: float | None = None
-    width: float | None = None
-    height: float | None = None
+    region: list[float] | None = Field(default=None, description="zoom, crop: [x, y, width, height], 0-1.")
 
 
 class _EditInput(BaseModel):
@@ -310,8 +307,8 @@ class _EditInput(BaseModel):
     inputs: list[str] = Field(default_factory=list, description=(
         "Videos, in order (several are joined): rec-…, edit-…, a file in this chat by name, or a workspace path."))
     steps: list[_Step] = Field(default_factory=list, description=(
-        "Applied in order; times are on the video as it is after earlier steps. zoom/crop: x, y, width, height "
-        "are fractions (0-1) of the picture; zoom fills the picture with that part (start/end optional)."))
+        "Applied in order; times are on the video as it is after earlier steps. A region is fractions of the "
+        "picture; zoom fills the picture with it for a while."))
     name: str = Field(default="", description="File name for the result, e.g. demo.mp4.")
     edit_id: str = Field(default="", description="status, stop, save: the edit (edit-…).")
     path: str = Field(default="", description="save: where in the workspace, e.g. videos/demo.mp4.")

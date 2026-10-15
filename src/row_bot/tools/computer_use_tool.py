@@ -149,8 +149,7 @@ def _screen_recording(action: str, minutes: int) -> str:
             **approval,
             "question": (f"Recording your screen needs ffmpeg (about {ffmpeg_runtime.size_words(wheel.size)}) "
                          "from PyPI. Download it and record your screen?"),
-            "description": f"{consent['description']} Then {approval['description'][0].lower()}"
-                           f"{approval['description'][1:]}",
+            "description": f"{consent['description']} Then {approval['description']}",
             "args": {**approval["args"], **consent["args"]},
         }
         risks += ffmpeg_runtime.consent_risks(wheel)

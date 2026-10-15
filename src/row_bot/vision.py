@@ -546,9 +546,10 @@ class VisionService:
                     "The chat model can't see images. Choose a model that can for Vision in Settings › Models "
                     "(or switch this chat to one), then ask again."
                 )
+            reason = str(compatibility.get("reason") or "not marked as image-capable")
             return (
-                "The selected Vision model is no longer marked as image-capable. Choose one that can see images "
-                "in Settings › Models, then ask again."
+                "The selected Vision model is no longer marked as image-capable. "
+                f"Choose a Vision-capable model in Settings -> Models. ({reason})"
             )
         return ""
 

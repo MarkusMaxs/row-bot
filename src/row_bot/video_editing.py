@@ -158,7 +158,11 @@ def parse_steps(raw: Iterable[Any] | None) -> list[Step]:
         if start is not None and end is not None and end <= start:
             raise EditError(f"Step {index}: end must be after start.")
         factor = _number(item.get("factor"), f"Step {index}'s factor")
-        region = {name: _number(item.get(name), f"Step {index}'s {name}") for name in ("x", "y", "width", "height")}
+        given = item.get("region")
+        if given is not None and (not isinstance(given, (list, tuple)) or len(given) != 4):
+            raise EditError(f"Step {index}: region is [x, y, width, height], as fractions of the picture (0 to 1).")
+        values = dict(zip(("x", "y", "width", "height"), given)) if given is not None else item
+        region = {name: _number(values.get(name), f"Step {index}'s {name}") for name in ("x", "y", "width", "height")}
         position = str(item.get("position") or "").strip().casefold()
         style = str(item.get("style") or "").strip().casefold()
         if position and position not in POSITIONS:
@@ -176,11 +180,12 @@ def parse_steps(raw: Iterable[Any] | None) -> list[Step]:
             raise EditError(f"Step {index}: captions need the captions as SRT text.")
         if op in {"zoom", "crop"}:
             if any(region[name] is None for name in ("x", "y", "width", "height")):
-                raise EditError(f"Step {index}: {op} needs x, y, width and height, as fractions of the picture "
-                                "(0 to 1).")
+                raise EditError(f"Step {index}: {op} needs a region: [x, y, width, height], as fractions of the "
+                                "picture (0 to 1).")
             x, y, width, height = (region["x"], region["y"], region["width"], region["height"])
             if not (0 <= x < 1 and 0 <= y < 1 and 0 < width <= 1 and 0 < height <= 1):  # type: ignore[operator]
-                raise EditError(f"Step {index}: x, y, width and height are fractions of the picture, from 0 to 1.")
+                raise EditError(f"Step {index}: a region's x, y, width and height are fractions of the picture, "
+                                "from 0 to 1.")
             if op == "crop" and (start is not None or end is not None):
                 raise EditError(f"Step {index}: crop applies to the whole video; use zoom for part of it.")
         label = item.get("label")

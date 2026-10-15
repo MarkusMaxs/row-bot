@@ -203,7 +203,7 @@ def _show_sheet(sheet: bytes) -> bool:
 
 
 def _analyze_image(
-    question: str, source: str = "camera", file_path: str = "", files: list[str] | None = None,
+    question: str, source: str | None = None, file_path: str = "", files: list[str] | None = None,
     contact_sheet: bool = False, frames: int = 0,
 ) -> str:
     """Analyze the page in Row-Bot's browser, an image file, or (after asking) the person's screen or camera."""
@@ -215,7 +215,8 @@ def _analyze_image(
         with_approval,
     )
 
-    source = str(source or "camera").strip().casefold()
+    chosen = source is not None
+    source = str(source or "").strip().casefold()
     if files:
         if source in _CAPTURES:
             # A capture keeps its own question (B327): never mixed with other pictures.
@@ -223,6 +224,8 @@ def _analyze_image(
         return _analyze_files(question, [str(item) for item in files], bool(contact_sheet), frames)
     if contact_sheet:
         return "A contact sheet needs files: the pictures or videos to tile."
+    if not chosen:
+        source = "camera"  # The default, as before; a blank or unknown source is refused below.
     if source == "browser":
         return _analyze_browser_page(question)
     if source == "file":
@@ -283,8 +286,8 @@ class VisionTool(BaseTool):
                 description="A specific visual question, e.g. 'What error is on the screen?'."
             )
             # When to use each source is in the tool description (and the vision guide).
-            source: Literal["camera", "screen", "file", "browser"] = Field(
-                default="camera", description="Where the image comes from."
+            source: Literal["camera", "screen", "file", "browser"] | None = Field(
+                default=None, description="Where the image comes from (camera when nothing else is given)."
             )
             file_path: str = Field(
                 default="",
@@ -292,14 +295,14 @@ class VisionTool(BaseTool):
             )
             files: list[str] = Field(
                 default_factory=list,
-                description=("Several pictures in one look (at most 8): files in this chat by name, workspace "
-                             "paths, 'browser', recordings (rec-…) and edits (edit-…); a video gives frames."),
+                description=("Up to 8 pictures in one look: chat files by name, workspace paths, 'browser', "
+                             "rec-…, edit-… (a video gives frames)."),
             )
             contact_sheet: bool = Field(
                 default=False,
-                description="Tile the files (up to 48 pictures or frames) into one labelled picture: fewer tokens.",
+                description="Tile files (up to 48 pictures or frames) into one labelled picture.",
             )
-            frames: int = Field(default=0, description="Frames per video (default 4, or 12 on a contact sheet).")
+            frames: int = Field(default=0, description="Frames per video (default 4; 12 on a sheet).")
 
         return [
             StructuredTool.from_function(

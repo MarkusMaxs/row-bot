@@ -143,7 +143,7 @@ def workspace_target(root: Path, value: str) -> tuple[Path, str, bool]:
     parts = relative.split("/") if relative else []
     if (not parts or len(relative) > 1024 or any(part in {"", ".", "..", ".git"} for part in parts)
             or any(ord(character) < 32 or character in ':*?"<>|' for character in relative)):
-        raise SourceError(f"{value} isn't a path Row-Bot can write in the workspace.")
+        raise SourceError(f"{value} isn't a path Row-Bot can write in the workspace (paths can't leave it).")
     current = root
     for part in [None, *parts]:
         if part is not None:
@@ -218,11 +218,12 @@ def resolve(value: str, conversation_id: str) -> list[Media]:
                     for ref, moment in zip(edit.frame_refs, edit.frame_times)]
         return [Media(label=edit.output_name or "Edited video", kind="video", ref=edit.media_ref)]
     place = workspace(conversation_id)
+    refused: SourceError | None = None
     if place is not None:
         try:
             path = workspace_file(place.root, text)
-        except SourceError:
-            path = None
+        except SourceError as exc:
+            path, refused = None, exc
         if path is not None:
             kind = _kind_of(path.name)
             if kind is None:
@@ -231,6 +232,9 @@ def resolve(value: str, conversation_id: str) -> list[Media]:
     found = _chat_file(conversation_id, text)
     if found is not None:
         return [found]
+    looks_like_path = "/" in text or "\\" in text or Path(text).is_absolute()
+    if refused is not None and looks_like_path and "isn't a file in the workspace." not in str(refused):
+        raise refused  # Outside the workspace, through a link, or Row-Bot's own data: say so.
     where = "this chat's files or the workspace" if place is not None else "this chat's files"
     raise SourceError(f"Couldn't find {text} in {where}. Name a file there, a recording (rec-…) or a video "
                       "edit (edit-…).")

@@ -53,9 +53,9 @@ def _video_problem(structured: dict[str, Any]) -> str:
     if detail and "ffmpeg" not in detail:
         return "Cua Driver couldn't start recording the screen. Try again in a moment."
     return (
-        "Recording your screen on this computer needs ffmpeg, and Cua Driver couldn't find it. Ask again so "
-        "Row-Bot can offer to download it, or install it yourself (for example with: winget install "
-        "Gyan.FFmpeg) and restart Row-Bot. Row-Bot's own browser can be recorded without it."
+        "Recording your screen on this computer needs ffmpeg, and Cua Driver couldn't find it. Install it "
+        "(for example with: winget install Gyan.FFmpeg), restart Row-Bot and ask again. "
+        "Row-Bot's own browser can be recorded without it."
     )
 
 
