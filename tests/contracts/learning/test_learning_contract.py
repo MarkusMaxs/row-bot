@@ -78,10 +78,23 @@ def test_a_jsonl_stream_of_mixed_records_round_trips():
 
 
 def test_every_record_carries_its_kind_and_schema_version():
+    versions = {"episode": 2}  # v2: the next-message marker (follows_decision_id)
     for record in ALL:
         data = record.to_dict()
         assert data["record"] == record.KIND
-        assert data["schema_version"] == type(record).SCHEMA_VERSION == 1
+        assert data["schema_version"] == type(record).SCHEMA_VERSION == versions.get(record.KIND, 1)
+
+
+def test_a_version_1_episode_reads_as_one_with_no_next_message_marker():
+    v1 = {
+        "record": "episode", "schema_version": 1, "id": "ep_old", "thread_id": "chat-1", "source": "my_chat",
+        "started_at": 1.0,
+    }
+    episode = contracts.record_from_dict(v1)
+    assert isinstance(episode, Episode)
+    assert episode.follows_decision_id is None and episode.to_dict()["schema_version"] == 2
+    marked = Episode(id="ep_new", thread_id="chat-1", source="my_chat", started_at=2.0, follows_decision_id="dec_1")
+    assert contracts.from_json(contracts.to_json(marked)) == marked
 
 
 @pytest.mark.parametrize(
