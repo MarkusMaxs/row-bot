@@ -67,7 +67,7 @@ def studio(tmp_path, monkeypatch, reload_for_data_dir):
 
 def test_an_edit_runs_through_the_process_manager_and_stop_ends_it(studio):
     from row_bot import background_processes, ffmpeg_runtime
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     studio["monkeypatch"].setattr(ffmpeg_runtime, "find", lambda: studio["fake"])
     studio["register"](studio["chat"], "demo.mp4", b"\x00\x00\x00\x18ftypisom" + b"\x00" * 64)
@@ -96,7 +96,7 @@ def test_an_edit_runs_through_the_process_manager_and_stop_ends_it(studio):
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="No ffmpeg on this computer")
 def test_a_real_tiny_encode(studio, tmp_path):
     from row_bot import ffmpeg_runtime
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
     from row_bot.video_editing import parse_probe, probe_command
 
     real = ffmpeg_runtime.find()

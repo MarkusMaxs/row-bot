@@ -51,7 +51,8 @@ def studio(tmp_path, monkeypatch, reload_for_data_dir):
     from row_bot import background_processes, ffmpeg_runtime, video_edits
     from row_bot.application.attachments import register_attachment
     from row_bot.developer import runtime
-    from row_bot.tools import approval_gate, registry, video_tool
+    from row_bot.tools import approval_gate, registry
+    from row_bot.tools import video_editing_tool as video_tool
     from row_bot.video_editing import VideoInfo
 
     chat = threads.create_thread("Demo", seed_default_skills=False)
@@ -143,7 +144,7 @@ def test_an_edit_runs_ffmpeg_in_the_background_manager_and_saves_a_new_video_to_
 
 def test_a_long_edit_carries_on_with_progress_and_stops_with_nothing_saved(studio, monkeypatch):
     from row_bot.application.attachments import list_conversation_files
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     monkeypatch.setattr(video_tool, "INLINE_SECONDS", 0.05)
     studio.hold = True
@@ -303,7 +304,7 @@ def test_a_result_too_large_for_the_chat_says_how_to_make_it_smaller(studio, mon
 def test_without_ffmpeg_the_edit_asks_to_download_it_first_and_shows_the_download(studio, monkeypatch):
     from row_bot import ffmpeg_runtime
     from row_bot.application.conversation_traces import specialize_tool_result
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     monkeypatch.setattr(ffmpeg_runtime, "find", lambda: None)
     wheel = ffmpeg_runtime.WHEELS["windows-x86_64"]
@@ -351,7 +352,7 @@ def test_a_denied_download_starts_nothing(studio, monkeypatch):
 
 
 def test_edits_stop_with_their_conversation_and_a_crash_s_leftover_is_marked(studio, monkeypatch):
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     monkeypatch.setattr(video_tool, "INLINE_SECONDS", 0.05)
     studio.hold = True
@@ -371,7 +372,7 @@ def test_edits_stop_with_their_conversation_and_a_crash_s_leftover_is_marked(stu
 
 
 def test_the_tool_waits_for_and_stops_an_edit_by_its_id(studio, monkeypatch):
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     monkeypatch.setattr(video_tool, "INLINE_SECONDS", 0.05)
     monkeypatch.setattr(video_tool, "STATUS_WAIT_SECONDS", 0.05)

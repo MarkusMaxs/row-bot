@@ -802,7 +802,7 @@ def _s4_program(seconds: float):
 def _s4_patch(*, missing: bool, seconds: float = 1.0) -> None:
     """ffmpeg present (the synthetic program) or missing (the download is a fake that waits)."""
     from row_bot import ffmpeg_runtime
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     if "originals" not in _S4_STATE:
         _S4_STATE["originals"] = (ffmpeg_runtime.find, ffmpeg_runtime.install, ffmpeg_runtime.current_wheel,
@@ -829,7 +829,7 @@ def _s4_patch(*, missing: bool, seconds: float = 1.0) -> None:
 
 def _s4_restore() -> None:
     from row_bot import ffmpeg_runtime
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     originals = _S4_STATE.pop("originals", None)
     if originals:
@@ -875,7 +875,7 @@ def _s4_stream(text: str, config: dict):
     from row_bot import ffmpeg_runtime
     from row_bot.application.attachments import register_attachment
     from row_bot.threads import append_checkpoint_messages
-    from row_bot.tools import video_tool, vision_tool
+    from row_bot.tools import video_editing_tool as video_tool, vision_tool
 
     call = predecessor._record("submit", config, "s4-media")
     thread = call["conversation_id"]
@@ -952,7 +952,7 @@ def _s4_stream(text: str, config: dict):
 def _s4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, stop_event=None):
     """After the ffmpeg card: start the edit, which downloads ffmpeg first (a fake that waits)."""
     from row_bot.threads import append_checkpoint_messages, get_latest_checkpoint_messages
-    from row_bot.tools import video_tool
+    from row_bot.tools import video_editing_tool as video_tool
 
     thread = str(config["configurable"]["thread_id"])
     last = next((message for message in reversed(get_latest_checkpoint_messages(thread))

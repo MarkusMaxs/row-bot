@@ -100,7 +100,10 @@ accident and Computer Use actions aren't written into its folder. Once the
 video is saved to the conversation (25 MB at most), the whole folder,
 including Cua's per-step pictures and action records, is removed; a folder a
 crash left behind is removed on the next start. On Windows, Cua's video needs
-ffmpeg on PATH; Row-Bot never calls `install_ffmpeg`.
+ffmpeg on PATH: Row-Bot passes Cua's recording session (only) a PATH that starts
+with the folder holding the ffmpeg it downloaded after asking (F3: a pinned,
+fingerprint-checked PyPI wheel; only the program is kept). Row-Bot never calls
+`install_ffmpeg`.
 
 All other recording, desktop capture, browser-page/CDP, arbitrary config,
 update, installer, autostart, telemetry mutation, skill, FFmpeg, kill-process,
