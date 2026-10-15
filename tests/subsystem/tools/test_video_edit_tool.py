@@ -152,8 +152,8 @@ def test_a_long_edit_carries_on_with_progress_and_stops_with_nothing_saved(studi
     result = studio.edit(inputs=["demo.mp4"], steps=[{"op": "speed", "factor": 2}])
     edit = studio.edits.get(_edit_id(result))
     assert "carries on in the background and the chat shows its progress with Stop" in result
-    for _ in range(200):
-        if studio.tracked:
+    for _ in range(500):  # The job records its process just after the process starts.
+        if studio.tracked and edit.status == "editing":
             break
         threading.Event().wait(0.01)
     studio.tracked[0].on_output("stdout", "out_time_us=1500000\n")
@@ -311,9 +311,11 @@ def test_without_ffmpeg_the_edit_asks_to_download_it_first_and_shows_the_downloa
     monkeypatch.setattr(ffmpeg_runtime, "current_wheel", lambda *_a, **_k: wheel)
     monkeypatch.setattr(video_tool, "INLINE_SECONDS", 0.05)
     release = threading.Event()
+    # The download so far (the fake below reports nothing new until it is released).
+    monkeypatch.setattr(ffmpeg_runtime, "_STATE", ffmpeg_runtime.DownloadState(
+        status="downloading", received=12 * 1024 * 1024, total=wheel.size))
 
     def install(*, check):
-        ffmpeg_runtime._set(status="downloading", received=12 * 1024 * 1024, total=wheel.size)
         while not release.wait(0.01):
             check()
         return studio.ffmpeg
