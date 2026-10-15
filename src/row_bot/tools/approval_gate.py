@@ -114,69 +114,119 @@ def current_approval_mode() -> str:
         return DEFAULT_APPROVAL_MODE
 
 
-# ── Resumed runs ─────────────────────────────────────────────────────────────
+# ── Each answer bound to its question ────────────────────────────────────────
+#
+# A LangGraph tool that asks runs again from the start once the person answers,
+# and LangGraph hands answers back by position: the first ``interrupt()`` of the
+# re-run gets the first answer. Under Auto the reviewer approves some questions
+# without a card, and a tool may not ask again what it already has (an app
+# already allowed, a tool group already on), so on a re-run positions alone
+# would put answers on the wrong questions. So every decision about a question
+# is kept in the tool call's answer list under the question's id, in the order
+# it was made: the person's answer always sits right after the record of the
+# question it answers, and a question uses only its own record and answer. A
+# re-run replays the reviewer's verdict instead of asking it again; a question
+# with no record of its own is decided afresh.
+
+_RECORD_KEY = "row_bot_approval_question"
 
 
-def _answer_waiting() -> bool:
-    """Whether this tool call is a re-run of one the person already answered.
+def question_id(payload: dict[str, Any]) -> str:
+    """A stable id for one approval question: the tool, and what its card says."""
 
-    A LangGraph tool that asked runs again from the start once the person
-    answers, and its ``interrupt()`` returns their answer. The reviewer must not
-    decide again on that re-run (it could approve what the person denied), so a
-    resumed task goes straight to the person's answer. Unknown is treated as
-    resumed: the person is asked, never skipped.
-    """
+    import hashlib
+    import json
+
+    raw = json.dumps([str(payload.get("tool") or ""), str(payload.get("label") or ""),
+                      str(payload.get("description") or "")], ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
+
+
+def _is_record(value: Any) -> bool:
+    return isinstance(value, dict) and _RECORD_KEY in value
+
+
+def _asked_the_person(record: Any) -> bool:
+    return _is_record(record) and record.get("review") != "approve"
+
+
+class _Ledger:
+    """One tool call's answer list as LangGraph keeps it, read the way ``interrupt()`` reads it."""
+
+    def __init__(self, scratchpad: Any, send: Callable[[list[tuple[str, Any]]], None], resume_key: str) -> None:
+        self._scratchpad = scratchpad
+        self._send = send
+        self._resume_key = resume_key
+
+    @property
+    def kept(self) -> list[Any]:
+        return self._scratchpad.resume
+
+    def _keep(self) -> None:
+        self._send([(self._resume_key, self._scratchpad.resume)])
+
+    def advance(self) -> int:
+        """Take the next place in the list (the one the next ``interrupt()`` would have read)."""
+
+        index = self._scratchpad.interrupt_counter()
+        self._keep()
+        return index
+
+    def append(self, entry: Any) -> None:
+        self._scratchpad.resume.append(entry)
+        self._keep()
+
+    def take_waiting_answer(self) -> Any:
+        """Take the answer given since the last pause, if no card in this run has taken it yet (else None)."""
+
+        return self._scratchpad.get_null_resume(True)
+
+
+_UNKNOWN_LEDGER = object()
+
+
+def _ledger() -> _Ledger | object | None:
+    """This tool call's ledger; None outside a graph task; ``_UNKNOWN_LEDGER`` if LangGraph changed."""
 
     try:
-        from langgraph._internal._constants import CONFIG_KEY_SCRATCHPAD
+        from langgraph._internal._constants import CONFIG_KEY_SCRATCHPAD, CONFIG_KEY_SEND, RESUME
         from langgraph.config import get_config
     except Exception:
-        return True
+        return _UNKNOWN_LEDGER
     try:
         configurable = get_config().get("configurable") or {}
     except RuntimeError:
-        return False  # Not inside a run: nothing can be waiting.
+        return None  # Not inside a run: nothing can be waiting.
     scratchpad = configurable.get(CONFIG_KEY_SCRATCHPAD)
     if scratchpad is None:
-        return False  # Not a graph task (a tool called on its own): nothing to resume.
-    try:
-        return bool(scratchpad.resume) or scratchpad.get_null_resume(False) is not None
-    except Exception:
-        logger.debug("Could not tell whether an answer is waiting; asking the person", exc_info=True)
-        return True
+        return None  # Not a graph task (a tool called on its own): nothing to resume.
+    send = configurable.get(CONFIG_KEY_SEND)
+    if send is None or not all(hasattr(scratchpad, name) for name in
+                               ("interrupt_counter", "resume", "get_null_resume")):
+        return _UNKNOWN_LEDGER
+    return _Ledger(scratchpad, send, RESUME)
 
 
 # ── The decision ─────────────────────────────────────────────────────────────
-
-# Why the reviewer asked, by action, so the person's answer on the re-run can say so.
-_ASKED_REASONS: dict[str, str] = {}
-_MAX_ASKED_REASONS = 256
-
-
-def _asked_key(payload: dict[str, Any]) -> str:
-    import hashlib
-
-    try:
-        from row_bot.agent import get_current_thread_id
-
-        thread_id = get_current_thread_id()
-    except Exception:
-        thread_id = ""
-    raw = "\0".join((thread_id, str(payload.get("tool") or ""), str(payload.get("label") or ""),
-                      str(payload.get("description") or "")))
-    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
-
-
-def _remember_asked(key: str, reason: str) -> None:
-    _ASKED_REASONS[key] = reason
-    while len(_ASKED_REASONS) > _MAX_ASKED_REASONS:
-        _ASKED_REASONS.pop(next(iter(_ASKED_REASONS)))
 
 
 def _interrupt(payload: dict[str, Any]) -> Any:
     from langgraph.types import interrupt
 
     return interrupt(payload)
+
+
+def _person_line(mode: str, response: Any, reason: str) -> str:
+    """The line for the person's answer: empty under Ask (callers keep their own), with the reviewer's reason."""
+
+    if mode != "auto":
+        return ""
+    line = APPROVAL_GIVEN if response is True else APPROVAL_DENIED
+    return after_review(line, reason) if reason else line
+
+
+def _with_review(payload: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {**payload, "review": {"decision": "ask", "reason": reason}} if reason else payload
 
 
 def _decide(
@@ -197,26 +247,80 @@ def _decide(
     if mode == "full":
         return True, APPROVAL_FULL_AUTONOMY
     ask = approval_callback or _interrupt
+    ledger = _ledger()
+    if ledger is _UNKNOWN_LEDGER:
+        # LangGraph changed how it keeps answers: the person decides every question, in order, so
+        # none can take another's answer.
+        logger.warning("Approval answers can't be bound to their questions here; asking the person")
+        response = ask(payload)
+        return response, _person_line(mode, response, "")
+    if isinstance(ledger, _Ledger):
+        return _decide_in_graph(payload, mode=mode, risks=risks, ask=ask, ledger=ledger)
+    return _decide_afresh(payload, mode=mode, risks=risks, ask=ask, ledger=None)
+
+
+def _decide_in_graph(payload: dict[str, Any], *, mode: str, risks: Iterable[str],
+                     ask: Callable[[dict[str, Any]], Any], ledger: _Ledger) -> tuple[Any, str]:
+    """Decide one question of a graph task by its own record, if it has one; else afresh."""
+
+    question = question_id(payload)
+    kept = ledger.kept
+    index = ledger.advance()
+    while index < len(kept):
+        entry = kept[index]
+        if _is_record(entry) and entry.get(_RECORD_KEY) == question:
+            reason = str(entry.get("reason") or "")
+            if entry.get("review") == "approve":
+                if mode == "auto":
+                    return True, approved_by_reviewer(reason)  # The reviewer's verdict, never asked again.
+                # The level is stricter now than when the reviewer approved it: ask afresh.
+            elif index + 1 >= len(kept) or not _is_record(kept[index + 1]):
+                # The person was asked: their answer is the next entry (or waiting), and is this question's.
+                response = ask(_with_review(payload, reason))
+                if _is_record(response):  # Never another question's record taken as an answer.
+                    response = False
+                return response, _person_line(mode, response, reason)
+        # Another question's entry (one this run didn't ask again), or an answer kept for none: pass it.
+        index = ledger.advance()
+    if index != len(kept):
+        # Can't happen while every card reads the list in order; if it does, no kept or waiting answer
+        # is used: the question is decided afresh, without a record.
+        logger.warning("Approval answers are out of step with this tool call; asking afresh")
+        ledger.take_waiting_answer()
+        return _decide_afresh(payload, mode=mode, risks=risks, ask=ask, ledger=None)
+    if kept and _asked_the_person(kept[-1]):
+        # The run paused at that question and hasn't reached it this time: the answer given since is
+        # that question's own, so it goes right after it, where that question will find it.
+        waiting = ledger.take_waiting_answer()
+        if waiting is not None:
+            ledger.append(waiting)
+            index = ledger.advance()
+    elif ledger.take_waiting_answer() is not None:
+        # An answer given to a card this run no longer shows (or from before answers were bound to
+        # their questions): it isn't this question's, so it is set aside and this question is asked.
+        logger.info("An answer for a card no longer shown was set aside; asking this question afresh")
+    return _decide_afresh(payload, mode=mode, risks=risks, ask=ask, ledger=ledger)
+
+
+def _decide_afresh(payload: dict[str, Any], *, mode: str, risks: Iterable[str], ask: Callable[[dict[str, Any]], Any],
+                   ledger: _Ledger | None) -> tuple[Any, str]:
+    """Decide a question nobody has decided yet: the reviewer first under Auto, then the person."""
+
     reason = ""
     if mode == "auto":
-        key = _asked_key(payload)
-        if _answer_waiting():
-            # The person already answered this: the reviewer asked them first. Never review again.
-            reason = _ASKED_REASONS.get(key, "")
-        else:
-            from row_bot.approval_review import review
+        from row_bot.approval_review import review
 
-            verdict = review(payload, risks=risks)
-            if verdict.approved:
-                return True, approved_by_reviewer(verdict.reason)
-            reason = verdict.reason
-            _remember_asked(key, reason)
-            payload = {**payload, "review": {"decision": "ask", "reason": reason}}
-    response = ask(payload)
-    if mode != "auto":
-        return response, ""
-    line = APPROVAL_GIVEN if response is True else APPROVAL_DENIED
-    return response, after_review(line, reason) if reason else line
+        verdict = review(payload, risks=risks)
+        reason = verdict.reason
+        if ledger is not None:
+            ledger.append({_RECORD_KEY: question_id(payload), "review": "approve" if verdict.approved else "ask",
+                           "reason": reason})
+        if verdict.approved:
+            return True, approved_by_reviewer(reason)
+    elif ledger is not None:
+        ledger.append({_RECORD_KEY: question_id(payload), "review": None, "reason": ""})
+    response = ask(_with_review(payload, reason))
+    return response, _person_line(mode, response, reason)
 
 
 def request_approval(
