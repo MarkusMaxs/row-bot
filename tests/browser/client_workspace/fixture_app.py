@@ -3603,11 +3603,13 @@ def p5_oauth_approve(state: str, allow: str = ""):
     with client_mcp_auth._LOCK:
         flow = next((f for f in client_mcp_auth._FLOWS.values() if f.oauth_state and f.oauth_state == state), None)
     if flow is not None and flow.delivery == "paste":
-        # Another device's browser goes where the sign-in said: an address that doesn't load there (F27).
+        # Another device's browser goes where the sign-in said: an address that doesn't load there (F27). A page
+        # that moves on by itself, not a 302: a spec answers that address with a route, which Chromium applies to
+        # a navigation but not reliably to a redirect hop.
         from urllib.parse import urlencode
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse(flow.callback_uri + "?" + urlencode({"code": "synthetic-code", "state": state}),
-                                status_code=302)
+        landing = flow.callback_uri + "?" + urlencode({"code": "synthetic-code", "state": state})
+        return HTMLResponse("<!doctype html><title>Signing in</title>"
+                            f'<meta http-equiv="refresh" content="0;url={escape(landing)}"><p>Returning to Row-Bot…</p>')
     client_mcp_auth.accept_callback(state=state, code="synthetic-code")
     return HTMLResponse("<!doctype html><title>Signed in</title><p>Signed in to the synthetic service.</p>")
 
