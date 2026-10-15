@@ -136,7 +136,10 @@ test('a test run that lacked pytest offers Prepare sandbox, which installs with 
     name: 'Preparing the sandbox: Installing',
   });
   await expect(running).toContainText('Network on for this install');
-  await expect(running).toContainText(/Collecting pytest|Downloading pytest/);
+  // The fake install waits on this line until the fixture releases it.
+  await expect(running).toContainText(
+    'Downloading pytest-8.3.3-py3-none-any.whl (342 kB)',
+  );
   await expect(running.getByRole('button', { name: 'Stop' })).toBeVisible();
   await everywhere(page, info, 'prepare-in-progress', async () => {
     await chat();

@@ -1263,7 +1263,7 @@ class _S6Docker:
                 if record.done.is_set():
                     return
                 record.output += line + "\n"
-                if line.startswith("Building") and self.release.wait(60):
+                if "Downloading pytest" in line and self.release.wait(60):
                     continue
                 if self.release.wait(0.6):
                     continue
