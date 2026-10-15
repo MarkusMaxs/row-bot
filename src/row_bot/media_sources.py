@@ -5,9 +5,12 @@ A tool names a source in one of these ways, and nothing else is ever opened:
 - a recording (``rec-…``) or an earlier video edit (``edit-…``) of this conversation;
 - a file in this conversation's files, by its name (the newest with that name);
 - a file in the workspace, by its path: the code folder bound to the conversation when it has
-  one, otherwise the workspace folder. Relative paths, or absolute ones inside it; ``..``, links
-  (anywhere on the way), ``.git`` and Row-Bot's own data folder are refused, with the guard the
-  Developer tools use (``developer.review.scoped_workspace_path``).
+  one, otherwise the workspace folder. Relative paths, or absolute ones inside it; ``..``,
+  ``.git``, links below the workspace (symbolic links and junctions) and Row-Bot's own data
+  folder are refused, and the file must resolve inside the workspace. This is the Developer
+  tools' guard (``developer.review.scoped_workspace_path``) with two differences: folders above
+  the workspace aren't checked (the person chose it), and cloud-file placeholders (OneDrive's
+  "online only" files and folders, also reparse points) aren't taken for links.
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
+# Windows reparse tags that redirect a path elsewhere: a symbolic link and a junction (mount point).
+_LINK_TAGS = frozenset({0xA000000C, 0xA0000003})
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"})
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
@@ -113,14 +118,45 @@ def _relative(root: Path, value: str) -> str:
     return text
 
 
+def _is_link(info: os.stat_result) -> bool:
+    return stat.S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) in _LINK_TAGS
+
+
+def _parts(relative: str) -> list[str]:
+    """The folders and name of a path inside the workspace; ValueError for one that could leave it."""
+    if (not relative or len(relative) > 1024 or relative.startswith(("/", "\\"))
+            or any(ord(character) < 32 or character in ':*?"<>|' for character in relative)):
+        raise ValueError("workspace_path_denied")
+    parts = relative.replace("\\", "/").split("/")
+    if any(part in {"", ".", "..", ".git"} for part in parts):
+        raise ValueError("workspace_path_denied")
+    return parts
+
+
+def _contained(root: Path, parts: list[str]) -> Path:
+    """The path below *root*, refusing any part that is a link; it must resolve inside *root*."""
+    current = root
+    for part in parts:
+        current = current / part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            break
+        if _is_link(info):
+            raise ValueError("workspace_path_denied")
+    target = root.joinpath(*parts)
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise ValueError("workspace_path_denied")
+    return target
+
+
 def workspace_file(root: Path, value: str) -> Path:
     """An existing file in the workspace, reached without links; never Row-Bot's own data."""
     from row_bot.data_paths import is_private_data_path
-    from row_bot.developer.review import scoped_workspace_path
 
     relative = _relative(root, value)
     try:
-        target = scoped_workspace_path(root, relative)
+        target = _contained(root, _parts(relative))
     except (OSError, ValueError):
         raise SourceError(f"{value} isn't a file in the workspace (paths can't leave it or go through links).") \
             from None
@@ -137,26 +173,19 @@ def workspace_target(root: Path, value: str) -> tuple[Path, str, bool]:
     Missing folders on the way are made inside the workspace; no part may be a link.
     """
     from row_bot.data_paths import is_private_data_path
-    from row_bot.developer.review import _is_link
 
     relative = _relative(root, value)
-    parts = relative.split("/") if relative else []
-    if (not parts or len(relative) > 1024 or any(part in {"", ".", "..", ".git"} for part in parts)
-            or any(ord(character) < 32 or character in ':*?"<>|' for character in relative)):
-        raise SourceError(f"{value} isn't a path Row-Bot can write in the workspace (paths can't leave it).")
-    current = root
-    for part in [None, *parts]:
-        if part is not None:
-            current = current / part
-        try:
-            info = current.lstat()
-        except FileNotFoundError:
-            continue
-        except OSError:
-            raise SourceError(f"{value} can't be written.") from None
-        if _is_link(info):
-            raise SourceError(f"{value} goes through a link, so Row-Bot won't write there.")
-    target = root.joinpath(*parts)
+    try:
+        parts = _parts(relative)
+    except ValueError:
+        raise SourceError(f"{value} isn't a path Row-Bot can write in the workspace (paths can't leave it).") \
+            from None
+    try:
+        target = _contained(root, parts)
+    except ValueError:
+        raise SourceError(f"{value} goes through a link, so Row-Bot won't write there.") from None
+    except OSError:
+        raise SourceError(f"{value} can't be written.") from None
     if is_private_data_path(target):
         raise SourceError("That path is inside Row-Bot's private data folder, which tools can't change.")
     if target.exists() and not target.is_file():
