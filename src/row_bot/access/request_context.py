@@ -34,8 +34,13 @@ SUPPORTED_FORWARDED_HEADERS = frozenset(
         "x-forwarded-proto",
     }
 )
+# Trusted proxies may attach these beside a validated Forwarded or
+# X-Forwarded-* model. They are not a client, scheme, host, or origin source,
+# and they do not form a forwarding model on their own.
+ANCILLARY_FORWARDING_HEADERS = frozenset({"cf-connecting-ip"})
 RECOGNIZED_FORWARDING_HEADERS = frozenset(
     set(SUPPORTED_FORWARDED_HEADERS)
+    | ANCILLARY_FORWARDING_HEADERS
     | {
         "x-forwarded",
         "x-forwarded-server",
@@ -43,7 +48,6 @@ RECOGNIZED_FORWARDING_HEADERS = frozenset(
         "x-real-ip",
         "x-client-ip",
         "x-cluster-client-ip",
-        "cf-connecting-ip",
         "true-client-ip",
         "fly-client-ip",
     }
@@ -394,12 +398,17 @@ class RequestContextResolver:
                 raise RequestContextError("untrusted_forwarding_headers")
             forwarded = None
         elif forwarding_headers:
-            unsupported = set(forwarding_headers) - SUPPORTED_FORWARDED_HEADERS
-            if unsupported:
+            model_headers = tuple(
+                name
+                for name in forwarding_headers
+                if name not in ANCILLARY_FORWARDING_HEADERS
+            )
+            unsupported = set(model_headers) - SUPPORTED_FORWARDED_HEADERS
+            if unsupported or not model_headers:
                 raise RequestContextError("unsupported_forwarding_headers")
-            has_standard = "forwarded" in forwarding_headers
+            has_standard = "forwarded" in model_headers
             has_x_forwarded = any(
-                name.startswith("x-forwarded-") for name in forwarding_headers
+                name.startswith("x-forwarded-") for name in model_headers
             )
             if has_standard and has_x_forwarded:
                 raise RequestContextError("ambiguous_forwarding_model")

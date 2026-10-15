@@ -201,6 +201,88 @@ def test_trusted_x_forwarded_chain_normalizes_ipv4_mapped_ipv6() -> None:
     assert provenance.direct_loopback is False
 
 
+def test_trusted_proxy_tolerates_cloudflare_connecting_ip_metadata() -> None:
+    resolver = RequestContextResolver(
+        _config(
+            trusted=("10.0.0.0/8",),
+            hosts=("rowbot.example.com",),
+            origins=("https://rowbot.example.com",),
+        )
+    )
+
+    provenance = resolver.resolve_provenance(
+        _scope(
+            client="10.0.0.2",
+            host="rowbot.example.com",
+            headers=[
+                (b"x-forwarded-for", b"198.51.100.99, 203.0.113.7"),
+                (b"x-forwarded-proto", b"https"),
+                (b"x-forwarded-host", b"rowbot.example.com"),
+                (b"cf-connecting-ip", b"198.51.100.99"),
+            ],
+        )
+    )
+
+    assert provenance.effective_client == "203.0.113.7"
+    assert provenance.proxy_chain == ("10.0.0.2", "203.0.113.7")
+    assert provenance.scheme == "https"
+    assert provenance.host == "rowbot.example.com"
+    assert provenance.origin == "https://rowbot.example.com"
+    assert provenance.trusted_proxy is True
+    assert "cf-connecting-ip" in provenance.forwarding_headers
+
+
+@pytest.mark.parametrize(
+    ("headers", "code"),
+    [
+        (
+            [(b"cf-connecting-ip", b"203.0.113.7")],
+            "unsupported_forwarding_headers",
+        ),
+        (
+            [
+                (b"cf-connecting-ip", b"203.0.113.7"),
+                (b"x-forwarded-proto", b"https"),
+                (b"x-forwarded-host", b"rowbot.example.com"),
+            ],
+            "missing_x_forwarded_for",
+        ),
+    ],
+)
+def test_cloudflare_metadata_without_standard_forwarding_model_fails_closed(
+    headers: list[tuple[bytes, bytes]],
+    code: str,
+) -> None:
+    resolver = RequestContextResolver(
+        _config(
+            trusted=("10.0.0.0/8",),
+            hosts=("rowbot.example.com",),
+            origins=("https://rowbot.example.com",),
+        )
+    )
+
+    with pytest.raises(RequestContextError, match=code):
+        resolver.resolve(
+            _scope(client="10.0.0.2", host="rowbot.example.com", headers=headers)
+        )
+
+
+def test_untrusted_cloudflare_forwarding_headers_reject_by_default() -> None:
+    resolver = RequestContextResolver(_config())
+
+    with pytest.raises(RequestContextError, match="untrusted_forwarding_headers"):
+        resolver.resolve(
+            _scope(
+                client="192.168.1.20",
+                headers=[
+                    (b"cf-connecting-ip", b"203.0.113.7"),
+                    (b"x-forwarded-for", b"203.0.113.7"),
+                    (b"x-forwarded-proto", b"https"),
+                ],
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "headers,code",
     [
