@@ -295,7 +295,7 @@ def _ffmpeg(edit: VideoEdit, request: Request):
         raise Stopped() from None
 
 
-def _probe(ffmpeg: Any, path: str, folder: Path) -> Any:
+def probe_video(ffmpeg: Any, path: str, folder: Path) -> Any:
     """What ffmpeg says about one input (a short run of its own)."""
     from row_bot.video_editing import EditError, parse_probe, probe_command
 
@@ -325,7 +325,7 @@ def _inputs(edit: VideoEdit, request: Request, ffmpeg: Any, folder: Path) -> lis
             path = name
         else:
             path = str(source.path)
-        inputs.append(InputVideo(path=path, info=_probe(ffmpeg, path, folder), label=source.label))
+        inputs.append(InputVideo(path=path, info=probe_video(ffmpeg, path, folder), label=source.label))
     return inputs
 
 

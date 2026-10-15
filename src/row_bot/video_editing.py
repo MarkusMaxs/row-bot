@@ -734,7 +734,13 @@ def progress_seconds(output: str) -> float | None:
 
 
 def clock(seconds: float) -> str:
-    total = max(0, int(round(seconds)))
-    minutes, rest = divmod(total, 60)
+    """``0:42``, ``1:02:10``; a moment between whole seconds keeps its tenth (``0:01.5``)."""
+    value = max(0.0, float(seconds))
+    whole = round(value)
+    if abs(value - whole) >= 0.05:
+        minutes, rest = divmod(value, 60)
+        hours, minutes = divmod(int(minutes), 60)
+        return f"{hours}:{minutes:02d}:{rest:04.1f}" if hours else f"{minutes}:{rest:04.1f}"
+    minutes, rest = divmod(int(whole), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}:{minutes:02d}:{rest:02d}" if hours else f"{minutes}:{rest:02d}"

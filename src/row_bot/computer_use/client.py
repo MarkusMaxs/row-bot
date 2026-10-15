@@ -239,8 +239,14 @@ def _normalized_mutation_response(response: CuaResponse) -> CuaResponse:
     )
 
 
-def build_cua_environment(session_id: str, environ: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the deliberately small child environment for Cua."""
+def build_cua_environment(
+    session_id: str, environ: dict[str, str] | None = None, *, path_prefix: str = "",
+) -> dict[str, str]:
+    """Return the deliberately small child environment for Cua.
+
+    ``path_prefix`` puts one folder first on PATH: the folder holding only the ffmpeg Row-Bot
+    downloaded, which Cua's screen recording needs on Windows (F3).
+    """
 
     source = dict(os.environ if environ is None else environ)
     common = {"PATH", "Path", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "LANG", "LC_ALL"}
@@ -255,6 +261,9 @@ def build_cua_environment(session_id: str, environ: dict[str, str] | None = None
     result.pop("CUA_DRIVER_HOST_BUNDLE_ID", None)
     result.pop("CUA_DRIVER_RS_TELEMETRY_ENABLED", None)
     result.pop("CUA_DRIVER_RS_TELEMETRY_DEBUG", None)
+    if path_prefix:
+        key = next((name for name in ("PATH", "Path") if name in result), "PATH")
+        result[key] = path_prefix + (os.pathsep + result[key] if result.get(key) else "")
     return result
 
 
@@ -488,6 +497,8 @@ class CuaClient:
         self.capabilities = frozenset(capabilities or ())
         self._transport: CuaTransport | None = None
         self.connection_generation = 0
+        # A folder to put first on Cua's PATH (the screen recording's ffmpeg); empty for every other client.
+        self.path_prefix = ""
 
     def _default_transport(
         self,
@@ -511,7 +522,7 @@ class CuaClient:
         transport = self._transport_factory(
             self.executable,
             self.session_id,
-            build_cua_environment(self.session_id),
+            build_cua_environment(self.session_id, path_prefix=self.path_prefix),
         )
         transport.open()
         self._transport = transport

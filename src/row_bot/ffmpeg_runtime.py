@@ -568,7 +568,7 @@ def install(*, check: Callable[[], None] = lambda: None) -> Ffmpeg:
         return found
 
 
-def _turn_check() -> Callable[[], None]:
+def turn_check() -> Callable[[], None]:
     """Stop with the turn: the turn's Stop ends a download it is waiting for."""
     try:
         from row_bot.cancellation import current_cancellation_scope
@@ -609,6 +609,6 @@ def ensure(purpose: str, tool: str, *, also: str = "", risks: tuple[str, ...] = 
     if refusal:
         return None, refusal
     try:
-        return install(check=_turn_check()), line
+        return install(check=turn_check()), line
     except FfmpegError as exc:
         return None, str(exc)

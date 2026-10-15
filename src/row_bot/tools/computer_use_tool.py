@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import platform
 import sys
 from typing import Any
 
@@ -130,16 +131,43 @@ def _screen_recording(action: str, minutes: int) -> str:
     if problem:
         return problem
     chosen = recordings.minutes(minutes, "screen")
+    from row_bot import ffmpeg_runtime
     from row_bot.tools.approval_gate import approval_check
 
+    # On Windows Cua's video needs ffmpeg (F3): the one on PATH, the one Row-Bot downloaded, or (asked
+    # for on this same card, so there is one question) a download first.
+    ffmpeg = ffmpeg_runtime.find() if platform.system().casefold() == "windows" else None
+    download = platform.system().casefold() == "windows" and ffmpeg is None
+    approval = _screen_recording_approval(chosen)
+    risks: tuple[str, ...] = ("records the whole screen, including other apps, to a video",)
+    if download:
+        wheel = ffmpeg_runtime.current_wheel()
+        if wheel is None:
+            return ffmpeg_runtime.unavailable_reason()
+        consent = ffmpeg_runtime.consent_request("screen", "computer_use", wheel=wheel)
+        approval = {
+            **approval,
+            "question": (f"Recording your screen needs ffmpeg (about {ffmpeg_runtime.size_words(wheel.size)}) "
+                         "from PyPI. Download it and record your screen?"),
+            "description": f"{consent['description']} Then {approval['description'][0].lower()}"
+                           f"{approval['description'][1:]}",
+            "args": {**approval["args"], **consent["args"]},
+        }
+        risks += ffmpeg_runtime.consent_risks(wheel)
     refusal, _line = approval_check(
-        _screen_recording_approval(chosen),
-        risks=("records the whole screen, including other apps, to a video",),
+        approval,
+        risks=risks,
         blocked_message="BLOCKED: Recording the screen needs approval, and this chat is on Block.",
         cancelled_message="The person didn't allow recording the screen; nothing was recorded.",
     )
     if refusal:
         return refusal
+    if download:
+        try:
+            ffmpeg = ffmpeg_runtime.install(check=ffmpeg_runtime.turn_check())
+        except ffmpeg_runtime.FfmpegError as exc:
+            return f"{exc} The screen wasn't recorded."
+    ffmpeg_folder = ffmpeg.folder if ffmpeg is not None and ffmpeg.source == "row_bot" else ""
 
     def begin(record, folder):
         capture = ScreenRecording(
@@ -147,6 +175,7 @@ def _screen_recording(action: str, minutes: int) -> str:
             max_seconds=record.max_seconds,
             size_limit=recordings.SIZE_LIMIT,
             on_end=lambda reason, video: recordings.finished(record, reason, video),
+            ffmpeg_folder=ffmpeg_folder,
         )
         capture.begin()
         return capture
