@@ -58,8 +58,18 @@ async function seed(page: Page, path: string) {
   expect(response.ok(), await response.text()).toBe(true);
 }
 
-/** A refusal the test causes on purpose shows as a failed request in the console. */
-function expectConsoleError(fixture: string, status: string, count: number) {
+/**
+ * A refusal the test causes on purpose shows as a failed request in the
+ * console. `upTo`: the server's reason phrase depends on its Python (422 is
+ * "Unprocessable Content" from 3.13, "Unprocessable Entity" before), so each
+ * spelling may appear at most `count` times.
+ */
+function expectConsoleError(
+  fixture: string,
+  status: string,
+  count: number,
+  upTo = false,
+) {
   test.info().annotations.push({
     type: 'expected-console-error',
     description: JSON.stringify({
@@ -67,6 +77,7 @@ function expectConsoleError(fixture: string, status: string, count: number) {
       fixture,
       signature: `Failed to load resource: the server responded with a status of ${status}`,
       count,
+      ...(upTo ? { upTo } : {}),
     }),
   });
 }
@@ -124,11 +135,13 @@ test('another device pastes back the address its browser ends on', async ({
   page,
   context,
 }, info) => {
-  expectConsoleError(
-    'a pasted address that is not one',
-    '422 (Unprocessable Content)',
-    1,
-  );
+  for (const phrase of ['Unprocessable Content', 'Unprocessable Entity'])
+    expectConsoleError(
+      'a pasted address that is not one',
+      `422 (${phrase})`,
+      1,
+      true,
+    );
   expectConsoleError('three refused pastes', '409 (Conflict)', 3);
   await seed(page, '/__s7_fixture/sign-in-elsewhere?mode=paste');
   await connect(page, 'Linear');
