@@ -34,7 +34,7 @@ export function DeliveryCard({
   nested = false,
 }: {
   deliveryId: string;
-  /** Shown inside the card of the send it replaced. */
+  /** Shown after the card of the send it replaced (never followed again). */
   nested?: boolean;
 }) {
   const io = useContext(DeliveryIoContext);
@@ -167,13 +167,12 @@ export function DeliveryCard({
     : view.status === 'failed'
       ? 'failed'
       : view.status;
-  return (
+  const card = (
     <div
       className="transcript-card recording-card delivery-card"
       data-kind="delivery"
       data-target={view.target}
       data-state={state}
-      data-nested={nested || undefined}
       role="group"
       aria-label={`${title}: ${status.label}`}
     >
@@ -253,11 +252,15 @@ export function DeliveryCard({
           {error}
         </p>
       )}
-      {view.sent_instead && !nested && (
-        <div className="delivery-instead">
-          <DeliveryCard deliveryId={view.sent_instead} nested />
-        </div>
-      )}
     </div>
+  );
+  // What was sent to the devices instead follows as a card of its own.
+  return view.sent_instead && !nested ? (
+    <>
+      {card}
+      <DeliveryCard deliveryId={view.sent_instead} nested />
+    </>
+  ) : (
+    card
   );
 }

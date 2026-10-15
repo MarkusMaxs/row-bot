@@ -66,8 +66,8 @@ export function deliveryTitle(view: DeliveryView, now = Date.now()) {
 export function daysLeft(view: DeliveryView, now = Date.now()) {
   const end = view.expires_at ? Date.parse(view.expires_at) : NaN;
   if (!Number.isFinite(end)) return '';
-  const days = Math.floor((end - now) / DAY_MS);
-  if (days < 1) return 'Less than a day left';
+  if (end - now < DAY_MS) return 'Less than a day left';
+  const days = Math.round((end - now) / DAY_MS);
   return `${days} day${days === 1 ? '' : 's'} left`;
 }
 

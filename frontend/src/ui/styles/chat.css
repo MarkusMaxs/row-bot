@@ -1378,6 +1378,13 @@
 .delivery-file:not([data-sent]) .media-file-text strong {
   color: var(--text-secondary);
 }
+@container transcript (max-width: 520px) {
+  /* A phone: the whole name, on two lines if it needs them, beside Download. */
+  .delivery-file .media-file-text strong {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}
 .delivery-saved {
   display: flex;
   flex-wrap: wrap;
@@ -1398,13 +1405,6 @@
 .delivery-card[data-state='loading'] .transcript-card-icon,
 .delivery-card[data-state='unavailable'] .transcript-card-icon {
   color: var(--text-muted);
-}
-.delivery-instead {
-  grid-column: 1 / -1;
-  margin-top: 6px;
-}
-.delivery-card[data-nested] {
-  background: var(--surface);
 }
 
 /* A video edit (F3): what it does, its progress and Stop while it is made

@@ -111,7 +111,7 @@ it('files sent to your devices download on this device with its session', async 
   const card = await screen.findByRole('group', {
     name: 'Sent to your devices: Ready to download',
   });
-  expect(card).toHaveTextContent('On all your signed-in devices · 6 days left');
+  expect(card).toHaveTextContent('On all your signed-in devices · 7 days left');
   expect(within(card).getByText('report.pdf')).toBeVisible();
   expect(card).toHaveTextContent('2.1 MB · PDF');
   fireEvent.click(
@@ -239,7 +239,7 @@ it('a file too big for the app says so and sends to your devices instead in one 
   await waitFor(() =>
     expect(deliveries.sendToDevices).toHaveBeenCalledWith('send-1a2b3c4d'),
   );
-  const copy = await within(card).findByRole('group', {
+  const copy = await screen.findByRole('group', {
     name: 'Sent to your devices: Ready to download',
   });
   expect(

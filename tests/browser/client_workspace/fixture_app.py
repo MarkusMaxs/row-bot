@@ -992,6 +992,170 @@ def s4_reset(x_fixture_token: str = Header(default="")) -> dict:
     return {"stopped": stopped}
 
 
+# ── S5: send a file to your devices or a chat app (F7) ──
+# The real send_file tool, deliveries, notices, downloads and cards. Telegram is the in-memory fake
+# adapter (tests/fixtures/channels.FakeChannel): it records what it would send; nothing reaches
+# Telegram. A big video for the "too big" case is written into a temporary workspace folder.
+_S5_STATE: dict = {}
+_S5_VIDEO_BYTES = 63 * 1024 * 1024
+
+
+def _s5_report() -> bytes:
+    """A small one-page PDF: the quarterly report the fixture sends."""
+    stream = b"BT /F1 24 Tf 72 720 Td (Q3 report) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += str(number).encode() + b" 0 obj\n" + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 " + str(len(objects) + 1).encode() + b"\n0000000000 65535 f \n"
+    for offset in offsets:
+        out += f"{offset:010d} 00000 n \n".encode()
+    out += b"trailer\n<< /Size " + str(len(objects) + 1).encode() + b" /Root 1 0 R >>\nstartxref\n"
+    out += str(start).encode() + b"\n%%EOF\n"
+    # Padded so it reads as a real report's size on the card.
+    return bytes(out) + b"%" + b" " * (182 * 1024)
+
+
+def _s5_telegram():
+    """The fake Telegram adapter, running and linked to the person, in place of the real one."""
+    from row_bot.channels import registry as channels
+    from tests.fixtures.channels import FakeChannel
+
+    if "telegram" not in _S5_STATE:
+        _S5_STATE["original"] = channels._channels.get("telegram")
+        fake = FakeChannel(name="telegram", display_name="Telegram", default_target=4242)
+        fake._running = True
+        channels._channels["telegram"] = fake
+        _S5_STATE["telegram"] = fake
+    return _S5_STATE["telegram"]
+
+
+def _s5_workspace() -> None:
+    """A workspace folder with a 63 MB screen recording in videos/ (too big for Telegram)."""
+    import tempfile
+
+    from row_bot.tools import registry
+
+    if "workspace" not in _S5_STATE:
+        _S5_STATE["workspace_root"] = registry.get_tool_config("filesystem", "workspace_root", "")
+        folder = Path(tempfile.mkdtemp(prefix="row-bot-s5-")) / "Projects"
+        (folder / "videos").mkdir(parents=True)
+        video = _s3_video()
+        (folder / "videos" / "demo-recording.mp4").write_bytes(video + b"\x00" * (_S5_VIDEO_BYTES - len(video)))
+        _S5_STATE["workspace"] = folder
+    registry.set_tool_config("filesystem", "workspace_root", str(_S5_STATE["workspace"]))
+
+
+def _s5_stream(text: str, config: dict):
+    from row_bot import file_deliveries
+    from row_bot.application.attachments import register_attachment
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools import send_file_tool
+
+    call = predecessor._record("submit", config, "s5-send")
+    thread = call["conversation_id"]
+    identity = f"s5:{call['generation_id']}"
+    try:
+        register_attachment(thread, "q3-report.pdf", _s5_report())
+        _s5_telegram()
+        if "telegram" in text:
+            args = {"files": ["q3-report.pdf"], "to": "telegram"}
+            tool_id = fixture_id(identity + ":tool")
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+                tool_calls=[{"id": tool_id, "name": "send_file", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "name": "send_file", "args": args}
+            plan = file_deliveries.plan_channel(thread, "telegram")
+            sources = file_deliveries.resolve(args["files"], thread)
+            yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"),
+                                 **send_file_tool.channel_approval(plan, sources)}]
+            return
+        if "too big" in text:
+            _s5_workspace()
+            args = {"files": ["videos/demo-recording.mp4"], "to": "telegram"}
+            final = ("demo-recording.mp4 is 63 MB, too big for Telegram (50 MB limit), so I didn't send it. I can "
+                     "send it to your devices instead: use the button below.")
+        else:
+            args = {"files": ["q3-report.pdf"], "to": "devices"}
+            final = ("Sent: q3-report.pdf is on your devices. Open this chat on your phone or laptop and tap "
+                     "Download; it's there for 7 days.")
+        steps = [("send_file", args,
+                  lambda: (_s4_in_thread(thread, lambda: send_file_tool._send_file(**args)), []))]
+        yield from _s3_steps(thread, identity, steps)
+        yield from _natural_final(call, thread, final, "s5")
+    finally:
+        call["quiesced"] = True
+
+
+def _s5_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, stop_event=None):
+    """After the Telegram card: send through the fake adapter, as approved."""
+    from row_bot.threads import append_checkpoint_messages, get_latest_checkpoint_messages
+    from row_bot.tools import send_file_tool
+
+    thread = str(config["configurable"]["thread_id"])
+    last = next((message for message in reversed(get_latest_checkpoint_messages(thread))
+                 if getattr(message, "tool_calls", None)), None)
+    asked = last.tool_calls[0] if last is not None else {}
+    if asked.get("name") != "send_file":
+        yield from _s4_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "s5-telegram")
+    identity = f"s5-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        args = asked.get("args") or {}
+        result_id = fixture_id(identity + ":send")
+        if approved:
+            content = _s4_in_thread(thread, lambda: send_file_tool._send_file(**args))
+        else:
+            content = ("Approval: asked; denied by you — did not run\nThe person didn't allow sending "
+                       "q3-report.pdf to your Telegram chat; nothing was sent.")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="send_file",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "send_file",
+                            "args": args, "content": content}
+        yield from _natural_final(call, thread, "Sent q3-report.pdf to your Telegram chat." if approved
+                                  else "OK, I won't send it.", "s5-telegram")
+    finally:
+        call["quiesced"] = True
+
+
+@app.get("/__s5_fixture/telegram")
+def s5_telegram(x_fixture_token: str = Header(default="")) -> dict:
+    """What the fake Telegram adapter was asked to send: file names and the chat."""
+    predecessor._authorize(x_fixture_token)
+    fake = _S5_STATE.get("telegram")
+    return {"sent": [{"target": str(target), "name": Path(path).name} for target, path, _caption
+                     in (fake.documents if fake else [])]}
+
+
+@app.post("/__s5_fixture/reset")
+def s5_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Put the real Telegram adapter and the workspace folder back (a spec's clean-up)."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.channels import registry as channels
+    from row_bot.tools import registry
+
+    fake = _S5_STATE.pop("telegram", None)
+    original = _S5_STATE.pop("original", None)
+    if fake is not None:
+        if original is not None:
+            channels._channels["telegram"] = original
+        else:
+            channels._channels.pop("telegram", None)
+    if "workspace_root" in _S5_STATE:
+        registry.set_tool_config("filesystem", "workspace_root", _S5_STATE.pop("workspace_root"))
+    return {"sent": len(fake.documents) if fake else 0}
+
+
 def _goal_verifier(goal, _context):
     """A goal's second step completes it; the first asks for one more."""
     if int(goal.get("turns_used") or 0) >= 2:
@@ -1001,6 +1165,11 @@ def _goal_verifier(goal, _context):
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("s5 ") and text.rstrip().endswith("fixture"):
+        # Send a file to your devices or a chat app (F7): the real tool, deliveries and cards, with
+        # the fake Telegram adapter.
+        yield from _s5_stream(text, config)
+        return
     if text.startswith("s4 ") and text.rstrip().endswith("fixture"):
         # Video editing and many images at once (F3, F5): the real tools, jobs and cards, with a
         # synthetic ffmpeg program, a fake ffmpeg download and a scripted vision model.
@@ -2830,7 +2999,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _s4_resume
+    agent.resume_stream_agent = _s5_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -2841,7 +3010,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _s4_resume
+    client_platform_service.resume_factory = _s5_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier

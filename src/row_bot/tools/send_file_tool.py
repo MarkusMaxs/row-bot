@@ -83,8 +83,10 @@ def channel_approval(plan, sources, caption: str = "") -> dict:
     origins = {"workspace" if source.relative else "chat" for source in sources}
     whence = ("from the workspace" if origins == {"workspace"} else "from this chat's files" if origins == {"chat"}
               else "from this chat's files and the workspace")
-    who = (f"Everyone in {plan.place} will be able to open {'it' if len(sources) == 1 else 'them'}."
-           if plan.shared else f"{'It' if len(sources) == 1 else 'They'} will be in {plan.place} on {plan.label}.")
+    one = len(sources) == 1
+    who = (f"Everyone in {plan.place} will be able to open {'it' if one else 'them'}." if plan.shared
+           else "It leaves Row-Bot and stays in that chat." if one
+           else "They leave Row-Bot and stay in that chat.")
     words = f" with the message “{caption.strip()[:200]}”" if caption.strip() else ""
     return {
         "tool": "send_file",
