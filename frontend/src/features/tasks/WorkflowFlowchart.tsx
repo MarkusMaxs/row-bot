@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -25,6 +26,7 @@ import {
   layoutFlowchart,
   type FlowBranch,
   type FlowTarget,
+  type StepIssue,
 } from './workflow-flowchart';
 
 const ICONS: Record<string, LucideIcon> = {
@@ -62,7 +64,7 @@ export interface WorkflowFlowchartProps {
   /** `pointer` when a card was clicked rather than chosen from the keyboard. */
   onSelect: (id: string, how: 'pointer' | 'keyboard') => void;
   disabled?: boolean;
-  issues: ReadonlyMap<number, string>;
+  issues: ReadonlyMap<number, StepIssue>;
   kindLabel: (type: string) => string;
   summary: (step: TaskGraphStepEdit) => string;
 }
@@ -91,7 +93,19 @@ export default function WorkflowFlowchart({
   );
   const links = useMemo(() => flowLinks(steps), [steps]);
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const frame = useRef<HTMLDivElement>(null);
   const selectedIndex = steps.findIndex((step) => step.id === selected);
+
+  // A chart wider than its frame (a phone) opens on Start, not its left edge.
+  const centred = useRef(false);
+  useLayoutEffect(() => {
+    const element = frame.current;
+    const start = layout.terminals.find((item) => item.kind === 'start');
+    if (centred.current || !element || !start) return;
+    centred.current = true;
+    if (element.scrollWidth > element.clientWidth)
+      element.scrollLeft = start.x + start.width / 2 - element.clientWidth / 2;
+  }, [layout]);
 
   // Keep the chosen card in view when it changes (a new step, the list).
   const shown = useRef(selected);
@@ -152,7 +166,10 @@ export default function WorkflowFlowchart({
       );
     if (layout.steps[index].layer === null)
       parts.push('Not reached: no step leads here, so it never runs');
-    return parts.filter(Boolean).join('. ') + '.';
+    return parts
+      .filter(Boolean)
+      .map((part) => (/[.?!…]$/.test(part) ? part : `${part}.`))
+      .join(' ');
   }
 
   const active = (edge: (typeof layout.edges)[number]) =>
@@ -160,7 +177,7 @@ export default function WorkflowFlowchart({
     (edge.from === selectedIndex || edge.to === selectedIndex);
 
   return (
-    <div className="workflow-chart">
+    <div className="workflow-chart" ref={frame}>
       <div
         className="workflow-chart-canvas"
         role="group"
@@ -280,13 +297,13 @@ export default function WorkflowFlowchart({
                 {issue && (
                   <span className="workflow-chart-issue">
                     <CircleAlert size={13} aria-hidden="true" />
-                    <span>{issue}</span>
+                    <span>{issue.short}</span>
                   </span>
                 )}
               </span>
               <span id={`${id}-${index}`} className="visually-hidden">
                 {describe(index)}
-                {issue ? ` Problem: ${issue}` : ''}
+                {issue ? ` Problem: ${issue.message}` : ''}
               </span>
             </button>
           );

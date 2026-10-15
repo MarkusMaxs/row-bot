@@ -754,7 +754,8 @@ it('shows a step’s problem on its card, its row and its form in plain words', 
     'When denied goes to a step that was removed. Choose another.';
   expect(screen.getByText('1 step needs a fix')).toBeInTheDocument();
   const card = screen.getByRole('button', { name: 'Step 2 · Approval' });
-  expect(within(card).getByText(problem)).toBeInTheDocument();
+  // The card says it in a few words; its description and form say it whole.
+  expect(within(card).getByText('Goes to a removed step')).toBeVisible();
   expect(card).toHaveAccessibleDescription(
     expect.stringContaining(`Problem: ${problem}`),
   );

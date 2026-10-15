@@ -33,7 +33,8 @@ export type FlowLink = {
   branch: FlowBranch | null;
 };
 
-export type StepIssue = { step: number; message: string };
+/** A problem with a step: a few words for its card, the sentence for its form. */
+export type StepIssue = { short: string; message: string };
 
 /** The form's own names for each branch, so a problem names the field to fix. */
 export const BRANCH_FIELDS: Record<BranchField, string> = {
@@ -82,9 +83,9 @@ export function flowLinks(steps: readonly FlowStep[]): FlowLink[] {
 const OUTPUT_REFERENCE = /\{\{\s*step\.([A-Za-z0-9_-]+)\.output\s*\}\}/g;
 
 /** What would stop a save or a run, in plain words, one per step at most. */
-export function stepIssues(steps: readonly FlowStep[]): Map<number, string> {
+export function stepIssues(steps: readonly FlowStep[]): Map<number, StepIssue> {
   const ids = new Set(steps.map((step) => step.id));
-  const issues = new Map<number, string>();
+  const issues = new Map<number, StepIssue>();
   steps.forEach((step, index) => {
     const fields: BranchField[] =
       step.type === 'condition'
@@ -95,18 +96,19 @@ export function stepIssues(steps: readonly FlowStep[]): Map<number, string> {
     for (const field of fields) {
       const value = step.fields[field];
       if (!value || value === 'end') continue;
+      const name = BRANCH_FIELDS[field];
       if (value === step.id) {
-        issues.set(
-          index,
-          `${BRANCH_FIELDS[field]} goes back to this same step. Choose another.`,
-        );
+        issues.set(index, {
+          short: 'Goes back to itself',
+          message: `${name} goes back to this same step. Choose another.`,
+        });
         return;
       }
       if (!ids.has(value)) {
-        issues.set(
-          index,
-          `${BRANCH_FIELDS[field]} goes to a step that was removed. Choose another.`,
-        );
+        issues.set(index, {
+          short: 'Goes to a removed step',
+          message: `${name} goes to a step that was removed. Choose another.`,
+        });
         return;
       }
     }
@@ -115,10 +117,11 @@ export function stepIssues(steps: readonly FlowStep[]): Map<number, string> {
       !step.fields.if_true &&
       !step.fields.if_false
     ) {
-      issues.set(
-        index,
-        'Choose a step or End for When true or When false. Both can’t continue to the next step.',
-      );
+      issues.set(index, {
+        short: 'Choose a branch',
+        message:
+          'Choose a step or End for When true or When false. Both can’t continue to the next step.',
+      });
       return;
     }
     for (const text of [
@@ -129,7 +132,10 @@ export function stepIssues(steps: readonly FlowStep[]): Map<number, string> {
     ]) {
       for (const match of String(text ?? '').matchAll(OUTPUT_REFERENCE)) {
         if (!ids.has(match[1])) {
-          issues.set(index, 'Uses the result of a step that was removed.');
+          issues.set(index, {
+            short: 'Uses a removed step',
+            message: 'Uses the result of a step that was removed.',
+          });
           return;
         }
       }
@@ -153,12 +159,12 @@ export type FlowchartOptions = {
 };
 
 export const FLOWCHART_DEFAULTS: FlowchartOptions = {
-  nodeWidth: 224,
+  nodeWidth: 232,
   nodeHeight: () => 60,
   terminalWidth: 72,
   terminalHeight: 28,
   columnGap: 40,
-  rowGap: 56,
+  rowGap: 48,
   margin: 24,
   laneGap: 16,
   groupColumns: 3,
@@ -433,7 +439,9 @@ export function layoutFlowchart(
     if (edge.loop) return;
     const chain = [edge.source];
     for (let layer = edge.source.layer + 1; layer < edge.target.layer; layer++)
-      chain.push(vertex(`via-${number}-${layer}`, layer, 12, 0, 0.6, 16));
+      // A long edge runs straight: its spacers hold their line and the
+      // cards beside them move over (a skipped step sits to one side).
+      chain.push(vertex(`via-${number}-${layer}`, layer, 12, 0, 1000, 16));
     chain.push(edge.target);
     chains.set(number, chain);
     for (let k = 0; k + 1 < chain.length; k += 1)
@@ -486,10 +494,15 @@ export function layoutFlowchart(
     layer.forEach((item, order) => {
       item.order = order;
     });
+    // Under its parents, leaning towards a long edge's straight line.
     const targets = layer.map((item) => {
       const above = parents.get(item) ?? [];
+      const pull = (segment: Segment) => Math.max(segment.from.weight, 0.01);
       return above.length
-        ? above.reduce((sum, segment) => sum + segment.from.x, 0) / above.length
+        ? above.reduce(
+            (sum, segment) => sum + segment.from.x * pull(segment),
+            0,
+          ) / above.reduce((sum, segment) => sum + pull(segment), 0)
         : 0;
     });
     const gaps = layer

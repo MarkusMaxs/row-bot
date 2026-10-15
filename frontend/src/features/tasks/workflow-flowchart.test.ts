@@ -99,15 +99,38 @@ describe('stepIssues', () => {
       step('e', 'prompt', { prompt: 'Use {{step.a.output}}', next: 'end' }),
     ]);
     expect([...issues]).toEqual([
-      [0, 'When true goes to a step that was removed. Choose another.'],
-      [1, 'When approved goes back to this same step. Choose another.'],
+      [
+        0,
+        {
+          short: 'Goes to a removed step',
+          message: 'When true goes to a step that was removed. Choose another.',
+        },
+      ],
+      [
+        1,
+        {
+          short: 'Goes back to itself',
+          message: 'When approved goes back to this same step. Choose another.',
+        },
+      ],
       [
         2,
-        'Choose a step or End for When true or When false. Both can’t continue to the next step.',
+        {
+          short: 'Choose a branch',
+          message:
+            'Choose a step or End for When true or When false. Both can’t continue to the next step.',
+        },
       ],
-      [3, 'Uses the result of a step that was removed.'],
+      [
+        3,
+        {
+          short: 'Uses a removed step',
+          message: 'Uses the result of a step that was removed.',
+        },
+      ],
     ]);
-    for (const message of issues.values()) expect(message).not.toMatch(/gone/);
+    for (const issue of issues.values())
+      expect(JSON.stringify(issue)).not.toMatch(/gone/);
   });
 });
 
@@ -164,6 +187,26 @@ describe('layoutFlowchart', () => {
     expect(layout.terminals.filter((item) => item.kind === 'end')).toHaveLength(
       2,
     );
+  });
+
+  it('keeps the main line straight past an optional step, which sits to one side', () => {
+    const layout = layoutFlowchart([
+      step('draft'),
+      step('check', 'condition', { if_true: 'fix', if_false: 'review' }),
+      step('fix'),
+      step('review', 'approval', { if_approved: '', if_denied: 'end' }),
+      step('publish', 'notify', { next: 'end' }),
+    ]);
+    expectTidy(layout);
+    const [draft, check, fix, review, publish] = layout.steps;
+    for (const box of [check, review, publish])
+      expect(centre(box)).toBe(centre(draft));
+    expect(centre(fix)).toBeLessThan(draft.x);
+    expect(review.layer).toBe(fix.layer! + 1);
+    // The "no" edge skips the optional step in a straight line.
+    const skip = layout.edges.find((edge) => edge.label === 'no')!;
+    expect(skip.to).toBe(3);
+    expect(new Set(skip.points.map((point) => point.x)).size).toBe(1);
   });
 
   it('labels an approval approved and denied, and keeps the approved path straight', () => {

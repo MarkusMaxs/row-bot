@@ -2109,10 +2109,13 @@ button.overview-stat:hover {
   flex: none;
   margin-top: 3px;
 }
+/* The same look as the editor's other alerts: a quiet card, a danger edge. */
 .task-graph-form-issue {
   padding: 8px 10px;
+  border-inline-start: 2px solid var(--status-danger-text);
   border-radius: 8px;
-  background: var(--status-danger-background);
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--border-hairline);
   color: var(--text-primary);
 }
 .task-graph-form-issue > svg {
@@ -2128,7 +2131,9 @@ button.overview-stat:hover {
 /* Workflow flowchart (F23) ------------------------------------------------ */
 .workflow-chart {
   --chart-line: var(--border-control);
-  max-height: min(70vh, 720px);
+  /* Room for most workflows beside the form; longer ones scroll inside. */
+  max-height: min(max(360px, calc(100vh - 240px)), 960px);
+  max-height: min(max(360px, calc(100dvh - 240px)), 960px);
   overflow: auto;
   border-radius: var(--radius-panel);
   background-color: var(--surface-sunken);
@@ -2141,6 +2146,12 @@ button.overview-stat:hover {
   background-attachment: local;
   box-shadow: inset 0 0 0 1px var(--border-hairline);
   overscroll-behavior: contain;
+}
+@container builder (max-width: 760px) {
+  .workflow-chart {
+    max-height: 65vh;
+    max-height: 65dvh;
+  }
 }
 .workflow-chart-canvas {
   position: relative;

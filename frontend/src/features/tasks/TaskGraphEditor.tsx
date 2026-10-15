@@ -645,7 +645,7 @@ export default function TaskGraphEditor({
                     </span>
                     {issues.has(position) && (
                       <span className="task-graph-step-issue">
-                        {issues.get(position)}
+                        {issues.get(position)?.message}
                       </span>
                     )}
                   </li>
@@ -696,12 +696,6 @@ export default function TaskGraphEditor({
                 <legend>
                   Step {index + 1} · {kindLabel(step.type)}
                 </legend>
-                {issues.has(index) && (
-                  <p className="task-graph-form-issue">
-                    <CircleAlert size={14} aria-hidden />
-                    {issues.get(index)}
-                  </p>
-                )}
                 <div className="task-graph-form-actions">
                   <IconButton
                     size="sm"
@@ -738,6 +732,12 @@ export default function TaskGraphEditor({
                     <Trash2 size={14} aria-hidden />
                   </IconButton>
                 </div>
+                {issues.has(index) && (
+                  <p className="task-graph-form-issue">
+                    <CircleAlert size={14} aria-hidden />
+                    {issues.get(index)?.message}
+                  </p>
+                )}
                 {retained?.retained_fields && (
                   <p className="home-caption">
                     Additional saved settings are preserved when you edit these
