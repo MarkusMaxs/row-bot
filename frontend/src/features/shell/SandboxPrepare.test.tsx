@@ -197,7 +197,7 @@ it('in Docker mode without the image, the sandbox offers to download it, with it
   });
   const offer = screen.getByRole('group', { name: 'Sandbox image' });
   expect(offer).toHaveTextContent('Download the sandbox image?');
-  expect(offer).toHaveTextContent('about 570 MB to download from Docker Hub');
+  expect(offer).toHaveTextContent('about 570 MB from Docker Hub');
   await click('Download image');
   expect(controller.pullSandboxImage).toHaveBeenCalledWith('conversation-a');
   const card = await screen.findByRole('group', {

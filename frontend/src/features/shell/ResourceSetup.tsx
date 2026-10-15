@@ -1407,7 +1407,10 @@ export default function ResourceSetup({
               )}
             </div>
           )}
-          {selected?.origin_status === 'repair_required' && !conversationId ? (
+          {browsing &&
+          kind === 'workspace' &&
+          mode === 'create' ? null : selected?.origin_status ===
+              'repair_required' && !conversationId ? (
             <Button disabled={busy} onClick={() => void perform('repair')}>
               Repair missing origin
             </Button>

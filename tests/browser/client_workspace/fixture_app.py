@@ -1156,6 +1156,270 @@ def s5_reset(x_fixture_token: str = Header(default="")) -> dict:
     return {"sent": len(fake.documents) if fake else 0}
 
 
+# ── S6: attach a code folder from any device (F19) and Prepare sandbox (F18) ──
+# The workspace folder is a disposable one with a few projects; a clone is a fake Git that
+# makes the folder; Docker is a fake that "installs" over a few seconds (or until released).
+_S6_STATE: dict = {}
+_S6_IMAGE = "nikolaik/python-nodejs:python3.11-nodejs20"
+_S6_INSTALL_LINES = (
+    "Obtaining file:///workspace",
+    "Collecting pytest",
+    "  Downloading pytest-8.3.3-py3-none-any.whl (342 kB)",
+    "Collecting pluggy<2,>=1.5",
+    "Building editable for tide (pyproject.toml)",
+    "Installing collected packages: pluggy, iniconfig, pytest, tide",
+    "Successfully installed iniconfig-2.0.0 pluggy-1.5.0 pytest-8.3.3 tide-0.1.0",
+)
+
+
+def _s6_root() -> Path:
+    """Row-Bot's workspace folder for these specs: projects, an empty folder and a repository."""
+    import tempfile
+
+    from row_bot.tools import registry
+
+    if "root" not in _S6_STATE:
+        _S6_STATE["workspace_root"] = registry.get_tool_config("filesystem", "workspace_root", "")
+        base = Path(tempfile.mkdtemp(prefix="row-bot-s6-"))
+        root = base / "Row-Bot"
+        (root / "Projects" / "tide-app" / ".git").mkdir(parents=True)
+        (root / "Projects" / "tide-app" / "README.md").write_text("# Tide app\n", encoding="utf-8")
+        (root / "Projects" / "harbour-site" / ".git").mkdir(parents=True)
+        (root / "Projects" / "notes").mkdir()
+        (root / "Archive" / "2025").mkdir(parents=True)
+        (base / "outside" / "private").mkdir(parents=True)
+        _S6_STATE.update(root=root.resolve(), base=base)
+    registry.set_tool_config("filesystem", "workspace_root", str(_S6_STATE["root"]))
+    return _S6_STATE["root"]
+
+
+def _s6_fake_git() -> None:
+    """Clones make their folder with a .git and a README; nothing reaches the network."""
+    from types import SimpleNamespace
+
+    from row_bot.developer import client_clone
+
+    if "subprocess_run" in _S6_STATE:
+        return
+    real = client_clone.subprocess.run
+    _S6_STATE["subprocess_run"] = real
+
+    def run(args, **kwargs):
+        if isinstance(args, list) and args and Path(str(args[0])).stem.lower() == "git":
+            if "clone" in args:
+                target = Path(args[-1])
+                (target / ".git").mkdir(parents=True, exist_ok=True)
+                (target / "README.md").write_text("# demo\n", encoding="utf-8")
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return SimpleNamespace(returncode=0, stdout=_S6_STATE.get("source", "") + "\n", stderr="")
+        return real(args, **kwargs)
+
+    client_clone.subprocess = SimpleNamespace(**{**vars(client_clone.subprocess), "run": run})
+
+
+class _S6Docker:
+    """Docker as Prepare sandbox sees it, with an install that takes a while."""
+
+    def __init__(self, image_present: bool) -> None:
+        import threading
+
+        self.images = {_S6_IMAGE} if image_present else set()
+        self.containers: set[str] = set()
+        self.release = threading.Event()
+
+    def runtime(self):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(available=True, binary="docker", message="", version="27.3.1")
+
+    def docker(self, binary, *args, timeout=30):
+        from types import SimpleNamespace
+
+        if args[:2] == ("image", "inspect"):
+            return SimpleNamespace(returncode=0 if args[2] in self.images else 1, stdout="", stderr="")
+        if args[0] == "inspect":
+            return SimpleNamespace(returncode=0 if args[-1] in self.containers else 1, stdout="", stderr="")
+        if args[0] == "rm":
+            self.containers.discard(args[-1])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def start(self, job, argv, folder, name):
+        import threading
+        import uuid
+        from types import SimpleNamespace
+
+        record = SimpleNamespace(process_id=f"proc-{uuid.uuid4().hex[:8]}", exit_code=None, output="",
+                                 done=threading.Event())
+        if argv[1] == "pull":
+            self.images.add(argv[2])
+            record.output = "Status: Downloaded newer image for " + argv[2] + "\n"
+            record.exit_code = 0
+            record.done.set()
+            return record
+        self.containers.add(argv[argv.index("--name") + 1])
+
+        def install():
+            for line in _S6_INSTALL_LINES:
+                if record.done.is_set():
+                    return
+                record.output += line + "\n"
+                if line.startswith("Building") and self.release.wait(60):
+                    continue
+                if self.release.wait(0.6):
+                    continue
+            if not record.done.is_set():
+                record.exit_code = 0
+                record.done.set()
+
+        threading.Thread(target=install, daemon=True).start()
+        return record
+
+    def stop(self, record, by):
+        record.exit_code = 137
+        record.done.set()
+
+
+def _s6_docker(image_present: bool) -> _S6Docker:
+    from row_bot.developer import sandbox_prepare
+
+    fake = _S6Docker(image_present)
+    if "sandbox_seams" not in _S6_STATE:
+        _S6_STATE["sandbox_seams"] = {name: getattr(sandbox_prepare, name) for name in (
+            "_runtime", "_docker", "_start_process", "_process_done", "_stop_process", "_tail")}
+    sandbox_prepare._runtime = fake.runtime
+    sandbox_prepare._docker = fake.docker
+    sandbox_prepare._start_process = fake.start
+    sandbox_prepare._process_done = lambda record, timeout: record.done.wait(timeout)
+    sandbox_prepare._stop_process = fake.stop
+    sandbox_prepare._tail = lambda record: record.output
+    _S6_STATE["docker"] = fake
+    return fake
+
+
+@app.post("/__s6_fixture/workspace")
+def s6_workspace(x_fixture_token: str = Header(default="")) -> dict:
+    """Use the disposable workspace folder, with fake Git clones."""
+    predecessor._authorize(x_fixture_token)
+    root = _s6_root()
+    _s6_fake_git()
+    _S6_STATE["source"] = "https://example.test/team/demo.git"
+    return {"folders": sorted(item.name for item in root.iterdir())}
+
+
+@app.get("/__s6_fixture/workspace")
+def s6_workspace_state(x_fixture_token: str = Header(default="")) -> dict:
+    """Which folders the workspace folder has now (names only)."""
+    predecessor._authorize(x_fixture_token)
+    root = _S6_STATE.get("root")
+    if root is None:
+        return {"folders": [], "projects": []}
+    return {"folders": sorted(item.name for item in root.iterdir()),
+            "projects": sorted(item.name for item in (root / "Projects").iterdir())}
+
+
+@app.post("/__s6_fixture/link-out")
+def s6_link_out(x_fixture_token: str = Header(default="")) -> dict:
+    """Swap Projects/notes for a link to a folder outside the workspace folder (a junction on Windows)."""
+    predecessor._authorize(x_fixture_token)
+    import shutil
+
+    root = _s6_root()
+    target = root / "Projects" / "notes"
+    outside = _S6_STATE["base"] / "outside"
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target)
+    if not target.exists():
+        if sys.platform == "win32":
+            import _winapi
+
+            _winapi.CreateJunction(str(outside), str(target))
+        else:
+            target.symlink_to(outside, target_is_directory=True)
+    return {"linked": True}
+
+
+@app.post("/__s6_fixture/sandbox")
+def s6_sandbox(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """The conversation's code folder becomes a Python project in the Docker sandbox, with a fake Docker."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.developer import sandbox_prepare, storage
+
+    conversation = str(body.get("conversation_id") or "")
+    workspace = sandbox_prepare.conversation_workspace(conversation)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="No code folder")
+    folder = Path(workspace.path)
+    (folder / "tests").mkdir(exist_ok=True)
+    (folder / "pyproject.toml").write_text(
+        "[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.build_meta\"\n\n"
+        "[project]\nname = \"tide\"\nversion = \"0.1.0\"\n\n[project.optional-dependencies]\n"
+        "test = [\"pytest-cov\"]\n", encoding="utf-8")
+    (folder / "tests" / "test_tide.py").write_text("def test_high_tide():\n    assert True\n", encoding="utf-8")
+    storage.set_workspace_execution_settings(workspace.id, execution_mode="docker", sandbox_network="off",
+                                             sandbox_image=_S6_IMAGE)
+    _s6_docker(image_present=bool(body.get("image_present", True)))
+    return {"workspace": workspace.name}
+
+
+@app.post("/__s6_fixture/sandbox/release")
+def s6_sandbox_release(x_fixture_token: str = Header(default="")) -> dict:
+    """Let the fake install finish."""
+    predecessor._authorize(x_fixture_token)
+    fake = _S6_STATE.get("docker")
+    if fake is not None:
+        fake.release.set()
+    return {"released": fake is not None}
+
+
+@app.post("/__s6_fixture/reset")
+def s6_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Put the workspace folder, Git and Docker back (a spec's clean-up)."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.developer import client_clone, sandbox_prepare
+    from row_bot.tools import registry
+
+    fake = _S6_STATE.pop("docker", None)
+    if fake is not None:
+        fake.release.set()
+        sandbox_prepare.stop_all(timeout=5)
+    for name, value in _S6_STATE.pop("sandbox_seams", {}).items():
+        setattr(sandbox_prepare, name, value)
+    real = _S6_STATE.pop("subprocess_run", None)
+    if real is not None:
+        import subprocess
+
+        client_clone.subprocess = subprocess
+    if "workspace_root" in _S6_STATE:
+        registry.set_tool_config("filesystem", "workspace_root", _S6_STATE.pop("workspace_root"))
+    _S6_STATE.pop("root", None)
+    return {"ok": True}
+
+
+def _s6_stream(text: str, config: dict):
+    """A sandbox test run that couldn't start: pytest isn't installed there (F18)."""
+    from row_bot.developer.runtime import CommandResult
+    from row_bot.developer.sandbox import ApprovalDecision
+    from row_bot.tools.developer_tool import _command_text
+
+    call = predecessor._record("submit", config, "s6-tests")
+    thread = call["conversation_id"]
+    identity = f"s6:{call['generation_id']}"
+    try:
+        result = CommandResult(command="python -m pytest", cwd="/workspace", returncode=1, stdout="",
+                               stderr="/usr/local/bin/python: No module named pytest",
+                               decision=ApprovalDecision("allow", "The project's detected commands run in the "
+                                                         "sandbox without asking."),
+                               execution_mode="docker", sandbox_backend="docker")
+        content = _command_text(result, tool_name="developer_run_detected_test")
+        steps = [("developer_run_detected_test", {"command": "pytest"}, lambda: (content, []))]
+        yield from _s3_steps(thread, identity, steps)
+        yield from _natural_final(call, thread, (
+            "The tests couldn't run: pytest isn't installed in the sandbox, and its network is off. "
+            "Prepare the sandbox to install the project's test tools, then I'll run them again."), "s6")
+    finally:
+        call["quiesced"] = True
+
+
 def _goal_verifier(goal, _context):
     """A goal's second step completes it; the first asks for one more."""
     if int(goal.get("turns_used") or 0) >= 2:
@@ -1165,6 +1429,11 @@ def _goal_verifier(goal, _context):
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("s6 ") and text.rstrip().endswith("fixture"):
+        # Prepare sandbox (F18): a sandbox test run that lacked pytest; the offer, the job and
+        # its card are real, Docker is a fake.
+        yield from _s6_stream(text, config)
+        return
     if text.startswith("s5 ") and text.rstrip().endswith("fixture"):
         # Send a file to your devices or a chat app (F7): the real tool, deliveries and cards, with
         # the fake Telegram adapter.

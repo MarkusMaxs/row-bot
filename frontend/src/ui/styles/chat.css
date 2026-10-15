@@ -1601,10 +1601,15 @@
 .sandbox-image-offer,
 .sandbox-prepare-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr);
   align-items: start;
-  gap: 4px 10px;
+  gap: 6px 10px;
   font-size: var(--text-13);
+}
+.sandbox-image-offer > .button,
+.sandbox-prepare-row > .button {
+  grid-column: 2;
+  justify-self: start;
 }
 .sandbox-image-offer {
   padding: 10px;
@@ -1620,7 +1625,11 @@
 .sandbox-prepare-row p {
   margin: 0;
 }
-.sandbox-image-offer code {
+.sandbox-image-name {
+  display: block;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
   overflow-wrap: anywhere;
 }
 .sandbox-ready-icon {
@@ -1628,17 +1637,6 @@
   height: 16px;
   margin-top: 2px;
   color: var(--text-secondary);
-}
-@media (max-width: 560px) {
-  .sandbox-image-offer,
-  .sandbox-prepare-row {
-    grid-template-columns: 18px minmax(0, 1fr);
-  }
-  .sandbox-image-offer > .button,
-  .sandbox-prepare-row > .button {
-    grid-column: 2;
-    justify-self: start;
-  }
 }
 
 /* Files a step sent (F7): where they went, each file with Download while it

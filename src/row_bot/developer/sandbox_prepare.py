@@ -308,6 +308,8 @@ class SandboxJob:
     detail: str = ""
     done: threading.Event = field(default_factory=threading.Event)
     stop_event: threading.Event = field(default_factory=threading.Event)
+    # The running step's process record, for its latest line of output (not saved).
+    record: Any = None
 
     @property
     def active(self) -> bool:
@@ -586,6 +588,7 @@ def _install_argv(binary: str, job: SandboxJob, workspace: Any, shadow: Path) ->
 def _follow(job: SandboxJob, argv: list[str], folder: Path, name: str) -> tuple[int | None, str]:
     """Run one step through the process manager until it ends; (exit code, its last output)."""
     record = _start_process(job, argv, folder, name)
+    job.record = record
     _set(job, process_id=str(getattr(record, "process_id", "") or ""))
     while not _process_done(record, 0.5):
         if job.stop_event.is_set():
@@ -754,14 +757,12 @@ def _iso(value: float | None) -> str | None:
 
 def progress_line(job: SandboxJob) -> str:
     """The install's latest line of output, for the card while it runs."""
-    if not job.active or not job.process_id:
+    if not job.active or job.record is None:
         return ""
-    from row_bot import background_processes
-
-    record = background_processes.get(job.process_id)
-    if record is None:
+    try:
+        text = _tail(job.record)[-2048:]
+    except Exception:
         return ""
-    text, _dropped = record.log.tail(2048)
     lines = [line.strip() for line in text.replace("\r", "\n").splitlines() if line.strip()]
     return lines[-1][:160] if lines else ""
 

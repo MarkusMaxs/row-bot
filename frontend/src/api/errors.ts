@@ -2959,6 +2959,10 @@ const resourceDenials = new Set([
   'folder_selection_denied',
   'path_denied',
   'capability_unavailable',
+  // Refusals that say exactly why (F19, F18), not "this device isn't allowed".
+  'workspace_folder_refused',
+  'clone_blocked',
+  'sandbox_prepare_blocked',
 ]);
 
 function describe(code: string): ClientError | null {

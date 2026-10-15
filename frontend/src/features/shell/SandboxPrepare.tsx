@@ -206,6 +206,12 @@ export function SandboxReadiness({
     seenKey.current = revisionKey;
     refresh();
   }, [refresh, revisionKey]);
+  // A job that was over by the time its start answered (an image already
+  // downloading elsewhere, say) changes what the sandbox shows at once.
+  const started = run.started;
+  useEffect(() => {
+    if (started && !jobLive(started)) refresh();
+  }, [refresh, started]);
   const status = sandbox.status;
   if (!status)
     return sandbox.error ? (
@@ -219,7 +225,11 @@ export function SandboxReadiness({
       <Skeleton label="Checking the sandbox" />
     );
   if (status.execution_mode !== 'docker') return null;
-  const job = run.started ?? status.job;
+  // The job just started, until the sandbox's own record of it is fresher.
+  const job =
+    run.started && status.job?.job_id !== run.started.job_id
+      ? run.started
+      : status.job;
   const busy = run.busy || jobLive(job);
   return (
     <div className="sandbox-ready" role="group" aria-label="Sandbox readiness">
@@ -239,14 +249,14 @@ export function SandboxReadiness({
           <Download className="sandbox-ready-icon" aria-hidden />
           <div>
             <strong>Download the sandbox image?</strong>
+            <span className="sandbox-image-name">{status.image}</span>
             <p>
-              The Docker sandbox runs commands in <code>{status.image}</code>,
-              which isn&apos;t on this computer yet
+              It isn&apos;t on this computer yet. Docker downloads it once
               {status.image_download
-                ? ` (${status.image_download} to download from Docker Hub)`
+                ? ` (${status.image_download} from Docker Hub)`
                 : ''}
-              . Docker downloads it once; every sandbox command then uses it.
-              The sandbox network stays off.
+              ; every sandbox command then uses it. The sandbox network stays
+              off.
             </p>
           </div>
           <Button

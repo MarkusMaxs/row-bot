@@ -183,11 +183,11 @@ export function SandboxJobCard({
               <>
                 <dt>Network</dt>
                 <dd>
-                  On {clockTime(view.network_on_at)}
+                  On at {clockTime(view.network_on_at)}
                   {view.network_off_at
-                    ? `, off again ${clockTime(view.network_off_at)}`
-                    : ''}
-                  , for the install only
+                    ? `, off again at ${clockTime(view.network_off_at)}`
+                    : ''}{' '}
+                  (for the install only)
                 </dd>
               </>
             )}
