@@ -36,16 +36,19 @@ NAMES = {"A": "1.0.0", "B": "2.0.0"}
 FAKE_PYTHON = """#!/usr/bin/env bash
 if [ "${1:-}" = "-I" ]; then exec "$REAL_PYTHON" "$@"; fi
 release="$(basename "$(dirname "$PWD")")"
-printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$release" "$$" "${PYTHONDONTWRITEBYTECODE:-}" \\
-    "${PYTHONNOUSERSITE:-}" "${ROW_BOT_INSTALL_ROOT:-}" "$PWD" "${*:2}" >> "$FAKE_RUNS"
 codes="$PWD/exit_codes"
 code=0
 if [ -s "$codes" ]; then
     code="$(head -n 1 "$codes")"
     sed -i.bak '1d' "$codes"
 fi
+# A sleeping app can be stopped from the moment its start is recorded.
 if [ "$code" = "sleep" ]; then
     trap 'echo stopped >> "$FAKE_RUNS"; exit 0' TERM
+fi
+printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$release" "$$" "${PYTHONDONTWRITEBYTECODE:-}" \\
+    "${PYTHONNOUSERSITE:-}" "${ROW_BOT_INSTALL_ROOT:-}" "$PWD" "${*:2}" >> "$FAKE_RUNS"
+if [ "$code" = "sleep" ]; then
     while :; do sleep 0.1; done
 fi
 if [ -f "$PWD/on_exit.sh" ]; then
@@ -279,6 +282,34 @@ def test_stopping_the_wrapper_stops_the_app_and_never_relaunches(tmp_path):
     assert process.wait(timeout=30) == 0
     assert (tmp_path / "runs.tsv").read_text(encoding="utf-8").splitlines()[-1] == "stopped"
     assert len(_runs(tmp_path)) == 1
+
+
+@pytest.mark.slow
+def test_a_stop_while_the_app_starts_never_leaves_it_running(tmp_path):
+    """A stop can reach the wrapper at any moment of its start, before or after the app is running:
+    the wrapper always ends and never leaves the app running on its own."""
+    for attempt, delay in enumerate((0, 0.005, 0.01, 0.02, 0.05, 0.1)):
+        here = tmp_path / str(attempt)
+        root = here / "row-bot"
+        _release(root, "1.0.0", "sleep")
+        layout.set_linux_current(root, "1.0.0")
+        process = subprocess.Popen([str(root / "current" / "bin" / "row-bot"), "serve"], env=_env(here))
+        time.sleep(delay)
+        process.send_signal(signal.SIGTERM)
+        process.wait(timeout=30)
+        left = []
+        for run in _runs(here):
+            pid, deadline = int(run[1]), time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                left.append(pid)
+                os.kill(pid, signal.SIGKILL)
+        assert not left, f"stopped after {delay}s: the app was left running"
 
 
 @pytest.mark.slow
