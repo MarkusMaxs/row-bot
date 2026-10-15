@@ -2540,6 +2540,16 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.stopRecording(recordingId, signal);
     });
+  /** Video edits (F3): every one, or one conversation's, running ones first. */
+  videoEdits = (conversationId?: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.videoEdits?.(conversationId, signal));
+  /** Stop a video edit; nothing is saved. No approval. */
+  stopVideoEdit = (editId: string) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.stopVideoEdit)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.stopVideoEdit(editId, signal);
+    });
   /** The local addresses a conversation's browser may open now (F4). */
   browserLocalAddresses = (conversation: string, signal?: AbortSignal) =>
     this.query(() =>

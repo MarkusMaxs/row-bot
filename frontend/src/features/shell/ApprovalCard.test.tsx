@@ -346,3 +346,30 @@ it('asks the tool’s own question for a local address in one chat (F4)', async 
     "Allow Row-Bot's browser to open localhost:5173 in this chat?",
   );
 });
+
+it('asks to download ffmpeg in plain words: how big, from where, and its licence (F3)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'edit_video',
+    question:
+      'Video editing needs ffmpeg (about 30 MB) from PyPI. Download it now?',
+    reason:
+      "Row-Bot will download imageio-ffmpeg 0.6.0 for Windows (30 MB) from PyPI (files.pythonhosted.org), check it against the fingerprint saved in Row-Bot, and keep only its ffmpeg program in Row-Bot's data folder. ffmpeg is free software (GPL version 3 or later); Row-Bot runs it as a separate program. This happens once.",
+    risk_class: 'medium',
+    safe_argument_summary:
+      '{"download": "imageio-ffmpeg 0.6.0 (Windows, 30 MB)", "from": "files.pythonhosted.org", "licence": "ffmpeg 7.1, GPL version 3 or later"}',
+  });
+  await renderCard();
+
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required: Video editing needs ffmpeg (about 30 MB) from PyPI. Download it now?',
+  });
+  expect(card).toHaveTextContent('keep only its ffmpeg program');
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  expect(screen.getByText('From: files.pythonhosted.org')).toBeVisible();
+  expect(
+    screen.getByText('Licence: ffmpeg 7.1, GPL version 3 or later'),
+  ).toBeVisible();
+  expect(document.body).not.toHaveTextContent(/edit_video|\{"/);
+});

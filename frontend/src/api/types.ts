@@ -813,6 +813,15 @@ export interface ClientTransport {
     recordingId: string,
     signal?: AbortSignal,
   ): Promise<Wire.RecordingView>;
+  /** Video edits (F3): every one, or one conversation's. */
+  videoEdits?(
+    conversationId?: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.VideoEditPage>;
+  stopVideoEdit?(
+    editId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.VideoEditView>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
