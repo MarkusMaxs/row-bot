@@ -267,20 +267,18 @@ def test_cloudflare_metadata_without_standard_forwarding_model_fails_closed(
         )
 
 
-def test_untrusted_cloudflare_forwarding_headers_reject_by_default() -> None:
-    resolver = RequestContextResolver(_config())
+def test_cloudflare_header_alone_from_untrusted_loopback_never_grants_owner() -> None:
+    # A Cloudflare Tunnel on this computer whose address is not trusted.
+    scope = _scope(headers=[(b"cf-connecting-ip", b"203.0.113.7")])
 
     with pytest.raises(RequestContextError, match="untrusted_forwarding_headers"):
-        resolver.resolve(
-            _scope(
-                client="192.168.1.20",
-                headers=[
-                    (b"cf-connecting-ip", b"203.0.113.7"),
-                    (b"x-forwarded-for", b"203.0.113.7"),
-                    (b"x-forwarded-proto", b"https"),
-                ],
-            )
-        )
+        RequestContextResolver(_config()).resolve(scope)
+    context = RequestContextResolver(
+        _config(action=UntrustedForwardedAction.IGNORE.value)
+    ).resolve(scope)
+
+    assert context.authentication_kind is AuthenticationKind.UNAUTHENTICATED
+    assert context.direct_loopback is False
 
 
 @pytest.mark.parametrize(

@@ -35,8 +35,10 @@ SUPPORTED_FORWARDED_HEADERS = frozenset(
     }
 )
 # Trusted proxies may attach these beside a validated Forwarded or
-# X-Forwarded-* model. They are not a client, scheme, host, or origin source,
-# and they do not form a forwarding model on their own.
+# X-Forwarded-* model (Cloudflare sends CF-Connecting-IP beside the
+# X-Forwarded-For it appends to). They are not a client, scheme, host, or
+# origin source, and they do not form a forwarding model on their own. They
+# stay recognized, so they still mark a request as forwarded.
 ANCILLARY_FORWARDING_HEADERS = frozenset({"cf-connecting-ip"})
 RECOGNIZED_FORWARDING_HEADERS = frozenset(
     set(SUPPORTED_FORWARDED_HEADERS)
@@ -398,12 +400,8 @@ class RequestContextResolver:
                 raise RequestContextError("untrusted_forwarding_headers")
             forwarded = None
         elif forwarding_headers:
-            model_headers = tuple(
-                name
-                for name in forwarding_headers
-                if name not in ANCILLARY_FORWARDING_HEADERS
-            )
-            unsupported = set(model_headers) - SUPPORTED_FORWARDED_HEADERS
+            model_headers = set(forwarding_headers) - ANCILLARY_FORWARDING_HEADERS
+            unsupported = model_headers - SUPPORTED_FORWARDED_HEADERS
             if unsupported or not model_headers:
                 raise RequestContextError("unsupported_forwarding_headers")
             has_standard = "forwarded" in model_headers
