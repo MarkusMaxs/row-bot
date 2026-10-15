@@ -5,8 +5,10 @@ import {
   groupConversations,
   matchesType,
   recencyGroup,
+  shortTime,
   withRetainedRow,
 } from './conversation-groups';
+import { setServerUtcOffset } from '../../ui/format';
 
 const now = new Date(2026, 8, 26, 15, 30);
 const at = (days: number, hour = 10) =>
@@ -120,5 +122,23 @@ describe('conversation groups', () => {
     expect(
       ids(withRetainedRow(list, row('pin2', at(0), { pinned: true }))),
     ).toEqual(['pinned', 'pin2', 'today', 'week']);
+  });
+});
+
+describe('shortTime on a device in another timezone (B341)', () => {
+  it("reads an offset-less time with the server's clock, like the rest of the app", () => {
+    setServerUtcOffset(60);
+    try {
+      // Saved at 14:00 on a server an hour ahead of UTC: 13:00 UTC.
+      const saved = '2026-10-14T14:00:00.123456';
+      const sameInstant = new Date('2026-10-14T13:00:00.123Z');
+      const expected = new Intl.DateTimeFormat(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(sameInstant);
+      expect(shortTime(saved, new Date('2026-10-14T13:05:00Z'))).toBe(expected);
+    } finally {
+      setServerUtcOffset(null);
+    }
   });
 });

@@ -94,6 +94,7 @@ import {
   credentialSourceLabel,
   humanizeToken,
   maskedTail,
+  parseTimestamp,
   relativeTime,
 } from '../../ui/format';
 import {
@@ -288,8 +289,8 @@ function savedStateLabel(value: string | null | undefined) {
 }
 function formattedDateTime(value: string | null) {
   if (!value) return 'Never';
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) return value;
+  const date = parseTimestamp(value);
+  if (!date) return value;
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: '2-digit',

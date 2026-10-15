@@ -103,8 +103,9 @@ export function recencyGroup(
 /** "14:05" today, a weekday this week, "22 Sep" before that. */
 export function shortTime(value: string | undefined, now = new Date()): string {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
+  // The server's clock for offset-less times, like every other time shown (B341).
+  const date = parseTimestamp(value);
+  if (!date) return '';
   const group = recencyGroup(value, now);
   return new Intl.DateTimeFormat(
     undefined,
