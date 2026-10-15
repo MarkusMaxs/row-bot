@@ -155,3 +155,24 @@ test('a welcome prompt fills the composer to edit first', async ({ page }) => {
     0,
   );
 });
+
+test('what you send leaves the composer at once, even when the reply is instant', async ({
+  page,
+}, testInfo) => {
+  await newConversation(page);
+  // Sending refreshes the conversation afterwards; however long that takes,
+  // the sent text must not wait in the composer to be sent again.
+  await page.route('**/api/v1/conversations/*/workspace', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await route.continue();
+  });
+  await send(page, 'Answer this instant reply fixture');
+  await expect(
+    page
+      .getByRole('log', { name: 'Conversation' })
+      .getByText('Here it is, straight away.', { exact: true }),
+  ).toBeVisible();
+  await expect(composer(page)).toHaveValue('', { timeout: 1_000 });
+  await screenshot(page, testInfo, 'composer-after-instant-reply');
+  await page.unroute('**/api/v1/conversations/*/workspace');
+});
