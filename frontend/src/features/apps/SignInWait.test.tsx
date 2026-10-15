@@ -176,6 +176,15 @@ it('a code is shown with its page, copied in one tap, and counted down', async (
   );
 });
 
+it('while the code is on its way it says so, never the browser steps', () => {
+  show({ delivery: 'device', authorization_url: null, device: null });
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Getting a sign-in code from Linear…',
+  );
+  expect(screen.queryByText(/in your browser/)).toBeNull();
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
+});
+
 it('a code with its page prefilled opens that page', () => {
   const { platform } = show({
     delivery: 'device',

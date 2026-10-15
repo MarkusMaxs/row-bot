@@ -153,6 +153,17 @@ export default function SignInWait({
       </div>
     );
 
+  if (delivery === 'device' && !signIn?.device)
+    return (
+      <div className="plan-wait">
+        <p className="sign-in-waiting" role="status">
+          <LoaderCircle size={16} aria-hidden />
+          Getting a sign-in code from {name}…
+        </p>
+        <div className="app-dialog-actions">{stop}</div>
+      </div>
+    );
+
   if (delivery === 'device' && signIn?.device) {
     const { user_code, verification_uri, verification_uri_complete } =
       signIn.device;
