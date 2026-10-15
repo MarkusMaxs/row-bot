@@ -4284,6 +4284,33 @@ class VideoEditPage(WireModel):
     running: int = Field(ge=0)
 
 
+class WorkspaceFolderCrumb(WireModel):
+    """One folder on the way from the workspace root to the folder shown."""
+    name: str = Field(min_length=1, max_length=260)
+    # Its names under the root joined with "/" ("" is the root).
+    path: str = Field(max_length=1024)
+
+
+class WorkspaceFolderEntry(WireModel):
+    """A folder inside the folder shown: a code folder to choose, or a folder to open."""
+    name: str = Field(min_length=1, max_length=260)
+    path: str = Field(min_length=1, max_length=1024)
+    # It is a Git repository (it has .git).
+    is_git: bool
+
+
+class WorkspaceFolderPage(WireModel):
+    """The folders in one folder of the Developer workspace root (F19): folders only, no host path."""
+    path: str = Field(max_length=1024)
+    # The folder shown: the root's own name ("Row-Bot") at the root.
+    name: str = Field(min_length=1, max_length=4096)
+    crumbs: list[WorkspaceFolderCrumb] = Field(min_length=1, max_length=32)
+    folders: list[WorkspaceFolderEntry] = Field(max_length=500)
+    # More folders are here than are listed.
+    truncated: bool
+    is_root: bool
+
+
 DeliveryId = Annotated[str, StringConstraints(pattern=r"^send-[0-9a-f]{8}$")]
 
 
@@ -4900,6 +4927,12 @@ class ResourceSetupPayload(WireModel):
     draft_name: str | None = Field(default=None, min_length=1, max_length=120)
     clone_workspace: CloneWorkspaceSetupPayload | None = None
     folder_grant: OpaqueId | None = None
+    # A folder chosen in the workspace root's folder browser (F19), instead of the desktop
+    # picker's grant: its names under the root joined with "/" ("" is the root itself, which
+    # can be a parent to create or clone into but never the code folder itself).
+    root_folder: str | None = Field(default=None, max_length=1024)
+    # The person confirmed a clone's download (it reaches the network): needed under Ask.
+    confirm_network: bool | None = None
     # Create a copy of this design (with its revision in expected_resource_revision).
     duplicate_of: OpaqueId | None = None
 
@@ -4916,6 +4949,13 @@ class ResourceSetupPayload(WireModel):
             raise ValueError("A duplicate names one design and its current revision.")
         if self.draft_name is not None and self.draft_workspace is not True:
             raise ValueError("Only a new draft workspace takes a draft name.")
+        if self.root_folder is not None and (
+            self.kind != "workspace" or self.intent != "create" or self.folder_grant is not None
+            or self.resource_id is not None or self.draft_workspace is not None or self.duplicate_of is not None
+        ):
+            raise ValueError("A folder from the workspace root is chosen for a new code folder only.")
+        if self.confirm_network is not None and self.clone_workspace is None:
+            raise ValueError("Only a clone reaches the network.")
         if self.artifact is not None and (
             self.kind != "artifact"
             or self.intent != "create"
@@ -4932,7 +4972,7 @@ class ResourceSetupPayload(WireModel):
         if self.empty_workspace is not None and (
             self.kind != "workspace"
             or self.intent != "create"
-            or self.folder_grant is None
+            or (self.folder_grant is None and self.root_folder is None)
             or self.resource_id is not None
             or self.deck is not None
             or self.artifact is not None
@@ -4953,7 +4993,7 @@ class ResourceSetupPayload(WireModel):
             raise ValueError("A draft workspace uses the configured local Drafts folder.")
         if self.clone_workspace is not None and (
             self.kind != 'workspace' or self.intent != 'create'
-            or self.folder_grant is None or self.resource_id is not None
+            or (self.folder_grant is None and self.root_folder is None) or self.resource_id is not None
             or any(value is not None for value in (self.deck, self.artifact, self.empty_workspace))
         ):
             raise ValueError('Repository clone requires an explicit parent grant.')
@@ -4967,10 +5007,14 @@ class SetupContinuePayload(WireModel):
     )
     expected_origin_id: OpaqueId | None = None
     folder_grant: OpaqueId | None = None
+    # The same parent chosen again in the workspace root's folder browser (F19).
+    root_folder: str | None = Field(default=None, max_length=1024)
 
     @model_validator(mode="after")
     def recovery_target(self) -> SetupContinuePayload:
-        if self.expected_resource_revision is None and self.folder_grant is None:
+        if self.folder_grant is not None and self.root_folder is not None:
+            raise ValueError("A folder is chosen once: by the picker or in the workspace root.")
+        if self.expected_resource_revision is None and self.folder_grant is None and self.root_folder is None:
             raise ValueError(
                 "Continuation requires a resource revision or renewed folder grant."
             )
@@ -6201,11 +6245,14 @@ class Command(WireModel):
                 and "confirm_full_autonomy" not in supplied):
             self.payload.pop("confirm_full_autonomy", None)  # Existing durable verifiers stay as they were.
         if self.type == "resource.setup":
-            for field in ("artifact", "empty_workspace", "draft_workspace", "draft_name", "clone_workspace"):
+            for field in ("artifact", "empty_workspace", "draft_workspace", "draft_name", "clone_workspace",
+                          "root_folder", "confirm_network"):
                 if field not in supplied:
                     self.payload.pop(field, None)
-        if self.type == "resource.continue" and "folder_grant" not in supplied:
-            self.payload.pop("folder_grant", None)
+        if self.type == "resource.continue":
+            for field in ("folder_grant", "root_folder"):
+                if field not in supplied:
+                    self.payload.pop(field, None)
         return self
 
     @classmethod

@@ -72,7 +72,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "WorkspaceFolderPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -205,6 +205,7 @@ OPERATIONS = (
     ("get", "/recordings", None, "RecordingPage"),
     ("get", "/recordings/{recording_id}", None, "RecordingView"),
     ("post", "/recordings/{recording_id}/stop", None, "RecordingView"),
+    ("get", "/workspace-folders", None, "WorkspaceFolderPage"),
     ("get", "/video-edits", None, "VideoEditPage"),
     ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
     ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
@@ -730,6 +731,9 @@ export const getRecording = (base: string, proof: SessionProof, recording: strin
 /** Stop a recording; its video is saved to its conversation's files. It needs no approval. */
 export const stopRecording = (base: string, proof: SessionProof, recording: string, signal?: AbortSignal): Promise<RecordingView> =>
   jsonRequest(base, `/recordings/${id(recording)}/stop`, 'RecordingView', proof, 'POST', undefined, undefined, signal);
+/** The folders in one folder of the Developer workspace root (F19): folders only, checked against the root. */
+export const getWorkspaceFolders = (base: string, proof: SessionProof, path = '', signal?: AbortSignal): Promise<WorkspaceFolderPage> =>
+  jsonRequest(base, '/workspace-folders' + query({path: path || undefined}), 'WorkspaceFolderPage', proof, 'GET', undefined, undefined, signal);
 /** Every video edit (F3), or one conversation's: running ones first. */
 export const getVideoEdits = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<VideoEditPage> =>
   jsonRequest(base, '/video-edits' + query({conversation_id}), 'VideoEditPage', proof, 'GET', undefined, undefined, signal);

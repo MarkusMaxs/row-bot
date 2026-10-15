@@ -1009,6 +1009,12 @@ _STATUS.update(
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
+        # The workspace root's folder browser (F19) and a clone's network check.
+        "workspace_folder_refused": 403,
+        "workspace_folder_unavailable": 404,
+        "workspace_folder_root": 422,
+        "clone_blocked": 403,
+        "clone_confirmation_required": 409,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -3275,6 +3281,7 @@ def create_router(
         validate_access = dispatch_validation(request, current)
         folder = None
         native_folder_scope = None
+        root_folder: tuple[str, bool] | None = None
         if (
             body.type == "resource.setup"
             and body.payload.get("intent") == "new_conversation"
@@ -3282,6 +3289,25 @@ def create_router(
         ):
             # A saved-workspace conversation never consumes a folder capability.
             raise ProtocolError("invalid_command", 422)
+        if body.type in {"resource.setup", "resource.continue"} and body.payload.get(
+            "root_folder"
+        ) is not None:
+            # A folder chosen in the workspace root's folder browser (F19), from any signed-in
+            # device: checked against the root here and again just before the setup runs.
+            from row_bot.developer import workspace_folders
+
+            root_folder = (
+                str(body.payload["root_folder"]),
+                body.type == "resource.continue"
+                or body.payload.get("clone_workspace") is not None
+                or body.payload.get("empty_workspace") is not None,
+            )
+            try:
+                folder = await call(
+                    workspace_folders.authorize, root_folder[0], parent=root_folder[1]
+                )
+            except workspace_folders.FolderRefused as exc:
+                raise ProtocolError(exc.code, _STATUS[exc.code]) from None
         if body.type in {"resource.setup", "resource.continue"} and body.payload.get(
             "folder_grant"
         ):
@@ -3326,7 +3352,16 @@ def create_router(
                     body.payload["nonce"],
                     str(body.command_id),
                 )
-            if folder is not None:
+            if root_folder is not None:
+                from row_bot.developer import workspace_folders
+
+                try:
+                    again = workspace_folders.authorize(root_folder[0], parent=root_folder[1])
+                except workspace_folders.FolderRefused as exc:
+                    raise ProtocolError(exc.code, _STATUS[exc.code]) from None
+                if again.path != folder.path or again.scope_root != folder.scope_root:
+                    raise ProtocolError("workspace_folder_refused", 403)
+            elif folder is not None:
                 if native_folder_scope is not None:
                     validate_native_folder(native_folder_scope)
                     if not folder.path.is_dir():
@@ -5348,6 +5383,19 @@ def create_router(
         if not EDIT_ID.fullmatch(str(value or "")):
             raise ProtocolError("video_edit_unavailable", 404)
         return value
+
+    # The Developer workspace root's folders (F19): folders only, for attaching a code folder
+    # from a device with no folder picker. Every path is checked against the root.
+    @router.get("/workspace-folders")
+    async def workspace_folder_page(request: Request, path: str = "") -> JSONResponse:
+        await session(request)
+        from row_bot.developer import workspace_folders
+
+        try:
+            result = await call(workspace_folders.browse, path[:1025])
+        except workspace_folders.FolderRefused as exc:
+            raise ProtocolError(exc.code, _STATUS[exc.code]) from None
+        return await respond(request, dto.WorkspaceFolderPage, result)
 
     @router.get("/video-edits")
     async def list_video_edits(request: Request, conversation_id: str | None = None) -> JSONResponse:

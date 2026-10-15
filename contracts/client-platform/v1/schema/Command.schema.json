@@ -7870,6 +7870,18 @@
           ],
           "default": null
         },
+        "confirm_network": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Confirm Network"
+        },
         "deck": {
           "anyOf": [
             {
@@ -8009,6 +8021,19 @@
           ],
           "default": null,
           "title": "Resource Id"
+        },
+        "root_folder": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Folder"
         }
       },
       "required": [
@@ -8151,6 +8176,19 @@
           ],
           "default": null,
           "title": "Folder Grant"
+        },
+        "root_folder": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Root Folder"
         },
         "setup_command_id": {
           "format": "uuid",

@@ -490,6 +490,16 @@ def clone_repository(repo_url: str = "") -> str:
     done = cloned()
     if done is not None:
         return done
+    from row_bot.developer.sandbox import decide_action
+    from row_bot.threads import _get_thread_approval_mode
+
+    # A clone downloads from the internet: a network action, refused under Block (F19). Under the
+    # other levels the card asks the person, who chooses where it goes.
+    if decide_action(_get_thread_approval_mode(conversation_id), "run_network",
+                     by_person=True).decision == "block":
+        return _json({"ok": False, "kind": "blocked",
+                      "error": "Approvals are set to Block in this conversation, so Row-Bot can't clone. Tell "
+                               "the person; they can change Approvals and ask again."})
     refused = _ask_developer_tools()
     if refused is not None:
         return refused
