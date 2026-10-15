@@ -26,11 +26,11 @@ TraceStatus = Literal[
 TraceGroupKind = Literal["generic", "browser", "computer"]
 TraceSpecializationKind = Literal[
     "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-    "background_process", "recording", "video_edit", "delivery",
+    "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
 ]
 CARD_SPECIALIZATIONS = frozenset({
     "resource_created", "resource_bound", "setup_needed", "connect_apps", "background_process", "recording",
-    "video_edit", "delivery",
+    "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
 })
 # A recording of Row-Bot's browser or of the screen a step started or stopped (F2): the result's
 # first line after its approval line names it, and the card follows it by that id.
@@ -40,6 +40,11 @@ _RECORDING_LINE = re.compile(r"Recording (rec-[0-9a-f]{8}): ")
 _VIDEO_EDIT_LINE = re.compile(r"Video edit (edit-[0-9a-f]{8}): ")
 # Files a send_file step sent, or couldn't (F7): the result's first line after its approval line names them.
 _DELIVERY_LINE = re.compile(r"Delivery (send-[0-9a-f]{8}): ")
+# Prepare sandbox (F18): the job a developer_prepare_sandbox step started or followed, by its handle line;
+# and a sandbox test run that failed for want of its tools, which the chat offers to prepare.
+_SANDBOX_JOB_LINE = re.compile(r"Sandbox job (prep-[0-9a-f]{8}): ")
+_SANDBOX_RUN_TOOLS = frozenset({"developer_run_detected_test", "developer_run_command"})
+_UNPREPARED_LINE = re.compile(r"^Sandbox not ready for tests: (pytest)?", re.MULTILINE)
 # A background process a step started (F1) or a command that carried on in the background (F6):
 # the result's first line after its approval line names it; command output only ever follows.
 _PROCESS_TOOLS = frozenset({"run_command", "start_process"})
@@ -147,6 +152,8 @@ class TraceSpecialization:
     edit_id: str = ""
     # delivery: the files a send_file step sent to the devices or a chat app (re-read by id).
     delivery_id: str = ""
+    # sandbox_job: Prepare sandbox, or the sandbox image's download, the card follows (re-read by id).
+    job_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -654,6 +661,24 @@ def _delivery_specialization(name: str, content: Any) -> TraceSpecialization | N
     return TraceSpecialization(kind="delivery", delivery_id=match.group(1)) if match else None
 
 
+def _sandbox_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """Prepare sandbox's job by its handle line, or the offer under a test run that lacked its tools."""
+    if not isinstance(content, str):
+        return None
+    if name == "developer_prepare_sandbox":
+        first, _newline, rest = content.partition("\n")
+        if first.startswith("Approval: "):
+            first = rest.partition("\n")[0]
+        match = _SANDBOX_JOB_LINE.match(first)
+        return TraceSpecialization(kind="sandbox_job", job_id=match.group(1)) if match else None
+    if name in _SANDBOX_RUN_TOOLS:
+        match = _UNPREPARED_LINE.search(content[:64_000])
+        if match:
+            return TraceSpecialization(kind="sandbox_unprepared",
+                                       error_code="pytest_missing" if match.group(1) else "packages_missing")
+    return None
+
+
 def specialize_tool_result(result: Any) -> TraceSpecialization | None:
     """Return only reviewed specialization metadata, never the raw payload."""
 
@@ -665,6 +690,7 @@ def specialize_tool_result(result: Any) -> TraceSpecialization | None:
         or _recording_specialization(name, _content(result))
         or _video_edit_specialization(name, _content(result))
         or _delivery_specialization(name, _content(result))
+        or _sandbox_specialization(name, _content(result))
         or _skill_specialization(name, payload)
         or _agent_specialization(name, payload)
         or _card_specialization(name, payload)
@@ -809,6 +835,7 @@ def _public_specialization(
             **({"recording_id": specialization.recording_id} if specialization.recording_id else {}),
             **({"edit_id": specialization.edit_id} if specialization.edit_id else {}),
             **({"delivery_id": specialization.delivery_id} if specialization.delivery_id else {}),
+            **({"job_id": specialization.job_id} if specialization.job_id else {}),
         }
         if specialization.kind in CARD_SPECIALIZATIONS
         else {}

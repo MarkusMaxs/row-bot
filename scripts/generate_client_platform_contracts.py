@@ -72,7 +72,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "WorkspaceFolderPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -206,6 +206,12 @@ OPERATIONS = (
     ("get", "/recordings/{recording_id}", None, "RecordingView"),
     ("post", "/recordings/{recording_id}/stop", None, "RecordingView"),
     ("get", "/workspace-folders", None, "WorkspaceFolderPage"),
+    ("get", "/conversations/{conversation_id}/sandbox", None, "SandboxStatusView"),
+    ("post", "/conversations/{conversation_id}/sandbox/prepare", "SandboxStartPayload", "SandboxJobView"),
+    ("post", "/conversations/{conversation_id}/sandbox/pull", "SandboxStartPayload", "SandboxJobView"),
+    ("get", "/sandbox-jobs", None, "SandboxJobPage"),
+    ("get", "/sandbox-jobs/{job_id}", None, "SandboxJobView"),
+    ("post", "/sandbox-jobs/{job_id}/stop", None, "SandboxJobView"),
     ("get", "/video-edits", None, "VideoEditPage"),
     ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
     ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
@@ -734,6 +740,23 @@ export const stopRecording = (base: string, proof: SessionProof, recording: stri
 /** The folders in one folder of the Developer workspace root (F19): folders only, checked against the root. */
 export const getWorkspaceFolders = (base: string, proof: SessionProof, path = '', signal?: AbortSignal): Promise<WorkspaceFolderPage> =>
   jsonRequest(base, '/workspace-folders' + query({path: path || undefined}), 'WorkspaceFolderPage', proof, 'GET', undefined, undefined, signal);
+/** A conversation's code folder's sandbox (F18): Docker, its image, what Prepare would install, the latest job. */
+export const getConversationSandbox = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxStatusView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox`, 'SandboxStatusView', proof, 'GET', undefined, undefined, signal);
+/** Prepare sandbox, confirmed by the person: the network is on for the install only. Block refuses it. */
+export const prepareConversationSandbox = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox/prepare`, 'SandboxJobView', proof, 'POST', {confirmed: true}, undefined, signal);
+/** Download the sandbox image, confirmed by the person. */
+export const pullConversationSandboxImage = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox/pull`, 'SandboxJobView', proof, 'POST', {confirmed: true}, undefined, signal);
+/** Every sandbox job (F18), or one conversation's: running ones first. */
+export const getSandboxJobs = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<SandboxJobPage> =>
+  jsonRequest(base, '/sandbox-jobs' + query({conversation_id}), 'SandboxJobPage', proof, 'GET', undefined, undefined, signal);
+export const getSandboxJob = (base: string, proof: SessionProof, job: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/sandbox-jobs/${id(job)}`, 'SandboxJobView', proof, 'GET', undefined, undefined, signal);
+/** Stop a sandbox job; the network goes off again. It needs no approval. */
+export const stopSandboxJob = (base: string, proof: SessionProof, job: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/sandbox-jobs/${id(job)}/stop`, 'SandboxJobView', proof, 'POST', undefined, undefined, signal);
 /** Every video edit (F3), or one conversation's: running ones first. */
 export const getVideoEdits = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<VideoEditPage> =>
   jsonRequest(base, '/video-edits' + query({conversation_id}), 'VideoEditPage', proof, 'GET', undefined, undefined, signal);

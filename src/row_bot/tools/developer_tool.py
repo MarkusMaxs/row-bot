@@ -122,6 +122,8 @@ _DEVELOPER_RISKS = {
     "developer_create_pull_request": "opens a pull request other people can see",
     "developer_revert_change_set": "restores files, undoing earlier changes",
     "developer_import_sandbox_changes": "applies sandbox changes to the real code folder",
+    "developer_prepare_sandbox": "turns the sandbox network on while it downloads and installs packages from the "
+                                 "internet into the sandbox",
 }
 
 
@@ -365,6 +367,15 @@ def _command_text(result, *, tool_name: str) -> str:
         lines.append("changed files: " + ", ".join(result.changed_files))
     if result.sandbox_pending_change_id:
         lines.append(f"sandbox pending change: {result.sandbox_pending_change_id}")
+    if result.execution_mode == "docker" and result.returncode not in (None, 0):
+        from row_bot.developer.sandbox_prepare import UNPREPARED_LINE, missing_tools
+
+        # A test run that failed for want of its tools (F18): the chat offers Prepare sandbox.
+        why = missing_tools(f"{result.stdout}\n{result.stderr}")
+        if why:
+            lines.append(f"{UNPREPARED_LINE}{why}. Offer to prepare it: developer_prepare_sandbox installs "
+                         "the project's test dependencies with the sandbox network on for the install only, "
+                         "then off again (it asks the person first).")
     output = []
     if result.stdout:
         output.append("stdout:\n" + result.stdout.rstrip("\n"))
@@ -415,6 +426,46 @@ def _run_command(command: str, timeout: int = 120, approval_reason: str = "") ->
             confirmed=True,
         )
     return _command_text(result, tool_name="developer_run_command")
+
+
+def _prepare_sandbox() -> str:
+    """Prepare the Docker sandbox for tests (F18): asks, then installs with the network on for that only."""
+    from row_bot.developer import sandbox_prepare
+
+    workspace, _root = _active_workspace(write=True)
+    if workspace.execution_mode != "docker":
+        return ("This code folder runs commands on this computer, not in the Docker sandbox, so there is no "
+                "sandbox to prepare. To install test tools here, use developer_run_command (it asks first).")
+    running = sandbox_prepare.active_for(workspace.id)
+    if running is not None:
+        sandbox_prepare.wait(running, 120)
+        return sandbox_prepare.summary(running)
+    plan = sandbox_prepare.plan_for(workspace.path)
+    if plan is None:
+        return ("Row-Bot found nothing to install: the code folder has no pyproject.toml, requirements*.txt "
+                "or package.json. Ask the person what the tests need.")
+    decision = decide_action(_active_approval_mode(), "run_install")
+    if decision.decision == "block":
+        return ("Approvals are set to Block in this conversation, so Row-Bot can't prepare the sandbox. Tell the "
+                "person; they can change Approvals, or use Prepare sandbox in the code folder's Sandbox settings.")
+    installs = "; ".join(plan.commands)
+    approval = _ask({
+        "tool": "developer_prepare_sandbox",
+        "label": "Prepare sandbox",
+        "question": "Prepare the sandbox for tests?",
+        "description": (f"Turns the sandbox network on for the install only, installs {plan.summary} (from "
+                        f"{', '.join(plan.sources)}) in {workspace.name}'s sandbox, then turns the network off "
+                        "again."),
+        "args": {"workspace": workspace.name, "installs": installs},
+    })
+    if not approval:
+        return "Prepare sandbox cancelled by the person: nothing was installed and the sandbox network stayed off."
+    try:
+        job = sandbox_prepare.start(workspace, get_thread_id(), by="agent")
+    except sandbox_prepare.PrepareError as exc:
+        return f"Prepare sandbox couldn't start: {exc}"
+    sandbox_prepare.wait(job, 120)
+    return sandbox_prepare.summary(job)
 
 
 class _GitBranchInput(BaseModel):
@@ -978,6 +1029,7 @@ class DeveloperTool(BaseTool):
             StructuredTool.from_function(func=_update_todos, name="developer_update_todos", description="Create or update the visible Developer todo plan for this code thread. Keep it current: mark an item in_progress when you start it and completed when it is done, including work a helper agent finished, before you end your turn.", args_schema=_TodoInput),
             StructuredTool.from_function(func=changes(_run_detected), name="developer_run_detected_test", description="Run a command from the detected Developer test/lint/typecheck command list.", args_schema=_RunDetectedInput),
             StructuredTool.from_function(func=changes(_run_command), name="developer_run_command", description="Run a shell command in the active Developer workspace after policy checks and record file side effects.", args_schema=_RunCommandInput),
+            StructuredTool.from_function(func=_prepare_sandbox, name="developer_prepare_sandbox", description="Prepare the Docker sandbox for tests when a test run failed because pytest or the project's packages are missing: installs the test dependencies from pyproject.toml, requirements*.txt or package.json with the sandbox network on for the install only, then off again. Asks the person first."),
             StructuredTool.from_function(func=changes(_import_sandbox_changes), name="developer_import_sandbox_changes", description="Import this conversation's pending Docker Sandbox changes into the real workspace, all together and oldest first, after one approval. Call it once when the work is ready, not once per change.", args_schema=_ImportSandboxInput),
             StructuredTool.from_function(func=_preview_patch, name="developer_preview_patch", description="Validate and preview a unified diff patch without writing files.", args_schema=_PatchInput),
             StructuredTool.from_function(func=changes(_apply_patch), name="developer_apply_patch", description="Apply a validated unified diff patch inside the active Developer workspace and record an agent-owned change set.", args_schema=_PatchInput),

@@ -4284,6 +4284,76 @@ class VideoEditPage(WireModel):
     running: int = Field(ge=0)
 
 
+SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
+
+
+class SandboxJobView(WireModel):
+    """Prepare sandbox, or the sandbox image's download (F18): one job of a conversation's code folder."""
+    job_id: SandboxJobId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    workspace_name: str = Field(max_length=200)
+    kind: Literal["prepare", "pull"]
+    status: Literal["pulling", "installing", "finishing", "ready", "failed", "stopped"]
+    # What it installs, in words: "pytest and the project with its test extra".
+    summary: str = Field(max_length=300)
+    # The project files it read: "pyproject.toml", "requirements-dev.txt", "package.json".
+    sources: list[str] = Field(max_length=16)
+    # The commands it runs in the sandbox, one line each.
+    commands: list[str] = Field(max_length=4)
+    image: str = Field(max_length=256)
+    started_at: str = Field(max_length=80)
+    ended_at: str | None = Field(max_length=80)
+    seconds: float = Field(ge=0)
+    # The sandbox network for the install: "on" only while it installs.
+    network: Literal["on", "off"]
+    network_on_at: str | None = Field(max_length=80)
+    network_off_at: str | None = Field(max_length=80)
+    # False only when Row-Bot couldn't confirm the install container (and its network) went away.
+    network_off_confirmed: bool
+    process_id: str | None = Field(max_length=64, pattern=r"^proc-[0-9a-f]{8}$")
+    # The install's latest line of output while it runs.
+    progress: str = Field(max_length=160)
+    by: Literal["you", "agent"]
+    stopped_by: Literal["", "you", "agent", "conversation", "quit"]
+    problem: Literal["", "pull_failed", "install_failed", "not_finished"]
+    detail: str = Field(max_length=400)
+
+
+class SandboxJobPage(WireModel):
+    """Sandbox jobs: those running now first, then finished ones, newest first."""
+    items: list[SandboxJobView] = Field(max_length=100)
+    running: int = Field(ge=0)
+
+
+class SandboxPlanView(WireModel):
+    """What Prepare sandbox would install, read from the project's own files."""
+    summary: str = Field(max_length=300)
+    sources: list[str] = Field(max_length=16)
+    commands: list[str] = Field(max_length=4)
+
+
+class SandboxStatusView(WireModel):
+    """A conversation's code folder's sandbox: Docker, its image, Prepare, and the latest job (F18)."""
+    workspace_name: str = Field(max_length=200)
+    execution_mode: Literal["local", "docker"]
+    # The sandbox's own network setting (Prepare never changes it).
+    network: Literal["off", "ask", "on"]
+    image: str = Field(max_length=256)
+    # The image's download size in words, when Row-Bot knows it ("about 570 MB").
+    image_download: str | None = Field(max_length=40)
+    runtime: Literal["ready", "unavailable", "not_checked"]
+    runtime_detail: str = Field(max_length=300)
+    # None until Docker was asked (Docker mode only).
+    image_present: bool | None
+    prepare: SandboxPlanView | None
+    job: SandboxJobView | None
+
+
+class SandboxStartPayload(WireModel):
+    """The person confirmed it in the app (their approval for this one)."""
+    confirmed: Literal[True]
+
+
 class WorkspaceFolderCrumb(WireModel):
     """One folder on the way from the workspace root to the folder shown."""
     name: str = Field(min_length=1, max_length=260)
@@ -7073,7 +7143,7 @@ class AppViewAppSetting(WireModel):
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-        "background_process", "recording", "video_edit", "delivery",
+        "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7102,6 +7172,10 @@ class TraceSpecialization(WireModel):
     edit_id: str = Field(default="", max_length=64, pattern=r"^(edit-[0-9a-f]{8})?$")
     # delivery: the files a step sent to the person's devices or a chat app, re-read by id (F7).
     delivery_id: str = Field(default="", max_length=64, pattern=r"^(send-[0-9a-f]{8})?$")
+    # sandbox_job: Prepare sandbox or the sandbox image's download, followed live by id (F18).
+    # sandbox_unprepared (a test run that lacked its tools) says which in error_code:
+    # "pytest_missing" or "packages_missing".
+    job_id: str = Field(default="", max_length=64, pattern=r"^(prep-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):

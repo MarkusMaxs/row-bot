@@ -1015,6 +1015,13 @@ _STATUS.update(
         "workspace_folder_root": 422,
         "clone_blocked": 403,
         "clone_confirmation_required": 409,
+        # Prepare sandbox and the sandbox image (F18).
+        "sandbox_unavailable": 404,
+        "sandbox_job_unavailable": 404,
+        "sandbox_docker_required": 409,
+        "sandbox_nothing_to_install": 409,
+        "sandbox_runtime_unavailable": 409,
+        "sandbox_prepare_blocked": 403,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -5396,6 +5403,79 @@ def create_router(
         except workspace_folders.FolderRefused as exc:
             raise ProtocolError(exc.code, _STATUS[exc.code]) from None
         return await respond(request, dto.WorkspaceFolderPage, result)
+
+    # Prepare sandbox and the sandbox image (F18). The person's own start is confirmed in the app;
+    # Block refuses it. A person sees and stops every job; stopping needs no approval.
+    def _sandbox_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "sandbox_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 409))
+
+    def _sandbox_job_id(value: str) -> str:
+        from row_bot.developer.sandbox_prepare import JOB_ID
+
+        if not JOB_ID.fullmatch(str(value or "")):
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return value
+
+    @router.get("/conversations/{conversation_id}/sandbox")
+    async def conversation_sandbox(request: Request, conversation_id: str) -> JSONResponse:
+        await session(request)
+        await readable_conversation(conversation_id)
+        from row_bot.application.sandbox_views import SandboxViewError, read_status
+
+        try:
+            result = await call(read_status, conversation_id)
+        except SandboxViewError as exc:
+            raise _sandbox_failure(exc) from None
+        return await respond(request, dto.SandboxStatusView, result)
+
+    async def _start_sandbox_job(request: Request, conversation_id: str, kind: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        await readable_conversation(conversation_id)
+        await _body(request, dto.SandboxStartPayload, 1024)
+        from row_bot.application.sandbox_views import SandboxViewError, start_job
+
+        try:
+            result = await call(start_job, conversation_id, kind)
+        except SandboxViewError as exc:
+            raise _sandbox_failure(exc) from None
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.post("/conversations/{conversation_id}/sandbox/prepare")
+    async def prepare_conversation_sandbox(request: Request, conversation_id: str) -> JSONResponse:
+        return await _start_sandbox_job(request, conversation_id, "prepare")
+
+    @router.post("/conversations/{conversation_id}/sandbox/pull")
+    async def pull_conversation_sandbox_image(request: Request, conversation_id: str) -> JSONResponse:
+        return await _start_sandbox_job(request, conversation_id, "pull")
+
+    @router.get("/sandbox-jobs")
+    async def list_sandbox_jobs(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.sandbox_views import read_jobs
+
+        result = await call(read_jobs, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.SandboxJobPage, result)
+
+    @router.get("/sandbox-jobs/{job_id}")
+    async def sandbox_job(request: Request, job_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.sandbox_views import read_job
+
+        result = await call(read_job, _sandbox_job_id(job_id))
+        if result is None:
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.post("/sandbox-jobs/{job_id}/stop")
+    async def stop_sandbox_job(request: Request, job_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.sandbox_views import stop_job
+
+        result = await call(stop_job, _sandbox_job_id(job_id))
+        if result is None:
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return await respond(request, dto.SandboxJobView, result)
 
     @router.get("/video-edits")
     async def list_video_edits(request: Request, conversation_id: str | None = None) -> JSONResponse:
