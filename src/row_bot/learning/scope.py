@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from row_bot import learning as gate
@@ -299,6 +300,38 @@ def describe_thread(
         return SourceFacts("unknown", thread_id=clean, goal=goal, historical=historical)
 
 
+def resolve(
+    thread_id: str,
+    *,
+    goal: bool = False,
+    historical: bool = False,
+    sender_id: str | None = None,
+    lookup: ThreadLookup | None = None,
+    store: LearningStore | None = None,
+    root: Path | None = None,
+) -> tuple[ScopeDecision, SourceFacts]:
+    """:func:`check`, with the facts it decided on (capture needs the conversation a
+    delegated Agent's thread belongs to). ``root`` is the data folder (the current one
+    by default)."""
+
+    settings = gate.read_settings(root)
+    if not settings.enabled:
+        return _deny(LEARNING_OFF), SourceFacts("unknown", thread_id=str(thread_id or ""), goal=goal,
+                                                historical=historical)
+    facts = describe_thread(
+        thread_id, goal=goal, historical=historical, sender_id=sender_id, lookup=lookup
+    )
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore(root)
+    opted_out = False
+    for candidate in dict.fromkeys(filter(None, (facts.thread_id, facts.root_thread_id))):
+        if saved.is_chat_opted_out(candidate):
+            opted_out = True
+            break
+    return decide(facts, settings, opted_out=opted_out), facts
+
+
 def check(
     thread_id: str,
     *,
@@ -314,21 +347,9 @@ def check(
     its opt-out (the conversation's own, and the one that started it).
     """
 
-    settings = gate.read_settings()
-    if not settings.enabled:
-        return _deny(LEARNING_OFF)
-    facts = describe_thread(
-        thread_id, goal=goal, historical=historical, sender_id=sender_id, lookup=lookup
-    )
-    from row_bot.learning.store import LearningStore
-
-    saved = store if store is not None else LearningStore()
-    opted_out = False
-    for candidate in dict.fromkeys(filter(None, (facts.thread_id, facts.root_thread_id))):
-        if saved.is_chat_opted_out(candidate):
-            opted_out = True
-            break
-    return decide(facts, settings, opted_out=opted_out)
+    return resolve(
+        thread_id, goal=goal, historical=historical, sender_id=sender_id, lookup=lookup, store=store
+    )[0]
 
 
 def set_chat_opt_out(thread_id: str, opted_out: bool, *, store: LearningStore | None = None) -> int:
@@ -365,5 +386,6 @@ __all__ = [
     "check",
     "decide",
     "describe_thread",
+    "resolve",
     "set_chat_opt_out",
 ]

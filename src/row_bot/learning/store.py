@@ -473,8 +473,9 @@ class LearningStore:
         kept: bool | None = None,
         memory_id: str | None = None,
         limit: int = 1000,
+        newest_first: bool = False,
     ) -> list[Record]:
-        """Records of one kind, oldest first, filtered on the indexed columns.
+        """Records of one kind, oldest first (or newest first), filtered on the indexed columns.
 
         ``status`` is an episode's or run's status, an attempt's outcome or a job's
         state; ``subkind`` is a decision's or signal's kind, a release's kind, an
@@ -496,12 +497,12 @@ class LearningStore:
             clauses.append("kept = ?")
             params.append(int(kept))
         params.append(max(1, min(int(limit), 100_000)))
+        order = " ORDER BY created_at DESC, id DESC" if newest_first else " ORDER BY created_at, id"
         with self._reader() as connection:
             if connection is None:
                 return []
             rows = connection.execute(
-                "SELECT kind, body FROM records WHERE " + " AND ".join(clauses)
-                + " ORDER BY created_at, id LIMIT ?",
+                "SELECT kind, body FROM records WHERE " + " AND ".join(clauses) + order + " LIMIT ?",
                 params,
             ).fetchall()
         return self._parse(rows)
@@ -616,33 +617,52 @@ class LearningStore:
     def put_blob(self, data: bytes) -> str:
         """Store content once, by its SHA-256; returns the hash. Refused while Learning is off."""
 
-        if type(data) is not bytes:
-            raise TypeError("A blob is bytes.")
-        if len(data) > MAX_BLOB_BYTES:
-            raise LearningStoreError("blob_too_large")
+        return self.put_blobs([data])[0]
+
+    def put_blobs(self, datas: Sequence[bytes]) -> list[str]:
+        """Store several contents at once (one transaction); returns their hashes in order.
+
+        Content already stored is not written again. Refused while Learning is off.
+        """
+
+        items = list(datas)
+        for data in items:
+            if type(data) is not bytes:
+                raise TypeError("A blob is bytes.")
+            if len(data) > MAX_BLOB_BYTES:
+                raise LearningStoreError("blob_too_large")
+        if not items:
+            return []
         self._writable({"blob"})
-        sha = hashlib.sha256(data).hexdigest()
+        hashes = [hashlib.sha256(data).hexdigest() for data in items]
+        unique = dict(zip(hashes, items, strict=True))
         with _LOCK:
-            path = self._blob_path(sha)
-            if not (path.is_file() and path.stat().st_size == len(data)):
-                staging = self.blobs_dir / "tmp"
-                staging.mkdir(parents=True, exist_ok=True)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = staging / f"{sha}.{uuid.uuid4().hex}.tmp"
-                try:
-                    with open(temporary, "xb") as handle:
-                        handle.write(data)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    os.replace(temporary, path)
-                finally:
-                    temporary.unlink(missing_ok=True)
+            for sha, data in unique.items():
+                self._write_blob_file(sha, data)
+            now = float(self._clock())
             with self._transaction() as connection:
-                connection.execute(
+                connection.executemany(
                     "INSERT OR IGNORE INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)",
-                    (sha, len(data), float(self._clock())),
+                    [(sha, len(data), now) for sha, data in unique.items()],
                 )
-        return sha
+        return hashes
+
+    def _write_blob_file(self, sha: str, data: bytes) -> None:
+        path = self._blob_path(sha)
+        if path.is_file() and path.stat().st_size == len(data):
+            return
+        staging = self.blobs_dir / "tmp"
+        staging.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = staging / f"{sha}.{uuid.uuid4().hex}.tmp"
+        try:
+            with open(temporary, "xb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def read_blob(self, sha: str) -> bytes | None:
         """A blob's content, or None when it is missing or damaged."""
