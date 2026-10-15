@@ -42,6 +42,7 @@ Choose **Home**, then the **Workflows** tab. Overview's **New workflow** quick s
 ## Advanced Workflows
 
 - **Edit workflow steps** opens the step editor, with a builder and a step graph. Besides prompts, steps can be conditions, approvals, running another workflow, delegating to an agent, waiting for agents, and notifications.
+- The step graph shows the steps as a flowchart, from **Start** to **End**: arrows after a condition say **yes** or **no**, and after an approval **approved** or **denied**. Click a step (or press Enter on it) to edit it beside the chart. A step that points to a removed step says so on its card, and steps nothing leads to sit under **Not reached**. **List** shows the same steps in order; your choice is remembered on this device.
 - **Workflow settings** chooses the model, whether runs reuse one conversation, a concurrency group, and the trigger: manual and scheduled runs only, **When another workflow completes**, or **Webhook (HTTP POST)**. A webhook trigger creates a private secret when you save; download its configuration and keep it private.
 
 ## Workflows With Apps
