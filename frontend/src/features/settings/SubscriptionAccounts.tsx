@@ -14,7 +14,7 @@ import {
   useProviderSettingsValue,
 } from './provider-settings-sessions';
 import { When } from '../../ui/When';
-import { humanizeToken } from '../../ui/format';
+import { humanizeToken, parseTimestamp } from '../../ui/format';
 
 type Action =
   'start' | 'check' | 'submit' | 'disconnect' | 'restore' | 'import_token';
@@ -526,7 +526,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
                 ? 'CLI login referenced'
                 : 'Not connected'}
             {account.expires_at
-              ? ` · Expires ${new Date(account.expires_at).toLocaleString()}`
+              ? ` · Expires ${parseTimestamp(account.expires_at)?.toLocaleString() ?? account.expires_at}`
               : ''}
           </p>
         )}
