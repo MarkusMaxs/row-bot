@@ -3543,6 +3543,54 @@ button.attachment-tile-face:hover {
 .model-picker-connect:hover {
   background: var(--accent-subtle);
 }
+/* F10: "More models (N)" opens the hidden models in place. */
+.model-picker-more {
+  color: var(--text-muted);
+}
+.model-picker-more > svg {
+  flex: none;
+}
+/* A row's favourite/hide menu: shown on the highlighted row (always on touch). */
+.model-picker-row-menu {
+  display: inline-flex;
+  flex: none;
+  margin-inline-end: -4px;
+}
+.model-picker-row-menu-button.button {
+  inline-size: 24px;
+  block-size: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  box-shadow: none;
+  color: var(--text-muted);
+  opacity: 0;
+}
+.model-picker-option[aria-selected='true'] .model-picker-row-menu-button,
+.model-picker-option[data-menu] .model-picker-row-menu-button,
+.model-picker-row-menu-button.button:focus-visible {
+  opacity: 1;
+}
+.model-picker-row-menu-button.button:hover,
+.model-picker-row-menu-button.button[data-state='open'] {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+}
+@media (hover: none), (pointer: coarse) {
+  .model-picker-option {
+    min-height: 40px;
+  }
+  .model-picker-row-menu-button.button {
+    inline-size: 32px;
+    block-size: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    opacity: 1;
+  }
+}
 .model-picker-empty {
   margin: 0;
   padding: 16px 12px;

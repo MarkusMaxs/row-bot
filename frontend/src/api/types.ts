@@ -1462,6 +1462,10 @@ export interface ClientTransport {
     body: Wire.ModelContextMutation,
     signal?: AbortSignal,
   ): Promise<Wire.ModelsSettingsState>;
+  updateModelVisibility?(
+    body: Wire.ModelVisibilityMutation,
+    signal?: AbortSignal,
+  ): Promise<Wire.ModelVisibilityState>;
   agentRuntimeSettings?(
     signal?: AbortSignal,
   ): Promise<Wire.AgentRuntimeSettingsState>;

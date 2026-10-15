@@ -18,16 +18,19 @@ import type {
   ContextUsageView,
   ConversationComposer,
   ConversationControlsPayload,
+  ModelChoice,
   ReasoningSelectionValue,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useClientState, useRuntime } from '../../runtime';
 import { Button, Hint, Menu } from '../../ui/primitives';
+import { useNotify } from '../../ui/overlays';
 import ComposerSkills, {
   SkillsAnchor,
   type ComposerSkillAction,
 } from './ComposerSkills';
 import ModelPicker from './ModelPicker';
+import type { VisibilityAction } from './ModelList';
 import {
   modelRefName,
   rememberRecentModel,
@@ -108,6 +111,7 @@ export default function ComposerControls({
   const state = useClientState();
   const { controller } = useRuntime();
   const navigate = useNavigate();
+  const notify = useNotify();
   const attachHintId = useId();
   const [saving, setSaving] = useState(false);
   const [localPickerOpen, setLocalPickerOpen] = useState(false);
@@ -198,6 +202,39 @@ export default function ComposerControls({
       operation.current = false;
       setSaving(false);
     }
+  }
+  /**
+   * Favourite or hide a model from the picker (F10). It never changes the
+   * chat's model; hiding says where the model went, with Undo.
+   */
+  async function changeVisibility(
+    item: ModelChoice,
+    action: VisibilityAction,
+    undoing = false,
+  ) {
+    const name = splitModelLabel(item.label).name;
+    try {
+      await controller.updateModelVisibility({
+        action,
+        model_ref: item.model_ref,
+      });
+    } catch (cause) {
+      notify(
+        `Couldn't change ${name}: ${clientError(cause).message}`,
+        'warning',
+      );
+      return;
+    }
+    if (action === 'hide' && !undoing)
+      notify(`${name} is under More models`, undefined, {
+        label: 'Undo',
+        onAction: () =>
+          void changeVisibility(
+            item,
+            item.favourite_rank != null ? 'favourite' : 'show',
+            true,
+          ),
+      });
   }
   /** Turns a level on; Hands-off asks once on this install, after which it never asks again. */
   function chooseLevel(level: ApprovalLevel, opener?: HTMLElement | null) {
@@ -623,6 +660,7 @@ export default function ComposerControls({
         onReconnect={() => navigate('/settings/providers')}
         onManage={() => navigate('/settings/models')}
         onSetup={() => navigate('/setup')}
+        onVisibility={(item, action) => void changeVisibility(item, action)}
         anchor={singleLine ? anchor : undefined}
         returnFocusTo={singleLine ? () => plusRef.current : undefined}
       />

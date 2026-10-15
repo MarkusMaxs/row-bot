@@ -6,6 +6,11 @@ import {
 import { aborted, clientError, failureStatus } from './errors';
 import { networkFailure, reportNetworkFailures } from './network-failure';
 import { Acknowledgements } from './acknowledgements';
+import {
+  applyVisibility,
+  markModels,
+  restoreVisibility,
+} from './model-visibility';
 import { isPanelDescriptor } from './types';
 import { sha256Hex } from '../platform/crypto';
 import type {
@@ -4824,6 +4829,39 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.updateModelContext(body, signal);
     });
+  /**
+   * Favourite or hide a model (F10). The composer's list changes at once and
+   * settles on what the server saved; a failed save puts it back.
+   */
+  updateModelVisibility = async (
+    body: import('./types').ModelVisibilityMutation,
+  ): Promise<import('./types').ModelVisibilityState> => {
+    const before = this.state.handshake?.models;
+    const mark = (
+      change: (
+        models: readonly import('./types').ModelChoice[],
+      ) => import('./types').ModelChoice[],
+    ) => {
+      const current = this.state.handshake;
+      if (current && !this.disposed)
+        this.update({
+          handshake: { ...current, models: change(current.models) },
+        });
+    };
+    mark((models) => markModels(models, applyVisibility(models, body)));
+    try {
+      const saved = await this.authenticatedResult((signal) => {
+        if (!this.transport.updateModelVisibility)
+          throw clientError({ code: 'capability_unavailable' });
+        return this.transport.updateModelVisibility(body, signal);
+      });
+      mark((models) => markModels(models, saved));
+      return saved;
+    } catch (cause) {
+      if (before) mark((models) => restoreVisibility(models, before));
+      throw cause;
+    }
+  };
   agentRuntimeSettings = (signal?: AbortSignal) =>
     this.query(() => this.transport.agentRuntimeSettings?.(signal));
   saveAgentRuntimeSettings = (
