@@ -24,7 +24,6 @@ import type {
 import { clientError } from '../../api/errors';
 import { useClientState, useRuntime } from '../../runtime';
 import { Button, Hint, Menu } from '../../ui/primitives';
-import { useNotify } from '../../ui/overlays';
 import ComposerSkills, {
   SkillsAnchor,
   type ComposerSkillAction,
@@ -111,7 +110,6 @@ export default function ComposerControls({
   const state = useClientState();
   const { controller } = useRuntime();
   const navigate = useNavigate();
-  const notify = useNotify();
   const attachHintId = useId();
   const [saving, setSaving] = useState(false);
   const [localPickerOpen, setLocalPickerOpen] = useState(false);
@@ -214,10 +212,10 @@ export default function ComposerControls({
         model_ref: item.model_ref,
       });
     } catch (cause) {
+      // The composer's own error line, like a model change that didn't save.
       const name = splitModelLabel(item.label).name;
-      notify(
-        `Couldn't change ${name}: ${clientError(cause).message}`,
-        'warning',
+      onError(
+        `Couldn't save the change to ${name}. ${clientError(cause).message}`,
       );
     }
   }
