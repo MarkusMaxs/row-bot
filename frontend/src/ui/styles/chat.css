@@ -1215,6 +1215,184 @@
   }
 }
 
+/* Row-Bot's workspace folder, folder by folder (F19): the path, a bounded
+   list of folders (one tap opens one), and one action for the folder shown. */
+.folder-browser {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.approval-card .folder-browser {
+  grid-column: 2 / -1;
+  margin-top: 4px;
+}
+.folder-browser-head {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.folder-browser-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--text-13);
+}
+.folder-browser-crumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.folder-browser-crumbs [aria-current] {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.folder-browser-separator {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.folder-browser-crumb {
+  min-height: 24px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-link);
+  font: inherit;
+  cursor: pointer;
+}
+.folder-browser-crumb:hover {
+  text-decoration: underline;
+}
+.folder-browser-crumb:focus-visible,
+.folder-browser-row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.folder-browser-list {
+  display: grid;
+  gap: 1px;
+  max-height: min(272px, 40vh);
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  list-style: none;
+  overscroll-behavior: contain;
+}
+.folder-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-14);
+  text-align: start;
+  cursor: pointer;
+}
+.folder-browser-row:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.folder-browser-row:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.folder-browser-row > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-secondary);
+}
+.folder-browser-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-browser-tag {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--text-12);
+}
+.folder-browser-row > .folder-browser-open {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+.folder-browser-problem {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--status-danger-border);
+  border-radius: var(--radius-control);
+  background: var(--status-danger-background);
+  color: var(--status-danger-text);
+  font-size: var(--text-13);
+}
+.folder-browser-problem p {
+  margin: 0;
+}
+.folder-browser-note {
+  margin: 0;
+  font-size: var(--text-12);
+}
+.folder-browser-clone {
+  display: grid;
+  gap: 6px;
+  font-size: var(--text-13);
+}
+.folder-browser-clone label {
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+}
+.folder-browser-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+.folder-browser-confirm p {
+  margin: 0;
+}
+.folder-browser-confirm .action-cluster,
+.folder-browser-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.folder-browser-actions .button svg,
+.folder-browser-confirm .button svg {
+  margin-inline-end: 4px;
+}
+@media (pointer: coarse) {
+  .folder-browser-row {
+    min-height: 44px;
+  }
+  .folder-browser-crumb {
+    min-height: 32px;
+  }
+}
+
 /* ---------------------------------------------- cards the assistant leaves */
 
 /* A design or code folder a turn created (Open · Rename · Undo), or a

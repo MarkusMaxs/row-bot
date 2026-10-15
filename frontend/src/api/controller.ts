@@ -2540,6 +2540,13 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.stopRecording(recordingId, signal);
     });
+  /**
+   * The folders in one folder of the Developer workspace root (F19): how a
+   * device with no folder picker chooses a code folder. The server checks
+   * every path against the root.
+   */
+  workspaceFolders = (path = '', signal?: AbortSignal) =>
+    this.query(() => this.transport.workspaceFolders?.(path, signal));
   /** Video edits (F3): every one, or one conversation's, running ones first. */
   videoEdits = (conversationId?: string, signal?: AbortSignal) =>
     this.query(() => this.transport.videoEdits?.(conversationId, signal));

@@ -249,6 +249,9 @@ export class HttpTransport implements ClientTransport {
   stopRecording(recordingId: string, signal?: AbortSignal) {
     return wire.stopRecording(this.base, this.session(), recordingId, signal);
   }
+  workspaceFolders(path = '', signal?: AbortSignal) {
+    return wire.getWorkspaceFolders(this.base, this.session(), path, signal);
+  }
   videoEdits(conversationId?: string, signal?: AbortSignal) {
     return wire.getVideoEdits(
       this.base,

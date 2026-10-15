@@ -813,6 +813,11 @@ export interface ClientTransport {
     recordingId: string,
     signal?: AbortSignal,
   ): Promise<Wire.RecordingView>;
+  /** The folders in one folder of the Developer workspace root (F19). */
+  workspaceFolders?(
+    path?: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.WorkspaceFolderPage>;
   /** Video edits (F3): every one, or one conversation's. */
   videoEdits?(
     conversationId?: string,
