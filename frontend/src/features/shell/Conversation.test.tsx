@@ -1269,6 +1269,7 @@ it('waits for a model change that is still saving, then sends with it (B109)', a
     }),
     '2',
     expect.any(String),
+    { onReceipt: expect.any(Function) },
   );
 });
 
@@ -1301,6 +1302,35 @@ it('keeps only what was typed after sending once the message is accepted', async
   expect(mock.drafts.get('conversation-a')?.text).toBe(
     'Which one is the oldest?',
   );
+});
+
+it('takes what was sent out of the composer as soon as Row-Bot has it, before the chat refreshes', async () => {
+  // Found live: an instant reply showed while the sent text still waited in
+  // the composer, because it left only once the chat had refreshed after it.
+  idleConversation();
+  let refreshed!: () => void;
+  mock.intent.mockImplementation(
+    (_conversation, _type, payload, _revision, commandId, options) => {
+      const receipt = {
+        command_id: commandId,
+        conversation_id: 'conversation-a',
+        submission_id: payload.submission_id,
+        status: 'accepted',
+      };
+      options?.onReceipt?.(receipt);
+      return new Promise((resolve) => {
+        refreshed = () => resolve(receipt);
+      });
+    },
+  );
+  await act(async () => conversation());
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  });
+  expect(mock.intent).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('');
+  await act(async () => refreshed());
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('');
 });
 
 it('sends the files again with Send again, not their names as text (B136)', async () => {
@@ -1359,6 +1389,7 @@ it('sends the files again with Send again, not their names as text (B136)', asyn
     }),
     '1',
     expect.any(String),
+    { onReceipt: expect.any(Function) },
   );
 });
 

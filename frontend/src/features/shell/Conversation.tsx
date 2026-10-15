@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import type {
   AttachmentView,
   ClientError,
+  CommandReceipt,
   ConversationComposer,
   DelegatedActivityView,
   ErrorAction,
@@ -1344,6 +1345,47 @@ export default function Conversation({
         setPending({ conversation: target, id: claim.steeringId!, text });
       }
       setUnknown({ key: scope, claim });
+      const sent = claim;
+      // What was sent leaves the composer as soon as Row-Bot has it, not once
+      // the conversation has refreshed after it (found live: an instant reply
+      // showed while the sent text still waited in the composer).
+      let left = false;
+      const leaveComposer = (receipt: CommandReceipt) => {
+        if (
+          left ||
+          receipt.command_id !== sent.commandId ||
+          receipt.conversation_id !== target ||
+          (receipt.submission_id &&
+            receipt.submission_id !== sent.steeringId) ||
+          (receipt.status !== 'accepted' && receipt.status !== 'completed')
+        )
+          return;
+        left = true;
+        const captured = submittedDraft.current;
+        if (
+          captured?.commandId === sent.commandId &&
+          captured.conversation === target &&
+          controller.getSnapshot().handshake?.instance_id === instance
+        ) {
+          // Anything typed after it stays (found live: a quick follow-up
+          // joined the sent text, which then waited there to be sent a
+          // second time).
+          const now = controller.getDraft(target);
+          if (now === captured.value)
+            controller.setDraft(target, { text: '', attachments: [] });
+          else if (now.text.startsWith(captured.value.text)) {
+            const sentFiles = new Set(
+              captured.value.attachments.map((a) => a.attachment_ref),
+            );
+            controller.setDraft(target, {
+              text: now.text.slice(captured.value.text.length).trimStart(),
+              attachments: now.attachments.filter(
+                (a) => !sentFiles.has(a.attachment_ref),
+              ),
+            });
+          }
+        }
+      };
       const receipt = checking
         ? await controller.receipt(claim.commandId)
         : await controller.intent(
@@ -1362,6 +1404,7 @@ export default function Conversation({
             },
             sendRevision,
             claim.commandId,
+            { onReceipt: leaveComposer },
           );
       if (
         receipt.command_id !== claim.commandId ||
@@ -1371,30 +1414,7 @@ export default function Conversation({
         throw { code: 'operation_uncertain' };
       if (receipt.status === 'accepted' || receipt.status === 'completed') {
         commandReceipts.clear(scope, claim.commandId);
-        const captured = submittedDraft.current;
-        if (
-          captured?.commandId === claim.commandId &&
-          captured.conversation === target &&
-          controller.getSnapshot().handshake?.instance_id === instance
-        ) {
-          // What was sent leaves the composer; anything typed after it stays
-          // (found live: a quick follow-up joined the sent text, which then
-          // waited there to be sent a second time).
-          const now = controller.getDraft(target);
-          if (now === captured.value)
-            controller.setDraft(target, { text: '', attachments: [] });
-          else if (now.text.startsWith(captured.value.text)) {
-            const sent = new Set(
-              captured.value.attachments.map((a) => a.attachment_ref),
-            );
-            controller.setDraft(target, {
-              text: now.text.slice(captured.value.text.length).trimStart(),
-              attachments: now.attachments.filter(
-                (a) => !sent.has(a.attachment_ref),
-              ),
-            });
-          }
-        }
+        leaveComposer(receipt);
         if (current()) {
           setUnknown(null);
           setMissingReceipt(null);
