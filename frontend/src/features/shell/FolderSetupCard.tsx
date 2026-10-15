@@ -316,6 +316,8 @@ export default function FolderSetupCard({
           }
           actionLabel={clone ? () => 'Clone here' : undefined}
           busy={!idle}
+          onCancel={() => void onDecide('reject')}
+          cancelLabel="Not now"
           onUse={useRoot}
           clone={
             clone ? undefined : { confirm: confirmDownload, onClone: cloneRoot }
@@ -342,32 +344,35 @@ export default function FolderSetupCard({
               : `Setup didn't finish. ${clientError({ code: partial.code ?? '' }).message}`}
         </p>
       )}
-      <div className="approval-card-actions">
-        <Button disabled={!idle} onClick={() => void onDecide('reject')}>
-          Not now
-        </Button>
-        {(!canPick && !browser) || bound ? (
-          <Button
-            variant="primary"
-            disabled={!idle}
-            onClick={() => void onDecide('approve')}
-          >
-            Continue
+      {/* The folder browser carries the card's actions while it is open. */}
+      {!showBrowser && (
+        <div className="approval-card-actions">
+          <Button disabled={!idle} onClick={() => void onDecide('reject')}>
+            Not now
           </Button>
-        ) : partial ? (
-          <Button variant="primary" disabled={!idle} onClick={finish}>
-            {unconfirmedClone ? 'Check clone status' : 'Continue setup'}
-          </Button>
-        ) : showBrowser ? null : (
-          <Button variant="primary" disabled={!idle} onClick={choose}>
-            {clone
-              ? 'Choose where'
-              : choices.length
-                ? 'Choose another folder'
-                : 'Choose folder'}
-          </Button>
-        )}
-      </div>
+          {(!canPick && !browser) || bound ? (
+            <Button
+              variant="primary"
+              disabled={!idle}
+              onClick={() => void onDecide('approve')}
+            >
+              Continue
+            </Button>
+          ) : partial ? (
+            <Button variant="primary" disabled={!idle} onClick={finish}>
+              {unconfirmedClone ? 'Check clone status' : 'Continue setup'}
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={!idle} onClick={choose}>
+              {clone
+                ? 'Choose where'
+                : choices.length
+                  ? 'Choose another folder'
+                  : 'Choose folder'}
+            </Button>
+          )}
+        </div>
+      )}
       {resolution && (
         <p role="status" className="approval-card-status">
           {resolution === 'Approval submitted.'

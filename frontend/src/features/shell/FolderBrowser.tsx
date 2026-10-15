@@ -56,6 +56,7 @@ export function FolderBrowser({
   actionLabel,
   onUse,
   onCancel,
+  cancelLabel = 'Cancel',
   clone,
   busy = false,
   title,
@@ -66,6 +67,8 @@ export function FolderBrowser({
   actionLabel?: (name: string, isRoot: boolean) => string;
   onUse: (choice: RootFolderChoice) => void;
   onCancel?: () => void;
+  /** The cancel action's words ("Not now" on a card in the chat). */
+  cancelLabel?: string;
   /** Offer Clone from URL; `confirm` asks before the download (Ask). */
   clone?: {
     confirm: boolean;
@@ -325,7 +328,7 @@ export function FolderBrowser({
         <div className="folder-browser-actions">
           {onCancel && (
             <Button variant="ghost" disabled={busy} onClick={onCancel}>
-              Cancel
+              {cancelLabel}
             </Button>
           )}
           {clone && (

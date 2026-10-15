@@ -437,10 +437,10 @@ def use_code_folder(name: str = "") -> str:
     elif choices:
         reason = f"No code folder is called exactly “{asked}”. Choose one of these, or another folder."
     elif asked:
-        reason = (f"No code folder is called “{asked}” yet. Choose the folder on this computer; Row-Bot "
-                  "adds it and works only inside it.")
+        reason = (f"No code folder is called “{asked}” yet. Choose the folder; Row-Bot adds it and works "
+                  "only inside it.")
     else:
-        reason = ("Choose the folder on this computer; Row-Bot adds it and works only inside it. Its "
+        reason = ("Choose the folder; Row-Bot adds it and works only inside it. Its "
                   "files and Git history stay as they are.")
     from langgraph.types import interrupt
 

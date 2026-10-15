@@ -26,7 +26,7 @@ const base = {
   revision: '3',
   nonce: 'nonce-a',
   action_label: 'use_code_folder',
-  reason: 'Choose the folder on this computer; Row-Bot adds it.',
+  reason: 'Choose the folder; Row-Bot adds it.',
   policy_revision: '1',
 };
 const folderCard = {
@@ -107,9 +107,7 @@ async function click(name: string) {
 
 it('Choose folder picks on this computer, adds it like Add resource, then lets the turn go on', async () => {
   const card = await renderCard('Use an existing folder');
-  expect(card).toHaveTextContent(
-    'Choose the folder on this computer; Row-Bot adds it.',
-  );
+  expect(card).toHaveTextContent('Choose the folder; Row-Bot adds it.');
   // A folder card never answers from the keyboard shortcut.
   await act(async () => {
     fireEvent.keyDown(document.body, { key: 'Enter', ctrlKey: true });

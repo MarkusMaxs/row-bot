@@ -1587,7 +1587,7 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
             yield "tool_call", {"tool_call_id": tool_id, "name": "use_code_folder", "args": {}}
             yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"),
                                  "tool": "use_code_folder", "label": "Use an existing folder",
-                                 "description": "Choose the folder on this computer; Row-Bot adds it and "
+                                 "description": "Choose the folder; Row-Bot adds it and "
                                                 "works only inside it. Its files and Git history stay as they are.",
                                  "args": {}, "setup": {"kind": "folder", "label": "Use an existing folder",
                                                        "folders": []}}]
