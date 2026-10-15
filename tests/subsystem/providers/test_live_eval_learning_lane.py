@@ -128,7 +128,8 @@ def test_the_lane_is_available_only_from_a_signed_in_eval_profile(tmp_path: Path
     assert not no_sign_in.available
     assert no_sign_in.reason == "the eval profile has no ChatGPT sign-in: run the sign-in script"
     missing = provider_registry.availability(codex, {eval_profile.PROFILE_ENV: str(tmp_path / "nowhere")})
-    assert not missing.available and "does not exist" in missing.reason
+    assert not missing.available and "does not exist yet" in missing.reason
+    assert missing.reason.startswith("the eval profile has no ChatGPT sign-in") and "run " in missing.reason
     home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
     (home / ".row-bot").mkdir(parents=True)

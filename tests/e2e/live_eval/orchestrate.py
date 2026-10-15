@@ -240,6 +240,9 @@ def run_provider(state: provider_registry.Availability, task_ids: Sequence[str],
     bundle: eval_profile.CodexBundle | None = None
     if pid == "codex":
         # The ChatGPT lane: the sign-in comes from the eval profile, through a pipe, never a file.
+        ready, why = eval_profile.availability()
+        if not ready:
+            return {"provider": pid, "model": state.model, "status": "skipped", "reason": why, "tasks": []}
         profile = eval_profile.profile_folder()
         try:
             bundle = eval_profile.read_bundle(profile, runner=bridge) if profile is not None else None

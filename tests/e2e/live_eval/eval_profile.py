@@ -125,10 +125,11 @@ def availability(env: Mapping[str, str] | None = None) -> tuple[bool, str]:
     profile = profile_folder(env)
     if profile is None:
         return False, f"set {PROFILE_ENV} to the eval profile folder (the ChatGPT lane, D31)"
-    try:
-        check_profile(profile)
-    except EvalProfileError as exc:
-        return False, str(exc)
+    if everyday_data_folder(profile):
+        return False, "refusing the everyday Row-Bot data folder as the eval profile"
+    if not profile.is_dir():
+        # The sign-in script makes the folder: no folder means no sign-in yet.
+        return False, f"the eval profile has no ChatGPT sign-in ({profile} does not exist yet): {sign_in_hint(env)}"
     if not signed_in(profile):
         return False, f"the eval profile has no ChatGPT sign-in: {sign_in_hint(env)}"
     return True, "ChatGPT sign-in from the eval profile; model chosen from the live catalog at run start"
