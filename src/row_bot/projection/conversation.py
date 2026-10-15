@@ -204,8 +204,13 @@ class ConversationProjection:
         rows = [row for msg in messages[-100:] if (row := public_message(msg)) is not None]
         self.install_rows(conversation_id, checkpoint_revision, rows)
 
-    def install_rows(self, conversation_id: str, checkpoint_revision: str, rows: list[dict]) -> None:
-        """Install a bounded result from the durable checkpoint reader."""
+    def install_rows(self, conversation_id: str, checkpoint_revision: str, rows: list[dict], *,
+                     settle: tuple[str, bool] | None = None) -> None:
+        """Install a bounded result from the durable checkpoint reader.
+
+        With *settle* (a live row, and whether its saved message adopted it), that live row is retired in
+        the same step: no read ever sees a saved answer and its live row together (a reply shown twice).
+        """
         size = 0
         bounded = []
         for row in reversed(rows):
@@ -217,20 +222,28 @@ class ConversationProjection:
                 break
             bounded.append(row)
             size += encoded_size
+        events: list[dict] = []
         with self._lock:
             state = self._states.setdefault(conversation_id, _Conversation())
-            if state.checkpoint_revision == checkpoint_revision:
-                return
-            active_size = sum(s.content_bytes for key, s in self._states.items()
-                              if key != conversation_id and (s.live_rows or (s.generation and not s.generation.get("quiesced"))))
-            budget = min(self.MAX_CONTENT_BYTES, max(2, self.MAX_GLOBAL_CONTENT_BYTES - active_size))
-            while bounded and self._content_size(list(reversed(bounded)), state.live_rows) > budget:
-                bounded.pop()
-            state.rows = list(reversed(bounded))
-            state.content_bytes = self._content_size(state.rows, state.live_rows)
-            state.checkpoint_revision = checkpoint_revision
-            event = self.publish(conversation_id, "transcript.checkpoint", {"checkpoint_revision": checkpoint_revision}, _notify_observers=False)
-        self._notify(conversation_id, event["projection_revision"])
+            if state.checkpoint_revision != checkpoint_revision:
+                active_size = sum(s.content_bytes for key, s in self._states.items()
+                                  if key != conversation_id and (s.live_rows or (s.generation and not s.generation.get("quiesced"))))
+                budget = min(self.MAX_CONTENT_BYTES, max(2, self.MAX_GLOBAL_CONTENT_BYTES - active_size))
+                retiring = {settle[0]} if settle is not None else set()
+                remaining = {key: row for key, row in state.live_rows.items() if key not in retiring}
+                while bounded and self._content_size(list(reversed(bounded)), remaining) > budget:
+                    bounded.pop()
+                state.rows = list(reversed(bounded))
+                state.content_bytes = self._content_size(state.rows, state.live_rows)
+                state.checkpoint_revision = checkpoint_revision
+                events.append(self.publish(conversation_id, "transcript.checkpoint",
+                                           {"checkpoint_revision": checkpoint_revision}, _notify_observers=False))
+            if settle is not None:
+                event = self._settle_live_locked(state, conversation_id, *settle)
+                if event is not None:
+                    events.append(event)
+        if events:
+            self._notify(conversation_id, events[-1]["projection_revision"])
 
     def snapshot(self, conversation_id: str) -> dict:
         with self._lock:
@@ -243,12 +256,17 @@ class ConversationProjection:
     def settle_live(self, conversation_id: str, row_id: str, *, adopted: bool) -> None:
         with self._lock:
             state = self._states.setdefault(conversation_id, _Conversation())
-            if state.live_rows.pop(row_id, None) is None:
-                return
-            state.content_bytes = self._content_size(state.rows, state.live_rows)
-            event = self.publish(conversation_id, "transcript.settled", {"row_id": row_id,
-                         "adoption": "exact" if adopted else "no_adoption"}, _notify_observers=False)
-        self._notify(conversation_id, event["projection_revision"])
+            event = self._settle_live_locked(state, conversation_id, row_id, adopted)
+        if event is not None:
+            self._notify(conversation_id, event["projection_revision"])
+
+    def _settle_live_locked(self, state: _Conversation, conversation_id: str, row_id: str,
+                            adopted: bool) -> dict | None:
+        if state.live_rows.pop(row_id, None) is None:
+            return None
+        state.content_bytes = self._content_size(state.rows, state.live_rows)
+        return self.publish(conversation_id, "transcript.settled", {"row_id": row_id,
+                            "adoption": "exact" if adopted else "no_adoption"}, _notify_observers=False)
 
     def events_since(self, conversation_id: str, cursor: str | None = None) -> dict:
         with self._lock:

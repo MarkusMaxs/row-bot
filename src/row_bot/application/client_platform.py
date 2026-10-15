@@ -649,7 +649,9 @@ class ClientPlatformService:
                 for row in selected], "has_more": more,
                 "next_cursor": base64.urlsafe_b64encode(json.dumps([revision, [selected[-1][1], selected[-1][2], selected[-1][0]]]).encode()).decode() if more else None}
 
-    def _refresh_checkpoint(self, conversation_id: str) -> None:
+    def _refresh_checkpoint(self, conversation_id: str, *, settle: tuple[str, bool] | None = None) -> None:
+        """Read the saved messages in; with *settle* (a live row, adopted or not), retire that live row in the
+        same step, so no read shows the saved answer and its live row together."""
         from row_bot import threads
         from row_bot.runtime.checkpoint_reader import open_checkpoint
         with threads.checkpoint_mutation(conversation_id):
@@ -658,7 +660,10 @@ class ClientPlatformService:
                 if reader and reader.revision != self.projection.snapshot(conversation_id)["checkpoint_revision"]:
                     records = list(reader.records(start=-100))
                     rows = [row for _, row in project_checkpoint_records(reader, records)]
-                    self.projection.install_rows(conversation_id, reader.revision, rows)
+                    self.projection.install_rows(conversation_id, reader.revision, rows, settle=settle)
+                    return
+        if settle is not None:
+            self.projection.settle_live(conversation_id, settle[0], adopted=settle[1])
 
     def conversation_changed(self, conversation_id: str) -> None:
         """A conversation was written outside its own turns (a delegated
@@ -1526,8 +1531,8 @@ class ClientPlatformService:
                     handle.segment_committed = True
                     handle.output_message_id = native_id
                     handle.output_checkpoint_revision = revision
-            self._refresh_checkpoint(conversation_id)
-            self.projection.settle_live(conversation_id, row_id, adopted=adopted)
+            # The saved answer replaces its live row in one step: a reader never sees both (a reply twice).
+            self._refresh_checkpoint(conversation_id, settle=(row_id, adopted))
             from row_bot.application.live_content import discard
             discard(conversation_id, f"live:{handle.pass_id}:{target_segment}")
         elif kind in {"tool_call", "tool_done"}:
