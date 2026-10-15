@@ -1528,6 +1528,119 @@
   max-width: 100%;
 }
 
+/* Prepare sandbox (F18): the network's state in words (warning tone only
+   while it is on), the install's latest line, and the offer under a test run
+   that couldn't start. */
+.sandbox-job-network[data-warning] {
+  color: var(--status-warning-text);
+  font-weight: var(--weight-medium);
+}
+.sandbox-job-card[data-network='on'] .transcript-card-icon {
+  color: var(--status-warning-text);
+}
+.sandbox-job-card[data-state='stopped'] .transcript-card-icon,
+.sandbox-job-card[data-state='failed'] .transcript-card-icon {
+  color: var(--text-muted);
+}
+.sandbox-job-summary,
+.sandbox-offer-advice {
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  line-height: 18px;
+}
+.sandbox-job-progress {
+  display: block;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sandbox-job-commands,
+.sandbox-confirm-commands code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sandbox-confirm {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--status-warning-border);
+  border-radius: var(--radius-control);
+  background: var(--status-warning-background);
+  font-size: var(--text-13);
+}
+.sandbox-confirm p {
+  margin: 0;
+}
+.sandbox-confirm .action-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.sandbox-confirm-commands {
+  font-size: var(--text-12);
+}
+.sandbox-ready {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 8px;
+}
+.sandbox-ready-line {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+}
+.sandbox-image-offer,
+.sandbox-prepare-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+  font-size: var(--text-13);
+}
+.sandbox-image-offer {
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+.sandbox-image-offer p,
+.sandbox-prepare-row p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+}
+.sandbox-prepare-row p {
+  margin: 0;
+}
+.sandbox-image-offer code {
+  overflow-wrap: anywhere;
+}
+.sandbox-ready-icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--text-secondary);
+}
+@media (max-width: 560px) {
+  .sandbox-image-offer,
+  .sandbox-prepare-row {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+  .sandbox-image-offer > .button,
+  .sandbox-prepare-row > .button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
 /* Files a step sent (F7): where they went, each file with Download while it
    lasts on the person's devices, or why it didn't go with one way out. */
 .delivery-advice {

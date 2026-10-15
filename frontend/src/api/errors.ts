@@ -1727,6 +1727,27 @@ const CATALOG: Record<string, Entry> = {
     'Choose a folder inside the workspace folder, not the workspace folder itself.',
     'none',
   ],
+  sandbox_unavailable: [
+    'This conversation has no code folder with a sandbox.',
+    'none',
+  ],
+  sandbox_job_unavailable: ['That sandbox job is no longer listed.', 'none'],
+  sandbox_docker_required: [
+    'This code folder runs commands on this computer, not in the Docker sandbox, so there is nothing to prepare.',
+    'none',
+  ],
+  sandbox_nothing_to_install: [
+    'Row-Bot found nothing to install: no pyproject.toml, requirements file or package.json in the code folder.',
+    'none',
+  ],
+  sandbox_runtime_unavailable: [
+    "Docker isn't running on this computer. Start Docker Desktop (or Docker), then try again.",
+    'retry',
+  ],
+  sandbox_prepare_blocked: [
+    "Approvals are set to Block in this chat, so the sandbox can't be prepared. Change Approvals to prepare it.",
+    'none',
+  ],
   clone_blocked: [
     "Approvals are set to Block in this chat, so Row-Bot can't clone. Change Approvals to clone.",
     'none',
