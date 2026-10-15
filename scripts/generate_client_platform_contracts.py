@@ -42,7 +42,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "NativeTerminalFrame", "NativeTerminalOutput", "NativeTerminalChanged", "NativeTerminalClosed",
     "StreamReset", "LazyContent", "SearchPage", "ConversationWorkspace", "ConversationComposer", "ConversationComposerQuery", "SlashCommandRead", "SlashCommandResult", "ResourceChoicePage",
     "DelegatedRun", "DelegatedActivityView",
-    "ContextUsageView", "ConversationOpenView", "ProviderStatusSnapshot", "ProviderLiveSnapshot", "ProviderCatalogRefresh", "ProviderRuntimeProbe", "CachedModelPage", "ModelsSettingsState", "ModelSurfaceMutation", "ModelContextMutation", "AgentRuntimeSettingsState", "ModelCatalogSummary", "ModelCameraList", "TaskSummaryPage", "TaskDeliverySnapshot", "ToolCatalogPage",
+    "ContextUsageView", "ConversationOpenView", "ProviderStatusSnapshot", "ProviderLiveSnapshot", "ProviderCatalogRefresh", "ProviderRuntimeProbe", "CachedModelPage", "ModelsSettingsState", "ModelSurfaceMutation", "ModelContextMutation", "ModelVisibilityMutation", "ModelVisibilityState", "AgentRuntimeSettingsState", "ModelCatalogSummary", "ModelCameraList", "TaskSummaryPage", "TaskDeliverySnapshot", "ToolCatalogPage",
     "SettingsSnapshot", "SettingsMutationRequest", "SettingsMutationReview", "SettingsMutationCommand", "SettingsMutationReceipt", "TrackerEntryPage", "GitHubAccessSnapshot", "GitHubAccessCommand", "GitHubAccessReceipt", "AccountAuthSnapshot", "AccountAuthCommand", "AccountAuthReceipt",
     "EntitySummaryPage", "KnowledgeEntityDetail", "KnowledgeRecallPage", "KnowledgeMemoryChangePage", "DocumentSummaryPage", "TaskEditableFields", "TaskEditorSnapshot", "TaskSaveResult",
     "TaskSettingsFields", "TaskSettingsSnapshot", "ProviderSettingsSnapshot",
@@ -430,6 +430,7 @@ OPERATIONS = (
     ("get", "/settings/models/state", None, "ModelsSettingsState"),
     ("post", "/settings/models/surface", "ModelSurfaceMutation", "ModelsSettingsState"),
     ("post", "/settings/models/context", "ModelContextMutation", "ModelsSettingsState"),
+    ("post", "/settings/models/visibility", "ModelVisibilityMutation", "ModelVisibilityState"),
     ("get", "/settings/models/agents", None, "AgentRuntimeSettingsState"),
     ("post", "/settings/models/agents", "AgentRuntimeSettingsState", "AgentRuntimeSettingsState"),
     ("post", "/settings/models/agents/reset", None, "AgentRuntimeSettingsState"),
@@ -957,6 +958,8 @@ export const updateModelSurface = (base: string, proof: SessionProof, body: Mode
   jsonRequest(base, '/settings/models/surface', 'ModelsSettingsState', proof, 'POST', body, undefined, signal);
 export const updateModelContext = (base: string, proof: SessionProof, body: ModelContextMutation, signal?: AbortSignal): Promise<ModelsSettingsState> =>
   jsonRequest(base, '/settings/models/context', 'ModelsSettingsState', proof, 'POST', body, undefined, signal);
+export const updateModelVisibility = (base: string, proof: SessionProof, body: ModelVisibilityMutation, signal?: AbortSignal): Promise<ModelVisibilityState> =>
+  jsonRequest(base, '/settings/models/visibility', 'ModelVisibilityState', proof, 'POST', body, undefined, signal);
 export const getAgentRuntimeSettings = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AgentRuntimeSettingsState> =>
   jsonRequest(base, '/settings/models/agents', 'AgentRuntimeSettingsState', proof, 'GET', undefined, undefined, signal);
 export const saveAgentRuntimeSettings = (base: string, proof: SessionProof, body: AgentRuntimeSettingsState, signal?: AbortSignal): Promise<AgentRuntimeSettingsState> =>
