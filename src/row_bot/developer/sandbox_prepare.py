@@ -484,8 +484,15 @@ def _container_gone(binary: str, name: str) -> bool:
         return False
 
 
+# Only ever Prepare's own install containers: "row-bot-dev-<16 hex>-prep-<8 hex>".
+INSTALL_CONTAINER = re.compile(r"row-bot-dev-[0-9a-f]{16}-prep-[0-9a-f]{8}")
+
+
 def _remove_container(job: SandboxJob) -> bool:
     """The install container is gone (its network with it); False when that can't be confirmed."""
+    if not INSTALL_CONTAINER.fullmatch(str(job.container or "")):
+        # A record naming anything else is never acted on.
+        return False
     probe = _runtime()
     if not getattr(probe, "binary", ""):
         return False

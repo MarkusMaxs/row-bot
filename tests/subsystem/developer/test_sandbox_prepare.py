@@ -316,6 +316,24 @@ def test_a_container_that_wont_go_is_reported_and_removed_on_the_next_start(sand
     assert again.network_off_confirmed and again.container not in env.docker.containers
 
 
+def test_a_record_naming_another_container_is_never_acted_on(sandbox):
+    env = sandbox
+    env.docker.hold.clear()
+    job = env.module.start(env.workspace, env.thread_id)
+    assert env.docker.started.wait(5)
+    saved_path = env.module.jobs_root() / f"{job.job_id}.json"
+    saved = json.loads(saved_path.read_text(encoding="utf-8"))
+    saved["container"] = "row-bot-dev-main"  # Tampered: the sandbox's own container.
+    saved_path.write_text(json.dumps(saved), encoding="utf-8", newline="\n")
+    env.module._RECORDS.clear()
+    env.module.sweep_leftovers(wait=True)
+    assert "row-bot-dev-main" in env.docker.containers
+    assert not any(call[:1] == ["rm"] and call[-1] == "row-bot-dev-main" for call in env.docker.calls)
+    env.module.stop(job.job_id)
+    env.docker.hold.set()
+    env.module.wait(job, 5)
+
+
 def test_a_job_a_crash_cut_short_is_marked_and_its_container_removed(sandbox):
     env = sandbox
     env.docker.hold.clear()
