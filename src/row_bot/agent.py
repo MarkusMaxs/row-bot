@@ -6026,10 +6026,25 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     return _agent_cache[cache_key]
 
 
+def _paused_at_a_question(state: Any) -> bool:
+    """Whether a LangGraph state is paused at a question (an ``interrupt()``).
+
+    ``state.next`` alone misses a tool that asks again once answered: LangGraph
+    counts the answers it keeps for that tool call as writes, and leaves the
+    call out of ``next`` although it is waiting.
+    """
+
+    if not state:
+        return False
+    if getattr(state, "next", None):
+        return True
+    return any(getattr(task, "interrupts", None) for task in getattr(state, "tasks", ()) or ())
+
+
 def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
     """Return normalized interrupt data from a paused LangGraph state."""
 
-    if not state or not getattr(state, "next", None):
+    if not _paused_at_a_question(state):
         return None
     all_interrupts: list[dict[str, Any]] = []
     for task in getattr(state, "tasks", ()) or ():
@@ -7600,7 +7615,8 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
     approval).
 
     Chained interrupts are handled after ``Command(resume=...)`` by checking
-    ``state.next`` and returning ``{"type": "interrupt", ...}``.
+    whether the graph is paused at a question (``_paused_at_a_question``) and
+    returning ``{"type": "interrupt", ...}``.
     """
     config = _normalize_agent_config(config)
     configurable = config.get("configurable") or {}
@@ -7678,7 +7694,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
 
     # Check for another interrupt (agent may call a second dangerous tool)
     state = agent.get_state(config)
-    if state and state.next:
+    if _paused_at_a_question(state):
         all_interrupts: list[dict] = []
         for task in state.tasks:
             if hasattr(task, "interrupts") and task.interrupts:
@@ -8625,7 +8641,7 @@ def _stream_graph(agent, input_data, config: dict,
 
     # Check if the graph paused due to an interrupt (destructive tool gate)
     state = agent.get_state(config)
-    if state and state.next:
+    if _paused_at_a_question(state):
         _log_stream_completion(
             config=config,
             answer_chars=_answer_chars,
