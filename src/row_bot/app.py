@@ -618,6 +618,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Video edit leftover check failed")
 
+    # Files sent to the devices whose time ran out, and anything a send cut short, are removed (F7).
+    try:
+        from row_bot.file_deliveries import sweep as sweep_deliveries
+        with _startup_phase("delivery_leftovers"):
+            await asyncio.to_thread(sweep_deliveries)
+    except Exception:
+        logger.exception("Delivery clean-up failed")
+
     # Background processes a crash left running are stopped, and reported once (F1).
     try:
         from row_bot.background_processes import report_leftovers

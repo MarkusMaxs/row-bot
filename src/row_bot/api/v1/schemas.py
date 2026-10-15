@@ -4284,6 +4284,56 @@ class VideoEditPage(WireModel):
     running: int = Field(ge=0)
 
 
+DeliveryId = Annotated[str, StringConstraints(pattern=r"^send-[0-9a-f]{8}$")]
+
+
+class DeliveryFile(WireModel):
+    """One file a delivery sent, or tried to (F7): its name and size, never where it came from."""
+    index: int = Field(ge=0, le=9)
+    name: str = Field(min_length=1, max_length=120)
+    size_bytes: int = Field(ge=0)
+    mime_type: str = Field(max_length=128)
+    sent: bool
+    # Sent to the person's devices and not expired: the download works with their session.
+    downloadable: bool
+
+
+class DeliveryView(WireModel):
+    """Files sent from a conversation to the person's own devices or to a chat app (F7)."""
+    delivery_id: DeliveryId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    target: Literal["devices", "channel"]
+    # The chat app (its registry name and how people call it), for a channel delivery.
+    channel: str = Field(max_length=64)
+    channel_label: str = Field(max_length=80)
+    # Where it went, in words: "your Telegram chat", "this Slack thread".
+    place: str = Field(max_length=120)
+    # Other people share that chat.
+    shared: bool
+    status: Literal["sent", "partly_sent", "failed", "expired"]
+    problem: Literal["", "too_large", "cant_send_files", "not_running", "not_linked", "send_failed", "store_full",
+                     "unavailable"]
+    # Why it didn't go, in plain words.
+    detail: str = Field(max_length=600)
+    # The size limit that applied, when the problem is size.
+    limit_bytes: int | None = Field(ge=0)
+    files: list[DeliveryFile] = Field(max_length=10)
+    created_at: str = Field(max_length=80)
+    # When the downloads end (devices only).
+    expires_at: str | None = Field(max_length=80)
+    # Who allowed it: nobody needed to (devices), you, the reviewer (Auto), or Hands-off.
+    approval: Literal["", "not_needed", "you", "reviewer", "hands_off"]
+    # It didn't go to a chat app, and the person can send it to their devices instead.
+    can_send_to_devices: bool
+    # The delivery to the person's devices made from this one instead.
+    sent_instead: DeliveryId | None
+
+
+class DeliveryPage(WireModel):
+    """A conversation's deliveries, or every one, newest first."""
+    items: list[DeliveryView] = Field(max_length=200)
+
+
 class LocalAddressGrantView(WireModel):
     """An address on this computer one conversation's browser may open (F4): one origin, for an hour."""
     grant_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
@@ -6976,7 +7026,7 @@ class AppViewAppSetting(WireModel):
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-        "background_process", "recording", "video_edit",
+        "background_process", "recording", "video_edit", "delivery",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7003,6 +7053,8 @@ class TraceSpecialization(WireModel):
     recording_id: str = Field(default="", max_length=64, pattern=r"^(rec-[0-9a-f]{8})?$")
     # video_edit: the edit the card follows live and then shows, re-read by id (F3).
     edit_id: str = Field(default="", max_length=64, pattern=r"^(edit-[0-9a-f]{8})?$")
+    # delivery: the files a step sent to the person's devices or a chat app, re-read by id (F7).
+    delivery_id: str = Field(default="", max_length=64, pattern=r"^(send-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -7132,6 +7184,8 @@ class Notice(WireModel):
     startup: bool
     count: int = Field(ge=1, le=9007199254740991)
     at: str = Field(min_length=1, max_length=64)
+    # The conversation it is about, when there is one to open (a file Row-Bot sent to the devices).
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class NoticePage(WireModel):

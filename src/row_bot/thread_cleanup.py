@@ -180,6 +180,9 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.video_edits import delete_conversation as delete_video_edits
 
     removed += delete_video_edits(thread_id)  # Its video edits' records (the results are its media).
+    from row_bot.file_deliveries import delete_conversation as delete_deliveries
+
+    removed += delete_deliveries(thread_id)  # Files it sent to the devices, and the records of its sends.
     return removed
 
 

@@ -1006,6 +1006,9 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
+        "delivery_unavailable": 404,
+        "delivery_expired": 410,
+        "delivery_files_gone": 409,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -5373,6 +5376,109 @@ def create_router(
         if result is None:
             raise ProtocolError("video_edit_unavailable", 404)
         return await respond(request, dto.VideoEditView, result)
+
+    # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
+    # so each sees every delivery; a download needs the session and ends when its copy expires.
+    def _delivery(value: str, index: str | None = None) -> tuple[str, int]:
+        from row_bot.file_deliveries import DELIVERY_ID
+
+        if not DELIVERY_ID.fullmatch(str(value or "")):
+            raise ProtocolError("delivery_unavailable", 404)
+        if index is None:
+            return value, -1
+        if not str(index).isdigit() or len(str(index)) > 2:
+            raise ProtocolError("delivery_unavailable", 404)
+        return value, int(index)
+
+    def _delivery_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "delivery_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 404))
+
+    @router.get("/deliveries")
+    async def list_deliveries(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.delivery_views import read_deliveries
+
+        result = await call(read_deliveries, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.DeliveryPage, result)
+
+    @router.get("/deliveries/{delivery_id}")
+    async def delivery(request: Request, delivery_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.delivery_views import read_delivery
+
+        result = await call(read_delivery, _delivery(delivery_id)[0])
+        if result is None:
+            raise ProtocolError("delivery_unavailable", 404)
+        return await respond(request, dto.DeliveryView, result)
+
+    @router.get("/deliveries/{delivery_id}/files/{index}")
+    async def delivery_file(request: Request, delivery_id: str, index: str) -> Response:
+        current = await session(request)
+        from urllib.parse import quote
+
+        from row_bot.file_deliveries import CHUNK_BYTES, DeliveryError, open_file
+
+        identifier, number = _delivery(delivery_id, index)
+        try:
+            name, size, handle = await call(open_file, identifier, number)
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+
+        async def chunks() -> Any:
+            try:
+                while True:
+                    # The person's session is checked again for every part sent.
+                    security.session(await _context(request), current.id, current.csrf)
+                    data = await call(handle.read, CHUNK_BYTES)
+                    if not data:
+                        return
+                    yield data
+            except ProtocolError:
+                return
+            finally:
+                handle.close()
+
+        return StreamingResponse(
+            chunks(),
+            # Never shown in the page: always a download, whatever the file is.
+            media_type="application/octet-stream",
+            headers={
+                **HEADERS,
+                "Content-Length": str(size),
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(name, safe=""),
+            },
+        )
+
+    @router.post("/deliveries/{delivery_id}/files/{index}/save")
+    async def delivery_file_save(request: Request, delivery_id: str, index: str) -> JSONResponse:
+        """The desktop window can't download (B275): the file is saved into Exports on this computer."""
+        current = await session(request, lane="mutation")
+        require_this_computer(await _context(request))
+        from row_bot.application.export_folder import save_export
+        from row_bot.file_deliveries import DeliveryError, read_file
+
+        identifier, number = _delivery(delivery_id, index)
+        try:
+            name, data = await call(read_file, identifier, number)
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+        result = await call(save_export, name, data, validate=dispatch_validation(request, current))
+        return await respond(request, dto.ExportSaved, result)
+
+    @router.post("/deliveries/{delivery_id}/to-devices")
+    async def delivery_to_devices(request: Request, delivery_id: str) -> JSONResponse:
+        """The person's own "Send to your devices instead": no approval (their own devices)."""
+        await session(request, lane="mutation")
+        from row_bot.application.delivery_views import send_to_devices_instead
+        from row_bot.file_deliveries import DeliveryError
+
+        try:
+            result = await call(send_to_devices_instead, _delivery(delivery_id)[0])
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+        return await respond(request, dto.DeliveryView, result)
 
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:

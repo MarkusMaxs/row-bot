@@ -1767,6 +1767,20 @@
           "title": "At",
           "type": "string"
         },
+        "conversation_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conversation Id"
+        },
         "count": {
           "maximum": 9007199254740991,
           "minimum": 1,
@@ -3020,6 +3034,13 @@
           "title": "Binding Id",
           "type": "string"
         },
+        "delivery_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(send-[0-9a-f]{8})?$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
         "display_name": {
           "default": "",
           "maxLength": 180,
@@ -3056,7 +3077,8 @@
             "connect_apps",
             "background_process",
             "recording",
-            "video_edit"
+            "video_edit",
+            "delivery"
           ],
           "title": "Kind",
           "type": "string"
