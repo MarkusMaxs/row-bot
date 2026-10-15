@@ -118,6 +118,15 @@ def test_node_projects_install_by_their_lockfile(tmp_path, lock, command):
     assert plan.commands == (command,) and plan.node and not plan.python
 
 
+def test_a_node_project_with_a_tests_folder_gets_no_pytest(tmp_path):
+    from row_bot.developer.sandbox_prepare import plan_for
+
+    root = _project(tmp_path, {"package.json": json.dumps({"devDependencies": {"jest": "^29"}}),
+                               "package-lock.json": "{}", "tests/app.test.js": "test('x', () => {});\n"})
+    plan = plan_for(root)
+    assert plan.commands == ("npm ci",) and not plan.python
+
+
 def test_nothing_to_install_is_none(tmp_path):
     from row_bot.developer.sandbox_prepare import plan_for
 

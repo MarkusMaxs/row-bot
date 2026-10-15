@@ -189,14 +189,26 @@ def _python_plan(root: Path) -> tuple[list[str], list[str], str] | None:
     if files:
         sources.extend(files)
         what.append("the packages in " + ", ".join(files))
-    has_tests = bool(sources) or any((root / name).exists() for name in (
-        "pytest.ini", "tox.ini", "conftest.py", "tests", "test", "setup.cfg", "setup.py"))
-    if not has_tests:
+    if not (sources or any((root / name).is_file() for name in (
+            "pytest.ini", "tox.ini", "conftest.py", "setup.cfg", "setup.py")) or _python_tests(root)):
         return None
     if "pytest" not in named:
         args.append("pytest")
         what.insert(0, "pytest")
     return args, sources, _words(what)
+
+
+def _python_tests(root: Path) -> bool:
+    """A tests/ or test/ folder with Python files in it (a Node project's tests/ is not a Python project)."""
+    for name in ("tests", "test"):
+        folder = root / name
+        if folder.is_dir() and not folder.is_symlink():
+            try:
+                if any(item.suffix == ".py" for _index, item in zip(range(200), folder.iterdir())):
+                    return True
+            except OSError:
+                continue
+    return False
 
 
 def _words(items: list[str]) -> str:
