@@ -19,6 +19,6 @@ it('lists favourites first in their order, then the rest, then hidden models (F1
     'f',
   ]);
   // Nothing chosen: the list is unchanged.
-  const plain = [{ id: 'x' }, { id: 'y' }];
+  const plain: { id: string; hidden?: boolean }[] = [{ id: 'x' }, { id: 'y' }];
   expect(favouritesFirst(plain)).toEqual(plain);
 });
