@@ -139,9 +139,15 @@ fi
 
 started=$SECONDS
 stopping=""
+child=""
+# Set before the app starts: a stop that lands while it starts is passed on,
+# never lost with the app left running on its own.
+trap 'stopping=1; [ -n "$child" ] && kill -TERM "$child" 2>/dev/null' TERM INT HUP
 "$VROOT/python/bin/python3" launcher.py "$@" &
 child=$!
-trap 'stopping=1; kill -TERM "$child" 2>/dev/null' TERM INT HUP
+if [ -n "$stopping" ]; then
+    kill -TERM "$child" 2>/dev/null
+fi
 while :; do
     wait "$child"
     code=$?
