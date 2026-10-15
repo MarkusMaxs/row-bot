@@ -795,7 +795,7 @@ def view(delivery: Delivery) -> dict[str, Any]:
         "shared": delivery.shared,
         "status": "expired" if expired and delivery.status != "failed" else delivery.status,
         "problem": delivery.problem,
-        "detail": delivery.detail,
+        "detail": delivery.detail[:600],
         "limit_bytes": delivery.limit_bytes or None,
         "files": [{"index": index, "name": item.name, "size_bytes": item.size_bytes, "mime_type": item.mime_type,
                    "sent": item.sent, "downloadable": available and item.sent}

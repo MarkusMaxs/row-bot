@@ -1060,7 +1060,7 @@ def _s5_stream(text: str, config: dict):
     from row_bot import file_deliveries
     from row_bot.application.attachments import register_attachment
     from row_bot.threads import append_checkpoint_messages
-    from row_bot.tools import send_file_tool
+    from row_bot.tools import file_delivery_tool
 
     call = predecessor._record("submit", config, "s5-send")
     thread = call["conversation_id"]
@@ -1077,7 +1077,7 @@ def _s5_stream(text: str, config: dict):
             plan = file_deliveries.plan_channel(thread, "telegram")
             sources = file_deliveries.resolve(args["files"], thread)
             yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"),
-                                 **send_file_tool.channel_approval(plan, sources)}]
+                                 **file_delivery_tool.channel_approval(plan, sources)}]
             return
         if "too big" in text:
             _s5_workspace()
@@ -1089,7 +1089,7 @@ def _s5_stream(text: str, config: dict):
             final = ("Sent: q3-report.pdf is on your devices. Open this chat on your phone or laptop and tap "
                      "Download; it's there for 7 days.")
         steps = [("send_file", args,
-                  lambda: (_s4_in_thread(thread, lambda: send_file_tool._send_file(**args)), []))]
+                  lambda: (_s4_in_thread(thread, lambda: file_delivery_tool._send_file(**args)), []))]
         yield from _s3_steps(thread, identity, steps)
         yield from _natural_final(call, thread, final, "s5")
     finally:
@@ -1099,7 +1099,7 @@ def _s5_stream(text: str, config: dict):
 def _s5_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, stop_event=None):
     """After the Telegram card: send through the fake adapter, as approved."""
     from row_bot.threads import append_checkpoint_messages, get_latest_checkpoint_messages
-    from row_bot.tools import send_file_tool
+    from row_bot.tools import file_delivery_tool
 
     thread = str(config["configurable"]["thread_id"])
     last = next((message for message in reversed(get_latest_checkpoint_messages(thread))
@@ -1114,7 +1114,7 @@ def _s5_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         args = asked.get("args") or {}
         result_id = fixture_id(identity + ":send")
         if approved:
-            content = _s4_in_thread(thread, lambda: send_file_tool._send_file(**args))
+            content = _s4_in_thread(thread, lambda: file_delivery_tool._send_file(**args))
         else:
             content = ("Approval: asked; denied by you — did not run\nThe person didn't allow sending "
                        "q3-report.pdf to your Telegram chat; nothing was sent.")

@@ -32,7 +32,7 @@ def chat(tmp_path, monkeypatch, reload_for_data_dir):
     from row_bot.channels import registry as channels
     from row_bot.channels.base import ChannelCapabilities
     from row_bot.tools import approval_gate, registry
-    from row_bot.tools import send_file_tool
+    from row_bot.tools import file_delivery_tool
 
     conversation = threads.create_thread("Quarterly report", seed_default_skills=False)
     register_attachment(conversation, "report.pdf", PDF)
@@ -42,7 +42,7 @@ def chat(tmp_path, monkeypatch, reload_for_data_dir):
     registry.set_tool_config("filesystem", "workspace_root", str(workspace))
     monkeypatch.setattr(file_deliveries, "_RECORDS", {})
     monkeypatch.setattr(file_deliveries, "_LOADED_ROOT", None)
-    monkeypatch.setattr(send_file_tool, "_REPLY_COUNTS", OrderedDict())
+    monkeypatch.setattr(file_delivery_tool, "_REPLY_COUNTS", OrderedDict())
     journal = app_notices.NoticeJournal()
     monkeypatch.setattr(app_notices, "app_notices", journal)
 
@@ -67,7 +67,7 @@ def chat(tmp_path, monkeypatch, reload_for_data_dir):
         return state.verdict
 
     monkeypatch.setattr(approval_review, "review", review)
-    state.send = lambda **kwargs: send_file_tool._send_file(**kwargs)
+    state.send = lambda **kwargs: file_delivery_tool._send_file(**kwargs)
     state.deliveries = file_deliveries
     yield state
 
