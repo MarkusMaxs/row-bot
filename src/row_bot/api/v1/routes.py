@@ -1051,6 +1051,10 @@ _STATUS.update(
 
 
 _STATUS.update(dict.fromkeys(('plan_changed', 'plan_unsupported', 'plan_not_resumable', 'invalid_access_preset', 'invalid_integration_query', 'invalid_mcp_auth', 'invalid_mcp_target', 'mcp_auth_busy', 'mcp_auth_callback_invalid', 'mcp_auth_callback_unavailable', 'mcp_auth_configuration_changed', 'mcp_auth_connection_unavailable', 'mcp_auth_denied', 'mcp_auth_expired', 'mcp_auth_flow_unavailable', 'mcp_auth_not_completed', 'mcp_auth_state_invalid', 'mcp_oauth_http_required', 'mcp_auth_endpoint_invalid', 'mcp_auth_issuer_mismatch', 'mcp_auth_origin_mismatch', 'mcp_auth_redirect_refused', 'mcp_credentials_endpoint_changed', 'mcp_credentials_too_large', 'mcp_credentials_unavailable', 'invalid_credential_reference', 'mcp_durable_storage_required', 'mcp_sign_in_required', 'mcp_package_recipe_unsupported', 'mcp_package_install_scripts_unsupported', 'mcp_package_locked_dependencies_required', 'mcp_package_integrity_required', 'mcp_package_integrity_changed', 'mcp_package_invalid', 'mcp_package_node_required', 'mcp_package_preparation_required', 'mcp_package_preview_capacity', 'mcp_package_preview_expired', 'mcp_package_source_invalid', 'mcp_package_too_large', 'package_link_or_collision', 'unsafe_package_path', 'hermes_recipe_unsupported', 'package_download_too_large', 'package_preview_changed', 'package_preview_expired', 'package_source_not_supported', 'package_source_removed', 'plugin_child_owned', 'plugin_child_parent_owned', 'plugin_child_source_immutable', 'plugin_mcp_state_unavailable', 'plugin_package_state_unavailable'), 409))
+# An address pasted back to finish a sign-in from another device: not that address, another sign-in's, already
+# used, or its sign-in has ended.
+_STATUS.update({"mcp_auth_address_invalid": 422, "mcp_auth_address_other": 409, "mcp_auth_address_used": 409,
+                "mcp_auth_address_expired": 409})
 
 _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 'unsupported_upload', 'unsafe_upload',
                               'bundle_signature_invalid', 'bundle_unsupported'), 422))
@@ -4510,7 +4514,7 @@ def create_router(
         except ValueError:
             redirect = ""
         return Context(owner_id=await integration_owner(request), mcp_owner_id=security.instance_id,
-            validate=dispatch_validation(request, current),
+            validate=dispatch_validation(request, current), remote=not on_this_computer(await _context(request)),
             redirect_uri=redirect, runtimes=runtime_installations, read_policy=installation_policy, **fields)
 
     @router.get("/integrations/sources")
@@ -4766,6 +4770,16 @@ def create_router(
                                      review_digest=body.review_digest)
         result = await call(resume, context, str(plan_id), preset=body.preset,
             overrides=None if body.overrides is None else dict(body.overrides), background=True)
+        return await respond(request, dto.InstallPlan, result)
+
+    @router.post("/integrations/plans/{plan_id}/sign-in")
+    async def integration_plan_sign_in(plan_id: UUID, request: Request) -> JSONResponse:
+        """Finish this plan's sign-in from another device with the address its browser ended on. The address is
+        only read (its state and code), never fetched; the session that sends it must be signed in."""
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.PlanSignInRequest, 16384)
+        from row_bot.integrations.plans import finish_sign_in
+        result = await call(finish_sign_in, await plan_context(request, current), str(plan_id), body.address)
         return await respond(request, dto.InstallPlan, result)
 
     @router.post("/integrations/plans/{plan_id}/cancel")

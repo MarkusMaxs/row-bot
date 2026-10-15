@@ -20,10 +20,10 @@ MODELS = {name: getattr(schemas, name) for name in (
     "SourceLink", "SourceOptIn", "SourceOptInChange", "IntegrationSourceView", "IntegrationSourceList", "CatalogUpdate", "CatalogSchedule", "AccessPresetView",
     "AppRef", "AppView", "AppList", "AppViewRenderRequest", "AppViewTool", "AppViewRender", "AppViewToolCall",
     "AppViewToolResult", "AppViewSettings", "AppViewAppSetting", "AppIconData", "IconBatch", "IconLicense", "IntegrationSignals", "IntegrationBlocker",
-    "IntegrationNextAction", "IntegrationEntry", "IntegrationEntryPage", "PlanInput", "PlanSignIn", "PlanRuntime", "PlanReviewItem",
+    "IntegrationNextAction", "IntegrationEntry", "IntegrationEntryPage", "PlanInput", "PlanDeviceCode", "PlanSignIn", "PlanRuntime", "PlanReviewItem",
     "PlanReview", "PlanLocalApp",
     "PlanTool", "PlanAccess", "PlanStep", "PlanConsent", "InstallPlan", "IntegrationDetail", "PlanReviewRequest",
-    "PlanStartRequest", "PlanContinueRequest", "IntegrationAbout", "IntegrationFile", "IntegrationRequirement", "IntegrationWay",
+    "PlanStartRequest", "PlanContinueRequest", "PlanSignInRequest", "IntegrationAbout", "IntegrationFile", "IntegrationRequirement", "IntegrationWay",
     "IntegrationResolveRequest", "IntegrationSettleRequest",
     "IntegrationAttribution", "IntegrationSourceStatus", "IntegrationSearchRequest",
     "Command", "Event", "Handshake", "Problem", "Outcome", "ResourceBinding",
@@ -129,6 +129,7 @@ OPERATIONS = (
     ('get', '/integrations/plans/{plan_id}', None, 'InstallPlan'),
     ('post', '/integrations/plans/{plan_id}/continue', 'PlanContinueRequest', 'InstallPlan'),
     ('post', '/integrations/plans/{plan_id}/cancel', None, 'InstallPlan'),
+    ('post', '/integrations/plans/{plan_id}/sign-in', 'PlanSignInRequest', 'InstallPlan'),
     ('post', '/integrations/items/resolve', 'IntegrationResolveRequest', 'IntegrationEntryPage'),
     ('post', '/integrations/items/settle', 'IntegrationSettleRequest', 'IntegrationDetail'),
     ('post', '/integrations/uploads', 'bytes', 'IntegrationEntryPage'),
@@ -1318,6 +1319,8 @@ export const getInstallPlan = (base: string, proof: SessionProof, plan: string, 
   jsonRequest(base, `/integrations/plans/${id(plan)}`, 'InstallPlan', proof, 'GET', undefined, undefined, signal);
 export const continueInstallPlan = (base: string, proof: SessionProof, plan: string, body: PlanContinueRequest, signal?: AbortSignal): Promise<InstallPlan> =>
   jsonRequest(base, `/integrations/plans/${id(plan)}/continue`, 'InstallPlan', proof, 'POST', validateWire('PlanContinueRequest', body), undefined, signal);
+export const finishInstallPlanSignIn = (base: string, proof: SessionProof, plan: string, body: PlanSignInRequest, signal?: AbortSignal): Promise<InstallPlan> =>
+  jsonRequest(base, `/integrations/plans/${id(plan)}/sign-in`, 'InstallPlan', proof, 'POST', validateWire('PlanSignInRequest', body), undefined, signal);
 export const cancelInstallPlan = (base: string, proof: SessionProof, plan: string, signal?: AbortSignal): Promise<InstallPlan> =>
   jsonRequest(base, `/integrations/plans/${id(plan)}/cancel`, 'InstallPlan', proof, 'POST', undefined, undefined, signal);
 export const getMcpConfiguration = (base: string, proof: SessionProof, search: string, cursor?: string, signal?: AbortSignal, target?: McpTarget): Promise<McpConfigurationPage> =>
