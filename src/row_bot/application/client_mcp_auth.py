@@ -123,7 +123,7 @@ def _receipt(flow: Flow, *, message: str = "") -> dict:
             "uncertain": "Local binding cleared; owned runtime or credential cleanup is incomplete. Use Cancel or clear sign-in to retry cleanup of the original operation.",
             "disconnected": "Local account binding cleared. Remote revocation was not verified; revoke the app or token in the service's account security controls. Configuration and tool permissions are retained.", "cancelled": "Sign-in cancelled.",
             "expired": "Sign-in expired. Start a new sign-in.", "failed": "Sign-in failed; existing credentials were kept."}.get(flow.state, "Inspect connection setup."),
-        "authorization_url": flow.authorization_url if flow.state == "waiting" else None,
+        "authorization_url": (flow.authorization_url or None) if flow.state == "waiting" else None,
         "delivery": flow.delivery,
         # While it waits: when its link or code stops working, whether its answer came (it is finishing), its code.
         "expires_at": flow.expires_at if flow.state in {"starting", "waiting"} else None,
