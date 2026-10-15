@@ -31,7 +31,10 @@ export function visibilityOf(
 
 /** One change, as the server makes it: adding moves a model to the end. */
 export function applyVisibility(
-  models: readonly ModelChoice[],
+  models: readonly Pick<
+    ModelChoice,
+    'model_ref' | 'favourite_rank' | 'hidden'
+  >[],
   change: ModelVisibilityMutation,
 ): ModelVisibilityState {
   const current = visibilityOf(models);
@@ -44,8 +47,11 @@ export function applyVisibility(
   return { schema_version: 1, favourites, hidden };
 }
 
+/** A listed model as far as these marks go: its reference and marks. */
+type Marked = Pick<ModelChoice, 'model_ref' | 'favourite_rank' | 'hidden'>;
+
 /** The list with each model marked from a saved preference. */
-export function markModels<T extends ModelChoice>(
+export function markModels<T extends Marked>(
   models: readonly T[],
   state: ModelVisibilityState,
 ): T[] {
@@ -61,9 +67,9 @@ export function markModels<T extends ModelChoice>(
 }
 
 /** Put the marks back as they were before a change that didn't save. */
-export function restoreVisibility<T extends ModelChoice>(
+export function restoreVisibility<T extends Marked>(
   models: readonly T[],
-  before: readonly ModelChoice[],
+  before: readonly Marked[],
 ): T[] {
   const marks = new Map(before.map((model) => [model.model_ref, model]));
   return models.map((model) => {
