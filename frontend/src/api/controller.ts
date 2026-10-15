@@ -2550,6 +2550,34 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.stopVideoEdit(editId, signal);
     });
+  /** Files sent to the person's devices or a chat app (F7). */
+  delivery = (deliveryId: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.delivery?.(deliveryId, signal));
+  /** One file sent to the devices, with this session (refused once expired). */
+  downloadDelivery = (
+    deliveryId: string,
+    index: number,
+    signal?: AbortSignal,
+  ) =>
+    this.authenticatedResult((current) => {
+      if (!this.transport.downloadDelivery)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.downloadDelivery(deliveryId, index, current);
+    }, signal);
+  /** Desktop window: save a sent file into Exports on this computer. */
+  saveDelivery = (deliveryId: string, index: number) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.saveDelivery)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.saveDelivery(deliveryId, index, signal);
+    });
+  /** "Send to your devices instead" for files that didn't go to a chat app. */
+  sendDeliveryToDevices = (deliveryId: string) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.sendDeliveryToDevices)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.sendDeliveryToDevices(deliveryId, signal);
+    });
   /** The local addresses a conversation's browser may open now (F4). */
   browserLocalAddresses = (conversation: string, signal?: AbortSignal) =>
     this.query(() =>

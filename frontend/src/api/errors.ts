@@ -1702,6 +1702,15 @@ const CATALOG: Record<string, Entry> = {
   process_unavailable: ['That command is no longer running.', 'none'],
   recording_unavailable: ['That recording is no longer listed.', 'none'],
   video_edit_unavailable: ['That video edit is no longer listed.', 'none'],
+  sent_file_unavailable: ['That file is no longer here to download.', 'none'],
+  sent_file_expired: [
+    'This download has ended: sent files stay for 7 days. Ask Row-Bot to send it again.',
+    'none',
+  ],
+  sent_files_gone: [
+    "Those files can't be found any more, so they weren't sent. Ask Row-Bot to send them again.",
+    'none',
+  ],
   local_address_unavailable: [
     'That address was already removed or ran out.',
     'none',

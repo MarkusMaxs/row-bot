@@ -555,22 +555,22 @@ def open_file(delivery_id: str, index: int) -> tuple[str, int, BinaryIO]:
 
     delivery = get(delivery_id)
     if delivery is None or delivery.target != "devices" or not 0 <= index < len(delivery.files):
-        raise DeliveryError("delivery_unavailable")
+        raise DeliveryError("sent_file_unavailable")
     item = delivery.files[index]
     if not item.sent:
-        raise DeliveryError("delivery_unavailable")
+        raise DeliveryError("sent_file_unavailable")
     folder = _files_folder(delivery)
     if delivery.expired():
         _remove(folder)
-        raise DeliveryError("delivery_expired")
+        raise DeliveryError("sent_file_expired")
     path = folder / str(index)
     try:
         info = path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_size != item.size_bytes:
-            raise DeliveryError("delivery_unavailable")
+            raise DeliveryError("sent_file_unavailable")
         handle = open(path, "rb")  # noqa: SIM115 - the route closes it once streamed.
     except OSError:
-        raise DeliveryError("delivery_unavailable") from None
+        raise DeliveryError("sent_file_unavailable") from None
     return item.name, item.size_bytes, handle
 
 
@@ -750,17 +750,17 @@ def send_instead_to_devices(delivery_id: str) -> Delivery:
 
     original = get(delivery_id)
     if original is None:
-        raise DeliveryError("delivery_unavailable")
+        raise DeliveryError("sent_file_unavailable")
     if original.sent_instead and get(original.sent_instead) is not None:
         return get(original.sent_instead)  # type: ignore[return-value]
     if original.status == "sent" or original.target != "channel":
-        raise DeliveryError("delivery_unavailable")
+        raise DeliveryError("sent_file_unavailable")
     # What didn't go (all of it, unless some files did).
     kept = [source for source, item in zip(original.sources, original.files) if not item.sent] or original.sources
     try:
         sources = _sources_again(original.conversation_id, kept)
     except SourceError:
-        raise DeliveryError("delivery_files_gone") from None
+        raise DeliveryError("sent_files_gone") from None
     copy = send_to_devices(original.conversation_id, sources, approval="not_needed")
     if copy.status == "failed":
         return copy

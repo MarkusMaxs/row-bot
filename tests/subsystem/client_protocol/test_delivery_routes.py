@@ -64,7 +64,7 @@ def test_a_signed_in_device_lists_and_downloads_what_was_sent(service, sent):
                         "/api/v1/deliveries/send-00000000/files/0", "/api/v1/deliveries/not-a-delivery",
                         f"/api/v1/deliveries/{sent['failed'].delivery_id}/files/0"):
             refused = client.get(missing, headers=headers)
-            assert refused.status_code == 404 and refused.json()["code"] == "delivery_unavailable", missing
+            assert refused.status_code == 404 and refused.json()["code"] == "sent_file_unavailable", missing
 
 
 def test_nothing_is_served_without_the_person_s_session(service, sent):
@@ -94,7 +94,7 @@ def test_the_link_expires_with_its_copy(service, sent, monkeypatch):
     with _client(service) as client:
         _, headers = bootstrap(client)
         expired = client.get(f"/api/v1/deliveries/{delivery.delivery_id}/files/0", headers=headers)
-        assert expired.status_code == 410 and expired.json()["code"] == "delivery_expired"
+        assert expired.status_code == 410 and expired.json()["code"] == "sent_file_expired"
         view = client.get(f"/api/v1/deliveries/{delivery.delivery_id}", headers=headers).json()
         assert view["status"] == "expired" and not view["files"][0]["downloadable"]
 

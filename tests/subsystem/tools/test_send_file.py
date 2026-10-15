@@ -154,7 +154,7 @@ def test_the_download_ends_when_its_copy_expires(chat, monkeypatch):
 
     with pytest.raises(DeliveryError) as refused:
         chat.deliveries.open_file(delivery.delivery_id, 0)
-    assert refused.value.code == "delivery_expired"
+    assert refused.value.code == "sent_file_expired"
     assert not folder.exists()  # The copy is gone, not just hidden.
     view = chat.deliveries.view(delivery)
     assert view["status"] == "expired" and not view["files"][0]["downloadable"]

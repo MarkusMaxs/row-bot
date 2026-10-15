@@ -1006,9 +1006,9 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
-        "delivery_unavailable": 404,
-        "delivery_expired": 410,
-        "delivery_files_gone": 409,
+        "sent_file_unavailable": 404,
+        "sent_file_expired": 410,
+        "sent_files_gone": 409,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -5383,15 +5383,15 @@ def create_router(
         from row_bot.file_deliveries import DELIVERY_ID
 
         if not DELIVERY_ID.fullmatch(str(value or "")):
-            raise ProtocolError("delivery_unavailable", 404)
+            raise ProtocolError("sent_file_unavailable", 404)
         if index is None:
             return value, -1
         if not str(index).isdigit() or len(str(index)) > 2:
-            raise ProtocolError("delivery_unavailable", 404)
+            raise ProtocolError("sent_file_unavailable", 404)
         return value, int(index)
 
     def _delivery_failure(exc: Exception) -> ProtocolError:
-        code = getattr(exc, "code", "delivery_unavailable")
+        code = getattr(exc, "code", "sent_file_unavailable")
         return ProtocolError(code, _STATUS.get(code, 404))
 
     @router.get("/deliveries")
@@ -5409,7 +5409,7 @@ def create_router(
 
         result = await call(read_delivery, _delivery(delivery_id)[0])
         if result is None:
-            raise ProtocolError("delivery_unavailable", 404)
+            raise ProtocolError("sent_file_unavailable", 404)
         return await respond(request, dto.DeliveryView, result)
 
     @router.get("/deliveries/{delivery_id}/files/{index}")
