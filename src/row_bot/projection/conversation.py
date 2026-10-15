@@ -242,6 +242,8 @@ class ConversationProjection:
                 event = self._settle_live_locked(state, conversation_id, *settle)
                 if event is not None:
                     events.append(event)
+            if events:
+                events.extend(self._retire_saved_twins_locked(state, conversation_id))
         if events:
             self._notify(conversation_id, events[-1]["projection_revision"])
 
@@ -259,6 +261,34 @@ class ConversationProjection:
             event = self._settle_live_locked(state, conversation_id, row_id, adopted)
         if event is not None:
             self._notify(conversation_id, event["projection_revision"])
+
+    def _retire_saved_twins_locked(self, state: _Conversation, conversation_id: str) -> list[dict]:
+        """A live row whose exact answer is already saved in this turn (after the person's last message) is
+        that answer, saved a moment before Row-Bot binds the two: it goes now, so no read shows it twice."""
+        if not state.live_rows:
+            return []
+
+        def text(row: dict) -> str | None:
+            # A saved row's blocks are rendered (markdown, with ids); a live row's are plain text.
+            blocks = row.get("blocks") or []
+            if row.get("content_status") == "lazy" or any(block.get("type") not in {"text", "markdown"}
+                                                         for block in blocks):
+                return None
+            return "".join(str(block.get("text") or "") for block in blocks) or None
+
+        last_person = max((index for index, row in enumerate(state.rows) if row.get("role") == "user"), default=-1)
+        saved = {text(row) for row in state.rows[last_person + 1:]
+                 if row.get("role") == "assistant" and not row.get("tool_call_ids") and not row.get("tool_calls_ref")}
+        saved.discard(None)
+        events = []
+        for row_id, live in list(state.live_rows.items()):
+            if text(live) not in saved:
+                continue
+            # Matched by text only, never adopted as exact (a saved answer may carry more than its text).
+            event = self._settle_live_locked(state, conversation_id, row_id, False)
+            if event is not None:
+                events.append(event)
+        return events
 
     def _settle_live_locked(self, state: _Conversation, conversation_id: str, row_id: str,
                             adopted: bool) -> dict | None:
