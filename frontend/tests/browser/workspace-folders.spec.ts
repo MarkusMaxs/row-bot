@@ -1,4 +1,4 @@
-import type { Page, TestInfo } from '@playwright/test';
+import type { Locator, Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
 import { newConversation, openAddResource } from './unified-helpers';
@@ -42,6 +42,23 @@ async function everywhere(
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
   await settle();
+}
+
+/**
+ * One way out (the sheet's ×, no footer Close or extra Cancel beside it)
+ * and the primary action in view, in the footer, at any width.
+ */
+async function oneWayOut(dialog: Locator, primary: string) {
+  await expect(
+    dialog.getByRole('button', { name: 'Close', exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByRole('button', { name: 'Close dialog', exact: true }),
+  ).toBeVisible();
+  const action = dialog
+    .locator('.dialog-footer')
+    .getByRole('button', { name: primary, exact: true });
+  await expect(action).toBeInViewport({ ratio: 1 });
 }
 
 async function codeFolderSetup(page: Page, mode: string) {
@@ -101,7 +118,7 @@ test('a plain browser registers a folder chosen in Row-Bot’s workspace folder'
   // Folders only, and no path to type.
   await expect(browser.getByRole('textbox')).toHaveCount(0);
   await expect(
-    browser.getByRole('button', { name: 'Use Row-Bot', exact: true }),
+    dialog.getByRole('button', { name: 'Use Row-Bot', exact: true }),
   ).toBeDisabled();
   await browser.getByRole('button', { name: 'Projects', exact: true }).click();
   await expect(
@@ -110,14 +127,20 @@ test('a plain browser registers a folder chosen in Row-Bot’s workspace folder'
       exact: true,
     }),
   ).toBeVisible();
-  await everywhere(page, info, 'folder-browser');
+  await everywhere(page, info, 'folder-browser', async () => {
+    await browser.scrollIntoViewIfNeeded();
+    await oneWayOut(dialog, 'Use Projects');
+  });
 
   // An empty folder says so, and can still be used.
   await browser.getByRole('button', { name: 'notes', exact: true }).click();
   await expect(browser).toContainText(
     'No folders inside notes. Use it, or go back.',
   );
-  await everywhere(page, info, 'folder-browser-empty');
+  await everywhere(page, info, 'folder-browser-empty', async () => {
+    await browser.scrollIntoViewIfNeeded();
+    await oneWayOut(dialog, 'Use notes');
+  });
 
   // A folder swapped for a link out of the workspace folder is refused.
   await browser
@@ -136,7 +159,12 @@ test('a plain browser registers a folder chosen in Row-Bot’s workspace folder'
   await expect(browser.getByRole('alert')).toContainText(
     "That folder is outside Row-Bot's workspace folder, so it can't be used.",
   );
-  await everywhere(page, info, 'folder-browser-refused');
+  await everywhere(page, info, 'folder-browser-refused', async () => {
+    await expect(
+      dialog.getByRole('button', { name: 'Close', exact: true }),
+    ).toHaveCount(0);
+    await browser.getByRole('alert').scrollIntoViewIfNeeded();
+  });
   await browser
     .getByRole('button', { name: 'Back to Row-Bot', exact: true })
     .click();
@@ -145,9 +173,10 @@ test('a plain browser registers a folder chosen in Row-Bot’s workspace folder'
   await browser
     .getByRole('button', { name: 'tide-app, Git repository', exact: true })
     .click();
-  await browser
+  await dialog
     .getByRole('button', { name: 'Use tide-app', exact: true })
     .click();
+  // Chosen: the footer's Close is back, and the form's own submit.
   await expect(
     dialog.getByText('Selected: Row-Bot › Projects › tide-app'),
   ).toBeVisible();
@@ -179,8 +208,14 @@ test('Clone from URL clones into Row-Bot’s workspace folder after the download
   await expect(confirm).toContainText(
     "Clone demo? Row-Bot downloads it from example.test into Row-Bot, with this computer's own Git sign-in.",
   );
-  await everywhere(page, info, 'clone-from-url');
-  await confirm.getByRole('button', { name: 'Clone', exact: true }).click();
+  await everywhere(page, info, 'clone-from-url', async () => {
+    await oneWayOut(dialog, 'Clone');
+    await confirm.scrollIntoViewIfNeeded();
+  });
+  await dialog
+    .locator('.dialog-footer')
+    .getByRole('button', { name: 'Clone', exact: true })
+    .click();
   await expect(dialog.getByText('Code folder ready')).toBeVisible();
   const state = await page.request.get('/__s6_fixture/workspace', {
     headers: fixtureHeaders(),

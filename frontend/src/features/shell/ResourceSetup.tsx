@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type {
   CommandReceipt,
@@ -17,6 +18,7 @@ import type {
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useClientState, useRuntime } from '../../runtime';
+import { useDialogFooter } from '../../ui/dialog-footer';
 import { useOverlay } from '../../ui/overlays';
 import {
   Button,
@@ -902,12 +904,40 @@ export default function ResourceSetup({
       );
     }
   }
+  // A clone waiting for its confirmation: Cancel and Clone take the dialog
+  // footer's place, so Clone is always in view (also on a phone).
+  const confirmingClone =
+    confirmClone &&
+    mode === 'create' &&
+    kind === 'workspace' &&
+    workspaceMode === 'clone_repository';
+  const cloneActions = confirmingClone ? (
+    <>
+      <Button disabled={busy} onClick={() => setConfirmClone(false)}>
+        Cancel
+      </Button>
+      <Button
+        variant="primary"
+        disabled={busy}
+        onClick={() => void perform('default', true)}
+      >
+        Clone
+      </Button>
+    </>
+  ) : null;
+  const cloneFooter = useDialogFooter(confirmingClone);
+  const confirmRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (confirmingClone)
+      confirmRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [confirmingClone]);
   // Row-Bot's workspace folder, folder by folder, where no picker can choose.
   const folderBrowser = (purpose: 'folder' | 'parent') => (
     <FolderBrowser
       purpose={purpose}
       title={purpose === 'parent' ? 'Choose where' : 'Choose a folder'}
       busy={busy}
+      dock
       onCancel={() => setBrowsing(false)}
       onUse={(choice) => {
         setFolder({
@@ -1414,11 +1444,9 @@ export default function ResourceSetup({
             <Button disabled={busy} onClick={() => void perform('repair')}>
               Repair missing origin
             </Button>
-          ) : confirmClone &&
-            mode === 'create' &&
-            kind === 'workspace' &&
-            workspaceMode === 'clone_repository' ? (
+          ) : confirmingClone ? (
             <div
+              ref={confirmRef}
               className="folder-browser-confirm"
               role="group"
               aria-label="Confirm the download"
@@ -1431,18 +1459,11 @@ export default function ResourceSetup({
                   : ''} into {folder?.label ?? 'the folder you chose'}, with
                 this computer&apos;s own Git sign-in.
               </p>
-              <div className="action-cluster">
-                <Button disabled={busy} onClick={() => setConfirmClone(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  variant="primary"
-                  disabled={busy}
-                  onClick={() => void perform('default', true)}
-                >
-                  Clone
-                </Button>
-              </div>
+              {cloneFooter ? (
+                createPortal(cloneActions, cloneFooter)
+              ) : (
+                <div className="action-cluster">{cloneActions}</div>
+              )}
             </div>
           ) : (
             <Button

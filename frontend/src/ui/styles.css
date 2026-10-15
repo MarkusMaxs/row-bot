@@ -1310,6 +1310,10 @@ small {
   background: var(--surface);
   flex-shrink: 0;
 }
+/* Content's own actions in the footer (useDialogFooter) lay out as its buttons. */
+.dialog-footer-slot {
+  display: contents;
+}
 .alert-dialog > .dialog-title {
   padding: 24px 24px 0;
 }

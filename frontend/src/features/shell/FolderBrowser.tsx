@@ -1,4 +1,5 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronRight,
   Folder,
@@ -9,6 +10,7 @@ import {
 import type { WorkspaceFolderPage } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
+import { useDialogFooter } from '../../ui/dialog-footer';
 import { Button, InlineEmpty, Input, Skeleton } from '../../ui/primitives';
 
 /** A folder chosen in the browser: its path under the root and where it is, in words. */
@@ -60,6 +62,7 @@ export function FolderBrowser({
   clone,
   busy = false,
   title,
+  dock = false,
 }: {
   /** A code folder to work in, or a place to clone or create one in. */
   purpose: Purpose;
@@ -76,6 +79,11 @@ export function FolderBrowser({
   };
   busy?: boolean;
   title?: string;
+  /**
+   * In a dialog: its actions take the dialog footer's place (one way out,
+   * the primary always in view), and it scrolls itself into view.
+   */
+  dock?: boolean;
 }) {
   const { controller } = useRuntime();
   const [path, setPath] = useState('');
@@ -138,8 +146,62 @@ export function FolderBrowser({
     clone.onClone(url.trim(), choice);
   }
 
+  const actions =
+    clone && cloning ? (
+      !confirming && (
+        <div className="folder-browser-actions">
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              setCloning(false);
+              setConfirming(false);
+            }}
+          >
+            Back
+          </Button>
+          <Button variant="primary" disabled={!cloneReady} onClick={startClone}>
+            <GitBranchPlus size={14} aria-hidden />
+            Clone here
+          </Button>
+        </div>
+      )
+    ) : (
+      <div className="folder-browser-actions">
+        {onCancel && (
+          <Button variant="ghost" disabled={busy} onClick={onCancel}>
+            {cancelLabel}
+          </Button>
+        )}
+        {clone && (
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() => setCloning(true)}
+          >
+            <GitBranchPlus size={14} aria-hidden />
+            Clone from URL
+          </Button>
+        )}
+        <Button
+          variant="primary"
+          disabled={!canUse}
+          onClick={() => choice && onUse(choice)}
+        >
+          {label}
+        </Button>
+      </div>
+    );
+  const footer = useDialogFooter(dock);
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    // Opened in a dialog: the list comes into view (the actions are in the footer).
+    if (dock) section.current?.scrollIntoView?.({ block: 'start' });
+  }, [dock]);
+
   return (
     <section
+      ref={section}
       className="folder-browser"
       aria-labelledby={headingId}
       aria-busy={loading || busy}
@@ -301,55 +363,7 @@ export function FolderBrowser({
           )}
         </div>
       )}
-      {clone && cloning ? (
-        !confirming && (
-          <div className="folder-browser-actions">
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => {
-                setCloning(false);
-                setConfirming(false);
-              }}
-            >
-              Back
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!cloneReady}
-              onClick={startClone}
-            >
-              <GitBranchPlus size={14} aria-hidden />
-              Clone here
-            </Button>
-          </div>
-        )
-      ) : (
-        <div className="folder-browser-actions">
-          {onCancel && (
-            <Button variant="ghost" disabled={busy} onClick={onCancel}>
-              {cancelLabel}
-            </Button>
-          )}
-          {clone && (
-            <Button
-              variant="ghost"
-              disabled={busy}
-              onClick={() => setCloning(true)}
-            >
-              <GitBranchPlus size={14} aria-hidden />
-              Clone from URL
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            disabled={!canUse}
-            onClick={() => choice && onUse(choice)}
-          >
-            {label}
-          </Button>
-        </div>
-      )}
+      {footer ? createPortal(actions, footer) : actions}
     </section>
   );
 }
