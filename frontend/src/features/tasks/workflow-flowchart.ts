@@ -677,7 +677,8 @@ export function layoutFlowchart(
       ),
     );
     unreached = { x: margin, y: y - rowGap / 2 };
-    let rowTop = unreached.y + 36;
+    // Below the heading and its one-line explanation.
+    let rowTop = unreached.y + 52;
     for (let k = 0; k < unreachedSteps.length; k += columns) {
       const row = unreachedSteps.slice(k, k + columns);
       row.forEach((index, column) => {

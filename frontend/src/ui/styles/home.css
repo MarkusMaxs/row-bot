@@ -2216,10 +2216,8 @@ button.overview-stat:hover {
 }
 .workflow-chart-group {
   position: absolute;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
+  display: grid;
+  gap: 2px;
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-12);

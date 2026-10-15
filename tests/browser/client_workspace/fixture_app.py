@@ -2946,6 +2946,63 @@ def p4_tasks(state: str, x_fixture_token: str = Header(default="")) -> dict:
     return {"state": state, "seeded_tasks": count}
 
 
+# F23: workflows whose steps branch, loop, break and leave a step unreached,
+# for the step editor's flowchart. Saved switched off; never scheduled or run.
+_F23_WORKFLOWS = (
+    ("f23-chain", "Flowchart: morning summary", [
+        {"id": "gather", "type": "prompt", "prompt": "Gather today's calendar and inbox highlights"},
+        {"id": "summarise", "type": "prompt", "prompt": "Summarise the news in five bullet points"},
+        {"id": "tell", "type": "notify", "message": "Your morning summary is ready", "channel": "desktop"},
+    ]),
+    ("f23-review", "Flowchart: weekly report review", [
+        {"id": "draft", "type": "prompt", "prompt": "Draft the weekly report from this week's notes"},
+        {"id": "check", "type": "condition", "condition": "contains:TODO", "if_true": "fix", "if_false": "review"},
+        {"id": "fix", "type": "prompt", "prompt": "Finish every TODO left in the report"},
+        {"id": "review", "type": "approval", "message": "Approve the weekly report before it goes out?",
+         "timeout_minutes": 0, "if_approved": "publish", "if_denied": "end"},
+        {"id": "publish", "type": "notify", "message": "The weekly report went out", "channel": "desktop",
+         "next": "end"},
+    ]),
+    ("f23-loop", "Flowchart: draft until approved", [
+        {"id": "write", "type": "prompt", "prompt": "Write a short announcement for the team"},
+        {"id": "approve", "type": "approval", "message": "Approve the announcement?", "timeout_minutes": 0,
+         "if_denied": "write"},
+        {"id": "announce", "type": "notify", "message": "The announcement was approved", "channel": "desktop"},
+    ]),
+    ("f23-broken", "Flowchart: release checklist", [
+        {"id": "collect", "type": "prompt", "prompt": "Check the release checklist"},
+        {"id": "gate", "type": "condition", "condition": "contains:ready", "if_true": "ship",
+         "if_false": "notes_9"},
+        {"id": "ship", "type": "notify", "message": "Ready to ship", "channel": "desktop", "next": "end"},
+        {"id": "tidy", "type": "prompt", "prompt": "Tidy up old release drafts"},
+    ]),
+)
+
+
+@app.post("/__p4_fixture/workflow-graphs")
+def p4_workflow_graphs(x_fixture_token: str = Header(default="")) -> dict:
+    """Seed disposable workflows with branching steps; do not schedule or run them."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+    if not Path(tasks._DB_PATH).resolve().is_relative_to(predecessor.DATA.resolve()):
+        raise HTTPException(status_code=403, detail="Synthetic data scope required")
+    conn = tasks._get_conn()
+    try:
+        conn.execute("DELETE FROM tasks WHERE id LIKE 'f23-%'")
+        conn.executemany(
+            "INSERT INTO tasks (id,name,description,icon,prompts,created_at,enabled,notify_only,sort_order,"
+            "channels,steps,advanced_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(identity, name, "Synthetic flowchart", "",
+              json.dumps([step["prompt"] for step in steps if step["type"] == "prompt"]),
+              "2026-01-01", 0, 0, order, "[]", json.dumps(steps), 1)
+             for order, (identity, name, steps) in enumerate(_F23_WORKFLOWS)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"seeded_workflows": len(_F23_WORKFLOWS)}
+
+
 @app.post("/__p4_fixture/tools/{state}")
 def p4_tools(state: str, x_fixture_token: str = Header(default="")) -> dict:
     """Register inert synthetic metadata only in this disposable fixture process."""
