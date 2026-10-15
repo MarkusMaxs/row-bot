@@ -151,9 +151,12 @@ def test_without_ffmpeg_it_says_so_and_leaves_nothing_running(screen):
 def _without_ffmpeg(screen, monkeypatch, wheel_key: str | None = "windows-x86_64"):
     from row_bot import ffmpeg_runtime
 
+    from row_bot.data_paths import get_row_bot_data_dir
+
     screen.ffmpeg = None
-    downloaded = ffmpeg_runtime.Ffmpeg(executable=str(Path("C:/data/ffmpeg/imageio-ffmpeg-0.6.0/ffmpeg.exe")),
-                                       source="row_bot", version="7.1", licence="GPL version 3 or later")
+    folder = get_row_bot_data_dir() / "ffmpeg" / "imageio-ffmpeg-0.6.0-windows-x86_64"
+    downloaded = ffmpeg_runtime.Ffmpeg(executable=str(folder / "ffmpeg.exe"), source="row_bot", version="7.1",
+                                       licence="GPL version 3 or later")
     monkeypatch.setattr(ffmpeg_runtime, "current_wheel",
                         lambda *_a, **_k: ffmpeg_runtime.WHEELS.get(wheel_key or ""))
     monkeypatch.setattr(ffmpeg_runtime, "install", lambda **_kw: screen.installs.append(1) or downloaded)
