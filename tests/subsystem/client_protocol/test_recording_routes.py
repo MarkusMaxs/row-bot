@@ -146,11 +146,14 @@ def test_a_recording_cut_short_by_a_crash_is_marked_and_its_files_go(service, da
     (folder / "turn-00001" / "action.json").write_text("{}", encoding="utf-8")
 
     # Row-Bot crashed: the next start reads the record it left.
+    before = recordings._RECORDS
     monkeypatch.setattr(recordings, "_RECORDS", {})
     assert recordings.sweep_leftovers() == 1
     reread = recordings.get(record.recording_id)
     assert (reread.status, reread.problem, reread.stopped_by) == ("failed", "not_saved", "quit")
     assert not folder.exists()
+    # Nothing of the "crashed" run stays in memory once the dictionary goes back (Buddy reads it).
+    before.pop(record.recording_id, None)
 
 
 def test_a_conversation_s_local_addresses_are_listed_and_removed(service, monkeypatch):  # noqa: F811
