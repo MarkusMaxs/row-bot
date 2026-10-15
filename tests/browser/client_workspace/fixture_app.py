@@ -3419,6 +3419,7 @@ def p4_integration_skills(x_fixture_token: str = Header(default="")) -> dict:
 def p5_apps(x_fixture_token: str = Header(default=""), x_fixture_origin: str = Header(default="")) -> dict:
     """Apps end to end on this machine only: synthetic servers, keychain and sign-in page."""
     p4_provider_credentials(x_fixture_token)
+    _elsewhere["mode"] = "this_computer"  # Signed in from this computer unless a spec says otherwise (F27).
     import asyncio
     import secrets
     from types import SimpleNamespace
@@ -3599,8 +3600,87 @@ def p5_oauth_approve(state: str, allow: str = ""):
     if not allow:
         return HTMLResponse("<!doctype html><title>Synthetic sign-in</title><p>Allow Row-Bot to use this service?</p>"
                             f'<a href="?state={escape(quote(state))}&allow=1">Allow</a>')
+    with client_mcp_auth._LOCK:
+        flow = next((f for f in client_mcp_auth._FLOWS.values() if f.oauth_state and f.oauth_state == state), None)
+    if flow is not None and flow.delivery == "paste":
+        # Another device's browser goes where the sign-in said: an address that doesn't load there (F27).
+        from urllib.parse import urlencode
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(flow.callback_uri + "?" + urlencode({"code": "synthetic-code", "state": state}),
+                                status_code=302)
     client_mcp_auth.accept_callback(state=state, code="synthetic-code")
     return HTMLResponse("<!doctype html><title>Signed in</title><p>Signed in to the synthetic service.</p>")
+
+
+_elsewhere: dict = {"mode": "this_computer"}
+_ELSEWHERE_PUBLIC = "https://rowbot.example.test/api/v1/settings/mcp/auth/callback"
+
+
+@app.post("/__s7_fixture/sign-in-elsewhere")
+def s7_sign_in_elsewhere(mode: str = "paste", x_fixture_token: str = Header(default=""),
+                         x_fixture_origin: str = Header(default="")) -> dict:
+    """F27 on this machine only: apps sign in to the synthetic service of /__p5_fixture/apps as if this browser
+    were another device. "paste": Row-Bot has no public address, so the browser ends on an address that doesn't
+    load, to paste back; "public": Row-Bot's public address; "device": the service offers a code."""
+    if mode not in {"paste", "public", "device"}:
+        raise HTTPException(status_code=422, detail="mode")
+    p5_apps(x_fixture_token, x_fixture_origin)
+    import asyncio
+    from row_bot.application import client_mcp_auth
+    from row_bot.integrations import plans
+    from row_bot.mcp_client import auth
+    _elsewhere["mode"] = mode
+    original = _elsewhere.setdefault("handler", plans._HANDLERS[("mcp", "sign_in")])
+
+    def elsewhere(ctx, record, step):
+        if _elsewhere["mode"] != "this_computer":
+            ctx = replace(ctx, remote=True, redirect_uri=_ELSEWHERE_PUBLIC if _elsewhere["mode"] == "public" else "")
+        return original(ctx, record, step)
+    plans._HANDLERS[("mcp", "sign_in")] = plans._HANDLERS[("mcp", "allow_changes")] = elsewhere
+    auth.discover_sign_in = lambda url: {"required": False, "metadata": True, "dcr": True, "device": mode == "device"}
+
+    async def run_device(flow, label, client):
+        with client_mcp_auth._LOCK:
+            flow.device = {"user_code": "WDJB-MJHT", "verification_uri": "https://auth.example.test/device",
+                           "verification_uri_complete": ""}
+            flow.state = "waiting"
+        client_mcp_auth._persist(flow)
+        await asyncio.to_thread(flow.event.wait, 120)
+        flow.authority()
+        if not flow.code:
+            raise auth.McpAuthError("mcp_auth_denied")
+        auth.write_credentials(flow.ref, {"tokens": {"access_token": "synthetic-access", "token_type": "Bearer"}})
+        client_mcp_auth._publish(flow, {"mode": "oauth", "credential_ref": flow.ref, "binding": auth.binding(flow.name, flow.cfg),
+            "callback_uri": flow.callback_uri, "label": label, "operation_id": flow.command_id})
+        return True
+    client_mcp_auth._run_device = run_device
+    return {"ready": True}
+
+
+@app.post("/__s7_fixture/sign-in-elsewhere/allow-code")
+def s7_allow_code(x_fixture_token: str = Header(default="")) -> dict:
+    """The person entered the code on the synthetic service's page and allowed access."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.application import client_mcp_auth
+    with client_mcp_auth._LOCK:
+        flow = next(f for f in client_mcp_auth._FLOWS.values() if f.delivery == "device" and f.state == "waiting")
+        flow.code, flow.callback_used = "synthetic-code", True
+        flow.event.set()
+    return {"allowed": True}
+
+
+@app.post("/__s7_fixture/sign-in-elsewhere/expire")
+def s7_expire(x_fixture_token: str = Header(default="")) -> dict:
+    """Five minutes pass: every waiting sign-in is past its time (B338)."""
+    predecessor._authorize(x_fixture_token)
+    import time
+    from row_bot.application import client_mcp_auth
+    with client_mcp_auth._LOCK:
+        flows = [f for f in client_mcp_auth._FLOWS.values() if f.state == "waiting"]
+        for flow in flows:
+            flow.created -= client_mcp_auth._TTL + 1
+            flow.expires_at = time.time() - 1
+    return {"expired": len(flows)}
 
 
 

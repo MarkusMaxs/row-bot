@@ -325,9 +325,14 @@
 }
 .sign-in-steps .field {
   min-width: 0;
+  max-width: 40rem;
+}
+.sign-in-steps .input[aria-invalid='true'] {
+  border-color: var(--status-danger-border);
 }
 .sign-in-steps .settings-dialog-error {
   display: block;
+  max-width: 40rem;
   margin-top: var(--space-1);
 }
 .sign-in-time {

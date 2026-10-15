@@ -76,6 +76,7 @@ BROWSER_SMOKE_SPECS = (
     "workspace-folders",
     "sandbox-prepare",
     "workflow-flowchart",
+    "apps-sign-in-elsewhere",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
@@ -100,7 +101,7 @@ BROWSER_PHONE_SPECS = (
     "capability-surfaces", "conversation-layout", "message-content", "overlays",
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
-    "unified-panels", "unified-quality", "visual-alignment",
+    "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")
