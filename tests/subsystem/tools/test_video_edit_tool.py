@@ -98,7 +98,8 @@ def studio(tmp_path, monkeypatch, reload_for_data_dir):
                                  licence="GPL version 3 or later")
     state.ffmpeg = fake
     monkeypatch.setattr(ffmpeg_runtime, "find", lambda: fake)
-    infos = {"input-1.mp4": VideoInfo(6.0, 640, 360, 30.0, True)}
+    infos = {"input-1.mp4": VideoInfo(6.0, 640, 360, 30.0, True),
+             "output.mp4": VideoInfo(3.0, 640, 360, 30.0, True)}
     monkeypatch.setattr(video_edits, "probe_video",
                         lambda _ffmpeg, path, _folder: infos.get(path, VideoInfo(4.0, 320, 240, 25.0, False)))
     monkeypatch.setattr("row_bot.tool_outputs.current_thread_id", lambda: state.chat)

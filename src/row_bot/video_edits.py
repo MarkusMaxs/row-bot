@@ -369,6 +369,18 @@ def _failure_words(output: str) -> str:
     return f"ffmpeg couldn't make it: {last[:300]}"
 
 
+def _measure(edit: VideoEdit, ffmpeg: Any, folder: Path) -> None:
+    """How long the edited video really is (the plan's length is what it expected)."""
+    from row_bot.media_sources import SourceError
+    from row_bot.video_editing import EditError
+
+    try:
+        info = probe_video(ffmpeg, "output.mp4", folder)
+    except (EditError, SourceError, OSError):
+        return
+    _set(edit, expected_seconds=round(info.duration, 2))
+
+
 def _save_video(edit: VideoEdit, output: Path) -> None:
     from row_bot.application.attachments import MAX_ATTACHMENT_BYTES, AttachmentError, register_attachment
     from row_bot.video_editing import EditError
@@ -451,6 +463,7 @@ def _run(edit: VideoEdit, request: Request) -> None:
                 (folder / name).write_bytes(data)
             _set(edit, expected_seconds=round(plan.duration, 2))
             _run_process(edit, ffmpeg, plan.args, folder, "Video edit")
+            _measure(edit, ffmpeg, folder)
             _save_video(edit, folder / "output.mp4")
         else:
             info = inputs[0].info

@@ -330,7 +330,9 @@ export const TranscriptMessage = memo(function TranscriptMessage({
                 downloadName={
                   item.label === 'Page screenshot'
                     ? 'screenshot.png'
-                    : undefined
+                    : item.label === 'Contact sheet'
+                      ? 'contact-sheet.jpg'
+                      : undefined
                 }
               />
             ))}

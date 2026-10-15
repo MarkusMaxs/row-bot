@@ -28,7 +28,8 @@ if "-version" in args:
     sys.exit(0)
 outputs = [arg[5:] for index, arg in enumerate(args) if arg.startswith("file:") and args[index - 1] != "-i"]
 if not outputs:
-    sys.stderr.write("  Duration: 00:00:06.00, start: 0.000000\n"
+    length = "00:00:03.00" if args[-1].endswith("output.mp4") else "00:00:06.00"
+    sys.stderr.write(f"  Duration: {length}, start: 0.000000\n"
                      "  Stream #0:0(und): Video: h264 (High), yuv420p, 640x360, 30 fps, 30 tbr\n"
                      "  Stream #0:1(und): Audio: aac (LC), 48000 Hz, stereo\n"
                      "At least one output file must be specified\n")
