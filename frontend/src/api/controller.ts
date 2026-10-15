@@ -5145,14 +5145,28 @@ export class ClientController {
     this.query(() =>
       this.transport.content?.(conversation, message, cursor, signal),
     );
+  /**
+   * Sends one command. The promise settles once the conversation and the list
+   * are refreshed after it; `onReceipt` hears Row-Bot's answer as soon as it
+   * comes, for what can't wait for those (a sent message leaving the composer
+   * before an instant reply shows).
+   */
   intent(
     target: string | null,
     type: Command['type'],
     payload: object,
     revision: string,
     identity: string = crypto.randomUUID(),
+    options: { onReceipt?: (receipt: CommandReceipt) => void } = {},
   ): Promise<CommandReceipt> {
-    const run = this.runIntent(target, type, payload, revision, identity);
+    const run = this.runIntent(
+      target,
+      type,
+      payload,
+      revision,
+      identity,
+      options.onReceipt,
+    );
     if (type === 'conversation.controls' && target) {
       this.controlSaves.set(target, run);
       const forget = () => {
@@ -5169,6 +5183,7 @@ export class ClientController {
     payload: object,
     revision: string,
     identity: string,
+    onReceipt?: (receipt: CommandReceipt) => void,
   ): Promise<CommandReceipt> {
     const session = this.state.handshake?.client_session_id;
     if (!session) throw clientError({ code: 'authentication_required' });
@@ -5180,6 +5195,7 @@ export class ClientController {
       expected_revision: revision,
     } as Command;
     const receipt = await this.command(target, command, identity);
+    onReceipt?.(receipt);
     if (target === this.state.selectedConversationId)
       await this.refreshWorkspace();
     await this.loadMoreConversations(true);

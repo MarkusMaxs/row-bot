@@ -340,9 +340,45 @@ describe('BuddyOverlay', () => {
           write_targets: [],
         }),
         'c1-r1',
+        undefined,
+        { onReceipt: expect.any(Function) },
       ),
     );
     await waitFor(() => expect(controller.getDraft('c1').text).toBe(''));
+  });
+
+  it('takes what was sent out of the field as soon as Row-Bot has it, before the thread refreshes', async () => {
+    const controller = fakeController();
+    let refreshed!: () => void;
+    controller.intent.mockImplementation(
+      (
+        target: string | null,
+        _type?: unknown,
+        _payload?: unknown,
+        _revision?: unknown,
+        _identity?: unknown,
+        options?: { onReceipt?: (receipt: object) => void },
+      ) => {
+        const receipt = {
+          status: 'accepted',
+          command_id: 'command',
+          conversation_id: target,
+        };
+        options?.onReceipt?.(receipt);
+        return new Promise((resolve) => {
+          refreshed = () => resolve(receipt);
+        });
+      },
+    );
+    renderOverlay(controller);
+    const field = await screen.findByRole('textbox', { name: 'Buddy message' });
+    await waitFor(() => expect(field).toBeEnabled());
+    fireEvent.change(field, { target: { value: 'Add a museum' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() => expect(controller.intent).toHaveBeenCalledTimes(1));
+    expect(controller.getDraft('c1').text).toBe('');
+    await act(async () => refreshed());
+    expect(controller.getDraft('c1').text).toBe('');
   });
 
   it('streams with Stop and resumes an interrupted run', async () => {

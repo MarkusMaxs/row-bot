@@ -1291,6 +1291,19 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         finally:
             call["quiesced"] = True
         return
+    if "instant reply fixture" in text:
+        # A turn that answers at once, before the app has refreshed after sending.
+        from langchain_core.messages import HumanMessage
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "instant")
+        thread = call["conversation_id"]
+        try:
+            append_checkpoint_messages(thread, [HumanMessage(
+                content=text, id=call["submission_id"] or fixture_id(f"instant:{call['generation_id']}:user"))])
+            yield from _natural_final(call, thread, "Here it is, straight away.", "instant")
+        finally:
+            call["quiesced"] = True
+        return
     if "folder fixture" in text:
         # The work needs a folder the person has: use_code_folder pauses the
         # turn on a folder card (B277) where they pick it.
