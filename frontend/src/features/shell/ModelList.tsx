@@ -120,6 +120,11 @@ export default function ModelList({
   const [active, setActive] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  // The model just hidden, said once in the list with Undo (no toast over it).
+  const [moved, setMoved] = useState<{
+    model: ListedModel;
+    undo: VisibilityAction;
+  } | null>(null);
   const [recent] = useState<string[]>(() =>
     showRecent ? readRecentModels() : [],
   );
@@ -263,6 +268,14 @@ export default function ModelList({
       const index = enabled.indexOf(row);
       setActive((enabled[index + 1] ?? enabled[index - 1])?.key ?? null);
     }
+    setMoved(
+      action === 'hide'
+        ? {
+            model: row.model,
+            undo: row.model.favourite_rank != null ? 'favourite' : 'show',
+          }
+        : null,
+    );
     onVisibility(row.model, action);
   };
   const hasMenu = (section: Section, row: Row) =>
@@ -347,7 +360,7 @@ export default function ModelList({
       );
     const label = splitModelLabel(row.model.label);
     const isCurrent = row.model.model_ref === current;
-    return (
+    const choice = (
       <div
         key={row.key}
         id={optionId(row.key)}
@@ -356,7 +369,6 @@ export default function ModelList({
         aria-selected={row.key === activeRow?.key}
         aria-disabled={!row.model.available || undefined}
         data-current={isCurrent ? 'true' : undefined}
-        data-menu={menuFor === row.key ? 'open' : undefined}
         onMouseDown={(event) => event.preventDefault()}
         onMouseMove={() => {
           if (row.model.available && active !== row.key) setActive(row.key);
@@ -382,7 +394,10 @@ export default function ModelList({
         {section.mixed && label.provider && (
           <span className="model-picker-option-provider">
             {label.provider}
-            {row.model.billing ? ` · ${billingLabel(row.model.billing)}` : ''}
+            {/* "Ollama Local" already says it runs here, for free. */}
+            {row.model.billing && row.model.billing !== 'local'
+              ? ` · ${billingLabel(row.model.billing)}`
+              : ''}
           </span>
         )}
         {/* The model in use stays in view even when hidden; say why it's here. */}
@@ -411,27 +426,35 @@ export default function ModelList({
             />
           )
         )}
-        {hasMenu(section, row) && (
-          // The row chooses its model; the menu button only opens the menu.
-          <span
-            className="model-picker-row-menu"
-            onClick={(event) => event.stopPropagation()}
+      </div>
+    );
+    if (!hasMenu(section, row)) return choice;
+    // The menu button sits beside the option, not inside it: an option holds
+    // no controls. It is the pointer's way in; the keyboard's is Shift+F10
+    // (said on the search field), so it stays out of the accessibility tree.
+    return (
+      <div
+        key={row.key}
+        className="model-picker-row"
+        role="presentation"
+        data-menu={menuFor === row.key ? 'open' : undefined}
+      >
+        {choice}
+        <span className="model-picker-row-menu" aria-hidden>
+          <Menu
+            label={`More for ${label.name}`}
+            actions={actions(row)}
+            iconOnly
+            variant="ghost"
+            tabIndex={-1}
+            className="model-picker-row-menu-button"
+            open={menuFor === row.key}
+            onOpenChange={(open) => setMenuFor(open ? row.key : null)}
+            focusAfterClose={() => input.current}
           >
-            <Menu
-              label={`More for ${label.name}`}
-              actions={actions(row)}
-              iconOnly
-              variant="ghost"
-              tabIndex={-1}
-              className="model-picker-row-menu-button"
-              open={menuFor === row.key}
-              onOpenChange={(open) => setMenuFor(open ? row.key : null)}
-              focusAfterClose={() => input.current}
-            >
-              <MoreHorizontal size={14} aria-hidden />
-            </Menu>
-          </span>
-        )}
+            <MoreHorizontal size={14} aria-hidden />
+          </Menu>
+        </span>
       </div>
     );
   };
@@ -520,6 +543,25 @@ export default function ModelList({
       {!rows.length && (
         <p className="model-picker-empty" role="status">
           {models.length || leading.length ? 'No models match.' : emptyText}
+        </p>
+      )}
+      {moved && onVisibility && (
+        <p className="model-picker-note" role="status">
+          <span>
+            {splitModelLabel(moved.model.label).name} is under More models.
+          </span>
+          <button
+            type="button"
+            className="model-picker-connect"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              onVisibility(moved.model, moved.undo);
+              setMoved(null);
+              input.current?.focus();
+            }}
+          >
+            Undo
+          </button>
         </p>
       )}
     </>

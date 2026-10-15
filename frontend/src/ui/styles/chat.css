@@ -3550,11 +3550,20 @@ button.attachment-tile-face:hover {
 .model-picker-more > svg {
   flex: none;
 }
-/* A row's favourite/hide menu: shown on the highlighted row (always on touch). */
+/* A row's favourite/hide menu, beside its option: shown on the hovered or
+   highlighted row, always on touch. */
+.model-picker-row {
+  position: relative;
+}
+.model-picker-row > .model-picker-option {
+  padding-inline-end: 32px;
+}
 .model-picker-row-menu {
+  position: absolute;
+  inset-inline-end: 4px;
+  top: 50%;
   display: inline-flex;
-  flex: none;
-  margin-inline-end: -4px;
+  transform: translateY(-50%);
 }
 .model-picker-row-menu-button.button {
   inline-size: 24px;
@@ -3569,9 +3578,11 @@ button.attachment-tile-face:hover {
   color: var(--text-muted);
   opacity: 0;
 }
-.model-picker-option[aria-selected='true'] .model-picker-row-menu-button,
-.model-picker-option[data-menu] .model-picker-row-menu-button,
-.model-picker-row-menu-button.button:focus-visible {
+.model-picker-row:hover .model-picker-row-menu-button,
+.model-picker-row[data-menu] .model-picker-row-menu-button,
+.model-picker-option[aria-selected='true']
+  + .model-picker-row-menu
+  .model-picker-row-menu-button {
   opacity: 1;
 }
 .model-picker-row-menu-button.button:hover,
@@ -3583,13 +3594,34 @@ button.attachment-tile-face:hover {
   .model-picker-option {
     min-height: 40px;
   }
+  .model-picker-row > .model-picker-option {
+    padding-inline-end: 40px;
+  }
   .model-picker-row-menu-button.button {
     inline-size: 32px;
     block-size: 32px;
     min-width: 32px;
     min-height: 32px;
-    opacity: 1;
+    opacity: 0.6;
   }
+}
+/* F10: "<model> is under More models. Undo", in place of a toast. */
+.model-picker-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+}
+.model-picker-note > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .model-picker-empty {
   margin: 0;

@@ -285,8 +285,10 @@ it('favourites or hides a model from its row menu, by pointer or keyboard', asyn
       onVisibility,
     },
   );
+  // A pointer's way in (hidden from assistive tech, which uses Shift+F10).
   const menu = await screen.findByRole('button', {
     name: 'More for mistral:7b',
+    hidden: true,
   });
   await act(async () => {
     fireEvent.pointerDown(menu, { button: 0, pointerType: 'mouse' });
@@ -317,6 +319,18 @@ it('favourites or hides a model from its row menu, by pointer or keyboard', asyn
     expect.objectContaining({ model_ref: 'model:ollama:llama3.1:8b' }),
     'hide',
   );
+  // Said once in the list, not as a toast over it; Undo puts it back as it was.
+  const note = screen.getByText('llama3.1:8b is under More models.');
+  await act(async () =>
+    fireEvent.click(
+      within(note.parentElement!).getByRole('button', { name: 'Undo' }),
+    ),
+  );
+  expect(onVisibility).toHaveBeenLastCalledWith(
+    expect.objectContaining({ model_ref: 'model:ollama:llama3.1:8b' }),
+    'favourite',
+  );
+  expect(screen.queryByText(/is under More models/)).toBeNull();
 });
 
 it('has no row menu where a list only chooses', async () => {
@@ -329,5 +343,7 @@ it('has no row menu where a list only chooses', async () => {
     },
   );
   await screen.findByRole('listbox', { name: 'Models' });
-  expect(screen.queryByRole('button', { name: /^More for / })).toBeNull();
+  expect(
+    screen.queryByRole('button', { name: /^More for /, hidden: true }),
+  ).toBeNull();
 });

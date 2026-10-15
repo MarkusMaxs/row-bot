@@ -3187,6 +3187,92 @@ def p10_first_run(action: str, runtime: str = "", models: str = "", test: str = 
     return {"action": action, "runtime": _p10_state["runtime"], "models": _p10_state["models"]}
 
 
+# ── S8 (F10): many local models ─────────────────────────────────────────────
+# A person with twenty-odd models in Ollama: each is in the composer's picker
+# (a pinned choice with its saved catalog row) and on the synthetic local
+# runtime that Setup and Settings › Models read. Favourites and hidden models
+# start empty. Nothing reaches a runtime, a provider or the network.
+_S8_LOCAL_MODELS = (
+    "deepseek-r1:14b", "gemma3:12b", "gemma3:4b", "gpt-oss:20b", "granite3.3:8b", "llama3.1:8b",
+    "llama3.2:3b", "llava:13b", "mistral-nemo:12b", "mistral-small3.2:24b", "mistral:7b", "phi4-mini:3.8b",
+    "phi4:14b", "qwen2.5-coder:7b", "qwen3-coder:30b", "qwen3:14b", "qwen3:32b", "qwen3:8b", "qwen3.8:27b",
+    "smollm2:1.7b",
+)
+_S8_CHAT = {"tasks": ["chat"], "input_modalities": ["text"], "output_modalities": ["text"], "tool_calling": True}
+_s8_backup: dict | None = None
+
+
+@app.post("/__s8_fixture/models/{action}")
+def s8_models(action: str, favourites: str = "", hidden: str = "",
+              x_fixture_token: str = Header(default="")) -> dict:
+    """seed: twenty local models everywhere models are chosen, with any favourites
+    and hidden models given (comma-separated names); restore: the profile back."""
+    global _s8_backup
+    predecessor._authorize(x_fixture_token)
+    from row_bot.providers import config as provider_config, model_catalog_cache as cache, saved_model_settings
+    from row_bot.providers.model_visibility import update_model_visibility
+    from row_bot.providers.selection import add_quick_choice_for_model
+
+    files = {
+        "providers": Path(provider_config.CONFIG_PATH),
+        "catalog": Path(cache.CATALOG_CACHE_PATH),
+        "settings": predecessor.DATA / "model_settings.json",
+    }
+    if not all(path.resolve().is_relative_to(predecessor.DATA.resolve()) for path in files.values()):
+        raise HTTPException(status_code=403, detail="Synthetic data scope required")
+    if action == "seed":
+        if _s8_backup is None:
+            _s8_backup = {key: path.read_text(encoding="utf-8") if path.exists() else None
+                          for key, path in files.items()}
+        snapshot = cache.read_model_catalog_cache()
+        from row_bot.providers.ollama import is_ollama_tool_capable
+
+        def chat(name: str) -> dict:
+            # Tools where the family uses them, as Ollama would report.
+            return {**_S8_CHAT, "tool_calling": is_ollama_tool_capable(name)}
+
+        cache.write_model_catalog_cache(cache.CatalogCacheSnapshot(
+            1, snapshot.generated_at + 1, snapshot.cloud_cache,
+            [{"provider_id": "ollama", "model_id": name, "display_name": name, "installed": True,
+              "capabilities_snapshot": chat(name)} for name in _S8_LOCAL_MODELS],
+            {"ollama": {"status": "ok", "count": len(_S8_LOCAL_MODELS)}}, (), "synthetic-browser",
+        ))
+        for name in _S8_LOCAL_MODELS:
+            add_quick_choice_for_model(name, provider_id="ollama", display_name=name,
+                                       capabilities_snapshot=chat(name), surface="chat")
+        saved_model_settings.update_saved_model_settings(
+            lambda raw: {key: value for key, value in raw.items() if key != "model_visibility"},
+            path=files["settings"])
+        for name in filter(None, favourites.split(",")):
+            update_model_visibility("favourite", f"model:ollama:{name}", path=files["settings"])
+        for name in filter(None, hidden.split(",")):
+            update_model_visibility("hide", f"model:ollama:{name}", path=files["settings"])
+        # Setup and Settings › Models read the same models from the local runtime.
+        _p10_state.update(runtime="running", models=[*_S8_LOCAL_MODELS, "nomic-embed-text:latest"])
+    elif action == "restore":
+        import time
+
+        for key, path in files.items():
+            saved = (_s8_backup or {}).get(key)
+            # Windows briefly refuses a file another reader has open: try again.
+            for attempt in range(20):
+                try:
+                    if saved is not None:
+                        path.write_text(saved, encoding="utf-8")
+                    elif _s8_backup is not None and path.exists():
+                        path.unlink()
+                    break
+                except PermissionError:
+                    if attempt == 19:
+                        raise
+                    time.sleep(0.1)
+        _s8_backup = None
+        _p10_state.update(runtime="not_installed", models=[])
+    else:
+        raise HTTPException(status_code=422, detail="Unknown model fixture action")
+    return {"action": action, "models": len(_S8_LOCAL_MODELS)}
+
+
 def _p17_install_connection_check_fakes() -> None:
     """Monitor's connection checks (B252) run hourly and on Run diagnosis; in
     this disposable server they answer from the fixture and never reach a

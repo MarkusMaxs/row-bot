@@ -205,36 +205,21 @@ export default function ComposerControls({
   }
   /**
    * Favourite or hide a model from the picker (F10). It never changes the
-   * chat's model; hiding says where the model went, with Undo.
+   * chat's model; the picker itself says where a hidden model went.
    */
-  async function changeVisibility(
-    item: ModelChoice,
-    action: VisibilityAction,
-    undoing = false,
-  ) {
-    const name = splitModelLabel(item.label).name;
+  async function changeVisibility(item: ModelChoice, action: VisibilityAction) {
     try {
       await controller.updateModelVisibility({
         action,
         model_ref: item.model_ref,
       });
     } catch (cause) {
+      const name = splitModelLabel(item.label).name;
       notify(
         `Couldn't change ${name}: ${clientError(cause).message}`,
         'warning',
       );
-      return;
     }
-    if (action === 'hide' && !undoing)
-      notify(`${name} is under More models`, undefined, {
-        label: 'Undo',
-        onAction: () =>
-          void changeVisibility(
-            item,
-            item.favourite_rank != null ? 'favourite' : 'show',
-            true,
-          ),
-      });
   }
   /** Turns a level on; Hands-off asks once on this install, after which it never asks again. */
   function chooseLevel(level: ApprovalLevel, opener?: HTMLElement | null) {

@@ -139,10 +139,11 @@ export default function LocalModelSettings({
             disabled={busy}
             onClick={() => void change(model.hidden ? 'show' : 'hide', model)}
           >
+            {/* The eye shows the state (open: listed), like a layer's eye. */}
             {model.hidden ? (
-              <Eye size={14} aria-hidden />
-            ) : (
               <EyeOff size={14} aria-hidden />
+            ) : (
+              <Eye size={14} aria-hidden />
             )}
           </IconButton>
         </div>
