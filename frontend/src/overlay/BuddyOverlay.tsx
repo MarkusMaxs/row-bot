@@ -285,6 +285,15 @@ export default function BuddyOverlay({
     if (!canSend || !id || !conversation || !controls?.model_selection) return;
     const captured = controller.getDraft(id);
     const selection = controls.model_selection;
+    // Clear only what was sent, as soon as Row-Bot has it (an instant reply
+    // can come before the thread has refreshed); later typing stays.
+    const leave = (receipt: { status: string }) => {
+      if (
+        (receipt.status === 'accepted' || receipt.status === 'completed') &&
+        controller.getDraft(id) === captured
+      )
+        controller.setDraft(id, { text: '', attachments: [] });
+    };
     void run(async () => {
       const receipt = await controller.intent(
         id,
@@ -297,12 +306,12 @@ export default function BuddyOverlay({
           write_targets: writeTargets(),
         },
         conversation.revision,
+        undefined,
+        { onReceipt: leave },
       );
       if (receipt.status !== 'accepted' && receipt.status !== 'completed')
         throw { code: 'operation_uncertain' };
-      // Clear only what was sent; later typing stays.
-      if (controller.getDraft(id) === captured)
-        controller.setDraft(id, { text: '', attachments: [] });
+      leave(receipt);
     }, 'The message may not have been sent. Open the full thread to check before sending again.');
   }
   function stop() {
