@@ -43,3 +43,28 @@ def test_every_read_of_a_settling_turn_shows_the_reply_once(platform, monkeypatc
     assert all(len(found) <= 1 for found in replies), replies
     final = platform.snapshot("conversation-a")["rows"]
     assert [row["id"] for row in final if row["role"] == "assistant"] == ["assistant:checkpoint:" + native_id]
+
+
+def test_a_page_reading_after_the_answer_is_saved_but_before_it_is_bound_sees_it_once(platform):
+    """The saved answer can reach the checkpoint a moment before Row-Bot binds it to its live row. A page
+    reading the conversation in that moment (after any reset) read the saved messages in and got both. Found
+    in the browser smoke (15 Oct, #459/#461): a reply after a tool step showed twice for a moment."""
+    from tests.helpers.client_platform_fakes import StreamBarrier
+
+    text = "I can't record your screen yet."
+    native_id = fixture_id("saved-before-bound-answer")
+    barrier = StreamBarrier()
+    fake = ScriptedAgentStream((("token", text), CheckpointCommit((AIMessage(content=text, id=native_id),)),
+                               barrier, ("done", text)))
+    handle = platform.registry.get(submit(platform, fake, "saved-before-bound")["execution_id"])
+    try:
+        assert barrier.entered.wait(10)
+        rows = platform.snapshot("conversation-a")["rows"]  # A page reads the conversation now.
+        shown = [row for row in rows if row["role"] == "assistant"
+                 and "".join(block.get("text", "") for block in row.get("blocks", [])) == text]
+        assert len(shown) == 1, [row["id"] for row in shown]
+    finally:
+        barrier.release.set()
+        assert handle.producer_done.wait(10)
+    final = [row["id"] for row in platform.snapshot("conversation-a")["rows"] if row["role"] == "assistant"]
+    assert final == ["assistant:checkpoint:" + native_id]
