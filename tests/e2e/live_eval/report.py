@@ -329,9 +329,12 @@ def render_markdown(report: Report, *, rates: Mapping[str, Rates] | None = None,
     if report.providers:
         lines += ["## Providers", "", "| Provider | Model | Status | Reason |", "|---|---|---|---|"]
         for entry in report.providers:
+            reason = str(entry.get("reason") or "")
+            if entry.get("credentials"):
+                reason = f"{reason} (sign-in tokens: {entry['credentials']})".strip()
             lines.append(
                 f"| {_cell(entry.get('provider'))} | {_cell(entry.get('model', ''))} | "
-                f"{_cell(entry.get('status', ''))} | {_cell(entry.get('reason', ''))} |"
+                f"{_cell(entry.get('status', ''))} | {_cell(reason)} |"
             )
         lines.append("")
     summaries = provider_summaries(report.tasks, rates)

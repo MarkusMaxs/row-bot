@@ -293,6 +293,7 @@ def test_the_lane_hands_the_sign_in_to_the_worker_and_writes_back_only_refreshed
     assert ACCESS not in result["stderr_tail"] and "[redacted]" in result["stderr_tail"]
     write_report(Report("run", providers=[{"provider": "codex", **{k: v for k, v in result.items() if k != "tasks"}}]),
                  run_dir)
+    assert "(sign-in tokens: written)" in (run_dir / "report.md").read_text(encoding="utf-8")
     for path in run_dir.rglob("*"):
         if path.is_file():
             text = path.read_text(encoding="utf-8", errors="replace")

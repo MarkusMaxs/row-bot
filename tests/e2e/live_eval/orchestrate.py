@@ -334,9 +334,11 @@ def run(env: Mapping[str, str] | None = None, *, run_dir: Path | None = None, gu
         result = run_provider(state, task_ids, folder, guard, variant_text=source.get(variants.VARIANT_ENV, ""),
                               label=variant.label)
         report.providers.append({
-            "provider": state.target.provider_id, "model": state.model, "status": result.get("status"),
-            "reason": result.get("reason", ""), "setup": result.get("setup_notes", []),
-            "variant_changes": result.get("variant_changes", []),
+            "provider": state.target.provider_id, "model": result.get("model") or state.model,
+            "status": result.get("status"), "reason": result.get("reason", ""),
+            "setup": result.get("setup_notes", []), "variant_changes": result.get("variant_changes", []),
+            # The ChatGPT lane: whether refreshed tokens went back to the eval profile (never the tokens).
+            "credentials": result.get("credentials", ""),
         })
         report.tasks.extend(TaskRecord.from_dict(task).finish(rates) for task in result.get("tasks") or [])
     for row in plan["skipped"]:
