@@ -85,7 +85,10 @@ it('Overview at the monthly limit says when testing resumes and offers Raise lim
   );
 
   expect(
-    screen.getByText(/^Monthly limit reached\. Testing resumes on 1 Nov/),
+    // The reader's date order: "1 Nov" or "Nov 1".
+    screen.getByText(
+      /^Monthly limit reached\. Testing resumes on (1 Nov|Nov 1)\. /,
+    ),
   ).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Raise limit' }));
   expect(onOpenSettings).toHaveBeenCalledWith('monthly_token_limit');
