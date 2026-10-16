@@ -16,7 +16,8 @@ own thread, plus a wake-up whenever something changes):
   that was running when Row-Bot closed (``jobs.recover`` at the next start).
 
 Starting is the runner's call (quiet hours, after Dream) or the person's (**Train now**,
-which starts at once when nothing heavy is running and otherwise waits for it).
+which starts at once when nothing heavy is running and otherwise waits for it). Neither starts
+while another app holds the graphics card's memory (L2c): training would spill out of it and crawl.
 Nothing here runs while Learning is off or paused, or in a build without the preview flag.
 """
 
@@ -53,11 +54,17 @@ RECOMMENDED_RECIPE: dict[str, Any] = {"name": "recommended", "settings": {"repor
 
 class TrainingError(RuntimeError):
     """A refused training action; ``code`` is stable (``learning_off``, ``learning_paused``,
-    ``nothing_to_train``, ``training_changed``)."""
+    ``nothing_to_train``, ``training_changed``, ``gpu_busy``)."""
 
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _gpu_free() -> bool:
+    from row_bot.learning.training import hardware
+
+    return hardware.gpu_free_for_training()
 
 
 class Dataset(Protocol):
@@ -101,6 +108,7 @@ class TrainingSupervisor:
         dataset: Dataset | None = None,
         lease: ResourceLease | None = None,
         start_threads: bool = True,
+        gpu_free: Callable[[], bool] | None = None,
     ) -> None:
         self._root = root
         self.jobs = TrainingJobs(root, store=store, clock=clock)
@@ -109,6 +117,8 @@ class TrainingSupervisor:
         self.engine: Engine = engine or NoEngine()
         self.dataset: Dataset = dataset or NoDataset()
         self.lease = lease or ResourceLease()
+        # Whether the graphics card's memory is free to train now (another app may hold it, L2c).
+        self.gpu_free: Callable[[], bool] = gpu_free or _gpu_free
         self._start_threads = start_threads
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
@@ -197,7 +207,7 @@ class TrainingSupervisor:
                 return job
             if job is None or job.state not in ("planned", "waiting", "paused") or not self.engine.ready():
                 raise TrainingError("nothing_to_train")
-            if self.lease.read().busy:
+            if self.lease.read().busy or not self.gpu_free():
                 moved = self.jobs.move(job.id, "waiting", reason="train_now", trigger="train_now")
                 self._ensure_watch()
                 self._notify()
@@ -266,6 +276,8 @@ class TrainingSupervisor:
             if self._run is not None or self._closed:
                 raise TrainingError("training_changed")
             self._require_on()
+            if not self.gpu_free():
+                raise TrainingError("gpu_busy")
             return self._launch(job, trigger)
 
     def _lease_folder(self, job: Job) -> tuple[Path, int]:
@@ -433,6 +445,15 @@ class TrainingSupervisor:
                                    message["step"])
                 self._notify(wake=False)
                 return
+            elif kind == "artifacts":
+                # What the finished run produced (names, sizes, SHA-256): the version's adapter is checked
+                # against it before it is exported (L2c).
+                try:
+                    (jobs_module.run_dir(job.id, self.jobs.root) / "artifacts.json").write_text(
+                        json.dumps({"files": message["files"]}, sort_keys=True), encoding="utf-8")
+                except OSError:
+                    logger.warning("Learning couldn't record what a training run produced")
+                return
             elif kind == "paused" and job.state == "pausing":
                 self.jobs.move(job.id, "paused", reason=run.pause_reason, pause_reason=run.pause_reason,
                                steps_done=message["step"], checkpoint_step=message["step"])
@@ -521,7 +542,7 @@ class TrainingSupervisor:
                 return False
             if not settings.enabled or settings.paused or not self.engine.ready():
                 return False  # the runner takes it up again when Learning resumes
-            if not self.lease.read().busy:
+            if not self.lease.read().busy and self.gpu_free():
                 self._launch(job, "train_now")
             return True
 

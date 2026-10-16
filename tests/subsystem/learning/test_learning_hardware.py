@@ -81,6 +81,40 @@ def test_without_a_card_that_fits_this_computer_cant_train(run, found, state, mo
     assert check.state == state and not check.can_train and check.tier is None
 
 
+def test_the_docker_image_says_training_is_unavailable(monkeypatch):
+    monkeypatch.setenv("ROW_BOT_CONTAINERIZED", "1")  # O46: set by Row-Bot's official image
+    calls: list = []
+
+    check = hardware.detect(run=_run("NVIDIA GeForce RTX 5070 Laptop GPU, 8151, 596.08\n", calls=calls),
+                            which=_which())
+
+    assert check.state == "container" and not check.can_train and calls == []
+
+
+def test_the_cards_memory_now_is_read_from_the_driver():
+    calls: list = []
+
+    reading = hardware.gpu_memory(run=_run("2915, 8151\n", calls=calls), which=_which())
+
+    assert reading == (2915, 8151)
+    assert "--query-gpu=memory.used,memory.total" in calls[0][0]
+    assert hardware.gpu_memory(run=_run("", returncode=9), which=_which()) is None
+    assert hardware.gpu_memory(run=_run(error=OSError("denied")), which=_which()) is None
+
+
+def test_training_waits_while_another_app_holds_the_cards_memory():
+    hardware.check(refresh=True, detector=lambda: hardware.classify([hardware.Gpu("NVIDIA RTX 5070", 8151, "596")]))
+    now = [100.0]
+    try:
+        assert hardware.gpu_free_for_training(memory=lambda: (120, 8151), clock=lambda: now[0]) is True
+        assert hardware.gpu_free_for_training(memory=lambda: (2915, 8151), clock=lambda: now[0]) is False
+        assert hardware.gpu_free_for_training(memory=lambda: None, clock=lambda: now[0]) is True  # unreadable
+        hardware.check(refresh=True, detector=lambda: hardware.HardwareCheck("no_gpu"))
+        assert hardware.gpu_free_for_training(memory=lambda: (8000, 8151)) is True  # no card to wait for
+    finally:
+        hardware.forget()
+
+
 def test_the_check_is_kept_for_the_process_until_asked_again():
     hardware.forget()
     answers = iter([hardware.HardwareCheck("no_gpu"), hardware.classify([hardware.Gpu("NVIDIA RTX A4000", 16376)])])

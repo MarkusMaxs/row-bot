@@ -65,6 +65,9 @@ STARTING_MODELS = ("qwen3.5-2b",)
 # ("waiting": the person agreed; L2b downloads when they tap it, and an old answer reads
 # as "Ready to download", O36) or Not now.
 MODEL_DOWNLOADS = ("not_asked", "waiting", "not_now")
+# Where the personal model runs ("Runs in", D10): Ollama by default (automated), or a runtime the
+# person starts (LM Studio, llama.cpp server, vLLM on Linux) with one command Row-Bot shows.
+SERVE_RUNTIMES = ("ollama", "lmstudio", "llama_cpp", "vllm")
 DEFAULT_MONTHLY_TOKEN_LIMIT = 2_000_000
 MAX_MONTHLY_TOKEN_LIMIT = 1_000_000_000
 _MAX_SETTINGS_BYTES = 64 * 1024
@@ -89,6 +92,7 @@ class LearningSettings:
     paused: bool = False
     starting_model: str = STARTING_MODELS[0]
     model_download: str = "not_asked"
+    serve_runtime: str = SERVE_RUNTIMES[0]
     # False when a saved file exists but could not be read; Learning is then off.
     readable: bool = True
 
@@ -155,6 +159,7 @@ def _normalise(document: Any) -> LearningSettings:
     train_where = document.get("train_where")
     starting_model = document.get("starting_model")
     model_download = document.get("model_download")
+    serve_runtime = document.get("serve_runtime")
     limit = document.get("monthly_token_limit")
     if type(limit) is not int or not 0 <= limit <= MAX_MONTHLY_TOKEN_LIMIT:
         limit = DEFAULT_MONTHLY_TOKEN_LIMIT
@@ -173,6 +178,7 @@ def _normalise(document: Any) -> LearningSettings:
         paused=paused if type(paused) is bool else True,
         starting_model=starting_model if starting_model in STARTING_MODELS else DEFAULTS.starting_model,
         model_download=model_download if model_download in MODEL_DOWNLOADS else DEFAULTS.model_download,
+        serve_runtime=serve_runtime if serve_runtime in SERVE_RUNTIMES else DEFAULTS.serve_runtime,
     )
 
 
@@ -347,6 +353,7 @@ __all__ = [
     "MAX_MONTHLY_TOKEN_LIMIT",
     "MODEL_DOWNLOADS",
     "PREVIEW_ENV",
+    "SERVE_RUNTIMES",
     "SETTINGS_FILE",
     "STARTING_MODELS",
     "STORE_FILE",

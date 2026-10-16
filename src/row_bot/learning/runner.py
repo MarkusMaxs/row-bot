@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from row_bot import learning as gate
 from row_bot.learning.training import jobs as jobs_module
@@ -126,15 +127,42 @@ class QuietHours:
 
 
 class LearningRunner:
-    """Decides what is due and asks the supervisor to start it."""
+    """Decides what is due and asks the supervisor to start it. With a ``planner`` (L2c) it plans
+    runs from the dataset, and with ``releases`` it makes each finished run a version."""
 
     def __init__(self, supervisor: TrainingSupervisor, *, root: Path | None = None,
-                 hours: QuietHours | None = None) -> None:
+                 hours: QuietHours | None = None, planner: Any = None, releases: Any = None) -> None:
         self.supervisor = supervisor
         self._root = root
         self.hours = hours or QuietHours(root)
+        self.planner = planner
+        self.releases = releases
         self._last = RunnerStatus("off")
         self._lock = threading.Lock()
+
+    def _unplanned(self, settings: Any, engine_ready: bool, act: bool) -> tuple[RunnerStatus, Any]:
+        """No run is current: plan one from the dataset when there is enough (new) work (L2c)."""
+
+        if settings.train_where != "this_computer":
+            return RunnerStatus("nothing_to_do", "hugging_face"), None
+        if not engine_ready:
+            return RunnerStatus("nothing_to_do", "no_engine"), None
+        if self.planner is None:
+            if not settings.train_in_quiet_hours:
+                return RunnerStatus("nothing_to_do", "train_off"), None
+            return RunnerStatus("nothing_to_do", "no_data"), None
+        if act and self.planner.due() and not self.supervisor.lease.read().busy:
+            outcome = self.planner.plan()
+            if outcome.job is not None:
+                return RunnerStatus("scheduled", "planned"), outcome.job
+        summary = self.planner.summary(compute=True)
+        if summary is None or not summary.enough:
+            return RunnerStatus("nothing_to_do", "no_data"), None
+        from row_bot.learning.training import releases
+
+        if releases.latest_state(self._root) is not None and summary.new_examples < self.planner.recipe().min_new_examples:
+            return RunnerStatus("trained", "up_to_date"), None
+        return RunnerStatus("nothing_to_do", "planning"), None
 
     def _decide(self, act: bool) -> RunnerStatus:
         settings = gate.read_settings(self._root)
@@ -148,11 +176,11 @@ class LearningRunner:
             return RunnerStatus("training")
         engine_ready = supervisor.engine.ready()
         if job is None:
-            if not settings.train_in_quiet_hours:
+            if self.planner is None and not settings.train_in_quiet_hours:
                 return RunnerStatus("nothing_to_do", "train_off")
-            if settings.train_where != "this_computer":
-                return RunnerStatus("nothing_to_do", "hugging_face")
-            return RunnerStatus("nothing_to_do", "no_data" if engine_ready else "no_engine")
+            status, job = self._unplanned(settings, engine_ready, act)
+            if job is None:
+                return status
         if job.state == "failed":
             return RunnerStatus("failed", job.error_code)
         if job.state in ("evaluating", "ready", "trial", "in_use"):
@@ -186,10 +214,14 @@ class LearningRunner:
 
     def _start(self, job, trigger: str, act: bool) -> RunnerStatus:
         if not act:
+            if not self.supervisor.gpu_free():
+                return RunnerStatus("waiting", "gpu_busy")  # another app holds the card's memory
             return RunnerStatus("scheduled", "now")
         try:
             self.supervisor.start(job, trigger)
         except TrainingError as error:
+            if error.code == "gpu_busy":
+                return RunnerStatus("waiting", "gpu_busy")
             return RunnerStatus("nothing_to_do", "no_data" if error.code == "nothing_to_train" else error.code)
         return RunnerStatus("training")
 
@@ -203,13 +235,18 @@ class LearningRunner:
             return self._last
 
     def check(self) -> RunnerStatus:
-        """One pass: start or continue what is due."""
+        """One pass: start or continue what is due, and make a finished run a version."""
 
         with self._lock:
             try:
                 self._last = self._decide(act=True)
             except Exception:
                 logger.exception("Learning's quiet-hours runner failed")
+            if self.releases is not None:
+                try:
+                    self.releases.tick()
+                except Exception:
+                    logger.exception("Learning couldn't make its personal model's version")
             return self._last
 
 
@@ -229,8 +266,13 @@ def get() -> LearningRunner:
     with _lock:
         if _runner is None:
             from row_bot.learning.training.engine import LocalEngine
+            from row_bot.learning.training.planner import LearningDataset, Planner
+            from row_bot.learning.training.releases import ReleaseMaker
 
-            _runner = LearningRunner(TrainingSupervisor(engine=LocalEngine()))
+            supervisor = TrainingSupervisor(engine=LocalEngine())
+            planner = Planner(jobs=supervisor.jobs, engine=supervisor.engine)
+            supervisor.dataset = LearningDataset(planner)
+            _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs))
         return _runner
 
 
@@ -238,16 +280,24 @@ def loaded() -> LearningRunner | None:
     return _runner
 
 
-def configure(*, engine=None, dataset=None, lease=None) -> TrainingSupervisor:
-    """Plug in the training engine, the dataset compiler or the lease (L2b, L2c; the fake ones in tests)."""
+def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=None) -> TrainingSupervisor:
+    """Plug in the training engine, the dataset compiler, the lease, the planner or the release maker
+    (L2b, L2c; the fake ones in tests and the browser fixture)."""
 
-    supervisor = get().supervisor
+    runner = get()
+    supervisor = runner.supervisor
     if engine is not None:
         supervisor.engine = engine
+        if runner.planner is not None:
+            runner.planner.engine = engine
     if dataset is not None:
         supervisor.dataset = dataset
     if lease is not None:
         supervisor.lease = lease
+    if planner is not None:
+        runner.planner = planner
+    if releases is not None:
+        runner.releases = releases
     return supervisor
 
 
@@ -306,6 +356,8 @@ def shutdown(timeout: float = 10.0) -> None:
     runner = _runner
     if runner is not None:
         runner.supervisor.shutdown()
+        if runner.releases is not None:
+            runner.releases.shutdown()
 
 
 def learning_turned_off() -> None:
@@ -314,6 +366,8 @@ def learning_turned_off() -> None:
     runner = _runner
     if runner is not None:
         runner.supervisor.stop_now("learning_off")
+        if runner.releases is not None:
+            runner.releases.shutdown()
     _stop.set()
 
 
@@ -331,6 +385,10 @@ def forget_training() -> None:
     runner = _runner
     if runner is not None:
         runner.supervisor.stop_now("learning_off")
+        if runner.releases is not None:
+            runner.releases.shutdown()
+        if runner.planner is not None:
+            runner.planner.forget()
 
 
 def training_now() -> bool:

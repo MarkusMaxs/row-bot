@@ -289,13 +289,16 @@ class TrainingJobs:
         return max(versions, default=0) + 1
 
     def plan(self, *, steps_total: int, checkpoint_every: int, recipe: dict[str, Any] | None = None,
-             version: int | None = None, trigger: str = "quiet_hours") -> Job:
-        """A new planned training job (L2c plans them from a dataset; tests and the fixture too)."""
+             version: int | None = None, trigger: str = "quiet_hours", dataset: dict[str, Any] | None = None) -> Job:
+        """A new planned training job (L2c plans them from a dataset; tests and the fixture too).
+        ``dataset`` names the compiled dataset its lease holds (its id and example count)."""
 
-        spec = {
+        spec: dict[str, Any] = {
             "checkpoint_every": int(checkpoint_every),
             "recipe": recipe or {"name": "recommended", "settings": {"report_to": "none"}},
         }
+        if dataset:
+            spec["dataset"] = {"id": str(dataset.get("id") or "")[:128], "examples": int(dataset.get("examples") or 0)}
         if not 1 <= int(checkpoint_every) <= int(steps_total) <= protocol.MAX_STEPS:
             raise ValueError("A training plan needs 1 ≤ checkpoint interval ≤ steps.")
         somewhere = str(Path(__file__).resolve().parent)  # the shape check needs absolute paths
@@ -328,7 +331,10 @@ class TrainingJobs:
             return default
         try:
             value = json.loads(data.decode("utf-8"))
-            return {"checkpoint_every": int(value["checkpoint_every"]), "recipe": dict(value["recipe"])}
+            found = {"checkpoint_every": int(value["checkpoint_every"]), "recipe": dict(value["recipe"])}
+            if isinstance(value.get("dataset"), dict):
+                found["dataset"] = dict(value["dataset"])
+            return found
         except (ValueError, KeyError, TypeError):
             return default
 
