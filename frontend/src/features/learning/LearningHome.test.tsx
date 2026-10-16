@@ -5,7 +5,15 @@ import { expect, it, vi } from 'vitest';
 import { OverlayProvider } from '../../ui/overlays';
 import LearningHome, { type LearningView } from './LearningHome';
 import type { LearningIO } from './learning-state';
-import { fakeIO, learningSnapshot, NO_GPU, runningRun } from './test-data';
+import {
+  downloadState,
+  fakeIO,
+  installedModel,
+  learningSnapshot,
+  NO_GPU,
+  personalModel,
+  runningRun,
+} from './test-data';
 
 function show(io: LearningIO, view: LearningView = 'overview') {
   const onViewChange = vi.fn();
@@ -218,22 +226,33 @@ it('Personal model: not set up offers the download ask', async () => {
   ).toBeVisible();
 });
 
-it('Personal model: waiting to download says nothing has downloaded yet', () => {
-  show(
-    fakeIO(
-      on({
-        personal_model: {
-          ...learningSnapshot().personal_model,
-          download: 'waiting',
-        },
+it('Personal model: an earlier Download answer reads as Ready to download, and one tap downloads (O36)', async () => {
+  const io = fakeIO(
+    on({
+      personal_model: personalModel({
+        download: 'waiting',
+        download_state: downloadState({ state: 'ready' }),
       }),
-    ),
-    'model',
+    }),
   );
+  show(io, 'model');
+
+  expect(screen.getByText('Ready to download')).toBeVisible();
+  // The sizes and the free space again, where it comes from, and usage reporting off.
   expect(
-    screen.getByRole('heading', { name: 'Waiting to download' }),
+    screen.getByText(
+      'The training engine (2.2 GB) and Qwen3.5 2B (4.6 GB). 512 GB free on this computer.',
+    ),
   ).toBeVisible();
-  expect(screen.getByText(/Nothing has been downloaded yet\./)).toBeVisible();
+  expect(
+    screen.getByText(
+      'From PyPI, PyTorch and Hugging Face. The training engine’s own usage reporting is switched off.',
+    ),
+  ).toBeVisible();
+  expect(io.run).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Download' }));
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith('start_download');
 });
 
 it('Personal model: without a suitable GPU it says so and points to the settings', async () => {
@@ -250,10 +269,7 @@ it('Personal model: without a suitable GPU it says so and points to the settings
 it('Personal model: a training run replaces the setup states, and keeps itself fresh while shown', async () => {
   const io = fakeIO(
     on({
-      personal_model: {
-        ...learningSnapshot().personal_model,
-        engine: 'installed',
-      },
+      personal_model: installedModel(),
       training: runningRun(),
     }),
   );
@@ -267,8 +283,10 @@ it('Personal model: a training run replaces the setup states, and keeps itself f
     screen.queryByRole('heading', { name: 'No personal model yet' }),
   ).toBeNull();
   const facts = screen.getByLabelText('Personal model');
-  expect(facts).toHaveTextContent('Qwen3.5 2B · Apache 2.0 · Downloaded');
-  expect(facts).toHaveTextContent('Training engineInstalled');
+  expect(facts).toHaveTextContent(
+    'Qwen3.5 2B · Apache 2.0 · On this computer (4.6 GB)',
+  );
+  expect(facts).toHaveTextContent('Training engineInstalled (4 GB)');
   expect(io.watchTraining).toHaveBeenCalledTimes(1);
   unmount();
   expect(stop).toHaveBeenCalledTimes(1);

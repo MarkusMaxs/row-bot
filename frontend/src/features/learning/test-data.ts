@@ -1,7 +1,9 @@
 /** Learning snapshots and fakes for the Learning vitests (never real data). */
 import { vi } from 'vitest';
 import type {
+  LearningDownload,
   LearningHardware,
+  LearningPersonalModel,
   LearningReceipt,
   LearningSnapshot,
   LearningTraining,
@@ -27,25 +29,67 @@ export function learningSnapshot(
     },
     quiet_hours: { window_start: 1, window_end: 5, next_look_at: null },
     past_chats: { state: 'none', total: 0, done: 0 },
-    personal_model: {
-      train_in_quiet_hours: true,
-      train_where: 'this_computer',
-      starting_model: {
-        id: 'qwen3.5-2b',
-        name: 'Qwen3.5 2B',
-        licence: 'Apache 2.0',
-        download_bytes: 4_570_000_000,
-      },
-      download: 'not_asked',
-      engine: 'not_downloaded',
-      engine_download_bytes: 2_170_000_000,
-    },
+    personal_model: personalModel(),
     training: trainingRun(),
     data: { exists: false, bytes: 0 },
     opted_out_conversations: [],
     owner_unset_channels: [],
     ...overrides,
   };
+}
+
+/** The personal model's download (nothing downloading by default). */
+export function downloadState(
+  overrides: Partial<LearningDownload> = {},
+): LearningDownload {
+  return {
+    state: 'none',
+    phase: null,
+    done_bytes: 0,
+    total_bytes: 0,
+    needs_bytes: null,
+    free_bytes: 512_000_000_000,
+    failure: null,
+    ...overrides,
+  };
+}
+
+/** The personal model's choices and files (nothing downloaded by default). */
+export function personalModel(
+  overrides: Partial<LearningPersonalModel> = {},
+): LearningPersonalModel {
+  return {
+    train_in_quiet_hours: true,
+    train_where: 'this_computer',
+    starting_model: {
+      id: 'qwen3.5-2b',
+      name: 'Qwen3.5 2B',
+      licence: 'Apache 2.0',
+      download_bytes: 4_571_272_453,
+    },
+    download: 'not_asked',
+    engine: 'not_downloaded',
+    engine_bytes: 0,
+    engine_download_bytes: 2_217_998_432,
+    starting_model_state: 'not_downloaded',
+    starting_model_bytes: 0,
+    download_state: downloadState(),
+    ...overrides,
+  };
+}
+
+/** Both downloaded: "Installed, 4 GB" and the starting model on this computer. */
+export function installedModel(
+  overrides: Partial<LearningPersonalModel> = {},
+): LearningPersonalModel {
+  return personalModel({
+    download: 'waiting',
+    engine: 'installed',
+    engine_bytes: 4_033_251_988,
+    starting_model_state: 'downloaded',
+    starting_model_bytes: 4_571_279_000,
+    ...overrides,
+  });
 }
 
 /** The personal model's training run (none by default: no engine yet). */

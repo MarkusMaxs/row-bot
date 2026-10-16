@@ -3933,6 +3933,9 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
     if action == "preview":
         learning._PREVIEW = True  # the start-up flag, as if launched with ROW_BOT_LEARNING_PREVIEW=1
         learning.invalidate()
+        # The personal model's download (L2b): a stand-in whose states the specs set; never a real one.
+        from row_bot.learning.training import downloads as _downloads
+        _downloads._downloads = _FixtureDownloads()
     elif action in {"gpu", "no-gpu"}:
         found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8151, "596.08")])
                  if action == "gpu" else hardware.HardwareCheck("no_gpu"))
@@ -3968,8 +3971,123 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
             store.delete_all()
         for leftover in (learning.store_path(), learning.settings_path()):
             leftover.unlink(missing_ok=True)
+        from row_bot.learning.training import downloads as _downloads
+        _downloads._downloads = None
         learning._PREVIEW = False
         learning.invalidate()
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
+# ── Learning (preview), L2b: the personal model's download, its states set by the spec ──
+
+_GB = 1_000_000_000
+
+
+class _FixtureDownloads:
+    """Stands in for ``training.downloads.Downloads``: what the surfaces read and the commands do,
+    with states the specs set. Nothing is downloaded or installed."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.state, self.phase, self.failure = "none", None, None
+        self.done, self.total, self.needs, self.free = 0, 0, None, 512 * _GB
+        self.engine_state, self.engine_bytes = "not_installed", 0
+        self.model_state, self.model_bytes = "not_downloaded", 0
+
+    def set(self, name: str) -> None:
+        self.reset()
+        if name == "installed":
+            self.engine_state, self.engine_bytes = "installed", 4_033_251_988
+            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+        elif name == "damaged":
+            self.engine_state, self.engine_bytes = "damaged", 0
+            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+        elif name in ("downloading", "model", "installing"):
+            self.state = "downloading"
+            self.phase = {"downloading": "engine", "model": "model", "installing": "installing"}[name]
+            self.done = {"engine": 1_190_000_000, "model": 4_930_000_000, "installing": 2_218_000_000}[self.phase]
+            self.total = 6_789_270_885
+        elif name == "paused":
+            self.state, self.done, self.total = "paused", 3_120_000_000, 6_789_270_885
+        elif name == "disk":
+            self.state, self.needs, self.free = "not_enough_disk", 9_420_000_000, 6_030_000_000
+            self.total = 6_789_270_885
+        elif name == "failed":
+            self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 6_789_270_885
+        elif name != "ready":
+            raise HTTPException(404, "Unknown download state")
+
+    def view(self):
+        from row_bot import learning
+        from row_bot.learning.training.downloads import DownloadView
+
+        state = self.state
+        missing = not (self.engine_state == "installed" and self.model_state == "downloaded")
+        if state == "none" and missing and learning.read_settings().model_download == "waiting":
+            state = "ready"
+        return DownloadView(state, self.phase, self.done, self.total, needs_bytes=self.needs, free_bytes=self.free,
+                            failure=self.failure, engine_state=self.engine_state, engine_bytes=self.engine_bytes,
+                            engine_download_bytes=2_217_998_432, model_state=self.model_state,
+                            model_bytes=self.model_bytes)
+
+    def running(self) -> bool:
+        return self.state == "downloading"
+
+    def start(self):
+        from row_bot import learning
+        from row_bot.learning.training.downloads import DownloadError
+
+        settings = learning.read_settings()
+        if not settings.enabled:
+            raise DownloadError("learning_off")
+        if settings.paused:
+            raise DownloadError("learning_paused")
+        self.set("downloading")
+        return self.view()
+
+    def stop(self, reason: str = "you"):
+        from row_bot.learning.training.downloads import DownloadError
+
+        if self.state != "downloading":
+            raise DownloadError("changed")
+        self.state, self.phase = "paused", None
+        return self.view()
+
+    def cancel(self):
+        self.reset()
+        return self.view()
+
+    def forget(self) -> None:
+        if self.state != "downloading":
+            self.state = "none"
+
+    def stop_quietly(self, reason: str) -> None:
+        if self.state == "downloading":
+            self.state, self.phase = "paused", None
+
+    def shutdown(self) -> None:
+        return None
+
+
+@app.post("/__l2b_fixture/learning/{action}")
+def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(default="")) -> dict:
+    """The personal model's download for the L2b spec: its states, and an NVIDIA driver too old
+    to train. Nothing reaches the network, a GPU or a provider."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.learning.training import downloads, hardware
+
+    current = downloads.loaded()
+    if action == "state":
+        if not isinstance(current, _FixtureDownloads):
+            raise HTTPException(409, "Turn on the preview first")
+        current.set(name)
+    elif action == "old-driver":
+        found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 3080 Laptop GPU", 8192, "560.94")])
+        hardware.check = lambda *, refresh=False, detector=None: found
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
     return {"action": action}

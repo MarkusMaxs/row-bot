@@ -70,6 +70,26 @@ def _process_capture_stopped():
 
 
 @pytest.fixture(autouse=True)
+def _no_real_graphics_card_or_download():
+    """Never ask the real ``nvidia-smi`` or start a real download: the hardware check reads as
+    "no NVIDIA card" unless a test sets its own, and the app's download is forgotten after each
+    test (a test that downloads plugs in fakes on loopback)."""
+
+    from row_bot.learning.training import hardware
+
+    hardware.check(refresh=True, detector=lambda: hardware.HardwareCheck("no_gpu"))
+    yield
+    downloads = sys.modules.get("row_bot.learning.training.downloads")
+    if downloads is not None and downloads.loaded() is not None:
+        downloads.loaded().stop_quietly("app_closed")
+        downloads._downloads = None  # noqa: SLF001 - a fresh app download for the next test
+    engine = sys.modules.get("row_bot.learning.training.engine")
+    if engine is not None:
+        engine.forget_status()
+    hardware.forget()
+
+
+@pytest.fixture(autouse=True)
 def _training_stopped():
     """The app's training runner (if a test started it) ends with its worker, and the next test
     gets a fresh one."""

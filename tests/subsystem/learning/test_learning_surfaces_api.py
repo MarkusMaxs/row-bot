@@ -226,13 +226,16 @@ def test_turning_off_keeps_the_data_and_says_so(api, no_channels):
     assert learning.is_enabled() is False
 
 
-def test_the_download_answer_is_recorded_and_waits_for_the_engine(api, no_channels):
+def test_the_download_answer_is_recorded_and_reads_as_ready_where_nothing_can_download(api, no_channels):
+    # No graphics card here (the Learning tests' default check): the answer is kept, and the
+    # personal model reads as Ready to download (O36). The download itself: test_learning_downloads.
     client, headers, _data, _ = api
     _turn_on(client, headers)
 
     waiting = _ok(_command(client, headers, "answer_download", download="download"))
     assert waiting["snapshot"]["personal_model"]["download"] == "waiting"
-    assert waiting["summary"] == "Waiting to download."
+    assert waiting["summary"] == "Ready to download."
+    assert waiting["snapshot"]["personal_model"]["download_state"]["state"] == "ready"
     not_now = _ok(_command(client, headers, "answer_download", download="not_now"))
     assert not_now["snapshot"]["personal_model"]["download"] == "not_now"
 

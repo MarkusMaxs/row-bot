@@ -164,7 +164,10 @@ test('turn Learning on, its tab appears, Teach a reply and undo it, then switch 
 
   await openSettings(page, 'learning');
   await expect(page.getByText('Learning on', { exact: true })).toBeVisible();
-  await expect(page.getByText('Waiting to download').first()).toBeVisible();
+  // Download in the ask starts it (L2b; the fixture's download stands still).
+  await expect(
+    page.getByText('Downloading the training engine').first(),
+  ).toBeVisible();
   await shoot(page, info, 'settings-on');
   // The rest of the page (it scrolls inside the settings pane).
   await page
@@ -291,11 +294,16 @@ test('the Learning tab: paused, limit reached, reading past chats, its other vie
     })
     .getByRole('button', { name: 'Download', exact: true })
     .click();
-  await expect(notice(page, 'Waiting to download.')).toBeVisible();
+  // Learning is paused here: the answer is kept and it reads as Ready to download (O36).
   await expect(
-    page.getByRole('heading', { name: 'Waiting to download' }),
+    notice(page, 'Ready to download once you resume Learning.'),
   ).toBeVisible();
-  await shoot(page, info, 'model-waiting');
+  await expect(
+    page
+      .getByRole('region', { name: 'Download' })
+      .getByText('Ready to download', { exact: true }),
+  ).toBeVisible();
+  await shoot(page, info, 'model-ready');
 
   await page.getByRole('button', { name: 'More for Learning' }).click();
   await page.getByRole('menuitem', { name: 'Delete learning data…' }).click();
