@@ -110,6 +110,9 @@ def worker_environment(run: Path, extra: Mapping[str, str] | None = None) -> dic
         "XDG_CACHE_HOME": str(temp), "TEMP": str(temp), "TMP": str(temp), "TMPDIR": str(temp),
         "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1",
         "PIP_CONFIG_FILE": os.devnull, "NETRC": str(work / ".disabled-netrc"),
+        # A neutral user name: libraries ask for one (``getpass.getuser``; PyTorch's Inductor fails
+        # to import without it on Windows), and the person's own never needs to reach the engine.
+        "USERNAME": "row-bot", "USER": "row-bot", "LOGNAME": "row-bot",
     })
     environment.update(TELEMETRY_ENV)
     return environment

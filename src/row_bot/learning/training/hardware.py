@@ -4,10 +4,13 @@ Row-Bot asks the NVIDIA driver's own ``nvidia-smi`` for the graphics cards and t
 (no network, 15 s at most, no console window) and maps the largest card to a recipe
 tier. Only the 8 GB tier is certified so far (O23: Qwen3.5 2B, bf16 LoRA at 16K, measured on an
 RTX 5070 Laptop in L0d); a larger card can use it too, and its own larger tier shows as "measured
-soon" until a recipe is certified for it. The answer is kept for the life of the process: a
-graphics card doesn't change while Row-Bot runs, and the setup sheet can ask again.
+soon" until a recipe is certified for it (the RTX 5090 results, ``scripts/learning_gpu_check.py``).
+The answer is kept for the life of the process: a graphics card doesn't change while Row-Bot runs,
+and the setup sheet can ask again.
 
-L2b extends this module (driver checks, engine wheels, the download).
+The driver picks the training engine's build (O25): CUDA 13.0 PyTorch with a driver of 580 or
+newer, the CUDA 12.8 build (PyTorch 2.11) with 570-579, and below 570 "Update your NVIDIA driver
+to train here".
 """
 
 from __future__ import annotations
@@ -20,6 +23,8 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from row_bot.learning.training import weights as _weights
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +44,17 @@ class StartingModel:
     download_bytes: int
 
 
-# Qwen/Qwen3.5-2B at the revision L0d measured: 4.57 GB of weights (D5, D13).
-QWEN35_2B = StartingModel("qwen3.5-2b", "Qwen3.5 2B", "Apache 2.0", 4_570_000_000)
-# The training engine's wheels (CUDA PyTorch, Unsloth, TRL, PEFT): 2.17 GB downloaded in L0d.
-ENGINE_DOWNLOAD_BYTES = 2_170_000_000
+# Qwen/Qwen3.5-2B at the revision L0d measured: 4.57 GB of weights (D5, D13), every file pinned
+# in ``weights.py``.
+QWEN35_2B = StartingModel(_weights.QWEN35_2B.id, _weights.QWEN35_2B.name, _weights.QWEN35_2B.licence,
+                          _weights.QWEN35_2B.download_bytes)
+# The training engine's download when its lock can't be read (CUDA PyTorch, Unsloth, TRL, PEFT):
+# 2.2 GB on Windows (L0d). The real figure comes from the lock (``engine_download_bytes``).
+ENGINE_DOWNLOAD_BYTES = 2_220_000_000
 STARTING_MODELS = {QWEN35_2B.id: QWEN35_2B}
+# Drivers (O25): CUDA 13.0 needs 580, CUDA 12.8 needs 570.
+CUDA13_DRIVER = 580
+MIN_DRIVER = 570
 
 
 @dataclass(frozen=True)
@@ -83,13 +94,38 @@ class Gpu:
         name = self.name[:-4] if self.name.endswith(" GPU") else self.name
         return f"{name} ({self.memory_gb}\u00a0GB)"
 
+    @property
+    def driver_major(self) -> int | None:
+        """596 for "596.08" (Windows), 580 for "580.65.06" (Linux); None when not reported."""
+
+        head = self.driver.strip().split(".", 1)[0]
+        return int(head) if head.isdigit() and 0 < len(head) <= 4 else None
+
+
+def engine_variant(gpu: Gpu | None) -> str | None:
+    """The engine build this card's driver takes: ``cu130``, ``cu128``, or None (too old).
+
+    A driver the check didn't report is taken as current (the CUDA 13.0 build); if it is
+    older, the engine's own check says so after the download.
+    """
+
+    if gpu is None:
+        return None
+    major = gpu.driver_major
+    if major is None or major >= CUDA13_DRIVER:
+        return "cu130"
+    if major >= MIN_DRIVER:
+        return "cu128"
+    return None
+
 
 @dataclass(frozen=True)
 class HardwareCheck:
-    """``gpu``: an NVIDIA card a certified recipe fits; ``small_gpu``: one too small to train on;
-    ``no_gpu``: none found; ``unknown``: the check itself failed."""
+    """``gpu``: an NVIDIA card a certified recipe fits; ``old_driver``: such a card whose driver
+    is older than 570 (O25); ``small_gpu``: one too small to train on; ``no_gpu``: none found;
+    ``unknown``: the check itself failed."""
 
-    state: Literal["gpu", "small_gpu", "no_gpu", "unknown"]
+    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "unknown"]
     gpu: Gpu | None = None
     # The certified tier this card trains with, and the larger tiers it fits once measured.
     tier: Tier | None = None
@@ -98,6 +134,26 @@ class HardwareCheck:
     @property
     def can_train(self) -> bool:
         return self.state == "gpu"
+
+    @property
+    def variant(self) -> str | None:
+        """The training engine's build for this card (None when it can't train here)."""
+
+        return engine_variant(self.gpu) if self.can_train else None
+
+
+def engine_download_bytes(variant: str | None) -> int:
+    """About how much the training engine downloads for this computer (from its lock)."""
+
+    if variant is None:
+        return ENGINE_DOWNLOAD_BYTES
+    try:
+        from row_bot.learning.training import lockfile
+
+        return lockfile.cached_plan(variant).download_bytes()
+    except Exception:
+        logger.debug("Learning could not read the training engine's lock", exc_info=True)
+        return ENGINE_DOWNLOAD_BYTES
 
 
 Runner = Callable[..., Any]
@@ -147,6 +203,8 @@ def classify(gpus: Sequence[Gpu]) -> HardwareCheck:
         return HardwareCheck("small_gpu", gpu)
     best = certified[-1]
     larger = tuple(tier for tier in fits if not tier.certified and tier.min_memory_mib > best.min_memory_mib)
+    if engine_variant(gpu) is None:
+        return HardwareCheck("old_driver", gpu, best, larger)
     return HardwareCheck("gpu", gpu, best, larger)
 
 
@@ -195,6 +253,13 @@ def check(*, refresh: bool = False, detector: Callable[[], HardwareCheck] = dete
         return _cached
 
 
+def peek() -> HardwareCheck | None:
+    """The kept answer if the check has run, without running it (reads that mustn't wait)."""
+
+    with _lock:
+        return _cached
+
+
 def forget() -> None:
     """Drop the kept answer (tests)."""
 
@@ -204,7 +269,9 @@ def forget() -> None:
 
 
 __all__ = [
+    "CUDA13_DRIVER",
     "ENGINE_DOWNLOAD_BYTES",
+    "MIN_DRIVER",
     "Gpu",
     "HardwareCheck",
     "QWEN35_2B",
@@ -215,5 +282,7 @@ __all__ = [
     "check",
     "classify",
     "detect",
+    "engine_download_bytes",
+    "engine_variant",
     "forget",
 ]

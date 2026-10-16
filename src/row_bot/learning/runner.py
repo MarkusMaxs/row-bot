@@ -13,8 +13,9 @@ looks at what is due, after Dream:
 - a run that stopped for the person (their Stop, Row-Bot closing, the engine stopping)
   waits for Continue or Discard.
 
-Until L2b and L2c give it an engine and a dataset it finds nothing to do, and its
-:meth:`LearningRunner.status` says why (``no_engine``, ``no_data``). It never runs while
+Until the training engine and starting model are downloaded (L2b) and L2c gives it a dataset
+it finds nothing to do, and its :meth:`LearningRunner.status` says why (``no_engine``,
+``no_data``). It never runs while
 Learning is off or paused, or in a build without the preview flag; it starts no thread
 and imports nothing until Learning is on.
 """
@@ -221,12 +222,15 @@ _stop = threading.Event()
 
 
 def get() -> LearningRunner:
-    """The app's runner and supervisor (created on first use; no thread)."""
+    """The app's runner and supervisor (created on first use; no thread). Its engine is the
+    installed training engine and starting model (L2b); tests plug in fakes with ``configure``."""
 
     global _runner
     with _lock:
         if _runner is None:
-            _runner = LearningRunner(TrainingSupervisor())
+            from row_bot.learning.training.engine import LocalEngine
+
+            _runner = LearningRunner(TrainingSupervisor(engine=LocalEngine()))
         return _runner
 
 
