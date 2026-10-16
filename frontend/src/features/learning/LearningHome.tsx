@@ -28,8 +28,9 @@ import {
 import { useNotify } from '../../ui/overlays';
 import { relativeTime } from '../../ui/format';
 import { useDeleteLearningData } from './DeleteLearningData';
-import type { LearningIO } from './learning-state';
+import { useTrainingWatch, type LearningIO } from './learning-state';
 import { DownloadAsk } from './LearningSetup';
+import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
   plural,
@@ -272,6 +273,8 @@ function PersonalModel({
   const [hardware, setHardware] = useState<LearningHardware | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const notify = useNotify();
+  // Training progress stays fresh while this view is open.
+  useTrainingWatch(io);
   useEffect(() => {
     let live = true;
     io.hardware().then(
@@ -292,8 +295,13 @@ function PersonalModel({
       Learning settings
     </Button>
   );
+  const training = snapshot.training;
+  // A run (or an engine with nothing to train yet) takes the place of the setup states.
+  const showTraining =
+    training.state !== 'none' || training.runner.reason === 'no_data';
   let state: ReactNode;
-  if (!model.train_in_quiet_hours)
+  if (showTraining) state = <TrainingProgress io={io} snapshot={snapshot} />;
+  else if (!model.train_in_quiet_hours)
     state = (
       <EmptyState title="Training is off" action={settings}>
         Turn on Train during quiet hours to train a model of your own on your
@@ -336,8 +344,12 @@ function PersonalModel({
         {`Row-Bot can train a model of your own on your work, here on this computer. First it needs ${sizes}.`}
       </EmptyState>
     );
-  const downloaded =
-    model.download === 'waiting' ? 'Waiting to download' : 'Not downloaded';
+  const installed = model.engine === 'installed';
+  const downloaded = installed
+    ? 'Downloaded'
+    : model.download === 'waiting'
+      ? 'Waiting to download'
+      : 'Not downloaded';
   return (
     <div className="learning-section-list">
       {state}
@@ -350,7 +362,7 @@ function PersonalModel({
         </div>
         <div>
           <dt>Training engine</dt>
-          <dd>{downloaded}</dd>
+          <dd>{installed ? 'Installed' : downloaded}</dd>
         </div>
         <div>
           <dt>Train during quiet hours</dt>
