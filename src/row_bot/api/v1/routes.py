@@ -371,6 +371,10 @@ _STATUS.update(
         "learning_receipt_unavailable": 404,
         "learning_nothing_to_train": 409,
         "learning_training_changed": 409,
+        "learning_download_unavailable": 409,
+        "learning_not_enough_disk": 409,
+        "learning_download_busy": 409,
+        "learning_download_changed": 409,
         "invalid_plugin_lifecycle_command": 422,
         "plugin_marketplace_unavailable": 409,
         "plugin_marketplace_entry_unavailable": 404,
@@ -9560,6 +9564,18 @@ def create_router(
             request,
             dto.LearningTraining,
             await call(read_learning_training, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/download")
+    async def learning_download(request: Request) -> JSONResponse:
+        # Polled by Monitor's row and the Personal model view while the download runs.
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_download
+
+        return await respond(
+            request,
+            dto.LearningDownload,
+            await call(read_learning_download, validate=dispatch_validation(request, current)),
         )
 
     @router.get("/learning/hardware")

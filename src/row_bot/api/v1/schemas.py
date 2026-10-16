@@ -3952,15 +3952,40 @@ class LearningStartingModel(WireModel):
     download_bytes: int = Field(ge=0)
 
 
+class LearningDownload(WireModel):
+    """The personal model's download (L2b): the training engine, then the starting model."""
+
+    # none: nothing to download, or nothing asked; ready: the person said Download before and
+    # one tap starts it (O36); downloading; paused (Stop, Learning paused, Row-Bot closed);
+    # not_enough_disk; failed (with a reason and Try again).
+    state: Literal["none", "ready", "downloading", "paused", "not_enough_disk", "failed"]
+    # While downloading: the engine's files, installing it, checking it, the starting model's files.
+    phase: Literal["engine", "installing", "checking", "model"] | None = None
+    # Bytes on this computer of everything this download needs (a real denominator).
+    done_bytes: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    # Free space the rest needs (the download plus the unpacked engine), and what is free.
+    needs_bytes: int | None = Field(default=None, ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+    failure: Literal["network", "mismatch", "install_failed", "check_failed", "no_cuda", "refused"] | None = None
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
     starting_model: LearningStartingModel
-    # The answer to the download ask: Download waits until the engine can be installed (L2b).
+    # The answer to the download ask: "waiting" is Download (it reads as Ready to download when
+    # nothing is downloading, O36), "not_now" is Not now.
     download: Literal["not_asked", "waiting", "not_now"]
-    # Installed with its starting-model weights (L2b); "not_downloaded" until then.
-    engine: Literal["not_downloaded", "installed"]
+    # The training engine on this computer: damaged (files missing) and outdated (from an earlier
+    # Row-Bot) download again with Repair / Update.
+    engine: Literal["not_downloaded", "installed", "damaged", "outdated"]
+    # Its size on disk while installed.
+    engine_bytes: int = Field(ge=0)
     engine_download_bytes: int = Field(ge=0)
+    starting_model_state: Literal["not_downloaded", "downloaded", "damaged"]
+    starting_model_bytes: int = Field(ge=0)
+    download_state: LearningDownload
 
 
 class LearningData(WireModel):
@@ -3981,7 +4006,7 @@ class LearningRunnerStatus(WireModel):
     reason: Literal[
         "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
-        "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused",
+        "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
     ] | None = None
 
 
@@ -4045,7 +4070,9 @@ class LearningTier(WireModel):
 
 
 class LearningHardware(WireModel):
-    state: Literal["gpu", "small_gpu", "no_gpu", "unknown"]
+    # old_driver: a card that fits, with an NVIDIA driver older than 570 ("Update your NVIDIA
+    # driver to train here").
+    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "unknown"]
     gpu: LearningGpu | None
     # The certified recipe tier this computer trains with, and larger ones still being measured.
     tier: LearningTier | None
@@ -4094,7 +4121,8 @@ class LearningCommand(WireModel):
     action: Literal[
         "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
         "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
-        "discard_training", "use_recommended",
+        "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
+        "remove_engine", "delete_starting_model",
     ]
     setup: LearningSetupChoices | None = None
     # The training run a training action is for (the one the person saw).

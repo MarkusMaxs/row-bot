@@ -61,8 +61,9 @@ TRAIN_PLACES = ("this_computer", "hugging_face")
 # Starting models a personal model can be trained from (``training/hardware.py``
 # describes them); only the certified 8 GB recipe's model so far (O23).
 STARTING_MODELS = ("qwen3.5-2b",)
-# The answer to the download ask after turning Learning on: not asked yet,
-# Download (waiting until the engine can be installed, L2b) or Not now.
+# The answer to the download ask after turning Learning on: not asked yet, Download
+# ("waiting": the person agreed; L2b downloads when they tap it, and an old answer reads
+# as "Ready to download", O36) or Not now.
 MODEL_DOWNLOADS = ("not_asked", "waiting", "not_now")
 DEFAULT_MONTHLY_TOKEN_LIMIT = 2_000_000
 MAX_MONTHLY_TOKEN_LIMIT = 1_000_000_000
@@ -253,6 +254,13 @@ def settings_saved(field: str, value: Any) -> None:
         capture = sys.modules.get("row_bot.learning.capture")
         if capture is not None:
             capture.learning_turned_off()
+    # The personal model's download (L2b): off or paused stops it (it shows as paused).
+    downloads = sys.modules.get("row_bot.learning.training.downloads")
+    if downloads is not None and ((field == "enabled" and value is not True) or (field == "paused" and value is True)):
+        try:
+            downloads.learning_stopped()
+        except Exception:
+            logger.warning("Learning could not stop its download", exc_info=True)
     # Training (L2a): off stops it at once; paused pauses it at its next step.
     runner = sys.modules.get("row_bot.learning.runner")
     if runner is not None:
