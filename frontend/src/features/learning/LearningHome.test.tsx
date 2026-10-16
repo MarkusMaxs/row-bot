@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { OverlayProvider } from '../../ui/overlays';
 import LearningHome, { type LearningView } from './LearningHome';
 import type { LearningIO } from './learning-state';
-import { fakeIO, learningSnapshot, NO_GPU } from './test-data';
+import { fakeIO, learningSnapshot, NO_GPU, runningRun } from './test-data';
 
 function show(io: LearningIO, view: LearningView = 'overview') {
   const onViewChange = vi.fn();
@@ -245,4 +245,31 @@ it('Personal model: without a suitable GPU it says so and points to the settings
   ).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Learning settings' }));
   expect(onOpenSettings).toHaveBeenCalledWith('personal-model');
+});
+
+it('Personal model: a training run replaces the setup states, and keeps itself fresh while shown', async () => {
+  const io = fakeIO(
+    on({
+      personal_model: {
+        ...learningSnapshot().personal_model,
+        engine: 'installed',
+      },
+      training: runningRun(),
+    }),
+  );
+  const stop = vi.fn();
+  io.watchTraining = vi.fn(() => stop);
+  const { unmount } = show(io, 'model');
+  expect(
+    screen.getByRole('progressbar', { name: 'Training progress' }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole('heading', { name: 'No personal model yet' }),
+  ).toBeNull();
+  const facts = screen.getByLabelText('Personal model');
+  expect(facts).toHaveTextContent('Qwen3.5 2B · Apache 2.0 · Downloaded');
+  expect(facts).toHaveTextContent('Training engineInstalled');
+  expect(io.watchTraining).toHaveBeenCalledTimes(1);
+  unmount();
+  expect(stop).toHaveBeenCalledTimes(1);
 });

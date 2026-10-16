@@ -4,6 +4,7 @@ import type {
   LearningHardware,
   LearningReceipt,
   LearningSnapshot,
+  LearningTraining,
 } from '../../api/types';
 import type { LearningIO } from './learning-state';
 
@@ -39,11 +40,53 @@ export function learningSnapshot(
       engine: 'not_downloaded',
       engine_download_bytes: 2_170_000_000,
     },
+    training: trainingRun(),
     data: { exists: false, bytes: 0 },
     opted_out_conversations: [],
     owner_unset_channels: [],
     ...overrides,
   };
+}
+
+/** The personal model's training run (none by default: no engine yet). */
+export function trainingRun(
+  overrides: Partial<LearningTraining> = {},
+): LearningTraining {
+  return {
+    state: 'none',
+    job_id: null,
+    version: null,
+    step: 0,
+    steps_total: null,
+    checkpoint_step: null,
+    seconds_left: null,
+    pause_reason: null,
+    resumes: null,
+    failure: null,
+    recovered: null,
+    trigger: null,
+    can_train_now: false,
+    runner: { state: 'nothing_to_do', reason: 'no_engine' },
+    ...overrides,
+  };
+}
+
+/** A run of 1,000 steps for v1, at step 340 (UX §5's example). */
+export function runningRun(
+  overrides: Partial<LearningTraining> = {},
+): LearningTraining {
+  return trainingRun({
+    state: 'running',
+    job_id: 'job_1',
+    version: 1,
+    step: 340,
+    steps_total: 1000,
+    checkpoint_step: 340,
+    seconds_left: 2400,
+    trigger: 'train_now',
+    runner: { state: 'training', reason: null },
+    ...overrides,
+  });
 }
 
 export const GPU_8GB: LearningHardware = {

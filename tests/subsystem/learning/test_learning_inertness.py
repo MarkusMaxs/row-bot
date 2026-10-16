@@ -173,3 +173,41 @@ def test_full_turns_with_learning_off_capture_nothing_load_nothing_and_start_not
     assert _learning_modules() == ["row_bot.learning"]
     started = {thread.name for thread in threading.enumerate()} - before
     assert not [name for name in started if name.startswith("learning-")]
+
+
+@pytest.mark.parametrize("state", ["off", "paused", "on_without_the_preview_flag"])
+def test_training_starts_nothing_and_loads_nothing_while_learning_is_off(state, data_dir, no_learning_modules,
+                                                                         monkeypatch):
+    """Start-up's runner, a settings save, Buddy's check of what's running and Dream's check of
+    the lease (L2a): with Learning off, paused, or on without the preview flag, none of them
+    loads Learning's training, starts a thread or writes a file."""
+    import row_bot.agent_orchestrator as orchestrator
+    import row_bot.buddy.brain as brain_mod
+    import row_bot.dream_cycle as dream_cycle
+    import row_bot.tasks as tasks
+    from row_bot import learning
+
+    if state == "paused":
+        save_learning_settings(data_dir, enabled=True, paused=True)
+    elif state == "on_without_the_preview_flag":
+        save_learning_settings(data_dir, enabled=True)
+        set_learning_preview(monkeypatch, False)
+    settings_file = [] if state == "off" else ["learning_config.json"]
+    monkeypatch.setattr(tasks, "get_pending_approvals", lambda: [])
+    monkeypatch.setattr(tasks, "get_running_tasks", lambda: {})
+    monkeypatch.setattr(orchestrator, "get_thread_orchestration_activity", lambda: {})
+    monkeypatch.setattr(brain_mod, "get_buddy_config", lambda: {"enabled": True, "mode": "sidebar", "pack_id": "glyph"})
+    for name in ("is_enabled", "_in_dream_window", "_is_idle", "_model_chosen"):
+        monkeypatch.setattr(dream_cycle, name, lambda: True)
+    monkeypatch.setattr(dream_cycle, "_already_ran_today", lambda: False)
+    before = {thread.name for thread in threading.enumerate()}
+
+    learning.start_runner()  # what start-up calls
+    learning.settings_saved("train_in_quiet_hours", True)
+    assert brain_mod.BuddyBrain().resolve(None).message != "Learning: training your personal model"
+    dream_cycle._should_dream()
+
+    assert _learning_modules() == ["row_bot.learning"]
+    started = {thread.name for thread in threading.enumerate()} - before
+    assert not [name for name in started if name.startswith("learning-")]
+    assert learning_files(data_dir) == settings_file
