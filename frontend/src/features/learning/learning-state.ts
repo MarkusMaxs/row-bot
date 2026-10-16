@@ -4,6 +4,7 @@ import { clientError } from '../../api/errors';
 import type {
   LearningCommand,
   LearningConversation,
+  LearningDownload,
   LearningHardware,
   LearningLessonPage,
   LearningReceipt,
@@ -39,6 +40,8 @@ export type LearningIO = {
    * runs, every 15 s otherwise); returns the stop. Absent in some tests.
    */
   watchTraining?: () => () => void;
+  /** The same for the personal model's download (every second while it runs). */
+  watchDownload?: () => () => void;
 };
 
 // Commands that don't depend on the saved choices: after a change from another
@@ -54,11 +57,23 @@ const RETRY_ON_CHANGE = new Set<LearningAction>([
   'continue_training',
   'discard_training',
   'use_recommended',
+  'start_download',
+  'stop_download',
+  'cancel_download',
+  'remove_engine',
+  'delete_starting_model',
 ]);
 
 /** How often the training run is read while it runs, and otherwise. */
 export const TRAINING_POLL_MS = 2000;
 export const TRAINING_IDLE_POLL_MS = 15000;
+/** How often the download is read while it runs. */
+export const DOWNLOAD_POLL_MS = 1000;
+
+/** The personal model's download is under way (Monitor's row, the progress bar). */
+export function downloadLive(download: LearningDownload | null | undefined) {
+  return download?.state === 'downloading';
+}
 
 /** A run whose worker is (or may be) going: Monitor's row, Buddy's line, the progress bar. */
 export function trainingLive(training: LearningTraining | null | undefined) {
@@ -169,8 +184,76 @@ class LearningStore {
     }
     this.set(receipt.snapshot);
     if (this.watchers) this.scheduleTraining(TRAINING_POLL_MS);
+    if (this.downloadWatchers) this.scheduleDownload(DOWNLOAD_POLL_MS);
     return receipt;
   };
+
+  // ── The download, polled while a surface shows it ──────────────────────
+
+  private downloadWatchers = 0;
+  private downloadTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly onDownloadVisibility = () => {
+    if (pageVisible() && this.downloadWatchers) this.scheduleDownload(0);
+  };
+
+  watchDownload = () => {
+    this.downloadWatchers += 1;
+    if (this.downloadWatchers === 1) {
+      document.addEventListener('visibilitychange', this.onDownloadVisibility);
+      this.scheduleDownload(0);
+    }
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      this.downloadWatchers -= 1;
+      if (!this.downloadWatchers) {
+        clearTimeout(this.downloadTimer);
+        document.removeEventListener(
+          'visibilitychange',
+          this.onDownloadVisibility,
+        );
+      }
+    };
+  };
+
+  private scheduleDownload(delay: number) {
+    clearTimeout(this.downloadTimer);
+    if (!this.downloadWatchers) return;
+    this.downloadTimer = setTimeout(() => void this.readDownload(), delay);
+  }
+
+  private async readDownload() {
+    if (!this.downloadWatchers || !pageVisible()) return;
+    const before = this.view.snapshot?.personal_model.download_state ?? null;
+    let next = before;
+    try {
+      const download = await this.controller.learningDownload();
+      const snapshot = this.view.snapshot;
+      if (download && snapshot) {
+        next = download;
+        if (downloadLive(before) && !downloadLive(download)) {
+          // It finished, paused or failed: the engine's and model's rows changed too.
+          await this.reload();
+        } else
+          this.publish({
+            snapshot: {
+              ...snapshot,
+              personal_model: {
+                ...snapshot.personal_model,
+                download_state: download,
+              },
+            },
+            error: '',
+          });
+      }
+    } catch {
+      // The next read tries again; the last known state stays shown.
+    }
+    this.scheduleDownload(
+      downloadLive(next) ? DOWNLOAD_POLL_MS : TRAINING_IDLE_POLL_MS,
+    );
+  }
 
   // ── The training run, polled while a surface shows it ──────────────────
 
@@ -311,6 +394,7 @@ export function useLearning(): LearningIO | null {
             lessons: () => controller.learningLessons(),
             conversation: (id: string) => controller.learningConversation(id),
             watchTraining: store.watchTraining,
+            watchDownload: store.watchDownload,
           }
         : null,
     [controller, preview, store, view],
@@ -320,6 +404,13 @@ export function useLearning(): LearningIO | null {
 /** Keeps the training run fresh while the calling surface is shown. */
 export function useTrainingWatch(io: LearningIO | null) {
   const watch = io?.watchTraining;
+  const on = learningIsOn(io);
+  useEffect(() => (on && watch ? watch() : undefined), [on, watch]);
+}
+
+/** Keeps the personal model's download fresh while the calling surface is shown. */
+export function useDownloadWatch(io: LearningIO | null) {
+  const watch = io?.watchDownload;
   const on = learningIsOn(io);
   useEffect(() => (on && watch ? watch() : undefined), [on, watch]);
 }

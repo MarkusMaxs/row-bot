@@ -28,8 +28,17 @@ import {
 import { useNotify } from '../../ui/overlays';
 import { relativeTime } from '../../ui/format';
 import { useDeleteLearningData } from './DeleteLearningData';
-import { useTrainingWatch, type LearningIO } from './learning-state';
+import {
+  useDownloadWatch,
+  useTrainingWatch,
+  type LearningIO,
+} from './learning-state';
 import { DownloadAsk } from './LearningSetup';
+import {
+  DownloadProgress,
+  downloadView,
+  missingWords,
+} from './PersonalModelDownload';
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
@@ -261,6 +270,32 @@ function Lessons({ io }: { io: LearningIO }) {
   );
 }
 
+/** The training engine's line in the facts: "Installed (3.4 GB)", "Downloading", "Needs an update". */
+function engineFact(model: LearningSnapshot['personal_model']) {
+  const download = model.download_state;
+  if (download.state === 'downloading' && download.phase !== 'model')
+    return download.phase === 'engine' ? 'Downloading' : 'Installing';
+  if (model.engine === 'installed')
+    return model.engine_bytes
+      ? `Installed (${sizeWords(model.engine_bytes)})`
+      : 'Installed';
+  if (model.engine === 'damaged') return 'Damaged';
+  if (model.engine === 'outdated') return 'Needs an update';
+  return 'Not downloaded';
+}
+
+function startingModelFact(model: LearningSnapshot['personal_model']) {
+  const download = model.download_state;
+  if (download.state === 'downloading' && download.phase === 'model')
+    return 'Downloading';
+  if (model.starting_model_state === 'downloaded')
+    return model.starting_model_bytes
+      ? `On this computer (${sizeWords(model.starting_model_bytes)})`
+      : 'On this computer';
+  if (model.starting_model_state === 'damaged') return 'Damaged';
+  return 'Not downloaded';
+}
+
 function PersonalModel({
   io,
   snapshot,
@@ -273,32 +308,33 @@ function PersonalModel({
   const [hardware, setHardware] = useState<LearningHardware | null>(null);
   const [askOpen, setAskOpen] = useState(false);
   const notify = useNotify();
-  // Training progress stays fresh while this view is open.
+  // Training progress and the download stay fresh while this view is open.
   useTrainingWatch(io);
+  useDownloadWatch(io);
+  const check = (refresh = false) => {
+    if (refresh) setHardware(null);
+    io.hardware(refresh).then(setHardware, () => undefined);
+  };
   useEffect(() => {
-    let live = true;
-    io.hardware().then(
-      (value) => live && setHardware(value),
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-    // The computer doesn't change while the view is open.
+    check();
+    // The computer doesn't change while the view is open (Check again asks it again).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const model = snapshot.personal_model;
   const starting = model.starting_model;
-  const sizes = `the training engine (${sizeWords(model.engine_download_bytes)}) and ${starting.name} (${sizeWords(starting.download_bytes)})`;
   const settings = (
     <Button className="small" onClick={() => onOpenSettings('personal-model')}>
       Learning settings
     </Button>
   );
   const training = snapshot.training;
+  const downloaded =
+    model.engine === 'installed' && model.starting_model_state === 'downloaded';
+  const download = downloadView(model);
   // A run (or an engine with nothing to train yet) takes the place of the setup states.
   const showTraining =
-    training.state !== 'none' || training.runner.reason === 'no_data';
+    training.state !== 'none' ||
+    (downloaded && training.runner.reason === 'no_data');
   let state: ReactNode;
   if (showTraining) state = <TrainingProgress io={io} snapshot={snapshot} />;
   else if (!model.train_in_quiet_hours)
@@ -315,6 +351,19 @@ function PersonalModel({
         before each run. Nothing is uploaded until you agree to a run.
       </EmptyState>
     );
+  else if (hardware?.state === 'old_driver')
+    state = (
+      <EmptyState
+        title="Update your NVIDIA driver to train here"
+        action={
+          <Button className="small" onClick={() => check(true)}>
+            Check again
+          </Button>
+        }
+      >
+        {`${hardware.gpu?.label ?? 'This graphics card'} can train a personal model, but its driver is too old. Training needs NVIDIA driver 570 or newer.`}
+      </EmptyState>
+    );
   else if (hardware && hardware.state !== 'gpu')
     state = (
       <EmptyState title="This computer can’t train a model" action={settings}>
@@ -325,13 +374,7 @@ function PersonalModel({
         run).
       </EmptyState>
     );
-  else if (model.download === 'waiting')
-    state = (
-      <EmptyState title="Waiting to download">
-        {`${sizes[0].toUpperCase()}${sizes.slice(1)} download once this preview can install them. Nothing has been downloaded yet.`}
-      </EmptyState>
-    );
-  else
+  else if (!download && !downloaded)
     state = (
       <EmptyState
         title="No personal model yet"
@@ -341,28 +384,23 @@ function PersonalModel({
           </Button>
         }
       >
-        {`Row-Bot can train a model of your own on your work, here on this computer. First it needs ${sizes}.`}
+        {`Row-Bot can train a model of your own on your work, here on this computer. First it needs ${missingWords(model)}.`}
       </EmptyState>
     );
-  const installed = model.engine === 'installed';
-  const downloaded = installed
-    ? 'Downloaded'
-    : model.download === 'waiting'
-      ? 'Waiting to download'
-      : 'Not downloaded';
   return (
     <div className="learning-section-list">
+      {download && <DownloadProgress io={io} snapshot={snapshot} />}
       {state}
       <dl className="learning-facts" aria-label="Personal model">
         <div>
           <dt>Starting model</dt>
           <dd>
-            {starting.name} · {starting.licence} · {downloaded}
+            {starting.name} · {starting.licence} · {startingModelFact(model)}
           </dd>
         </div>
         <div>
           <dt>Training engine</dt>
-          <dd>{installed ? 'Installed' : downloaded}</dd>
+          <dd>{engineFact(model)}</dd>
         </div>
         <div>
           <dt>Train during quiet hours</dt>
@@ -394,9 +432,9 @@ function PersonalModel({
         onOpenChange={setAskOpen}
         io={io}
         hardware={hardware}
-        onAnswered={(download) => {
+        onAnswered={(_download, summary) => {
           setAskOpen(false);
-          if (download) notify('Waiting to download.');
+          notify(summary);
         }}
       />
     </div>

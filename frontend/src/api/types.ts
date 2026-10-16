@@ -414,6 +414,7 @@ export interface ClientTransport {
   ): Promise<Wire.InsightReceipt>;
   learning?(signal?: AbortSignal): Promise<Wire.LearningSnapshot>;
   learningTraining?(signal?: AbortSignal): Promise<Wire.LearningTraining>;
+  learningDownload?(signal?: AbortSignal): Promise<Wire.LearningDownload>;
   learningHardware?(
     refresh?: boolean,
     signal?: AbortSignal,

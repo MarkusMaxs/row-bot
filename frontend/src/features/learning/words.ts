@@ -132,3 +132,43 @@ export const TRAINING_FAILURES: Record<
     action: 'Try again',
   },
 };
+
+/** Where the personal model's download comes from, and what is switched off (E14, AGENTS.md). */
+export const ENGINE_SOURCES = 'From PyPI, PyTorch and Hugging Face.';
+export const ENGINE_TELEMETRY =
+  'The training engine’s own usage reporting is switched off.';
+
+/** "3.1 of 6.8 GB": both in the total's unit, so the two numbers compare at a glance. */
+export function progressWords(done: number, total: number): string {
+  const whole = Math.max(0, total);
+  const part = Math.min(Math.max(0, done), whole);
+  const unit = whole >= 1_000_000_000 ? 1_000_000_000 : 1_000_000;
+  const name = unit === 1_000_000_000 ? 'GB' : 'MB';
+  const show = (value: number) =>
+    unit === 1_000_000_000
+      ? (value / unit).toFixed(1).replace(/\.0$/, '')
+      : String(Math.round(value / unit));
+  return `${show(part)} of ${show(whole)} ${name}`;
+}
+
+/** "45%": whole percent, never 100% before the last byte. */
+export function percentWords(done: number, total: number): string {
+  if (!total) return '0%';
+  const share = Math.floor((Math.max(0, done) / total) * 100);
+  return `${Math.min(done >= total ? 100 : 99, share)}%`;
+}
+
+/** Why the personal model's download stopped (designs/learning-ux.md §9). */
+export const DOWNLOAD_FAILURES: Record<string, string> = {
+  network:
+    'The download stopped: Row-Bot couldn’t reach the download server. Check the internet connection, then try again.',
+  mismatch:
+    'The download stopped: a file didn’t match the one Row-Bot expects, so it wasn’t used. Try again.',
+  refused:
+    'The download stopped: the download server refused it. Try again later.',
+  install_failed: 'The training engine couldn’t be installed. Try again.',
+  check_failed:
+    'The training engine was installed but didn’t start. Try again; if it happens again, remove it in Learning settings and download it afresh.',
+  no_cuda:
+    'The training engine couldn’t use the graphics card. Update your NVIDIA driver, then try again.',
+};

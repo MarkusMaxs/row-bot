@@ -11,6 +11,8 @@ import { Button, Select } from '../../ui/primitives';
 import { ModalTask } from '../../ui/overlays';
 import type { LearningIO } from './learning-state';
 import {
+  ENGINE_SOURCES,
+  ENGINE_TELEMETRY,
   limitMeaning,
   limitOptions,
   quietHoursWords,
@@ -125,6 +127,25 @@ function HardwareRows({
       </div>
     );
   }
+  if (hardware.state === 'old_driver')
+    return (
+      <div className="learning-stack-tight">
+        <p>
+          <span className="learning-label">This computer: </span>
+          {hardware.gpu?.label}
+        </p>
+        <p>Update your NVIDIA driver to train here.</p>
+        <p className="learning-muted">
+          Training needs NVIDIA driver 570 or newer. Check again once it’s
+          updated.
+        </p>
+        <div className="learning-actions-inline">
+          <Button className="small" onClick={onCheckAgain}>
+            Check again
+          </Button>
+        </div>
+      </div>
+    );
   const hugging = choices.train_where === 'hugging_face';
   return (
     <div className="learning-stack-tight">
@@ -465,24 +486,39 @@ export function LearningSetupSheet({
 
 /** The download ask's title and line: what downloads, how big, and the free space. */
 function downloadWords(io: LearningIO, hardware: LearningHardware | null) {
-  const model = io.snapshot?.personal_model.starting_model;
+  const personal = io.snapshot?.personal_model;
+  const model = personal?.starting_model;
   const name = model?.name ?? 'the starting model';
   const engine =
-    hardware?.engine_download_bytes ??
-    io.snapshot?.personal_model.engine_download_bytes ??
-    0;
+    hardware?.engine_download_bytes ?? personal?.engine_download_bytes ?? 0;
+  const engineNeeded = personal?.engine !== 'installed';
+  const modelNeeded = personal?.starting_model_state !== 'downloaded';
   const free = hardware?.free_bytes ?? null;
+  const total =
+    (engineNeeded ? engine : 0) +
+    (modelNeeded ? (model?.download_bytes ?? 0) : 0);
+  // The room it needs: the download, the unpacked engine and a margin (Row-Bot works it out).
+  const needs = personal?.download_state.needs_bytes || total;
+  const parts = [
+    engineNeeded ? `The training engine (${sizeWords(engine)})` : '',
+    modelNeeded ? `${name} (${sizeWords(model?.download_bytes ?? 0)})` : '',
+  ].filter(Boolean);
   return {
-    title: `Download the training engine and ${name}?`,
-    description: `The training engine (${sizeWords(engine)}) and ${name} (${sizeWords(model?.download_bytes ?? 0)}).${
+    title:
+      engineNeeded && !modelNeeded
+        ? 'Download the training engine?'
+        : !engineNeeded && modelNeeded
+          ? `Download ${name}?`
+          : `Download the training engine and ${name}?`,
+    description: `${parts.join(' and ')}.${
       free === null ? '' : ` ${sizeWords(free)} free on this computer.`
     }`,
-    total: engine + (model?.download_bytes ?? 0),
+    needs,
     free,
   };
 }
 
-/** Download or Not now; Download records the choice (the download itself arrives in L2b). */
+/** Download or Not now; Download starts the download (the sizes, where from, usage reporting off). */
 function DownloadAskBody({
   io,
   hardware,
@@ -490,21 +526,21 @@ function DownloadAskBody({
 }: {
   io: LearningIO;
   hardware: LearningHardware | null;
-  onAnswered: (download: boolean) => void;
+  onAnswered: (download: boolean, summary: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const model = io.snapshot?.personal_model.starting_model;
-  const { total, free } = downloadWords(io, hardware);
-  const fits = free === null || free >= total;
+  const { needs, free } = downloadWords(io, hardware);
+  const fits = free === null || free >= needs;
   async function answer(download: boolean) {
     setBusy(true);
     setError('');
     try {
-      await io.run('answer_download', {
+      const receipt = await io.run('answer_download', {
         download: download ? 'download' : 'not_now',
       });
-      onAnswered(download);
+      onAnswered(download, receipt.summary);
     } catch (cause) {
       setError(clientError(cause).message);
     } finally {
@@ -517,9 +553,12 @@ function DownloadAskBody({
         They’re used only to train your personal model, here on this computer.{' '}
         {model?.name} is {model?.licence}.
       </p>
+      <p className="learning-muted">
+        {ENGINE_SOURCES} {ENGINE_TELEMETRY}
+      </p>
       {!fits && free !== null && (
         <p role="alert" className="learning-error">
-          Needs {sizeWords(total)} free; {sizeWords(free)} free.
+          Needs {sizeWords(needs)} free; {sizeWords(free)} free.
         </p>
       )}
       {error && (
@@ -559,7 +598,7 @@ export function DownloadAsk({
   onOpenChange: (open: boolean) => void;
   io: LearningIO;
   hardware: LearningHardware | null;
-  onAnswered: (download: boolean) => void;
+  onAnswered: (download: boolean, summary: string) => void;
 }) {
   const words = downloadWords(io, hardware);
   const phone = usePhone();
