@@ -71,7 +71,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupState", "DataBackupCommand", "DataBackupReceipt", "DataRestoreReview",
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
-    "LearningSnapshot", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt",
+    "LearningSnapshot", "LearningTraining", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
     "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
@@ -329,6 +329,7 @@ OPERATIONS = (
     ("get", "/insights/commands/{command_id}", None, "InsightReceipt"),
     ("post", "/insights/commands", "InsightCommand", "InsightReceipt"),
     ("get", "/learning", None, "LearningSnapshot"),
+    ("get", "/learning/training", None, "LearningTraining"),
     ("get", "/learning/hardware", None, "LearningHardware"),
     ("get", "/learning/conversations/{conversation_id}", None, "LearningConversation"),
     ("get", "/learning/lessons", None, "LearningLessonPage"),
@@ -1112,6 +1113,8 @@ export const sendInsightCommand = (base: string, proof: SessionProof, command: I
   jsonRequest(base, '/insights/commands', 'InsightReceipt', proof, 'POST', validateWire('InsightCommand', command), command.command_id, signal);
 export const getLearning = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<LearningSnapshot> =>
   jsonRequest(base, '/learning', 'LearningSnapshot', proof, 'GET', undefined, undefined, signal);
+export const getLearningTraining = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<LearningTraining> =>
+  jsonRequest(base, '/learning/training', 'LearningTraining', proof, 'GET', undefined, undefined, signal);
 export const getLearningHardware = (base: string, proof: SessionProof, refresh = false, signal?: AbortSignal): Promise<LearningHardware> =>
   jsonRequest(base, '/learning/hardware' + query({refresh: refresh ? 'true' : undefined}), 'LearningHardware', proof, 'GET', undefined, undefined, signal);
 export const getLearningConversation = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<LearningConversation> =>

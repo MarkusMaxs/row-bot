@@ -87,7 +87,12 @@
         "opt_in",
         "teach",
         "undo_teach",
-        "answer_download"
+        "answer_download",
+        "train_now",
+        "stop_training",
+        "continue_training",
+        "discard_training",
+        "use_recommended"
       ],
       "title": "Action",
       "type": "string"
@@ -141,6 +146,12 @@
       ],
       "default": null,
       "title": "Download"
+    },
+    "job_id": {
+      "default": "",
+      "maxLength": 128,
+      "title": "Job Id",
+      "type": "string"
     },
     "message_id": {
       "default": "",

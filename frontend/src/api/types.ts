@@ -413,6 +413,7 @@ export interface ClientTransport {
     signal?: AbortSignal,
   ): Promise<Wire.InsightReceipt>;
   learning?(signal?: AbortSignal): Promise<Wire.LearningSnapshot>;
+  learningTraining?(signal?: AbortSignal): Promise<Wire.LearningTraining>;
   learningHardware?(
     refresh?: boolean,
     signal?: AbortSignal,

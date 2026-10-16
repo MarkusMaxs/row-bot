@@ -4434,6 +4434,8 @@ export class ClientController {
   /** Learning (preview): only when the handshake offers `learning:preview`. */
   learning = (signal?: AbortSignal) =>
     this.query(() => this.transport.learning?.(signal));
+  learningTraining = (signal?: AbortSignal) =>
+    this.query(() => this.transport.learningTraining?.(signal));
   learningHardware = (refresh = false, signal?: AbortSignal) =>
     this.query(() => this.transport.learningHardware?.(refresh, signal));
   learningConversation = (conversation: string, signal?: AbortSignal) =>

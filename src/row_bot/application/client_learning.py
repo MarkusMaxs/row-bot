@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import sys
 from collections.abc import Callable
 from datetime import date
 from hashlib import sha256
@@ -28,8 +29,25 @@ logger = logging.getLogger(__name__)
 
 _ACTIONS = frozenset({
     "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
-    "undo_teach", "answer_download",
+    "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
+    "discard_training", "use_recommended",
 })
+# The personal model's training (L2a): the person's actions on the current run.
+_TRAINING_ACTIONS = frozenset({"train_now", "stop_training", "continue_training", "discard_training",
+                               "use_recommended"})
+_TRAINING_ERRORS = {
+    "learning_off": "learning_off",
+    "learning_paused": "learning_paused",
+    "nothing_to_train": "learning_nothing_to_train",
+    "training_changed": "learning_training_changed",
+}
+_RUNNER_REASONS = frozenset({
+    "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
+    "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
+    "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused",
+})
+_FAILURES = frozenset({"out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"})
+_SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
 # The owner id each channel needs before its direct chats count as the owner's (O2), in words.
 _OWNER_WORDS = {
     "telegram": "Telegram user ID",
@@ -162,19 +180,86 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
     from row_bot.learning.training import hardware
 
     model = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B)
+    # The engine and its weights are installed by L2b; until then only a configured engine
+    # (the fake trainer in tests and the browser fixture) is ever ready.
+    runner_module = sys.modules.get("row_bot.learning.runner")
+    runner = runner_module.loaded() if runner_module is not None else None
+    try:
+        installed = runner is not None and bool(runner.supervisor.engine.ready())
+    except Exception:
+        installed = False
     return {
         "train_in_quiet_hours": settings.train_in_quiet_hours,
         "train_where": settings.train_where,
         "starting_model": _model_view(model),
         "download": settings.model_download,
-        # The engine and weights download arrive in L2b.
-        "engine": "not_downloaded",
+        "engine": "installed" if installed else "not_downloaded",
         "engine_download_bytes": hardware.ENGINE_DOWNLOAD_BYTES,
     }
 
 
 def _model_view(model: Any) -> dict[str, Any]:
     return {"id": model.id, "name": model.name, "licence": model.licence, "download_bytes": model.download_bytes}
+
+
+def _no_training(runner: dict[str, Any]) -> dict[str, Any]:
+    return {"state": "none", "job_id": None, "version": None, "step": 0, "steps_total": None,
+            "checkpoint_step": None, "seconds_left": None, "pause_reason": None, "resumes": None,
+            "failure": None, "recovered": None, "trigger": None, "can_train_now": False, "runner": runner}
+
+
+def _training(settings: learning.LearningSettings) -> dict[str, Any]:
+    """The personal model's current training run, and what the quiet-hours runner would do.
+
+    Reads only: nothing starts, and no store is created.
+    """
+
+    if not settings.enabled:
+        return _no_training({"state": "off", "reason": None})
+    try:
+        from row_bot.learning import runner as runner_module
+        from row_bot.learning.training.jobs import HELD, LIVE
+
+        runner = runner_module.get()
+        status = runner.status()
+        runner_view = {"state": status.state, "reason": status.reason if status.reason in _RUNNER_REASONS else None}
+        supervisor = runner.supervisor
+        job = supervisor.jobs.current() if learning.store_exists() else None
+        if job is None or job.state not in _SHOWN_STATES:
+            return _no_training(runner_view)
+        state, reason = job.state, job.pause_reason
+        if state in LIVE and supervisor.live_job_id() != job.id:
+            # Left running when Row-Bot closed; the runner pauses it when it next starts.
+            state, reason = "paused", "app_closed"
+        seconds_left = None
+        if state in ("running", "pausing") and job.seconds_per_step and job.steps_total:
+            seconds_left = int(max(0, job.steps_total - job.steps_done) * job.seconds_per_step)
+        resumes = None
+        if state == "paused":
+            resumes = "ask" if reason in HELD else "when_free" if job.trigger == "train_now" else "quiet_hours"
+        can_train_now = (
+            not settings.paused and supervisor.engine.ready()
+            and state in ("planned", "paused") and settings.train_where == "this_computer"
+        )
+        return {
+            "state": state,
+            "job_id": job.id,
+            "version": job.version,
+            "step": job.steps_done,
+            "steps_total": job.steps_total,
+            "checkpoint_step": job.checkpoint_step,
+            "seconds_left": seconds_left,
+            "pause_reason": reason,
+            "resumes": resumes,
+            "failure": (job.error_code if job.error_code in _FAILURES else "engine_error") if state == "failed" else None,
+            "recovered": job.recovered,
+            "trigger": job.trigger,
+            "can_train_now": bool(can_train_now),
+            "runner": runner_view,
+        }
+    except Exception:
+        logger.debug("Learning could not read its training", exc_info=True)
+        return _no_training({"state": "nothing_to_do", "reason": None})
 
 
 def _data() -> dict[str, Any]:
@@ -185,6 +270,11 @@ def _data() -> dict[str, Any]:
         vault = learning.folder_path() / "audit.db"
         if vault.is_file():
             size += vault.stat().st_size
+        from row_bot.learning.training import jobs as training_jobs
+
+        runs = training_jobs.runs_dir()
+        if runs.is_dir() and not runs.is_symlink():
+            size += sum(path.stat().st_size for path in runs.rglob("*") if path.is_file() and not path.is_symlink())
     except OSError:
         size = 0
     return {"exists": True, "bytes": max(0, int(size))}
@@ -249,6 +339,7 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
     settings = learning.read_settings()
     opted_out = _store().opted_out_chats() if learning.store_exists() else []
     state = "off" if not settings.enabled else "paused" if settings.paused else "on"
+    training = _training(settings)  # first: it loads the runner the engine's state comes from
     data = {
         "schema_version": 1,
         "state": state,
@@ -263,6 +354,7 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         "quiet_hours": _quiet_hours(root),
         "past_chats": _past_chats(settings),
         "personal_model": _personal_model(settings),
+        "training": training,
         "data": _data(),
         "opted_out_conversations": [_text(item, 256) for item in opted_out[:2000]],
         "owner_unset_channels": _owner_unset_channels(),
@@ -272,6 +364,16 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
     ).hexdigest()
     validate()
     return data
+
+
+def read_learning_training(*, validate: Callable[[], None]) -> dict[str, Any]:
+    """Only the training run (Monitor's row and the Personal model view poll this while it runs)."""
+
+    _require_preview()
+    validate()
+    result = _training(learning.read_settings())
+    validate()
+    return result
 
 
 def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = False) -> dict[str, Any]:
@@ -431,7 +533,49 @@ def _target(action: str, command: dict[str, Any]) -> str:
         return f"learning:chat:{command.get('conversation_id', '')}"
     if action == "undo_teach":
         return f"learning:signal:{command.get('signal_id', '')}"
+    if action in _TRAINING_ACTIONS:
+        return "learning:training"
     return "learning:settings"
+
+
+def _train(action: str, job_id: str) -> str:
+    """The person's action on the current training run: what happened, in words."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training.supervisor import TrainingError
+
+    supervisor = runner_module.get().supervisor
+    try:
+        if action in ("train_now", "continue_training"):
+            job = supervisor.train_now(job_id or None)
+            if job.state == "waiting":
+                summary = "Training starts when Row-Bot is free."
+            elif job.recovered == "start_over":
+                summary = "Training starts again from the beginning."
+            elif job.steps_done:
+                summary = f"Training continues from step {job.steps_done:,}."
+            else:
+                summary = "Training started."
+        elif action == "stop_training":
+            before = supervisor.jobs.current() if learning.store_exists() else None
+            job = supervisor.stop(job_id or None)
+            step = job.checkpoint_step or 0
+            if before is not None and before.state == "waiting":
+                summary = "Training won’t start now."
+            else:
+                summary = (f"Training stopped. It can continue from step {step:,}." if step
+                           else "Training stopped.")
+        elif action == "discard_training":
+            supervisor.discard(job_id or None)
+            summary = "Training discarded."
+        else:
+            supervisor.use_recommended(job_id or None)
+            summary = "Training will use the recommended settings next time."
+    except TrainingError as error:
+        raise ClientPlatformError(_TRAINING_ERRORS.get(error.code, "learning_training_changed")) from None
+    # The runner keeps it going (pauses on use, continues when free).
+    runner_module.start_background()
+    return summary
 
 
 def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], None]) -> dict:
@@ -449,6 +593,9 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         raise ClientPlatformError("invalid_learning_command")
     if action == "answer_download" and command.get("download") not in {"download", "not_now"}:
         raise ClientPlatformError("invalid_learning_command")
+    job_id = _text(command.get("job_id"), 128)
+    if action in _TRAINING_ACTIONS - {"train_now"} and not job_id:
+        raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
         "command_id": command["command_id"],
@@ -463,6 +610,7 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "note": _text(command.get("note"), 2000),
         "signal_id": signal_id,
         "download": command.get("download"),
+        "job_id": job_id,
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -566,14 +714,26 @@ def _perform(
 
         removed = teach.undo(signal_id)
         summary = "Removed." if removed else "Already removed."
+    elif action in _TRAINING_ACTIONS:
+        summary = _train(action, wire["job_id"])
     else:
         from row_bot.learning.store import LearningStoreError
+        from row_bot.learning.training import jobs as training_jobs
 
+        # Training stops first: its leased data and checkpoints are learning data too.
+        runner_module = sys.modules.get("row_bot.learning.runner")
+        if runner_module is not None:
+            runner_module.forget_training()
+        runs = training_jobs.runs_dir()
+        runs_bytes = 0
+        if runs.is_dir() and not runs.is_symlink():
+            runs_bytes = sum(path.stat().st_size for path in runs.rglob("*") if path.is_file() and not path.is_symlink())
+        training_jobs.remove_all_runs()
         try:
             report = _store().delete_all()
         except LearningStoreError:
             raise ClientPlatformError("learning_data_busy") from None
-        summary = f"Learning data deleted ({_size_words(report.bytes_freed)})."
+        summary = f"Learning data deleted ({_size_words(report.bytes_freed + runs_bytes)})."
     return summary, signal
 
 
@@ -607,4 +767,5 @@ __all__ = [
     "read_learning_hardware",
     "read_learning_lessons",
     "read_learning_receipt",
+    "read_learning_training",
 ]
