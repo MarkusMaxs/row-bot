@@ -253,12 +253,24 @@ def settings_saved(field: str, value: Any) -> None:
         capture = sys.modules.get("row_bot.learning.capture")
         if capture is not None:
             capture.learning_turned_off()
+    # Training (L2a): off stops it at once; paused pauses it at its next step.
+    runner = sys.modules.get("row_bot.learning.runner")
+    if runner is not None:
+        try:
+            if field == "enabled" and value is not True:
+                runner.learning_turned_off()
+            elif field == "paused" and value is True:
+                runner.learning_paused()
+        except Exception:
+            logger.warning("Learning could not stop training", exc_info=True)
     if (
         (field == "enabled" and value is True)
         or (field == "sources.past_chats" and value is True)
         or (field == "paused" and value is False)
     ):
         start_past_chat_import()
+    if (field == "enabled" and value is True) or (field == "paused" and value is False):
+        start_runner()
 
 
 def start_past_chat_import() -> None:
@@ -275,6 +287,20 @@ def start_past_chat_import() -> None:
         past_chats.start_background()
     except Exception as exc:
         logger.warning("Learning could not start reading past chats (%s)", type(exc).__name__)
+
+
+def start_runner() -> None:
+    """Start the quiet-hours runner while Learning is on (L2a): it pauses training that
+    stopped when Row-Bot closed, then looks once a minute for what is due."""
+
+    try:
+        if not is_enabled():
+            return
+        from row_bot.learning import runner
+
+        runner.start_background()
+    except Exception as exc:
+        logger.warning("Learning could not start its quiet-hours runner (%s)", type(exc).__name__)
 
 
 def note_retry(thread_id: str, replaced: Iterable[Any]) -> None:
@@ -328,6 +354,7 @@ __all__ = [
     "settings_path",
     "settings_saved",
     "start_past_chat_import",
+    "start_runner",
     "store_exists",
     "store_path",
 ]
