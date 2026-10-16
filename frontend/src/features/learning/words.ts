@@ -148,7 +148,7 @@ export function progressWords(done: number, total: number): string {
     unit === 1_000_000_000
       ? (value / unit).toFixed(1).replace(/\.0$/, '')
       : String(Math.round(value / unit));
-  return `${show(part)} of ${show(whole)} ${name}`;
+  return `${show(part)} of ${show(whole)}\u00a0${name}`;
 }
 
 /** "45%": whole percent, never 100% before the last byte. */
