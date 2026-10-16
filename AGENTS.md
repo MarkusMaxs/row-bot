@@ -68,8 +68,10 @@ Priorities, in order:
   (the seams' queue and writer, with redaction), the past-chat import, evaluation
   (replay, task packs in throwaway sandboxes, equal-budget arms), the sealed audit
   vault (only `evaluation` reads it) and the task packs. Off by default; while off
-  its seams cost one check, and it creates no file and imports nothing beyond the
-  switch.
+  or paused its seams cost one check, and it creates no file and imports nothing
+  beyond the switch. Until the 5.4 cut it exists only in a build started with
+  `ROW_BOT_LEARNING_PREVIEW=1`; its surfaces live in `frontend/src/features/learning/`
+  and `application/client_learning.py`.
 - `frontend/`: the React client (the only UI), served at `/app-v2/`.
 - `src/row_bot/server.py` and `src/row_bot/app.py`: the FastAPI app, its
   routes, middleware and start-up sequence, run by uvicorn.

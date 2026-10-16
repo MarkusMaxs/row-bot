@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from tests.fixtures.learning import save_learning_settings
+from tests.fixtures.learning import save_learning_settings, set_learning_preview
+
+
+@pytest.fixture(autouse=True)
+def _learning_preview(monkeypatch):
+    """A build started with the preview flag (O34)."""
+
+    set_learning_preview(monkeypatch, True)
 
 
 @pytest.fixture

@@ -12,12 +12,17 @@ compaction) can't be recovered, so:
 - a tool call is its arguments (secrets dropped) and its result as stored, with its untrusted
   stamp; approvals and signals are not recoverable.
 
-Which conversations: those *created* in the 30 days before the import started. Messages carry no
-time of their own, so the recent turns of an older conversation can't be told from its old ones;
-older conversations are left out rather than read whole. Each is read up to the length it had when
-the import was planned, so turns captured live afterwards are never read twice. Scope is decided
-per conversation with ``historical=True`` (past chats on; never a shared conversation, an opted-out
-chat, or a Slack or Discord DM, whose sender is unknown, O3).
+Which conversations: those *updated* in the 30 days before the import started (O10). Messages carry
+no time of their own, but checkpoints do: a conversation created before the window is read from the
+first message saved after its newest checkpoint older than the window (found by bisecting its
+checkpoints by their timestamps), so a long-lived owner channel chat gives its last 30 days and
+nothing older. When the checkpoints from before the window were already tidied away (Row-Bot keeps
+the newest few per conversation), only what came after the oldest kept checkpoint counts: never a
+turn that might be older than 30 days. A conversation created in the window is read whole. Each is
+read up to the length it had when the import was planned, so turns captured live afterwards are
+never read twice. Scope is decided per conversation with ``historical=True`` (past chats on; never
+a shared conversation, an opted-out chat, or a Slack or Discord DM, whose sender is unknown, O3).
+A paused Learning stops the import; resuming carries it on.
 
 One job (:data:`JOB_ID`) holds the plan and the progress the Overview shows ("Reading 214 past
 chats · 61 done"). A conversation's records and the job's progress are written in one
@@ -80,27 +85,40 @@ class ImportProgress:
 
 class PastChatSource(Protocol):
     def conversations(self, since: float) -> list[tuple[str, float]]:
-        """(conversation, created at) for those created at or after ``since`` (epoch seconds),
+        """(conversation, created at) for those updated at or after ``since`` (epoch seconds),
         oldest first."""
 
     def messages(self, thread_id: str) -> list[Any]:
         """A conversation's saved messages, in order."""
 
+    def window_start(self, thread_id: str, since: float, created_at: float) -> tuple[int, float]:
+        """(index of the first saved message inside the window, when that part began).
+
+        ``(0, created_at)`` for a conversation created in the window."""
+
+
+def _timestamp(value: Any) -> float | None:
+    try:
+        moment = datetime.fromisoformat(str(value or ""))
+    except ValueError:
+        return None
+    return moment.timestamp()
+
 
 class SavedChats:
-    """The conversations in ``threads.db`` and their latest checkpoints."""
+    """The conversations in ``threads.db`` and their checkpoints."""
 
     def conversations(self, since: float) -> list[tuple[str, float]]:
         from row_bot import threads
 
         found: list[tuple[float, str]] = []
         for row in threads._list_threads(include_details=True):  # noqa: SLF001 - one read of thread_meta
-            thread_id, created = str(row[0] or ""), str(row[2] or "")
-            try:
-                created_at = datetime.fromisoformat(created).timestamp()
-            except ValueError:
+            thread_id = str(row[0] or "")
+            created_at = _timestamp(row[2])
+            if created_at is None:
                 continue
-            if created_at >= since and contracts.valid_thread_id(thread_id):
+            updated_at = _timestamp(row[3]) or created_at
+            if max(created_at, updated_at) >= since and contracts.valid_thread_id(thread_id):
                 found.append((created_at, thread_id))
         return [(thread_id, created_at) for created_at, thread_id in sorted(found)]
 
@@ -108,6 +126,75 @@ class SavedChats:
         from row_bot.threads import get_latest_checkpoint_messages
 
         return list(get_latest_checkpoint_messages(thread_id))
+
+    @staticmethod
+    def _checkpoint(thread_id: str, checkpoint_id: str) -> tuple[float | None, int]:
+        """(saved at, how many messages it holds) for one checkpoint of a conversation."""
+
+        from row_bot.threads import checkpointer
+
+        config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": "", "checkpoint_id": checkpoint_id}}
+        saved = checkpointer.get_tuple(config)
+        checkpoint = getattr(saved, "checkpoint", None) if saved else None
+        if not isinstance(checkpoint, dict):
+            return None, 0
+        values = checkpoint.get("channel_values") or {}
+        messages = values.get("messages") if isinstance(values, dict) else None
+        return _timestamp(checkpoint.get("ts")), len(messages) if isinstance(messages, list) else 0
+
+    def window_start(self, thread_id: str, since: float, created_at: float) -> tuple[int, float]:
+        if created_at >= since:
+            return 0, created_at
+        from row_bot.threads import checkpointer
+
+        if hasattr(checkpointer, "cursor"):
+            with checkpointer.cursor(transaction=False) as cursor:
+                ids = [str(row[0]) for row in cursor.execute(
+                    "SELECT checkpoint_id FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ''"
+                    " ORDER BY checkpoint_id", (thread_id,))]
+        else:
+            # Ids only: listing is newest first and its ids sort by time.
+            config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+            listed = (str((item.config.get("configurable") or {}).get("checkpoint_id") or "")
+                      for item in checkpointer.list(config))
+            ids = sorted(checkpoint_id for checkpoint_id in listed if checkpoint_id)
+        return checkpoint_window(ids, since, lambda checkpoint_id: self._checkpoint(thread_id, checkpoint_id))
+
+
+def checkpoint_window(
+    ids: Sequence[str], since: float, read: Callable[[str], tuple[float | None, int]]
+) -> tuple[int, float]:
+    """Bisect a conversation's checkpoints (oldest first; their ids sort by time) for the window.
+
+    Returns (the index of the first message saved inside the window, when that part began). A
+    message first appears in the checkpoint written when it was saved, so the newest checkpoint
+    older than the window holds exactly the messages from before it. When every kept checkpoint
+    is inside the window (older ones were tidied away), only messages after the oldest kept one
+    are known to be recent. With no checkpoint inside the window nothing is recent.
+    """
+
+    seen: dict[int, tuple[float | None, int]] = {}
+
+    def at(index: int) -> tuple[float | None, int]:
+        if index not in seen:
+            seen[index] = read(ids[index])
+        return seen[index]
+
+    low, high = 0, len(ids)
+    while low < high:
+        middle = (low + high) // 2
+        stamp = at(middle)[0]
+        # An unreadable time counts as old: it never lets an older message in.
+        if stamp is None or stamp < since:
+            low = middle + 1
+        else:
+            high = middle
+    if low >= len(ids):
+        return (at(len(ids) - 1)[1] if ids else 0), since
+    began = at(low)[0] or since
+    if low > 0:
+        return at(low - 1)[1], began
+    return at(0)[1], began
 
 
 def progress(store: LearningStore | None = None) -> ImportProgress | None:
@@ -151,8 +238,13 @@ def _conversation_records(
     facts: scope.SourceFacts,
     started_at: float,
     sink: _Sink,
+    first_index: int = 0,
 ) -> list[contracts.Record]:
-    """A past conversation's turns as historical, partial episodes and decisions."""
+    """A past conversation's turns as historical, partial episodes and decisions.
+
+    Turns that begin before ``first_index`` (before the window) are left out; the requests of
+    the turns that are read still carry the whole conversation up to each reply.
+    """
 
     conversation = facts.root_thread_id or thread_id
     if not contracts.valid_thread_id(conversation):
@@ -176,6 +268,8 @@ def _conversation_records(
     records: list[contracts.Record] = []
     previous_reply: str | None = None
     for number, (start, end) in enumerate(_turns(messages)):
+        if start < first_index:
+            continue
         episode_id = _derived_id("eph", thread_id, number)
         # Turns carry no time of their own: they are ordered within the conversation's first day.
         turn_at = started_at + number * 0.001
@@ -251,10 +345,14 @@ def _plan(store: LearningStore, source: PastChatSource, now: float) -> Job:
     planned: list[list[Any]] = []
     for thread_id, created_at in source.conversations(since):
         try:
-            planned.append([thread_id, len(source.messages(thread_id)), float(created_at)])
+            length = len(source.messages(thread_id))
+            first, began = source.window_start(thread_id, since, float(created_at))
+            if first >= length:
+                continue  # nothing of it is from the last 30 days
+            planned.append([thread_id, length, float(began), int(first)])
         except Exception:
             logger.debug("Learning could not size a past chat; it is left out")
-    plan = _canonical({"format": PLAN_FORMAT, "version": 1, "window_start": since, "started_at": now,
+    plan = _canonical({"format": PLAN_FORMAT, "version": 2, "window_start": since, "started_at": now,
                        "conversations": planned})
     sha = store.put_blob(plan)
     job = Job(id=JOB_ID, kind="past_chat_import", created_at=now, updated_at=now, state="running",
@@ -263,13 +361,16 @@ def _plan(store: LearningStore, source: PastChatSource, now: float) -> Job:
     return job
 
 
-def _planned(store: LearningStore, job: Job) -> list[tuple[str, int, float]]:
+def _planned(store: LearningStore, job: Job) -> list[tuple[str, int, float, int]]:
+    """(conversation, length, when its part in the window began, first message in the window)."""
+
     data = store.read_blob(job.spec_blob or "")
     if data is None:
         return []
     try:
         plan = json.loads(data.decode("utf-8"))
-        return [(str(item[0]), int(item[1]), float(item[2])) for item in plan.get("conversations") or []]
+        return [(str(item[0]), int(item[1]), float(item[2]), int(item[3]) if len(item) > 3 else 0)
+                for item in plan.get("conversations") or []]
     except (ValueError, TypeError, IndexError, AttributeError):
         return []
 
@@ -293,7 +394,7 @@ def run_import(
     """
 
     settings = gate.read_settings(root)
-    if not settings.enabled or not settings.past_chats:
+    if not settings.enabled or settings.paused or not settings.past_chats:
         return None
     store = store or LearningStore(root, clock=clock)
     source = source or SavedChats()
@@ -323,19 +424,19 @@ def run_import(
                 job = replace(job, state="stopped", updated_at=max(float(clock()), job.updated_at))
                 store.put(job)
                 return progress(store)
-            thread_id, length, created_at = planned[index]
+            thread_id, length, began, first = planned[index]
             sink = _Sink()
             try:
                 decision, facts = scope.resolve(thread_id, historical=True, lookup=lookup, store=store, root=root)
-                if decision.reason in (scope.LEARNING_OFF, scope.PAST_CHATS_OFF):
-                    # Turned off just now: stop here, and read this conversation when it is back on.
+                if decision.reason in (scope.LEARNING_OFF, scope.LEARNING_PAUSED, scope.PAST_CHATS_OFF):
+                    # Turned off or paused just now: stop here, and read this conversation when it is back.
                     job = replace(job, state="stopped", updated_at=max(float(clock()), job.updated_at))
                     store.put(job)
                     return progress(store)
                 if decision.allowed:
                     messages = source.messages(thread_id)[:length]
                     sink.records = _conversation_records(thread_id, messages, facts=facts,
-                                                         started_at=created_at, sink=sink)
+                                                         started_at=began, sink=sink, first_index=first)
             except LearningStoreError:
                 raise
             except Exception as error:
@@ -375,7 +476,7 @@ def start_background() -> bool:
 
         def stopping() -> bool:
             settings = gate.read_settings(root)
-            return _stop.is_set() or not settings.enabled or not settings.past_chats
+            return _stop.is_set() or not settings.enabled or settings.paused or not settings.past_chats
 
         def run() -> None:
             try:
@@ -405,6 +506,7 @@ __all__ = [
     "PastChatSource",
     "SavedChats",
     "WINDOW_DAYS",
+    "checkpoint_window",
     "progress",
     "run_import",
     "start_background",

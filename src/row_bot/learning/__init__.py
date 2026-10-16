@@ -19,10 +19,22 @@ seams outside the Agent.
 
 Settings live in ``learning_config.json`` in the data folder::
 
-    {"enabled": false,
+    {"enabled": false, "paused": false,
      "sources": {"my_chats": true, "workflows_and_goals": true, "past_chats": true},
      "apply_mode": "ask_first", "monthly_token_limit": 2000000,
-     "train_in_quiet_hours": true, "train_where": "this_computer"}
+     "train_in_quiet_hours": true, "train_where": "this_computer",
+     "starting_model": "qwen3.5-2b", "model_download": "not_asked"}
+
+**The preview flag (O34).** Until the 5.4 cut, Learning exists only in a build
+started with ``ROW_BOT_LEARNING_PREVIEW=1``. The flag is read once, when this
+package is imported at start-up; it is a build gate, not a setting. Without it
+Learning is off whatever the settings say: :func:`read_settings` reports it off,
+:func:`is_enabled` is false, nothing is recorded and the Learning API answers
+"unavailable".
+
+**Pause.** A paused Learning stays on (its settings, changes and models in use are
+kept) but records, tests and trains nothing: :func:`is_enabled` is false while it is
+paused, at the same one cached read.
 """
 
 from __future__ import annotations
@@ -46,9 +58,19 @@ FOLDER = "learning"
 
 APPLY_MODES = ("ask_first", "automatic")
 TRAIN_PLACES = ("this_computer", "hugging_face")
+# Starting models a personal model can be trained from (``training/hardware.py``
+# describes them); only the certified 8 GB recipe's model so far (O23).
+STARTING_MODELS = ("qwen3.5-2b",)
+# The answer to the download ask after turning Learning on: not asked yet,
+# Download (waiting until the engine can be installed, L2b) or Not now.
+MODEL_DOWNLOADS = ("not_asked", "waiting", "not_now")
 DEFAULT_MONTHLY_TOKEN_LIMIT = 2_000_000
 MAX_MONTHLY_TOKEN_LIMIT = 1_000_000_000
 _MAX_SETTINGS_BYTES = 64 * 1024
+
+PREVIEW_ENV = "ROW_BOT_LEARNING_PREVIEW"
+# Read once at start-up (O34); tests change it through ``tests/fixtures/learning.py``.
+_PREVIEW = os.environ.get(PREVIEW_ENV, "").strip() == "1"
 
 
 @dataclass(frozen=True)
@@ -63,14 +85,24 @@ class LearningSettings:
     monthly_token_limit: int = DEFAULT_MONTHLY_TOKEN_LIMIT
     train_in_quiet_hours: bool = True
     train_where: str = "this_computer"
+    paused: bool = False
+    starting_model: str = STARTING_MODELS[0]
+    model_download: str = "not_asked"
     # False when a saved file exists but could not be read; Learning is then off.
     readable: bool = True
+
+
+def preview_enabled() -> bool:
+    """Whether this build was started with Learning's preview flag (O34)."""
+
+    return _PREVIEW
 
 
 DEFAULTS = LearningSettings()
 
 # (settings path, mtime_ns, size, inode) -> settings; one entry, swapped whole.
-_cache: tuple[tuple[str, int, int, int], LearningSettings] | None = None
+# The key carries the preview flag too, so the gate costs nothing per call.
+_cache: tuple[tuple[str, int, int, int, bool], LearningSettings] | None = None
 
 
 def data_dir() -> Path:
@@ -120,9 +152,12 @@ def _normalise(document: Any) -> LearningSettings:
     sources = sources if isinstance(sources, dict) else {}
     apply_mode = document.get("apply_mode")
     train_where = document.get("train_where")
+    starting_model = document.get("starting_model")
+    model_download = document.get("model_download")
     limit = document.get("monthly_token_limit")
     if type(limit) is not int or not 0 <= limit <= MAX_MONTHLY_TOKEN_LIMIT:
         limit = DEFAULT_MONTHLY_TOKEN_LIMIT
+    paused = document.get("paused", False)
     return LearningSettings(
         # Only an explicit true turns Learning on.
         enabled=document.get("enabled") is True,
@@ -133,6 +168,10 @@ def _normalise(document: Any) -> LearningSettings:
         monthly_token_limit=limit,
         train_in_quiet_hours=_bool(document, "train_in_quiet_hours", DEFAULTS.train_in_quiet_hours),
         train_where=train_where if train_where in TRAIN_PLACES else DEFAULTS.train_where,
+        # A pause that can't be read keeps Learning paused (nothing is recorded).
+        paused=paused if type(paused) is bool else True,
+        starting_model=starting_model if starting_model in STARTING_MODELS else DEFAULTS.starting_model,
+        model_download=model_download if model_download in MODEL_DOWNLOADS else DEFAULTS.model_download,
     )
 
 
@@ -140,7 +179,8 @@ def read_settings(root: Path | None = None) -> LearningSettings:
     """The saved settings, cached until the file changes. Never raises.
 
     A missing file reads as the defaults (Learning off). A file that exists but
-    can't be read or parsed reads as off and ``readable=False``.
+    can't be read or parsed reads as off and ``readable=False``. Without the
+    preview flag Learning reads as off whatever was saved (O34).
     """
 
     global _cache
@@ -150,7 +190,7 @@ def read_settings(root: Path | None = None) -> LearningSettings:
             stat = os.stat(path)
         except FileNotFoundError:
             return DEFAULTS
-        key = (str(path), stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        key = (str(path), stat.st_mtime_ns, stat.st_size, stat.st_ino, _PREVIEW)
         cached = _cache
         if cached is not None and cached[0] == key:
             return cached[1]
@@ -159,6 +199,8 @@ def read_settings(root: Path | None = None) -> LearningSettings:
         else:
             with open(path, encoding="utf-8") as handle:
                 settings = _normalise(json.load(handle))
+        if not _PREVIEW and settings.enabled:
+            settings = replace(settings, enabled=False)
         _cache = (key, settings)
         return settings
     except Exception:
@@ -167,10 +209,15 @@ def read_settings(root: Path | None = None) -> LearningSettings:
 
 
 def is_enabled(root: Path | None = None) -> bool:
-    """Whether Learning is on. Cheap, cached, and False when settings can't be read."""
+    """Whether Learning may record, test or train now: on and not paused.
+
+    Cheap, cached, and False when settings can't be read or the build has no
+    preview flag.
+    """
 
     try:
-        return read_settings(root).enabled
+        settings = read_settings(root)
+        return settings.enabled and not settings.paused
     except Exception:
         return False
 
@@ -187,11 +234,14 @@ def settings_saved(field: str, value: Any) -> None:
 
     Turning Learning on creates its store and, when "Also learn from the last 30 days
     of chats" is ticked, starts reading past chats in the background (D26). Turning it
-    off keeps the data and stops capture and the import. A store that can't be created
-    now is created by the first write while Learning is on.
+    off or pausing it keeps the data and stops capture and the import; resuming
+    carries the import on. A store that can't be created now is created by the first
+    write while Learning is on. Without the preview flag nothing happens.
     """
 
     invalidate()
+    if not _PREVIEW:
+        return
     if field == "enabled" and value is True:
         try:
             from row_bot.learning.store import LearningStore
@@ -199,11 +249,15 @@ def settings_saved(field: str, value: Any) -> None:
             LearningStore().create()
         except Exception:
             logger.warning("Learning is on but its store could not be created yet", exc_info=True)
-    if field == "enabled" and value is not True:
+    if (field == "enabled" and value is not True) or (field == "paused" and value is True):
         capture = sys.modules.get("row_bot.learning.capture")
         if capture is not None:
             capture.learning_turned_off()
-    if (field == "enabled" and value is True) or (field == "sources.past_chats" and value is True):
+    if (
+        (field == "enabled" and value is True)
+        or (field == "sources.past_chats" and value is True)
+        or (field == "paused" and value is False)
+    ):
         start_past_chat_import()
 
 
@@ -257,7 +311,10 @@ __all__ = [
     "FOLDER",
     "LearningSettings",
     "MAX_MONTHLY_TOKEN_LIMIT",
+    "MODEL_DOWNLOADS",
+    "PREVIEW_ENV",
     "SETTINGS_FILE",
+    "STARTING_MODELS",
     "STORE_FILE",
     "TRAIN_PLACES",
     "data_dir",
@@ -266,6 +323,7 @@ __all__ = [
     "is_enabled",
     "note_channel_sender",
     "note_retry",
+    "preview_enabled",
     "read_settings",
     "settings_path",
     "settings_saved",

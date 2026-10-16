@@ -15,7 +15,7 @@ import pytest
 
 # Bound to the session's data folder at import, as in the app (not to a test's folder).
 from row_bot import threads, thread_cleanup
-from tests.fixtures.learning import learning_files
+from tests.fixtures.learning import learning_files, save_learning_settings, set_learning_preview
 from tests.fixtures.memory_stack import fresh_memory_stack
 
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
@@ -112,12 +112,21 @@ def test_deleting_a_memory_with_learning_off_touches_nothing_of_learning(
     assert _learning_modules() in ([], ["row_bot.learning"])
 
 
+@pytest.mark.parametrize("state", ["off", "paused", "on_without_the_preview_flag"])
 def test_full_turns_with_learning_off_capture_nothing_load_nothing_and_start_nothing(
-    data_dir, no_learning_modules, monkeypatch
+    state, data_dir, no_learning_modules, monkeypatch
 ):
     """Model calls, tool calls, an approval, a Stop and a Retry pass every capture seam: with
-    Learning off each costs one check and nothing else happens."""
+    Learning off, paused, or on in a build without the preview flag (O34), each costs one check
+    and nothing else happens."""
     from langchain_core.messages import HumanMessage
+
+    if state == "paused":
+        save_learning_settings(data_dir, enabled=True, paused=True)
+    elif state == "on_without_the_preview_flag":
+        save_learning_settings(data_dir, enabled=True)
+        set_learning_preview(monkeypatch, False)
+    settings_file = [] if state == "off" else ["learning_config.json"]
     from langchain_core.tools import tool
 
     from tests.helpers.learning_turns import AgentTurns, ScriptedModel, asks, call, says
@@ -159,7 +168,7 @@ def test_full_turns_with_learning_off_capture_nothing_load_nothing_and_start_not
         turns.thread_id, [HumanMessage(content="Say hi", id=f"retry-{uuid.uuid4().hex[:6]}")], retry_text="Say hi")
 
     assert len(model.seen) == 5
-    assert learning_files(data_dir) == []
+    assert learning_files(data_dir) == settings_file
     assert learning_files(threads.DATA_DIR) == session_files
     assert _learning_modules() == ["row_bot.learning"]
     started = {thread.name for thread in threading.enumerate()} - before
