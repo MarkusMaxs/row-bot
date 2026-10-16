@@ -4303,6 +4303,10 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
 
         training_jobs.remove_all_runs()
         shutil.rmtree(releases.versions_dir(), ignore_errors=True)
+        if "executable" in _l2c:
+            from row_bot.learning.training import serving
+
+            serving.OllamaRuntime.executable = _l2c["executable"]
         _l2c.clear()
         return {"action": action}
     if action == "container":
@@ -4323,7 +4327,11 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         runner.configure(engine=engine, dataset=FakeDataset(examples=_L2C_EXAMPLES), lease=lease, planner=planner,
                          releases=makes)
         runner.get().hours = QuietHours(now=lambda: datetime(2026, 10, 16, 14, 0))
-        _l2c.update(planner=planner, engine=engine, lease=lease)
+        # Ollama reads as installed whatever the machine running the spec has (CI has none).
+        from row_bot.learning.training import serving
+
+        _l2c.update(planner=planner, engine=engine, lease=lease, executable=serving.OllamaRuntime.executable)
+        serving.OllamaRuntime.executable = lambda self: "ollama"
         return {"action": action}
     planner = _l2c["planner"]
     supervisor = runner.get().supervisor

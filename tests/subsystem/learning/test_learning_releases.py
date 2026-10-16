@@ -163,7 +163,7 @@ def test_the_model_card_says_what_it_was_trained_on_in_plain_words(maker_for):
     assert "Left out: 3 kept back as hidden tests, 2 a tool failed." in card
     assert "Answers from: Ollama (on this computer), OpenAI." in card
     assert "may be limited by their terms" in card  # D7
-    assert "Starting model: Qwen/Qwen3.5-2B" in card and "LoRA rank 16, 16,384-token examples" in card
+    assert "Starting model: Qwen/Qwen3.5-2B" in card and "LoRA rank 16, 16,384-token examples, one pass" in card
     assert "Training engine: torch 2.10.0, unsloth 2026.4.1." in card
     assert "Runs in Ollama: Row-Bot's check and one real task with a tool passed." in card
     assert "Not yet compared with your main model." in card

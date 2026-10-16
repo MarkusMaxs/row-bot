@@ -209,8 +209,10 @@ def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState
     lines.append("## What it was trained on")
     examples = int(dataset.get("examples") or 0)
     conversations = len(dataset.get("conversations") or ())
-    lines.append(f"- {examples:,} examples of your own work with Row-Bot, from {conversations:,} conversations"
-                 f" ({_day(dataset.get('first_at'))} to {_day(dataset.get('last_at'))}).")
+    first, last = _day(dataset.get("first_at")), _day(dataset.get("last_at"))
+    when = f"all on {first}" if first == last else f"{first} to {last}"
+    lines.append(f"- {examples:,} examples of your own work with Row-Bot, from {conversations:,} "
+                 f"conversation{'s' if conversations != 1 else ''} ({when}).")
     historical = int(dataset.get("historical") or 0)
     if historical:
         lines.append(f"- {historical:,} of them are replies from past chats.")
@@ -233,7 +235,8 @@ def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState
     if identity.base is not None:
         lines.append(f"- Starting model: {identity.base.name} at revision {identity.base.version}.")
     lines.append(f"- Recipe: {recipe.title} ({recipe.name}): LoRA rank {recipe.settings.get('rank')}, "
-                 f"{recipe.max_seq_length:,}-token examples, {recipe.epochs} pass(es), no reasoning.")
+                 f"{recipe.max_seq_length:,}-token examples, "
+                 f"{'one pass' if recipe.epochs == 1 else f'{recipe.epochs} passes'}, no reasoning.")
     if engine_versions:
         lines.append("- Training engine: " + ", ".join(f"{key} {value}" for key, value in sorted(engine_versions.items()))
                      + ".")
