@@ -144,7 +144,7 @@ it('the setup sheet fills in every default, turns on with one tap and then asks 
   ).toBeChecked();
   expect(
     within(sheet).getByRole('combobox', { name: 'Starting model' }),
-  ).toHaveDisplayValue('Qwen3.5 2B · Apache 2.0 · 4.6 GB download');
+  ).toHaveDisplayValue('Qwen3.5 2B · Apache 2.0 · 4.6 GB download');
   expect(
     within(sheet).getByRole('combobox', { name: 'Monthly limit' }),
   ).toHaveDisplayValue('2M tokens');
@@ -175,7 +175,7 @@ it('the setup sheet fills in every default, turns on with one tap and then asks 
     },
   });
   expect(ask).toHaveAccessibleDescription(
-    'The training engine (2.2 GB) and Qwen3.5 2B (4.6 GB). 512 GB free on this computer.',
+    'The training engine (2.2 GB) and Qwen3.5 2B (4.6 GB). 512 GB free on this computer.',
   );
   fireEvent.click(within(ask).getByRole('button', { name: 'Download' }));
   await act(async () => undefined);
@@ -264,7 +264,9 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
     'Learning data',
   ])
     expect(screen.getByRole('heading', { name: heading })).toBeVisible();
-  expect(screen.getByText('12 MB on this computer.')).toBeVisible();
+  expect(
+    screen.getByText('12 MB. Turning Learning off keeps it.'),
+  ).toBeVisible();
   expect(
     screen.getByRole('button', { name: 'Delete learning data…' }),
   ).toBeVisible();

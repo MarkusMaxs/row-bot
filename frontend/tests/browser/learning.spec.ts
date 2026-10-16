@@ -66,10 +66,10 @@ async function shoot(
       path: file,
       contentType: 'image/png',
     });
+    // An open menu hides the page behind it (aria-hidden) while it holds
+    // focus; its screens are scanned once it closes, on the dialog it opens.
+    if (axe) await accessibility(page, info, `${name}-${size}-${appearance}`);
   }
-  // An open menu hides the page behind it (aria-hidden) while it holds focus;
-  // its screens are scanned once it closes, on the dialog it opens.
-  if (axe) await accessibility(page, info, `${name}-${size}`);
   await page.emulateMedia({ colorScheme: 'light' });
 }
 
@@ -280,6 +280,9 @@ test('the Learning tab: paused, limit reached, reading past chats, its other vie
   await expect(
     page.getByRole('heading', { name: 'No personal model yet' }),
   ).toBeVisible();
+  await expect(
+    page.getByText('NVIDIA GeForce RTX 5070 Laptop (8 GB)'),
+  ).toBeVisible();
   await shoot(page, info, 'model-not-set-up');
   await page.getByRole('button', { name: 'Download…' }).click();
   await page
@@ -330,5 +333,6 @@ test('without a suitable graphics card the setup sheet offers Hugging Face', asy
   await expect(
     page.getByRole('heading', { name: 'Training on Hugging Face' }),
   ).toBeVisible();
+  await expect(page.getByText('No NVIDIA graphics card')).toBeVisible();
   await shoot(page, info, 'model-hugging-face');
 });

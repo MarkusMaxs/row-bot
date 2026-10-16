@@ -36,7 +36,7 @@ def test_an_8_gb_card_trains_with_the_certified_small_model_recipe():
                             which=_which())
 
     assert check.state == "gpu" and check.can_train
-    assert check.gpu and check.gpu.label == "NVIDIA GeForce RTX 5070 Laptop (8 GB)"
+    assert check.gpu and check.gpu.label == "NVIDIA GeForce RTX 5070 Laptop (8\u00a0GB)"
     assert check.tier and check.tier.certified and check.tier.id == "8gb"
     assert check.tier.summary == "Can train small models (up to about 2B) on your tasks."
     assert [(model.name, model.licence) for model in check.tier.models] == [("Qwen3.5 2B", "Apache 2.0")]

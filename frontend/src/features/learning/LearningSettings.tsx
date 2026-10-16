@@ -461,11 +461,11 @@ export default function LearningSettings({
       />
       <SettingsGroup title="Learning data" anchor="learning-data">
         <SettingsItem
-          label="Learning data"
+          label="Kept on this computer"
           help={
             snapshot.data.exists
-              ? `${sizeWords(snapshot.data.bytes)} on this computer.`
-              : 'Nothing is kept yet.'
+              ? `${sizeWords(snapshot.data.bytes)}. Turning Learning off keeps it.`
+              : 'Nothing yet.'
           }
           trailing={
             snapshot.data.exists ? (

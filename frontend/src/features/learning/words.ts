@@ -23,17 +23,18 @@ export function tokenWords(count: number): string {
   return String(value);
 }
 
-/** 4,570,000,000 → "4.6 GB", 43,700,000 → "44 MB". */
+/** 4,570,000,000 → "4.6 GB", 43,700,000 → "44 MB" (number and unit kept together). */
 export function sizeWords(bytes: number): string {
   const value = Math.max(0, bytes);
   if (value >= 1_000_000_000) {
     const amount = value / 1_000_000_000;
-    return `${amount >= 100 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, '')} GB`;
+    return `${amount >= 100 ? Math.round(amount) : amount.toFixed(1).replace(/\.0$/, '')}\u00a0GB`;
   }
   if (value >= 1_000_000)
-    return `${Math.max(1, Math.round(value / 1_000_000))} MB`;
-  if (value >= 1_000) return `${Math.max(1, Math.round(value / 1_000))} KB`;
-  return value === 1 ? '1 byte' : `${value} bytes`;
+    return `${Math.max(1, Math.round(value / 1_000_000))}\u00a0MB`;
+  if (value >= 1_000)
+    return `${Math.max(1, Math.round(value / 1_000))}\u00a0KB`;
+  return value === 1 ? '1\u00a0byte' : `${value}\u00a0bytes`;
 }
 
 /** The monthly limit's choices; the saved value shows even when it isn't one of them. */

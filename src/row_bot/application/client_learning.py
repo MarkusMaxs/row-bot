@@ -416,13 +416,14 @@ def _save(values: dict[str, Any]) -> None:
 
 
 def _size_words(size: int) -> str:
+    """"4.6 GB", the number kept with its unit (a non-breaking space)."""
     if size >= 1_000_000_000:
-        return f"{size / 1_000_000_000:.1f} GB"
+        return f"{size / 1_000_000_000:.1f}\u00a0GB"
     if size >= 1_000_000:
-        return f"{max(1, round(size / 1_000_000))} MB"
+        return f"{max(1, round(size / 1_000_000))}\u00a0MB"
     if size >= 1_000:
-        return f"{max(1, round(size / 1_000))} KB"
-    return f"{size} bytes"
+        return f"{max(1, round(size / 1_000))}\u00a0KB"
+    return f"{size}\u00a0bytes"
 
 
 def _target(action: str, command: dict[str, Any]) -> str:

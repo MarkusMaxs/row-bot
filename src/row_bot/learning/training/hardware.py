@@ -78,10 +78,10 @@ class Gpu:
 
     @property
     def label(self) -> str:
-        """"NVIDIA GeForce RTX 5070 Laptop (8 GB)"."""
+        """"NVIDIA GeForce RTX 5070 Laptop (8 GB)" (the size kept with its unit)."""
 
         name = self.name[:-4] if self.name.endswith(" GPU") else self.name
-        return f"{name} ({self.memory_gb} GB)"
+        return f"{name} ({self.memory_gb}\u00a0GB)"
 
 
 @dataclass(frozen=True)

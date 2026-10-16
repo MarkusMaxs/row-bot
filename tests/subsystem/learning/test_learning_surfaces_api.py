@@ -404,7 +404,7 @@ def test_the_hardware_read_reports_the_check_and_free_space(api, monkeypatch):
 
     assert response.status_code == 200 and again.status_code == 200
     value = LearningHardware.model_validate_json(response.text)
-    assert value.state == "gpu" and value.gpu and value.gpu.label == "NVIDIA GeForce RTX 5070 Laptop (8 GB)"
+    assert value.state == "gpu" and value.gpu and value.gpu.label == "NVIDIA GeForce RTX 5070 Laptop (8\u00a0GB)"
     assert value.tier and value.tier.certified and value.tier.summary.startswith("Can train small models")
     assert [model.name for model in value.starting_models] == ["Qwen3.5 2B"]
     assert value.free_bytes is not None and value.free_bytes > 0
