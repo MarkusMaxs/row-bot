@@ -175,6 +175,7 @@ class TrainingWorker:
         self._tail = bytearray()
         self._reader: threading.Thread | None = None
         self._exited = threading.Event()
+        self._closed = threading.Event()  # the process is gone and its files are written
         self.violation: str | None = None
         self.returncode: int | None = None
 
@@ -263,7 +264,9 @@ class TrainingWorker:
                 process.wait(STOP_WAIT_SECONDS)
             except subprocess.TimeoutExpired:
                 return False
-            return ended
+        # The exit thread writes the worker's log into its run folder: wait for that too, so a
+        # caller that deletes the folder next (Delete learning data) finds nothing being written.
+        return self._closed.wait(STOP_WAIT_SECONDS) and ended
 
     def wait(self, timeout: float | None = None) -> bool:
         """Wait until the worker has ended and its exit was reported."""
@@ -341,6 +344,7 @@ class TrainingWorker:
             (self.run / LOG_FILE).write_bytes(bytes(self._tail))
         except OSError:
             pass
+        self._closed.set()
         self.returncode = code
         try:
             self._on_exit(code, self.violation)

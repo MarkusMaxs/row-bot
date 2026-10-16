@@ -11,6 +11,7 @@ driven step by step (no sleeps); every process here ends before its test does.""
 from __future__ import annotations
 
 import sys
+import time
 
 import pytest
 
@@ -280,6 +281,16 @@ def test_a_worker_that_refuses_to_resume_goes_back_a_checkpoint_then_starts_over
         training.stop()
 
 
+def _ended(*pids: int, seconds: float = 5.0) -> bool:
+    """Every process has ended. Windows ends a job's processes asynchronously once it is
+    terminated, so a grandchild may take a moment after the worker itself is gone."""
+
+    deadline = time.monotonic() + seconds
+    while any(process_alive(pid) for pid in pids) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not any(process_alive(pid) for pid in pids)
+
+
 def test_stop_and_quitting_end_the_workers_whole_process_tree(learning_on, clock):
     training = _training(learning_on, clock, spawn_child=True)
     try:
@@ -290,7 +301,7 @@ def test_stop_and_quitting_end_the_workers_whole_process_tree(learning_on, clock
         assert process_alive(child) and process_alive(worker.pid)
         job = training.supervisor.stop(training.job.id)  # the person's Stop
         assert (job.state, job.pause_reason) == ("paused", "you")
-        assert not process_alive(child) and not process_alive(worker.pid)
+        assert not process_alive(worker.pid) and _ended(child)
 
         (work / "child.pid").unlink()
         training.supervisor.train_now(job.id)
@@ -298,7 +309,7 @@ def test_stop_and_quitting_end_the_workers_whole_process_tree(learning_on, clock
         child = int(wait_for_file(work / "child.pid"))
         worker = training.supervisor.live_worker()
         training.supervisor.shutdown()  # Row-Bot quits
-        assert not process_alive(child) and not process_alive(worker.pid)
+        assert not process_alive(worker.pid) and _ended(child)
         assert training.current().pause_reason == "app_closed"
     finally:
         training.stop()
