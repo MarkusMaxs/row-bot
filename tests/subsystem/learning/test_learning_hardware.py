@@ -43,7 +43,7 @@ def test_an_8_gb_card_trains_with_the_certified_small_model_recipe():
     assert check.larger_tiers == ()
     (args, kwargs), = calls
     assert args[0] == "/fake/bin/nvidia-smi" and "--query-gpu=name,memory.total,driver_version" in args
-    assert kwargs["timeout"] <= 5 and kwargs["check"] is False
+    assert kwargs["timeout"] <= 15 and kwargs["check"] is False
     if sys.platform == "win32":
         # No console window flashes up from the desktop app.
         assert kwargs["creationflags"] == subprocess.CREATE_NO_WINDOW

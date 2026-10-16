@@ -1,7 +1,7 @@
 """What this computer can train a personal model on (D3, O23).
 
 Row-Bot asks the NVIDIA driver's own ``nvidia-smi`` for the graphics cards and their memory
-(no network, a few seconds at most, no console window) and maps the largest card to a recipe
+(no network, 15 s at most, no console window) and maps the largest card to a recipe
 tier. Only the 8 GB tier is certified so far (O23: Qwen3.5 2B, bf16 LoRA at 16K, measured on an
 RTX 5070 Laptop in L0d); a larger card can use it too, and its own larger tier shows as "measured
 soon" until a recipe is certified for it. The answer is kept for the life of the process: a
@@ -24,7 +24,9 @@ from typing import Any, Literal
 logger = logging.getLogger(__name__)
 
 QUERY = ("--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
-TIMEOUT_SECONDS = 5.0
+# A laptop's graphics card asleep (Optimus) can take about 5 s to answer: measured
+# 1.0-5.0 s on the RTX 5070 Laptop. The sheet shows "Checking..." meanwhile.
+TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
