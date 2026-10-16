@@ -146,6 +146,40 @@
       "title": "LearningDownload",
       "type": "object"
     },
+    "LearningExamples": {
+      "additionalProperties": false,
+      "description": "How much of the person's work training can use (L2c): \"Needs more examples\" below ``needed``.",
+      "properties": {
+        "examples": {
+          "minimum": 0,
+          "title": "Examples",
+          "type": "integer"
+        },
+        "left_out": {
+          "minimum": 0,
+          "title": "Left Out",
+          "type": "integer"
+        },
+        "needed": {
+          "minimum": 1,
+          "title": "Needed",
+          "type": "integer"
+        },
+        "new_examples": {
+          "minimum": 0,
+          "title": "New Examples",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "examples",
+        "needed",
+        "new_examples",
+        "left_out"
+      ],
+      "title": "LearningExamples",
+      "type": "object"
+    },
     "LearningPastChats": {
       "additionalProperties": false,
       "properties": {
@@ -215,6 +249,36 @@
           "title": "Engine Download Bytes",
           "type": "integer"
         },
+        "examples": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningExamples"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "runtime": {
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "lmstudio",
+            "llama_cpp",
+            "vllm"
+          ],
+          "title": "Runtime",
+          "type": "string"
+        },
+        "runtimes": {
+          "items": {
+            "$ref": "#/$defs/LearningRuntime"
+          },
+          "maxItems": 8,
+          "title": "Runtimes",
+          "type": "array"
+        },
         "starting_model": {
           "$ref": "#/$defs/LearningStartingModel"
         },
@@ -243,6 +307,17 @@
           ],
           "title": "Train Where",
           "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningVersion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -325,7 +400,11 @@
                 "engine_error",
                 "learning_off",
                 "learning_paused",
-                "extraction"
+                "extraction",
+                "planned",
+                "planning",
+                "up_to_date",
+                "gpu_busy"
               ],
               "type": "string"
             },
@@ -356,6 +435,50 @@
         "state"
       ],
       "title": "LearningRunnerStatus",
+      "type": "object"
+    },
+    "LearningRuntime": {
+      "additionalProperties": false,
+      "description": "Where a personal model can run (\"Runs in\", D10).",
+      "properties": {
+        "automated": {
+          "title": "Automated",
+          "type": "boolean"
+        },
+        "id": {
+          "enum": [
+            "ollama",
+            "lmstudio",
+            "llama_cpp",
+            "vllm"
+          ],
+          "title": "Id",
+          "type": "string"
+        },
+        "installed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Installed"
+        },
+        "name": {
+          "maxLength": 64,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "automated"
+      ],
+      "title": "LearningRuntime",
       "type": "object"
     },
     "LearningSourcesSnapshot": {
@@ -647,6 +770,181 @@
         "runner"
       ],
       "title": "LearningTraining",
+      "type": "object"
+    },
+    "LearningVersion": {
+      "additionalProperties": false,
+      "description": "The newest personal-model version after training (L2c): being prepared to run, made ready in\nits runtime, ready (it then waits for its comparison), or stuck with the way out.",
+      "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "examples": {
+          "minimum": 0,
+          "title": "Examples",
+          "type": "integer"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_enough_disk",
+                "adapter_missing",
+                "engine_missing",
+                "tools_missing",
+                "export_failed",
+                "not_installed",
+                "not_running",
+                "not_local",
+                "create_failed",
+                "not_loaded",
+                "probe_failed",
+                "tool_turn_failed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure"
+        },
+        "file_bytes": {
+          "minimum": 0,
+          "title": "File Bytes",
+          "type": "integer"
+        },
+        "file_name": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Name"
+        },
+        "folder": {
+          "maxLength": 1024,
+          "title": "Folder",
+          "type": "string"
+        },
+        "free_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Free Bytes"
+        },
+        "needs_bytes": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Needs Bytes"
+        },
+        "phase": {
+          "enum": [
+            "exporting",
+            "export_failed",
+            "making_ready",
+            "ready",
+            "runtime_failed",
+            "waiting_for_you"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "quantization": {
+          "enum": [
+            "Q8_0",
+            "Q4_K_M"
+          ],
+          "title": "Quantization",
+          "type": "string"
+        },
+        "runtime": {
+          "enum": [
+            "ollama",
+            "lmstudio",
+            "llama_cpp",
+            "vllm"
+          ],
+          "title": "Runtime",
+          "type": "string"
+        },
+        "step": {
+          "anyOf": [
+            {
+              "enum": [
+                "merge",
+                "convert",
+                "quantize"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Step"
+        },
+        "trained_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trained At"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "phase",
+        "runtime",
+        "quantization",
+        "file_bytes",
+        "folder",
+        "examples"
+      ],
+      "title": "LearningVersion",
       "type": "object"
     }
   },

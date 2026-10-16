@@ -2790,6 +2790,14 @@ const CATALOG: Record<string, Entry> = {
     'The download changed meanwhile. Check it and try again.',
     'review',
   ],
+  learning_version_changed: [
+    'Your personal model changed meanwhile. Check it and try again.',
+    'review',
+  ],
+  learning_version_busy: [
+    'Row-Bot is already preparing your personal model. It says here when it’s done.',
+    'none',
+  ],
   knowledge_changed: [
     'This memory changed. Try again with its current version.',
     'retry',

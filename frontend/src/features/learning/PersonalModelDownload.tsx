@@ -97,12 +97,25 @@ export function downloadView(
           actions: [stop],
           announce: 'Checking the training engine.',
         };
-      const what = download.phase === 'model' ? name : 'the training engine';
+      // O49: the title names both parts while the total holds both (the engine, then the model).
+      const both =
+        download.phase === 'model'
+          ? total > model.starting_model.download_bytes
+          : model.starting_model_state !== 'downloaded';
+      const what = both
+        ? `the training engine and ${name}`
+        : download.phase === 'model'
+          ? name
+          : 'the training engine';
       const share = total ? Math.floor((done / total) * 10) * 10 : 0;
       return {
-        title: `Downloading ${what}`,
+        title: total
+          ? `Downloading ${what} · ${progressWords(done, total)}`
+          : `Downloading ${what}`,
         detail: total
-          ? `${progressWords(done, total)} · ${percentWords(done, total)}`
+          ? both
+            ? `${percentWords(done, total)} · now ${download.phase === 'model' ? name : 'the training engine'}`
+            : percentWords(done, total)
           : undefined,
         progress: total ? { value: done, max: total } : undefined,
         actions: [stop],

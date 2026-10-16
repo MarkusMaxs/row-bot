@@ -39,6 +39,12 @@ import {
   downloadView,
   missingWords,
 } from './PersonalModelDownload';
+import {
+  RunsInSheet,
+  runsInWords,
+  VersionCard,
+  versionFileWords,
+} from './PersonalModelVersion';
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
@@ -307,6 +313,7 @@ function PersonalModel({
 }) {
   const [hardware, setHardware] = useState<LearningHardware | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  const [runsInOpen, setRunsInOpen] = useState(false);
   const notify = useNotify();
   // Training progress and the download stay fresh while this view is open.
   useTrainingWatch(io);
@@ -334,7 +341,10 @@ function PersonalModel({
   // A run (or an engine with nothing to train yet) takes the place of the setup states.
   const showTraining =
     training.state !== 'none' ||
-    (downloaded && training.runner.reason === 'no_data');
+    (downloaded &&
+      ['no_data', 'planning', 'up_to_date'].includes(
+        training.runner.reason ?? '',
+      ));
   let state: ReactNode;
   if (showTraining) state = <TrainingProgress io={io} snapshot={snapshot} />;
   else if (!model.train_in_quiet_hours)
@@ -364,6 +374,13 @@ function PersonalModel({
         {`${hardware.gpu?.label ?? 'This graphics card'} can train a personal model, but its driver is too old. Training needs NVIDIA driver 570 or newer.`}
       </EmptyState>
     );
+  else if (hardware?.state === 'container')
+    state = (
+      <EmptyState title="Training isn’t available here" action={settings}>
+        Row-Bot’s Docker image doesn’t train personal models. Run Row-Bot on the
+        computer with the graphics card (Windows or Linux) to train one.
+      </EmptyState>
+    );
   else if (hardware && hardware.state !== 'gpu')
     state = (
       <EmptyState title="This computer can’t train a model" action={settings}>
@@ -390,8 +407,37 @@ function PersonalModel({
   return (
     <div className="learning-section-list">
       {download && <DownloadProgress io={io} snapshot={snapshot} />}
+      {model.version && (
+        <VersionCard
+          io={io}
+          model={model}
+          onRunsIn={() => setRunsInOpen(true)}
+        />
+      )}
       {state}
       <dl className="learning-facts" aria-label="Personal model">
+        {(downloaded || model.version) && (
+          <div>
+            <dt>Runs in</dt>
+            <dd className="learning-fact-action">
+              <span>{runsInWords(model)}</span>
+              <Button
+                variant="ghost"
+                className="small"
+                aria-label="Change where your personal model runs"
+                onClick={() => setRunsInOpen(true)}
+              >
+                Change
+              </Button>
+            </dd>
+          </div>
+        )}
+        {model.version?.file_name && (
+          <div>
+            <dt>Newest version</dt>
+            <dd>{versionFileWords(model.version)}</dd>
+          </div>
+        )}
         <div>
           <dt>Starting model</dt>
           <dd>
@@ -436,6 +482,12 @@ function PersonalModel({
           setAskOpen(false);
           notify(summary);
         }}
+      />
+      <RunsInSheet
+        open={runsInOpen}
+        onOpenChange={setRunsInOpen}
+        io={io}
+        model={model}
       />
     </div>
   );

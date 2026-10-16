@@ -146,6 +146,7 @@
         "old_driver",
         "small_gpu",
         "no_gpu",
+        "container",
         "unknown"
       ],
       "title": "State",

@@ -1,9 +1,16 @@
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { expect, it } from 'vitest';
-import type { LearningTraining } from '../../api/types';
+import type { LearningPersonalModel, LearningTraining } from '../../api/types';
 import { OverlayProvider } from '../../ui/overlays';
-import { fakeIO, learningSnapshot, runningRun, trainingRun } from './test-data';
+import {
+  fakeIO,
+  installedModel,
+  learningSnapshot,
+  runningRun,
+  trainingRun,
+  versionState,
+} from './test-data';
 import { TrainingProgress } from './TrainingProgress';
 import { timeLeftWords } from './words';
 
@@ -199,6 +206,103 @@ it('shows a planned run with Train now, and says when there is nothing to train'
     ),
   ).toBeInTheDocument();
   expect(screen.queryByRole('button')).toBeNull();
+});
+
+function withModel(
+  training: LearningTraining,
+  model: Partial<LearningPersonalModel>,
+) {
+  const snapshot = learningSnapshot({
+    state: 'on',
+    training,
+    personal_model: installedModel(model),
+  });
+  render(
+    <OverlayProvider>
+      <TrainingProgress io={fakeIO(snapshot)} snapshot={snapshot} />
+    </OverlayProvider>,
+  );
+}
+
+it('says how many more examples training needs, then that it is getting them ready', () => {
+  withModel(
+    trainingRun({ runner: { state: 'nothing_to_do', reason: 'no_data' } }),
+    {
+      examples: { examples: 37, needed: 100, new_examples: 37, left_out: 4 },
+    },
+  );
+  expect(
+    screen.getByText(/^Needs more examples · 37 of 100/, SHOWN),
+  ).toBeInTheDocument();
+  cleanup();
+  withModel(
+    trainingRun({ runner: { state: 'nothing_to_do', reason: 'planning' } }),
+    {
+      examples: { examples: 154, needed: 100, new_examples: 154, left_out: 11 },
+    },
+  );
+  expect(
+    screen.getByText('Getting 154 examples ready to train…', SHOWN),
+  ).toBeInTheDocument();
+});
+
+it('says a version has learned from everything so far', () => {
+  withModel(
+    trainingRun({ runner: { state: 'trained', reason: 'up_to_date' } }),
+    {
+      examples: { examples: 160, needed: 100, new_examples: 6, left_out: 0 },
+      version: versionState(),
+    },
+  );
+  expect(
+    screen.getByText('v1 has learned from everything so far.', SHOWN),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      'The next version trains once there are enough new examples (6 so far).',
+      SHOWN,
+    ),
+  ).toBeInTheDocument();
+});
+
+it('waits for the graphics card while another app holds its memory', () => {
+  withModel(
+    trainingRun({
+      state: 'planned',
+      job_id: 'job_1',
+      version: 1,
+      steps_total: 39,
+      can_train_now: true,
+      runner: { state: 'waiting', reason: 'gpu_busy' },
+    }),
+    {
+      examples: { examples: 154, needed: 100, new_examples: 154, left_out: 11 },
+    },
+  );
+  expect(
+    screen.getByText(
+      'Training v1 starts when the graphics card is free · uses 154 examples.',
+      SHOWN,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(/^Another app is using the graphics card’s memory/, SHOWN),
+  ).toBeInTheDocument();
+});
+
+it('leaves a finished run to its version’s card', () => {
+  withModel(
+    trainingRun({
+      state: 'evaluating',
+      job_id: 'job_1',
+      version: 1,
+      step: 39,
+      steps_total: 39,
+      runner: { state: 'trained', reason: null },
+    }),
+    { version: versionState({ phase: 'exporting', step: 'merge' }) },
+  );
+  expect(screen.queryByRole('region', { name: 'Training' })).toBeNull();
 });
 
 it('shows nothing while there is no training engine', () => {

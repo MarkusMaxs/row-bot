@@ -7,6 +7,7 @@ import type {
   LearningReceipt,
   LearningSnapshot,
   LearningTraining,
+  LearningVersion,
 } from '../../api/types';
 import type { LearningIO } from './learning-state';
 
@@ -90,6 +91,30 @@ export function installedModel(
     starting_model_bytes: 4_571_279_000,
     ...overrides,
   });
+}
+
+/** The newest personal-model version (v1, ready in Ollama by default). */
+export function versionState(
+  overrides: Partial<LearningVersion> = {},
+): LearningVersion {
+  return {
+    version: 1,
+    phase: 'ready',
+    step: null,
+    failure: null,
+    runtime: 'ollama',
+    quantization: 'Q8_0',
+    file_name: 'row-bot-personal-v1-Q8_0.gguf',
+    file_bytes: 2_012_012_128,
+    folder:
+      'C:\\Users\\me\\AppData\\Local\\Row-Bot\\learning_models\\versions\\v1',
+    command: null,
+    needs_bytes: null,
+    free_bytes: null,
+    trained_at: '2026-10-16T19:30:00+00:00',
+    examples: 154,
+    ...overrides,
+  };
 }
 
 /** The personal model's training run (none by default: no engine yet). */

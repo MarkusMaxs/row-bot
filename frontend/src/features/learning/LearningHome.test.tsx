@@ -246,7 +246,7 @@ it('Personal model: an earlier Download answer reads as Ready to download, and o
   ).toBeVisible();
   expect(
     screen.getByText(
-      'From PyPI, PyTorch and Hugging Face. The training engine’s own usage reporting is switched off.',
+      'From PyPI, PyTorch, Hugging Face and GitHub (llama.cpp). The training engine’s own usage reporting is switched off.',
     ),
   ).toBeVisible();
   expect(io.run).not.toHaveBeenCalled();

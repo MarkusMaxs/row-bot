@@ -97,7 +97,9 @@
         "stop_download",
         "cancel_download",
         "remove_engine",
-        "delete_starting_model"
+        "delete_starting_model",
+        "make_ready",
+        "choose_runtime"
       ],
       "title": "Action",
       "type": "string"
@@ -173,6 +175,18 @@
     "revision": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Revision",
+      "type": "string"
+    },
+    "runtime": {
+      "default": "",
+      "enum": [
+        "",
+        "ollama",
+        "lmstudio",
+        "llama_cpp",
+        "vllm"
+      ],
+      "title": "Runtime",
       "type": "string"
     },
     "setup": {

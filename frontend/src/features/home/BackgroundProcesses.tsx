@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Square, Terminal } from 'lucide-react';
 import type { BackgroundProcessView } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { useOverlay } from '../../ui/overlays';
+import { useNotify, useOverlay } from '../../ui/overlays';
 import {
   Button,
   Disclosure,
@@ -60,6 +60,7 @@ export default function BackgroundProcesses({
   learning?: LearningIO | null;
 }) {
   const overlay = useOverlay();
+  const notify = useNotify();
   const feed = useBackgroundProcesses(io);
   const [openId, setOpenId] = useState('');
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
@@ -89,12 +90,23 @@ export default function BackgroundProcesses({
   const [stoppingDownload, setStoppingDownload] = useState(false);
   const live = running.length + (trainingRow ? 1 : 0) + (downloadRow ? 1 : 0);
 
+  // O49: Stop says what stopped and where it continues.
+  function stopped(summary: string, how: string) {
+    notify(
+      `${summary} ${how} it in Learning › Personal model.`,
+      undefined,
+      io.openLearning
+        ? { label: 'Open', onAction: io.openLearning }
+        : undefined,
+    );
+  }
+
   async function stopDownload() {
     if (!learning || !downloadRow) return;
     setStoppingDownload(true);
     setError('');
     try {
-      await learning.run('stop_download');
+      stopped((await learning.run('stop_download')).summary, 'Resume');
     } catch (cause) {
       setError(clientError(cause).message);
     } finally {
@@ -107,7 +119,10 @@ export default function BackgroundProcesses({
     setStoppingTraining(true);
     setError('');
     try {
-      await learning.run('stop_training', { job_id: trainingRow.job_id ?? '' });
+      const receipt = await learning.run('stop_training', {
+        job_id: trainingRow.job_id ?? '',
+      });
+      stopped(receipt.summary, 'Continue or discard');
     } catch (cause) {
       setError(clientError(cause).message);
     } finally {

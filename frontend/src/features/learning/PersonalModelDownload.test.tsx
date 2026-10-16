@@ -46,8 +46,13 @@ it('downloading shows bytes and percent of the whole download, with a real bar a
   );
   card(io);
 
-  expect(screen.getByText('Downloading the training engine')).toBeVisible();
-  expect(screen.getByText('1.2 of 6.8 GB · 17%')).toBeVisible();
+  // O49: the title names both parts while the total holds both, with the bytes.
+  expect(
+    screen.getByText(
+      'Downloading the training engine and Qwen3.5 2B · 1.2 of 6.8 GB',
+    ),
+  ).toBeVisible();
+  expect(screen.getByText('17% · now the training engine')).toBeVisible();
   const bar = screen.getByRole('progressbar', { name: 'Download progress' });
   expect(bar).toHaveAttribute('max', String(6.8 * GB));
   expect(bar).toHaveAttribute('value', String(1.2 * GB));
@@ -66,9 +71,24 @@ it('installing and checking the engine have no bar (no denominator) but can stop
     expect(view.progress).toBeUndefined();
     expect(view.actions.map((item) => item.label)).toEqual(['Stop']);
   }
-  expect(downloadView(downloading({ phase: 'model' }))!.title).toBe(
-    'Downloading Qwen3.5 2B',
-  );
+  expect(downloadView(downloading({ phase: 'model' }))!).toMatchObject({
+    title: 'Downloading the training engine and Qwen3.5 2B · 1.2 of 6.8 GB',
+    detail: '17% · now Qwen3.5 2B',
+  });
+  // Only the starting model left to download (the engine is installed): its own name.
+  expect(
+    downloadView(
+      installedModel({
+        starting_model_state: 'not_downloaded',
+        download_state: downloadState({
+          state: 'downloading',
+          phase: 'model',
+          done_bytes: 2.3 * GB,
+          total_bytes: 4_571_272_453,
+        }),
+      }),
+    )!.title,
+  ).toBe('Downloading Qwen3.5 2B · 2.3 of 4.6 GB');
 });
 
 it('a paused download says where it stopped, with Resume and a Cancel that asks first', async () => {
@@ -174,7 +194,7 @@ it('the ask names where it comes from and says usage reporting is off, and check
   });
   expect(
     within(ask).getByText(
-      'From PyPI, PyTorch and Hugging Face. The training engine’s own usage reporting is switched off.',
+      'From PyPI, PyTorch, Hugging Face and GitHub (llama.cpp). The training engine’s own usage reporting is switched off.',
     ),
   ).toBeVisible();
   expect(within(ask).getByRole('alert')).toHaveTextContent(
@@ -212,4 +232,10 @@ it('Monitor shows one row for the download, with Stop', async () => {
   fireEvent.click(row);
   await act(async () => undefined);
   expect(learning.run).toHaveBeenCalledWith('stop_download');
+  // O49: Stop says what stopped and where it continues.
+  expect(
+    await screen.findByText(
+      'Done: stop_download Resume it in Learning › Personal model.',
+    ),
+  ).toBeInTheDocument();
 });
