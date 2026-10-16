@@ -270,6 +270,8 @@ class Runtime:
                 self.setup_notes.append(f"catalog refresh: {getattr(result, 'status', None) or 'done'}")
             except Exception as exc:  # the readiness error on the first task tells the rest
                 self.setup_notes.append(f"catalog refresh failed: {type(exc).__name__}: {exc}"[:300])
+        else:
+            self.setup_notes.append(refresh_local_catalog())
         models.adopt_saved_default(self.model_ref)
         changes: list[str] = []
         if variant is not None:
@@ -505,6 +507,24 @@ class Runtime:
                 VisionService().analyze(tiny_png(), "What colour is this image?", chat_model=self.model_ref)
             except Exception:
                 logger.debug("live eval: vision call failed", exc_info=True)
+
+
+def refresh_local_catalog() -> str:
+    """Record what the local Ollama says each installed model can do (``/api/show``: tools, thinking,
+    context), as the app's catalog refresh does, without its network calls. Without it a model whose name
+    isn't in Row-Bot's family list (a personal model, say) reads as not tool-capable."""
+    from dataclasses import replace
+
+    from row_bot.providers.model_catalog import load_ollama_catalog_rows
+    from row_bot.providers.model_catalog_cache import read_model_catalog_cache, write_model_catalog_cache
+
+    try:
+        rows = [dict(row) for row in load_ollama_catalog_rows()]
+        write_model_catalog_cache(replace(read_model_catalog_cache(), ollama_rows=rows, generated_at=time.time(),
+                                          reason="live eval"))
+    except Exception as exc:  # the readiness error on the first task tells the rest
+        return f"local catalog refresh failed: {type(exc).__name__}: {exc}"[:300]
+    return f"local catalog: {len(rows)} Ollama models with their own capability answers"
 
 
 def tiny_png(colour: tuple[int, int, int] = (200, 30, 30), size: int = 8) -> bytes:
