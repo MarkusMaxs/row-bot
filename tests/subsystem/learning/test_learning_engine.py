@@ -16,6 +16,7 @@ from tests.fixtures.learning import save_learning_settings
 from tests.fixtures.learning_engine import (
     FakeIndex,
     fake_engine_site,
+    fake_llama,
     fake_lock,
     loopback_opener,
     uv_command,
@@ -58,6 +59,7 @@ def setup(tmp_path, monkeypatch):
         uv = wheel(index, "uv", "0.12.22")
         lock = fake_lock(tmp_path / "uv.lock", common=common, cu130=cu130, cu128=cu128, uv=uv)
         monkeypatch.setattr(lockfile, "LOCK_FILE", lock)
+        fake_llama(index, monkeypatch)
         engine.forget_status()
         yield Setup(index, root, lock, log)
         engine.forget_status()
@@ -117,7 +119,7 @@ def test_a_stop_part_way_installs_nothing_and_the_next_attempt_downloads_only_th
 
     setup.installer().install()
 
-    again = [item["path"] for item in setup.index.requests[before:]]
+    again = [item["path"] for item in setup.index.requests[before:] if item["path"].endswith(".whl")]
     assert len(again) < len(setup.plan().wheels)  # the finished wheels weren't downloaded again
     assert engine.status(setup.root).state == "installed"
     assert torch_path in [item["path"] for item in setup.index.requests]

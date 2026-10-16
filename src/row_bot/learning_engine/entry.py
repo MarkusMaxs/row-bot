@@ -7,6 +7,7 @@ launcher) and ``-I -S``::
     python -I -S entry.py check --site <site-packages>
     python -I -S entry.py train --site <site-packages> --protocol <protocol.py> --model <model folder>
     python -I -S entry.py fit --site <site-packages> --model <folder> --rows <jsonl> --out <json> [...]
+    python -I -S entry.py measure --site <site-packages> --model <folder> --rows <jsonl> --out <json>
     python -I -S entry.py export --site <site-packages> --model <folder> --adapter <folder> --out <folder> [...]
 
 Before anything else it
@@ -21,7 +22,8 @@ Before anything else it
 4. adds the engine's site-packages folder (``site.addsitedir``, so its ``.pth`` files work).
 
 ``check`` prints one JSON line: whether every package imports and whether PyTorch sees the
-graphics card. ``train`` speaks Row-Bot's training protocol (``trainer.py``).
+graphics card. ``train`` speaks Row-Bot's training protocol (``trainer.py``). ``measure`` counts
+each dataset row's tokens as training renders them (the CPU only). ``export`` builds the GGUF.
 """
 
 from __future__ import annotations
@@ -162,7 +164,7 @@ def add_site(site: str) -> None:
 
 def _arguments(argv: list[str]) -> tuple[str, dict[str, str]]:
     if not argv:
-        raise SystemExit("row-bot engine: say check, train, fit or export")
+        raise SystemExit("row-bot engine: say check, train, fit, measure or export")
     mode, options, index = argv[0], {}, 1
     while index < len(argv):
         key = argv[index]
@@ -232,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         return trainer.serve(writer, reader, protocol_path=options["protocol"], model_dir=options["model"])
     if mode == "fit":
         return trainer.fit_main(writer, options)
+    if mode == "measure":
+        return trainer.measure_main(writer, options)
     if mode == "export":
         return trainer.export_main(writer, options)
     raise SystemExit(f"row-bot engine: unknown mode {mode!r}")

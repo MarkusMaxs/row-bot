@@ -195,8 +195,7 @@ class Downloads:
                 installer = self._installer(plan)
                 engine_download = plan.download_bytes()
                 if engine_needed:
-                    engine_total = sum(item.known_size or lockfile.UNKNOWN_WHEEL_BYTES
-                                       for item in ([] if installer.uv is not None else [plan.uv]) + list(plan.wheels))
+                    engine_total = sum(item.known_size or lockfile.UNKNOWN_WHEEL_BYTES for item in installer.files())
                     engine_done = min(engine_total, installer.downloaded())
                     installed = installer.installed_estimate()
             except Exception:

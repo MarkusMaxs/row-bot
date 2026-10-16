@@ -47,7 +47,7 @@ import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from row_bot.learning.training import fetch, lockfile
@@ -179,6 +179,8 @@ class EngineStatus:
     site: Path | None = None
     bytes: int = 0
     reason: str | None = None
+    # llama.cpp's tools for the export: ``bin/`` (the CPU build) and ``src/`` (the converter).
+    llama: Path | None = None
 
     @property
     def installed(self) -> bool:
@@ -310,9 +312,94 @@ def _read_status(base: Path, plan_identity: Callable[[str], str | None]) -> Engi
     if any(found.get(name) != version for name, version in core.items()):
         return EngineStatus("damaged", variant, folder, python, site, reason="packages")
     size = int(record.get("bytes") or 0)
-    if variant is None or plan_identity(variant) != record.get("plan"):
-        return EngineStatus("outdated", variant, folder, python, site, size, reason="plan")
-    return EngineStatus("installed", variant, folder, python, site, size)
+    llama = folder / str(record.get("llama") or "") if record.get("llama") else None
+    if llama is not None and (not _inside(llama, folder) or llama_tools_missing(llama)):
+        return EngineStatus("damaged", variant, folder, python, site, size, reason="tools")
+    if variant is None or plan_identity(variant) != record.get("plan") or llama is None:
+        return EngineStatus("outdated", variant, folder, python, site, size, reason="plan", llama=llama)
+    return EngineStatus("installed", variant, folder, python, site, size, llama=llama)
+
+
+QUANTIZE_NAMES = ("llama-quantize.exe", "llama-quantize")
+CONVERTER = "convert_hf_to_gguf.py"
+# What of llama.cpp's source the converter needs (its own package and llama.cpp's gguf-py).
+CONVERTER_PARTS = (CONVERTER, "conversion/", "gguf-py/", "LICENSE")
+
+
+def llama_quantize(llama: Path) -> Path | None:
+    for path in sorted((Path(llama) / "bin").rglob("llama-quantize*")):
+        if path.name in QUANTIZE_NAMES and path.is_file():
+            return path
+    return None
+
+
+def llama_converter(llama: Path) -> Path | None:
+    found = sorted((Path(llama) / "src").rglob(CONVERTER))
+    return found[0] if found and found[0].is_file() else None
+
+
+def llama_tools_missing(llama: Path) -> bool:
+    """Whether llama.cpp's converter or ``llama-quantize`` is missing from an installed engine."""
+
+    try:
+        return llama_quantize(llama) is None or llama_converter(llama) is None
+    except OSError:
+        return True
+
+
+def _member_path(name: str) -> PurePosixPath | None:
+    """An archive member's path, or None when it would land outside the folder it unpacks into."""
+
+    text = name.replace("\\", "/")
+    path = PurePosixPath(text)
+    if not text or path.is_absolute() or ".." in path.parts or ":" in path.parts[0]:
+        return None
+    return path
+
+
+def unpack_llama(build: Path, source: Path, target: Path) -> Path:
+    """llama.cpp's verified CPU build into ``target/bin`` and only the converter from its source
+    archive into ``target/src`` (members that would land outside are refused)."""
+
+    import tarfile
+
+    target = Path(target)
+    bin_dir, src_dir = target / "bin", target / "src"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    src_dir.mkdir(parents=True, exist_ok=True)
+    if build.name.endswith(".zip"):
+        with zipfile.ZipFile(build) as archive:
+            for member in archive.infolist():
+                path = _member_path(member.filename)
+                if member.is_dir() or path is None:
+                    continue
+                destination = bin_dir.joinpath(*path.parts)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as reader, open(destination, "wb") as writer:
+                    shutil.copyfileobj(reader, writer, 1024 * 1024)
+    else:
+        with tarfile.open(build, "r:*") as archive:
+            archive.extractall(bin_dir, filter="data")  # links and paths kept inside the folder
+    with zipfile.ZipFile(source) as archive:
+        for member in archive.infolist():
+            path = _member_path(member.filename)
+            if member.is_dir() or path is None or len(path.parts) < 2:
+                continue
+            inner = "/".join(path.parts[1:])  # below the archive's own top folder
+            if not any(inner == part or inner.startswith(part) for part in CONVERTER_PARTS):
+                continue
+            destination = src_dir.joinpath(*path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as reader, open(destination, "wb") as writer:
+                shutil.copyfileobj(reader, writer, 1024 * 1024)
+    quantize = llama_quantize(target)
+    if quantize is None or llama_converter(target) is None:
+        raise EngineError("install_failed")
+    if os.name != "nt":
+        for path in bin_dir.rglob("*"):
+            if path.is_file() and not path.is_symlink() and (path.name.startswith("llama-") or path.suffix == ""):
+                os.chmod(path, 0o755)
+    return target
 
 
 def check_files(site: Path, check: Callable[[], None] = lambda: None) -> list[str]:
@@ -552,11 +639,12 @@ class EngineInstaller:
     # ── Downloads ───────────────────────────────────────────────────────
 
     def files(self) -> list[LockedWheel]:
-        """What downloads: uv first (unless one is given), then every wheel."""
+        """What downloads: uv first (unless one is given), then every wheel, then llama.cpp's tools
+        (always: no uv cache holds them)."""
 
         if self.uv_cache is not None:
-            return []
-        return ([] if self.uv is not None else [self.plan.uv]) + list(self.plan.wheels)
+            return list(self.plan.tools)
+        return ([] if self.uv is not None else [self.plan.uv]) + list(self.plan.wheels) + list(self.plan.tools)
 
     def pinned(self, wheel: LockedWheel, check: Callable[[], None] = lambda: None) -> fetch.Pinned:
         size = wheel.known_size
@@ -689,6 +777,22 @@ class EngineInstaller:
             raise EngineError("install_failed")
         return expected
 
+    def _tools(self, paths: dict[str, Path], staging: Path, check: Callable[[], None]) -> Path | None:
+        """llama.cpp's verified tools, unpacked into the build's ``llama/`` (None in a plan without them)."""
+
+        if not self.plan.tools:
+            return None
+        found = [paths.get(tool.filename) for tool in self.plan.tools]
+        if any(path is None for path in found):
+            raise EngineError("install_failed")
+        build, source = found[0], found[-1]
+        check()
+        try:
+            return unpack_llama(build, source, staging / "llama")
+        except (OSError, zipfile.BadZipFile, ValueError) as error:
+            logger.warning("Learning couldn't unpack llama.cpp's tools (%s)", type(error).__name__)
+            raise EngineError("install_failed") from error
+
     def install(self, check: Callable[[], None] = lambda: None) -> EngineStatus:
         """Download what is missing, build, check and publish. Raises :class:`EngineError`."""
 
@@ -710,6 +814,7 @@ class EngineInstaller:
                 python = self._python(uv, staging, env, check)
                 site = self._packages(uv, python, staging, env, check)
                 packages = self._verify(site, check)
+                llama = self._tools(paths, staging, check)
                 report: dict[str, Any] = {}
                 if self.run_check:
                     progress.phase = "checking"
@@ -727,6 +832,8 @@ class EngineInstaller:
                     "python_version": self.plan.python_version,
                     "site": site.relative_to(staging).as_posix(),
                     "packages": packages,
+                    "llama": llama.relative_to(staging).as_posix() if llama is not None else None,
+                    "llama_release": lockfile.LLAMA_CPP_RELEASE if llama is not None else None,
                     "torch_cuda": report.get("torch_cuda"),
                     "installed_at": time.time(),
                 }

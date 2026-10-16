@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 CHUNK = 1024 * 1024
 ATTEMPTS = 4
 # Where pinned downloads may come from: PyPI's files, the PyTorch wheel index (and the bucket it
-# redirects to), and Hugging Face (and its CDN for large files).
+# redirects to), Hugging Face (and its CDN for large files), and llama.cpp's GitHub release and
+# source archive (and the hosts GitHub redirects those to).
 HOSTS: frozenset[str] = frozenset({
     "files.pythonhosted.org",
     "download.pytorch.org",
@@ -39,6 +40,10 @@ HOSTS: frozenset[str] = frozenset({
     "huggingface.co",
     ".huggingface.co",
     ".hf.co",
+    "github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
 })
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+%-]{0,199}\Z")
 
