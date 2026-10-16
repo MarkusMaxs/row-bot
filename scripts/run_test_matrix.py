@@ -56,7 +56,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # images at once (the ffmpeg download asked for once, edits with Stop, contact sheets),
 # files sent to the person's devices (the download on another device, its notice) or a chat app,
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
-# and favourite and hidden models (the picker's menu, More models, Settings › Models and Setup).
+# favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
+# and Learning (preview): turning it on, its tab, Teach and Undo, and a chat switched off.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -79,6 +80,7 @@ BROWSER_SMOKE_SPECS = (
     "workflow-flowchart",
     "apps-sign-in-elsewhere",
     "model-visibility",
+    "learning",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
@@ -104,7 +106,7 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility",
+    "model-visibility", "learning",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")
