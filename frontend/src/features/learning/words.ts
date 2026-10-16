@@ -205,6 +205,55 @@ export function examplesWords(count: number, needed: number) {
   return `${count.toLocaleString()} of ${needed.toLocaleString()} so far`;
 }
 
+/** Kinds of work (learning/kinds.py): the four the personal model can be used for. */
+export const KINDS_OF_WORK: { value: KindOfWork; label: string }[] = [
+  { value: 'document_lookups', label: 'Document lookups' },
+  { value: 'structured_transforms', label: 'Structured transforms' },
+  { value: 'small_coding', label: 'Small coding tasks' },
+  { value: 'tool_workflows', label: 'Tool workflows' },
+];
+export type KindOfWork = NonNullable<LearningCommand['kind']>;
+
+export function kindLabel(kind: string | null | undefined) {
+  if (kind === 'own_work') return 'Your own work';
+  return KINDS_OF_WORK.find((item) => item.value === kind)?.label ?? 'Other';
+}
+
+/** "document lookups", inside a sentence. */
+export function kindPhrase(kind: string | null | undefined) {
+  const label = kindLabel(kind);
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+/** A row of the versions table: the new version against its baseline. */
+export const VERDICT_WORDS: Record<string, string> = {
+  better: 'Better',
+  same: 'No clear difference',
+  worse: 'Worse',
+  too_few: 'Too few tasks to tell',
+};
+
+/** "3 s" / "1 min 5 s": time per task. */
+export function secondsWords(seconds: number | null | undefined) {
+  if (seconds == null) return '–';
+  const value = Math.max(0, seconds);
+  if (value < 10) return `${value.toFixed(1).replace(/\.0$/, '')}\u00a0s`;
+  if (value < 60) return `${Math.round(value)}\u00a0s`;
+  const minutes = Math.floor(value / 60);
+  const rest = Math.round(value % 60);
+  return rest ? `${minutes}\u00a0min ${rest}\u00a0s` : `${minutes}\u00a0min`;
+}
+
+/** Why the main model wasn't in a comparison. */
+export const MAIN_UNAVAILABLE: Record<string, string> = {
+  no_main_model:
+    'Your main model wasn’t compared: choose a default model in Settings › Models.',
+  sign_in_unsupported:
+    'Your main model wasn’t compared: Row-Bot can’t use its sign-in for tests yet.',
+  main_failed:
+    'Your main model wasn’t compared: it couldn’t run the test tasks here. Check it works in a chat, then Compare again.',
+};
+
 /** Why the personal model's download stopped (designs/learning-ux.md §9). */
 export const DOWNLOAD_FAILURES: Record<string, string> = {
   network:

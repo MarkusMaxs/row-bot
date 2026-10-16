@@ -58,7 +58,7 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
 # favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
 # and Learning (preview): turning it on, its tab, Teach and Undo, a chat switched off, the personal
-# model's download, training and its versions.
+# model's download, training, its versions, and comparing, trying and using it.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -85,6 +85,7 @@ BROWSER_SMOKE_SPECS = (
     "learning-training",
     "learning-download",
     "learning-version",
+    "learning-use",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
@@ -110,7 +111,7 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility", "learning", "learning-training", "learning-download", "learning-version",
+    "model-visibility", "learning", "learning-training", "learning-download", "learning-version", "learning-use",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")

@@ -1,5 +1,175 @@
 {
   "$defs": {
+    "LearningAdvanced": {
+      "additionalProperties": false,
+      "description": "Advanced \u203a (D9): the next run's settings, the recommended ones and what may be chosen.",
+      "properties": {
+        "changed": {
+          "title": "Changed",
+          "type": "boolean"
+        },
+        "choices": {
+          "$ref": "#/$defs/LearningAdvancedChoices"
+        },
+        "data_mix": {
+          "items": {
+            "$ref": "#/$defs/LearningDataMixItem"
+          },
+          "maxItems": 4,
+          "title": "Data Mix",
+          "type": "array"
+        },
+        "recommended": {
+          "$ref": "#/$defs/LearningAdvancedValues"
+        },
+        "values": {
+          "$ref": "#/$defs/LearningAdvancedValues"
+        }
+      },
+      "required": [
+        "values",
+        "recommended",
+        "changed",
+        "choices",
+        "data_mix"
+      ],
+      "title": "LearningAdvanced",
+      "type": "object"
+    },
+    "LearningAdvancedChoices": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 8,
+          "title": "Context",
+          "type": "array"
+        },
+        "epochs": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 8,
+          "title": "Epochs",
+          "type": "array"
+        },
+        "learning_rate": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 8,
+          "title": "Learning Rate",
+          "type": "array"
+        },
+        "method": {
+          "items": {
+            "const": "standard",
+            "type": "string"
+          },
+          "maxItems": 2,
+          "title": "Method",
+          "type": "array"
+        },
+        "rank": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 8,
+          "title": "Rank",
+          "type": "array"
+        },
+        "starting_model": {
+          "items": {
+            "$ref": "#/$defs/LearningAdvancedModelChoice"
+          },
+          "maxItems": 8,
+          "title": "Starting Model",
+          "type": "array"
+        }
+      },
+      "required": [
+        "starting_model",
+        "rank",
+        "learning_rate",
+        "epochs",
+        "context",
+        "method"
+      ],
+      "title": "LearningAdvancedChoices",
+      "type": "object"
+    },
+    "LearningAdvancedModelChoice": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 64,
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 128,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "LearningAdvancedModelChoice",
+      "type": "object"
+    },
+    "LearningAdvancedValues": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "maximum": 1048576,
+          "minimum": 512,
+          "title": "Context",
+          "type": "integer"
+        },
+        "epochs": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Epochs",
+          "type": "integer"
+        },
+        "learning_rate": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Learning Rate",
+          "type": "number"
+        },
+        "method": {
+          "const": "standard",
+          "default": "standard",
+          "title": "Method",
+          "type": "string"
+        },
+        "rank": {
+          "maximum": 512,
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "starting_model": {
+          "maxLength": 64,
+          "title": "Starting Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "starting_model",
+        "rank",
+        "learning_rate",
+        "epochs",
+        "context"
+      ],
+      "title": "LearningAdvancedValues",
+      "type": "object"
+    },
     "LearningChannelNote": {
       "additionalProperties": false,
       "properties": {
@@ -27,6 +197,309 @@
       "title": "LearningChannelNote",
       "type": "object"
     },
+    "LearningComparison": {
+      "additionalProperties": false,
+      "description": "The newest ready version's comparison (UX \u00a75 \"Versions\"): waiting, running with its real\ndenominator, paused or stopped (it runs again), failed, or done with its counts.",
+      "properties": {
+        "arms": {
+          "items": {
+            "$ref": "#/$defs/LearningComparisonArm"
+          },
+          "maxItems": 3,
+          "title": "Arms",
+          "type": "array"
+        },
+        "baseline_unavailable": {
+          "title": "Baseline Unavailable",
+          "type": "boolean"
+        },
+        "coding_left_out": {
+          "title": "Coding Left Out",
+          "type": "boolean"
+        },
+        "compared_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compared At"
+        },
+        "done": {
+          "minimum": 0,
+          "title": "Done",
+          "type": "integer"
+        },
+        "line": {
+          "maxLength": 400,
+          "title": "Line",
+          "type": "string"
+        },
+        "main_unavailable": {
+          "anyOf": [
+            {
+              "enum": [
+                "no_main_model",
+                "sign_in_unsupported",
+                "main_failed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Main Unavailable"
+        },
+        "note": {
+          "maxLength": 400,
+          "title": "Note",
+          "type": "string"
+        },
+        "recommend": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_lookups",
+                "structured_transforms",
+                "small_coding",
+                "tool_workflows"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommend"
+        },
+        "reviewed": {
+          "title": "Reviewed",
+          "type": "boolean"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/LearningComparisonRow"
+          },
+          "maxItems": 5,
+          "title": "Rows",
+          "type": "array"
+        },
+        "state": {
+          "enum": [
+            "waiting",
+            "running",
+            "paused",
+            "stopped",
+            "failed",
+            "done"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "better",
+                "mixed",
+                "worse",
+                "no_difference",
+                "unclear"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verdict"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "state",
+        "done",
+        "total",
+        "arms",
+        "rows",
+        "line",
+        "note",
+        "coding_left_out",
+        "baseline_unavailable",
+        "reviewed"
+      ],
+      "title": "LearningComparison",
+      "type": "object"
+    },
+    "LearningComparisonArm": {
+      "additionalProperties": false,
+      "description": "One model in a comparison: the new version, its baseline (the version in use or the untouched\nstarting model) and the main model.",
+      "properties": {
+        "cached": {
+          "minimum": 0,
+          "title": "Cached",
+          "type": "integer"
+        },
+        "cloud_tokens_per_task": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cloud Tokens Per Task"
+        },
+        "key": {
+          "maxLength": 32,
+          "title": "Key",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 128,
+          "title": "Label",
+          "type": "string"
+        },
+        "ran": {
+          "minimum": 0,
+          "title": "Ran",
+          "type": "integer"
+        },
+        "role": {
+          "enum": [
+            "new",
+            "baseline",
+            "main"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "seconds_per_task": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds Per Task"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "role",
+        "ran",
+        "cached"
+      ],
+      "title": "LearningComparisonArm",
+      "type": "object"
+    },
+    "LearningComparisonCell": {
+      "additionalProperties": false,
+      "properties": {
+        "counted": {
+          "minimum": 0,
+          "title": "Counted",
+          "type": "integer"
+        },
+        "key": {
+          "maxLength": 32,
+          "title": "Key",
+          "type": "string"
+        },
+        "passed": {
+          "minimum": 0,
+          "title": "Passed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key",
+        "passed",
+        "counted"
+      ],
+      "title": "LearningComparisonCell",
+      "type": "object"
+    },
+    "LearningComparisonRow": {
+      "additionalProperties": false,
+      "properties": {
+        "cells": {
+          "items": {
+            "$ref": "#/$defs/LearningComparisonCell"
+          },
+          "maxItems": 3,
+          "title": "Cells",
+          "type": "array"
+        },
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows",
+            "own_work"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 64,
+          "title": "Label",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "verdict": {
+          "enum": [
+            "better",
+            "same",
+            "worse",
+            "too_few"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "label",
+        "total",
+        "cells",
+        "verdict"
+      ],
+      "title": "LearningComparisonRow",
+      "type": "object"
+    },
     "LearningData": {
       "additionalProperties": false,
       "properties": {
@@ -45,6 +518,44 @@
         "bytes"
       ],
       "title": "LearningData",
+      "type": "object"
+    },
+    "LearningDataMixItem": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "title": "Available",
+          "type": "boolean"
+        },
+        "id": {
+          "enum": [
+            "your_work",
+            "corrections",
+            "practice",
+            "general"
+          ],
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 64,
+          "title": "Label",
+          "type": "string"
+        },
+        "share": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Share",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "share",
+        "available"
+      ],
+      "title": "LearningDataMixItem",
       "type": "object"
     },
     "LearningDownload": {
@@ -180,6 +691,62 @@
       "title": "LearningExamples",
       "type": "object"
     },
+    "LearningNeedsYou": {
+      "additionalProperties": false,
+      "description": "One line of Overview's Needs you about the personal model (UX \u00a73, \u00a75).",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_lookups",
+                "structured_transforms",
+                "small_coding",
+                "tool_workflows"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "compare",
+            "keep",
+            "retrain"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "version",
+        "title"
+      ],
+      "title": "LearningNeedsYou",
+      "type": "object"
+    },
     "LearningPastChats": {
       "additionalProperties": false,
       "properties": {
@@ -217,6 +784,28 @@
     "LearningPersonalModel": {
       "additionalProperties": false,
       "properties": {
+        "advanced": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningAdvanced"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "comparison": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningComparison"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "download": {
           "enum": [
             "not_asked",
@@ -259,6 +848,12 @@
             }
           ],
           "default": null
+        },
+        "export_folder": {
+          "default": "",
+          "maxLength": 1024,
+          "title": "Export Folder",
+          "type": "string"
         },
         "runtime": {
           "default": "ollama",
@@ -308,6 +903,14 @@
           "title": "Train Where",
           "type": "string"
         },
+        "uses": {
+          "items": {
+            "$ref": "#/$defs/LearningUse"
+          },
+          "maxItems": 4,
+          "title": "Uses",
+          "type": "array"
+        },
         "version": {
           "anyOf": [
             {
@@ -318,6 +921,14 @@
             }
           ],
           "default": null
+        },
+        "versions": {
+          "items": {
+            "$ref": "#/$defs/LearningVersionRow"
+          },
+          "maxItems": 20,
+          "title": "Versions",
+          "type": "array"
         }
       },
       "required": [
@@ -404,7 +1015,8 @@
                 "planned",
                 "planning",
                 "up_to_date",
-                "gpu_busy"
+                "gpu_busy",
+                "comparing"
               ],
               "type": "string"
             },
@@ -494,6 +1106,14 @@
         },
         "data": {
           "$ref": "#/$defs/LearningData"
+        },
+        "needs_you": {
+          "items": {
+            "$ref": "#/$defs/LearningNeedsYou"
+          },
+          "maxItems": 20,
+          "title": "Needs You",
+          "type": "array"
         },
         "opted_out_conversations": {
           "items": {
@@ -864,6 +1484,127 @@
       "title": "LearningTraining",
       "type": "object"
     },
+    "LearningUse": {
+      "additionalProperties": false,
+      "description": "A kind of work given to a personal-model version: on trial, or kept (in use).",
+      "properties": {
+        "keep_due": {
+          "title": "Keep Due",
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 64,
+          "title": "Label",
+          "type": "string"
+        },
+        "previous_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Version"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since"
+        },
+        "state": {
+          "enum": [
+            "trial",
+            "in_use"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "total": {
+          "$ref": "#/$defs/LearningUseTally"
+        },
+        "trial": {
+          "$ref": "#/$defs/LearningUseTally"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "label",
+        "version",
+        "state",
+        "trial",
+        "total",
+        "keep_due"
+      ],
+      "title": "LearningUse",
+      "type": "object"
+    },
+    "LearningUseTally": {
+      "additionalProperties": false,
+      "properties": {
+        "answered": {
+          "minimum": 0,
+          "title": "Answered",
+          "type": "integer"
+        },
+        "fallbacks": {
+          "minimum": 0,
+          "title": "Fallbacks",
+          "type": "integer"
+        },
+        "requests": {
+          "minimum": 0,
+          "title": "Requests",
+          "type": "integer"
+        },
+        "seconds_per_request": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds Per Request"
+        }
+      },
+      "required": [
+        "requests",
+        "answered",
+        "fallbacks"
+      ],
+      "title": "LearningUseTally",
+      "type": "object"
+    },
     "LearningVersion": {
       "additionalProperties": false,
       "description": "The newest personal-model version after training (L2c): being prepared to run, made ready in\nits runtime, ready (it then waits for its comparison), or stuck with the way out.",
@@ -1037,6 +1778,88 @@
         "examples"
       ],
       "title": "LearningVersion",
+      "type": "object"
+    },
+    "LearningVersionRow": {
+      "additionalProperties": false,
+      "description": "One personal-model version on this computer (newest first).",
+      "properties": {
+        "compared": {
+          "title": "Compared",
+          "type": "boolean"
+        },
+        "file_bytes": {
+          "minimum": 0,
+          "title": "File Bytes",
+          "type": "integer"
+        },
+        "ready": {
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "trained_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Trained At"
+        },
+        "uses": {
+          "items": {
+            "$ref": "#/$defs/LearningVersionUse"
+          },
+          "maxItems": 4,
+          "title": "Uses",
+          "type": "array"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "ready",
+        "file_bytes",
+        "compared"
+      ],
+      "title": "LearningVersionRow",
+      "type": "object"
+    },
+    "LearningVersionUse": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "trial",
+            "in_use"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "state"
+      ],
+      "title": "LearningVersionUse",
       "type": "object"
     }
   },

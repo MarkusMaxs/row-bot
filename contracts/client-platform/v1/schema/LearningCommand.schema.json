@@ -1,5 +1,54 @@
 {
   "$defs": {
+    "LearningAdvancedValues": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "maximum": 1048576,
+          "minimum": 512,
+          "title": "Context",
+          "type": "integer"
+        },
+        "epochs": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Epochs",
+          "type": "integer"
+        },
+        "learning_rate": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Learning Rate",
+          "type": "number"
+        },
+        "method": {
+          "const": "standard",
+          "default": "standard",
+          "title": "Method",
+          "type": "string"
+        },
+        "rank": {
+          "maximum": 512,
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "starting_model": {
+          "maxLength": 64,
+          "title": "Starting Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "starting_model",
+        "rank",
+        "learning_rate",
+        "epochs",
+        "context"
+      ],
+      "title": "LearningAdvancedValues",
+      "type": "object"
+    },
     "LearningSetupChoices": {
       "additionalProperties": false,
       "properties": {
@@ -99,10 +148,34 @@
         "remove_engine",
         "delete_starting_model",
         "make_ready",
-        "choose_runtime"
+        "choose_runtime",
+        "compare_version",
+        "stop_compare",
+        "use_version",
+        "keep_version",
+        "keep_not_now",
+        "undo_use",
+        "export_version",
+        "delete_version",
+        "save_advanced",
+        "reset_advanced",
+        "retrain_without",
+        "dismiss",
+        "review_version"
       ],
       "title": "Action",
       "type": "string"
+    },
+    "advanced": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningAdvancedValues"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "category": {
       "anyOf": [
@@ -154,11 +227,41 @@
       "default": null,
       "title": "Download"
     },
+    "folder": {
+      "default": "",
+      "maxLength": 1024,
+      "title": "Folder",
+      "type": "string"
+    },
+    "item_id": {
+      "default": "",
+      "maxLength": 128,
+      "title": "Item Id",
+      "type": "string"
+    },
     "job_id": {
       "default": "",
       "maxLength": 128,
       "title": "Job Id",
       "type": "string"
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Kind"
     },
     "message_id": {
       "default": "",
@@ -211,6 +314,20 @@
       "maxLength": 256,
       "title": "Tool Call Id",
       "type": "string"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Version"
     }
   },
   "required": [

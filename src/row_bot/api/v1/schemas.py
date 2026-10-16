@@ -4017,6 +4017,140 @@ class LearningVersion(WireModel):
     examples: int = Field(ge=0)
 
 
+LearningKindOfWork = Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows"]
+
+
+class LearningVersionUse(WireModel):
+    kind: LearningKindOfWork
+    state: Literal["trial", "in_use"]
+
+
+class LearningVersionRow(WireModel):
+    """One personal-model version on this computer (newest first)."""
+
+    version: int = Field(ge=1)
+    ready: bool
+    file_bytes: int = Field(ge=0)
+    trained_at: str | None = Field(default=None, max_length=64)
+    compared: bool
+    uses: list[LearningVersionUse] = Field(default_factory=list, max_length=4)
+
+
+class LearningComparisonArm(WireModel):
+    """One model in a comparison: the new version, its baseline (the version in use or the untouched
+    starting model) and the main model."""
+
+    key: str = Field(max_length=32)
+    label: str = Field(max_length=128)
+    role: Literal["new", "baseline", "main"]
+    # Tasks it ran (or whose result was kept from an earlier test, O31) and how many were kept.
+    ran: int = Field(ge=0)
+    cached: int = Field(ge=0)
+    seconds_per_task: float | None = Field(default=None, ge=0)
+    cloud_tokens_per_task: int | None = Field(default=None, ge=0)
+
+
+class LearningComparisonCell(WireModel):
+    key: str = Field(max_length=32)
+    passed: int = Field(ge=0)
+    # The tasks that counted for this model (a provider error is left out, O19).
+    counted: int = Field(ge=0)
+
+
+class LearningComparisonRow(WireModel):
+    kind: Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows", "own_work"]
+    label: str = Field(max_length=64)
+    total: int = Field(ge=0)
+    cells: list[LearningComparisonCell] = Field(max_length=3)
+    # The new version against its baseline: better, no clear difference, worse, or too few tasks to tell.
+    verdict: Literal["better", "same", "worse", "too_few"]
+
+
+class LearningComparison(WireModel):
+    """The newest ready version's comparison (UX §5 "Versions"): waiting, running with its real
+    denominator, paused or stopped (it runs again), failed, or done with its counts."""
+
+    version: int = Field(ge=1)
+    state: Literal["waiting", "running", "paused", "stopped", "failed", "done"]
+    done: int = Field(ge=0)
+    total: int = Field(ge=0)
+    compared_at: str | None = Field(default=None, max_length=64)
+    arms: list[LearningComparisonArm] = Field(max_length=3)
+    rows: list[LearningComparisonRow] = Field(max_length=5)
+    verdict: Literal["better", "mixed", "worse", "no_difference", "unclear"] | None = None
+    line: str = Field(max_length=400)
+    recommend: LearningKindOfWork | None = None
+    note: str = Field(max_length=400)
+    coding_left_out: bool
+    baseline_unavailable: bool
+    main_unavailable: Literal["no_main_model", "sign_in_unsupported", "main_failed"] | None = None
+    reviewed: bool
+
+
+class LearningUseTally(WireModel):
+    requests: int = Field(ge=0)
+    answered: int = Field(ge=0)
+    # Finished by the main model after the personal model got stuck (a cloud finish).
+    fallbacks: int = Field(ge=0)
+    seconds_per_request: float | None = Field(default=None, ge=0)
+
+
+class LearningUse(WireModel):
+    """A kind of work given to a personal-model version: on trial, or kept (in use)."""
+
+    kind: LearningKindOfWork
+    label: str = Field(max_length=64)
+    version: int = Field(ge=1)
+    state: Literal["trial", "in_use"]
+    since: str | None = Field(default=None, max_length=64)
+    # Undo goes back to this version (null: the main model).
+    previous_version: int | None = Field(default=None, ge=1)
+    trial: LearningUseTally
+    total: LearningUseTally
+    keep_due: bool
+
+
+class LearningAdvancedValues(WireModel):
+    starting_model: str = Field(max_length=64)
+    rank: int = Field(ge=1, le=512)
+    learning_rate: float = Field(gt=0, le=1)
+    epochs: int = Field(ge=1, le=100)
+    context: int = Field(ge=512, le=1_048_576)
+    method: Literal["standard"] = "standard"
+
+
+class LearningAdvancedModelChoice(WireModel):
+    id: str = Field(max_length=64)
+    name: str = Field(max_length=128)
+
+
+class LearningAdvancedChoices(WireModel):
+    starting_model: list[LearningAdvancedModelChoice] = Field(max_length=8)
+    rank: list[int] = Field(max_length=8)
+    learning_rate: list[float] = Field(max_length=8)
+    epochs: list[int] = Field(max_length=8)
+    context: list[int] = Field(max_length=8)
+    method: list[Literal["standard"]] = Field(max_length=2)
+
+
+class LearningDataMixItem(WireModel):
+    id: Literal["your_work", "corrections", "practice", "general"]
+    label: str = Field(max_length=64)
+    share: int = Field(ge=0, le=100)
+    # Not available yet: corrections arrive with diagnosis, practice with practice tasks.
+    available: bool
+
+
+class LearningAdvanced(WireModel):
+    """Advanced › (D9): the next run's settings, the recommended ones and what may be chosen."""
+
+    values: LearningAdvancedValues
+    recommended: LearningAdvancedValues
+    changed: bool
+    choices: LearningAdvancedChoices
+    data_mix: list[LearningDataMixItem] = Field(max_length=4)
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
@@ -4039,6 +4173,25 @@ class LearningPersonalModel(WireModel):
     # The count of usable examples once the engine is installed; null before.
     examples: LearningExamples | None = None
     version: LearningVersion | None = None
+    # L2c2: every version, the newest ready one's comparison, the kinds of work given to versions,
+    # Advanced and where Export… offers to save.
+    versions: list[LearningVersionRow] = Field(default_factory=list, max_length=20)
+    comparison: LearningComparison | None = None
+    uses: list[LearningUse] = Field(default_factory=list, max_length=4)
+    advanced: LearningAdvanced | None = None
+    export_folder: str = Field(default="", max_length=1024)
+
+
+class LearningNeedsYou(WireModel):
+    """One line of Overview's Needs you about the personal model (UX §3, §5)."""
+
+    id: str = Field(max_length=128)
+    # compare: "Personal model v1 is ready to compare"; keep: "Keep v1 for document lookups?";
+    # retrain: "A deleted chat was used to train v1." (Retrain without it, O6).
+    type: Literal["compare", "keep", "retrain"]
+    version: int = Field(ge=1)
+    kind: LearningKindOfWork | None = None
+    title: str = Field(max_length=200)
 
 
 class LearningData(WireModel):
@@ -4060,7 +4213,7 @@ class LearningRunnerStatus(WireModel):
         "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
         "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-        "planned", "planning", "up_to_date", "gpu_busy",
+        "planned", "planning", "up_to_date", "gpu_busy", "comparing",
     ] | None = None
 
 
@@ -4107,6 +4260,65 @@ class LearningSnapshot(WireModel):
     data: LearningData
     opted_out_conversations: list[Annotated[str, StringConstraints(max_length=256)]] = Field(max_length=2000)
     owner_unset_channels: list[LearningChannelNote] = Field(max_length=8)
+    needs_you: list[LearningNeedsYou] = Field(default_factory=list, max_length=20)
+
+
+class LearningNamedValue(WireModel):
+    name: str = Field(max_length=64)
+    value: str = Field(max_length=200)
+
+
+class LearningLeftOut(WireModel):
+    reason: str = Field(max_length=80)
+    count: int = Field(ge=0)
+
+
+class LearningDetailsData(WireModel):
+    examples: int = Field(ge=0)
+    validation: int = Field(ge=0)
+    conversations: int = Field(ge=0)
+    first_at: str | None = Field(default=None, max_length=64)
+    last_at: str | None = Field(default=None, max_length=64)
+    providers: list[Annotated[str, StringConstraints(max_length=80)]] = Field(max_length=16)
+    left_out: list[LearningLeftOut] = Field(max_length=32)
+    # D7: answers from OpenAI, Anthropic or Google models are in the data.
+    terms_note: bool
+
+
+class LearningDetailsMethod(WireModel):
+    name: str = Field(max_length=64)
+    title: str = Field(max_length=80)
+    rank: int = Field(ge=0)
+    learning_rate: float = Field(ge=0)
+    epochs: int = Field(ge=0)
+    context: int = Field(ge=0)
+    quantization: str = Field(max_length=16)
+
+
+class LearningDetailsRun(WireModel):
+    suite: str = Field(max_length=80)
+    arm: str = Field(max_length=128)
+    passed: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class LearningFile(WireModel):
+    name: str = Field(max_length=256)
+    bytes: int = Field(ge=0)
+
+
+class LearningVersionDetails(WireModel):
+    """Experiment details of one version (UX §4, §7): data, method, versions, every test run (counts
+    only) and its files."""
+
+    version: int = Field(ge=1)
+    data: LearningDetailsData
+    method: LearningDetailsMethod
+    versions: list[LearningNamedValue] = Field(max_length=8)
+    runs: list[LearningDetailsRun] = Field(max_length=12)
+    files: list[LearningFile] = Field(max_length=16)
+    budget_tokens_per_task: int = Field(ge=0)
+    comparison_note: str = Field(max_length=400)
 
 
 class LearningGpu(WireModel):
@@ -4177,8 +4389,18 @@ class LearningCommand(WireModel):
         "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
         "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
         "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
+        "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
+        "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
+        "review_version",
     ]
     setup: LearningSetupChoices | None = None
+    # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
+    # Needs you line to dismiss.
+    version: int | None = Field(default=None, ge=1, le=100_000)
+    kind: LearningKindOfWork | None = None
+    folder: str = Field(default="", max_length=1024)
+    advanced: LearningAdvancedValues | None = None
+    item_id: str = Field(default="", max_length=128)
     # choose_runtime: where personal models run.
     runtime: Literal["", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
     # The training run a training action is for (the one the person saw).
@@ -7567,13 +7789,18 @@ class TranscriptRow(WireModel):
     # A server-started follow-up (a goal step, work continuing in a resource
     # the assistant created), a delegated agent's task or its parent's
     # messages to it: the row's text is a short public note.
-    note: Literal["continuation", "agent_task", "agent_guidance"] | None = None
+    # Learning (preview): "personal_model_fallback" is the quiet line where the main
+    # model finished a turn the personal model got stuck on.
+    note: Literal["continuation", "agent_task", "agent_guidance", "personal_model_fallback"] | None = None
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
     # The provider stopped this reply at its output token limit: the client
     # says so under it. The saved reply itself is the model's own text.
     cut_short: bool = False
+    # Learning (preview): the reply came from the person's personal model ("Answered
+    # by your personal model").
+    answered_by: Literal["personal_model"] | None = None
 
 
 class Snapshot(WireModel):
@@ -7683,6 +7910,8 @@ class ModelChoice(WireModel):
     # F10: listed first (a favourite's place, from 1) or under "More models".
     favourite_rank: int | None = Field(default=None, ge=1, le=64)
     hidden: bool = False
+    # Learning (preview, D11): one of the person's personal-model versions ("Personal model v1").
+    personal: bool = False
 
 
 class CapabilityChoice(WireModel):

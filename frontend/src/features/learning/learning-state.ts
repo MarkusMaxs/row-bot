@@ -10,6 +10,7 @@ import type {
   LearningReceipt,
   LearningSnapshot,
   LearningTraining,
+  LearningVersionDetails,
 } from '../../api/types';
 import { useRuntime } from '../../runtime';
 
@@ -35,6 +36,8 @@ export type LearningIO = {
   hardware: (refresh?: boolean) => Promise<LearningHardware>;
   lessons: () => Promise<LearningLessonPage>;
   conversation: (id: string) => Promise<LearningConversation>;
+  /** Experiment details of one personal-model version (absent in some tests). */
+  version?: (version: number) => Promise<LearningVersionDetails>;
   /**
    * Keep the training run fresh while a surface shows it (every 2 s while it
    * runs, every 15 s otherwise); returns the stop. Absent in some tests.
@@ -62,6 +65,11 @@ const RETRY_ON_CHANGE = new Set<LearningAction>([
   'cancel_download',
   'remove_engine',
   'delete_starting_model',
+  'undo_use',
+  'dismiss',
+  'review_version',
+  'export_version',
+  'stop_compare',
 ]);
 
 /** How often the training run is read while it runs, and otherwise. */
@@ -393,6 +401,7 @@ export function useLearning(): LearningIO | null {
               controller.learningHardware(refresh),
             lessons: () => controller.learningLessons(),
             conversation: (id: string) => controller.learningConversation(id),
+            version: (version: number) => controller.learningVersion(version),
             watchTraining: store.watchTraining,
             watchDownload: store.watchDownload,
           }

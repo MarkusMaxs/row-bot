@@ -131,12 +131,16 @@ class LearningRunner:
     runs from the dataset, and with ``releases`` it makes each finished run a version."""
 
     def __init__(self, supervisor: TrainingSupervisor, *, root: Path | None = None,
-                 hours: QuietHours | None = None, planner: Any = None, releases: Any = None) -> None:
+                 hours: QuietHours | None = None, planner: Any = None, releases: Any = None,
+                 comparisons: Any = None, unloader: Any = None) -> None:
         self.supervisor = supervisor
         self._root = root
         self.hours = hours or QuietHours(root)
         self.planner = planner
         self.releases = releases
+        # L2c2: a ready version's comparison, and O51's unloading of Row-Bot's own resident model.
+        self.comparisons = comparisons
+        self.unloader = unloader
         self._last = RunnerStatus("off")
         self._lock = threading.Lock()
 
@@ -217,6 +221,19 @@ class LearningRunner:
             if not self.supervisor.gpu_free():
                 return RunnerStatus("waiting", "gpu_busy")  # another app holds the card's memory
             return RunnerStatus("scheduled", "now")
+        if self.comparisons is not None and self.comparisons.running():
+            return RunnerStatus("waiting", "comparing")  # a version's comparison has the card
+        if (trigger == "quiet_hours" and self.unloader is not None and not self.supervisor.gpu_free()
+                and self.hours.inside()):
+            # O51: in quiet hours, with nobody using Row-Bot for 30 minutes, Row-Bot's own resident
+            # local model is unloaded so training can have the card (never another app's model).
+            try:
+                if self.unloader.free_card(idle_seconds=self.supervisor.lease.read().since_activity):
+                    from row_bot.learning.training import hardware
+
+                    hardware.forget_memory_reading()
+            except Exception:
+                logger.debug("Learning couldn't free the graphics card", exc_info=True)
         try:
             self.supervisor.start(job, trigger)
         except TrainingError as error:
@@ -247,6 +264,12 @@ class LearningRunner:
                     self.releases.tick()
                 except Exception:
                     logger.exception("Learning couldn't make its personal model's version")
+            if self.comparisons is not None and not self.supervisor.training() and (
+                    self.releases is None or not self.releases.busy()):
+                try:
+                    self.comparisons.tick()
+                except Exception:
+                    logger.exception("Learning couldn't compare its personal model's version")
             return self._last
 
 
@@ -269,10 +292,15 @@ def get() -> LearningRunner:
             from row_bot.learning.training.planner import LearningDataset, Planner
             from row_bot.learning.training.releases import ReleaseMaker
 
+            from row_bot.learning.model_compare import Comparisons
+            from row_bot.learning.training.freeing import OwnModelUnloader
+
             supervisor = TrainingSupervisor(engine=LocalEngine())
             planner = Planner(jobs=supervisor.jobs, engine=supervisor.engine)
             supervisor.dataset = LearningDataset(planner)
-            _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs))
+            comparisons = Comparisons(lease=supervisor.lease, training=supervisor.training)
+            _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs),
+                                     comparisons=comparisons, unloader=OwnModelUnloader())
         return _runner
 
 
@@ -280,9 +308,10 @@ def loaded() -> LearningRunner | None:
     return _runner
 
 
-def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=None) -> TrainingSupervisor:
-    """Plug in the training engine, the dataset compiler, the lease, the planner or the release maker
-    (L2b, L2c; the fake ones in tests and the browser fixture)."""
+def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=None,
+              comparisons=None) -> TrainingSupervisor:
+    """Plug in the training engine, the dataset compiler, the lease, the planner, the release maker or
+    the comparisons (L2b, L2c, L2c2; the fake ones in tests and the browser fixture)."""
 
     runner = get()
     supervisor = runner.supervisor
@@ -298,6 +327,8 @@ def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=N
         runner.planner = planner
     if releases is not None:
         runner.releases = releases
+    if comparisons is not None:
+        runner.comparisons = comparisons
     return supervisor
 
 
@@ -358,25 +389,31 @@ def shutdown(timeout: float = 10.0) -> None:
         runner.supervisor.shutdown()
         if runner.releases is not None:
             runner.releases.shutdown()
+        if runner.comparisons is not None:
+            runner.comparisons.stop()
 
 
 def learning_turned_off() -> None:
-    """Learning was turned off: training stops at once; nothing new starts."""
+    """Learning was turned off: training and any comparison stop at once; nothing new starts."""
 
     runner = _runner
     if runner is not None:
         runner.supervisor.stop_now("learning_off")
         if runner.releases is not None:
             runner.releases.shutdown()
+        if runner.comparisons is not None:
+            runner.comparisons.stop()
     _stop.set()
 
 
 def learning_paused() -> None:
-    """Learning was paused: training pauses at its next step."""
+    """Learning was paused: training pauses at its next step; a comparison stops (it runs again)."""
 
     runner = _runner
     if runner is not None:
         runner.supervisor.request_pause("learning_paused")
+        if runner.comparisons is not None:
+            runner.comparisons.stop()
 
 
 def forget_training() -> None:
@@ -387,6 +424,8 @@ def forget_training() -> None:
         runner.supervisor.stop_now("learning_off")
         if runner.releases is not None:
             runner.releases.shutdown()
+        if runner.comparisons is not None:
+            runner.comparisons.stop()
         if runner.planner is not None:
             runner.planner.forget()
 

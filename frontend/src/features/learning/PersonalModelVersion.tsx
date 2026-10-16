@@ -21,8 +21,8 @@ import {
 
 type VersionAction = {
   label: string;
-  /** make_ready: Try again / Check again; runs_in: open the "Runs in" choice; try_ollama. */
-  kind: 'make_ready' | 'runs_in' | 'try_ollama';
+  /** make_ready: Try again / Check again; runs_in: open the "Runs in" choice; try_ollama; compare: Compare now. */
+  kind: 'make_ready' | 'runs_in' | 'try_ollama' | 'compare';
   primary?: boolean;
 };
 
@@ -89,7 +89,7 @@ export function versionView(version: LearningVersion): VersionView {
         title: `${name} is ready to compare`,
         detail: `${trainedWords(version)} · runs in ${where}.`,
         note: 'Row-Bot compares it with your main model before asking you to use it. Until then your main model answers everything.',
-        actions: [],
+        actions: [{ label: 'Compare now', kind: 'compare' }],
         announce: `${name} is ready to compare.`,
       };
     case 'waiting_for_you':
@@ -196,7 +196,9 @@ export function VersionCard({
       const receipt =
         action.kind === 'try_ollama'
           ? await io.run('choose_runtime', { runtime: 'ollama' })
-          : await io.run('make_ready');
+          : action.kind === 'compare'
+            ? await io.run('compare_version', { version: version!.version })
+            : await io.run('make_ready');
       notify(receipt.summary);
     } catch (cause) {
       notify(clientError(cause).message, 'danger');
@@ -348,8 +350,9 @@ export function runsInWords(model: LearningPersonalModel) {
   return where;
 }
 
+/** "v1 · 2 GB": main screens never name the file (O54; Export… and Experiment details do). */
 export function versionFileWords(version: LearningVersion) {
-  return version.file_name
-    ? `${version.file_name} · ${sizeWords(version.file_bytes)}`
+  return version.file_bytes
+    ? `v${version.version} · ${sizeWords(version.file_bytes)}`
     : '';
 }

@@ -207,6 +207,22 @@ class OllamaRuntime:
             return False
         return True
 
+    def loaded(self) -> list[dict[str, Any]] | None:
+        """The models Ollama holds in memory now (``/api/ps``: name, graphics memory, expiry), or None
+        when it doesn't answer."""
+
+        try:
+            items = self._json("GET", "/api/ps").get("models")
+        except Exception:
+            return None
+        found = []
+        for item in items or ():
+            if isinstance(item, dict) and (item.get("name") or item.get("model")):
+                found.append({"name": str(item.get("name") or item.get("model")),
+                              "size_vram": int(item.get("size_vram") or 0),
+                              "expires_at": str(item.get("expires_at") or "")})
+        return found
+
     def unload(self, name: str) -> bool:
         """Free the graphics memory the model holds now (it loads again when next used)."""
 
@@ -394,17 +410,23 @@ def serve(
     register: Callable[..., str] = register_endpoint,
     list_models: Callable[[str], list[str] | None] = served_models,
     root: Path | None = None,
+    tag: str | None = None,
+    tool_turn: bool = True,
 ) -> ServeOutcome:
     """Register ``gguf`` in ``runtime`` and check it is ready (the probe and a real tool turn).
-    ``root``: the data folder (its Ollama tag)."""
+    ``root``: the data folder (its Ollama tag). ``tag`` names the Ollama model instead of the
+    version's own name (the untouched starting model a first version is compared with, L2c2), and
+    ``tool_turn=False`` checks only Row-Bot's probe (that model never learned the tool bridge)."""
 
     from row_bot.providers.selection import model_ref as make_ref
 
     if runtime not in RUNTIMES:
         raise ValueError("unknown runtime")
+    if tag is not None and runtime != "ollama":
+        raise ValueError("a named model is served in Ollama")
     started = time.monotonic()
     verifier = verifier or RowBotVerifier()
-    tag = ""
+    served = ""  # the Ollama model this call made (none for the runtimes the person starts)
     if runtime == "ollama":
         ollama = ollama or OllamaRuntime()
         if not _loopback(ollama.base_url):
@@ -415,8 +437,8 @@ def serve(
             return ServeOutcome("failed", runtime, reason=reason, seconds=time.monotonic() - started)
         modelfile = Path(folder) / "Modelfile"
         modelfile.write_text(modelfile_text(gguf, serve_context), encoding="utf-8", newline="\n")
-        tag = ollama_tag(version, root)
-        if not ollama.create(tag, modelfile):
+        served = tag or ollama_tag(version, root)
+        if not ollama.create(served, modelfile):
             return ServeOutcome("failed", runtime, reason="create_failed", runtime_version=found,
                                 seconds=time.monotonic() - started)
         try:
@@ -425,9 +447,9 @@ def serve(
             logger.warning("Learning couldn't refresh the local model catalog", exc_info=True)
         if save_model_settings is None:
             from row_bot.models import set_local_model_settings as save_model_settings
-        save_model_settings(tag, context=int(serve_context), reasoning="off")
-        reference = make_ref("ollama", tag)
-        probe = dict(verifier.probe(reference, runtime=runtime, model_id=tag))
+        save_model_settings(served, context=int(serve_context), reasoning="off")
+        reference = make_ref("ollama", served)
+        probe = dict(verifier.probe(reference, runtime=runtime, model_id=served))
     else:
         base_url = f"http://127.0.0.1:{PORTS[runtime]}/v1"
         command = command_for(runtime, gguf=gguf, version=version, serve_context=serve_context,
@@ -447,16 +469,16 @@ def serve(
         found = None
     turn: dict[str, Any] = {}
     reason = "" if probe.get("agent_ready") else "probe_failed"
-    if not reason:
+    if not reason and tool_turn:
         turn = dict(verifier.tool_turn(reference))
         reason = "" if turn.get("ok") else "tool_turn_failed"
-    if tag and ollama is not None:
+    if served and ollama is not None:
         # The checks loaded it: its graphics memory goes back now (Ollama would hold it for half an
         # hour, and the person's own local model, or training, needs the card).
-        ollama.unload(tag)
+        ollama.unload(served)
     if reason:
-        if tag and ollama is not None:  # nothing half-working stays in Ollama (the version's file is kept)
-            _take_back(ollama, tag, catalog)
+        if served and ollama is not None:  # nothing half-working stays in Ollama (the version's file is kept)
+            _take_back(ollama, served, catalog)
         return ServeOutcome("failed", runtime, model_ref=reference, reason=reason, runtime_version=found,
                             probe=probe, tool_turn=turn, seconds=time.monotonic() - started)
     return ServeOutcome("ready", runtime, model_ref=reference, runtime_version=found, probe=probe, tool_turn=turn,

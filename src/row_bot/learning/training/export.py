@@ -132,9 +132,13 @@ def export_gguf(
     on_step: Callable[[str], None] = lambda _step: None,
     runner: Callable[..., Any] | None = None,
     disk_free: Callable[[Path], int | None] = free_bytes,
+    untouched: bool = False,
 ) -> ExportResult:
     """Build ``<name>-<quantization>.gguf`` in ``folder`` from the starting model and ``adapter`` with
-    the installed engine (``engine``: its status, with ``python``, ``site`` and ``llama``)."""
+    the installed engine (``engine``: its status, with ``python``, ``site`` and ``llama``).
+
+    ``untouched``: the starting model as it is, with no adapter (the baseline a first version is
+    compared with, L2c2); nothing is merged."""
 
     from row_bot.learning.training import engine as engine_module
 
@@ -157,8 +161,8 @@ def export_gguf(
     env = engine_module._base_environment(home)  # noqa: SLF001 - the engine's own clean environment
     env.update(engine_module.engine_variables())
     argv = [str(engine.python), "-I", "-S", str(engine_module.ENTRY), "export", "--site", str(engine.site),
-            "--model", str(weights), "--adapter", str(adapter), "--out", str(work), "--llama", str(llama),
-            "--name", name, "--quant", quantization]
+            "--model", str(weights), "--adapter", "none" if untouched else str(adapter), "--out", str(work),
+            "--llama", str(llama), "--name", name, "--quant", quantization]
     seen = {"step": "merge"}  # said below, before the engine starts
 
     def watched() -> None:
@@ -202,11 +206,13 @@ def export_gguf(
     produced.replace(final)
     shutil.rmtree(work, ignore_errors=True)
     adapter_path = Path(adapter)
-    adapter_bytes = sum((adapter_path / item).stat().st_size for item in ADAPTER_FILES if (adapter_path / item).is_file())
+    adapter_bytes = 0 if untouched else sum((adapter_path / item).stat().st_size for item in ADAPTER_FILES
+                                            if (adapter_path / item).is_file())
     return ExportResult(
         gguf=final, quantization=quantization, gguf_bytes=final.stat().st_size, gguf_sha256=sha256_file(final),
         adapter=adapter_path, adapter_bytes=adapter_bytes,
-        adapter_sha256=sha256_file(adapter_path / ADAPTER_FILES[0]) if (adapter_path / ADAPTER_FILES[0]).is_file() else "",
+        adapter_sha256=sha256_file(adapter_path / ADAPTER_FILES[0])
+        if not untouched and (adapter_path / ADAPTER_FILES[0]).is_file() else "",
         seconds=round(time.monotonic() - started, 1), steps=dict(report.get("steps") or {}),
         blocked_connections=int(report.get("blocked_connections") or 0),
     )

@@ -1,13 +1,18 @@
 /** Learning snapshots and fakes for the Learning vitests (never real data). */
 import { vi } from 'vitest';
 import type {
+  LearningAdvanced,
+  LearningComparison,
   LearningDownload,
   LearningHardware,
   LearningPersonalModel,
   LearningReceipt,
   LearningSnapshot,
   LearningTraining,
+  LearningUse,
   LearningVersion,
+  LearningVersionDetails,
+  LearningVersionRow,
 } from '../../api/types';
 import type { LearningIO } from './learning-state';
 
@@ -234,6 +239,252 @@ export function fakeIO(
       state: 'learning' as const,
       reason: '',
     })),
+    version: vi.fn(async () => versionDetails()),
   };
   return io;
+}
+
+/** v1's comparison, done (UX §5's example): better at document lookups. */
+export function comparisonState(
+  overrides: Partial<LearningComparison> = {},
+): LearningComparison {
+  return {
+    version: 1,
+    state: 'done',
+    done: 96,
+    total: 96,
+    compared_at: '2026-10-16T21:10:00+00:00',
+    arms: [
+      {
+        key: 'base',
+        label: 'the starting model',
+        role: 'baseline',
+        ran: 32,
+        cached: 0,
+        seconds_per_task: 6.2,
+        cloud_tokens_per_task: 0,
+      },
+      {
+        key: 'v1',
+        label: 'v1 (new)',
+        role: 'new',
+        ran: 32,
+        cached: 0,
+        seconds_per_task: 4.8,
+        cloud_tokens_per_task: 0,
+      },
+      {
+        key: 'main',
+        label: 'GPT-6.1 Sol',
+        role: 'main',
+        ran: 32,
+        cached: 32,
+        seconds_per_task: 21.5,
+        cloud_tokens_per_task: 18_400,
+      },
+    ],
+    rows: [
+      {
+        kind: 'document_lookups',
+        label: 'Document lookups',
+        total: 12,
+        cells: [
+          { key: 'base', passed: 6, counted: 12 },
+          { key: 'v1', passed: 10, counted: 12 },
+          { key: 'main', passed: 11, counted: 12 },
+        ],
+        verdict: 'better',
+      },
+      {
+        kind: 'structured_transforms',
+        label: 'Structured transforms',
+        total: 10,
+        cells: [
+          { key: 'base', passed: 7, counted: 10 },
+          { key: 'v1', passed: 7, counted: 9 },
+          { key: 'main', passed: 9, counted: 10 },
+        ],
+        verdict: 'same',
+      },
+      {
+        kind: 'own_work',
+        label: 'Your own work',
+        total: 10,
+        cells: [
+          { key: 'base', passed: 4, counted: 10 },
+          { key: 'v1', passed: 5, counted: 10 },
+          { key: 'main', passed: 8, counted: 10 },
+        ],
+        verdict: 'same',
+      },
+    ],
+    verdict: 'better',
+    line: 'Better at document lookups than the starting model: 10 of 12 passed, against 6.',
+    recommend: 'document_lookups',
+    note: 'Testing used 590K tokens (and 1.1M on this computer); GPT-6.1 Sol’s results were reused.',
+    coding_left_out: true,
+    baseline_unavailable: false,
+    main_unavailable: null,
+    reviewed: false,
+    ...overrides,
+  };
+}
+
+/** The same comparison when v1 is no better: said plainly, nothing to use. */
+export function noDifferenceComparison(
+  overrides: Partial<LearningComparison> = {},
+): LearningComparison {
+  const base = comparisonState();
+  return comparisonState({
+    rows: base.rows.map((row) => ({ ...row, verdict: 'same' as const })),
+    verdict: 'no_difference',
+    line: 'No clear difference from the starting model. Not used.',
+    recommend: null,
+    ...overrides,
+  });
+}
+
+/** One ready version in the Versions list. */
+export function versionRow(
+  overrides: Partial<LearningVersionRow> = {},
+): LearningVersionRow {
+  return {
+    version: 1,
+    ready: true,
+    file_bytes: 2_012_012_128,
+    trained_at: '2026-10-16T19:30:00+00:00',
+    compared: true,
+    uses: [],
+    ...overrides,
+  };
+}
+
+/** v1 on trial for document lookups (due for "Keep v1…?" by default). */
+export function trialUse(overrides: Partial<LearningUse> = {}): LearningUse {
+  return {
+    kind: 'document_lookups',
+    label: 'Document lookups',
+    version: 1,
+    state: 'trial',
+    since: '2026-10-13T09:00:00+00:00',
+    previous_version: null,
+    trial: {
+      requests: 18,
+      answered: 17,
+      fallbacks: 1,
+      seconds_per_request: 4.2,
+    },
+    total: {
+      requests: 18,
+      answered: 17,
+      fallbacks: 1,
+      seconds_per_request: 4.2,
+    },
+    keep_due: true,
+    ...overrides,
+  };
+}
+
+/** Advanced ›: the 8 GB recipe's values, nothing changed. */
+export function advancedState(
+  overrides: Partial<LearningAdvanced> = {},
+): LearningAdvanced {
+  const values = {
+    starting_model: 'qwen3.5-2b',
+    rank: 16,
+    learning_rate: 0.0002,
+    epochs: 1,
+    context: 4096,
+    method: 'standard' as const,
+  };
+  return {
+    values,
+    recommended: values,
+    changed: false,
+    choices: {
+      starting_model: [{ id: 'qwen3.5-2b', name: 'Qwen3.5 2B' }],
+      rank: [8, 16, 32, 64],
+      learning_rate: [0.00005, 0.0001, 0.0002, 0.0003, 0.0005],
+      epochs: [1, 2, 3],
+      context: [4096],
+      method: ['standard'],
+    },
+    data_mix: [
+      { id: 'your_work', label: 'Your work', share: 100, available: true },
+      { id: 'corrections', label: 'Corrections', share: 0, available: false },
+      { id: 'practice', label: 'Practice', share: 0, available: false },
+      { id: 'general', label: 'General replay', share: 0, available: false },
+    ],
+    ...overrides,
+  };
+}
+
+/** v1's experiment details (the review sheet and Export… read them). */
+export function versionDetails(
+  overrides: Partial<LearningVersionDetails> = {},
+): LearningVersionDetails {
+  return {
+    version: 1,
+    data: {
+      examples: 154,
+      validation: 17,
+      conversations: 41,
+      first_at: '2026-10-01T08:00:00+00:00',
+      last_at: '2026-10-16T18:00:00+00:00',
+      providers: ['OpenAI'],
+      left_out: [{ reason: 'too long', count: 3 }],
+      terms_note: true,
+    },
+    method: {
+      name: 'Standard',
+      title: 'LoRA',
+      rank: 16,
+      learning_rate: 0.0002,
+      epochs: 1,
+      context: 4096,
+      quantization: 'Q8_0',
+    },
+    versions: [
+      { name: 'Starting model', value: 'Qwen3.5 2B' },
+      { name: 'Training engine', value: 'Unsloth 2026.10.2' },
+    ],
+    runs: [
+      {
+        suite: 'Tasks it hadn’t seen',
+        arm: 'v1 (new)',
+        passed: 16,
+        total: 22,
+      },
+      {
+        suite: 'Tasks it hadn’t seen',
+        arm: 'the starting model',
+        passed: 12,
+        total: 22,
+      },
+    ],
+    files: [
+      { name: 'row-bot-personal-v1-Q8_0.gguf', bytes: 2_012_012_128 },
+      { name: 'adapter_model.safetensors', bytes: 43_000_000 },
+      { name: 'MODEL_CARD.md', bytes: 4_000 },
+      { name: 'manifest.json', bytes: 2_000 },
+    ],
+    budget_tokens_per_task: 150_000,
+    comparison_note: '',
+    ...overrides,
+  };
+}
+
+/** The personal model with v1 ready and compared. */
+export function comparedModel(
+  overrides: Partial<LearningPersonalModel> = {},
+): LearningPersonalModel {
+  return installedModel({
+    version: versionState(),
+    versions: [versionRow()],
+    comparison: comparisonState(),
+    uses: [],
+    advanced: advancedState(),
+    export_folder: 'C:\\Users\\me\\Documents',
+    ...overrides,
+  });
 }

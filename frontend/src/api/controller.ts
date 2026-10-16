@@ -4446,6 +4446,8 @@ export class ClientController {
     );
   learningLessons = (signal?: AbortSignal) =>
     this.query(() => this.transport.learningLessons?.(signal));
+  learningVersion = (version: number, signal?: AbortSignal) =>
+    this.query(() => this.transport.learningVersion?.(version, signal));
   learningReceipt = (command: string, signal?: AbortSignal) =>
     this.query(() => this.transport.learningReceipt?.(command, signal));
   executeLearning = async (

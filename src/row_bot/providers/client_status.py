@@ -7,7 +7,7 @@ metadata; the legacy passive Providers view leaves runtime readiness unknown.
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
@@ -174,9 +174,22 @@ def _read(now: float | None, *, include_readiness: bool = False) -> tuple[Provid
         rows = project_saved_catalog_readiness(rows)
     from row_bot.providers.model_visibility import withheld
 
-    # Learning's personal models aren't offered here until Learning offers a version (L2c2).
-    rows = [row for row in rows if _provider_identity(row.provider_id) and _identity(row.model_id, 512)
-            and not withheld(row.provider_id, row.model_id)]
+    # Learning's personal models are offered only once Learning offers a version (L2c2): every ready
+    # version, as "Personal model v1", pinned to chat; the starting model it compares with, never.
+    from row_bot import learning
+
+    offered = learning.offered_personal_models() if any(withheld(row.provider_id, row.model_id) for row in rows) else {}
+    kept = []
+    for row in rows:
+        if not (_provider_identity(row.provider_id) and _identity(row.model_id, 512)):
+            continue
+        if withheld(row.provider_id, row.model_id):
+            label = offered.get(row.selection_ref)
+            if label is None:
+                continue
+            row = replace(row, display_name=label, pinned_surfaces=tuple(sorted({*row.pinned_surfaces, "chat"})))
+        kept.append(row)
+    rows = kept
     endpoints = {}
     for raw in config.get("custom_endpoints", []):
         if not isinstance(raw, dict):

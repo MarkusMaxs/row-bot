@@ -114,6 +114,42 @@ it('says when the output limit cut a reply short', () => {
   expect(screen.queryByText('Cut short by the output limit')).toBeNull();
 });
 
+it('says quietly which replies the personal model gave, and when the main model finished one (Learning)', () => {
+  const { rerender } = render(
+    <TranscriptMessage
+      row={{ ...reply, answered_by: 'personal_model' }}
+      conversationId="conversation-a"
+    />,
+  );
+  expect(screen.getByText('Here is the plan.')).toBeInTheDocument();
+  expect(screen.getByText('Answered by your personal model')).toBeVisible();
+  rerender(<TranscriptMessage row={reply} conversationId="conversation-a" />);
+  expect(screen.queryByText('Answered by your personal model')).toBeNull();
+
+  // The hand-over is never shown as the person's message or the model's words.
+  const fallback = {
+    ...ask,
+    id: 'user:handover',
+    message_id: 'handover',
+    note: 'personal_model_fallback',
+    blocks: [
+      {
+        id: 'b',
+        type: 'markdown',
+        text: 'Your personal model got stuck; GPT-6.1 Sol finished this.',
+      },
+    ],
+  } as unknown as TranscriptRow;
+  rerender(
+    <TranscriptMessage row={fallback} conversationId="conversation-a" />,
+  );
+  expect(screen.getByRole('note')).toHaveTextContent(
+    'Your personal model got stuck; GPT-6.1 Sol finished this.',
+  );
+  expect(screen.queryByRole('article')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Copy message' })).toBeNull();
+});
+
 function speaking(speakers: Speakers, row: TranscriptRow, turnStart: boolean) {
   return (
     <SpeakersContext.Provider value={speakers}>
