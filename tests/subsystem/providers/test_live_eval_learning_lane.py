@@ -343,6 +343,23 @@ def test_in_memory_credentials_are_redacted_like_environment_keys() -> None:
     assert redact(f"echoed {secret}") == "echoed [redacted]"
 
 
+def test_the_ollama_lane_takes_each_models_capabilities_from_ollama_itself(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from row_bot.providers import model_catalog, model_catalog_cache
+    from row_bot.providers.capability_resolution import cached_ollama_capability_snapshot
+    from row_bot.providers.ollama import ollama_catalog_rows
+    from tests.e2e.live_eval.runner import refresh_local_catalog
+
+    monkeypatch.setattr(model_catalog_cache, "CATALOG_CACHE_PATH", tmp_path / "model_catalog_cache.json")
+    model_catalog_cache.write_model_catalog_cache(model_catalog_cache.empty_catalog_cache())
+    personal = "row-bot-personal-v3:latest"  # not in Row-Bot's family list
+    assert not cached_ollama_capability_snapshot(personal)
+    monkeypatch.setattr(model_catalog, "load_ollama_catalog_rows", lambda: ollama_catalog_rows(
+        [personal], [], metadata_by_model={personal: {"capabilities": ["completion", "tools"]}}))
+    assert refresh_local_catalog() == "local catalog: 1 Ollama models with their own capability answers"
+    assert cached_ollama_capability_snapshot(personal)["tool_calling"] is True
+
+
 def test_a_local_model_is_free_so_the_caps_never_hold_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from row_bot.prompt_cache import ModelUsage
     from row_bot.providers.usage_ledger import UsageRecord, record_model_usage
