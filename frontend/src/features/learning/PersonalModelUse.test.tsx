@@ -318,8 +318,9 @@ it('shows a trial with its numbers, Keep when it is due and Undo at once', async
   );
   const section = screen.getByRole('region', { name: 'In use for' });
   expect(section).toHaveTextContent('Document lookups · v1');
+  // The date in the reader's own format (CI is en-US).
   expect(section).toHaveTextContent(
-    /On trial since 13 Oct · 18 requests: 17 answered, 1 finished by GPT-6\.1 Sol/,
+    /On trial since (13 Oct|Oct 13) · 18 requests: 17 answered, 1 finished by GPT-6\.1 Sol/,
   );
   await user.click(within(section).getByRole('button', { name: 'Keep' }));
   expect(io.run).toHaveBeenCalledWith('keep_version', {
@@ -346,7 +347,7 @@ it('says a kept version is in use, with Undo and no Keep', () => {
     />,
   );
   const section = screen.getByRole('region', { name: 'In use for' });
-  expect(section).toHaveTextContent(/In use since 13 Oct/);
+  expect(section).toHaveTextContent(/In use since (13 Oct|Oct 13)/);
   expect(within(section).queryByRole('button', { name: 'Keep' })).toBeNull();
   expect(
     within(section).getByRole('button', {
