@@ -11,11 +11,13 @@ nothing installed system-wide). In that folder it:
    Linux), checks every hash, and runs the engine's own check;
 2. downloads the candidate starting models at pinned revisions from Hugging Face, after printing
    the total and asking (no token is ever used): Qwen3.5-2B (4.6 GB), Qwen3.5-4B (9.3 GB),
-   Qwen3.5-9B (about 19 GB) and Qwen3-8B (Unsloth's 4-bit build, 6.1 GB);
+   Qwen3.5-9B (about 19 GB), Qwen3-8B (Unsloth's 4-bit build, 6.1 GB) and Qwen3.8-27B (about
+   56 GB, the 32 GB tier's candidate, measured with 4-bit QLoRA only);
 3. measures each model and context the tier could use (8K for the big ones, 16K and 32K): peak
    memory and seconds per step over a few optimizer steps, one fresh process per cell;
 4. runs one short real training (the largest model that fits 16K) through Row-Bot's own training
-   worker, asks it to pause part way and resumes it from its checkpoint;
+   worker, asks it to pause part way and resumes it from its checkpoint, and does the same with a
+   short 4-bit QLoRA training of Qwen3.8-27B when it fits 16K;
 5. exports the trained result with llama.cpp's own tools (a merged GGUF, Q8_0 and Q4_K_M), using
    the pinned llama.cpp b11669 release on Windows (``--llama-cpp`` elsewhere);
 6. writes ``learning_gpu_check_results.json`` in the scratch folder: the card, driver, tier and
@@ -30,7 +32,9 @@ PowerShell, from the checkout::
     uv sync --locked --all-extras --group test
     uv run python scripts/learning_gpu_check.py
 
-It takes about one and a half to three hours (mostly downloads and the memory matrix), keeps
+It downloads about 100 GB (keep about 160 GB free, or pass ``--data`` with a folder on a bigger
+drive), takes about three
+to five hours (mostly downloads, the memory matrix and the 27B training), keeps
 everything it downloaded in the scratch folder so a second run continues where the first stopped,
 and prints where the results file is. Delete the scratch folder to remove everything.
 """
@@ -128,6 +132,8 @@ def pinned_models() -> dict[str, Any]:
         # Pinned revision; its files are listed and checked against the Hub at that revision.
         "q35-9b": ("Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a"),
         "q3-8b": q3_8b,
+        # The 32 GB tier's candidate (Apache 2.0, the Qwen3.5 architecture), 4-bit QLoRA only.
+        "q38-27b": ("Qwen/Qwen3.8-27B", "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"),
     }
 
 
@@ -276,6 +282,7 @@ MATRIX = (
     ("q3-8b", 4, (8 * K, 16 * K, 32 * K)),
     ("q35-9b", 16, (8 * K, 16 * K, 32 * K)),
     ("q35-9b", 4, (8 * K, 16 * K, 32 * K)),
+    ("q38-27b", 4, (8 * K, 16 * K, 32 * K)),
 )
 
 
@@ -351,11 +358,13 @@ class Smi(threading.Thread):
 
 
 def short_training(found: Any, root: Path, model_dir: Path, settings: dict[str, Any],
-                   results: dict[str, Any]) -> Path | None:
+                   results: dict[str, Any], key: str = "training") -> Path | None:
+    """One short training, paused and resumed; recorded under ``results[key]``. Only the main run
+    (``key == "training"``) keeps an adapter for the export."""
     from row_bot.learning.training import engine, protocol
     from row_bot.learning.training.worker import PROTOCOL_PATH, EngineCommand, TrainingWorker
 
-    run = root / "run"
+    run = root / ("run" if key == "training" else f"run-{key}")
     shutil.rmtree(run, ignore_errors=True)
     (run / "data").mkdir(parents=True)
     rows = _rows()
@@ -414,12 +423,12 @@ def short_training(found: Any, root: Path, model_dir: Path, settings: dict[str, 
          f"(asks it to pause after step {pause_at})")
     first = part(None, pause=True)
     record["part_one"] = first
-    save(root, results | {"training": record})
+    save(root, results | {key: record})
     paused = (first.get("last") or {}).get("type") == "paused"
     step = (first.get("last") or {}).get("step")
     if not paused:
         record["result"] = "did not pause"
-        results["training"] = record
+        results[key] = record
         return None
     _say(f"  paused at step {step}; part two resumes from checkpoint-{step}")
     second = part(protocol.checkpoint_name(step), pause=False)
@@ -428,8 +437,8 @@ def short_training(found: Any, root: Path, model_dir: Path, settings: dict[str, 
     out = run / "checkpoints"
     record["adapter_bytes"] = (out / "adapter_model.safetensors").stat().st_size if (
         out / "adapter_model.safetensors").is_file() else None
-    results["training"] = record
-    if record["result"] != "finished":
+    results[key] = record
+    if record["result"] != "finished" or key != "training":
         return None
     adapter = root / "adapter"
     shutil.rmtree(adapter, ignore_errors=True)
@@ -511,8 +520,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA, help="the scratch folder (never a Row-Bot profile)")
     parser.add_argument("--models", default="",
-                        help="comma-separated: q35-2b, q35-4b, q35-9b, q3-8b, or repo@revision for another model "
-                             "(default: all four)")
+                        help="comma-separated: q35-2b, q35-4b, q35-9b, q3-8b, q38-27b, or repo@revision for another "
+                             "model (default: all five)")
     parser.add_argument("--tier", default="auto", choices=("auto", "8", "16", "24", "32"))
     parser.add_argument("--yes", action="store_true", help="don't ask before downloading")
     parser.add_argument("--skip-matrix", action="store_true")
@@ -551,7 +560,8 @@ def main() -> int:
         "variant": variant, "os": f"{platform.system()} {platform.release()}", "machine": platform.machine(),
     }
     available = pinned_models()
-    keys = [item.strip() for item in (args.models or "q35-2b,q35-4b,q35-9b,q3-8b").split(",") if item.strip()]
+    keys = [item.strip() for item in (args.models or "q35-2b,q35-4b,q35-9b,q3-8b,q38-27b").split(",")
+            if item.strip()]
     models: dict[str, Any] = {}
     for key in keys:
         if "@" in key:
@@ -613,6 +623,13 @@ def main() -> int:
         _say("4. One short training, paused and resumed")
         adapter = short_training(engine_found, root, folders[choice["model"]], trained, results)
         save(root, results)
+        big = [cell for cell in results.get("fit", []) if cell.get("ran") and cell["model"] == "q38-27b"
+               and cell["context"] == 16 * K]
+        if big and "q38-27b" in folders and trained["model"] != "q38-27b":
+            _say("4b. A short 4-bit training of Qwen3.8 27B, paused and resumed")
+            short_training(engine_found, root, folders["q38-27b"],
+                           {"model": "q38-27b", "bits": 4, "max_seq_length": 16 * K}, results, key="training_27b")
+            save(root, results)
     if not args.skip_export and adapter is not None and trained is not None:
         _say("5. Export")
         llama = llama_cpp(root, args.llama_cpp)
