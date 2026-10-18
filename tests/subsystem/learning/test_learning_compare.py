@@ -58,7 +58,7 @@ class FakeWorker:
         return {"type": "result", "case": {
             "task_id": task["id"], "status": "passed" if passed else "failed", "check": "answer",
             "tokens": 2000, "local_tokens": 0 if cloud else 2000, "steps": 3, "seconds": 9.0 if cloud else 3.0,
-            "detail": ""}, "usage": [{"provider": "openai" if cloud else "ollama", "model": arm, "input": 1800,
+            "detail": "", "cause": "" if passed else "wrong_answer"}, "usage": [{"provider": "openai" if cloud else "ollama", "model": arm, "input": 1800,
                                       "output": 200}]}
 
 
@@ -151,6 +151,17 @@ def test_the_hidden_split_comes_back_as_counts_only(ready):
     looks = [look for look in audit_looks(store=LearningStore(ready)) if "personal model comparison" in look.asked_by]
     assert looks and all(look.caller == "row_bot.learning.evaluation" for look in looks)
     assert any("row_bot.learning.model_compare" in look.asked_by for look in looks)
+
+
+def test_each_model_says_why_its_tasks_didnt_pass_hidden_ones_as_counts(ready):
+    result = _comparer(ready).run(1)
+
+    arms = {arm["key"]: arm for arm in result["arms"]}
+    assert arms["main"]["causes"] == {}
+    failed = {key: sum(row["counted"][key] - row["passed"][key] for row in result["rows"] if key in row["counted"])
+              for key in ("base", "v1")}
+    assert arms["v1"]["causes"] == {"wrong_answer": failed["v1"]} and failed["v1"] > 0
+    assert arms["base"]["causes"] == {"wrong_answer": failed["base"]}  # visible and hidden together
 
 
 def test_coding_tasks_run_only_with_a_container(ready):

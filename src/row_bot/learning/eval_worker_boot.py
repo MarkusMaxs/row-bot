@@ -30,6 +30,9 @@ def main(argv: list[str]) -> int:
     for folder in reversed(paths):
         if os.path.isdir(folder) and folder not in sys.path:
             sys.path.insert(0, folder)
+    # Before any Row-Bot import: a failed test turn here never reaches the person's desktop
+    # (``row_bot.notifications`` shows no desktop notification and plays no sound).
+    os.environ["ROW_BOT_DESKTOP_NOTIFICATIONS"] = "off"
     from row_bot.learning.eval_worker import worker_main
 
     return worker_main()

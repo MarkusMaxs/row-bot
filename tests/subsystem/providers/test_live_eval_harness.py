@@ -371,6 +371,7 @@ def test_a_worker_gets_its_own_data_folder_and_a_closed_keychain(tmp_path: Path,
     env = orchestrate.child_env(tmp_path / "data", tmp_path / "ws")
     assert env["ROW_BOT_DATA_DIR"] == str(tmp_path / "data")
     assert env["ROW_BOT_TEST_MODE"] == "true" and "PYTEST_XDIST_WORKER" not in env
+    assert env["ROW_BOT_DESKTOP_NOTIFICATIONS"] == "off"  # a failed eval turn never reaches the desktop
     from tests.e2e.live_eval import worker
 
     home = tmp_path / "home"  # a stand-in home: the real everyday folder is never named, even briefly

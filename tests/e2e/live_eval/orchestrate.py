@@ -213,6 +213,8 @@ def child_env(data_dir: Path, workspace: Path, base: Mapping[str, str] | None = 
         # tool modules importable, so the "default" tool profile matches the app's.
         "ROW_BOT_TEST_MODE": "true",
         "ROW_BOT_AUTO_START_OLLAMA": "0",
+        # A failed eval turn never reaches the desktop (no notification, no sound).
+        "ROW_BOT_DESKTOP_NOTIFICATIONS": "off",
         "ROW_BOT_WORKSPACE": str(workspace),
         "GIT_CEILING_DIRECTORIES": str(REPO_ROOT / ".tmp"),
         "PYTHONIOENCODING": "utf-8",

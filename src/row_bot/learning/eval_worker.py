@@ -28,6 +28,15 @@ for a personal model (its saved settings, O24/O30).
 
 Every arm gets the same budget (E12): the same tokens per task (a gate refuses a model call that
 would pass it, before it is sent), the same tool calls per task and the same time.
+
+**Each model is measured the way it serves** (L2v): its own saved serving settings (a personal
+version and its untouched starting model as ``serving.serve`` registers them: their context,
+thinking off, O24/O30; the person's main model with the person's own settings), so its tool
+exposure is Row-Bot's own for that context (A5's bridge at 32K or less, everything bound above
+64K). The worker's own profile doesn't distort that: the pack's apps are switched on (a tool that
+is off is listed to the model as off), the person's libraries answer as the empty libraries they
+are, nothing one task leaves behind (its conversation, memories) is seen by the next, and a check
+reads the reply's last message. Each case says why it didn't pass (:data:`CAUSES`).
 """
 
 from __future__ import annotations
@@ -60,6 +69,8 @@ STOP_WAIT_SECONDS = 10.0
 #: Tool calls a task may make: its own step count times this (the same for every arm).
 TOOL_CALL_FACTOR = 3
 PREFIX = "row-bot-eval-"
+#: ``notifications.DESKTOP_SWITCH``, written out so this module imports nothing more for it.
+DESKTOP_SWITCH = "ROW_BOT_DESKTOP_NOTIFICATIONS"
 #: Tools that act on this computer or an account outside the test's workspace, reach the network, or
 #: always stop for a person: never bound in an evaluation turn.
 UNSAFE_TOOLS = frozenset({
@@ -75,6 +86,160 @@ UNSAFE_TOOLS = frozenset({
 #: The fake apps, as the worker registers them (pack toolset → tool name).
 APP_TOOLS = {"calendar": "learning_calendar", "mail": "learning_mail", "issues": "learning_issues"}
 _CARRIED_SKIP = re.compile(r"^(ROW_BOT|PYTEST|COV_|PYTHONPATH$|PYTHONHOME$|VIRTUAL_ENV$|UV_)")
+#: Why a task that ran didn't pass (a case's ``cause``), decided from the turn's own events (L2v).
+#: Codes only: no task text, so a hidden task's cause says nothing about the task (E10).
+CAUSES: dict[str, str] = {
+    "provider_error": "the model call failed (the provider or its tool-call parser)",
+    "harness": "the test itself couldn't run or check the task",
+    "budget": "ran out of its steps, tokens or time",
+    "no_tool": "answered without using any tool",
+    "tool_not_found": "never reached the tool the task needs",
+    "bad_call": "a tool call was malformed or refused",
+    "file_write": "the file the task asks for wasn't written",
+    "no_answer": "the turn ended without an answer",
+    "wrong_answer": "used the tools and answered, but the check failed",
+}
+#: Trace events a developer's run keeps per task (only when it asks for them).
+TRACE_EVENTS = 160
+_APP_PREFIXES = ("calendar_", "mail_", "issues_")
+_FILE_WRITERS = frozenset({"workspace_write_file", "write_file", "workspace_edit_file", "edit_file"})
+
+
+def _result_problem(name: str, content: Any) -> str:
+    """The refusal or error a tool result reports, as a short code ("" when it worked)."""
+
+    text = content if isinstance(content, str) else json.dumps(content, default=str) if content else ""
+    text = str(text or "")
+    head = text.lstrip()[:4000]
+    if head.startswith("{"):
+        try:
+            found = json.loads(head if len(text) <= 4000 else text)
+        except ValueError:
+            found = None
+        if isinstance(found, dict):
+            if found.get("ok") is False:
+                error = found.get("error")
+                code = error.get("code") if isinstance(error, dict) else error
+                return str(code or "refused")[:40]
+            if "ok" not in found and found.get("error"):
+                return "tool_error"  # an app's own refusal ("no event …")
+            if name == "tool_search" and found.get("ok") and not found.get("results"):
+                return "no_match"
+    lowered = head[:600].lower()
+    if "is not a valid tool" in lowered:
+        return "unknown_tool"
+    if "validation error" in lowered or "error invoking tool" in lowered or "field required" in lowered:
+        return "invalid_arguments"
+    if lowered.startswith(("error:", "tool error:")):
+        return "tool_error"
+    return ""
+
+
+@dataclass
+class TurnRecord:
+    """What one evaluation turn did, compact: the tools it called (a ``tool_invoke`` counts as its
+    target), the tool results that were refusals or errors, model-call errors and how it ended. The
+    trace (``events``) is kept only when asked: a developer's run of the visible packs, never the
+    product's comparison or a hidden task."""
+
+    keep: bool = False
+    calls: list[str] = field(default_factory=list)
+    #: Every tool result in order: (the tool it came from, a ``tool_invoke`` as its target; its problem or "").
+    results: list[tuple[str, str]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    searches: int = 0
+    empty_searches: int = 0
+    ended: str = ""
+    events: list[dict[str, Any]] = field(default_factory=list)
+    _names: dict[str, str] = field(default_factory=dict, repr=False)
+
+    @property
+    def problems(self) -> list[tuple[str, str]]:
+        return [(name, problem) for name, problem in self.results if problem and problem != "no_match"]
+
+    def unrecovered(self) -> list[tuple[str, str]]:
+        """Refused or failed calls the turn never got right afterwards (the same tool working later)."""
+
+        found: list[tuple[str, str]] = []
+        for index, (name, problem) in enumerate(self.results):
+            if problem and problem != "no_match" and not any(
+                    later == name and not again for later, again in self.results[index + 1:]):
+                found.append((name, problem))
+        return found
+
+    def _keep(self, event: dict[str, Any]) -> None:
+        if self.keep and len(self.events) < TRACE_EVENTS:
+            self.events.append(event)
+
+    def add(self, kind: str, payload: Any) -> None:
+        if kind == "tool_call":
+            raw = str(getattr(payload, "raw_name", "") or payload or "")
+            name = str(getattr(payload, "runtime_name", "") or raw)
+            self.calls.append(name)
+            self._names[str(getattr(payload, "call_id", "") or "")] = name
+            if raw == "tool_search":
+                self.searches += 1
+            args = getattr(payload, "args", None)
+            self._keep({"call": name, "via": raw if raw != name else "",
+                        "args": json.dumps(args, ensure_ascii=False, default=str)[:400] if args else ""})
+        elif kind == "tool_done" and isinstance(payload, Mapping):
+            raw = str(payload.get("raw_name") or payload.get("name") or "")
+            name = self._names.get(str(payload.get("tool_call_id") or ""), raw) or raw
+            content = payload.get("content")
+            problem = _result_problem(raw, content)
+            if problem == "no_match":
+                self.empty_searches += 1
+            self.results.append((name, problem))
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
+            self._keep({"result": name, "problem": problem, "head": str(text or "")[:400]})
+        elif kind == "error":
+            self.errors.append(str(payload or "")[:300])
+            self._keep({"error": str(payload or "")[:400]})
+        elif kind == "terminal":
+            reason = payload.get("terminal_reason") if isinstance(payload, Mapping) else ""
+            self.ended = str(reason or "terminal")
+            self._keep({"terminal": self.ended})
+        elif kind == "interrupt":
+            self.ended = "asked"
+            self._keep({"interrupt": True})
+        elif kind == "done":
+            self._keep({"done": str(payload or "")[:600]})
+        elif kind == "reply":  # the whole reply, when its last message (``done``) is only part of it
+            self._keep({"reply": str(payload or "")[:600]})
+        elif kind == "warning":
+            self._keep({"warning": str(payload or "")[:300]})
+
+
+def failure_cause(status: str, detail: str, record: TurnRecord, *, task_tools: Sequence[str] = (),
+                  check: str = "") -> str:
+    """Why a task that ran didn't pass ("" when it passed or didn't run): one of :data:`CAUSES`.
+
+    In order: the model call failed; the test itself failed; a budget ran out; then, for a failed
+    check, no tool used at all, the task's app never reached, the file the check needs refused
+    when written (O22), a malformed or refused call it never got right, and otherwise a wrong
+    answer."""
+
+    if status in ("passed", "not_run", "skipped", ""):
+        return ""
+    if status == "error":
+        return "provider_error" if detail.startswith("the model call failed") else "harness"
+    if status == "budget":
+        return "budget"
+    if detail == "stopped to ask for approval":
+        return "harness"
+    if detail == "the turn ended without an answer":
+        return "no_answer"
+    if not record.calls:
+        return "no_tool"
+    apps = [app for app in task_tools if app in APP_TOOLS]
+    if apps and not any(call.startswith(_APP_PREFIXES) for call in record.calls):
+        return "tool_not_found"
+    if check == "file" and ("was not written" in detail or "is not JSON" in detail) and any(
+            name in _FILE_WRITERS for name, _ in record.problems):
+        return "file_write"
+    if record.unrecovered():
+        return "bad_call"
+    return "wrong_answer"
 
 
 class EvalWorkerError(RuntimeError):
@@ -257,6 +422,8 @@ def worker_environment(data: Path, *, extra: Mapping[str, str] | None = None) ->
     environment.update({
         "ROW_BOT_DATA_DIR": str(data), "ROW_BOT_AUTO_START_OLLAMA": "0", "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1", "PYTHONNOUSERSITE": "1",
+        # A failed test turn never reaches the person's desktop (no notification, no sound; L2v).
+        DESKTOP_SWITCH: "off",
     })
     for key, value in (extra or {}).items():
         environment[str(key)] = str(value)
@@ -516,14 +683,18 @@ class EvalWorker:
     # ── Tasks ───────────────────────────────────────────────────────────
 
     def run(self, task: Mapping[str, Any], arm: str, *, budget: Mapping[str, Any],
-            timeout: float = TASK_SECONDS) -> dict[str, Any]:
-        """Run one pack task (its canonical dict) on one arm; the worker's result frame."""
+            timeout: float = TASK_SECONDS, trace: bool = False) -> dict[str, Any]:
+        """Run one pack task (its canonical dict) on one arm; the worker's result frame (with the
+        turn's trace when ``trace``: a developer's look at the visible packs)."""
 
         if not self.alive:
             raise EvalWorkerError("not_running")
         ident = uuid.uuid4().hex
-        if not self._send({"type": "task", "id": ident, "arm": arm, "task": dict(task), "budget": dict(budget),
-                           "timeout": timeout}):
+        message = {"type": "task", "id": ident, "arm": arm, "task": dict(task), "budget": dict(budget),
+                   "timeout": timeout}
+        if trace:
+            message["trace"] = True
+        if not self._send(message):
             raise EvalWorkerError("not_running")
         frame = self._wait(lambda item: item.get("type") == "result" and item.get("id") == ident, timeout + 120)
         if frame is None:
@@ -628,7 +799,51 @@ def _register_fake_apps() -> list[str]:
     for app, name in APP_TOOLS.items():
         if registry.get_tool(name) is None:
             registry.register(FakeAppTool(app, name))
+        # On in this throwaway profile: a tool the registry holds but hasn't switched on is listed
+        # to the model as "TOOLS THAT ARE OFF" in every turn's context, beside the same app as
+        # available, and small models then wouldn't use it (L2v). Each turn still binds only its
+        # task's apps.
+        if not registry.is_enabled(name):
+            registry.set_enabled(name, True)
     return list(APP_TOOLS.values())
+
+
+def _empty_libraries() -> list[str]:
+    """The person's own libraries are empty in the throwaway profile, and their tools say so.
+
+    The documents tool embeds the query before it looks at the (empty) library, so where the
+    embedding model isn't on this computer it answered every call with an error, and small models
+    called it again and again (L2v). In the worker it answers as an empty library does, with the
+    same name, description and schema the model sees when it serves."""
+
+    from row_bot.tools import registry
+
+    changed: list[str] = []
+    tool = registry.get_tool("documents")
+    if tool is not None:
+        tool.execute = lambda query: f"No results found for: {query}"  # type: ignore[method-assign]
+        changed.append("documents")
+    return changed
+
+
+def _forget_task(thread_id: str) -> None:
+    """What one task's turn left in the worker's profile goes before the next task, so no task
+    (or arm) finds another's conversation or memories (L2v): its thread, and every memory (the
+    throwaway profile has none of its own)."""
+
+    try:
+        from row_bot.thread_cleanup import delete_thread
+
+        delete_thread(thread_id)
+    except Exception as error:  # noqa: BLE001 - a later task still runs
+        logging.getLogger(__name__).info("An evaluation thread wasn't removed (%s)", type(error).__name__)
+    try:
+        from row_bot import knowledge_graph
+
+        if knowledge_graph.count_entities():
+            knowledge_graph.delete_all_entities()
+    except Exception as error:  # noqa: BLE001
+        logging.getLogger(__name__).info("An evaluation task's memories weren't removed (%s)", type(error).__name__)
 
 
 def _seed_credentials(credentials: Sequence[Mapping[str, Any]], emit: Callable[[dict[str, Any]], None],
@@ -713,10 +928,44 @@ class _TaskGate:
         self.cloud_spent = 0
         self.refused = ""
 
+        self.sent: dict[str, int] = {}
+        self.estimated = 0
+
     def reset(self, allowance: int, cloud_cap: int | None) -> None:
         self.allowance, self.cloud_cap = int(allowance), cloud_cap
         self.spent = self.cloud_spent = 0
         self.refused = ""
+        self.sent = {}
+        self.estimated = 0
+
+    def admit(self, run_id: Any, estimate: int, *, local: bool) -> None:
+        """Before a model call: refuse it (raise) when its estimate would pass the task's allowance
+        or the month's limit; otherwise remember what it is about to send."""
+
+        from row_bot.agent_budget import ModelCallRefused
+
+        if self.spent + estimate > self.allowance:
+            self.refused = "task"
+            raise ModelCallRefused("learning evaluation budget: the task's token budget is spent")
+        if not local and self.cloud_cap is not None and self.cloud_spent + estimate > self.cloud_cap:
+            self.refused = "limit"
+            raise ModelCallRefused("learning evaluation budget: the monthly limit would be passed")
+        from row_bot.learning.evaluation import _OUTPUT_ALLOWANCE
+
+        self.sent[str(run_id)] = max(0, int(estimate) - _OUTPUT_ALLOWANCE)
+
+    def charge(self, run_id: Any, used: int, *, local: bool) -> None:
+        """After a model call: charge what it used. A runtime that reports no usage (llama.cpp's
+        server streams none here) is charged the estimate of what was sent, so every arm's budget
+        holds the same (E12; L2v)."""
+
+        sent = self.sent.pop(str(run_id), 0)
+        if used <= 0 and sent > 0:
+            used = sent
+            self.estimated += 1
+        self.spent += max(0, int(used))
+        if not local:
+            self.cloud_spent += max(0, int(used))
 
 
 def _install_gate(gate: _TaskGate) -> None:
@@ -736,24 +985,16 @@ def _install_gate(gate: _TaskGate) -> None:
 
     def on_chat_model_start(self: Any, serialized: Any, messages: Any, *, run_id: Any, **kwargs: Any) -> None:
         estimate = estimate_tokens(flatten(messages), (kwargs.get("invocation_params") or {}).get("tools"))
-        local = is_local_provider(str(getattr(self, "provider_id", "") or ""))
-        if gate.spent + estimate > gate.allowance:
-            gate.refused = "task"
-            raise RuntimeError("learning evaluation budget: the task's token budget is spent")
-        if not local and gate.cloud_cap is not None and gate.cloud_spent + estimate > gate.cloud_cap:
-            gate.refused = "limit"
-            raise RuntimeError("learning evaluation budget: the monthly limit would be passed")
+        gate.admit(run_id, estimate, local=is_local_provider(str(getattr(self, "provider_id", "") or "")))
         return original_start(self, serialized, messages, run_id=run_id, **kwargs)
 
     def on_llm_end(self: Any, response: Any, *, run_id: Any, **kwargs: Any) -> Any:
         try:
             usage = usage_ledger._usage_from_result(response)  # noqa: SLF001 - the ledger's own reading
             used = int(usage.input_tokens or 0) + int(usage.output_tokens or 0)
-            gate.spent += used
-            if not is_local_provider(str(getattr(self, "provider_id", "") or "")):
-                gate.cloud_spent += used
         except Exception:  # noqa: BLE001
-            pass
+            used = 0
+        gate.charge(run_id, used, local=is_local_provider(str(getattr(self, "provider_id", "") or "")))
         return original_end(self, response, run_id=run_id, **kwargs)
 
     callback.on_chat_model_start = on_chat_model_start
@@ -781,16 +1022,29 @@ def _ledger_rows(after: int) -> tuple[list[dict[str, Any]], int]:
     return found, (int(rows[-1][0]) if rows else after)
 
 
-def _consume(events: Iterable[tuple], stop: threading.Event, max_calls: int) -> dict[str, Any]:
-    outcome: dict[str, Any] = {"answer": "", "status": "unknown", "calls": 0, "errors": []}
+def _consume(events: Iterable[tuple], stop: threading.Event, max_calls: int,
+             record: TurnRecord | None = None) -> dict[str, Any]:
+    outcome: dict[str, Any] = {"answer": "", "final": "", "status": "unknown", "calls": 0, "errors": []}
+    # The reply's last message (the text after its last tool step): progress lines written before a
+    # tool call are part of the reply the person sees, not the answer a check reads (L2v).
+    last: list[str] = []
     for event in events:
         kind = event[0]
         payload = event[1] if len(event) > 1 else None
-        if kind == "done":
+        if kind == "token":
+            last.append(str(payload or ""))
+        elif kind in ("tool_call", "tool_done"):
+            last = []
+        elif kind == "done":
             outcome["answer"] = str(payload or "")
+            outcome["final"] = "".join(last).strip() or outcome["answer"]
             if outcome["status"] == "unknown":
                 outcome["status"] = "done"
-        elif kind == "tool_call":
+        if record is not None:
+            record.add(kind, outcome["final"] if kind == "done" else payload)
+            if kind == "done" and outcome["final"] != outcome["answer"].strip():
+                record.add("reply", outcome["answer"])
+        if kind == "tool_call":
             outcome["calls"] += 1
             if outcome["calls"] > max_calls:
                 outcome["status"] = "steps"
@@ -842,19 +1096,25 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
         "thread_id": thread_id, "model_override": str(arm["model_ref"]), "runtime_mode": "agent",
         "runtime_surface": "normal_chat", "approval_mode": "full", "generation_id": uuid.uuid4().hex,
     }}
+    record = TurnRecord(keep=bool(message.get("trace")))
     try:
-        outcome = _consume(agent.stream_agent(task.prompt, names, config, stop_event=stop), stop, max_calls)
+        outcome = _consume(agent.stream_agent(task.prompt, names, config, stop_event=stop), stop, max_calls, record)
     except Exception as error:  # noqa: BLE001 - a failed turn is a result
         outcome = {"answer": "", "status": "error", "calls": 0, "errors": [type(error).__name__]}
+        record.add("error", type(error).__name__)
     finally:
         timer.cancel()
         try:
             agent._set_active_runtime_context()  # noqa: SLF001 - leave no turn context behind
         except Exception:  # noqa: BLE001
             pass
-    rows, _ = _ledger_rows(baseline)
+        # The task's usage rows first: deleting its conversation takes them with it.
+        rows, _ = _ledger_rows(baseline)
+        _forget_task(thread_id)
     tokens = sum(row["input"] + row["output"] for row in rows)
     local = sum(row["input"] + row["output"] for row in rows if is_local_provider(row["provider"]))
+    if gate.estimated and tokens < gate.spent and is_local_provider(_provider_of(str(arm["model_ref"]))):
+        tokens = local = gate.spent  # a local runtime that reports no usage: what was sent (estimated)
     status, detail = "failed", ""
     if gate.refused == "limit":
         status, detail = "not_run", "limit"
@@ -871,7 +1131,8 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
         logging.getLogger(__name__).info("An evaluation turn failed: %s", "; ".join(outcome["errors"])[:500])
     elif outcome["status"] == "done":
         try:
-            verdict = verify(task, Outcome(outcome["answer"], workspace_files(workspace), _CURRENT.apps.state()),
+            verdict = verify(task, Outcome(outcome["final"] or outcome["answer"], workspace_files(workspace),
+                                           _CURRENT.apps.state()),
                              backend=str(spec.get("code_backend") or "container"))
             status, detail = ("passed" if verdict.passed else "failed"), verdict.detail
         except Exception as error:  # noqa: BLE001 - the check couldn't run
@@ -881,8 +1142,12 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
     shutil.rmtree(workspace, ignore_errors=True)
     case = {"task_id": task.id, "suite": "pack", "kind_of_work": task.kind_of_work, "status": status,
             "check": task.verifier.kind, "tokens": tokens, "local_tokens": local, "steps": int(outcome["calls"]),
-            "seconds": round(time.monotonic() - started, 3), "detail": detail[:300]}
-    return {"type": "result", "id": message["id"], "case": case, "usage": rows}
+            "seconds": round(time.monotonic() - started, 3), "detail": detail[:300],
+            "cause": failure_cause(status, detail, record, task_tools=task.tools, check=task.verifier.kind)}
+    frame = {"type": "result", "id": message["id"], "case": case, "usage": rows}
+    if record.keep:
+        frame["trace"] = record.events
+    return frame
 
 
 def worker_main() -> int:
@@ -930,6 +1195,7 @@ def worker_main() -> int:
         import row_bot.agent  # noqa: F401 - binds the runtime before the gate patches the ledger
 
         _setup_providers(spec, notes)
+        _empty_libraries()
         fake = _register_fake_apps()
         tools = [name for name in safe_tools(spec.get("tools") or ()) if name not in fake]
         gate = _TaskGate()
@@ -958,7 +1224,7 @@ def worker_main() -> int:
             emit({"type": "result", "id": message.get("id"), "case": {
                 "task_id": str((message.get("task") or {}).get("id") or ""), "suite": "pack", "kind_of_work": "",
                 "status": "error", "check": "", "tokens": 0, "local_tokens": 0, "steps": 0, "seconds": 0.0,
-                "detail": f"the task could not run ({type(error).__name__})"}, "usage": []})
+                "detail": f"the task could not run ({type(error).__name__})", "cause": "harness"}, "usage": []})
 
 
 # ── The runner evaluation uses ──────────────────────────────────────────────
@@ -977,8 +1243,11 @@ class RuntimeRunner:
     arms: Mapping[str, WorkerArm]
     record_usage: Callable[[Sequence[Mapping[str, Any]]], None] | None = None
     seconds: float = TASK_SECONDS
-    signature: str = "agent-runtime-1"
+    signature: str = "agent-runtime-2"
     unsupported: set[str] = field(default_factory=set)
+    #: A developer's look at visible tasks: called with (task, arm name, case, trace). Never set by the
+    #: product's comparison, so no hidden task's turn ever leaves the worker (E10).
+    on_trace: Callable[[Any, str, Mapping[str, Any], list[dict[str, Any]]], None] | None = None
 
     def run(self, task: Any, arm: Any, *, budget: Any, meter: Any, arm_left: int | None) -> Any:
         from row_bot.learning.evaluation import CaseResult, LimitReached, estimate_tokens
@@ -994,9 +1263,14 @@ class RuntimeRunner:
             if not meter.allows(estimate, local=False):
                 raise LimitReached()
             cloud_cap = max(0, int(meter.remaining))
+        tracing = self.on_trace is not None and getattr(task, "split", "") == "visible"
+        options = {"trace": True} if tracing else {}
         frame = self.worker.run(task.to_dict(), arm.name, budget={
-            "task_tokens": allowance, "max_steps": budget.max_steps, "cloud_cap": cloud_cap}, timeout=self.seconds)
+            "task_tokens": allowance, "max_steps": budget.max_steps, "cloud_cap": cloud_cap}, timeout=self.seconds,
+            **options)
         case = dict(frame.get("case") or {})
+        if tracing and self.on_trace is not None:
+            self.on_trace(task, arm.name, case, list(frame.get("trace") or ()))
         usage = [dict(row) for row in frame.get("usage") or () if isinstance(row, dict)]
         if usage and self.record_usage is not None:
             self.record_usage(usage)
@@ -1008,11 +1282,12 @@ class RuntimeRunner:
         if case.get("status") == "not_run" and case.get("detail") == "limit":
             raise LimitReached()
         status = str(case.get("status") or "error")
+        cause = str(case.get("cause") or "")
         return CaseResult(task.id, "pack", task.kind_of_work,
                           status if status in ("passed", "failed", "budget", "error") else "error",  # type: ignore[arg-type]
                           str(case.get("check") or task.verifier.kind), tokens, local_tokens,
                           int(case.get("steps") or 0), float(case.get("seconds") or 0.0),
-                          str(case.get("detail") or "")[:300])
+                          str(case.get("detail") or "")[:300], cause if cause in CAUSES else "")
 
 
 def ledger_recorder(purpose: str = "learning_test") -> Callable[[Sequence[Mapping[str, Any]]], None]:

@@ -66,7 +66,10 @@ logger = logging.getLogger(__name__)
 
 # ── Fixed points (E4): metric definitions no strategy can change ────────────
 
-METRIC_VERSION = 1
+# 2 (L2v): an answer check also passes a reply that states the expected value in a sentence without
+# giving the task's known wrong value first (``packs.verify``), and the real-runtime worker checks
+# the reply's last message. Results under 1 are never mixed with these (the arm cache keys on it).
+METRIC_VERSION = 2
 # "21 of 24 passed": passed over passed + failed. A task that ran out of its budget or
 # steps failed; one the provider couldn't run (an error) or no check could decide
 # (unverified) is reported but left out of the denominator.
@@ -148,6 +151,8 @@ class CaseResult:
     steps: int = 0
     seconds: float = 0.0
     detail: str = ""
+    # Why a task that ran didn't pass, when the runner can tell (``eval_worker.CAUSES``): a code, never task text.
+    cause: str = ""
 
     @property
     def passed(self) -> bool:
@@ -203,6 +208,8 @@ class ArmResult:
     measured_tokens: int = 0
     measured_cloud_tokens: int = 0
     cached: int = 0
+    # Why tasks didn't pass (cause code → count), for audit runs too: codes only, never a task (E10).
+    causes: dict[str, int] = field(default_factory=dict)
 
     @property
     def passed(self) -> int:
@@ -1181,13 +1188,17 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
             "format": RESULTS_FORMAT, "version": 1, "metric_version": METRIC_VERSION, "arm": arm.name,
             "guidance": len(arm.guidance), "suite": suite, "budget": budget.to_dict(), "tokens": spent[arm.name],
             "local_tokens": local, "by_kind": {k: list(v) for k, v in by_kind.items()},
-            "statuses": dict(Counter(case.status for case in cases)), "small_sample": _small(passed, len(counted)),
+            "statuses": dict(Counter(case.status for case in cases)),
+            # Why tasks didn't pass, as codes (``eval_worker.CAUSES``): counts only, so audit runs keep them too.
+            "causes": dict(Counter(case.cause for case in cases if case.cause)),
+            "small_sample": _small(passed, len(counted)),
             "stopped": stopped, "judge": calibration_dict,
         }
         if not aggregate_only:
             body["cases"] = [{"task": case.task_id, "kind_of_work": case.kind_of_work, "status": case.status,
                               "check": case.check, "tokens": case.tokens, "steps": case.steps,
-                              "seconds": case.seconds, "detail": case.detail} for case in cases]
+                              "seconds": case.seconds, "detail": case.detail, "cause": case.cause}
+                             for case in cases]
         runs.append((run, body))
         ran = [case for case in cases if case.status != "not_run"]
         arm_results.append(ArmResult(
@@ -1195,7 +1206,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
             ran=len(ran), seconds=round(sum(case.seconds for case in ran), 3),
             measured_tokens=sum(case.tokens for case in ran),
             measured_cloud_tokens=sum(max(0, case.tokens - case.local_tokens) for case in ran),
-            cached=cached_count[arm.name]))
+            cached=cached_count[arm.name], causes=dict(body["causes"])))
     if cache is not None:
         cache.save()
     if save:
