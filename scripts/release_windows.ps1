@@ -158,9 +158,10 @@ function Save-Artifact([string]$Name, [string]$Into, [switch]$Optional) {
 
 function Get-Draft {
     # The one draft release of the tag, by id; refuses none, several, or a published one.
-    $ids = @(Get-NativeOutput -File $Gh -Arguments @("api", "repos/$Repository/releases?per_page=100", "--paginate",
-             "--jq", ".[] | select(.tag_name == `"$Tag`") | .id"))
-    $ids = @($ids | Where-Object { $_ })
+    # No quotes inside the jq: Windows PowerShell 5.1 drops them when it calls gh, so the tag is matched here.
+    $rows = @(Get-NativeOutput -File $Gh -Arguments @("api", "repos/$Repository/releases?per_page=100", "--paginate",
+              "--jq", ".[] | [.id, .tag_name] | @tsv"))
+    $ids = @($rows | Where-Object { $_ } | ForEach-Object { $id, $name = $_ -split "`t", 2; if ($name -eq $Tag) { $id } })
     if ($ids.Count -eq 0) { Stop-Release "there is no release $Tag (release.yml creates the draft)" }
     if ($ids.Count -gt 1) { Stop-Release "$($ids.Count) releases are tagged $Tag; delete the extra drafts" }
     if ($script:ReleaseId -and $ids[0] -ne $script:ReleaseId) { Stop-Release "the release of $Tag changed (id $($ids[0]))" }
