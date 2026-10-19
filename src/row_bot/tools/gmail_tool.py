@@ -7,6 +7,7 @@ file attachment support.
 from __future__ import annotations
 
 import base64
+import email
 import email.encoders
 import email.mime.base
 import email.mime.multipart
@@ -14,8 +15,9 @@ import email.mime.text
 import logging
 import mimetypes
 import os
+from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, field_validator
@@ -294,10 +296,12 @@ class GmailTool(BaseTool):
         """Build a fresh service and HTTP transport for one call only.
 
         A Gmail ``Resource`` and its ``httplib2`` connection are not thread-safe, and
-        parallel tool calls run on worker threads (B347)."""
-        from langchain_google_community.gmail.utils import build_resource_service
+        parallel tool calls run on worker threads (B347). Built with googleapiclient
+        itself: importing langchain_google_community loads ~450 MB of Google Cloud
+        libraries Gmail never uses."""
+        from googleapiclient.discovery import build
 
-        return build_resource_service(credentials=account_tokens.google_credentials())
+        return build("gmail", "v1", credentials=account_tokens.google_credentials())
 
     # ── Build toolkit tools ──────────────────────────────────────────────────
     def _get_selected_operations(self) -> list[str]:
@@ -312,7 +316,7 @@ class GmailTool(BaseTool):
             return []
 
         try:
-            api_resource = self._build_api_resource()
+            self._build_api_resource()
         except Exception as exc:
             logger.warning("Gmail tools unavailable — %s", exc)
             return []
@@ -320,16 +324,9 @@ class GmailTool(BaseTool):
         selected = self._get_selected_operations()
         tools = []
 
-        # Read tools from LangChain toolkit
-        if any(op in selected for op in _READ_OPS):
-            from langchain_google_community import GmailToolkit
-            toolkit = GmailToolkit(api_resource=api_resource)
-            all_lc_tools = toolkit.get_tools()
-            for t in all_lc_tools:
-                if t.name in selected and t.name in _READ_OPS:
-                    tools.append(_wrap_gmail_tool_empty_guard(
-                        _bounded_gmail_read_tool(t, self._build_api_resource)
-                    ))
+        for name in _READ_OPS:
+            if name in selected:
+                tools.append(_wrap_gmail_tool_empty_guard(_gmail_read_tool(name, self._build_api_resource)))
 
         # Custom draft with attachments
         if "create_gmail_draft" in selected:
@@ -403,23 +400,137 @@ def _bounded_gmail_result(tool_name: str, result):
     return result
 
 
-def _bounded_gmail_read_tool(tool, build_api_resource):
-    """Wrap a LangChain Gmail read tool so each call has its own API client and a bounded, compact result."""
-    from langchain_core.tools import StructuredTool
+# ── Read tools ───────────────────────────────────────────────────────────
+# The search, message and thread reads of langchain_google_community's Gmail toolkit, with
+# the same names, descriptions, arguments and results.
 
-    if getattr(tool, "_run", None) is None:
-        return tool
+class _SearchResource(str, Enum):
+    THREADS = "threads"
+    MESSAGES = "messages"
+
+
+class _SearchInput(BaseModel):
+    # From https://support.google.com/mail/answer/7190?hl=en
+    query: str = Field(
+        ...,
+        description="The Gmail query. Example filters include from:sender,"
+        " to:recipient, subject:subject, -filtered_term,"
+        " in:folder, is:important|read|starred, after:year/mo/date, "
+        "before:year/mo/date, label:label_name"
+        ' "exact phrase".'
+        " Search newer/older than using d (day), m (month), and y (year): "
+        "newer_than:2d, older_than:1y."
+        " Attachments with extension example: filename:pdf. Multiple term"
+        " matching example: from:amy OR from:david.",
+    )
+    resource: _SearchResource = Field(
+        default=_SearchResource.MESSAGES,
+        description="Whether to search for threads or messages.",
+    )
+    max_results: int = Field(default=10, description="The maximum number of results to return.")
+
+
+class _GetMessageInput(BaseModel):
+    message_id: str = Field(
+        ...,
+        description="The unique ID of the email message, retrieved from a search.",
+    )
+
+
+class _GetThreadInput(BaseModel):
+    thread_id: str = Field(..., description="The thread ID.")
+
+
+def _clean_email_body(body: str) -> str:
+    from bs4 import BeautifulSoup
+
+    try:
+        return str(BeautifulSoup(str(body), "html.parser").get_text())
+    except Exception as exc:
+        logger.error(exc)
+        return str(body)
+
+
+def _plain_text(email_msg) -> str:
+    """The first plain-text part that isn't an attachment, or the whole body."""
+    parts = [
+        part for part in email_msg.walk()
+        if part.get_content_type() == "text/plain" and "attachment" not in str(part.get("Content-Disposition"))
+    ] if email_msg.is_multipart() else [email_msg]
+    if not parts:
+        return ""
+    payload = parts[0].get_payload(decode=True)
+    try:
+        return payload.decode("utf-8", errors="replace")
+    except UnicodeDecodeError:
+        return payload.decode("latin-1", errors="replace")
+
+
+def _read_message(service, message_id: str) -> dict:
+    data = service.users().messages().get(userId="me", format="raw", id=message_id).execute()
+    email_msg = email.message_from_bytes(base64.urlsafe_b64decode(data["raw"]))
+    return {
+        "id": message_id,
+        "threadId": data["threadId"],
+        "snippet": data["snippet"],
+        "body": _clean_email_body(_plain_text(email_msg)),
+        "subject": email_msg.get("Subject", ""),
+        "sender": email_msg.get("From", ""),
+    }
+
+
+def _search_gmail(service, query: str, resource: _SearchResource = _SearchResource.MESSAGES,
+                  max_results: int = 10) -> list[dict[str, Any]]:
+    resource = _SearchResource(resource)
+    listing = getattr(service.users(), resource.value)()
+    found = listing.list(userId="me", q=query, maxResults=max_results).execute().get(resource.value, [])
+    if resource is _SearchResource.MESSAGES:
+        return [_read_message(service, message["id"]) for message in found]
+    for thread in found:
+        messages = service.users().threads().get(userId="me", id=thread["id"]).execute()["messages"]
+        thread["messages"] = [{"snippet": message["snippet"], "id": message["id"]} for message in messages]
+    return found
+
+
+def _get_gmail_message(service, message_id: str) -> dict:
+    return _read_message(service, message_id)
+
+
+def _get_gmail_thread(service, thread_id: str) -> dict:
+    thread = service.users().threads().get(userId="me", id=thread_id).execute()
+    if not isinstance(thread, dict):
+        raise ValueError("The output of the query must be a list.")
+    thread["messages"] = [{key: message[key] for key in ("id", "snippet") if key in message}
+                          for message in thread["messages"]]
+    return thread
+
+
+_READ_TOOLS = {
+    "search_gmail": (_search_gmail, _SearchInput, (
+        "Use this tool to search for email messages or threads."
+        " The input must be a valid Gmail query."
+        " The output is a JSON list of the requested resource."
+    )),
+    "get_gmail_message": (_get_gmail_message, _GetMessageInput, (
+        "Use this tool to fetch an email by message ID."
+        " Returns the thread ID, snippet, body, subject, and sender."
+    )),
+    "get_gmail_thread": (_get_gmail_thread, _GetThreadInput, (
+        "Use this tool to search for email messages."
+        " The input must be a valid Gmail query."
+        " The output is a JSON list of messages."
+    )),
+}
+
+
+def _gmail_read_tool(name: str, build_api_resource):
+    """A Gmail read tool whose every call has its own API client and a bounded, compact result."""
+    read, schema, description = _READ_TOOLS[name]
 
     def _read(**kwargs):
-        call_tool = type(tool)(api_resource=build_api_resource())
-        return _bounded_gmail_result(tool.name, call_tool._run(**kwargs))
+        return _bounded_gmail_result(name, read(build_api_resource(), **kwargs))
 
-    return StructuredTool.from_function(
-        func=_read,
-        name=tool.name,
-        description=tool.description,
-        args_schema=tool.args_schema,
-    )
+    return StructuredTool.from_function(func=_read, name=name, description=description, args_schema=schema)
 
 
 # ── Empty-result guard ───────────────────────────────────────────────────

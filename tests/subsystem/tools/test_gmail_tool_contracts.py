@@ -6,7 +6,6 @@ import ssl
 import threading
 from typing import Any
 
-from googleapiclient.discovery import Resource
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import ToolNode
@@ -76,7 +75,7 @@ def test_gmail_tools_retain_items_after_locked_google_conversion() -> None:
             assert properties[field_name]["items"]["type"] == types.Type.STRING
 
 
-class _FakeGmailService(Resource):
+class _FakeGmailService:
     """A Gmail service whose connection, like httplib2's, must never be used by two threads at once."""
 
     def __init__(self, backend: "_FakeGmailBackend") -> None:
@@ -145,3 +144,67 @@ def test_parallel_gmail_reads_never_share_a_connection(monkeypatch) -> None:
     assert backend.shared_connection_uses == 0
     bodies = [json.loads(message.content)["body"] for message in result["messages"]]
     assert sorted(bodies) == [f"Body m{index}" for index in range(4)]
+
+
+class _Request:
+    def __init__(self, result) -> None:
+        self.result = result
+
+    def execute(self):
+        return self.result
+
+
+class _Mailbox:
+    """A synthetic Gmail mailbox: two messages in one thread."""
+
+    raws = {
+        "m1": "Subject: Invoice\nFrom: billing@example.com\nContent-Type: text/html\n\n<p>Total <b>42</b></p>",
+        "m2": "Subject: Re: Invoice\nFrom: a@example.com\n\nPaid",
+    }
+
+    def users(self):
+        return self
+
+    def messages(self):
+        return _Collection("messages", self)
+
+    def threads(self):
+        return _Collection("threads", self)
+
+
+class _Collection:
+    def __init__(self, kind: str, box: _Mailbox) -> None:
+        self.kind, self.box = kind, box
+
+    def list(self, *, userId: str, q: str, maxResults: int):
+        assert (userId, q) == ("me", "invoice")
+        found = [{"id": "m1"}, {"id": "m2"}] if self.kind == "messages" else [{"id": "t1"}]
+        return _Request({self.kind: found[:maxResults]})
+
+    def get(self, *, userId: str, id: str, format: str = "full"):
+        if self.kind == "threads":
+            return _Request({"id": id, "historyId": "7", "messages": [
+                {"id": "m1", "snippet": "Total 42", "payload": {"secret": "not returned"}},
+                {"id": "m2", "snippet": "Paid", "payload": {}}]})
+        raw = base64.urlsafe_b64encode(self.box.raws[id].encode()).decode()
+        return _Request({"raw": raw, "threadId": "t1", "snippet": "snippet " + id})
+
+
+def test_gmail_reads_return_messages_threads_and_their_text(monkeypatch) -> None:
+    tool = GmailTool()
+    monkeypatch.setattr(GmailTool, "has_credentials_file", lambda self: True)
+    monkeypatch.setattr(GmailTool, "is_authenticated", lambda self: True)
+    monkeypatch.setattr(GmailTool, "_build_api_resource", lambda self: _Mailbox())
+    monkeypatch.setattr(tool, "get_config", lambda key, default=None: ["search_gmail", "get_gmail_message", "get_gmail_thread"])
+    tools = {item.name: item for item in tool.as_langchain_tools()}
+    assert list(tools) == ["search_gmail", "get_gmail_message", "get_gmail_thread"]
+
+    found = json.loads(tools["search_gmail"].invoke({"query": "invoice", "max_results": 1}))
+    assert found == [{"id": "m1", "threadId": "t1", "snippet": "snippet m1", "body": "Total 42",
+                      "subject": "Invoice", "sender": "billing@example.com"}]
+    threads = json.loads(tools["search_gmail"].invoke({"query": "invoice", "resource": "threads"}))
+    assert threads == [{"id": "t1", "messages": [{"snippet": "Total 42", "id": "m1"}, {"snippet": "Paid", "id": "m2"}]}]
+    message = json.loads(tools["get_gmail_message"].invoke({"message_id": "m2"}))
+    assert (message["subject"], message["body"]) == ("Re: Invoice", "Paid")
+    thread = json.loads(tools["get_gmail_thread"].invoke({"thread_id": "t1"}))
+    assert thread["messages"] == [{"id": "m1", "snippet": "Total 42"}, {"id": "m2", "snippet": "Paid"}]
