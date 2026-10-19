@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import base64
+import json
+import ssl
+import threading
 from typing import Any
 
+from googleapiclient.discovery import Resource
+from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
+from langgraph.prebuilt import ToolNode
+from langgraph.runtime import Runtime
 
-from row_bot.tools.gmail_tool import _CreateDraftInput, _SendMessageInput
+from row_bot.tools.gmail_tool import GmailTool, _CreateDraftInput, _SendMessageInput
 
 
 def _tool(name: str, schema) -> StructuredTool:
@@ -66,3 +74,74 @@ def test_gmail_tools_retain_items_after_locked_google_conversion() -> None:
         for field_name in ("to", "cc", "bcc", "attachments"):
             assert properties[field_name]["type"] == types.Type.ARRAY
             assert properties[field_name]["items"]["type"] == types.Type.STRING
+
+
+class _FakeGmailService(Resource):
+    """A Gmail service whose connection, like httplib2's, must never be used by two threads at once."""
+
+    def __init__(self, backend: "_FakeGmailBackend") -> None:
+        self.backend = backend
+        self.in_use = threading.Lock()
+
+    def users(self) -> "_FakeGmailService":
+        return self
+
+    def messages(self) -> "_FakeGmailService":
+        return self
+
+    def get(self, *, userId: str, format: str, id: str) -> "_FakeGmailService":
+        self.message_id = id
+        return self
+
+    def execute(self) -> dict[str, Any]:
+        if not self.in_use.acquire(blocking=False):
+            self.backend.shared_connection_uses += 1
+            raise ssl.SSLError("record layer failure")
+        try:
+            try:
+                self.backend.overlap.wait(timeout=2)
+            except threading.BrokenBarrierError:
+                pass
+            raw = f"Subject: Message {self.message_id}\nFrom: a@example.com\n\nBody {self.message_id}"
+            return {
+                "raw": base64.urlsafe_b64encode(raw.encode()).decode(),
+                "threadId": f"thread-{self.message_id}",
+                "snippet": f"Body {self.message_id}",
+            }
+        finally:
+            self.in_use.release()
+
+
+class _FakeGmailBackend:
+    def __init__(self, parallel_calls: int) -> None:
+        self.overlap = threading.Barrier(parallel_calls)
+        self.shared_connection_uses = 0
+        self.services: list[_FakeGmailService] = []
+
+    def build(self) -> _FakeGmailService:
+        service = _FakeGmailService(self)
+        self.services.append(service)
+        return service
+
+
+def test_parallel_gmail_reads_never_share_a_connection(monkeypatch) -> None:
+    backend = _FakeGmailBackend(parallel_calls=4)
+    tool = GmailTool()
+    monkeypatch.setattr(GmailTool, "has_credentials_file", lambda self: True)
+    monkeypatch.setattr(GmailTool, "is_authenticated", lambda self: True)
+    monkeypatch.setattr(GmailTool, "_build_api_resource", lambda self: backend.build())
+    monkeypatch.setattr(tool, "get_config", lambda key, default=None: ["get_gmail_message"])
+    [get_message] = tool.as_langchain_tools()
+    calls = [
+        {"name": "get_gmail_message", "args": {"message_id": f"m{index}"}, "id": f"call-{index}", "type": "tool_call"}
+        for index in range(4)
+    ]
+
+    result = ToolNode([get_message]).invoke(
+        {"messages": [AIMessage(content="", tool_calls=calls)]},
+        {"configurable": {"__pregel_runtime": Runtime()}},
+    )
+
+    assert backend.shared_connection_uses == 0
+    bodies = [json.loads(message.content)["body"] for message in result["messages"]]
+    assert sorted(bodies) == [f"Body m{index}" for index in range(4)]
