@@ -82,20 +82,30 @@ def _not_in_chats(row: dict) -> str:
     return "Used by skills and Developer, not by chat tools."
 
 
+def _needs_you(item: dict) -> str:
+    """Why an added app that needs attention can't be used in chats now, or "" for one that can or is only starting."""
+    if item["lifecycle"] != "installed" or item["readiness"] not in {"attention", "needs_sign_in"}:
+        return ""
+    return next((b["message"] for b in item["blockers"] if b["severity"] == "blocking" and b["message"]),
+                "It needs attention in Apps.")
+
+
 def chat_apps(conversation_id: str) -> list[dict]:
     """Every ready app, as Your apps lists them, for the composer: on unless switched off here, and
-    unavailable (with why) when the chat's agent profile leaves them out. Built-in ways without chat
-    tools (the GitHub account, channels) are listed without a switch, saying why."""
+    unavailable (with why) when the chat's agent profile leaves them out or the app needs attention, so
+    it never just disappears (B349). Built-in ways without chat tools (the GitHub account, channels) are
+    listed without a switch, saying why."""
     from row_bot.integrations import builtin
     from row_bot.threads import get_thread_apps_off
     off, allow = set(get_thread_apps_off(conversation_id)), _profile_allow(conversation_id)
-    ready = [item for item in _items() if item["lifecycle"] == "installed" and item["readiness"] == "ready"]
+    listed = [item for item in _items() if item["lifecycle"] == "installed" and item["readiness"] == "ready"
+              or _needs_you(item)]
     found = []
-    for item, name in zip(ready, _shown(ready)):
-        allowed = _allowed(item, allow)
+    for item, name in zip(listed, _shown(listed)):
+        allowed, attention = _allowed(item, allow), _needs_you(item)
         found.append({"item_id": item["id"], "app_id": (item.get("app") or {}).get("id", ""),
-                      "name": name, "icon": item["icon"], "on": item["id"] not in off, "available": allowed,
-                      "switchable": True, "reason": "" if allowed else "This chat's agent profile doesn't use it."})
+                      "name": name, "icon": item["icon"], "on": item["id"] not in off, "available": allowed and not attention,
+                      "switchable": True, "reason": attention or ("" if allowed else "This chat's agent profile doesn't use it.")})
     for row in builtin.rows():
         if not row.get("tools") and row["lifecycle"] == "installed" and row["readiness"] == "ready":
             found.append({"item_id": row["id"], "app_id": (row.get("app") or {}).get("id", ""), "name": row["name"][:128],
