@@ -2,9 +2,7 @@
 
 ---
 
-## v5.2.0 - Draft
-
-<!-- Draft: each 5.2 lane adds its own sections. Name the release before it is cut. -->
+## v5.2.0-beta.1 - Updates In The Background
 
 Row-Bot now keeps itself up to date in the background. It downloads only what
 changed, prepares the new version next to the one you are using, and switches
