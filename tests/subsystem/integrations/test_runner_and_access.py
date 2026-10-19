@@ -426,6 +426,27 @@ def test_a_recheck_keeps_earlier_allowances_and_applies_explicit_choices_to_earl
     assert gate(owner.tools)["get_record"] == "off"  # An explicit choice reaches a tool accepted before.
 
 
+def test_fix_on_a_connected_app_whose_tools_changed_checks_it_and_reaches_the_review(item, owner):
+    connect(item, "ask")
+    mcp_runtime.stop_server("Synthetic")
+    owner.tools.append({"name": "archive_record", "description": "Archive a synthetic record", "inputSchema": {}})
+    mcp_runtime.discover_enabled_servers()  # Row-Bot starts again; the server now offers one more tool.
+    assert mcp_runtime._servers["Synthetic"]._ready.wait(5)
+    facts.invalidate()
+    _, plan = api.read_item(owner_id="owner", item_id=item, intent="fix")
+    plan_id = str(uuid4())
+
+    paused = api.start_plan(ctx(), plan_id=plan_id, item_id=item, intent="fix", digest=plan["digest"])
+
+    assert paused["pause"] == "access", (paused["message"], paused["steps"])  # Not refused by the live connection.
+    access = next(s for s in paused["steps"] if s["type"] == "access")["access"]
+    assert "archive_record" in {t["name"] for t in access["tools"]}
+    done = plans.resume(ctx(tools_digest=access["tools_digest"]), plan_id)
+    assert done["state"] == "completed", done
+    assert "archive_record" in saved()["tools"]["accepted_names"]
+    assert mcp_runtime._servers["Synthetic"]._ready.wait(5) and mcp_runtime._statuses["Synthetic"].status == "connected"
+
+
 def test_a_read_never_overwrites_progress_saved_while_it_looked(item, owner, monkeypatch):
     _, plan = api.read_item(owner_id="owner", item_id=item)
     plan_id = str(uuid4())
