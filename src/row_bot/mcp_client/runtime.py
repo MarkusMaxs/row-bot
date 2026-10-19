@@ -108,6 +108,8 @@ class McpServerStatus:
     last_connected_at: str = ""
     last_discovered_at: str = ""
     source: dict[str, Any] = field(default_factory=dict)
+    # How the tools differ from the accepted ones ({"added", "removed", "changed"} counts); empty when they don't.
+    tools_changed: dict[str, int] = field(default_factory=dict)
 
 
 _loop: asyncio.AbstractEventLoop | None = None
@@ -858,8 +860,12 @@ class McpServerRuntime:
         accepted = self.cfg.get("tools", {}).get("catalog")
         options = self.cfg.get("tools", {})
         expected = {name for name in options.get("accepted_names", list(accepted)) if name not in options.get("exclude", []) and (not options.get("include") or name in options["include"])} if isinstance(accepted, dict) else set(normalized)
-        changed = isinstance(accepted, dict) and (expected != set(normalized) or any(not _accepted_tool_matches(self.cfg, info) for info in normalized.values()))
+        redefined = [name for name, info in normalized.items() if name in expected and not _accepted_tool_matches(self.cfg, info)]
+        difference = {"added": len(set(normalized) - expected), "removed": len(expected - set(normalized)),
+                      "changed": len(redefined)} if isinstance(accepted, dict) else {}
+        changed = any(difference.values())
         self._status(
+            tools_changed={key: count for key, count in difference.items() if count},
             status="error" if changed else "connected",
             tool_count=len(normalized),
             enabled_tool_count=sum(1 for info in normalized.values() if info.enabled),
@@ -1922,13 +1928,16 @@ def get_passive_server_statuses(names: tuple[str, ...]) -> dict[str, dict[str, A
             status = _statuses.get(name)
             if status is None:
                 continue
-            count = status.tool_count
+            count, changed = status.tool_count, getattr(status, "tools_changed", None)
             result[name] = {
                 "status": status.status if type(status.status) is str and status.status in states else "unknown",
                 "tool_count": count if type(count) is int and 0 <= count <= 10000 else None,
                 "connection_present": name in _servers,
                 # A refused or expired account; the error text itself never leaves.
                 "sign_in_failed": any(code in str(getattr(status, "last_error", "")) for code in _SIGN_IN_FAILURES),
+                "tools_changed": {key: min(value, 10000) for key, value in changed.items()
+                                  if key in {"added", "removed", "changed"} and type(value) is int and value > 0}
+                                 if type(changed) is dict else {},
             }
         return result
 

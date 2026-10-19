@@ -19,16 +19,17 @@ pytestmark = pytest.mark.subsystem
 _ITEMS, _MCP_ITEMS = scope._items, scope._mcp_items  # The real readers, before any fixture replaces them.
 
 
-def _item(item_id, server, name, *, readiness="ready", lifecycle="installed", parent=None):
+def _item(item_id, server, name, *, readiness="ready", lifecycle="installed", parent=None, blockers=()):
     return {"id": item_id, "kind": "mcp", "server": server, "name": name, "app": {"id": name.lower(), "name": name},
             "icon": "letter:" + name[0], "lifecycle": lifecycle, "readiness": readiness, "parent_id": parent,
-            "children": []}
+            "children": [], "blockers": list(blockers)}
 
 
 @pytest.fixture
 def apps(monkeypatch):
     items = [_item("mcp:notion", "Notion", "Notion"), _item("mcp:linear", "Linear", "Linear"),
-             _item("mcp:sentry", "Sentry", "Sentry", readiness="needs_sign_in"),
+             _item("mcp:sentry", "Sentry", "Sentry", readiness="needs_sign_in", blockers=[
+                 {"code": "expired", "severity": "blocking", "message": "The saved sign-in no longer works. Sign in again."}]),
              _item("plugin:kit:mcp:figma", "plugin_kit_figma", "Figma", parent="plugin:kit")]
     off: list[str] = []
     profile: dict = {}
@@ -46,7 +47,19 @@ def test_nothing_is_narrowed_without_a_switch_or_a_mention(apps):
     assert scope.turn_scope("chat", "Summarise my week", None) is None
     listed = scope.chat_apps("chat")
     assert [(a["name"], a["on"], a["available"]) for a in listed] == [
-        ("Figma", True, True), ("Linear", True, True), ("Notion", True, True)]  # Ready apps only: Sentry needs a sign-in.
+        ("Figma", True, True), ("Linear", True, True), ("Notion", True, True), ("Sentry", True, False)]
+
+
+def test_an_app_that_needs_attention_stays_listed_and_says_why(apps):
+    """An app that stopped working (its sign-in expired, its tools changed) never just disappears from the
+    composer (B349): it stays listed, unavailable, with what it needs; one only starting is not listed."""
+    apps.items.append(_item("mcp:jira", "Jira", "Jira", readiness="needs_setup", blockers=[
+        {"code": "not_connected", "severity": "blocking", "message": "Connect using the accepted tools."}]))
+    listed = {a["name"]: a for a in scope.chat_apps("chat")}
+    assert (listed["Sentry"]["available"], listed["Sentry"]["reason"]) == (
+        False, "The saved sign-in no longer works. Sign in again.")
+    assert "Jira" not in listed
+    assert not (scope.turn_scope("chat", "@Sentry what broke?", None) or {}).get("focus")
 
 
 def test_the_menu_lists_every_ready_built_in_way_and_says_why_some_have_no_switch(apps):

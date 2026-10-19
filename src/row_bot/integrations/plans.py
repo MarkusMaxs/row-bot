@@ -161,7 +161,7 @@ def _mcp_steps(row: dict, cfg: dict, intent: str) -> tuple[list[dict], dict, dic
                            sign_in={"method": method, "authorization_url": None}))
     installed = row["lifecycle"] != "available"
     accepted = setup["catalog_accepted"] and "tools_not_accepted" not in codes
-    retest = bool(codes & {"connection_failed", "expired", "tools_not_accepted", "sign_in_required", "key_required"})
+    retest = bool(codes & {"connection_failed", "tools_changed", "expired", "tools_not_accepted", "sign_in_required", "key_required"})
     checked = installed and accepted and not (intent == "fix" and retest)
     steps.append(_step("test", "done" if checked or intent == "access" else "pending", "Check the connection"))
     steps.append(_step("access", "done" if checked and intent != "access" else "pending", f"Choose what {name} can do",
