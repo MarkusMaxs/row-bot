@@ -440,7 +440,9 @@ $uploaded = @($release.assets | Where-Object { $_.name -eq $InstallerName })
 if ($uploaded.Count -ne 1 -or ($uploaded[0].PSObject.Properties["digest"] -and $uploaded[0].digest -and $uploaded[0].digest -ne "sha256:$installerHash")) {
     Stop-Release "the installer on the draft is not the one signed here"
 }
-Invoke-Native -File $Gh -Arguments @("api", "-X", "PATCH", "repos/$Repository/releases/$script:ReleaseId", "-F", "body=@$NewBody")
+# tag_name every time: editing a draft without it detaches the draft from its tag ("untagged-…").
+Invoke-Native -File $Gh -Arguments @("api", "-X", "PATCH", "repos/$Repository/releases/$script:ReleaseId",
+    "-f", "tag_name=$Tag", "-F", "body=@$NewBody")
 Write-Note "The block lists all $($listing.Count) files."
 
 # ── 6. Publish ──────────────────────────────────────────────────────────────
@@ -468,7 +470,7 @@ if (-not (Test-Python @($Publish, "same-assets", "--listing", $ListingFile, "--a
     Stop-Release "the draft changed since its block was written; run this script again"
 }
 Invoke-Native -File $Gh -Arguments @("api", "-X", "PATCH", "repos/$Repository/releases/$script:ReleaseId",
-    "-F", "draft=false", "-F", "prerelease=$(if ($prerelease) { 'true' } else { 'false' })",
+    "-f", "tag_name=$Tag", "-F", "draft=false", "-F", "prerelease=$(if ($prerelease) { 'true' } else { 'false' })",
     "-f", "make_latest=$(if ($prerelease) { 'false' } else { 'true' })")
 $published = Get-Release
 $afterFile = Join-Path $WorkDir "assets-published.json"
