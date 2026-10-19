@@ -1438,9 +1438,16 @@ class ClientPlatformService:
                             error_text = str(event[1] if len(event) > 1 else "")
             except InterruptedError:
                 status = "stopped"
-            except Exception:
-                _LOG.exception("Conversation generation failed for %s", conversation_id)
-                self.projection.publish(conversation_id, "generation.error", {"code": "generation_failed"})
+            except Exception as exc:
+                from row_bot.providers.runtime import ProviderSignInRequired
+                if isinstance(exc, ProviderSignInRequired):
+                    # Not just "interrupted · Resume": resuming fails the same way until the person signs in again.
+                    _LOG.warning("Conversation generation needs a new %s sign-in for %s", exc.label, conversation_id)
+                    self.projection.publish(conversation_id, "generation.error",
+                                            {"code": "sign_in_required", "provider": exc.label})
+                else:
+                    _LOG.exception("Conversation generation failed for %s", conversation_id)
+                    self.projection.publish(conversation_id, "generation.error", {"code": "generation_failed"})
             finally:
                 if handle.cancel_scope.is_cancelled():
                     status = "stopped"
