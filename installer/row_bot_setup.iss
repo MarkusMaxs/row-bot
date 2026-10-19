@@ -145,6 +145,18 @@ SetupLogging=yes
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Messages]
+; The progress page says what it is doing in a few plain steps, not every file it copies (B356).
+StatusClosingApplications=Closing Row-Bot...
+StatusCreateDirs=Copying Row-Bot...
+StatusExtractFiles=Copying Row-Bot...
+StatusCreateIcons=Creating shortcuts...
+StatusCreateIniEntries=Finishing up...
+StatusCreateRegistryEntries=Finishing up...
+StatusRegisterFiles=Finishing up...
+StatusSavingUninstall=Finishing up...
+StatusRollback=Undoing the changes...
+
 [InstallDelete]
 ; Reinstalling a version replaces its folder whole, so nothing a build no
 ; longer ships stays behind. User data lives in the profile folder, never
@@ -329,10 +341,19 @@ begin
     MoveFileEx(State + '.setup.tmp', State, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH);
 end;
 
+procedure InitializeWizard;
+begin
+  { One status line, no file names (B356). }
+  WizardForm.FilenameLabel.Visible := False;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
+    WizardForm.StatusLabel.Caption := 'Getting Row-Bot ready...';
     RecordInstall;
+  end;
 end;
 
 function InitializeUninstall: Boolean;
