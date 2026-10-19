@@ -172,6 +172,8 @@ Source: "{#AppStageDir}\*";       DestDir: "{#VersionDir}\app"; Flags: ignorever
 ; Embedded Python with all packages pre-installed.
 Source: "build\python\*";         DestDir: "{#VersionDir}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "build\version.json";     DestDir: "{#VersionDir}"; Flags: ignoreversion
+; Runs the server beside python.exe, so Windows Firewall names Row-Bot, not Python (B355).
+Source: "build\Row-Bot Server.exe"; DestDir: "{#VersionDir}\python"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"

@@ -17,6 +17,10 @@ import sys
 import time
 
 _APP_BOOT_STARTED = time.perf_counter()
+if __name__ == "__main__":
+    from row_bot.runtime_paths import python_for_children
+
+    python_for_children()
 _LAUNCH_SESSION_ID = os.environ.get("ROW_BOT_LAUNCH_SESSION_ID", "")
 _FIRST_LAUNCHER_PING_LOGGED = False
 _DISCORD_BENIGN_VOICE_LOGGERS = (
