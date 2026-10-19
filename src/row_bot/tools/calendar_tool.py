@@ -464,9 +464,10 @@ class CalendarTool(BaseTool):
 
     def _build_api_resource(self) -> Any:
         """Build a fresh service and HTTP transport for one invocation only."""
-        from langchain_google_community.calendar.utils import build_calendar_service
+        from googleapiclient.discovery import build
 
-        return build_calendar_service(credentials=account_tokens.google_credentials())
+        # Not langchain_google_community's builder: importing it loads ~450 MB of unused Google Cloud libraries.
+        return build("calendar", "v3", credentials=account_tokens.google_credentials())
 
     def _get_selected_operations(self) -> list[str]:
         configured = self.get_config("selected_operations", DEFAULT_OPERATIONS)
