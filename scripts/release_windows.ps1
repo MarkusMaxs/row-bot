@@ -309,6 +309,7 @@ if ($ciInno -ne $localInno) {
     Write-Host "   Packing with Inno Setup $localInno; CI smoke-tested $ciInno (-AllowInnoMismatch)" -ForegroundColor Yellow
 }
 $Launcher = Join-Path $Stage "installer\build\Row-Bot.exe"
+$Server = Join-Path $Stage "installer\build\Row-Bot Server.exe"
 Write-Note "Stage of $Version from run $RunId ($($run.headSha)) ready"
 
 # ── 3. Sign Row-Bot.exe, pack, sign the installer ───────────────────────────
@@ -318,10 +319,12 @@ $InstallerName = [IO.Path]::GetFileName($Installer)
 if ($DryRun) {
     Write-Step "3. Sign, pack, sign: Row-Bot.exe and the installer are not signed (dry run)"
 } else {
-    Write-Step "3. Sign Row-Bot.exe, pack the installer, sign it"
+    Write-Step "3. Sign Row-Bot.exe and Row-Bot Server.exe, pack the installer, sign it"
     Assert-SigningReady
     Invoke-Sign $Launcher
     Assert-Signed $Launcher
+    Invoke-Sign $Server
+    Assert-Signed $Server
 }
 $packed = (Test-Path $Installer) -and ((Get-Item $Installer).LastWriteTimeUtc -gt (Get-Item $Launcher).LastWriteTimeUtc)
 if ($packed) {
@@ -333,6 +336,7 @@ if (-not (Test-Path $Installer)) { throw "ISCC did not write $Installer" }
 if (-not $DryRun) {
     Invoke-Sign $Installer
     Assert-Signed $Launcher
+    Assert-Signed $Server
     Assert-Signed $Installer
 }
 
