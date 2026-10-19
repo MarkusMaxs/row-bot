@@ -148,6 +148,30 @@ def test_explicit_signin_publishes_once_and_durable_receipt_is_redacted(account)
     assert saved_start["flow"]["authorization_url"] is None and saved_start["flow"]["device_code"] is None
 
 
+@pytest.mark.parametrize("account", ["codex"], indirect=True)
+def test_a_device_code_approved_with_no_page_open_still_signs_in(account):
+    """The server checks ChatGPT's device code itself, so approving it after closing the page still
+    connects (B342). Nothing but Start is ever sent."""
+    provider, owner, module, calls, *_ = account
+    approved = Event()
+    module.start_codex_device_flow = lambda **_kw: SimpleNamespace(
+        verification_uri="https://example.invalid/device", user_code="SYNTHETIC", interval_seconds=0.01,
+        expires_at="2030-01-01T00:00:00+00:00")
+    module.poll_codex_device_authorization = lambda *_a, **_kw: SimpleNamespace() if approved.is_set() else None
+
+    start = execute(owner, command(provider))
+    assert start["flow"]["state"] == "waiting"
+    approved.set()  # The person approves the code on another device; no page asks Row-Bot to check.
+    retained = owner._flows[start["flow"]["flow_id"]]
+    retained.thread.join(5)
+
+    assert not retained.thread.is_alive() and calls.count("exchange") == 1
+    assert auth_store.get_provider_secret(provider, "access_token") == "synthetic-access"
+    seen = owner.read(owner_id="synthetic-owner", flow_id=start["flow"]["flow_id"],
+                      server_epoch=start["flow"]["server_epoch"], validate=lambda: None)
+    assert seen.state == "connected" and seen.quiescent
+
+
 def test_original_start_receipt_retry_does_not_begin_second_flow(account, monkeypatch):
     provider, owner, _, calls, *_ = account
     original = admissions.complete_command

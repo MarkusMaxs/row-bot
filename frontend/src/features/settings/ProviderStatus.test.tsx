@@ -250,3 +250,32 @@ it('says in plain words when a subscription can borrow another app’s sign-in',
   ).toBeVisible();
   expect(screen.queryByText(/CLI|chat/)).toBeNull();
 });
+
+it('a ChatGPT row that says Reconnect offers Reconnect and says the sign-in expired (B342)', async () => {
+  const onSubscription = vi.fn();
+  render(
+    <ProviderStatus
+      load={async () => ({
+        schema_version: 1,
+        providers: [
+          {
+            ...card,
+            provider_id: 'codex',
+            display_name: 'ChatGPT',
+            group: 'subscription',
+            configured: true,
+            runtime_enabled: false,
+            source: 'oauth_device',
+          },
+        ],
+      })}
+      refresh={vi.fn()}
+      refreshState={vi.fn()}
+      onSubscription={onSubscription}
+    />,
+  );
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Reconnect ChatGPT' }),
+  );
+  expect(onSubscription).toHaveBeenCalledWith('codex', 'connect', true);
+});

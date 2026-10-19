@@ -12,6 +12,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import logging
 import threading
 import time
 from typing import Any
@@ -23,6 +24,7 @@ from row_bot.runtime import admissions
 
 PROVIDERS = ("codex", "claude_subscription", "xai_oauth")
 ACTIONS = frozenset({"start", "check", "submit", "cancel", "disconnect", "restore", "import_token"})
+logger = logging.getLogger(__name__)
 
 
 class SubscriptionError(ValueError):
@@ -391,7 +393,7 @@ class SubscriptionFlows:
         from row_bot.providers import codex, claude_subscription, xai_oauth
         return {"codex": codex, "claude_subscription": claude_subscription, "xai_oauth": xai_oauth}[provider_id]
 
-    def _start(self, flow: _Flow, validate):
+    def _start(self, flow: _Flow, validate, proof: dict):
         module = self._module(flow.provider_id)
         def guard() -> None:
             self._guard(flow, validate)
@@ -448,6 +450,46 @@ class SubscriptionFlows:
                 self._cancel(flow)
                 raise SubscriptionError("subscription_listener_unavailable")
         flow.state = "waiting"
+        if flow.provider_id == "codex":
+            self._check_until_done(flow, proof, validate)
+
+    def _check_until_done(self, flow: _Flow, proof: dict, validate) -> None:
+        """Check a device code on the server until it is approved, expires or is cancelled, so the sign-in
+        finishes whether or not a page is open (B342). Each check holds the flow like a Check command, so it
+        never overlaps one; an approved code is saved under the Start command the person gave."""
+        interval = float(getattr(flow.flow, "interval_seconds", 5) or 5)
+
+        def check() -> None:
+            while not flow.listener_stop.wait(interval):
+                with self._lock:
+                    if self._closed or flow.cancel.is_set() or flow.published:
+                        return
+                    if flow.active:
+                        continue
+                    flow.active = True
+                try:
+                    flow.client = self._client_factory(lambda: self._guard(flow, validate))
+                    self._finish(flow, "check", None, proof, validate)
+                except SubscriptionError:
+                    if flow.state == "checking":
+                        flow.state = "waiting"
+                    return  # Expired, cancelled or changed meanwhile: the page says so.
+                except Exception:
+                    if flow.state != "checking":  # The exchange or save may have happened: never repeat it.
+                        flow.state = "uncertain"
+                        logger.warning("A ChatGPT sign-in checked on the server did not finish", exc_info=True)
+                        return
+                    flow.state = "waiting"  # Not reached this time; the next check tries again.
+                finally:
+                    try:
+                        if flow.client is not None:
+                            flow.client.close()
+                    finally:
+                        with self._lock:
+                            flow.client, flow.active = None, False
+
+        flow.thread = threading.Thread(target=check, name="subscription-device-code", daemon=True)
+        flow.thread.start()
 
     def _publish(self, flow, tokens, proof, validate):
         module = self._module(flow.provider_id)
@@ -462,6 +504,8 @@ class SubscriptionFlows:
         # The loopback listener has already returned before Check can consume it.
 
     def _finish(self, flow, operation, value, proof, validate):
+        if flow.published:
+            return  # Already finished on the server: nothing to check (B342).
         module = self._module(flow.provider_id)
         def guard() -> None:
             self._guard(flow, validate)
@@ -670,7 +714,7 @@ class SubscriptionFlows:
         try:
             flow.client = self._client_factory(lambda: self._guard(flow, validate))
             if operation == "start":
-                self._start(flow, validate)
+                self._start(flow, validate, proof)
             elif operation in {"check", "submit"}:
                 self._finish(flow, operation, value, proof, validate)
             else:

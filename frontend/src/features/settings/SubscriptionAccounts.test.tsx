@@ -110,7 +110,7 @@ it('starts subscription sign-in from the compact row action and shows its flow',
   expect(screen.queryByRole('button', { name: 'Review sign-in' })).toBeNull();
 });
 
-it('checks a waiting ChatGPT sign-in by itself every few seconds', async () => {
+it('follows a waiting ChatGPT sign-in, which the server checks itself, until it connects (B342)', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     const p = props({
@@ -120,18 +120,61 @@ it('checks a waiting ChatGPT sign-in by itself every few seconds', async () => {
     });
     render(<SubscriptionAccounts {...p} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
-    await screen.findByText('Waiting for you to sign in');
-    expect(p.apply).toHaveBeenCalledTimes(1);
+    const waiting = await screen.findByText('Waiting for you to sign in');
+    const started = vi.mocked(p.readFlow).mock.results.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5100);
     });
-    await waitFor(() => expect(p.apply).toHaveBeenCalledTimes(2));
-    expect(vi.mocked(p.review).mock.calls[1][0].operation).toBe('check');
-    // A check that is still waiting says nothing new.
-    expect(screen.queryByText(/updated\./)).toBeNull();
+    await waitFor(() =>
+      expect(vi.mocked(p.readFlow).mock.calls.length).toBeGreaterThan(started),
+    );
+    // Only reads: the server checks the code, so the page sends nothing more.
+    expect(p.apply).toHaveBeenCalledTimes(1);
+    expect(waiting).toBeVisible();
+    const flow = vi.mocked(p.readFlow).mock.calls[0][0];
+    vi.mocked(p.readFlow).mockResolvedValue({
+      ...flow,
+      state: 'connected',
+      quiescent: true,
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5100);
+    });
+    expect(
+      await screen.findByText('Signed in to ChatGPT / Codex.'),
+    ).toBeVisible();
+    expect(p.onSaved).toHaveBeenCalled();
+    expect(p.apply).toHaveBeenCalledTimes(1);
   } finally {
     vi.useRealTimers();
   }
+});
+it('a saved sign-in that expired says so and offers Reconnect (B342)', async () => {
+  const saved = {
+    ...snapshot,
+    accounts: snapshot.accounts.map((account) =>
+      account.provider_id === 'codex'
+        ? {
+            ...account,
+            saved_state: 'saved',
+            expires_at: '2026-10-14T05:32:00+00:00',
+          }
+        : account,
+    ),
+  } as SubscriptionAccountsSnapshot;
+  const p = props({
+    compact: true,
+    initialProvider: 'codex',
+    initialAction: 'manage',
+    signInExpired: true,
+    load: vi.fn().mockResolvedValue(saved),
+  });
+  render(<SubscriptionAccounts {...p} />);
+  expect(
+    await screen.findByRole('button', { name: 'Reconnect' }),
+  ).toBeVisible();
+  expect(screen.getByText(/Sign-in expired/)).toBeVisible();
+  expect(screen.queryByText(/Expires/)).toBeNull();
 });
 it('keeps an active sign-in attached to its provider when another row is opened', async () => {
   const session = new SubscriptionAccountsSession();
