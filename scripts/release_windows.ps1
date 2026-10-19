@@ -73,6 +73,9 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptRoot
 $Tag = "v$Version"
 $Utf8 = New-Object System.Text.UTF8Encoding $false
+# gh and Python print UTF-8; Windows PowerShell 5.1 otherwise reads them in the console's code page and
+# writes the garbled release notes back to the draft ("Settings ΓÇ║ Updates").
+[Console]::OutputEncoding = $Utf8
 
 function Write-Step([string]$Text) { Write-Host ""; Write-Host "== $Text" -ForegroundColor Cyan }
 function Write-Note([string]$Text) { Write-Host "   $Text" }
