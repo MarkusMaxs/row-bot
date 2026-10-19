@@ -176,6 +176,31 @@ it('a saved sign-in that expired says so and offers Reconnect (B342)', async () 
   expect(screen.getByText(/Sign-in expired/)).toBeVisible();
   expect(screen.queryByText(/Expires/)).toBeNull();
 });
+it('Check now on a ChatGPT sign-in reads it, so one the server finished shows as signed in (B357)', async () => {
+  const p = props({
+    compact: true,
+    initialProvider: 'codex',
+    initialAction: 'connect',
+  });
+  render(<SubscriptionAccounts {...p} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+  await screen.findByText('Waiting for you to sign in');
+  const flow = vi.mocked(p.apply).mock.calls[0];
+  expect(flow).toBeDefined();
+  vi.mocked(p.readFlow).mockResolvedValue({
+    ...(await vi.mocked(p.apply).mock.results[0].value).flow,
+    state: 'connected',
+    quiescent: true,
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
+  expect(
+    await screen.findByText('Signed in to ChatGPT / Codex.'),
+  ).toBeVisible();
+  // A read, never a Check command whose revision the server's finish moved.
+  expect(p.review).toHaveBeenCalledTimes(1);
+  expect(p.apply).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 it('keeps an active sign-in attached to its provider when another row is opened', async () => {
   const session = new SubscriptionAccountsSession();
   const p = props({
@@ -286,32 +311,23 @@ it('retains an uncertain original receipt and locks input without resending', as
 it('supports explicit cancel while a login check is still running', async () => {
   let reject!: (reason: unknown) => void;
   const p = props();
-  const apply = vi.mocked(p.apply);
-  apply
-    .mockImplementationOnce(async (_a, _r, id) => ({
-      command_id: id,
-      status: 'completed',
-      accounts: snapshot,
-      flow,
-    }))
-    .mockImplementationOnce(
-      () =>
-        new Promise<Awaited<ReturnType<SubscriptionAccountsProps['apply']>>>(
-          (_resolve, deny) => {
-            reject = deny;
-          },
-        ),
-    );
+  // ChatGPT's check reads the sign-in (the server checks the code itself).
+  vi.mocked(p.readFlow).mockImplementationOnce(
+    () =>
+      new Promise((_resolve, deny) => {
+        reject = deny;
+      }),
+  );
   render(<SubscriptionAccounts {...p} />);
   await startSignIn(p);
   await screen.findByRole('link', { name: 'Open ChatGPT / Codex sign-in' });
   fireEvent.click(screen.getByRole('button', { name: 'Check login' }));
-  await waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(p.readFlow).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole('button', { name: 'Cancel sign-in' }));
   await waitFor(() => expect(p.cancel).toHaveBeenCalledTimes(1));
   await act(async () => reject({ code: 'subscription_cancelled' }));
-  expect(apply).toHaveBeenCalledTimes(2);
-  expect(screen.getByRole('button', { name: 'Check account' })).toBeEnabled();
+  expect(p.apply).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Sign-in is cancelled.')).toBeVisible();
 });
 it('purges private intent on authentication disposal and ignores late success', async () => {
   let resolve!: (

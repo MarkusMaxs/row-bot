@@ -178,10 +178,13 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
   // check stops the loop and leaves "Check now". ChatGPT's code is checked on
   // the server, page open or not (B342), so its loop only reads how it went.
   const polling = !!props.compact && active && POLLED.has(provider) && !error;
+  // ChatGPT's Check reads the sign-in too: a Check command carries the
+  // revision the page loaded, which the server's own finish has moved (B357).
+  const checkNow = () =>
+    provider === 'codex' ? inspect() : performDirect('check');
   const check = useRef<() => void>(() => undefined);
   check.current = () => {
-    if (!locked)
-      void (provider === 'codex' ? inspect() : performDirect('check'));
+    if (!locked) void checkNow();
   };
   useEffect(() => {
     if (!polling) return;
@@ -407,6 +410,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
         )
           throw { code: 'operation_uncertain' };
         setFlow(current);
+        setError('');
         if (current.state === 'connected' && flow.state !== 'connected') {
           const accounts = await props.load(abort.signal);
           setSnapshot(accounts);
@@ -505,7 +509,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
             <Button
               disabled={locked}
               onClick={() =>
-                void (POLLED.has(provider) ? performDirect('check') : inspect())
+                void (POLLED.has(provider) ? checkNow() : inspect())
               }
             >
               Check now
@@ -589,9 +593,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
                 <Button
                   disabled={locked}
                   onClick={() =>
-                    void (POLLED.has(provider)
-                      ? performDirect('check')
-                      : inspect())
+                    void (POLLED.has(provider) ? checkNow() : inspect())
                   }
                 >
                   Check now
@@ -828,7 +830,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
           {active && provider !== 'claude_subscription' && (
             <Button
               disabled={locked || flow?.state === 'uncertain'}
-              onClick={() => void performDirect('check')}
+              onClick={() => void checkNow()}
             >
               Check login
             </Button>
