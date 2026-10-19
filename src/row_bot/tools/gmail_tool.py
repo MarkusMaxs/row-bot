@@ -158,8 +158,8 @@ def _build_mime_message(
     return mime
 
 
-def _make_custom_send(api_resource):
-    """Return a send function bound to *api_resource*."""
+def _make_custom_send(build_api_resource):
+    """Return a send function that builds its own API client for each call."""
     def _send_gmail_message(
         message: str,
         to: Union[str, List[str]],
@@ -172,7 +172,7 @@ def _make_custom_send(api_resource):
             mime = _build_mime_message(message, to, subject, cc, bcc, attachments)
             raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
             sent = (
-                api_resource.users()
+                build_api_resource().users()
                 .messages()
                 .send(userId="me", body={"raw": raw})
                 .execute()
@@ -188,8 +188,8 @@ def _make_custom_send(api_resource):
     return _send_gmail_message
 
 
-def _make_custom_draft(api_resource):
-    """Return a draft-creation function bound to *api_resource*."""
+def _make_custom_draft(build_api_resource):
+    """Return a draft-creation function that builds its own API client for each call."""
     def _create_gmail_draft(
         message: str,
         to: Union[str, List[str]],
@@ -202,7 +202,7 @@ def _make_custom_draft(api_resource):
             mime = _build_mime_message(message, to, subject, cc, bcc, attachments)
             raw = base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
             draft = (
-                api_resource.users()
+                build_api_resource().users()
                 .drafts()
                 .create(userId="me", body={"message": {"raw": raw}})
                 .execute()
@@ -291,6 +291,10 @@ class GmailTool(BaseTool):
         return account_tokens.check_google()
 
     def _build_api_resource(self):
+        """Build a fresh service and HTTP transport for one call only.
+
+        A Gmail ``Resource`` and its ``httplib2`` connection are not thread-safe, and
+        parallel tool calls run on worker threads (B347)."""
         from langchain_google_community.gmail.utils import build_resource_service
 
         return build_resource_service(credentials=account_tokens.google_credentials())
@@ -323,12 +327,14 @@ class GmailTool(BaseTool):
             all_lc_tools = toolkit.get_tools()
             for t in all_lc_tools:
                 if t.name in selected and t.name in _READ_OPS:
-                    tools.append(_wrap_gmail_tool_empty_guard(_bounded_gmail_read_tool(t)))
+                    tools.append(_wrap_gmail_tool_empty_guard(
+                        _bounded_gmail_read_tool(t, self._build_api_resource)
+                    ))
 
         # Custom draft with attachments
         if "create_gmail_draft" in selected:
             tools.append(StructuredTool.from_function(
-                func=_make_custom_draft(api_resource),
+                func=_make_custom_draft(self._build_api_resource),
                 name="create_gmail_draft",
                 description=(
                     "Create a Gmail draft email. Supports file attachments — "
@@ -342,7 +348,7 @@ class GmailTool(BaseTool):
         # Custom send with attachments
         if "send_gmail_message" in selected:
             tools.append(StructuredTool.from_function(
-                func=_make_custom_send(api_resource),
+                func=_make_custom_send(self._build_api_resource),
                 name="send_gmail_message",
                 description=(
                     "Send an email via Gmail. Supports file attachments — "
@@ -397,16 +403,16 @@ def _bounded_gmail_result(tool_name: str, result):
     return result
 
 
-def _bounded_gmail_read_tool(tool):
-    """Wrap a LangChain Gmail read tool so its result is bounded and compact."""
+def _bounded_gmail_read_tool(tool, build_api_resource):
+    """Wrap a LangChain Gmail read tool so each call has its own API client and a bounded, compact result."""
     from langchain_core.tools import StructuredTool
 
-    run = getattr(tool, "_run", None)
-    if run is None:
+    if getattr(tool, "_run", None) is None:
         return tool
 
     def _read(**kwargs):
-        return _bounded_gmail_result(tool.name, run(**kwargs))
+        call_tool = type(tool)(api_resource=build_api_resource())
+        return _bounded_gmail_result(tool.name, call_tool._run(**kwargs))
 
     return StructuredTool.from_function(
         func=_read,
