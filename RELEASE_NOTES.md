@@ -38,7 +38,7 @@ before upgrading from 5.1 or 5.0.
 - **Windows Firewall names Row-Bot** - with phone or LAN access on, the program
   that listens is Row-Bot, signed by Row-Bot, not "Python".
 - **Smaller downloads** - the Windows installer is about 420 MB (731 MB in
-  5.1), the macOS DMG about 690 MB (1.09 GB) and the Linux tarball about
+  5.1), the macOS DMG about 930 MB (1.09 GB) and the Linux tarball about
   790 MB (846 MB). Browser Automation uses Chrome or Edge on every system;
   design exports to PDF, PNG and PowerPoint ask once to install Row-Bot's
   browser runtime.
@@ -111,6 +111,9 @@ before upgrading from 5.1 or 5.0.
   first; web pages are read from Row-Bot's own browser.
 - **Plugins** - worker plugins get an isolated environment in packaged builds.
 - **Recovery restore** brings back the usage ledger.
+- **Replies on a Mac** - on a Mac installed from the DMG, settings could not be
+  saved, so every reply stopped with "The response was interrupted". Both work
+  now.
 
 ### Upgrade Notes
 
