@@ -2,37 +2,21 @@
 
 ---
 
-## v5.2.0-beta.2 - Fixes From The First Beta
+## v5.2.0 - Updates In The Background, Lower Costs & Every Device
 
-The second 5.2 beta. If you have beta.1, it arrives as a background update
-(about 8 MB): Settings › Updates shows it downloading and preparing, then
-**Restart now**. Everything in beta.1's notes below still applies.
-
-- **Windows Firewall names Row-Bot** - with access from your phone or another
-  computer on, Windows asked to allow "Python". The program that listens is now
-  Row-Bot, signed by Row-Bot. A version installed by beta.1's background update
-  picks this up with the next full installer.
-- **The installer says what it is doing** - a few plain steps instead of every
-  file name, and when an earlier Row-Bot hands over to it, "Updating Row-Bot:
-  Row-Bot closed to install the update. It opens again by itself when this
-  finishes."
-- **ChatGPT sign-in** - after you approve the code, the page no longer says
-  "This changed somewhere else" and waits; it shows you're signed in.
-- **Readable live steps** - a step that is still running stays readable at its
-  faintest.
-
-## v5.2.0-beta.1 - Updates In The Background
-
-Row-Bot now keeps itself up to date in the background. It downloads only what
+Row-Bot now keeps itself up to date in the background: it downloads only what
 changed, prepares the new version next to the one you are using, and switches
-to it in seconds when it restarts. Windows installs for your account only,
-without administrator rights, and every installer is smaller. Read **Upgrade
-Notes** below before upgrading from 5.1.
+in seconds when it restarts. Windows installs for your account only, without
+administrator rights, and every installer is smaller. Conversations cost less
+and run longer: Row-Bot caches what it can, trims old tool output, and records
+what each model call uses. Every device you sign in from can now do what the
+desktop app can, from Google sign-in to backups. Read **Upgrade Notes** below
+before upgrading from 5.1 or 5.0.
 
 ### Installing And Updating
 
 - **Updates in the background** - about once a day Row-Bot checks for a new
-  release, downloads only what changed (typically about 10 MB rather than the
+  release, downloads only what changed (typically a few MB rather than the
   whole installer), checks every file, and prepares the new version while you
   keep working. Nothing changes until Row-Bot restarts.
 - **Restart to update** - when the update is ready, the sidebar and the tray
@@ -48,27 +32,91 @@ Notes** below before upgrading from 5.1.
 - **From any of your devices** - a phone or another computer signed in to your
   Row-Bot can see what is downloading and restart into a ready update.
 - **Windows installs per user** - no administrator rights and no wizard pages,
-  into `%LocalAppData%\Programs\Row-Bot`, and Row-Bot opens when the installer
-  finishes. Updates no longer ask for administrator approval, and Row-Bot
-  starts again by itself after updating.
+  into `%LocalAppData%\Programs\Row-Bot`, with a few plain steps on screen, and
+  Row-Bot opens when the installer finishes. Updates no longer ask for
+  administrator approval.
+- **Windows Firewall names Row-Bot** - with phone or LAN access on, the program
+  that listens is Row-Bot, signed by Row-Bot, not "Python".
 - **Smaller downloads** - the Windows installer is about 420 MB (731 MB in
   5.1), the macOS DMG about 690 MB (1.09 GB) and the Linux tarball about
-  790 MB (846 MB).
-- **No browser in the Windows installer** - Browser Automation uses Chrome or
-  Edge, as on macOS and Linux. Design exports to PDF, PNG and PowerPoint ask
-  once to install Row-Bot's browser runtime, which goes into your data folder
-  and stays across updates.
-- **Docker** - a container is updated by its host: Settings › Updates says so,
-  and the agent has no update tool there. Pull a newer image as before.
+  790 MB (846 MB). Browser Automation uses Chrome or Edge on every system;
+  design exports to PDF, PNG and PowerPoint ask once to install Row-Bot's
+  browser runtime.
+- **Docker** - a container is updated by its host: Settings › Updates says so.
+  Pull a newer image as before.
 - **What updates contact** - GitHub for the release, and, only when libraries
   changed, the Python Package Index and PyTorch's download server. Every file
   is checked against a published checksum. No telemetry.
 
+### Lower Costs, Longer Conversations
+
+- **See what each call uses** - every model call records its tokens and cost,
+  and Row-Bot shows them per conversation.
+- **Caching that sticks** - a stable request head, per-conversation cache keys
+  and cached conversation tails on Claude routes mean repeat turns are cheaper
+  and faster; local models stay warm between turns.
+- **Old tool output steps aside** - it is cleared in jumps rather than
+  rewritten every call, and long results stay reachable by handle instead of
+  filling the context.
+- **Compaction at the right moment** - near the limit, after clearing, on a
+  calibrated estimate; small-window models get a leaner first turn without
+  losing any tool.
+- **Cheaper background work** - memory extraction, Dream Cycle, documents,
+  goals and helper agents use the same model at the lowest effort, with caps
+  and structured answers.
+
+### Every Signed-In Device
+
+- **One owner** - every device you sign in from can do what the desktop app
+  can.
+- **Sign in to Google and X from anywhere**, through Row-Bot's public address.
+- **Backups from any device** - download a backup, or restore one, from a phone
+  or another computer.
+- **Times that read right** - remote devices in another timezone show saved
+  times correctly.
+- **Cloudflare Tunnel** - forwarding metadata is accepted for remote access,
+  with docs for setup and forwarding-header errors.
+
+### Conversations, Channels And Models
+
+- **Channel threads are their own conversations**, and `/new` works.
+- **A reply never shows twice**, a sent message leaves the composer at once,
+  and a reply cut short by the output limit says so on every route.
+- **Move a conversation to a local Ollama model** from another provider; local
+  models' text tool arguments stay as text.
+- **ChatGPT sign-in** - an expired sign-in says "Sign in to ChatGPT again" with
+  Reconnect instead of "interrupted"; a sign-in finishes even if you close the
+  page; an expired access token renews by itself.
+
+### Apps, Documents And Developer
+
+- **Apps** - "Needs attention" says why (for example, an app's tools changed),
+  and Fix completes; an app that needs attention stays listed in chats with
+  its reason. Abandoned sign-ins recover, and approval cards are readable.
+- **Gmail and Calendar** - parallel reads no longer crash Row-Bot, and their
+  tools use far less memory.
+- **Documents** - one list and one action, honest counts and pauses, and no
+  failure from a deferred index. Memory vectors are stored by meaning with
+  small saves.
+- **Developer** - helpers finish cleanly, read-only helpers can read the code
+  folder, the Git tab shows the agent's pull request, and conversations keep a
+  stable tool set.
+
+### Reliability, Security And Privacy
+
+- **Four security gaps closed** - the shell's safe list, `read_url` server-side
+  request forgery, keys in child process environments, and channel approval
+  buttons.
+- **Untrusted tool results are fenced**, and screen and camera captures ask
+  first; web pages are read from Row-Bot's own browser.
+- **Plugins** - worker plugins get an isolated environment in packaged builds.
+- **Recovery restore** brings back the usage ledger.
+
 ### Upgrade Notes
 
-- **From 5.1, once with the full installer** - 5.1 updates to 5.2 the way it
-  always has. After that, updates download in the background. 5.0 updates to
-  5.2 directly too.
+- **From 5.1 or 5.0, once with the full installer** - the old version updates
+  to 5.2 the way it always has. After that, updates download in the
+  background.
 - **Row-Bot closes while 5.2 installs** - after the download, 5.0 and 5.1 show
   "Disconnected" and close. That's expected: the installer's window then says
   it is updating Row-Bot, and Row-Bot opens again by itself when it finishes.
@@ -79,12 +127,19 @@ Notes** below before upgrading from 5.1.
   Row-Bot 5.2 installs and opens anyway, and Settings › Updates offers **Remove
   the old Row-Bot** later, in the desktop app on that computer.
 - **macOS** - Row-Bot now needs macOS 14 (Sonoma) or newer on Apple silicon.
-  When 5.1 opens the new DMG, drag Row-Bot to Applications one last time.
+  When the old version opens the new DMG, drag Row-Bot to Applications one last
+  time.
 - **Linux** - nothing to do; 5.1 installs 5.2 by itself. To run Row-Bot under
   systemd, use `Restart=always` (or `RestartForceExitStatus=75`), so it comes
   back after restarting to update.
 - **Your data stays** - conversations, memory, settings and sign-ins carry
   over. Repair can go back to an earlier 5.2 version, not to 5.1.
+
+### Known Issues
+
+- **Windows Firewall may ask again after an update** - with phone or LAN access
+  on, Windows can ask once more after each update, because each version runs
+  from its own folder. Allow it; a later 5.2 release keeps one fixed path.
 
 ---
 
