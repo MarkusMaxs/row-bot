@@ -88,7 +88,10 @@ html[data-device='mobile'] .landing-hero__other { display: none; }
     border-radius: 0 0 15px 15px;
     background: #080b0f;
 }
-.scene { position: absolute; inset: 0; margin: 0; }
+.scene { position: absolute; inset: 0; margin: 0; opacity: 0; transition: opacity 320ms ease; }
+/* The incoming scene fades in over the outgoing one, which holds its last frame. */
+.scene.is-shown { z-index: 2; opacity: 1; }
+.scene.is-leaving { z-index: 1; opacity: 1; transition: none; }
 .scene img,
 .scene video {
     position: absolute;
@@ -99,7 +102,7 @@ html[data-device='mobile'] .landing-hero__other { display: none; }
     object-fit: cover;
     object-position: center top;
 }
-.scene video { opacity: 0; }
+.scene video { opacity: 0; transition: opacity 200ms ease; }
 .scene.is-live video { opacity: 1; }
 .product-control {
     position: absolute;
@@ -137,7 +140,9 @@ html[data-device='mobile'] .landing-hero__other { display: none; }
 .buddy img,
 .buddy video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .buddy video { opacity: 0; }
-.buddy.is-live video { opacity: 1; }
+.buddy video.is-front { opacity: 1; }
+/* The newest pose sits on top while the previous one is swapped out. */
+.buddy video.is-top { z-index: 1; }
 .buddy.is-live img { visibility: hidden; }
 
 .scene-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
@@ -185,6 +190,7 @@ html[data-device='mobile'] .landing-hero__other { display: none; }
 .scene-caption { display: none; }
 
 html:not(.js) .scene-tabs { display: none; }
+html:not(.js) .scene:not([hidden]) { opacity: 1; }
 html:not(.js) .scene-caption { display: block; margin: 16px 0 0; color: var(--text-soft); text-align: center; }
 
 /* Demos */

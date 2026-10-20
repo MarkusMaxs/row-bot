@@ -8,6 +8,11 @@
     const BUDDY_START = { thinking: 1 };
     // The reviewed Ship cut clears its approval dialog at 2.25 seconds.
     const SHIP_APPROVAL_AT = 2.25;
+    const BUDDY_CLEAN_AFTER = .2;
+    // Matches the .scene opacity transition in landing-story.css.
+    const CROSSFADE_MS = 320;
+    // How long a scene change waits for the next clip's first frame before showing its still.
+    const CLIP_WAIT_MS = 1200;
     const HEVC_ALPHA_TYPE = 'video/mp4; codecs="hvc1"';
     const CONTROLS = {
         pause: { label: 'Pause the product tour', icon: '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>' },
@@ -42,18 +47,20 @@
     const control = document.querySelector('[data-product-control]');
     const buddy = document.querySelector('[data-buddy]');
     const buddyStill = document.querySelector('[data-buddy-still]');
-    const buddyVideo = document.querySelector('[data-buddy-video]');
+    // Two video slots: the next pose loads in one while the other keeps playing.
+    const buddyVideos = [...document.querySelectorAll('[data-buddy-video]')];
 
     let scene = 'research';
     // The tour plays once through on its own; reduced motion and Save-Data wait for Play.
     let running = !reducedMotion.matches && !saveData;
     let finished = false;
     let visible = !('IntersectionObserver' in window);
-    let buddyState = '';
+    let buddyFront = null;
 
     const panelFor = name => panels.find(panel => panel.dataset.scenePanel === name);
     const clipFor = name => panelFor(name)?.querySelector('video');
     const tabFor = name => tabs.find(tab => tab.dataset.sceneTab === name);
+    const nextScene = () => SCENES[SCENES.indexOf(scene) + 1];
     const onScreen = () => visible && !document.hidden;
     const motionAllowed = () => !reducedMotion.matches && !saveData;
 
@@ -65,19 +72,31 @@
     function hydrate(video) {
         if (video.dataset.hydrated) return;
         video.dataset.hydrated = 'true';
+        video.preload = 'auto';
         video.querySelectorAll('source').forEach(source => { source.src = source.dataset.src; });
         video.load();
     }
 
+    // The incoming scene fades in over the outgoing one, which stays on its last
+    // frame until the fade ends, so a scene change never shows an empty screen.
+    function reveal(panel) {
+        if (panel.dataset.scenePanel !== scene || panel.classList.contains('is-shown')) return;
+        panel.classList.add('is-shown');
+        window.setTimeout(() => {
+            panels.forEach(other => {
+                if (other === panelFor(scene) || !other.classList.contains('is-leaving')) return;
+                other.classList.remove('is-leaving', 'is-live');
+                other.hidden = true;
+            });
+        }, CROSSFADE_MS);
+    }
+
     function show(name) {
         if (name === scene) return;
+        const outgoing = panelFor(scene);
         clipFor(scene)?.pause();
         scene = name;
         frame.dataset.scene = name;
-        panels.forEach(panel => {
-            panel.hidden = panel.dataset.scenePanel !== name;
-            panel.classList.remove('is-live');
-        });
         tabs.forEach(tab => {
             const selected = tab.dataset.sceneTab === name;
             tab.setAttribute('aria-selected', String(selected));
@@ -85,10 +104,28 @@
             tab.style.setProperty('--progress', '0');
         });
         if (caption) caption.textContent = tabFor(name)?.querySelector('.scene-tab__line')?.textContent || '';
+
+        const incoming = panelFor(name);
+        if (outgoing.classList.contains('is-shown')) {
+            outgoing.classList.remove('is-shown');
+            outgoing.classList.add('is-leaving');
+        } else outgoing.hidden = true;
+        incoming.classList.remove('is-leaving', 'is-shown', 'is-live');
+        incoming.hidden = false;
+        // Commit the transparent start, or a preloaded clip's first frame can land
+        // before the browser draws it and the fade becomes a cut.
+        void incoming.offsetWidth;
         const clip = clipFor(name);
         if (clip?.dataset.hydrated) {
             try { clip.currentTime = 0; } catch (_) { /* Metadata may not be ready. */ }
         }
+        // A playing tour waits briefly for the clip's first frame; otherwise the still shows once decoded.
+        const still = incoming.querySelector('img');
+        still.loading = 'eager';
+        const waitForClip = running && onScreen();
+        Promise.resolve(still.decode?.()).catch(() => {}).then(() => {
+            window.setTimeout(() => reveal(incoming), waitForClip ? CLIP_WAIT_MS : 0);
+        });
     }
 
     function setControl(action) {
@@ -101,37 +138,77 @@
     }
 
     function buddySource(state) {
-        if (appleWebKit && buddyVideo.canPlayType?.(HEVC_ALPHA_TYPE)) return `${BUDDY_MEDIA}${state}.mov`;
-        return `${BUDDY_MEDIA}${state}.webm`;
+        const hevc = appleWebKit && buddyVideos[0].canPlayType?.(HEVC_ALPHA_TYPE);
+        return `${BUDDY_MEDIA}${state}.${hevc ? 'mov' : 'webm'}${BUDDY_START[state] ? `#t=${BUDDY_START[state]}` : ''}`;
+    }
+
+    function buddyStateNow() {
+        const clip = clipFor('ship');
+        const approved = scene === 'ship' && (finished || (clip && clip.currentTime >= SHIP_APPROVAL_AT));
+        return approved ? 'success' : BUDDY_STATES[scene];
+    }
+
+    const upcomingBuddyState = () => (nextScene() ? BUDDY_STATES[nextScene()] : 'success');
+
+    // Loads a pose into the slot that is not on screen, ready to swap in.
+    function prepareBuddy(state) {
+        const ready = buddyVideos.find(video => video.dataset.state === state);
+        if (ready) return ready;
+        // Never the pose on screen, nor the one about to replace it.
+        const slot = buddyVideos.find(video => video !== buddyFront && video.dataset.state !== buddy.dataset.state);
+        if (!slot) return null;
+        slot.dataset.state = state;
+        slot.loop = state !== 'success';
+        slot.preload = 'auto';
+        slot.src = buddySource(state);
+        return slot;
+    }
+
+    function showBuddyStill(state) {
+        buddyVideos.forEach(video => video.pause());
+        if (buddyFront?.dataset.state === state) return;
+        const source = `${BUDDY_MEDIA}${state}.webp`;
+        const next = new Image();
+        next.src = source;
+        Promise.resolve(next.decode?.()).catch(() => {}).then(() => {
+            if (buddy.dataset.state !== state) return;
+            buddyStill.src = source;
+            buddyFront?.classList.remove('is-front');
+            buddyFront = null;
+            buddy.classList.remove('is-live');
+        });
     }
 
     function syncBuddy(animate) {
-        if (!buddy || !buddyVideo) return;
-        const clip = clipFor('ship');
-        const approved = scene === 'ship' && (finished || (clip && clip.currentTime >= SHIP_APPROVAL_AT));
-        const state = approved ? 'success' : BUDDY_STATES[scene];
-        if (state !== buddyState) {
-            buddyState = state;
-            buddy.dataset.state = state;
-            buddy.classList.remove('is-live');
-            buddyStill.src = `${BUDDY_MEDIA}${state}.webp`;
-            buddyVideo.pause();
-            buddyVideo.removeAttribute('src');
-            buddyVideo.hidden = true;
-        }
-        if (!animate) {
-            buddyVideo.pause();
+        if (!buddy) return;
+        const state = buddyStateNow();
+        buddy.dataset.state = state;
+        if (!animate || !buddyVideos.length) {
+            showBuddyStill(state);
             return;
         }
-        if (!buddyVideo.getAttribute('src')) {
-            buddyVideo.loop = state !== 'success';
-            buddyVideo.src = `${buddySource(state)}${BUDDY_START[state] ? `#t=${BUDDY_START[state]}` : ''}`;
-            buddyVideo.hidden = false;
-        }
-        // Success plays once and then rests on its last frame.
-        if (buddyVideo.paused && !buddyVideo.ended) {
-            buddyVideo.play().catch(() => { buddyVideo.hidden = true; });
-        }
+        const target = prepareBuddy(state);
+        if (!target) return;
+        // Success plays once and then rests on its last frame; a later pass plays it again.
+        if (target.paused && (!target.ended || target !== buddyFront)) target.play().catch(() => {});
+        if (target !== buddyFront) buddyFront?.play().catch(() => {});
+    }
+
+    function promoteBuddy(video) {
+        if (video.dataset.state !== buddy.dataset.state || video === buddyFront) return;
+        const previous = buddyFront;
+        video.classList.add('is-front', 'is-top');
+        previous?.classList.remove('is-top');
+        buddyFront = video;
+        buddy.classList.add('is-live');
+        if (!previous) return;
+        // The browser needs a frame to paint the incoming video; keep the old pose until then.
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+            if (previous === buddyFront) return;
+            previous.classList.remove('is-front');
+            previous.pause();
+            if (motionAllowed()) prepareBuddy(upcomingBuddyState());
+        }));
     }
 
     function sync() {
@@ -156,8 +233,8 @@
 
     function select(name, { focus = false } = {}) {
         finished = false;
-        show(name);
         if (motionAllowed()) running = true;
+        show(name);
         if (focus) tabFor(name)?.focus();
         sync();
     }
@@ -165,7 +242,18 @@
     panels.forEach(panel => {
         const video = panel.querySelector('video');
         if (!video) return;
-        video.addEventListener('playing', () => afterFirstFrame(video, () => panel.classList.add('is-live')));
+        video.addEventListener('playing', () => afterFirstFrame(video, () => {
+            panel.classList.add('is-live');
+            reveal(panel);
+            if (panel.dataset.scenePanel !== scene || !motionAllowed()) return;
+            // Load the next scene while this one plays, so the change is seamless.
+            const next = nextScene();
+            if (next) {
+                panelFor(next).querySelector('img').loading = 'eager';
+                hydrate(clipFor(next));
+            }
+            prepareBuddy(upcomingBuddyState());
+        }));
         video.addEventListener('timeupdate', () => {
             if (panel.dataset.scenePanel !== scene || !video.duration) return;
             tabFor(scene)?.style.setProperty('--progress', String(Math.min(1, video.currentTime / video.duration)));
@@ -173,7 +261,7 @@
         });
         video.addEventListener('ended', () => {
             if (panel.dataset.scenePanel !== scene) return;
-            const next = SCENES[SCENES.indexOf(scene) + 1];
+            const next = nextScene();
             if (!next) {
                 finished = true;
                 running = false;
@@ -183,10 +271,29 @@
         });
     });
 
-    buddyVideo?.addEventListener('playing', () => afterFirstFrame(buddyVideo, () => buddy.classList.add('is-live')));
-    buddyVideo?.addEventListener('error', () => {
-        buddyVideo.hidden = true;
-        buddy.classList.remove('is-live');
+    // The first frames of a freshly started alpha video can decode without their
+    // alpha (a dark box), so a pose swaps in only once it is a little way in.
+    function promoteWhenClean(video) {
+        const cleanAt = (BUDDY_START[video.dataset.state] || 0) + BUDDY_CLEAN_AFTER;
+        const check = (_, metadata) => {
+            if (video.paused) return;
+            if ((metadata?.mediaTime ?? video.currentTime) >= cleanAt) promoteBuddy(video);
+            else next();
+        };
+        const next = () => {
+            if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(check);
+            else window.requestAnimationFrame(() => check());
+        };
+        next();
+    }
+
+    buddyVideos.forEach(video => {
+        video.addEventListener('playing', () => promoteWhenClean(video));
+        video.addEventListener('error', () => {
+            video.removeAttribute('src');
+            delete video.dataset.state;
+            if (video === buddyFront) showBuddyStill(buddy.dataset.state);
+        });
     });
 
     tabs.forEach((tab, index) => {
@@ -205,8 +312,8 @@
     control?.addEventListener('click', () => {
         if (finished) {
             finished = false;
-            show(SCENES[0]);
             running = true;
+            show(SCENES[0]);
         } else running = !running;
         sync();
     });

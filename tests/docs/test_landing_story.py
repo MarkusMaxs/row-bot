@@ -60,7 +60,7 @@ def test_scene_tabs_control_the_four_real_clip_panels() -> None:
 
 def test_no_media_plays_or_loops_without_the_controller() -> None:
     videos = _elements("video")
-    assert len(videos) == 5  # four app clips and Buddy
+    assert len(videos) == 6  # four app clips and two Buddy slots
     for video in videos:
         assert "autoplay" not in video
         assert "loop" not in video
