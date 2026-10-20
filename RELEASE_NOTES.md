@@ -2,6 +2,25 @@
 
 ---
 
+## v5.2.0-beta.2 - Fixes From The First Beta
+
+The second 5.2 beta. If you have beta.1, it arrives as a background update
+(about 8 MB): Settings › Updates shows it downloading and preparing, then
+**Restart now**. Everything in beta.1's notes below still applies.
+
+- **Windows Firewall names Row-Bot** - with access from your phone or another
+  computer on, Windows asked to allow "Python". The program that listens is now
+  Row-Bot, signed by Row-Bot. A version installed by beta.1's background update
+  picks this up with the next full installer.
+- **The installer says what it is doing** - a few plain steps instead of every
+  file name, and when an earlier Row-Bot hands over to it, "Updating Row-Bot:
+  Row-Bot closed to install the update. It opens again by itself when this
+  finishes."
+- **ChatGPT sign-in** - after you approve the code, the page no longer says
+  "This changed somewhere else" and waits; it shows you're signed in.
+- **Readable live steps** - a step that is still running stays readable at its
+  faintest.
+
 ## v5.2.0-beta.1 - Updates In The Background
 
 Row-Bot now keeps itself up to date in the background. It downloads only what
