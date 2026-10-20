@@ -207,6 +207,8 @@ function MoveFileEx(ExistingFileName, NewFileName: string; Flags: Cardinal): Boo
 var
   FirstInstall: Boolean;
   LegacyInstallPending: Boolean;
+  { An earlier Row-Bot (this user's, or a 5.x install for all users) is being replaced. }
+  Updating: Boolean;
 
 function HasParam(const Name: string): Boolean;
 var
@@ -309,6 +311,7 @@ begin
   Result := '';
   FirstInstall := not FileExists(ExpandConstant('{app}\state.json')) and
     not FileExists(ExpandConstant('{app}\Row-Bot.exe'));
+  Updating := not FirstInstall or LegacyInstallPresent;
   LegacyInstallPending := not RemoveLegacyInstall;
   MoveRunningLauncherAside;
 end;
@@ -347,6 +350,25 @@ procedure InitializeWizard;
 begin
   { One status line, no file names (B356). }
   WizardForm.FilenameLabel.Visible := False;
+end;
+
+{ An update run by an earlier Row-Bot (5.0 and 5.1 run this with /SILENT and quit) says that Row-Bot
+  closed on purpose and comes back by itself (B358). }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID <> wpInstalling then
+    Exit;
+  if Updating then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Updating Row-Bot';
+    WizardForm.PageDescriptionLabel.Caption :=
+      'Row-Bot closed to install the update. It opens again by itself when this finishes.';
+  end
+  else
+  begin
+    WizardForm.PageNameLabel.Caption := 'Installing Row-Bot';
+    WizardForm.PageDescriptionLabel.Caption := 'Row-Bot opens by itself when this finishes.';
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

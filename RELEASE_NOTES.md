@@ -48,7 +48,13 @@ Notes** below before upgrading from 5.1.
 ### Upgrade Notes
 
 - **From 5.1, once with the full installer** - 5.1 updates to 5.2 the way it
-  always has. After that, updates download in the background.
+  always has. After that, updates download in the background. 5.0 updates to
+  5.2 directly too.
+- **Row-Bot closes while 5.2 installs** - after the download, 5.0 and 5.1 show
+  "Disconnected" and close. That's expected: the installer's window then says
+  it is updating Row-Bot, and Row-Bot opens again by itself when it finishes.
+- **Choosing Beta in 5.1** - if 5.1 says the settings changed somewhere else
+  when you pick the Beta channel, reload and pick Beta again.
 - **Windows** - 5.2 moves Row-Bot from Program Files to your account and asks
   once for administrator approval to remove the old copy. If you decline,
   Row-Bot 5.2 installs and opens anyway, and Settings › Updates offers **Remove
