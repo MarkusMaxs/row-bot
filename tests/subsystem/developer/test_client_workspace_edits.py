@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 from types import SimpleNamespace
 import uuid
 
@@ -550,6 +551,38 @@ def test_posix_extended_attributes_are_not_discarded(domain):
     result = d.save()
     assert result.status == "denied" and result.code == "file_metadata_unavailable"
     assert target.read_bytes() == b"original" and os.getxattr(target, name) == b"retained"
+
+
+def _set_macos_xattr(path: Path, name: str, value: bytes) -> None:
+    import ctypes
+    library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    library.setxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                                 ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    assert library.setxattr(os.fsencode(path), name.encode(), value, len(value), 0, 0) == 0
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended attributes")
+def test_macos_provenance_tag_does_not_block_a_save(domain):
+    """A Row-Bot downloaded on macOS finds com.apple.provenance on every file it wrote."""
+    d = domain
+    target = d.root / "hello.txt"
+    target.write_bytes(b"original")
+    _set_macos_xattr(target, "com.apple.provenance", b"\x01\x02\x00\xad")
+    result = d.save()
+    assert result.status == "saved", result
+    assert target.read_bytes() == b"new\n"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended attributes")
+def test_macos_extended_attributes_are_not_discarded(domain):
+    d = domain
+    target = d.root / "hello.txt"
+    target.write_bytes(b"original")
+    _set_macos_xattr(target, "com.apple.provenance", b"\x01\x02\x00\xad")
+    _set_macos_xattr(target, "com.example.row_bot_review", b"retained")
+    result = d.save()
+    assert result.status == "denied" and result.code == "file_metadata_unavailable"
+    assert target.read_bytes() == b"original"
 
 
 def test_metadata_change_during_retirement_restores_original(domain, monkeypatch):
