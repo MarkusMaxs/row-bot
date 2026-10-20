@@ -82,12 +82,6 @@
       "still": "screenshots/create.webp",
       "sha256": "c532a3d8e9d326162253497e90a347416ecc559eb54b789133377005a6c74dd8",
       "alt": "The composer's model pill showing GPT-5.6 Sol as a cloud model, beside the conversation's Design panel."
-    },
-    {
-      "scene_id": "mobile-shell",
-      "still": "screenshots/mobile-shell.webp",
-      "sha256": "1e7fc565e7af856b43a46e52f22f38e9fa54af14161c77b47fd97ca278a85c88",
-      "alt": "The same public-safe Row-Bot workspace at a mobile browser width."
     }
   ],
   "buddy": {
@@ -99,8 +93,7 @@
       "thinking": "24d527d4faf0ac3e277dc06f8776ce152c1b71aea82a1e616b1192ba71d6f808",
       "working": "ffbe25521fea6ac71c7552c39308fc90e9e99c97afccffb1dc66728ae9aa6c11",
       "approval": "9ba6984b52e3322e902b23a1463820851c2145d1f5a3d39f3840a10d1594f659",
-      "success": "19ef46e3260043779138fbb5c8db3cbee32fcac2bc04809fb987d197c0ae9d04",
-      "error": "b586dcf23017ccbda58b1ff0895c8c9559f4b6d7be1753c8cd7b06f8712cfdd9"
+      "success": "19ef46e3260043779138fbb5c8db3cbee32fcac2bc04809fb987d197c0ae9d04"
     },
     "motion": {
       "format": "webm",
@@ -118,8 +111,7 @@
         "thinking": "7cffda47e017f0fc2fbe0e80f1d09f4bef54de8fd2009a8af49b767d47e9bb0c",
         "working": "7363131a02264797cf88443f558ea0882aa08becccddc10308010a8253053650",
         "approval": "5332f0136c7e3307ea8249cb77d45f8640b45c4b89796c3b283b675570bb845b",
-        "success": "96f0bb0d8e3176aba5163250d8ff02cebcc079ecb6151dcc94d8b97fa3dedd73",
-        "error": "9b59552f8f9cb680779e11cb4b590eb9d06637879c1a965224e889b50fb56e1f"
+        "success": "96f0bb0d8e3176aba5163250d8ff02cebcc079ecb6151dcc94d8b97fa3dedd73"
       },
       "edits": {
         "idle": {
@@ -146,8 +138,7 @@
           "thinking": "4d569fd3147420475b01d686012e37c901bdf7ba18536cff80b3851f493afe65",
           "working": "d4ab8f1c385d7314a72f1bd00f4b46c2fd4ea3b6a8a16994f95047e08771e126",
           "approval": "aacd5fc2f59fd11bf11fd9eb7069e85407300655d6641bb2aec3ff9b696e3349",
-          "success": "dc2e749d51e7c1c2656eb8ea972c9892a10b1b23d4c530f83e608c89603e0feb",
-          "error": "abce1770ce873306d0d725007fc23871600993a83632f06e9dfec83d58093d03"
+          "success": "dc2e749d51e7c1c2656eb8ea972c9892a10b1b23d4c530f83e608c89603e0feb"
         }
       }
     }

@@ -100,7 +100,7 @@ def test_landing_page_is_evergreen_and_current() -> None:
     assert parser.sections == [
         "top",
         "demos",
-        "architecture",
+        "privacy",
         "faq",
         "install",
     ]
@@ -110,7 +110,7 @@ def test_landing_page_is_evergreen_and_current() -> None:
     assert "One private workspace to reason, build, automate, and act." in HTML
     assert "Row-Bot · Real app capture" in HTML
     assert "Recorded in-product" in HTML
-    assert "Reason.<br>Orchestrate.<br>Work.<br><em>Keep it yours.</em>" in HTML
+    assert "Reason. Orchestrate. Work. <em>Keep it yours.</em>" in HTML
     assert "PARENT-LED ORCHESTRATION" not in HTML
 
 
