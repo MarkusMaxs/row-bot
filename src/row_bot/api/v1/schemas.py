@@ -1506,10 +1506,8 @@ class DefaultModelReceipt(WireModel):
     selection: DefaultModelSnapshot
 
 
-SubscriptionProvider = Literal["codex", "claude_subscription", "xai_oauth"]
-SubscriptionOperation = Literal[
-    "start", "check", "submit", "cancel", "disconnect", "restore", "import_token"
-]
+SubscriptionProvider = Literal["codex", "xai_oauth"]
+SubscriptionOperation = Literal["start", "check", "submit", "cancel", "disconnect", "restore"]
 
 
 class SubscriptionAccountSnapshot(WireModel):
@@ -1525,7 +1523,7 @@ class SubscriptionAccountSnapshot(WireModel):
 class SubscriptionAccountsSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    accounts: list[SubscriptionAccountSnapshot] = Field(min_length=3, max_length=3)
+    accounts: list[SubscriptionAccountSnapshot] = Field(min_length=2, max_length=2)
 
 
 class SubscriptionFlowSnapshot(WireModel):
@@ -1613,7 +1611,7 @@ class SubscriptionProbeResult(WireModel):
 class SubscriptionProbeSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    items: list[SubscriptionProbeResult] = Field(min_length=6, max_length=6)
+    items: list[SubscriptionProbeResult] = Field(min_length=4, max_length=4)
 
 
 class SubscriptionProbeRequest(WireModel):
@@ -1746,14 +1744,14 @@ class DocumentRemovalReceipt(WireModel):
 
 
 class SubscriptionReferenceState(WireModel):
-    provider_id: Literal["codex", "claude_subscription"]
+    provider_id: Literal["codex"]
     metadata_saved: bool
 
 
 class SubscriptionOptionsSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    references: list[SubscriptionReferenceState] = Field(min_length=2, max_length=2)
+    references: list[SubscriptionReferenceState] = Field(min_length=1, max_length=1)
     xai_client_id_source: Literal["environment", "override", "default", "missing"]
     xai_saved_client_id: str | None = Field(max_length=512)
     xai_default_available: bool
@@ -4996,6 +4994,20 @@ class ProviderStatusSnapshot(WireModel):
     total_models: int = Field(ge=0)
 
 
+class ClaudePlanStatus(WireModel):
+    """Claude Code on the computer running Row-Bot: never a credential, a path or an account name."""
+
+    state: Literal["not_installed", "signed_out", "too_old", "ready", "error"]
+    version: str = Field(max_length=40)
+    minimum_version: str = Field(max_length=40)
+    # The plan Claude Code is signed in with ("Claude Max"), when it says.
+    plan: str = Field(max_length=80)
+    # Plain words for a signed-out or error state; "" when the state says it all.
+    detail: str = Field(max_length=256)
+    # The old Claude sign-in had this profile set up: Settings says to set it up again.
+    set_up_again: bool
+
+
 class ProviderLiveCard(WireModel):
     provider_id: OpaqueId
     display_name: str = Field(max_length=256)
@@ -5019,6 +5031,8 @@ class ProviderLiveCard(WireModel):
     risk_label: str = Field(max_length=80)
     last_runtime_probe_ok: bool | None = None
     billing: Literal["subscription", "pay_per_use", "credits", "local"] | None = None
+    # Claude (your Claude plan) only: what the person's Claude Code says.
+    claude_plan: ClaudePlanStatus | None = None
 
 
 class ProviderLiveSnapshot(WireModel):
@@ -5036,7 +5050,7 @@ class ProviderCatalogRefresh(WireModel):
 
 
 class ProviderRuntimeProbe(WireModel):
-    provider_id: Literal["claude_subscription", "xai_oauth"]
+    provider_id: Literal["xai_oauth"]
     ok: bool
     detail: str = Field(max_length=256)
 

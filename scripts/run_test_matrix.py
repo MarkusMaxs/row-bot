@@ -90,7 +90,7 @@ BROWSER_SMOKE_SPECS = (
 BROWSER_NIGHTLY_SPECS = (
     "capability-surfaces", "conversation-layout", "media", "message-content",
     "navigation", "panels", "persistence", "polish-visual", "resources",
-    "settings-models", "settings-routes", "settings", "sidebar", "suggestions",
+    "settings-claude-plan", "settings-models", "settings-routes", "settings", "sidebar", "suggestions",
     "terminal", "theme", "visual-alignment", "voice", "workflows",
 )
 # Apps in chat connect fake apps and run fake turns: a backend of their own, so no other spec sees them.
@@ -110,7 +110,7 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility", "learning", "learning-training", "learning-download", "learning-version",
+    "model-visibility", "learning", "learning-training", "learning-download", "learning-version", "settings-claude-plan",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")

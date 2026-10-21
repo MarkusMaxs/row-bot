@@ -855,6 +855,7 @@ export default function Navigation({
       <AttentionIndicator
         load={controller.attention}
         loadApprovals={controller.pendingApprovals}
+        conversations={state.conversations}
         onNavigate={openRoute}
       />
       <div className="nav-section-header">
@@ -1203,6 +1204,7 @@ export function NavigationRail({
         <AttentionIndicator
           load={controller.attention}
           loadApprovals={controller.pendingApprovals}
+          conversations={state.conversations}
           compact
         />
         <Hint label="Settings">

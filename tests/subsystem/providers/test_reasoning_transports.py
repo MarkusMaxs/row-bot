@@ -3,7 +3,6 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage
 
 from row_bot.providers.reasoning import ReasoningCapabilities, ReasoningRequestPlan, ReasoningSelection
-from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
 from row_bot.providers.transports.codex_responses import ChatCodexResponses
 from row_bot.providers.transports.ollama_cloud import ChatOllamaCloud
 from row_bot.providers.transports.openai_compatible import ChatOpenAICompatible
@@ -46,18 +45,6 @@ def test_xai_oauth_maps_effort_to_responses_reasoning() -> None:
     assert body["reasoning"] == {"effort": "high"}
 
 
-def test_claude_subscription_maps_effort_to_output_config_and_adaptive_thinking() -> None:
-    model = ChatClaudeSubscriptionMessages(
-        model_name="claude-sonnet-4-6",
-        reasoning_plan=_plan("model:claude_subscription:claude-sonnet-4-6", style="anthropic"),
-    )
-
-    request = model._request_kwargs([HumanMessage(content="hello")])
-
-    assert request["output_config"] == {"effort": "high"}
-    assert request["thinking"] == {"type": "adaptive"}
-
-
 def test_ollama_cloud_maps_exact_effort_to_native_think() -> None:
     model = ChatOllamaCloud(
         model_name="gpt-oss:20b-cloud",
@@ -92,9 +79,6 @@ def test_provider_default_preserves_each_custom_transport_baseline() -> None:
     messages = [HumanMessage(content="hello")]
 
     assert ChatXAIOAuthResponses(model_name="grok-4")._request_body(messages).get("reasoning") is None
-    claude = ChatClaudeSubscriptionMessages(model_name="claude-sonnet-4-6")._request_kwargs(messages)
-    assert "output_config" not in claude
-    assert "thinking" not in claude
     assert "think" not in ChatOllamaCloud(model_name="gpt-oss:20b", api_key="key")._request_body(
         messages, stream=True
     )

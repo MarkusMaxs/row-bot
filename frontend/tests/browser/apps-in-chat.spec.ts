@@ -159,7 +159,7 @@ test('an app found in the chat connects there, names itself on its steps, and fo
   const needs = page.getByRole('list', { name: 'Needs you' });
   await expect(needs.getByText('Sign in to Granola')).toBeVisible();
   await screenshot(page, testInfo, 'home-needs-you');
-  await needs.getByRole('button', { name: 'Sign in again' }).click();
+  await needs.getByRole('link', { name: 'Open Granola settings' }).click();
   await expect(page).toHaveURL(/\/settings\/apps\/item\?id=/);
   await expect(
     page.getByRole('dialog', { name: /Sign in again|Fix Granola/ }),

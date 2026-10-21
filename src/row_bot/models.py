@@ -1761,11 +1761,11 @@ def get_cloud_model_context(model_name: str) -> int:
             pass
     if provider_id == "claude_subscription":
         try:
-            from row_bot.providers.claude_subscription import list_claude_subscription_model_infos_for_status
+            from row_bot.providers.claude_subscription import claude_plan_model_info
 
-            for model_info in list_claude_subscription_model_infos_for_status():
-                if model_info.model_id == runtime_model and model_info.context_window:
-                    return int(model_info.context_window)
+            model_info = claude_plan_model_info(runtime_model)
+            if model_info is not None and model_info.context_window:
+                return int(model_info.context_window)
         except Exception:
             pass
     if provider_id == "xai_oauth":
@@ -1838,12 +1838,9 @@ def is_cloud_vision_model(model_name: str) -> bool:
     if parsed and parsed[0] == "claude_subscription":
         try:
             from row_bot.providers.capabilities import snapshot_supports_surface
-            from row_bot.providers.claude_subscription import list_claude_subscription_model_infos_for_status
-            return any(
-                model_info.model_id == runtime_model
-                and snapshot_supports_surface(model_info.capability_snapshot(), "vision")
-                for model_info in list_claude_subscription_model_infos_for_status()
-            )
+            from row_bot.providers.claude_subscription import claude_plan_model_info
+            model_info = claude_plan_model_info(runtime_model)
+            return model_info is not None and snapshot_supports_surface(model_info.capability_snapshot(), "vision")
         except Exception:
             return False
     if parsed and parsed[0] == "xai_oauth":
@@ -2180,7 +2177,7 @@ def _fetch_cloud_models(provider: str) -> int:
 
     Supported providers include OpenAI, ChatGPT/Codex, Ollama Cloud,
     OpenRouter, Requesty, Anthropic, Google, xAI, xAI OAuth, MiniMax,
-    OpenCode, Atlas Cloud, and Claude Subscription. Populates
+    OpenCode, Atlas Cloud, and the Claude plan. Populates
     ``_cloud_model_cache`` and returns the number of models found. Safe to
     call from background threads.
     """
@@ -3077,7 +3074,7 @@ def _fetch_codex_models() -> int:
 
 
 def _fetch_claude_subscription_models() -> int:
-    """Populate Claude Subscription models from Row-Bot-owned OAuth catalog."""
+    """Populate the Claude plan's models from Claude Code's own model list."""
     from row_bot.providers.catalog import model_info_to_cache_entry
     from row_bot.providers.claude_subscription import list_claude_subscription_model_infos
 
@@ -3269,14 +3266,11 @@ def _cloud_model_available_after_refresh(model_name: str) -> bool:
             logger.debug("Could not validate Codex default model after refresh", exc_info=True)
     if provider_id == "claude_subscription":
         try:
-            from row_bot.providers.claude_subscription import list_claude_subscription_model_infos_for_status
+            from row_bot.providers.claude_subscription import claude_plan_model_info
 
-            return any(
-                model_info.model_id == parsed_model
-                for model_info in list_claude_subscription_model_infos_for_status()
-            )
+            return claude_plan_model_info(parsed_model) is not None
         except Exception:
-            logger.debug("Could not validate Claude Subscription default model after refresh", exc_info=True)
+            logger.debug("Could not validate the Claude plan default model after refresh", exc_info=True)
     if provider_id == "xai_oauth":
         try:
             from row_bot.providers.xai_oauth import list_xai_oauth_model_infos_for_status

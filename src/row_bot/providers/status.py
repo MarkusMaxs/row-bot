@@ -178,6 +178,7 @@ def provider_status_cards(*, refresh_tokens: bool = False) -> list[dict]:
             "risk_label": definition.risk_label,
             "icon": definition.icon,
             "group": _provider_group(definition.id, definition.risk_label),
+            **({"claude_plan": dict(status["claude_plan"])} if isinstance(status.get("claude_plan"), dict) else {}),
         })
     return cards
 

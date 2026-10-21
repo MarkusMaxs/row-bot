@@ -19,12 +19,26 @@ Open **Settings**, then choose **Providers** in the **Models** group, or search 
 
 - Connection Status summarizes how many providers are connected, local, API-based, subscription-based, or media-capable.
 - Local providers show runtimes such as Ollama. Refresh checks what the local service currently exposes.
-- Subscription accounts show sign-in based providers such as ChatGPT / Codex or Claude Subscription. Use connect, reconnect, test, and refresh actions from the row.
+- Subscription accounts show providers that use a plan you already pay for: ChatGPT / Codex, Claude (your Claude plan) and xAI Grok. Use the row's actions to set one up, reconnect it, test it or refresh its models.
 - API providers show services that need an API key or compatible endpoint. Their credential buttons open the setup flow for that provider.
 - xAI API catalog refresh also discovers live image-generation models and their supported output formats, aspect ratios, resolutions, and quality choices. Row-Bot keeps that capability metadata separate from ordinary chat models.
 - Custom endpoint providers let advanced users point Row-Bot at OpenAI-compatible servers such as LM Studio, vLLM, llama.cpp, LocalAI, LiteLLM, or SGLang.
 - Custom endpoint Advanced settings can describe reasoning mode, a thinking budget, returned reasoning content, and whether preserved reasoning may be replayed to that endpoint.
 - Runtime tests check whether a provider can handle the kind of requests Row-Bot needs. A failed test keeps the provider visible but may stop Row-Bot from offering it for agent work.
+
+## Claude (Your Claude Plan)
+
+Claude through your own Claude plan runs Claude Code on this computer for every reply, and uses your plan's limits. Row-Bot never sees, stores or refreshes your Claude sign-in: Claude Code signs in by itself.
+
+1. Install Claude Code from [Anthropic's setup page](https://code.claude.com/docs/en/setup).
+2. Open a terminal and run `claude auth login`, then sign in with your Claude plan (Pro, Max, Team or Enterprise).
+3. In **Settings › Providers**, choose **Set up Claude** on the Claude row, then **Check again**. The row says **Ready** with your plan's name, and Claude models appear in the model picker.
+
+The row says what Claude Code reports: **Not set up** (Claude Code isn't installed), **Not signed in** (run `claude auth login`), **Update needed** (run `claude update`; Row-Bot needs Claude Code 2.1.263 or newer) or **Couldn't check** (run `claude doctor` in a terminal to see why). Claude Code signed in with an API key or another cloud counts as not signed in, so a reply never bills anything but your plan.
+
+Row-Bot starts Claude Code with its non-essential traffic turned off: no telemetry, error reports or automatic updates come from these runs. Claude Code's own tools are off; when Claude asks for one of Row-Bot's tools, Row-Bot runs it after its usual approval check. The models are the ones Claude Code lists for your plan.
+
+Earlier versions signed in to Claude inside Row-Bot. That sign-in is gone and its saved tokens were deleted when you updated; the Claude row says **Set up again** until Claude Code is ready.
 
 ## Common Workflow
 

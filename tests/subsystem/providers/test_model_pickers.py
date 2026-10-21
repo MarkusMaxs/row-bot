@@ -46,7 +46,8 @@ STATUSES = {
     "openai": {"configured": False, "runtime_enabled": False},
 }
 SOL, LUNA = "model:codex:gpt-5.6-sol", "model:codex:gpt-5.6-luna"
-SONNET, MYSTERY = "model:claude_subscription:claude-sonnet-5", "model:claude_subscription:claude-mystery"
+# Any Claude model name is Claude Code's to accept, so the model without saved metadata is a Codex one.
+SONNET, MYSTERY = "model:claude_subscription:claude-sonnet-5", "model:codex:gpt-mystery"
 UNCONNECTED = "model:openai:gpt-unconnected"
 
 
@@ -84,7 +85,7 @@ def saved_state(tmp_path, monkeypatch):
             _pin("codex", "gpt-5.6-sol", "GPT-5.6 Sol (ChatGPT)", CODEX_FULL),
             _pin("codex", "gpt-5.6-luna", "GPT-5.6 Luna (ChatGPT)", CODEX_FULL),
             _pin("claude_subscription", "claude-sonnet-5", "Claude Sonnet 5", DOCUMENTED_CLAUDE),
-            _pin("claude_subscription", "claude-mystery", "Claude Mystery", {}),
+            _pin("codex", "gpt-mystery", "GPT Mystery", {}),
             _pin("openai", "gpt-unconnected", "GPT Unconnected", SEEING_CHAT),
         ],
     }), encoding="utf-8")
@@ -104,7 +105,7 @@ def saved_state(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "provider_status", lambda provider_id, **_kwargs: dict(STATUSES.get(provider_id, {})))
     selection._provider_status_picker_cache.clear()
     for module, name in ((codex, "fetch_codex_model_infos"),
-                         (claude_subscription, "fetch_claude_subscription_model_infos"),
+                         (claude_subscription, "discover_claude_plan_models"),
                          (cache, "start_model_catalog_refresh_background"),
                          (cache, "refresh_model_catalog_cache")):
         monkeypatch.setattr(module, name, lambda *_a, **_kw: pytest.fail("a picker read contacted a provider"))
