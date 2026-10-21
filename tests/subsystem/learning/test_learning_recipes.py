@@ -19,7 +19,7 @@ def _card(mib: int, driver: str = "596.08") -> hardware.HardwareCheck:
 def test_every_shipped_recipe_reads_and_only_the_8gb_tier_is_certified():
     found = {recipe.id: recipe for recipe in recipes.all_recipes()}
 
-    assert list(found) == ["8gb", "12gb", "24gb", "32gb"]
+    assert list(found) == ["8gb", "16gb", "24gb", "32gb"]
     assert [recipe.id for recipe in found.values() if recipe.certified] == ["8gb"]
     eight = found["8gb"]
     assert eight.name == "8gb-v1" and eight.starting_model == "qwen3.5-2b"

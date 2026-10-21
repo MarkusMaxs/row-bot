@@ -2,7 +2,8 @@
 
 Learning (preview) can train a personal model on this computer. Training runs in a separately
 installed **training engine** (CUDA PyTorch, Unsloth, TRL, PEFT and their dependencies, plus
-llama.cpp's own tools that export a trained version to a GGUF file), never in
+llama.cpp's own tools that export a trained version to a GGUF file, and llama.cpp's server that
+runs personal models), never in
 Row-Bot's own environment, the `all` extra, `requirements.txt` or the installers. This page records,
 for the AGENTS.md rule on third-party telemetry, what the engine's libraries would send on their
 own, how Row-Bot switches each one off, and how that is tested. Row-Bot itself adds no telemetry.
@@ -22,7 +23,8 @@ reporting:
 | CPython 3.12.15 (the engine's own interpreter) | uv's managed download (python-build-standalone) | about 30 MB | uv's own pinned hashes |
 | llama.cpp b11669's CPU build (`llama-quantize` and its libraries) | `github.com` release assets (redirect to `objects.githubusercontent.com` or `release-assets.githubusercontent.com`) | 19.5 MB on Windows, 17.9 MB on Linux | SHA-256 and size in `learning/training/lockfile.py` (`LLAMA_CPP_TOOLS`) |
 | llama.cpp b11669's source archive, of which only its converter (`convert_hf_to_gguf.py`, `conversion/`, `gguf-py/`) is unpacked | `github.com` (redirects to `codeload.github.com`) | 40 MB | SHA-256 and size in `lockfile.py` (`LLAMA_CPP_SOURCE`) |
-| Qwen3.5 2B at revision `15852e8c…` | `huggingface.co` (redirects to its CDN, `*.hf.co`) | 4.6 GB | size and SHA-256 per file in `learning/training/weights.py` |
+| llama.cpp b11669's CUDA build (`llama-server`) and the CUDA runtime it needs, for Row-Bot's own model server (CUDA 13.4 with a driver of 580 or newer; 12.4 on Windows and 12.8 on Linux with 570-579) | `github.com` release assets | 578 MB on Windows (CUDA 13.4), 594 MB on Linux; 658 and 767 MB for CUDA 12 | SHA-256 and size in `lockfile.py` (`LLAMA_CPP_SERVER`) |
+| The starting model the person chose: Qwen3.5 2B (`15852e8c…`), 4B (`851bf6e8…`), 9B (`c2022362…`) or Qwen3.8 27B (`1d4bf0f2…`), as the card's tier allows | `huggingface.co` (redirects to its CDN, `*.hf.co`) | 4.6, 9.3, 19.3 or 55.6 GB | size and SHA-256 per file in `learning/training/weights.py` |
 
 Every request goes through Row-Bot's safe download path (`integrations.safe.open_stream`): https
 only, reviewed hosts only, checked addresses, no credentials sent, never a Hugging Face token. A
@@ -63,11 +65,29 @@ neutral user name.
 
 ## Serving a version
 
-A trained version is registered in a runtime on this computer only: Ollama (`ollama create` from the
-version's GGUF, on loopback; nothing leaves the computer) or a server the person starts (LM Studio,
-llama.cpp's server with `--offline --no-webui --host 127.0.0.1`, vLLM), which Row-Bot reaches on
-`127.0.0.1` only. Row-Bot's own checks (its readiness probe and one Agent turn with the calculator)
-run against that local server.
+A trained version runs on this computer only. By default it runs in **Row-Bot's own model server**
+(`learning/training/llama_server.py`, O75): llama.cpp's `llama-server` from the download above,
+which Row-Bot starts when a request needs one of its models and stops when they are idle. It is
+started with:
+
+- `--host 127.0.0.1` and a free port: nothing outside this computer can reach it;
+- `--offline`: it never downloads (no `-hf`, `-mu` or model URLs are ever passed), and its model
+  cache is an empty folder of its own (`LLAMA_CACHE`), so it lists only the files Row-Bot gives it;
+- `--no-webui`, and none of its own tools, agent or MCP proxy (`--tools`, `--agent`,
+  `--mcp-servers-*`, `--ui-mcp-proxy` are off by default and never passed);
+- an API key Row-Bot makes at each start, in its environment only (never on its command line or on
+  disk); the model processes it starts inherit it, and every request without it is refused;
+- an environment with nothing of the person's: no keys, no `LLAMA_*` settings that could switch its
+  tools or downloads on, its own home and temp folders.
+
+llama.cpp's server has no telemetry or update check of its own; its only network use is the
+downloads and the web page's proxy above, none of which is switched on. {MEASURED}
+
+Otherwise a version is registered in Ollama (`ollama create` from the version's GGUF, on loopback;
+nothing leaves the computer) or in a server the person starts (LM Studio, llama.cpp's server with
+`--offline --no-webui --host 127.0.0.1`, vLLM), which Row-Bot reaches on `127.0.0.1` only. Row-Bot's
+own checks (its readiness probe and one Agent turn with the calculator) run against that local
+server.
 
 ## How it is tested
 
@@ -86,3 +106,7 @@ run against that local server.
   asked for their models only on this computer.
 - `tests/e2e/learning/test_learning_personal_model_e2e.py` (opt-in, L2c): real training, export and
   serving with the process tree's connections sampled: none that weren't this computer.
+- `tests/subsystem/learning/test_learning_llama_server.py` (L2x): Row-Bot's own model server starts
+  on loopback with `--offline --no-webui` and none of its tools, its key only in its environment and
+  refused without it, nothing of the person's environment; it and its model processes end on Stop, on
+  quit and after a crash. `test_learning_server_files.py`: its pinned download.

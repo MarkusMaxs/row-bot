@@ -25,7 +25,7 @@ from typing import Any
 
 FORMAT = "row-bot-recipe"
 FOLDER = Path(__file__).resolve().parent
-ORDER = ("8gb", "12gb", "24gb", "32gb")
+ORDER = ("8gb", "16gb", "24gb", "32gb")
 METHODS = frozenset({"lora_sft"})
 QUANTIZATIONS = frozenset({"Q8_0", "Q4_K_M"})
 # The trainer's own settings (``trainer.DEFAULTS``); anything else in a file is refused.
@@ -38,7 +38,7 @@ MIN_TRAINING_CONTEXT = 16_384
 _KEYS = frozenset({
     "format", "version", "id", "tier", "certified", "title", "starting_model", "method", "evidence", "settings",
     "epochs", "checkpoint_every", "min_examples", "min_new_examples", "validation_share", "serve_context",
-    "quantization", "reasoning",
+    "quantization", "reasoning", "memory_mib",
 })
 
 
@@ -72,6 +72,9 @@ class Recipe:
     quantization: str
     reasoning: str
     sha256: str
+    # The graphics memory a run needs free to start (its measured peak, rounded up): a card that also
+    # drives the desktop trains when this much is free, not its whole tier (O91, L2x).
+    memory_mib: int = 8192
 
     @property
     def name(self) -> str:
@@ -150,6 +153,7 @@ def parse(text: str, *, source: str = "") -> Recipe:
                               high=1_048_576),
         quantization=data["quantization"], reasoning=data["reasoning"],
         sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        memory_mib=_number(data["memory_mib"], "memory_mib", integer=True, low=1024, high=262_144),
     )
     if recipe.certified and recipe.max_seq_length < MIN_TRAINING_CONTEXT:
         raise RecipeError("invalid_recipe", "a certified recipe trains on at least 16K tokens (O23)")

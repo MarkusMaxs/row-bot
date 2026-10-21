@@ -58,7 +58,7 @@ def test_a_larger_card_uses_the_certified_recipe_and_lists_its_own_tiers_as_meas
     assert check.state == "gpu"
     assert check.gpu and check.gpu.name == "NVIDIA GeForce RTX 5090" and check.gpu.memory_gb == 32
     assert check.tier and check.tier.id == "8gb"
-    assert [tier.id for tier in check.larger_tiers] == ["12gb", "24gb", "32gb"]
+    assert [tier.id for tier in check.larger_tiers] == ["16gb", "24gb", "32gb"]
     assert all(not tier.certified and tier.summary.endswith("measured soon.") for tier in check.larger_tiers)
 
 
@@ -143,4 +143,4 @@ def test_the_check_is_kept_for_the_process_until_asked_again():
         hardware.forget()
 
     assert first.state == again.state == "no_gpu" and len(asked) == 2
-    assert fresh.state == "gpu" and [tier.id for tier in fresh.larger_tiers] == ["12gb"]
+    assert fresh.state == "gpu" and [tier.id for tier in fresh.larger_tiers] == ["16gb"]

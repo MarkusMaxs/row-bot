@@ -16,7 +16,6 @@ to train here".
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import subprocess
 import sys
@@ -77,11 +76,27 @@ class Tier:
     models: tuple[StartingModel, ...] = ()
 
 
+def _tier(tier_id: str, label: str, min_memory_mib: int, summary: str, model: StartingModel) -> Tier:
+    """A tier as its recipe file certifies it (``recipes/<tier>.json``): measured on a real card of that
+    size or under that size's cap on a larger one (L0d, L2b for 8 GB; L2x on the RTX 5090 for the
+    others), never promised (D3). Until then it reads "measured soon" and offers no model."""
+
+    from row_bot.learning.training import recipes
+
+    try:
+        certified = recipes.load(tier_id).certified
+    except Exception:  # noqa: BLE001 - a recipe that can't be read certifies nothing
+        certified = False
+    if not certified:
+        return Tier(tier_id, label, min_memory_mib, False, f"Larger models for {label} cards: measured soon.")
+    return Tier(tier_id, label, min_memory_mib, True, summary, (model,))
+
+
 TIERS: tuple[Tier, ...] = (
-    Tier("8gb", "8 GB", 7_600, True, "Can train small models (up to about 2B) on your tasks.", (QWEN35_2B,)),
-    Tier("12gb", "12–16 GB", 11_500, False, "Larger models for 12–16 GB cards: measured soon."),
-    Tier("24gb", "24 GB", 23_000, False, "Larger models for 24 GB cards: measured soon."),
-    Tier("32gb", "32 GB", 30_000, False, "Larger models for 32 GB cards: measured soon."),
+    _tier("8gb", "8 GB", 7_600, "Can train small models (up to about 2B) on your tasks.", QWEN35_2B),
+    _tier("16gb", "16 GB", 15_000, "Can train models up to about 4B on your tasks.", QWEN35_4B),
+    _tier("24gb", "24 GB", 23_000, "Can train models up to about 9B on your tasks.", QWEN35_9B),
+    _tier("32gb", "32 GB", 30_000, "Can train large models (up to about 27B) on your tasks.", QWEN38_27B),
 )
 
 
@@ -339,8 +354,8 @@ def forget_memory_reading() -> None:
 
 
 def training_need_mib(found: HardwareCheck | None = None) -> int | None:
-    """The memory the recipe this computer trains with needs: its tier's size (the 8 GB recipe,
-    8,192 MiB), or None when there is no recipe for it."""
+    """The memory the recipe this computer trains with needs free: its measured need (the 8 GB recipe,
+    8,192 MiB; L2x's larger tiers their measured peak), or None when there is no recipe for it."""
 
     from row_bot.learning.training import recipes
 
@@ -348,8 +363,8 @@ def training_need_mib(found: HardwareCheck | None = None) -> int | None:
         recipe = recipes.current(check=found if found is not None else peek())
     except Exception:  # noqa: BLE001 - no recipe: the share of the card decides
         return None
-    match = re.fullmatch(r"(\d+)gb", str(getattr(recipe, "tier", "") or ""))
-    return int(match.group(1)) * 1024 if match else None
+    need = int(getattr(recipe, "memory_mib", 0) or 0)
+    return need or None
 
 
 def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None = None,

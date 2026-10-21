@@ -28,5 +28,6 @@
   "validation_share": 0.1,
   "serve_context": 65536,
   "quantization": "Q4_K_M",
-  "reasoning": "off"
+  "reasoning": "off",
+  "memory_mib": 32768
 }

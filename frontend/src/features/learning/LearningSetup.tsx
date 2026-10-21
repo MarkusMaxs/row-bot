@@ -231,7 +231,9 @@ export function LearningSetupSheet({
     io.hardware(refresh).then((found) => {
       setHardware(found);
       // The card's own tier's model is the recommendation (D3), chosen when the card is read.
-      const recommended = found.starting_models[0]?.id;
+      const recommended = found.starting_models[0]?.id as
+        | LearningSetupChoices['starting_model']
+        | undefined;
       if (recommended)
         setChoices((current) =>
           current ? { ...current, starting_model: recommended } : current,

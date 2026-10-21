@@ -1,10 +1,10 @@
 {
   "format": "row-bot-recipe",
   "version": 1,
-  "id": "12gb",
-  "tier": "12gb",
+  "id": "16gb",
+  "tier": "16gb",
   "certified": false,
-  "title": "12-16 GB graphics cards",
+  "title": "16 GB graphics cards",
   "starting_model": "qwen3.5-4b",
   "method": "lora_sft",
   "evidence": "Not certified: a candidate until the RTX 5090 results (scripts/learning_gpu_check.py) are read (L2c2). On 8 GB Qwen3.5 4B fits only as QLoRA at 8K (L0d).",
@@ -28,5 +28,6 @@
   "validation_share": 0.1,
   "serve_context": 32768,
   "quantization": "Q8_0",
-  "reasoning": "off"
+  "reasoning": "off",
+  "memory_mib": 16384
 }
