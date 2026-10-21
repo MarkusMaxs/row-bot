@@ -49,6 +49,10 @@ if __name__ == "__main__":
     from row_bot.profile_restore import apply_on_start
 
     apply_on_start()
+    # After the restore, which starts nothing: what the server starts runs as python.exe (B355).
+    from row_bot.runtime_paths import python_for_children
+
+    python_for_children()
 from row_bot.brand import APP_DISPLAY_NAME, APP_PING_ID, APP_USER_AGENT
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.access.launcher_control import LAUNCH_SECRET_ENV

@@ -29,9 +29,10 @@
     transform: translateY(2px);
   }
 }
+/* Live text stays readable at its faintest: 0.75 keeps it above 4.5:1 in both themes (B352). */
 @keyframes chat-breathe {
   50% {
-    opacity: 0.55;
+    opacity: 0.75;
   }
 }
 @keyframes chat-spin {

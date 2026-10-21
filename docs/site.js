@@ -1,9 +1,9 @@
 (() => {
     'use strict';
 
-    const WINDOWS_URL = 'https://github.com/siddsachar/row-bot/releases/download/v5.1.0/Row-Bot-5.1.0-Windows-x64.exe';
-    const MAC_URL = 'https://github.com/siddsachar/row-bot/releases/download/v5.1.0/Row-Bot-5.1.0-macOS-arm64.dmg';
-    const LINUX_COMMAND = 'curl -fsSL https://raw.githubusercontent.com/siddsachar/row-bot/main/installer/install-linux.sh | bash -s -- 5.1.0';
+    const WINDOWS_URL = 'https://github.com/siddsachar/row-bot/releases/download/v5.2.1/Row-Bot-5.2.1-Windows-x64.exe';
+    const MAC_URL = 'https://github.com/siddsachar/row-bot/releases/download/v5.2.1/Row-Bot-5.2.1-macOS-arm64.dmg';
+    const LINUX_COMMAND = 'curl -fsSL https://raw.githubusercontent.com/siddsachar/row-bot/main/installer/install-linux.sh | bash -s -- 5.2.1';
     const DESKTOP_LINK = 'https://row-bot.ai/';
     const GA_MEASUREMENT_ID = 'G-0YYKPX5M5E';
     const GOOGLE_ADS_ID = 'AW-847204616';
@@ -50,8 +50,6 @@
     }
 
     initializeAnalytics();
-
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     function detectDevice(environment = {}) {
         const nav = environment.navigator || window.navigator;
@@ -145,20 +143,6 @@
         link.innerHTML = link.dataset.osLabel === 'short'
             ? 'Download'
             : `${selectedPlatform.label} <small>&middot; ${selectedPlatform.hint}</small>`;
-    });
-
-    document.querySelectorAll('[data-hero-secondary]').forEach(link => {
-        if (detectedDevice.device === 'desktop') {
-            link.href = sectionTarget('proof');
-            link.innerHTML = 'See Row-Bot in action <span aria-hidden="true">&rarr;</span>';
-        }
-    });
-
-    document.querySelectorAll('[data-platform-note]').forEach(note => {
-        note.textContent = `Detected: ${selectedPlatform.name}. Choose any desktop platform:`;
-    });
-    document.querySelectorAll('[data-platform-choice]').forEach(link => {
-        link.classList.toggle('is-detected', detectedDevice.device === 'desktop' && link.dataset.platformChoice === selectedPlatform.platform);
     });
 
     document.querySelectorAll('[data-desktop-download]').forEach(link => {
@@ -402,36 +386,6 @@
         };
         updateProgress();
         window.addEventListener('scroll', updateProgress, { passive: true });
-    }
-
-    if (!reduceMotion && 'IntersectionObserver' in window) {
-        const revealObserver = new IntersectionObserver(entries => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('is-visible');
-                    revealObserver.unobserve(entry.target);
-                }
-            });
-        }, { threshold: 0.11 });
-        document.querySelectorAll('.reveal').forEach(element => revealObserver.observe(element));
-    } else {
-        document.querySelectorAll('.reveal').forEach(element => element.classList.add('is-visible'));
-    }
-
-    const stage = document.querySelector('.core-stage');
-    if (stage && !reduceMotion && window.matchMedia('(pointer: fine)').matches) {
-        const visual = stage.closest('.hero-visual');
-        visual?.addEventListener('pointermove', event => {
-            const bounds = visual.getBoundingClientRect();
-            const x = (event.clientX - bounds.left) / bounds.width - 0.5;
-            const y = (event.clientY - bounds.top) / bounds.height - 0.5;
-            stage.style.setProperty('--ry', `${8 + x * 7}deg`);
-            stage.style.setProperty('--rx', `${-4 - y * 5}deg`);
-        });
-        visual?.addEventListener('pointerleave', () => {
-            stage.style.setProperty('--ry', '8deg');
-            stage.style.setProperty('--rx', '-4deg');
-        });
     }
 
     function activateVideo(facade, event) {
