@@ -81,7 +81,11 @@ started with:
   tools or downloads on, its own home and temp folders.
 
 llama.cpp's server has no telemetry or update check of its own; its only network use is the
-downloads and the web page's proxy above, none of which is switched on. {MEASURED}
+downloads and the web page's proxy above, none of which is switched on. Measured on an RTX 5090 (L2x): while it
+served two personal models through Row-Bot's own checks (its probe and an Agent turn each), its
+process tree (the server and the model processes it started, six in all) listened only on
+`127.0.0.1` and had no connection to anything but this computer (469 sockets seen in 223 samples,
+one every 0.2 s).
 
 Otherwise a version is registered in Ollama (`ollama create` from the version's GGUF, on loopback;
 nothing leaves the computer) or in a server the person starts (LM Studio, llama.cpp's server with
