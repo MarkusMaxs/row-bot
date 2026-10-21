@@ -481,3 +481,27 @@ def test_a_running_helpers_steps_reach_its_page_and_its_parents_list(service, mo
 
     agent_runs.finish_agent_run(run["id"], "completed", summary="Done")
     assert read_activity(service, parent)["items"][0]["activity"] is None
+
+
+def test_helper_rows_say_which_model_and_reasoning_they_run_on(service, monkeypatch):
+    """B386: the row shows the helper's model and reasoning; an unoffered level is refused by name."""
+    from row_bot import agent_commands, agent_runner, agent_runs, threads
+    from row_bot.application.client_platform import ClientPlatformError
+    from row_bot.application.delegated_activity import read_activity
+    parent = threads.create_thread("Parent", seed_default_skills=False)
+    helper = agent_runs.create_agent_run(parent_thread_id=parent, display_name="Lookup", status="running")
+    agent_runs.append_agent_event(helper["id"], "reasoning.chosen", {
+        "model_ref": "model:xai:grok-3-mini", "model": "grok-3-mini",
+        "reasoning": "Provider default", "not_offered": "Medium"})
+    older = agent_runs.create_agent_run(parent_thread_id=parent, display_name="Older", status="completed")
+    items = {item["run_id"]: item for item in read_activity(service, parent)["items"]}
+    assert (items[helper["id"]]["model_ref"], items[helper["id"]]["reasoning"],
+            items[helper["id"]]["reasoning_not_offered"]) == ("model:xai:grok-3-mini", "Provider default", "Medium")
+    assert items[older["id"]]["model_ref"] is None and items[older["id"]]["reasoning"] is None
+
+    def refuse(*_args, **_kwargs):
+        raise agent_runner.HelperReasoningError("Reasoning effort 'xhigh' is not supported by this model.")
+
+    monkeypatch.setattr(agent_commands, "spawn_agent_from_request", refuse)
+    with pytest.raises(ClientPlatformError, match="helper_reasoning_unavailable"):
+        _agent_command(service, parent, "agent.start", {"text": "--reasoning xhigh Summarise"})

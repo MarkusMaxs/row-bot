@@ -83,6 +83,7 @@ import SlashPalette, { type SlashPaletteHandle } from './SlashPalette';
 import MentionPalette, { type MentionItem } from './MentionPalette';
 import { AppIcon } from '../apps/parts';
 import {
+  agentReasoningOption,
   goalRequest,
   profileChoice,
   reasoningChoice,
@@ -999,21 +1000,38 @@ export default function Conversation({
       const current = controller.getDraft(target);
       controller.setDraft(target, { ...current, text: '' });
     };
+    // The chat's own thinking levels, for /reasoning and a helper on its model.
+    const chatReasoning =
+      state.workspace.reasoning?.model_ref ===
+      controls.model_selection?.model_ref
+        ? state.workspace.reasoning
+        : null;
+    const notALevel = (value: string) =>
+      chatReasoning?.available
+        ? `“${value}” isn't a thinking level for this model. Try ${chatReasoning.choices.map((item) => item.label).join(', ')}.`
+        : 'This model has no thinking levels to choose from.';
+    if (command.handler_kind === 'agent') {
+      // A helper on the chat's model takes one of its levels (B386).
+      const option = agentReasoningOption(argument);
+      if (
+        option &&
+        !option.otherModel &&
+        !(
+          option.value.toLocaleLowerCase() === 'budget' ||
+          reasoningChoice(option.value, chatReasoning)
+        )
+      ) {
+        setError(notALevel(option.value));
+        return;
+      }
+    }
     setBusy(true);
     try {
       if (command.handler_kind === 'reasoning') {
-        const reasoning =
-          state.workspace.reasoning?.model_ref ===
-          controls.model_selection?.model_ref
-            ? state.workspace.reasoning
-            : null;
+        const reasoning = chatReasoning;
         const choice = reasoningChoice(argument, reasoning);
         if (!reasoning?.available || !choice) {
-          setError(
-            reasoning?.available
-              ? `“${argument}” isn't a thinking level for this model. Try ${reasoning.choices.map((item) => item.label).join(', ')}.`
-              : 'This model has no thinking levels to choose from.',
-          );
+          setError(notALevel(argument));
           return;
         }
         await controller.intent(
@@ -2171,6 +2189,12 @@ export default function Conversation({
         controller.delegatedActivity(id, cursor, signal)
       }
       loadRun={(run, signal) => controller.delegatedRun(id, run, signal)}
+      modelName={(ref) => {
+        const model = state.handshake?.models.find(
+          (item) => item.model_ref === ref,
+        );
+        return model ? splitModelLabel(model.label).name : modelRefName(ref);
+      }}
       // The dialog keeps these from when it opened: read the conversation's
       // revision when the person acts, not the render's.
       stopRun={async (run) => {
@@ -3035,7 +3059,12 @@ export default function Conversation({
               id && state.conversation && state.status === 'ready',
             )}
             onRename={rename}
-            model={id ? modelName : undefined}
+            model={
+              id
+                ? // A helper's header also says how it thinks (B386).
+                  [modelName, ownRun?.reasoning].filter(Boolean).join(' · ')
+                : undefined
+            }
             onFind={id ? findConversation : undefined}
             onShare={id ? manageConversation : undefined}
             onContext={

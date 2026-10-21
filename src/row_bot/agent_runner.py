@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import threading
@@ -294,6 +295,10 @@ class AgentRunnerError(ValueError):
     """Raised when a child Agent cannot be created or started."""
 
 
+class HelperReasoningError(AgentRunnerError):
+    """The helper's model does not offer the reasoning level asked for (B386)."""
+
+
 def _short_title(text: str, *, limit: int = 64) -> str:
     title = " ".join(str(text or "").strip().split())
     if not title:
@@ -543,6 +548,75 @@ def _is_task_stopped(exc: BaseException) -> bool:
     return exc.__class__.__name__ == "TaskStoppedError"
 
 
+def _model_reasoning_ref(label: str) -> tuple[str, str, str]:
+    """(canonical reasoning ref, selection ref, model id) for a model choice; blanks if it doesn't resolve."""
+    if not label:
+        return "", "", ""
+    try:
+        from row_bot.providers.reasoning import canonical_reasoning_model_ref
+        from row_bot.providers.resolution import resolve_provider_config
+
+        resolved = resolve_provider_config(label, allow_legacy_local=True)
+        return (
+            canonical_reasoning_model_ref(resolved.provider_id, resolved.runtime_model),
+            resolved.selection_ref,
+            resolved.model_id,
+        )
+    except Exception:
+        logger.debug("Model %s did not resolve for a helper's reasoning", label, exc_info=True)
+        return "", "", label
+
+
+def _helper_reasoning(
+    parent_thread_id: str, parent_model: str, child_model: str, requested: str,
+) -> tuple[str, dict[str, str], Any]:
+    """The helper's reasoning ref, what it runs on and its reasoning, refused before anything starts (B386)."""
+    from row_bot.models import get_current_model
+    from row_bot.providers.reasoning import helper_reasoning
+
+    current = str(get_current_model() or "")
+    parent_ref, _, _ = _model_reasoning_ref(parent_model or current)
+    child_ref, selection_ref, model_id = _model_reasoning_ref(child_model or current)
+    try:
+        chosen = helper_reasoning(parent_thread_id, parent_ref, child_ref, requested)
+    except ValueError as exc:
+        raise HelperReasoningError(str(exc)) from exc
+    runs_on = {"model_ref": selection_ref, "model": model_id, "reasoning": chosen.selection.label,
+               "not_offered": chosen.not_offered}
+    return child_ref, runs_on, chosen
+
+
+def helper_thinking(run_id: str, recorded: Any = None) -> dict[str, str]:
+    """The model and reasoning a helper started with (B386), or {} for an older run.
+
+    ``recorded`` is the event's payload when the caller already read it."""
+    payload = recorded
+    if payload is None:
+        from row_bot.agent_runs import get_agent_events
+
+        payload = next((event.get("payload_json") for event in get_agent_events(run_id, limit=20)
+                        if event.get("type") == "reasoning.chosen"), None)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = None
+    if not isinstance(payload, Mapping):
+        return {}
+    return {key: str(payload.get(key) or "")[:120]
+            for key in ("model_ref", "model", "reasoning", "not_offered")}
+
+
+def thinking_line(thinking: Mapping[str, str]) -> str:
+    """"claude-opus-4-8 · High", or "… · Provider default: High isn't offered"."""
+    if not thinking:
+        return ""
+    line = " · ".join(value for value in (thinking.get("model"), thinking.get("reasoning")) if value)
+    if thinking.get("not_offered"):
+        line += f": {thinking['not_offered']} isn't offered"
+    return line
+
+
 def _delegating_app_scope(parent_thread_id: str, stored: Mapping[str, Any] | None = None) -> dict | None:
     """What an agent a chat starts leaves out: the delegating turn's own exclusions, the ones an earlier
     run of the same work started with (``stored``: a retry or resume keeps the message's focus), and
@@ -631,6 +705,7 @@ def spawn_agent_run(
     orchestration_attempt: int = 1,
     retry_of_run_id: str = "",
     app_scope: Mapping[str, Any] | None = None,
+    reasoning: str = "",
     wait: bool = False,
     timeout: float | None = None,
 ) -> dict[str, Any]:
@@ -722,6 +797,10 @@ def spawn_agent_run(
         )
     # Read before anything is created, so a refusal leaves nothing behind.
     app_scope = _delegating_app_scope(parent_thread_id, app_scope) if parent_thread_id else None
+    # A helper thinks as the conversation does unless it was given a level (B386).
+    child_model_ref, runs_on, thinking = _helper_reasoning(
+        parent_thread_id, str(parent_defaults["model_override"] or ""), model, reasoning,
+    )
     effective_developer_workspace_id = parent_developer_workspace_id
     workspace_path = ""
     worktree_allocation: dict[str, Any] | None = None
@@ -783,6 +862,10 @@ def spawn_agent_run(
         agent_profile_slug=str(profile_snapshot.get("slug") or ""),
         seed_default_skills=False,
     )
+    if child_model_ref and not thinking.selection.is_default:
+        from row_bot.threads import set_thread_reasoning_selection
+
+        set_thread_reasoning_selection(child_thread_id, child_model_ref, thinking.selection.to_json())
     child_skills = _profile_child_skills(parent_defaults["skills_override"], profile_snapshot)
     set_thread_skills_override(child_thread_id, child_skills)
     if parent_thread_id:
@@ -906,6 +989,12 @@ def spawn_agent_run(
             },
             visibility="user_visible",
         )
+    append_agent_event(
+        run_id,
+        "reasoning.chosen",
+        runs_on,
+        visibility="user_visible",
+    )
     append_agent_event(
         run_id,
         "context.packed",

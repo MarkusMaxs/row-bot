@@ -3030,6 +3030,26 @@ it('starts a delegated agent with /agent and its task', async () => {
   );
 });
 
+it('refuses /agent --reasoning with a level this model lacks, naming its levels (B386)', async () => {
+  withCommands();
+  await sendText('/agent --reasoning turbo Summarise tide tables');
+  expect(mock.intent).not.toHaveBeenCalled();
+  expect(
+    screen.getByText(/isn't a thinking level for this model. Try Low, High./),
+  ).toBeVisible();
+});
+
+it('starts a helper at a level this model offers with /agent --reasoning (B386)', async () => {
+  withCommands();
+  await sendText('/agent --reasoning high Summarise tide tables');
+  expect(mock.intent).toHaveBeenCalledWith(
+    'conversation-a',
+    'agent.start',
+    { text: '--reasoning high Summarise tide tables' },
+    '1',
+  );
+});
+
 it('starts a goal at once with /goal and no turn limit unless Agent runtime sets one (B243)', async () => {
   withCommands();
   mock.goals.mockResolvedValue({
