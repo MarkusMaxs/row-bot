@@ -283,6 +283,11 @@ def _provider_of(model_ref: str) -> str:
     return parsed[0] if parsed else ""
 
 
+# The person's Claude plan runs their own, unmodified Claude Code: Row-Bot never reads, stores or hands over its
+# sign-in (Anthropic's terms), so an arm on it is never run here.
+_NEVER_HANDED_OVER = frozenset({"claude_subscription"})
+
+
 def gather(arms: Sequence[WorkerArm]) -> tuple[list[Credential], dict[str, Any], list[str]]:
     """In the app: the credentials, endpoint definitions and local model settings the arms need,
     and the arms that can't be handed over (their names). Never refreshes a sign-in."""
@@ -297,6 +302,9 @@ def gather(arms: Sequence[WorkerArm]) -> tuple[list[Credential], dict[str, Any],
     for arm in arms:
         provider = _provider_of(arm.model_ref)
         model_id = arm.model_ref.split(":", 2)[-1] if arm.model_ref.count(":") >= 2 else ""
+        if provider in _NEVER_HANDED_OVER:
+            unsupported.append(arm.name)  # nothing of it is read
+            continue
         if provider == "ollama":
             found = models.local_model_settings(model_id)
             if found:
