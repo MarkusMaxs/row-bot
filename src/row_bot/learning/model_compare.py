@@ -317,9 +317,8 @@ class Comparer:
         found = weights.status(model, self._root)
         if found.state != "downloaded":
             return None, "engine_missing"
-        main = next((item for item in model.files if item.name.endswith(".safetensors")), None)
         return base_model.ensure(root=self._root, engine_status=engine.status(self._root), model=model,
-                                 weights_folder=found.folder, weights_bytes=main.size if main else model.download_bytes,
+                                 weights_folder=found.folder, weights_bytes=model.weights_bytes or model.download_bytes,
                                  recipe=recipes.current(self._root), runtime=runtime)
 
     def _baseline(self, version: int, runtime: str = "ollama") -> tuple[str, str, str | None, str | None, str | None]:

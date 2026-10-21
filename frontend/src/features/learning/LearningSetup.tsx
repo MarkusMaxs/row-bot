@@ -73,7 +73,8 @@ function HardwareRows({
       </div>
     );
   if (hardware.state === 'gpu' && hardware.tier) {
-    const model = hardware.starting_models[0];
+    // Every certified model this card trains, its own tier's first (the recommendation, D3).
+    const models = hardware.starting_models;
     return (
       <div className="learning-stack-tight">
         <p>
@@ -86,7 +87,7 @@ function HardwareRows({
             {tier.summary}
           </p>
         ))}
-        {model && (
+        {models.length > 0 && (
           <label className="learning-field" htmlFor={modelId}>
             <span className="learning-label">Starting model</span>
             <Select
@@ -100,10 +101,12 @@ function HardwareRows({
                 })
               }
             >
-              <option value={model.id}>
-                {model.name} · {model.licence} ·{' '}
-                {sizeWords(model.download_bytes)} download
-              </option>
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} · {model.licence} ·{' '}
+                  {sizeWords(model.download_bytes)} download
+                </option>
+              ))}
             </Select>
           </label>
         )}
@@ -225,9 +228,15 @@ export function LearningSetupSheet({
   const check = (refresh = false) => {
     setHardwareError('');
     if (refresh) setHardware(null);
-    io.hardware(refresh).then(setHardware, (cause: unknown) =>
-      setHardwareError(clientError(cause).message),
-    );
+    io.hardware(refresh).then((found) => {
+      setHardware(found);
+      // The card's own tier's model is the recommendation (D3), chosen when the card is read.
+      const recommended = found.starting_models[0]?.id;
+      if (recommended)
+        setChoices((current) =>
+          current ? { ...current, starting_model: recommended } : current,
+        );
+    }, (cause: unknown) => setHardwareError(clientError(cause).message));
   };
   useEffect(() => {
     if (!open) return;

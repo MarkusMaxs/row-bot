@@ -161,6 +161,7 @@ export function percentWords(done: number, total: number): string {
 
 /** Where a personal model runs ("Runs in", designs/learning-ux.md §5). */
 export const RUNTIME_NAMES: Record<string, string> = {
+  row_bot: 'Row-Bot',
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
   llama_cpp: 'llama.cpp server',
@@ -198,6 +199,13 @@ export const VERSION_FAILURES: Record<string, string> = {
   probe_failed: 'It loaded, but didn’t pass Row-Bot’s check.',
   tool_turn_failed:
     'It started, but couldn’t finish a short task that uses a tool.',
+  server_missing:
+    'Row-Bot needs one more part of the training engine to run it.',
+  server_unavailable:
+    'Row-Bot can run it only on a computer with an NVIDIA graphics card.',
+  server_failed: 'Row-Bot’s runner stopped while starting it.',
+  load_failed:
+    'It didn’t load. The graphics card may not have enough free memory.',
 };
 
 /** "Needs more examples · 46 of 100 so far". */

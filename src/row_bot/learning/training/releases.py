@@ -348,8 +348,8 @@ class ReleaseMaker:
 
         model = weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
         found = weights.status(model, self._root)
-        main = next((item for item in model.files if item.name.endswith(".safetensors")), None)
-        return model, found.folder if found.state == "downloaded" else None, main.size if main else model.download_bytes
+        return (model, found.folder if found.state == "downloaded" else None,
+                model.weights_bytes or model.download_bytes)
 
     def recipe(self) -> Any:
         if self._recipe_for is not None:
@@ -558,7 +558,9 @@ class ReleaseMaker:
         parent = max(previous, key=lambda item: item.version) if previous else None
         base = template = tokenizer = None
         if weights_folder is not None:
-            base_file = next((item.name for item in model.files if item.name.endswith(".safetensors")), "")
+            shards = [item.name for item in model.files if item.name.endswith(".safetensors")]
+            # One file of weights is pinned as it is; a model in shards by its index (which names them all).
+            base_file = shards[0] if len(shards) == 1 else "model.safetensors.index.json" if shards else ""
             base = _pin_file(model.repo, weights_folder, base_file, model.revision)
             tokenizer = _pin_file(f"{model.repo} tokenizer", weights_folder, "tokenizer.json", model.revision)
             template = _pin_file(f"{model.repo} chat template", weights_folder, "chat_template.jinja", model.revision)

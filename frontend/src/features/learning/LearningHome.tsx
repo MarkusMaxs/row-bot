@@ -528,6 +528,11 @@ function PersonalModel({
                 : hardware.state === 'unknown'
                   ? 'Couldn’t check the graphics card'
                   : 'No NVIDIA graphics card'}
+            {hardware?.state === 'gpu' && hardware.tier && (
+              <span className="learning-muted learning-fact-note">
+                {hardware.tier.summary}
+              </span>
+            )}
           </dd>
         </div>
       </dl>

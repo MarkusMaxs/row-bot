@@ -574,6 +574,8 @@ def fit_main(writer: Any, options: dict[str, str]) -> int:
         "max_seq_length": int(options.get("max_seq", 16384)),
         "bits": int(options.get("bits", 16)),
         "gradient_accumulation": int(options.get("accum", 2)),
+        # A smaller tier's card, on a larger one: the share of this card that tier may use (L2x, O90).
+        "vram_cap": float(options.get("vram_cap", DEFAULTS["vram_cap"])),
     })
     steps = int(options.get("steps", 4))
     started = time.monotonic()

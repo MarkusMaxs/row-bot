@@ -350,6 +350,10 @@
 .learning-facts dd.learning-fact-action > .button {
   margin-block: calc(-1 * var(--space-1));
 }
+.learning-facts .learning-fact-note {
+  display: block;
+  margin-top: var(--space-1);
+}
 @media (max-width: 767px) {
   .learning-facts > div {
     grid-template-columns: minmax(0, 1fr);
