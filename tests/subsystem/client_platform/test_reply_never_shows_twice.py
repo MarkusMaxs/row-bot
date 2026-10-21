@@ -85,13 +85,24 @@ def test_an_answer_saved_before_it_starts_streaming_shows_once(platform):
     handle = platform.registry.get(submit(platform, fake, "saved-before-streamed")["execution_id"])
     try:
         assert saved.entered.wait(10)
-        platform.snapshot("conversation-a")  # A page reads the saved answer in before it streams.
+        page = platform.snapshot("conversation-a")  # A page reads the saved answer in before it streams.
         saved.release.set()
         assert streamed.entered.wait(10)
-        rows = platform.snapshot("conversation-a")["rows"]  # And reads again once it streams.
-        shown = [row for row in rows if row["role"] == "assistant"
-                 and "".join(block.get("text", "") for block in row.get("blocks", [])) == text]
-        assert len(shown) == 1, [row["id"] for row in shown]
+        # The page applies each delta that follows to its own rows, as the client does, until a settle
+        # or checkpoint sends it to read again.
+        rows = {row["id"]: row for row in page["rows"]}
+        for event in platform.events_since("conversation-a", page["cursor"])["events"]:
+            if event["type"] in {"transcript.settled", "transcript.checkpoint"}:
+                break
+            if event["type"] == "transcript.delta":
+                delta = event["payload"]
+                live = rows.setdefault(delta["row_id"], {"id": delta["row_id"], "role": "assistant",
+                                                         "blocks": [{"type": "text", "text": ""}]})
+                live["blocks"][0]["text"] += delta["public_text_delta"]
+        for view in (list(rows.values()), platform.snapshot("conversation-a")["rows"]):  # and when it reads again
+            shown = [row for row in view if row["role"] == "assistant"
+                     and "".join(block.get("text", "") for block in row.get("blocks", [])) == text]
+            assert len(shown) == 1, [row["id"] for row in shown]
     finally:
         saved.release.set()
         streamed.release.set()
