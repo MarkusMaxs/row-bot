@@ -89,7 +89,8 @@ _CARRIED_SKIP = re.compile(r"^(ROW_BOT|PYTEST|COV_|PYTHONPATH$|PYTHONHOME$|VIRTU
 #: Why a task that ran didn't pass (a case's ``cause``), decided from the turn's own events (L2v).
 #: Codes only: no task text, so a hidden task's cause says nothing about the task (E10).
 CAUSES: dict[str, str] = {
-    "provider_error": "the model call failed (the provider or its tool-call parser)",
+    "provider_error": "the model call failed (the provider was unavailable or broke)",
+    "malformed_call": "the runtime refused the model's own malformed tool call (counted as failed, O70)",
     "harness": "the test itself couldn't run or check the task",
     "budget": "ran out of its steps, tokens or time",
     "no_tool": "answered without using any tool",
@@ -99,6 +100,8 @@ CAUSES: dict[str, str] = {
     "no_answer": "the turn ended without an answer",
     "wrong_answer": "used the tools and answered, but the check failed",
 }
+#: A failed case's detail when the runtime refused the model's malformed call (``evaluation.MALFORMED_DETAIL``).
+MALFORMED_DETAIL = "the model's tool call was malformed (the runtime refused it)"
 #: Trace events a developer's run keeps per task (only when it asks for them).
 TRACE_EVENTS = 160
 _APP_PREFIXES = ("calendar_", "mail_", "issues_")
@@ -223,6 +226,8 @@ def failure_cause(status: str, detail: str, record: TurnRecord, *, task_tools: S
         return ""
     if status == "error":
         return "provider_error" if detail.startswith("the model call failed") else "harness"
+    if detail == MALFORMED_DETAIL:
+        return "malformed_call"
     if status == "budget":
         return "budget"
     if detail == "stopped to ask for approval":
@@ -930,6 +935,9 @@ class _TaskGate:
 
         self.sent: dict[str, int] = {}
         self.estimated = 0
+        # The failed model calls' own errors (the provider's text, not the turn's friendly line), so
+        # a runtime's refusal of the model's malformed tool call is told apart from an outage (O70).
+        self.errors: list[str] = []
 
     def reset(self, allowance: int, cloud_cap: int | None) -> None:
         self.allowance, self.cloud_cap = int(allowance), cloud_cap
@@ -937,6 +945,16 @@ class _TaskGate:
         self.refused = ""
         self.sent = {}
         self.estimated = 0
+        self.errors = []
+
+    def failed(self, error: BaseException) -> None:
+        self.errors.append(str(error)[:2000])
+
+    @property
+    def malformed_call(self) -> bool:
+        from row_bot.learning.evaluation import is_malformed_call
+
+        return any(is_malformed_call(text) for text in self.errors)
 
     def admit(self, run_id: Any, estimate: int, *, local: bool) -> None:
         """Before a model call: refuse it (raise) when its estimate would pass the task's allowance
@@ -976,6 +994,7 @@ def _install_gate(gate: _TaskGate) -> None:
     callback = usage_ledger.UsageLedgerCallback
     original_start = callback.on_chat_model_start
     original_end = callback.on_llm_end
+    original_error = callback.on_llm_error
 
     def flatten(messages: Any) -> list[Any]:
         found: list[Any] = []
@@ -997,8 +1016,13 @@ def _install_gate(gate: _TaskGate) -> None:
         gate.charge(run_id, used, local=is_local_provider(str(getattr(self, "provider_id", "") or "")))
         return original_end(self, response, run_id=run_id, **kwargs)
 
+    def on_llm_error(self: Any, error: BaseException, *, run_id: Any, **kwargs: Any) -> Any:
+        gate.failed(error)
+        return original_error(self, error, run_id=run_id, **kwargs)
+
     callback.on_chat_model_start = on_chat_model_start
     callback.on_llm_end = on_llm_end
+    callback.on_llm_error = on_llm_error
     callback.raise_error = True
 
 
@@ -1126,6 +1150,9 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
         status, detail = "budget", "ran out of steps"
     elif outcome["status"] == "asked":
         status, detail = "failed", "stopped to ask for approval"
+    elif outcome["status"] == "error" and gate.malformed_call:
+        # The runtime refused the model's own malformed tool call: the model wrote it, so it failed (O70).
+        status, detail = "failed", MALFORMED_DETAIL
     elif outcome["status"] == "error":
         status, detail = "error", "the model call failed: " + "; ".join(outcome["errors"])[:200]
         logging.getLogger(__name__).info("An evaluation turn failed: %s", "; ".join(outcome["errors"])[:500])
@@ -1243,7 +1270,8 @@ class RuntimeRunner:
     arms: Mapping[str, WorkerArm]
     record_usage: Callable[[Sequence[Mapping[str, Any]]], None] | None = None
     seconds: float = TASK_SECONDS
-    signature: str = "agent-runtime-2"
+    # 3 (L2w): a runtime's refusal of a malformed tool call counts as failed (O70).
+    signature: str = "agent-runtime-3"
     unsupported: set[str] = field(default_factory=set)
     #: A developer's look at visible tasks: called with (task, arm name, case, trace). Never set by the
     #: product's comparison, so no hidden task's turn ever leaves the worker (E10).

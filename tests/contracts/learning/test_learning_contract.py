@@ -99,6 +99,17 @@ def test_a_version_1_episode_reads_as_one_with_no_next_message_marker():
     assert contracts.from_json(contracts.to_json(marked)) == marked
 
 
+def test_a_version_1_release_reads_as_one_whose_rows_rendering_is_unknown():
+    v1 = {"record": "release", "schema_version": 1, "id": "rel_old", "kind": "model", "version": 1, "created_at": 1.0,
+          "identity": {"data": {"dataset_id": "ds_old", "examples": 120, "providers": ["codex"]}}}
+    release = contracts.record_from_dict(v1)
+    assert isinstance(release, contracts.Release) and release.identity.data.rendering is None
+    assert release.to_dict()["schema_version"] == 2
+    shaped = contracts.Release(id="rel_new", kind="model", version=2, created_at=2.0, identity=contracts.ReleaseIdentity(
+        data=contracts.DataSpec(dataset_id="ds_new", examples=300, rendering="serving-v1@32768")))
+    assert contracts.from_manifest(contracts.to_manifest(shaped)) == shaped
+
+
 @pytest.mark.parametrize(
     ("version", "detail"),
     [(2, "newer"), (99, "newer"), (0, "retired"), (-1, "retired")],

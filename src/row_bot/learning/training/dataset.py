@@ -370,7 +370,7 @@ Measure = Callable[[Sequence[Mapping[str, Any]], int], Sequence[tuple[int, int]]
 class _Book:
     """A store's records, read once."""
 
-    def __init__(self, store: Any) -> None:
+    def __init__(self, store: Any, episodes: Sequence[Episode] = ()) -> None:
         self.store = store
         self.decisions: dict[str, list[Decision]] = defaultdict(list)
         for decision in store.find("decision", limit=100_000):
@@ -397,9 +397,11 @@ class _Book:
         # What each held reply looked like (its tool call ids, its text), by conversation: a later
         # turn's history repeats it, and no row may hold it even as context (O18).
         self.held_replies: dict[str, list[tuple[float, frozenset[str], str]]] = defaultdict(list)
-        for items in self.decisions.values():
+        # The turn after a held-out correction counts as held for later turns' history too (O87).
+        redone = {episode.id for episode in episodes if episode.follows_decision_id in self.held_corrections}
+        for episode_id, items in self.decisions.items():
             for item in items:
-                if item.id in self.held and item.kind == "model_call":
+                if item.kind == "model_call" and (item.id in self.held or episode_id in redone):
                     self.held_replies[item.thread_id].append((item.created_at, *_reply_signature(store, item)))
 
     def held_before(self, thread_id: str, at: float) -> list[tuple[frozenset[str], str]]:
@@ -655,14 +657,14 @@ def compile_dataset(
         envelope = shape_module.envelope_for(int(recipe.serve_context))
     elif shape == "captured":
         envelope = None
-    book = _Book(store)
+    episodes = [item for item in store.find("episode", limit=100_000) if isinstance(item, Episode)]
+    episodes.sort(key=lambda item: (item.started_at, item.id))
+    book = _Book(store, episodes)
     left_out: Counter[str] = Counter()
     scope_cache: dict[tuple[str, bool, bool], str | None] = {}
     candidates: list[Example] = []
     changes: dict[str, shape_module.Stats] = {}
     paths = 0
-    episodes = [item for item in store.find("episode", limit=100_000) if isinstance(item, Episode)]
-    episodes.sort(key=lambda item: (item.started_at, item.id))
     for episode in episodes:
         reason = _scope_reason(episode.conversation_id, historical=episode.historical,
                                goal=episode.source == "goal", store=store, lookup=lookup, settings=settings,

@@ -26,11 +26,11 @@ Priorities, in order:
   execution, and accepted by the user. Never describe third-party telemetry
   as Row-Bot telemetry, and never allow dependency telemetry to include
   Row-Bot prompts, files, memories, secrets, screenshots, tool arguments, or
-  channel content. The reviewed, opt-in Cua Driver integration is the only
-  currently approved exception; future dependencies require a separate review.
-  The Learning (preview) training engine, installed only after the download
-  ask, with every library's usage reporting switched off and a network guard
-  (`docs/LEARNING_ENGINE_TELEMETRY.md`), is the second reviewed exception.
+  channel content. Two reviewed, opt-in exceptions are currently approved:
+  the Cua Driver integration, and the Learning (preview) training engine,
+  installed only after the download ask, with every library's usage reporting
+  switched off and a network guard (`docs/LEARNING_ENGINE_TELEMETRY.md`).
+  Future dependencies require a separate review.
 - Do not commit secrets, API keys, provider tokens, private local paths, or real
   user data in code, tests, docs, fixtures, snapshots, or logs.
 - Do not make default tests depend on live providers, live MCP servers, real

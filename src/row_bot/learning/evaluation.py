@@ -73,6 +73,14 @@ METRIC_VERSION = 2
 # "21 of 24 passed": passed over passed + failed. A task that ran out of its budget or
 # steps failed; one the provider couldn't run (an error) or no check could decide
 # (unverified) is reported but left out of the denominator.
+# O70 narrows "the provider couldn't run it": a runtime's rejection of the model's own malformed
+# tool call (Ollama's tool-call parser answering 500) is the model's output, so the task failed
+# (cause ``malformed_call``) and counts. Real outages (refused connections, timeouts, other server
+# errors) stay outside.
+MALFORMED_CALL = "malformed_call"
+MALFORMED_DETAIL = "the model's tool call was malformed (the runtime refused it)"
+MALFORMED_CALL_MARKERS = ("xml syntax error", "error parsing tool call", "failed to parse tool call",
+                          "tool call could not be parsed", "invalid tool call format")
 SMALL_SAMPLE = 30
 SMALL_SAMPLE_HALF_WIDTH = 0.15
 VARIANCE_NOTE = "Small test, so expect some variation."
@@ -236,6 +244,16 @@ class Comparison:
     paired: dict[str, Any] = field(default_factory=dict)
     # What the judge used while deciding this comparison's results (its calibration is counted apart).
     judge_tokens: int = 0
+    # How many times each problem ran per arm, and per arm how many repeated problems ran the same
+    # every time (``problems``, ``identical``: greedy decoding shows up here).
+    repeats: int = 1
+    repeated: dict[str, dict[str, int]] = field(default_factory=dict)
+    # The pre-registered paired analysis of each arm against the first (O88): aggregates only, so an
+    # audit run's per-problem results never leave this module (E10).
+    analysis: dict[str, Any] = field(default_factory=dict)
+    # Each problem's cluster (its source chat; a pack task is its own), kept only where the problems
+    # aren't hidden, so a later audit run can analyse visible and hidden problems together.
+    clusters: dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def tokens(self) -> int:
@@ -285,6 +303,13 @@ def wilson_half_width(passed: int, total: int, z: float = 1.96) -> float:
 
 def _small(passed: int, total: int) -> bool:
     return total < SMALL_SAMPLE or wilson_half_width(passed, total) > SMALL_SAMPLE_HALF_WIDTH
+
+
+def is_malformed_call(error: object) -> bool:
+    """Whether a failed model call is the runtime refusing the model's own malformed tool call (O70)."""
+
+    text = str(error or "").lower()
+    return any(marker in text for marker in MALFORMED_CALL_MARKERS)
 
 
 def sign_test(better: int, worse: int) -> float:
@@ -561,7 +586,7 @@ def run_pack_task(task: PackTask, arm: Arm, *, client: ModelClient, budget: Budg
     started = time.monotonic()
     steps = tokens = local_tokens = 0
     status: Status = "failed"
-    detail = ""
+    detail = cause = ""
     allowance = budget.task_tokens if arm_left is None else min(budget.task_tokens, max(0, arm_left))
     with Sandbox() as box:
         for name, content in task.files.items():
@@ -597,17 +622,20 @@ def run_pack_task(task: PackTask, arm: Arm, *, client: ModelClient, budget: Budg
         except _LimitReached:
             raise
         except Exception as error:  # noqa: BLE001 - a provider failure is reported, not fatal
-            status, detail = "error", f"the model call failed ({type(error).__name__})"
+            if is_malformed_call(error):
+                status, detail, cause = "failed", MALFORMED_DETAIL, MALFORMED_CALL  # the model's own output (O70)
+            else:
+                status, detail = "error", f"the model call failed ({type(error).__name__})"
         if finished:
             try:
                 verdict = verify(task, Outcome(answer, box.files(), apps.state()), backend=backend)
                 status, detail = ("passed" if verdict.passed else "failed"), verdict.detail
             except SandboxError as error:
                 status, detail = "error", f"the check could not run ({error})"
-        elif status == "failed":
+        elif status == "failed" and not cause:
             status, detail = "budget", "ran out of steps"
     return CaseResult(task.id, "pack", task.kind_of_work, status, task.verifier.kind, tokens, local_tokens, steps,
-                      round(time.monotonic() - started, 3), detail[:300])
+                      round(time.monotonic() - started, 3), detail[:300], cause)
 
 
 # ── Replay: re-asking a captured decision at its prefix ─────────────────────
@@ -878,6 +906,9 @@ def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: 
     except _LimitReached:
         raise
     except Exception as error:  # noqa: BLE001
+        if is_malformed_call(error):  # the model's own output, so it failed (O70)
+            return CaseResult(case.decision_id, "replay", case.kind_of_work, "failed", case.check,
+                              detail=MALFORMED_DETAIL, cause=MALFORMED_CALL)
         return CaseResult(case.decision_id, "replay", case.kind_of_work, "error", case.check,
                           detail=f"the model call failed ({type(error).__name__})")
     verdict, detail = compare_action(Action.from_message(reply.message), case.reference, check=case.check,
@@ -927,12 +958,18 @@ class ArmCache:
         return gate.folder_path(self._root) / CACHE_FILE
 
     @staticmethod
-    def key(arm: Arm, task: PackTask, budget: Budget, signature: str) -> str:
+    def key(arm: Arm, task: PackTask, budget: Budget, signature: str, *, repeat: int = 0) -> str:
+        """A repeated run of a task is its own entry (``repeat``), so repeats are never one result
+        copied."""
+
         import hashlib
 
         content = json.dumps(task.to_dict(), sort_keys=True, ensure_ascii=False)
-        material = json.dumps([str(arm.model_ref or ""), hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                               METRIC_VERSION, budget.to_dict(), signature], sort_keys=True)
+        parts: list[Any] = [str(arm.model_ref or ""), hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                            METRIC_VERSION, budget.to_dict(), signature]
+        if repeat:
+            parts.append(int(repeat))
+        material = json.dumps(parts, sort_keys=True)
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
     def _load(self) -> dict[str, dict[str, Any]]:
@@ -988,30 +1025,168 @@ def _caller() -> str:
     return str(frame.f_globals.get("__name__", "")) if frame is not None else ""
 
 
-def _by_kind(cases: Sequence[CaseResult]) -> dict[str, tuple[int, int]]:
-    table: dict[str, list[int]] = {}
+def pass_fractions(cases: Sequence[CaseResult]) -> dict[str, tuple[str, float]]:
+    """Each problem's pass fraction over its counted runs (``s(i, a)``, pre-registration §6.1), with
+    its kind of work. A problem with no counted run has none."""
+
+    runs: dict[str, list[int]] = {}
+    kinds_of_work: dict[str, str] = {}
     for case in cases:
         if case.counted:
-            row = table.setdefault(case.kind_of_work or "Other", [0, 0])
-            row[0] += int(case.passed)
-            row[1] += 1
-    return {kind: (row[0], row[1]) for kind, row in sorted(table.items())}
+            runs.setdefault(case.task_id, []).append(int(case.passed))
+            kinds_of_work.setdefault(case.task_id, case.kind_of_work or "Other")
+    return {task: (kinds_of_work[task], sum(found) / len(found)) for task, found in runs.items()}
+
+
+def _by_kind(cases: Sequence[CaseResult]) -> dict[str, tuple[int, int]]:
+    """Passed of problems per kind of work. With repeated runs a problem counts as its pass fraction,
+    and the kind's total is rounded to whole problems ("2 of 8": the verdict rule's own units)."""
+
+    table: dict[str, list[float]] = {}
+    for kind, fraction in pass_fractions(cases).values():
+        row = table.setdefault(kind, [0.0, 0])
+        row[0] += fraction
+        row[1] += 1
+    return {kind: (int(round(row[0] + 1e-9)), int(row[1])) for kind, row in sorted(table.items())}
 
 
 def _paired(first: Sequence[CaseResult], second: Sequence[CaseResult]) -> dict[str, Any]:
-    results = {case.task_id: case for case in second if case.counted}
+    base = pass_fractions(first)
+    other = pass_fractions(second)
     better = worse = same = 0
-    for case in first:
-        other = results.get(case.task_id)
-        if other is None or not case.counted:
+    for task, (_, fraction) in base.items():
+        if task not in other:
             continue
-        if other.passed and not case.passed:
+        if other[task][1] > fraction:
             better += 1
-        elif case.passed and not other.passed:
+        elif other[task][1] < fraction:
             worse += 1
         else:
             same += 1
     return {"better": better, "worse": worse, "same": same, "p_value": round(sign_test(better, worse), 4)}
+
+
+# ── The pre-registered paired analysis (§7, O88): only aggregates leave ─────
+
+#: Fixed by the pre-registration: a 95% percentile interval from 10,000 cluster resamples, a two-sided
+#: paired permutation test by cluster with 10,000 sign flips, and a recorded seed.
+RESAMPLES = 10_000
+PERMUTATIONS = 10_000
+ANALYSIS_SEED = 20_261_022
+#: Fewer counted problems than this: no confirmatory test (reported as descriptive only).
+MIN_PROBLEMS = 30
+#: Non-inferiority margin: worse by at most 10 points.
+MARGIN = 0.10
+
+
+def _percentile(ordered: Sequence[float], share: float) -> float:
+    if not ordered:
+        return 0.0
+    position = share * (len(ordered) - 1)
+    low = math.floor(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def paired_analysis(differences: Sequence[tuple[str, float]], *, resamples: int = RESAMPLES,
+                    permutations: int = PERMUTATIONS, seed: int = ANALYSIS_SEED) -> dict[str, Any]:
+    """The pre-registered analysis of paired differences ``d(i) = s(i, A) - s(i, B)``, given as
+    (cluster, d) per problem: the mean difference, a 95% cluster-bootstrap percentile interval
+    (source chats resampled with replacement; a pack task is its own cluster) and a two-sided
+    paired permutation p-value (each cluster's summed difference flips sign; exact when there are
+    few enough clusters to list every sign pattern). Deterministic for a seed."""
+
+    import itertools
+    import random
+
+    clusters: dict[str, list[float]] = {}
+    for cluster, difference in differences:
+        clusters.setdefault(str(cluster), []).append(float(difference))
+    keys = sorted(clusters)
+    sums = [sum(clusters[key]) for key in keys]
+    counts = [len(clusters[key]) for key in keys]
+    problems = sum(counts)
+    base = {"problems": problems, "clusters": len(keys), "resamples": int(resamples),
+            "permutations": int(permutations), "seed": int(seed)}
+    if not problems:
+        return {**base, "difference": None, "low": None, "high": None, "p_value": None, "exact": False}
+    total = sum(sums)
+    mean = total / problems
+    rng = random.Random(int(seed))
+    indexes = range(len(keys))
+    boots = []
+    for _ in range(int(resamples)):
+        picks = rng.choices(indexes, k=len(keys))
+        boots.append(sum(sums[index] for index in picks) / sum(counts[index] for index in picks))
+    boots.sort()
+    observed = abs(total) - 1e-12
+    exact = 2 ** len(keys) <= int(permutations)
+    if exact:
+        hits = sum(1 for signs in itertools.product((1, -1), repeat=len(keys))
+                   if abs(sum(sign * value for sign, value in zip(signs, sums))) >= observed)
+        p_value = hits / 2 ** len(keys)
+    else:
+        hits = sum(1 for _ in range(int(permutations))
+                   if abs(sum(value if rng.random() < 0.5 else -value for value in sums)) >= observed)
+        p_value = (hits + 1) / (int(permutations) + 1)
+    return {**base, "difference": round(mean, 6), "low": round(_percentile(boots, 0.025), 6),
+            "high": round(_percentile(boots, 0.975), 6), "p_value": round(p_value, 6), "exact": exact}
+
+
+def interval_verdict(analysis: Mapping[str, Any]) -> str:
+    """What the interval says: ``better`` (it lies above 0), ``worse`` (below 0) or ``unclear``; the
+    product's own verdict rule is unchanged (a promotion rule, E4) and reported beside it."""
+
+    low, high = analysis.get("low"), analysis.get("high")
+    if low is None or high is None:
+        return "unclear"
+    if low > 0:
+        return "better"
+    if high < 0:
+        return "worse"
+    return "unclear"
+
+
+def _analysis(first: Sequence[CaseResult], second: Sequence[CaseResult], clusters: Mapping[str, str], *,
+              seed: int, kind_key: Callable[[str], str] | None = None) -> dict[str, Any]:
+    """``second`` against ``first`` on the problems both counted, overall and per kind of work
+    (``kind_key`` groups the kinds, as a caller's table does)."""
+
+    base, other = pass_fractions(first), pass_fractions(second)
+    rows: dict[str, list[tuple[str, float]]] = {}
+    means: dict[str, list[tuple[float, float]]] = {}
+    for task, (kind, fraction) in base.items():
+        if task not in other:
+            continue  # a problem with no counted run in one arm leaves the pair (§8.3)
+        difference = other[task][1] - fraction
+        for key in ("overall", kind_key(kind) if kind_key is not None else kind):
+            rows.setdefault(key, []).append((clusters.get(task, task), difference))
+            means.setdefault(key, []).append((fraction, other[task][1]))
+
+    def summary(key: str) -> dict[str, Any]:
+        found = paired_analysis(rows.get(key, []), resamples=RESAMPLES, permutations=PERMUTATIONS, seed=seed)
+        pairs = means.get(key, [])
+        found["baseline"] = round(sum(item[0] for item in pairs) / len(pairs), 6) if pairs else None
+        found["arm"] = round(sum(item[1] for item in pairs) / len(pairs), 6) if pairs else None
+        found["enough"] = found["problems"] >= MIN_PROBLEMS
+        found["interval_verdict"] = interval_verdict(found)
+        found["not_worse"] = found["low"] is not None and found["low"] > -MARGIN
+        return found
+
+    return {"overall": summary("overall"),
+            "by_kind": {kind: summary(kind) for kind in sorted(key for key in rows if key != "overall")}}
+
+
+def _repeat_record(cases: Sequence[CaseResult]) -> dict[str, int]:
+    """How many repeated problems gave the same run every time (status, tokens and steps): a runtime
+    that decodes greedily answers identically, and the report says so."""
+
+    runs: dict[str, list[tuple[str, int, int]]] = {}
+    for case in cases:
+        if case.counted:
+            runs.setdefault(case.task_id, []).append((case.status, case.tokens, case.steps))
+    repeated = [found for found in runs.values() if len(found) > 1]
+    return {"problems": len(repeated), "identical": sum(1 for found in repeated if len(set(found)) == 1)}
 
 
 def _save(store: Any, runs: Sequence[tuple[TestRun, dict[str, Any]]],
@@ -1073,28 +1248,34 @@ def compare(arms: Sequence[Arm], *, tasks: Sequence[PackTask] = (), replay: Sequ
             budget: Budget = Budget(), meter: TokenMeter | None = None, store: Any | None = None,
             save: bool = True, clock: Callable[[], float] = time.time, backend: str = "auto",
             suite: Literal["replay", "pack", "practice"] | None = None, runner: PackRunner | None = None,
-            cache: ArmCache | None = None, on_case: Callable[[str, CaseResult], None] | None = None) -> Comparison:
+            cache: ArmCache | None = None, on_case: Callable[[str, CaseResult], None] | None = None,
+            repeats: int = 1, seed: int = ANALYSIS_SEED, kind_key: Callable[[str], str] | None = None) -> Comparison:
     """Run every arm on the same pack tasks and replayed decisions, with the same budget.
 
     The first arm is the baseline the others are compared with. A judge is used only
     with its calibration and only when that calibration is reliable. ``runner`` runs pack tasks
     through the real Agent runtime (O56) instead of the in-process tool loop; ``cache`` keeps
     and reuses the results of arms marked ``cache`` (O31); ``on_case(arm, case)`` follows progress.
+    ``repeats`` runs every problem that many times per arm (O88); the paired analysis uses ``seed``
+    and groups kinds of work with ``kind_key``.
     """
 
     return _compare(arms, list(tasks), list(replay), client=client, judge=judge, calibration=calibration,
                     budget=budget, meter=meter, store=store, save=save, clock=clock, backend=backend,
                     suite=suite or ("replay" if replay and not tasks else "pack"), aggregate_only=False,
-                    runner=runner, cache=cache, on_case=on_case)
+                    runner=runner, cache=cache, on_case=on_case, repeats=repeats, seed=seed, kind_key=kind_key)
 
 
 def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase], *, client: ModelClient | None,
              judge: Judge | None, calibration: Calibration | None, budget: Budget, meter: TokenMeter | None,
              store: Any | None, save: bool, clock: Callable[[], float], backend: str, suite: str,
              aggregate_only: bool, runner: PackRunner | None = None, cache: ArmCache | None = None,
-             on_case: Callable[[str, CaseResult], None] | None = None) -> Comparison:
+             on_case: Callable[[str, CaseResult], None] | None = None, repeats: int = 1,
+             seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
+             kind_key: Callable[[str], str] | None = None) -> Comparison:
     if not arms:
         raise EvaluationError("no_arms")
+    repeats = max(1, int(repeats))
     if len({arm.name for arm in arms}) != len(arms):
         raise EvaluationError("arm_names_repeat")
     if judge is not None:
@@ -1114,7 +1295,9 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
     signature = str(getattr(runner, "signature", "") or "in-process-1")
     stopped = ""
     items: list[PackTask | ReplayCase] = [*tasks, *replay]
-    for index, item in enumerate(items):
+    # Every problem runs ``repeats`` times per arm, the arms interleaved run by run (O88).
+    units = [(item, repeat) for item in items for repeat in range(repeats)]
+    for index, (item, repeat) in enumerate(units):
         round_results: dict[str, CaseResult] = {}
         try:
             for arm in arms:
@@ -1125,7 +1308,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                     round_results[arm.name] = CaseResult(case_id, "pack" if isinstance(item, PackTask) else "replay",
                                                          kind, "budget", "budget", detail="the arm's budget was spent")
                     continue
-                key = (ArmCache.key(arm, item, budget, signature)
+                key = (ArmCache.key(arm, item, budget, signature, repeat=repeat)
                        if cache is not None and arm.cache and isinstance(item, PackTask) else None)
                 kept = cache.get(key, item) if key is not None and cache is not None else None
                 if kept is not None:
@@ -1150,7 +1333,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                     on_case(arm.name, result)
         except _LimitReached:
             stopped = meter.note()
-            for later in items[index:]:
+            for later, _repeat in units[index:]:
                 case_id = later.id if isinstance(later, PackTask) else later.decision_id
                 for arm in arms:
                     results[arm.name].append(CaseResult(case_id, "pack" if isinstance(later, PackTask) else "replay",
@@ -1178,7 +1361,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
             subject_id=arm.subject_id, baseline_id=baseline_id, pack=packs[0] if len(packs) == 1 and not replay else None,
             model_ref=arm.model_ref, status="stopped" if stopped else "completed", passed=passed,
             failed=len(counted) - passed, total=len(counted),
-            budget_tokens=budget.arm_tokens if budget.arm_tokens is not None else budget.task_tokens * len(items),
+            budget_tokens=budget.arm_tokens if budget.arm_tokens is not None else budget.task_tokens * len(units),
             cost=Cost(tokens=spent[arm.name] - local), comparison_set=comparison_set, ended_at=ended,
             source_thread_ids=tuple(threads),
         )
@@ -1193,6 +1376,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
             "causes": dict(Counter(case.cause for case in cases if case.cause)),
             "small_sample": _small(passed, len(counted)),
             "stopped": stopped, "judge": calibration_dict,
+            "repeats": repeats, "repeated": _repeat_record(cases),
         }
         if not aggregate_only:
             body["cases"] = [{"task": case.task_id, "kind_of_work": case.kind_of_work, "status": case.status,
@@ -1223,7 +1407,26 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
             arm_result.run = run
     paired = _paired(results[arms[0].name], results[arms[1].name]) if len(arms) == 2 else {}
     judge_used = int(getattr(judge, "tokens", 0) or 0) - judge_before if judge is not None else 0
-    return Comparison(comparison_set, suite, arm_results, budget, stopped, calibration, paired, judge_used)
+    # The pre-registered paired analysis of each arm against the first, inside this module (O88, E10).
+    clusters = {item.id: item.id for item in tasks}
+    clusters.update({case.decision_id: case.conversation_id or case.thread_id or case.decision_id
+                     for case in replay})
+    analysis: dict[str, Any] = {"seed": int(seed), "resamples": RESAMPLES, "permutations": PERMUTATIONS,
+                                "arms": {arm.name: _analysis(results[arms[0].name], results[arm.name], clusters,
+                                                             seed=seed, kind_key=kind_key) for arm in arms[1:]}}
+    if combine_with is not None:
+        # Visible and hidden problems together (a visible comparison of the same arms run before).
+        joined = {**combine_with.clusters, **clusters}
+        visible = {item.arm.name: list(item.cases) for item in combine_with.arms}
+        if arms[0].name in visible:
+            analysis["combined"] = {
+                arm.name: _analysis([*visible[arms[0].name], *results[arms[0].name]],
+                                    [*visible.get(arm.name, []), *results[arm.name]], joined, seed=seed,
+                                    kind_key=kind_key)
+                for arm in arms[1:] if arm.name in visible}
+    return Comparison(comparison_set, suite, arm_results, budget, stopped, calibration, paired, judge_used,
+                      repeats=repeats, repeated={arm.name: _repeat_record(results[arm.name]) for arm in arms},
+                      analysis=analysis, clusters={} if aggregate_only else clusters)
 
 
 # ── The audit vault: only this module reads it ──────────────────────────────
@@ -1252,6 +1455,10 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
     saved = store if store is not None else LearningStore()
     if not gate.is_enabled(saved.root) and not audit.vault_exists(saved.root):
         raise EvaluationError("learning_off")
+    # O87: every 2nd confirmed correction is held out first, so nothing tests or trains on it in the open.
+    from row_bot.learning import holdout
+
+    holdout.mark_corrections(saved)
     vault = _vault(saved)
     report = vault.refresh(_eligible_for_audit(saved, vault.horizon()), asked_by=f"{_caller()}: {asked_by}".strip(": "))
     if report.added:
@@ -1269,10 +1476,14 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 store: Any | None = None, save: bool = True, clock: Callable[[], float] = time.time,
                 backend: str = "auto", runner: PackRunner | None = None, cache: ArmCache | None = None,
                 verifiers: Iterable[str] | None = None,
-                on_progress: Callable[[int, int], None] | None = None) -> Comparison:
+                on_progress: Callable[[int, int], None] | None = None, repeats: int = 3,
+                seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
+                kind_key: Callable[[str], str] | None = None) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
-    work and tokens per arm; no task, id or text (E10).
+    work and tokens per arm, and the paired analysis; no task, id or text (E10).
 
+    Every hidden problem runs ``repeats`` times per arm (3, O84/O88). ``combine_with`` (a visible
+    comparison of the same arms) adds the analysis of visible and hidden problems together.
     ``verifiers`` leaves out hidden tasks checked any other way (``code_tests`` need a container
     for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more."""
 
@@ -1287,7 +1498,7 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
     tasks = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
              if allowed is None or task.verifier.kind in allowed]
     replay = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)] if include_replay else []
-    total = (len(tasks) + len(replay)) * len(arms)
+    total = (len(tasks) + len(replay)) * len(arms) * max(1, int(repeats))
     done = [0]
 
     def counted(_arm: str, _case: CaseResult) -> None:
@@ -1297,12 +1508,13 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
 
     return _compare(arms, tasks, replay, client=client, judge=judge, calibration=calibration, budget=budget,
                     meter=meter, store=saved, save=save, clock=clock, backend=backend, suite="audit",
-                    aggregate_only=True, runner=runner, cache=cache, on_case=counted)
+                    aggregate_only=True, runner=runner, cache=cache, on_case=counted, repeats=repeats, seed=seed,
+                    combine_with=combine_with, kind_key=kind_key)
 
 
 def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,
                verifiers: Iterable[str] | None = None, include_replay: bool = True) -> int:
-    """How many hidden tasks an :func:`audit_check` with the same choices would run (a count only)."""
+    """How many hidden problems an :func:`audit_check` with the same choices would run (a count only)."""
 
     allowed = None if verifiers is None else set(verifiers)
     vault = _vault(store)
@@ -1356,6 +1568,7 @@ def audit_selfcheck(*, asked_by: str, store: Any | None = None, backend: str = "
 
 
 __all__ = [
+    "ANALYSIS_SEED",
     "Action",
     "Arm",
     "ArmCache",
@@ -1374,6 +1587,7 @@ __all__ = [
     "EvaluationError",
     "Judge",
     "LedgerModelClient",
+    "MALFORMED_CALL",
     "MARK_HELD_OUT",
     "METRIC_VERSION",
     "ModelClient",
@@ -1393,7 +1607,11 @@ __all__ = [
     "compare_action",
     "estimate_tokens",
     "fixture_for",
+    "interval_verdict",
+    "is_malformed_call",
     "is_novel",
+    "paired_analysis",
+    "pass_fractions",
     "refresh_audit",
     "replay_fixture_for",
     "run_pack_task",

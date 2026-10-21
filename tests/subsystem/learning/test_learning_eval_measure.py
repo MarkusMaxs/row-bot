@@ -41,7 +41,8 @@ WRITE_REFUSED = ("Error invoking tool 'workspace_write_file' with kwargs {'text'
 
 
 def test_each_failure_is_told_apart_by_what_the_turn_did():
-    # The model call itself failed (Ollama's parser answering 500): outside the denominator, said so.
+    # The model call itself failed (the provider was down): outside the denominator, said so. The
+    # runtime refusing the model's own malformed call is a failure instead (O70, test_learning_paired).
     assert _cause([], status="error", detail="the model call failed: the provider had a server error") \
         == "provider_error"
     assert _cause([], status="error", detail="the check could not run (OSError)") == "harness"
