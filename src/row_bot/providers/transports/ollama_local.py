@@ -60,7 +60,7 @@ OLLAMA_CHAT_KEEP_ALIVE = "30m"
 
 # What Ollama's tool-call parsers say when the model's own call can't be read.
 _TOOL_CALL_PARSE_ERRORS = ("xml syntax error", "error parsing tool call", "failed to parse tool call")
-# Measured on a captured request whose malformed call Ollama answers with a 500 (L2c2's v1, Ollama 0.40.7):
+# Measured on a captured request whose malformed call Ollama answers with a 500 (a Qwen3.5-2B fine-tune, Ollama 0.40.7):
 # asked again with this note, 35 of 60 calls came back well formed, against 18 of 60 asked again without one.
 # A note showing a whole call made the model copy it; one showing only the form did no better than none.
 MALFORMED_CALL_NOTE = (
