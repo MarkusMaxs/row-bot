@@ -4020,6 +4020,8 @@ def _prepare_with_compaction(inputs: PreparationInputs, *, force: bool = False) 
                 thread_id,
                 next_state,
                 expected_revision=inputs.checkpoint_revision or "",
+                # This turn's own checkpoint, written in the background, may land meanwhile.
+                messages=list(inputs.raw_messages),
             ):
                 # A concurrent winner may already have produced a valid state.
                 concurrent = _validated_summary_for_inputs(inputs)

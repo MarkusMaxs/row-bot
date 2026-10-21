@@ -99,6 +99,7 @@ const mock = vi.hoisted(() => ({
   computerUseCommand: vi.fn(),
   delegatedPage: vi.fn(),
   delegatedRun: vi.fn(),
+  pendingApprovals: vi.fn(),
   command: vi.fn(),
   forgetConversation: vi.fn(),
 }));
@@ -139,6 +140,7 @@ vi.mock('../../runtime', () => {
       waitingMessages: mock.waitingMessages,
       steering: mock.steering,
       approval: mock.approval,
+      pendingApprovals: mock.pendingApprovals,
       receipt: mock.receipt,
       showHistory: mock.showHistory,
       showLatest: mock.showLatest,
@@ -208,6 +210,11 @@ beforeEach(() => {
     value: { kind: 'browser', platform: 'browser', capabilities: [] },
   });
   mock.workspaceFor.mockResolvedValue({ writer_status: '' });
+  mock.pendingApprovals.mockResolvedValue({
+    schema_version: 1,
+    items: [],
+    total: 0,
+  });
   mock.controlsSettled.mockResolvedValue(undefined);
   mock.waitingMessages.mockImplementation(async (id: string) => ({
     conversation_id: id,
@@ -388,6 +395,58 @@ it('morphs Send into Stop on one button that keeps its place and focus', () => {
   expect(send).toBe(stop);
   expect(send).toHaveAttribute('data-state', 'send');
   expect(send).toHaveAttribute('type', 'submit');
+});
+
+it('shows a helper’s approval in the chat that started it, with the helper’s name (B348)', async () => {
+  activeConversation();
+  const waiting = {
+    id: 'approval-helper',
+    source: 'agent' as const,
+    title: 'Catalogue helper',
+    what: 'Create a product in Stripe',
+    requested_at: '2030-01-01T00:00:00Z',
+    expires_at: null,
+    conversation_id: 'helper-thread',
+    parent_conversation_id: 'conversation-a',
+    task_id: null,
+  };
+  mock.pendingApprovals.mockResolvedValue({
+    schema_version: 1,
+    items: [
+      waiting,
+      { ...waiting, id: 'elsewhere', parent_conversation_id: 'other' },
+    ],
+    total: 2,
+  });
+  mock.approval.mockResolvedValue({
+    id: 'approval-helper',
+    status: 'pending',
+    revision: '0',
+    expires_at: '2030-01-01T00:00:00Z',
+    summary: 'Create a product in Stripe.',
+    action_label: 'Create a product',
+    reason: 'Add the blue mug to the catalogue.',
+    risk_class: 'medium',
+    scope: 'One product.',
+    safe_argument_summary: '{"name":"Blue mug"}',
+    requesting_trace_id: 'call-h',
+    policy_revision: '1',
+    nonce: 'n'.repeat(32),
+  } satisfies ApprovalView);
+
+  const view = conversation();
+  const card = await screen.findByRole('group', {
+    name: 'Catalogue helper needs your approval',
+  });
+  expect(
+    within(card).getByText('Catalogue helper is waiting for your approval.'),
+  ).toBeVisible();
+  expect(
+    await within(card).findByText('Add the blue mug to the catalogue.'),
+  ).toBeVisible();
+  // Only this chat's helpers: another chat's approval stays there.
+  expect(screen.getAllByText(/is waiting for your approval/)).toHaveLength(1);
+  view.unmount();
 });
 
 it('anchors bounded approval context inline with canonical resolve controls', async () => {
@@ -3026,6 +3085,26 @@ it('starts a delegated agent with /agent and its task', async () => {
     'conversation-a',
     'agent.start',
     { text: 'Summarise tide tables' },
+    '1',
+  );
+});
+
+it('refuses /agent --reasoning with a level this model lacks, naming its levels (B386)', async () => {
+  withCommands();
+  await sendText('/agent --reasoning turbo Summarise tide tables');
+  expect(mock.intent).not.toHaveBeenCalled();
+  expect(
+    screen.getByText(/isn't a thinking level for this model. Try Low, High./),
+  ).toBeVisible();
+});
+
+it('starts a helper at a level this model offers with /agent --reasoning (B386)', async () => {
+  withCommands();
+  await sendText('/agent --reasoning high Summarise tide tables');
+  expect(mock.intent).toHaveBeenCalledWith(
+    'conversation-a',
+    'agent.start',
+    { text: '--reasoning high Summarise tide tables' },
     '1',
   );
 });
