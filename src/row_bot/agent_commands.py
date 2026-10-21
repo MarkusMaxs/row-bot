@@ -40,6 +40,8 @@ class AgentSpawnRequest:
     model: str = ""
     use_worktree: bool = False
     developer_workspace_id: str = ""
+    # The /reasoning words for the helper's own level; empty follows the chat (B386).
+    reasoning: str = ""
 
 
 _DIRECT_AGENT_VERBS = {"ask", "create", "spawn", "start", "launch", "make"}
@@ -227,6 +229,7 @@ def parse_agent_spawn_text(text: str) -> AgentSpawnRequest | None:
         if arg is None:
             return None
         model = str(options.get("model") or "")
+        reasoning = str(options.get("reasoning") or "")
         use_worktree_option = bool(options.get("use_worktree"))
         developer_workspace_id = str(options.get("developer_workspace_id") or "")
         arg = arg.strip()
@@ -243,6 +246,7 @@ def parse_agent_spawn_text(text: str) -> AgentSpawnRequest | None:
                     explicit_profile=True,
                     source="slash",
                     model=model,
+                    reasoning=reasoning,
                     use_worktree=use_worktree_option or use_worktree_text,
                     developer_workspace_id=developer_workspace_id,
                 )
@@ -255,6 +259,7 @@ def parse_agent_spawn_text(text: str) -> AgentSpawnRequest | None:
             explicit_profile=False,
             source="slash",
             model=model,
+            reasoning=reasoning,
             use_worktree=use_worktree_option or use_worktree_text,
             developer_workspace_id=developer_workspace_id,
         )
@@ -265,10 +270,11 @@ def _extract_agent_options(arg: str) -> tuple[str | None, dict[str, object]]:
     """Remove supported strict slash-command options from an argument."""
     parts = str(arg or "").strip().split()
     if not parts:
-        return "", {"model": "", "use_worktree": False, "developer_workspace_id": ""}
+        return "", {"model": "", "reasoning": "", "use_worktree": False, "developer_workspace_id": ""}
     kept: list[str] = []
     options: dict[str, object] = {
         "model": "",
+        "reasoning": "",
         "use_worktree": False,
         "developer_workspace_id": "",
     }
@@ -287,6 +293,22 @@ def _extract_agent_options(arg: str) -> tuple[str | None, dict[str, object]]:
                 return None, options
             options["model"] = model
             index += 1
+            continue
+        if part == "--reasoning" or part.startswith("--reasoning="):
+            value = part.split("=", 1)[1].strip() if "=" in part else ""
+            index += 1
+            if not value:
+                if index >= len(parts):
+                    return None, options
+                value = parts[index].strip()
+                index += 1
+            # "budget 4000", as /reasoning takes it.
+            if value.lower() == "budget":
+                if index >= len(parts):
+                    return None, options
+                value = f"budget {parts[index].strip()}"
+                index += 1
+            options["reasoning"] = value
             continue
         if part == "--worktree":
             options["use_worktree"] = True
@@ -341,15 +363,18 @@ def _extract_model_option(arg: str) -> tuple[str | None, str]:
 
 def format_agent_spawn_usage() -> str:
     return (
-        "Usage: `/agent [--worktree] [--workspace=id] [--model=model:provider:model-id] [profile] <task>`.\n\n"
+        "Usage: `/agent [--worktree] [--workspace=id] [--model=model:provider:model-id] [--reasoning=level] [profile] <task>`.\n\n"
         "Examples:\n"
         "- `/agent review check this plan for risk`\n"
         "- `/agent develop implement the focused fix`\n"
         "- `/agent --worktree develop fix the failing tests`\n"
-        "- `/agent --model=model:claude_subscription:claude-opus-4-8 worker only reply: ok`\n\n"
+        "- `/agent --model=model:claude_subscription:claude-opus-4-8 worker only reply: ok`\n"
+        "- `/agent --reasoning low summarise the thread`\n\n"
         "Generic Agent requests use `worker`. A specialized profile is used only "
         "when you explicitly name an enabled Agent Profile. The optional model "
         "must be an active pinned Brain canonical ref or exact pinned label. "
+        "Helpers think at the conversation's reasoning level unless --reasoning "
+        "names one (the same words as /reasoning). "
         "Worktree gives the child Agent its own local git worktree."
     )
 
@@ -399,6 +424,7 @@ def spawn_agent_from_request(
         context_mode="auto",
         enabled_tool_names=list(enabled_tool_names or []),
         model_override=model_override,
+        reasoning=request.reasoning,
         developer_workspace_id=request.developer_workspace_id or developer_workspace_id,
         use_worktree=request.use_worktree,
         wait=False,
@@ -411,8 +437,11 @@ def format_agent_spawn_started(run: dict, request: AgentSpawnRequest) -> str:
     name = str((run or {}).get("display_name") or agent_spawn_display_name(request)).strip()
     profile = str((run or {}).get("profile_slug") or request.profile or DEFAULT_DIRECT_AGENT_PROFILE).strip()
     suffix = f" (`{run_id}`)" if run_id else ""
+    from row_bot.agent_runner import helper_thinking, thinking_line
+
+    thinking = thinking_line(helper_thinking(run_id)) if run_id else ""
     model = str((run or {}).get("model_override") or request.model or "").strip()
-    model_text = f" Model: `{model}`." if model else ""
+    model_text = f" Runs on {thinking}." if thinking else f" Model: `{model}`." if model else ""
     workspace_mode = str((run or {}).get("workspace_mode") or "").strip()
     workspace_text = " Workspace: Worktree." if workspace_mode == "worktree" else ""
     return (
