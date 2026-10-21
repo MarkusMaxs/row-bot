@@ -622,6 +622,22 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Video edit leftover check failed")
 
+    # A Prepare sandbox a crash cut short is marked, and its install container removed (F18).
+    try:
+        from row_bot.developer.sandbox_prepare import sweep_leftovers as sweep_sandbox_jobs
+        with _startup_phase("sandbox_job_leftovers"):
+            await asyncio.to_thread(sweep_sandbox_jobs)
+    except Exception:
+        logger.exception("Sandbox job leftover check failed")
+
+    # Files sent to the devices whose time ran out, and anything a send cut short, are removed (F7).
+    try:
+        from row_bot.file_deliveries import sweep as sweep_deliveries
+        with _startup_phase("delivery_leftovers"):
+            await asyncio.to_thread(sweep_deliveries)
+    except Exception:
+        logger.exception("Delivery clean-up failed")
+
     # Background processes a crash left running are stopped, and reported once (F1).
     try:
         from row_bot.background_processes import report_leftovers
@@ -656,6 +672,14 @@ async def _run_startup_sequence():
             await asyncio.to_thread(migrate_legacy_presets)
     except Exception:
         logger.warning("Could not keep the models this profile was using", exc_info=True)
+
+    # Once: Claude now runs the person's own Claude Code; the old Claude sign-in's stored tokens go (N1).
+    try:
+        from row_bot.providers.claude_subscription import retire_old_claude_sign_in
+        with _startup_phase("claude_sign_in_retirement"):
+            await asyncio.to_thread(retire_old_claude_sign_in)
+    except Exception:
+        logger.warning("Could not retire the old Claude sign-in", exc_info=True)
 
     # Once: an off saved while off was the Developer tool's default (B259).
     try:
@@ -1160,6 +1184,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             _safe_console_print(f"[shutdown] Stopped {_edits} video edit(s)")
     except Exception as exc:
         _safe_console_print(f"[shutdown] Video edit cleanup error: {exc}")
+    try:
+        # Prepare sandbox stops with its network off: its install container is removed (F18).
+        from row_bot.developer.sandbox_prepare import stop_all as _stop_sandbox_jobs
+        _jobs = await asyncio.to_thread(_stop_sandbox_jobs, timeout=15.0)
+        if _jobs:
+            _safe_console_print(f"[shutdown] Stopped {_jobs} sandbox job(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Sandbox job cleanup error: {exc}")
     try:
         from row_bot.tools.browser_tool import get_session_manager as _get_bsm
         _get_bsm().kill_all()

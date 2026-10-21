@@ -18,6 +18,7 @@ import type {
   ContextUsageView,
   ConversationComposer,
   ConversationControlsPayload,
+  ModelChoice,
   ReasoningSelectionValue,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
@@ -28,6 +29,7 @@ import ComposerSkills, {
   type ComposerSkillAction,
 } from './ComposerSkills';
 import ModelPicker from './ModelPicker';
+import type { VisibilityAction } from './ModelList';
 import {
   modelRefName,
   rememberRecentModel,
@@ -197,6 +199,24 @@ export default function ComposerControls({
     } finally {
       operation.current = false;
       setSaving(false);
+    }
+  }
+  /**
+   * Favourite or hide a model from the picker (F10). It never changes the
+   * chat's model; the picker itself says where a hidden model went.
+   */
+  async function changeVisibility(item: ModelChoice, action: VisibilityAction) {
+    try {
+      await controller.updateModelVisibility({
+        action,
+        model_ref: item.model_ref,
+      });
+    } catch (cause) {
+      // The composer's own error line, like a model change that didn't save.
+      const name = splitModelLabel(item.label).name;
+      onError(
+        `Couldn't save the change to ${name}. ${clientError(cause).message}`,
+      );
     }
   }
   /** Turns a level on; Hands-off asks once on this install, after which it never asks again. */
@@ -623,6 +643,7 @@ export default function ComposerControls({
         onReconnect={() => navigate('/settings/providers')}
         onManage={() => navigate('/settings/models')}
         onSetup={() => navigate('/setup')}
+        onVisibility={(item, action) => void changeVisibility(item, action)}
         anchor={singleLine ? anchor : undefined}
         returnFocusTo={singleLine ? () => plusRef.current : undefined}
       />

@@ -180,6 +180,12 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.video_edits import delete_conversation as delete_video_edits
 
     removed += delete_video_edits(thread_id)  # Its video edits' records (the results are its media).
+    from row_bot.developer.sandbox_prepare import delete_conversation as delete_sandbox_jobs
+
+    removed += delete_sandbox_jobs(thread_id)  # Its Prepare sandbox records (the packages stay in the sandbox).
+    from row_bot.file_deliveries import delete_conversation as delete_deliveries
+
+    removed += delete_deliveries(thread_id)  # Files it sent to the devices, and the records of its sends.
     return removed
 
 
@@ -241,6 +247,13 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
         video_edits.stop_conversation(thread_id)  # Its video edits stop with it (F3).
     except Exception:
         logger.debug("Could not stop video edits for %s", thread_id, exc_info=True)
+
+    try:
+        from row_bot.developer import sandbox_prepare
+
+        sandbox_prepare.stop_conversation(thread_id)  # Prepare sandbox stops with it, network off (F18).
+    except Exception:
+        logger.debug("Could not stop sandbox jobs for %s", thread_id, exc_info=True)
 
     try:
         from row_bot.tools.shell_tool import clear_shell_history, get_session_manager

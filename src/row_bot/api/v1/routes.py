@@ -1007,6 +1007,22 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
+        "sent_file_unavailable": 404,
+        "sent_file_expired": 410,
+        "sent_files_gone": 409,
+        # The workspace root's folder browser (F19) and a clone's network check.
+        "workspace_folder_refused": 403,
+        "workspace_folder_unavailable": 404,
+        "workspace_folder_root": 422,
+        "clone_blocked": 403,
+        "clone_confirmation_required": 409,
+        # Prepare sandbox and the sandbox image (F18).
+        "sandbox_unavailable": 404,
+        "sandbox_job_unavailable": 404,
+        "sandbox_docker_required": 409,
+        "sandbox_nothing_to_install": 409,
+        "sandbox_runtime_unavailable": 409,
+        "sandbox_prepare_blocked": 403,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -1036,6 +1052,10 @@ _STATUS.update(
 
 
 _STATUS.update(dict.fromkeys(('plan_changed', 'plan_unsupported', 'plan_not_resumable', 'invalid_access_preset', 'invalid_integration_query', 'invalid_mcp_auth', 'invalid_mcp_target', 'mcp_auth_busy', 'mcp_auth_callback_invalid', 'mcp_auth_callback_unavailable', 'mcp_auth_configuration_changed', 'mcp_auth_connection_unavailable', 'mcp_auth_denied', 'mcp_auth_expired', 'mcp_auth_flow_unavailable', 'mcp_auth_not_completed', 'mcp_auth_state_invalid', 'mcp_oauth_http_required', 'mcp_auth_endpoint_invalid', 'mcp_auth_issuer_mismatch', 'mcp_auth_origin_mismatch', 'mcp_auth_redirect_refused', 'mcp_credentials_endpoint_changed', 'mcp_credentials_too_large', 'mcp_credentials_unavailable', 'invalid_credential_reference', 'mcp_durable_storage_required', 'mcp_sign_in_required', 'mcp_package_recipe_unsupported', 'mcp_package_install_scripts_unsupported', 'mcp_package_locked_dependencies_required', 'mcp_package_integrity_required', 'mcp_package_integrity_changed', 'mcp_package_invalid', 'mcp_package_node_required', 'mcp_package_preparation_required', 'mcp_package_preview_capacity', 'mcp_package_preview_expired', 'mcp_package_source_invalid', 'mcp_package_too_large', 'package_link_or_collision', 'unsafe_package_path', 'hermes_recipe_unsupported', 'package_download_too_large', 'package_preview_changed', 'package_preview_expired', 'package_source_not_supported', 'package_source_removed', 'plugin_child_owned', 'plugin_child_parent_owned', 'plugin_child_source_immutable', 'plugin_mcp_state_unavailable', 'plugin_package_state_unavailable'), 409))
+# An address pasted back to finish a sign-in from another device: not that address, another sign-in's, already
+# used, or its sign-in has ended.
+_STATUS.update({"mcp_auth_address_invalid": 422, "mcp_auth_address_other": 409, "mcp_auth_address_used": 409,
+                "mcp_auth_address_expired": 409})
 
 _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 'unsupported_upload', 'unsafe_upload',
                               'bundle_signature_invalid', 'bundle_unsupported'), 422))
@@ -1199,23 +1219,28 @@ def cached_choices() -> dict:
     """Read existing caches/catalogues; opening a client never refreshes a provider."""
     from row_bot.providers.model_catalog_cache import read_model_catalog_cache
     from row_bot.providers.client_status import picker_choices
+    from row_bot.providers.model_visibility import annotate
     from row_bot.tools import registry as tool_registry
     from row_bot.plugins import registry as plugin_registry, state as plugin_state
     from row_bot.mcp_client.runtime import get_catalog_snapshot
 
     snapshot = read_model_catalog_cache()
-    # The composer offers the Brain picker's list, judged by the same rule.
-    models = [
-        {
-            "provider_id": option["provider_id"],
-            "model_ref": option["selection_ref"],
-            "label": option["label"],
-            "available": option["available"],
-            "unavailable_reason": option["unavailable_reason"],
-            "billing": option["billing"],
-        }
-        for option in picker_choices("chat")
-    ]
+    # The composer offers the Brain picker's list, judged by the same rule,
+    # with each person's favourites and hidden models marked (F10).
+    models = annotate(
+        (
+            {
+                "provider_id": option["provider_id"],
+                "model_ref": option["selection_ref"],
+                "label": option["label"],
+                "available": option["available"],
+                "unavailable_reason": option["unavailable_reason"],
+                "billing": option["billing"],
+            }
+            for option in picker_choices("chat")
+        ),
+        key="model_ref",
+    )
     capabilities = []
 
     def add(identifier: str, enabled: bool, destructive: bool) -> None:
@@ -3273,6 +3298,7 @@ def create_router(
         validate_access = dispatch_validation(request, current)
         folder = None
         native_folder_scope = None
+        root_folder: tuple[str, bool] | None = None
         if (
             body.type == "resource.setup"
             and body.payload.get("intent") == "new_conversation"
@@ -3280,6 +3306,25 @@ def create_router(
         ):
             # A saved-workspace conversation never consumes a folder capability.
             raise ProtocolError("invalid_command", 422)
+        if body.type in {"resource.setup", "resource.continue"} and body.payload.get(
+            "root_folder"
+        ) is not None:
+            # A folder chosen in the workspace root's folder browser (F19), from any signed-in
+            # device: checked against the root here and again just before the setup runs.
+            from row_bot.developer import workspace_folders
+
+            root_folder = (
+                str(body.payload["root_folder"]),
+                body.type == "resource.continue"
+                or body.payload.get("clone_workspace") is not None
+                or body.payload.get("empty_workspace") is not None,
+            )
+            try:
+                folder = await call(
+                    workspace_folders.authorize, root_folder[0], parent=root_folder[1]
+                )
+            except workspace_folders.FolderRefused as exc:
+                raise ProtocolError(exc.code, _STATUS[exc.code]) from None
         if body.type in {"resource.setup", "resource.continue"} and body.payload.get(
             "folder_grant"
         ):
@@ -3324,7 +3369,16 @@ def create_router(
                     body.payload["nonce"],
                     str(body.command_id),
                 )
-            if folder is not None:
+            if root_folder is not None:
+                from row_bot.developer import workspace_folders
+
+                try:
+                    again = workspace_folders.authorize(root_folder[0], parent=root_folder[1])
+                except workspace_folders.FolderRefused as exc:
+                    raise ProtocolError(exc.code, _STATUS[exc.code]) from None
+                if again.path != folder.path or again.scope_root != folder.scope_root:
+                    raise ProtocolError("workspace_folder_refused", 403)
+            elif folder is not None:
                 if native_folder_scope is not None:
                     validate_native_folder(native_folder_scope)
                     if not folder.path.is_dir():
@@ -4466,7 +4520,7 @@ def create_router(
         except ValueError:
             redirect = ""
         return Context(owner_id=await integration_owner(request), mcp_owner_id=security.instance_id,
-            validate=dispatch_validation(request, current),
+            validate=dispatch_validation(request, current), remote=not on_this_computer(await _context(request)),
             redirect_uri=redirect, runtimes=runtime_installations, read_policy=installation_policy, **fields)
 
     @router.get("/integrations/sources")
@@ -4722,6 +4776,16 @@ def create_router(
                                      review_digest=body.review_digest)
         result = await call(resume, context, str(plan_id), preset=body.preset,
             overrides=None if body.overrides is None else dict(body.overrides), background=True)
+        return await respond(request, dto.InstallPlan, result)
+
+    @router.post("/integrations/plans/{plan_id}/sign-in")
+    async def integration_plan_sign_in(plan_id: UUID, request: Request) -> JSONResponse:
+        """Finish this plan's sign-in from another device with the address its browser ended on. The address is
+        only read (its state and code), never fetched; the session that sends it must be signed in."""
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.PlanSignInRequest, 16384)
+        from row_bot.integrations.plans import finish_sign_in
+        result = await call(finish_sign_in, await plan_context(request, current), str(plan_id), body.address)
         return await respond(request, dto.InstallPlan, result)
 
     @router.post("/integrations/plans/{plan_id}/cancel")
@@ -5347,6 +5411,92 @@ def create_router(
             raise ProtocolError("video_edit_unavailable", 404)
         return value
 
+    # The Developer workspace root's folders (F19): folders only, for attaching a code folder
+    # from a device with no folder picker. Every path is checked against the root.
+    @router.get("/workspace-folders")
+    async def workspace_folder_page(request: Request, path: str = "") -> JSONResponse:
+        await session(request)
+        from row_bot.developer import workspace_folders
+
+        try:
+            result = await call(workspace_folders.browse, path[:1025])
+        except workspace_folders.FolderRefused as exc:
+            raise ProtocolError(exc.code, _STATUS[exc.code]) from None
+        return await respond(request, dto.WorkspaceFolderPage, result)
+
+    # Prepare sandbox and the sandbox image (F18). The person's own start is confirmed in the app;
+    # Block refuses it. A person sees and stops every job; stopping needs no approval.
+    def _sandbox_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "sandbox_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 409))
+
+    def _sandbox_job_id(value: str) -> str:
+        from row_bot.developer.sandbox_prepare import JOB_ID
+
+        if not JOB_ID.fullmatch(str(value or "")):
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return value
+
+    @router.get("/conversations/{conversation_id}/sandbox")
+    async def conversation_sandbox(request: Request, conversation_id: str) -> JSONResponse:
+        await session(request)
+        await readable_conversation(conversation_id)
+        from row_bot.application.sandbox_views import SandboxViewError, read_status
+
+        try:
+            result = await call(read_status, conversation_id)
+        except SandboxViewError as exc:
+            raise _sandbox_failure(exc) from None
+        return await respond(request, dto.SandboxStatusView, result)
+
+    async def _start_sandbox_job(request: Request, conversation_id: str, kind: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        await readable_conversation(conversation_id)
+        await _body(request, dto.SandboxStartPayload, 1024)
+        from row_bot.application.sandbox_views import SandboxViewError, start_job
+
+        try:
+            result = await call(start_job, conversation_id, kind)
+        except SandboxViewError as exc:
+            raise _sandbox_failure(exc) from None
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.post("/conversations/{conversation_id}/sandbox/prepare")
+    async def prepare_conversation_sandbox(request: Request, conversation_id: str) -> JSONResponse:
+        return await _start_sandbox_job(request, conversation_id, "prepare")
+
+    @router.post("/conversations/{conversation_id}/sandbox/pull")
+    async def pull_conversation_sandbox_image(request: Request, conversation_id: str) -> JSONResponse:
+        return await _start_sandbox_job(request, conversation_id, "pull")
+
+    @router.get("/sandbox-jobs")
+    async def list_sandbox_jobs(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.sandbox_views import read_jobs
+
+        result = await call(read_jobs, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.SandboxJobPage, result)
+
+    @router.get("/sandbox-jobs/{job_id}")
+    async def sandbox_job(request: Request, job_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.sandbox_views import read_job
+
+        result = await call(read_job, _sandbox_job_id(job_id))
+        if result is None:
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.post("/sandbox-jobs/{job_id}/stop")
+    async def stop_sandbox_job(request: Request, job_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.sandbox_views import stop_job
+
+        result = await call(stop_job, _sandbox_job_id(job_id))
+        if result is None:
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return await respond(request, dto.SandboxJobView, result)
+
     @router.get("/video-edits")
     async def list_video_edits(request: Request, conversation_id: str | None = None) -> JSONResponse:
         await session(request)
@@ -5374,6 +5524,109 @@ def create_router(
         if result is None:
             raise ProtocolError("video_edit_unavailable", 404)
         return await respond(request, dto.VideoEditView, result)
+
+    # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
+    # so each sees every delivery; a download needs the session and ends when its copy expires.
+    def _delivery(value: str, index: str | None = None) -> tuple[str, int]:
+        from row_bot.file_deliveries import DELIVERY_ID
+
+        if not DELIVERY_ID.fullmatch(str(value or "")):
+            raise ProtocolError("sent_file_unavailable", 404)
+        if index is None:
+            return value, -1
+        if not str(index).isdigit() or len(str(index)) > 2:
+            raise ProtocolError("sent_file_unavailable", 404)
+        return value, int(index)
+
+    def _delivery_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "sent_file_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 404))
+
+    @router.get("/deliveries")
+    async def list_deliveries(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.delivery_views import read_deliveries
+
+        result = await call(read_deliveries, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.DeliveryPage, result)
+
+    @router.get("/deliveries/{delivery_id}")
+    async def delivery(request: Request, delivery_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.delivery_views import read_delivery
+
+        result = await call(read_delivery, _delivery(delivery_id)[0])
+        if result is None:
+            raise ProtocolError("sent_file_unavailable", 404)
+        return await respond(request, dto.DeliveryView, result)
+
+    @router.get("/deliveries/{delivery_id}/files/{index}")
+    async def delivery_file(request: Request, delivery_id: str, index: str) -> Response:
+        current = await session(request)
+        from urllib.parse import quote
+
+        from row_bot.file_deliveries import CHUNK_BYTES, DeliveryError, open_file
+
+        identifier, number = _delivery(delivery_id, index)
+        try:
+            name, size, handle = await call(open_file, identifier, number)
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+
+        async def chunks() -> Any:
+            try:
+                while True:
+                    # The person's session is checked again for every part sent.
+                    security.session(await _context(request), current.id, current.csrf)
+                    data = await call(handle.read, CHUNK_BYTES)
+                    if not data:
+                        return
+                    yield data
+            except ProtocolError:
+                return
+            finally:
+                handle.close()
+
+        return StreamingResponse(
+            chunks(),
+            # Never shown in the page: always a download, whatever the file is.
+            media_type="application/octet-stream",
+            headers={
+                **HEADERS,
+                "Content-Length": str(size),
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(name, safe=""),
+            },
+        )
+
+    @router.post("/deliveries/{delivery_id}/files/{index}/save")
+    async def delivery_file_save(request: Request, delivery_id: str, index: str) -> JSONResponse:
+        """The desktop window can't download (B275): the file is saved into Exports on this computer."""
+        current = await session(request, lane="mutation")
+        require_this_computer(await _context(request))
+        from row_bot.application.export_folder import save_export
+        from row_bot.file_deliveries import DeliveryError, read_file
+
+        identifier, number = _delivery(delivery_id, index)
+        try:
+            name, data = await call(read_file, identifier, number)
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+        result = await call(save_export, name, data, validate=dispatch_validation(request, current))
+        return await respond(request, dto.ExportSaved, result)
+
+    @router.post("/deliveries/{delivery_id}/to-devices")
+    async def delivery_to_devices(request: Request, delivery_id: str) -> JSONResponse:
+        """The person's own "Send to your devices instead": no approval (their own devices)."""
+        await session(request, lane="mutation")
+        from row_bot.application.delivery_views import send_to_devices_instead
+        from row_bot.file_deliveries import DeliveryError
+
+        try:
+            result = await call(send_to_devices_instead, _delivery(delivery_id)[0])
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+        return await respond(request, dto.DeliveryView, result)
 
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:
@@ -6505,14 +6758,9 @@ def create_router(
         provider_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        if provider_id == "claude_subscription":
-            from row_bot.providers.claude_subscription import (
-                run_claude_subscription_runtime_probe as probe,
-            )
-        elif provider_id == "xai_oauth":
-            from row_bot.providers.xai_oauth import run_xai_oauth_runtime_probe as probe
-        else:
+        if provider_id != "xai_oauth":
             raise ProtocolError("not_found", 404)
+        from row_bot.providers.xai_oauth import run_xai_oauth_runtime_probe as probe
         await call(dispatch_validation(request, current))
         try:
             result = await call(probe)
@@ -8062,6 +8310,29 @@ def create_router(
         except ValueError as exc:
             raise ProtocolError(str(exc), 422) from None
         return await respond(request, dto.ModelsSettingsState, result)
+
+    @router.post("/settings/models/visibility")
+    async def models_visibility_update(request: Request) -> JSONResponse:
+        # A display preference (F10): favourites first, hidden models under
+        # "More models". It never changes which model a chat uses.
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.ModelVisibilityMutation, 2048)
+        from row_bot.providers.config import ProviderConfigError
+        from row_bot.providers.model_visibility import update_model_visibility
+
+        try:
+            result = await call(
+                update_model_visibility,
+                body.action,
+                body.model_ref,
+                validate=dispatch_validation(request, current),
+            )
+        except ProviderConfigError as exc:
+            # The settings file can't be read or written right now.
+            raise ProtocolError(exc.code, 503) from None
+        except ValueError as exc:
+            raise ProtocolError(str(exc), 422) from None
+        return await respond(request, dto.ModelVisibilityState, result.as_dict())
 
     @router.get("/settings/models/agents")
     async def models_agent_settings(request: Request) -> JSONResponse:

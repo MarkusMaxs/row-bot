@@ -20,10 +20,10 @@ MODELS = {name: getattr(schemas, name) for name in (
     "SourceLink", "SourceOptIn", "SourceOptInChange", "IntegrationSourceView", "IntegrationSourceList", "CatalogUpdate", "CatalogSchedule", "AccessPresetView",
     "AppRef", "AppView", "AppList", "AppViewRenderRequest", "AppViewTool", "AppViewRender", "AppViewToolCall",
     "AppViewToolResult", "AppViewSettings", "AppViewAppSetting", "AppIconData", "IconBatch", "IconLicense", "IntegrationSignals", "IntegrationBlocker",
-    "IntegrationNextAction", "IntegrationEntry", "IntegrationEntryPage", "PlanInput", "PlanSignIn", "PlanRuntime", "PlanReviewItem",
+    "IntegrationNextAction", "IntegrationEntry", "IntegrationEntryPage", "PlanInput", "PlanDeviceCode", "PlanSignIn", "PlanRuntime", "PlanReviewItem",
     "PlanReview", "PlanLocalApp",
     "PlanTool", "PlanAccess", "PlanStep", "PlanConsent", "InstallPlan", "IntegrationDetail", "PlanReviewRequest",
-    "PlanStartRequest", "PlanContinueRequest", "IntegrationAbout", "IntegrationFile", "IntegrationRequirement", "IntegrationWay",
+    "PlanStartRequest", "PlanContinueRequest", "PlanSignInRequest", "IntegrationAbout", "IntegrationFile", "IntegrationRequirement", "IntegrationWay",
     "IntegrationResolveRequest", "IntegrationSettleRequest",
     "IntegrationAttribution", "IntegrationSourceStatus", "IntegrationSearchRequest",
     "Command", "Event", "Handshake", "Problem", "Outcome", "ResourceBinding",
@@ -42,7 +42,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "NativeTerminalFrame", "NativeTerminalOutput", "NativeTerminalChanged", "NativeTerminalClosed",
     "StreamReset", "LazyContent", "SearchPage", "ConversationWorkspace", "ConversationComposer", "ConversationComposerQuery", "SlashCommandRead", "SlashCommandResult", "ResourceChoicePage",
     "DelegatedRun", "DelegatedActivityView",
-    "ContextUsageView", "ConversationOpenView", "ProviderStatusSnapshot", "ProviderLiveSnapshot", "ProviderCatalogRefresh", "ProviderRuntimeProbe", "CachedModelPage", "ModelsSettingsState", "ModelSurfaceMutation", "ModelContextMutation", "AgentRuntimeSettingsState", "ModelCatalogSummary", "ModelCameraList", "TaskSummaryPage", "TaskDeliverySnapshot", "ToolCatalogPage",
+    "ContextUsageView", "ConversationOpenView", "ProviderStatusSnapshot", "ProviderLiveSnapshot", "ProviderCatalogRefresh", "ProviderRuntimeProbe", "CachedModelPage", "ModelsSettingsState", "ModelSurfaceMutation", "ModelContextMutation", "ModelVisibilityMutation", "ModelVisibilityState", "AgentRuntimeSettingsState", "ModelCatalogSummary", "ModelCameraList", "TaskSummaryPage", "TaskDeliverySnapshot", "ToolCatalogPage",
     "SettingsSnapshot", "SettingsMutationRequest", "SettingsMutationReview", "SettingsMutationCommand", "SettingsMutationReceipt", "TrackerEntryPage", "GitHubAccessSnapshot", "GitHubAccessCommand", "GitHubAccessReceipt", "AccountAuthSnapshot", "AccountAuthCommand", "AccountAuthReceipt",
     "EntitySummaryPage", "KnowledgeEntityDetail", "KnowledgeRecallPage", "KnowledgeMemoryChangePage", "DocumentSummaryPage", "TaskEditableFields", "TaskEditorSnapshot", "TaskSaveResult",
     "TaskSettingsFields", "TaskSettingsSnapshot", "ProviderSettingsSnapshot",
@@ -72,7 +72,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -129,6 +129,7 @@ OPERATIONS = (
     ('get', '/integrations/plans/{plan_id}', None, 'InstallPlan'),
     ('post', '/integrations/plans/{plan_id}/continue', 'PlanContinueRequest', 'InstallPlan'),
     ('post', '/integrations/plans/{plan_id}/cancel', None, 'InstallPlan'),
+    ('post', '/integrations/plans/{plan_id}/sign-in', 'PlanSignInRequest', 'InstallPlan'),
     ('post', '/integrations/items/resolve', 'IntegrationResolveRequest', 'IntegrationEntryPage'),
     ('post', '/integrations/items/settle', 'IntegrationSettleRequest', 'IntegrationDetail'),
     ('post', '/integrations/uploads', 'bytes', 'IntegrationEntryPage'),
@@ -205,9 +206,21 @@ OPERATIONS = (
     ("get", "/recordings", None, "RecordingPage"),
     ("get", "/recordings/{recording_id}", None, "RecordingView"),
     ("post", "/recordings/{recording_id}/stop", None, "RecordingView"),
+    ("get", "/workspace-folders", None, "WorkspaceFolderPage"),
+    ("get", "/conversations/{conversation_id}/sandbox", None, "SandboxStatusView"),
+    ("post", "/conversations/{conversation_id}/sandbox/prepare", "SandboxStartPayload", "SandboxJobView"),
+    ("post", "/conversations/{conversation_id}/sandbox/pull", "SandboxStartPayload", "SandboxJobView"),
+    ("get", "/sandbox-jobs", None, "SandboxJobPage"),
+    ("get", "/sandbox-jobs/{job_id}", None, "SandboxJobView"),
+    ("post", "/sandbox-jobs/{job_id}/stop", None, "SandboxJobView"),
     ("get", "/video-edits", None, "VideoEditPage"),
     ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
     ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
+    ("get", "/deliveries", None, "DeliveryPage"),
+    ("get", "/deliveries/{delivery_id}", None, "DeliveryView"),
+    ("get", "/deliveries/{delivery_id}/files/{index}", None, "bytes"),
+    ("post", "/deliveries/{delivery_id}/files/{index}/save", None, "ExportSaved"),
+    ("post", "/deliveries/{delivery_id}/to-devices", None, "DeliveryView"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
@@ -417,6 +430,7 @@ OPERATIONS = (
     ("get", "/settings/models/state", None, "ModelsSettingsState"),
     ("post", "/settings/models/surface", "ModelSurfaceMutation", "ModelsSettingsState"),
     ("post", "/settings/models/context", "ModelContextMutation", "ModelsSettingsState"),
+    ("post", "/settings/models/visibility", "ModelVisibilityMutation", "ModelVisibilityState"),
     ("get", "/settings/models/agents", None, "AgentRuntimeSettingsState"),
     ("post", "/settings/models/agents", "AgentRuntimeSettingsState", "AgentRuntimeSettingsState"),
     ("post", "/settings/models/agents/reset", None, "AgentRuntimeSettingsState"),
@@ -725,6 +739,26 @@ export const getRecording = (base: string, proof: SessionProof, recording: strin
 /** Stop a recording; its video is saved to its conversation's files. It needs no approval. */
 export const stopRecording = (base: string, proof: SessionProof, recording: string, signal?: AbortSignal): Promise<RecordingView> =>
   jsonRequest(base, `/recordings/${id(recording)}/stop`, 'RecordingView', proof, 'POST', undefined, undefined, signal);
+/** The folders in one folder of the Developer workspace root (F19): folders only, checked against the root. */
+export const getWorkspaceFolders = (base: string, proof: SessionProof, path = '', signal?: AbortSignal): Promise<WorkspaceFolderPage> =>
+  jsonRequest(base, '/workspace-folders' + query({path: path || undefined}), 'WorkspaceFolderPage', proof, 'GET', undefined, undefined, signal);
+/** A conversation's code folder's sandbox (F18): Docker, its image, what Prepare would install, the latest job. */
+export const getConversationSandbox = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxStatusView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox`, 'SandboxStatusView', proof, 'GET', undefined, undefined, signal);
+/** Prepare sandbox, confirmed by the person: the network is on for the install only. Block refuses it. */
+export const prepareConversationSandbox = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox/prepare`, 'SandboxJobView', proof, 'POST', {confirmed: true}, undefined, signal);
+/** Download the sandbox image, confirmed by the person. */
+export const pullConversationSandboxImage = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox/pull`, 'SandboxJobView', proof, 'POST', {confirmed: true}, undefined, signal);
+/** Every sandbox job (F18), or one conversation's: running ones first. */
+export const getSandboxJobs = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<SandboxJobPage> =>
+  jsonRequest(base, '/sandbox-jobs' + query({conversation_id}), 'SandboxJobPage', proof, 'GET', undefined, undefined, signal);
+export const getSandboxJob = (base: string, proof: SessionProof, job: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/sandbox-jobs/${id(job)}`, 'SandboxJobView', proof, 'GET', undefined, undefined, signal);
+/** Stop a sandbox job; the network goes off again. It needs no approval. */
+export const stopSandboxJob = (base: string, proof: SessionProof, job: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/sandbox-jobs/${id(job)}/stop`, 'SandboxJobView', proof, 'POST', undefined, undefined, signal);
 /** Every video edit (F3), or one conversation's: running ones first. */
 export const getVideoEdits = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<VideoEditPage> =>
   jsonRequest(base, '/video-edits' + query({conversation_id}), 'VideoEditPage', proof, 'GET', undefined, undefined, signal);
@@ -733,6 +767,28 @@ export const getVideoEdit = (base: string, proof: SessionProof, edit: string, si
 /** Stop a video edit; nothing is saved. It needs no approval. */
 export const stopVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
   jsonRequest(base, `/video-edits/${id(edit)}/stop`, 'VideoEditView', proof, 'POST', undefined, undefined, signal);
+/** Files sent to the person's devices or a chat app (F7), or one conversation's: newest first. */
+export const getDeliveries = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<DeliveryPage> =>
+  jsonRequest(base, '/deliveries' + query({conversation_id}), 'DeliveryPage', proof, 'GET', undefined, undefined, signal);
+export const getDelivery = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}`, 'DeliveryView', proof, 'GET', undefined, undefined, signal);
+/** One file sent to the devices, with the person's session; refused once it expired. */
+export async function readDeliveryFile(base: string, proof: SessionProof, delivery: string, index: number, signal?: AbortSignal): Promise<Blob> {
+  if (!Number.isInteger(index) || index < 0 || index > 9) throw new Error('invalid_request');
+  const response = await fetch(`${base}/api/v1/deliveries/${id(delivery)}/files/${index}`, {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  const data = await response.blob();
+  if (data.size > 104857600) throw new Error('protocol_incompatible');
+  return data;
+}
+/** Desktop window: the file is saved into Exports on this computer (it can't download). */
+export const saveDeliveryFile = (base: string, proof: SessionProof, delivery: string, index: number, signal?: AbortSignal): Promise<ExportSaved> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}/files/${index}/save`, 'ExportSaved', proof, 'POST', {}, undefined, signal);
+/** The person's "Send to your devices instead" for files that didn't go to a chat app. No approval. */
+export const sendDeliveryToDevices = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}/to-devices`, 'DeliveryView', proof, 'POST', {}, undefined, signal);
 export const getAttention = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AttentionSnapshot> =>
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>
@@ -902,6 +958,8 @@ export const updateModelSurface = (base: string, proof: SessionProof, body: Mode
   jsonRequest(base, '/settings/models/surface', 'ModelsSettingsState', proof, 'POST', body, undefined, signal);
 export const updateModelContext = (base: string, proof: SessionProof, body: ModelContextMutation, signal?: AbortSignal): Promise<ModelsSettingsState> =>
   jsonRequest(base, '/settings/models/context', 'ModelsSettingsState', proof, 'POST', body, undefined, signal);
+export const updateModelVisibility = (base: string, proof: SessionProof, body: ModelVisibilityMutation, signal?: AbortSignal): Promise<ModelVisibilityState> =>
+  jsonRequest(base, '/settings/models/visibility', 'ModelVisibilityState', proof, 'POST', body, undefined, signal);
 export const getAgentRuntimeSettings = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AgentRuntimeSettingsState> =>
   jsonRequest(base, '/settings/models/agents', 'AgentRuntimeSettingsState', proof, 'GET', undefined, undefined, signal);
 export const saveAgentRuntimeSettings = (base: string, proof: SessionProof, body: AgentRuntimeSettingsState, signal?: AbortSignal): Promise<AgentRuntimeSettingsState> =>
@@ -1264,6 +1322,8 @@ export const getInstallPlan = (base: string, proof: SessionProof, plan: string, 
   jsonRequest(base, `/integrations/plans/${id(plan)}`, 'InstallPlan', proof, 'GET', undefined, undefined, signal);
 export const continueInstallPlan = (base: string, proof: SessionProof, plan: string, body: PlanContinueRequest, signal?: AbortSignal): Promise<InstallPlan> =>
   jsonRequest(base, `/integrations/plans/${id(plan)}/continue`, 'InstallPlan', proof, 'POST', validateWire('PlanContinueRequest', body), undefined, signal);
+export const finishInstallPlanSignIn = (base: string, proof: SessionProof, plan: string, body: PlanSignInRequest, signal?: AbortSignal): Promise<InstallPlan> =>
+  jsonRequest(base, `/integrations/plans/${id(plan)}/sign-in`, 'InstallPlan', proof, 'POST', validateWire('PlanSignInRequest', body), undefined, signal);
 export const cancelInstallPlan = (base: string, proof: SessionProof, plan: string, signal?: AbortSignal): Promise<InstallPlan> =>
   jsonRequest(base, `/integrations/plans/${id(plan)}/cancel`, 'InstallPlan', proof, 'POST', undefined, undefined, signal);
 export const getMcpConfiguration = (base: string, proof: SessionProof, search: string, cursor?: string, signal?: AbortSignal, target?: McpTarget): Promise<McpConfigurationPage> =>

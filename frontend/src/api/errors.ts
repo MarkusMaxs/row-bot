@@ -126,6 +126,23 @@ const CATALOG: Record<string, Entry> = {
     'review',
     MCP,
   ],
+  // An address pasted back to finish a sign-in from another device (F27).
+  mcp_auth_address_invalid: [
+    "That doesn't look like the address. After you sign in, copy the whole address from your browser's address bar. It starts with http://127.0.0.1.",
+    'review',
+  ],
+  mcp_auth_address_other: [
+    'That address is from a different sign-in. Open the sign-in page from here, then paste the address you land on.',
+    'review',
+  ],
+  mcp_auth_address_used: [
+    "That address has already been used. If signing in didn't finish, start again.",
+    'review',
+  ],
+  mcp_auth_address_expired: [
+    'This sign-in has ended. Start again to get a new link.',
+    'review',
+  ],
   mcp_auth_busy: [
     'Several sign-ins are pending. Cancel an unused sign-in before starting another.',
     'review',
@@ -1708,9 +1725,59 @@ const CATALOG: Record<string, Entry> = {
   process_unavailable: ['That command is no longer running.', 'none'],
   recording_unavailable: ['That recording is no longer listed.', 'none'],
   video_edit_unavailable: ['That video edit is no longer listed.', 'none'],
+  sent_file_unavailable: ['That file is no longer here to download.', 'none'],
+  sent_file_expired: [
+    'This download has ended: sent files stay for 7 days. Ask Row-Bot to send it again.',
+    'none',
+  ],
+  sent_files_gone: [
+    "Those files can't be found any more, so they weren't sent. Ask Row-Bot to send them again.",
+    'none',
+  ],
   local_address_unavailable: [
     'That address was already removed or ran out.',
     'none',
+  ],
+  workspace_folder_refused: [
+    "That folder is outside Row-Bot's workspace folder, so it can't be used. Choose a folder listed here.",
+    'none',
+  ],
+  workspace_folder_unavailable: [
+    "That folder isn't there any more. Go back and choose another.",
+    'retry',
+  ],
+  workspace_folder_root: [
+    'Choose a folder inside the workspace folder, not the workspace folder itself.',
+    'none',
+  ],
+  sandbox_unavailable: [
+    'This conversation has no code folder with a sandbox.',
+    'none',
+  ],
+  sandbox_job_unavailable: ['That sandbox job is no longer listed.', 'none'],
+  sandbox_docker_required: [
+    'This code folder runs commands on this computer, not in the Docker sandbox, so there is nothing to prepare.',
+    'none',
+  ],
+  sandbox_nothing_to_install: [
+    'Row-Bot found nothing to install: no pyproject.toml, requirements file or package.json in the code folder.',
+    'none',
+  ],
+  sandbox_runtime_unavailable: [
+    "Docker isn't running on this computer. Start Docker Desktop (or Docker), then try again.",
+    'retry',
+  ],
+  sandbox_prepare_blocked: [
+    "Approvals are set to Block in this chat, so the sandbox can't be prepared. Change Approvals to prepare it.",
+    'none',
+  ],
+  clone_blocked: [
+    "Approvals are set to Block in this chat, so Row-Bot can't clone. Change Approvals to clone.",
+    'none',
+  ],
+  clone_confirmation_required: [
+    'Confirm the download to clone this repository.',
+    'review',
   ],
   runtime_installation_command_unavailable: [
     "That install action isn't available.",
@@ -2915,6 +2982,10 @@ const resourceDenials = new Set([
   'folder_selection_denied',
   'path_denied',
   'capability_unavailable',
+  // Refusals that say exactly why (F19, F18), not "this device isn't allowed".
+  'workspace_folder_refused',
+  'clone_blocked',
+  'sandbox_prepare_blocked',
 ]);
 
 function describe(code: string): ClientError | null {

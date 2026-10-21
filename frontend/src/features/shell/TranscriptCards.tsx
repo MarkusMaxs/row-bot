@@ -14,6 +14,9 @@ import AppViewFrame from '../apps/AppViewFrame';
 import { ProcessCard } from './BackgroundProcess';
 import { RecordingCard } from './RecordingCard';
 import { VideoEditCard } from './VideoEditCard';
+import { DeliveryCard } from './DeliveryCard';
+import { SandboxJobCard } from './SandboxJobCard';
+import { SandboxPrepareOffer } from './SandboxPrepare';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
@@ -49,7 +52,13 @@ export type TranscriptCard =
   /** A recording of Row-Bot's browser or the screen a step started or stopped (F2). */
   | { kind: 'recording'; recordingId: string }
   /** A video edit a step started, followed or stopped (F3). */
-  | { kind: 'video_edit'; editId: string };
+  | { kind: 'video_edit'; editId: string }
+  /** Files a step sent to the person's devices or a chat app (F7). */
+  | { kind: 'delivery'; deliveryId: string }
+  /** Prepare sandbox, or the sandbox image's download, a step started (F18). */
+  | { kind: 'sandbox_job'; jobId: string }
+  /** A sandbox test run that couldn't start for want of its tools: Prepare sandbox (F18). */
+  | { kind: 'sandbox_offer'; reason: string };
 
 type Specialization = NonNullable<
   TranscriptTraceGroup['items'][number]['specialization']
@@ -82,6 +91,21 @@ export function cardOf(value: Specialization | null | undefined) {
       kind: 'recording',
       recordingId: value.recording_id,
     } satisfies TranscriptCard;
+  if (value.kind === 'delivery' && value.delivery_id)
+    return {
+      kind: 'delivery',
+      deliveryId: value.delivery_id,
+    } satisfies TranscriptCard;
+  if (value.kind === 'sandbox_job' && value.job_id)
+    return {
+      kind: 'sandbox_job',
+      jobId: value.job_id,
+    } satisfies TranscriptCard;
+  if (value.kind === 'sandbox_unprepared')
+    return {
+      kind: 'sandbox_offer',
+      reason: value.error_code ?? '',
+    } satisfies TranscriptCard;
   if (value.kind === 'video_edit' && value.edit_id)
     return {
       kind: 'video_edit',
@@ -113,7 +137,13 @@ export function cardKey(card: TranscriptCard) {
             ? `recording:${card.recordingId}`
             : card.kind === 'video_edit'
               ? `video_edit:${card.editId}`
-              : `connect:${card.target}`;
+              : card.kind === 'delivery'
+                ? `delivery:${card.deliveryId}`
+                : card.kind === 'sandbox_job'
+                  ? `sandbox_job:${card.jobId}`
+                  : card.kind === 'sandbox_offer'
+                    ? 'sandbox_offer'
+                    : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -129,7 +159,10 @@ export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
       seen.add(cardKey(card));
       cards.push(card);
     }
-  return cards;
+  // A step that went on to prepare the sandbox needs no offer to (F18).
+  return cards.some((card) => card.kind === 'sandbox_job')
+    ? cards.filter((card) => card.kind !== 'sandbox_offer')
+    : cards;
 }
 
 /** Cards announced live that no settled row shows yet. */
@@ -397,6 +430,16 @@ export function TranscriptCards({
             key={cardKey(card)}
             recordingId={card.recordingId}
             conversationId={conversation}
+          />
+        ) : card.kind === 'delivery' ? (
+          <DeliveryCard key={cardKey(card)} deliveryId={card.deliveryId} />
+        ) : card.kind === 'sandbox_job' ? (
+          <SandboxJobCard key={cardKey(card)} jobId={card.jobId} />
+        ) : card.kind === 'sandbox_offer' ? (
+          <SandboxPrepareOffer
+            key={cardKey(card)}
+            conversationId={conversation}
+            reason={card.reason}
           />
         ) : card.kind === 'video_edit' ? (
           <VideoEditCard

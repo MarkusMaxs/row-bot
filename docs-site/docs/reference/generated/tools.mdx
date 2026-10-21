@@ -8,7 +8,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 # Tools
 
 <!-- generated-from: scripts/docs/collect_inventory.py -->
-<!-- inventory-hash: ce88e844b26647c7 -->
+<!-- inventory-hash: e7940b721a50c378 -->
 
 <GeneratedNotice source="scripts/docs/collect_inventory.py" />
 
@@ -29,6 +29,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 | developer | developer_guide | Guidance for using the Developer tools to inspect, edit, test, and review code folders safely. | Operation-dependent approval | `tool_guides/developer_guide/SKILL.md` | `src/row_bot/tools/developer_tool.py` |
 | documents | Documents | Document retrieval tool - searches the local FAISS vector store. | No tool-wide destructive classification |  | `src/row_bot/tools/documents_tool.py` |
 | duckduckgo | Duckduckgo | DuckDuckGo web search tool - no API key required. | No tool-wide destructive classification |  | `src/row_bot/tools/duckduckgo_tool.py` |
+| file_delivery | file_delivery_guide | Guidance for sending files to the person's devices or a chat app with send_file. | Operation-dependent approval | `tool_guides/file_delivery_guide/SKILL.md` | `src/row_bot/tools/file_delivery_tool.py` |
 | filesystem | filesystem_guide | Guidance for workspace file tools vs shell commands. | Approval-gated: workspace_file_delete, workspace_move_file | `tool_guides/filesystem_guide/SKILL.md` | `src/row_bot/tools/filesystem_tool.py` |
 | gmail | Gmail | Gmail tool - search, read, draft, and send emails via the Gmail API | Approval-gated: send_gmail_message |  | `src/row_bot/tools/gmail_tool.py` |
 | goal | goal_guide | Guidance for durable /goal progress tracking. | Operation-dependent approval | `tool_guides/goal_guide/SKILL.md` | `src/row_bot/tools/goal_tool.py` |

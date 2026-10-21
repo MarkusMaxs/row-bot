@@ -255,6 +255,8 @@ def test_skill_specialization_exposes_only_reviewed_bounded_metadata():
         "process_id": "",
         "recording_id": "",
         "edit_id": "",
+        "delivery_id": "",
+        "job_id": "",
     }
     assert private not in repr(specialized)
 

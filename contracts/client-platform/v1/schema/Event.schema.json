@@ -2619,6 +2619,13 @@
           "title": "Binding Id",
           "type": "string"
         },
+        "delivery_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(send-[0-9a-f]{8})?$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
         "display_name": {
           "default": "",
           "maxLength": 180,
@@ -2644,6 +2651,13 @@
           "title": "Evicted Skill Id",
           "type": "string"
         },
+        "job_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(prep-[0-9a-f]{8})?$",
+          "title": "Job Id",
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "skill_load",
@@ -2655,7 +2669,10 @@
             "connect_apps",
             "background_process",
             "recording",
-            "video_edit"
+            "video_edit",
+            "delivery",
+            "sandbox_job",
+            "sandbox_unprepared"
           ],
           "title": "Kind",
           "type": "string"

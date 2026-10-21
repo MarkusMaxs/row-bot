@@ -1482,10 +1482,8 @@ class DefaultModelReceipt(WireModel):
     selection: DefaultModelSnapshot
 
 
-SubscriptionProvider = Literal["codex", "claude_subscription", "xai_oauth"]
-SubscriptionOperation = Literal[
-    "start", "check", "submit", "cancel", "disconnect", "restore", "import_token"
-]
+SubscriptionProvider = Literal["codex", "xai_oauth"]
+SubscriptionOperation = Literal["start", "check", "submit", "cancel", "disconnect", "restore"]
 
 
 class SubscriptionAccountSnapshot(WireModel):
@@ -1501,7 +1499,7 @@ class SubscriptionAccountSnapshot(WireModel):
 class SubscriptionAccountsSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    accounts: list[SubscriptionAccountSnapshot] = Field(min_length=3, max_length=3)
+    accounts: list[SubscriptionAccountSnapshot] = Field(min_length=2, max_length=2)
 
 
 class SubscriptionFlowSnapshot(WireModel):
@@ -1589,7 +1587,7 @@ class SubscriptionProbeResult(WireModel):
 class SubscriptionProbeSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    items: list[SubscriptionProbeResult] = Field(min_length=6, max_length=6)
+    items: list[SubscriptionProbeResult] = Field(min_length=4, max_length=4)
 
 
 class SubscriptionProbeRequest(WireModel):
@@ -1722,14 +1720,14 @@ class DocumentRemovalReceipt(WireModel):
 
 
 class SubscriptionReferenceState(WireModel):
-    provider_id: Literal["codex", "claude_subscription"]
+    provider_id: Literal["codex"]
     metadata_saved: bool
 
 
 class SubscriptionOptionsSnapshot(WireModel):
     schema_version: Literal[1]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
-    references: list[SubscriptionReferenceState] = Field(min_length=2, max_length=2)
+    references: list[SubscriptionReferenceState] = Field(min_length=1, max_length=1)
     xai_client_id_source: Literal["environment", "override", "default", "missing"]
     xai_saved_client_id: str | None = Field(max_length=512)
     xai_default_available: bool
@@ -2383,6 +2381,11 @@ class LocalRuntimeModel(WireModel):
     model_ref: str = Field(min_length=1, max_length=1024)
     name: str = Field(max_length=512)
     agent_ready: bool | None = None
+    # F10: a favourite's place in the list (from 1), a hidden model, and
+    # Row-Bot's suggested first picks. Absent when not set.
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
+    recommended: bool = False
 
 
 class LocalRuntimeSnapshot(WireModel):
@@ -4284,6 +4287,153 @@ class VideoEditPage(WireModel):
     running: int = Field(ge=0)
 
 
+SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
+
+
+class SandboxJobView(WireModel):
+    """Prepare sandbox, or the sandbox image's download (F18): one job of a conversation's code folder."""
+    job_id: SandboxJobId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    workspace_name: str = Field(max_length=200)
+    kind: Literal["prepare", "pull"]
+    status: Literal["pulling", "installing", "finishing", "ready", "failed", "stopped"]
+    # What it installs, in words: "pytest and the project with its test extra".
+    summary: str = Field(max_length=300)
+    # The project files it read: "pyproject.toml", "requirements-dev.txt", "package.json".
+    sources: list[str] = Field(max_length=16)
+    # The commands it runs in the sandbox, one line each.
+    commands: list[str] = Field(max_length=4)
+    image: str = Field(max_length=256)
+    started_at: str = Field(max_length=80)
+    ended_at: str | None = Field(max_length=80)
+    seconds: float = Field(ge=0)
+    # The sandbox network for the install: "on" only while it installs.
+    network: Literal["on", "off"]
+    network_on_at: str | None = Field(max_length=80)
+    network_off_at: str | None = Field(max_length=80)
+    # False only when Row-Bot couldn't confirm the install container (and its network) went away.
+    network_off_confirmed: bool
+    process_id: str | None = Field(max_length=64, pattern=r"^proc-[0-9a-f]{8}$")
+    # The install's latest line of output while it runs.
+    progress: str = Field(max_length=160)
+    by: Literal["you", "agent"]
+    stopped_by: Literal["", "you", "agent", "conversation", "quit"]
+    problem: Literal["", "pull_failed", "install_failed", "not_finished"]
+    detail: str = Field(max_length=400)
+
+
+class SandboxJobPage(WireModel):
+    """Sandbox jobs: those running now first, then finished ones, newest first."""
+    items: list[SandboxJobView] = Field(max_length=100)
+    running: int = Field(ge=0)
+
+
+class SandboxPlanView(WireModel):
+    """What Prepare sandbox would install, read from the project's own files."""
+    summary: str = Field(max_length=300)
+    sources: list[str] = Field(max_length=16)
+    commands: list[str] = Field(max_length=4)
+
+
+class SandboxStatusView(WireModel):
+    """A conversation's code folder's sandbox: Docker, its image, Prepare, and the latest job (F18)."""
+    workspace_name: str = Field(max_length=200)
+    execution_mode: Literal["local", "docker"]
+    # The sandbox's own network setting (Prepare never changes it).
+    network: Literal["off", "ask", "on"]
+    image: str = Field(max_length=256)
+    # The image's download size in words, when Row-Bot knows it ("about 570 MB").
+    image_download: str | None = Field(max_length=40)
+    runtime: Literal["ready", "unavailable", "not_checked"]
+    runtime_detail: str = Field(max_length=300)
+    # None until Docker was asked (Docker mode only).
+    image_present: bool | None
+    prepare: SandboxPlanView | None
+    job: SandboxJobView | None
+
+
+class SandboxStartPayload(WireModel):
+    """The person confirmed it in the app (their approval for this one)."""
+    confirmed: Literal[True]
+
+
+class WorkspaceFolderCrumb(WireModel):
+    """One folder on the way from the workspace root to the folder shown."""
+    name: str = Field(min_length=1, max_length=260)
+    # Its names under the root joined with "/" ("" is the root).
+    path: str = Field(max_length=1024)
+
+
+class WorkspaceFolderEntry(WireModel):
+    """A folder inside the folder shown: a code folder to choose, or a folder to open."""
+    name: str = Field(min_length=1, max_length=260)
+    path: str = Field(min_length=1, max_length=1024)
+    # It is a Git repository (it has .git).
+    is_git: bool
+
+
+class WorkspaceFolderPage(WireModel):
+    """The folders in one folder of the Developer workspace root (F19): folders only, no host path."""
+    path: str = Field(max_length=1024)
+    # The folder shown: the root's own name ("Row-Bot") at the root.
+    name: str = Field(min_length=1, max_length=4096)
+    crumbs: list[WorkspaceFolderCrumb] = Field(min_length=1, max_length=32)
+    folders: list[WorkspaceFolderEntry] = Field(max_length=500)
+    # More folders are here than are listed.
+    truncated: bool
+    is_root: bool
+
+
+DeliveryId = Annotated[str, StringConstraints(pattern=r"^send-[0-9a-f]{8}$")]
+
+
+class DeliveryFile(WireModel):
+    """One file a delivery sent, or tried to (F7): its name and size, never where it came from."""
+    index: int = Field(ge=0, le=9)
+    name: str = Field(min_length=1, max_length=120)
+    size_bytes: int = Field(ge=0)
+    mime_type: str = Field(max_length=128)
+    sent: bool
+    # Sent to the person's devices and not expired: the download works with their session.
+    downloadable: bool
+
+
+class DeliveryView(WireModel):
+    """Files sent from a conversation to the person's own devices or to a chat app (F7)."""
+    delivery_id: DeliveryId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    target: Literal["devices", "channel"]
+    # The chat app (its registry name and how people call it), for a channel delivery.
+    channel: str = Field(max_length=64)
+    channel_label: str = Field(max_length=80)
+    # Where it went, in words: "your Telegram chat", "this Slack thread".
+    place: str = Field(max_length=120)
+    # Other people share that chat.
+    shared: bool
+    status: Literal["sent", "partly_sent", "failed", "expired"]
+    problem: Literal["", "too_large", "cant_send_files", "not_running", "not_linked", "send_failed", "store_full",
+                     "unavailable"]
+    # Why it didn't go, in plain words.
+    detail: str = Field(max_length=600)
+    # The size limit that applied, when the problem is size.
+    limit_bytes: int | None = Field(ge=0)
+    files: list[DeliveryFile] = Field(max_length=10)
+    created_at: str = Field(max_length=80)
+    # When the downloads end (devices only).
+    expires_at: str | None = Field(max_length=80)
+    # Who allowed it: nobody needed to (devices), you, the reviewer (Auto), or Hands-off.
+    approval: Literal["", "not_needed", "you", "reviewer", "hands_off"]
+    # It didn't go to a chat app, and the person can send it to their devices instead.
+    can_send_to_devices: bool
+    # The delivery to the person's devices made from this one instead.
+    sent_instead: DeliveryId | None
+
+
+class DeliveryPage(WireModel):
+    """A conversation's deliveries, or every one, newest first."""
+    items: list[DeliveryView] = Field(max_length=200)
+
+
 class LocalAddressGrantView(WireModel):
     """An address on this computer one conversation's browser may open (F4): one origin, for an hour."""
     grant_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
@@ -4536,6 +4686,20 @@ class ProviderStatusSnapshot(WireModel):
     total_models: int = Field(ge=0)
 
 
+class ClaudePlanStatus(WireModel):
+    """Claude Code on the computer running Row-Bot: never a credential, a path or an account name."""
+
+    state: Literal["not_installed", "signed_out", "too_old", "ready", "error"]
+    version: str = Field(max_length=40)
+    minimum_version: str = Field(max_length=40)
+    # The plan Claude Code is signed in with ("Claude Max"), when it says.
+    plan: str = Field(max_length=80)
+    # Plain words for a signed-out or error state; "" when the state says it all.
+    detail: str = Field(max_length=256)
+    # The old Claude sign-in had this profile set up: Settings says to set it up again.
+    set_up_again: bool
+
+
 class ProviderLiveCard(WireModel):
     provider_id: OpaqueId
     display_name: str = Field(max_length=256)
@@ -4559,6 +4723,8 @@ class ProviderLiveCard(WireModel):
     risk_label: str = Field(max_length=80)
     last_runtime_probe_ok: bool | None = None
     billing: Literal["subscription", "pay_per_use", "credits", "local"] | None = None
+    # Claude (your Claude plan) only: what the person's Claude Code says.
+    claude_plan: ClaudePlanStatus | None = None
 
 
 class ProviderLiveSnapshot(WireModel):
@@ -4576,7 +4742,7 @@ class ProviderCatalogRefresh(WireModel):
 
 
 class ProviderRuntimeProbe(WireModel):
-    provider_id: Literal["claude_subscription", "xai_oauth"]
+    provider_id: Literal["xai_oauth"]
     ok: bool
     detail: str = Field(max_length=256)
 
@@ -4645,6 +4811,8 @@ class ModelPickerOption(WireModel):
     context_window: int | None = Field(default=None, ge=1)
     reason: str = Field(default="", max_length=256)
     billing: Literal["subscription", "pay_per_use", "credits", "local"] | None = None
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
 
 
 class ModelPickerSurface(WireModel):
@@ -4686,6 +4854,27 @@ class ModelSurfaceMutation(WireModel):
 class ModelContextMutation(WireModel):
     policy_kind: Literal["local", "provider"]
     cap: int | None = Field(default=None, ge=16384, le=10000000)
+
+
+class ModelVisibilityMutation(WireModel):
+    """Favourite or hide one model (by its provider-qualified reference), or show every hidden one."""
+
+    action: Literal["favourite", "unfavourite", "hide", "show", "show_all"]
+    model_ref: str | None = Field(default=None, min_length=1, max_length=647)
+
+    @model_validator(mode="after")
+    def one_model(self) -> ModelVisibilityMutation:
+        if (self.action == "show_all") != (self.model_ref is None):
+            raise ValueError("Every action but show_all names one model.")
+        return self
+
+
+class ModelVisibilityState(WireModel):
+    """Favourites in their order, and the hidden models (F10)."""
+
+    schema_version: Literal[1] = 1
+    favourites: list[str] = Field(max_length=64)
+    hidden: list[str] = Field(max_length=512)
 
 
 class AgentRuntimeSettingsState(WireModel):
@@ -4850,6 +5039,12 @@ class ResourceSetupPayload(WireModel):
     draft_name: str | None = Field(default=None, min_length=1, max_length=120)
     clone_workspace: CloneWorkspaceSetupPayload | None = None
     folder_grant: OpaqueId | None = None
+    # A folder chosen in the workspace root's folder browser (F19), instead of the desktop
+    # picker's grant: its names under the root joined with "/" ("" is the root itself, which
+    # can be a parent to create or clone into but never the code folder itself).
+    root_folder: str | None = Field(default=None, max_length=1024)
+    # The person confirmed a clone's download (it reaches the network): needed under Ask.
+    confirm_network: bool | None = None
     # Create a copy of this design (with its revision in expected_resource_revision).
     duplicate_of: OpaqueId | None = None
 
@@ -4866,6 +5061,13 @@ class ResourceSetupPayload(WireModel):
             raise ValueError("A duplicate names one design and its current revision.")
         if self.draft_name is not None and self.draft_workspace is not True:
             raise ValueError("Only a new draft workspace takes a draft name.")
+        if self.root_folder is not None and (
+            self.kind != "workspace" or self.intent != "create" or self.folder_grant is not None
+            or self.resource_id is not None or self.draft_workspace is not None or self.duplicate_of is not None
+        ):
+            raise ValueError("A folder from the workspace root is chosen for a new code folder only.")
+        if self.confirm_network is not None and self.clone_workspace is None:
+            raise ValueError("Only a clone reaches the network.")
         if self.artifact is not None and (
             self.kind != "artifact"
             or self.intent != "create"
@@ -4882,7 +5084,7 @@ class ResourceSetupPayload(WireModel):
         if self.empty_workspace is not None and (
             self.kind != "workspace"
             or self.intent != "create"
-            or self.folder_grant is None
+            or (self.folder_grant is None and self.root_folder is None)
             or self.resource_id is not None
             or self.deck is not None
             or self.artifact is not None
@@ -4903,7 +5105,7 @@ class ResourceSetupPayload(WireModel):
             raise ValueError("A draft workspace uses the configured local Drafts folder.")
         if self.clone_workspace is not None and (
             self.kind != 'workspace' or self.intent != 'create'
-            or self.folder_grant is None or self.resource_id is not None
+            or (self.folder_grant is None and self.root_folder is None) or self.resource_id is not None
             or any(value is not None for value in (self.deck, self.artifact, self.empty_workspace))
         ):
             raise ValueError('Repository clone requires an explicit parent grant.')
@@ -4917,10 +5119,14 @@ class SetupContinuePayload(WireModel):
     )
     expected_origin_id: OpaqueId | None = None
     folder_grant: OpaqueId | None = None
+    # The same parent chosen again in the workspace root's folder browser (F19).
+    root_folder: str | None = Field(default=None, max_length=1024)
 
     @model_validator(mode="after")
     def recovery_target(self) -> SetupContinuePayload:
-        if self.expected_resource_revision is None and self.folder_grant is None:
+        if self.folder_grant is not None and self.root_folder is not None:
+            raise ValueError("A folder is chosen once: by the picker or in the workspace root.")
+        if self.expected_resource_revision is None and self.folder_grant is None and self.root_folder is None:
             raise ValueError(
                 "Continuation requires a resource revision or renewed folder grant."
             )
@@ -6151,11 +6357,14 @@ class Command(WireModel):
                 and "confirm_full_autonomy" not in supplied):
             self.payload.pop("confirm_full_autonomy", None)  # Existing durable verifiers stay as they were.
         if self.type == "resource.setup":
-            for field in ("artifact", "empty_workspace", "draft_workspace", "draft_name", "clone_workspace"):
+            for field in ("artifact", "empty_workspace", "draft_workspace", "draft_name", "clone_workspace",
+                          "root_folder", "confirm_network"):
                 if field not in supplied:
                     self.payload.pop(field, None)
-        if self.type == "resource.continue" and "folder_grant" not in supplied:
-            self.payload.pop("folder_grant", None)
+        if self.type == "resource.continue":
+            for field in ("folder_grant", "root_folder"):
+                if field not in supplied:
+                    self.payload.pop(field, None)
         return self
 
     @classmethod
@@ -6978,7 +7187,7 @@ class AppViewAppSetting(WireModel):
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-        "background_process", "recording", "video_edit",
+        "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7005,6 +7214,12 @@ class TraceSpecialization(WireModel):
     recording_id: str = Field(default="", max_length=64, pattern=r"^(rec-[0-9a-f]{8})?$")
     # video_edit: the edit the card follows live and then shows, re-read by id (F3).
     edit_id: str = Field(default="", max_length=64, pattern=r"^(edit-[0-9a-f]{8})?$")
+    # delivery: the files a step sent to the person's devices or a chat app, re-read by id (F7).
+    delivery_id: str = Field(default="", max_length=64, pattern=r"^(send-[0-9a-f]{8})?$")
+    # sandbox_job: Prepare sandbox or the sandbox image's download, followed live by id (F18).
+    # sandbox_unprepared (a test run that lacked its tools) says which in error_code:
+    # "pytest_missing" or "packages_missing".
+    job_id: str = Field(default="", max_length=64, pattern=r"^(prep-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -7134,6 +7349,8 @@ class Notice(WireModel):
     startup: bool
     count: int = Field(ge=1, le=9007199254740991)
     at: str = Field(min_length=1, max_length=64)
+    # The conversation it is about, when there is one to open (a file Row-Bot sent to the devices).
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class NoticePage(WireModel):
@@ -7171,6 +7388,9 @@ class ModelChoice(WireModel):
     available: bool
     unavailable_reason: Literal["configuration_required", "metadata_missing", "unavailable"] | None = None
     billing: ProviderBilling | None = None
+    # F10: listed first (a favourite's place, from 1) or under "More models".
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
 
 
 class CapabilityChoice(WireModel):
@@ -8256,9 +8476,26 @@ class PlanInput(WireModel):
     saved: bool = False
 
 
+class PlanDeviceCode(WireModel):
+    """A code to enter on the service's own page, on any device (RFC 8628)."""
+
+    user_code: str = Field(min_length=1, max_length=64)
+    verification_uri: str = Field(min_length=1, max_length=2048)
+    # The same page with the code filled in, when the service offers one.
+    verification_uri_complete: str = Field(default="", max_length=2048)
+
+
 class PlanSignIn(WireModel):
     method: Literal["oauth_dcr", "oauth_cimd", "oauth_preregistered", "oauth_client", "api_key"]
     authorization_url: str | None = Field(default=None, max_length=8192)
+    # How the sign-in's answer comes back: this computer's browser or Row-Bot's public address return by
+    # themselves; "paste" asks for the address another device's browser ends on; "device" shows a code.
+    delivery: Literal["this_computer", "public", "paste", "device"] = "this_computer"
+    # While it waits: seconds its link or code still works, by Row-Bot's clock.
+    expires_in: int | None = Field(default=None, ge=0, le=3600)
+    # Its answer came and it is finishing (a pasted address was accepted).
+    received: bool = False
+    device: PlanDeviceCode | None = None
 
 
 class PlanRuntime(WireModel):
@@ -8439,6 +8676,12 @@ class PlanStartRequest(WireModel):
     tools_digest: str = Field(default="", max_length=64)
     overrides: ToolOverrides = Field(default_factory=dict, max_length=256)
     cleanup: bool = False
+
+
+class PlanSignInRequest(WireModel):
+    """The address another device's browser ended on after signing in, pasted back to finish the sign-in."""
+
+    address: str = Field(min_length=1, max_length=8192)
 
 
 class PlanContinueRequest(WireModel):

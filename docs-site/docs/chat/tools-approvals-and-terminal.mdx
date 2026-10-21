@@ -149,6 +149,14 @@ Row-Bot can look at up to 8 pictures in one go: files in the conversation, pictu
 
 If the conversation's model can't see images, Row-Bot says so and gathers nothing; choose a model that can for **Vision** in **Settings › Models**, or switch the conversation to one. Looking at your screen or through your camera still asks first every time, on its own.
 
+## Sending Files
+
+Ask Row-Bot to send you a file, for example "send the report to my phone" or "send it to me on Telegram". It sends files you already have: files in the conversation, its recordings and video edits, and files in the workspace (the conversation's code folder when it has one, otherwise the workspace folder). It never sends anything from elsewhere on the computer or from Row-Bot's own data folder. Up to 10 files go in one reply.
+
+- **To your devices.** The files show in the conversation as a card, **Sent to your devices**, with **Download** for each file, on every phone or computer signed in to Row-Bot (see [Phone And Native Desktop](/docs/mobile-native)). Each open Row-Bot window also shows **Row-Bot sent you report.pdf** with **Open**. Downloads need that device's sign-in and end after 7 days, when Row-Bot removes its copy; each file can be up to 100 MB. Sending to your own devices never asks, at any approval level. Row-Bot has no push notifications: a device with Row-Bot closed finds the file in the conversation the next time it opens it. The desktop app saves a download into the workspace's **Exports** folder, with **Show in folder**.
+- **To a chat app.** Telegram, Discord, Slack or WhatsApp, once it's set up in [Channels](/docs/integrations/channels). The files go to your own chat there, or, when the conversation came from that app, to that same chat; Row-Bot can't send them to any other chat. A file leaving Row-Bot asks like sending a message: **Ask** asks, **Auto**'s reviewer approves it only when you clearly asked for it, **Hands-off** allows it, and **Block** refuses. A conversation other people share (a Slack or Discord channel thread, a group chat) never sends on Hands-off. Each app has a size limit: Telegram 50 MB, Discord 10 MB, WhatsApp 16 MB and Slack 100 MB through Row-Bot.
+- **When a file can't go**, the card says why in plain words (too big for the app, the app isn't connected, or it can't take files) and offers **Send to your devices instead**. SMS can't send files.
+
 ## Interactive Terminal
 
 In the Row-Bot desktop app, a conversation can open a real interactive terminal docked at the bottom of the window. Open or close it with the terminal button in the header, **Open panel › Interactive terminal**, the command palette (**Toggle terminal**), or Ctrl+`.
@@ -179,3 +187,4 @@ The terminal is for you: what you type runs as your own commands on this compute
 - If a local app shows "Nothing answered at localhost:5173", start its server first; if Row-Bot started it, check its card in the conversation.
 - If Row-Bot asks again for a local address you allowed, its hour ran out or it was removed; allow it again.
 - If video editing says ffmpeg couldn't be downloaded, check the internet connection and ask again, or install ffmpeg yourself and restart Row-Bot.
+- If a file Row-Bot sent says **This download has ended**, its 7 days ran out; ask Row-Bot to send it again.

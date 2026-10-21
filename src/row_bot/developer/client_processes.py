@@ -174,7 +174,10 @@ def _docker_bootstrap(binary: str, container_id: str, *, recover: bool = False) 
     source = Path(runtime.__file__).with_name("process_worker.py").read_text(encoding="utf-8")
     if len(source.encode("utf-8")) > 24 * 1024:
         raise ValueError("process_containment_unavailable")
-    return [binary, "exec", "-i", "-w", "/workspace", container_id,
+    from row_bot.developer.sandbox_runtime import sandbox_env_args
+
+    # The worker's commands see the packages Prepare sandbox installed (F18).
+    return [binary, "exec", "-i", "-w", "/workspace", *sandbox_env_args(), container_id,
             "python3", "-I", "-S", "-B", "-u", "-c", source, *(["--recover-owner"] if recover else [])]
 
 

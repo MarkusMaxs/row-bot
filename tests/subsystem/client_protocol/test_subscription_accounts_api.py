@@ -75,7 +75,7 @@ def test_explicit_signin_uses_same_session_flow_and_private_receipt(service, acc
             client,
             headers,
             provider,
-            "submit" if provider == "claude_subscription" else "check",
+            "check",
             flow,
         )
         result = send(client, headers, command)
@@ -126,7 +126,7 @@ def test_tampered_review_cannot_claim_original_and_cancel_survives_config_change
         original = review(client, headers, provider)
         forged = copy.deepcopy(original)
         forged["payload"]["provider_id"] = (
-            "claude_subscription" if provider != "claude_subscription" else "codex"
+            "xai_oauth" if provider != "xai_oauth" else "codex"
         )
         response = send(client, headers, forged)
         assert (

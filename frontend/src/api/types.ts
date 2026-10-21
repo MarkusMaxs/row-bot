@@ -230,6 +230,12 @@ export interface ClientTransport {
     plan: string,
     signal?: AbortSignal,
   ): Promise<Wire.InstallPlan>;
+  /** The address another device's browser ended on after signing in (F27). */
+  finishInstallPlanSignIn?(
+    plan: string,
+    body: Wire.PlanSignInRequest,
+    signal?: AbortSignal,
+  ): Promise<Wire.InstallPlan>;
 
   conversationActions?(
     conversation: string,
@@ -813,6 +819,34 @@ export interface ClientTransport {
     recordingId: string,
     signal?: AbortSignal,
   ): Promise<Wire.RecordingView>;
+  /** A conversation's code folder's sandbox (F18): Docker, its image, Prepare, the latest job. */
+  conversationSandbox?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxStatusView>;
+  /** Prepare sandbox, confirmed by the person in the app. */
+  prepareSandbox?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  /** Download the sandbox image, confirmed by the person in the app. */
+  pullSandboxImage?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  sandboxJob?(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  stopSandboxJob?(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  /** The folders in one folder of the Developer workspace root (F19). */
+  workspaceFolders?(
+    path?: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.WorkspaceFolderPage>;
   /** Video edits (F3): every one, or one conversation's. */
   videoEdits?(
     conversationId?: string,
@@ -822,6 +856,28 @@ export interface ClientTransport {
     editId: string,
     signal?: AbortSignal,
   ): Promise<Wire.VideoEditView>;
+  /** Files sent to the person's devices or a chat app (F7). */
+  delivery?(
+    deliveryId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.DeliveryView>;
+  /** One file sent to the devices, with this session; refused once it expired. */
+  downloadDelivery?(
+    deliveryId: string,
+    index: number,
+    signal?: AbortSignal,
+  ): Promise<Blob>;
+  /** Desktop window: the file saved into Exports on this computer. */
+  saveDelivery?(
+    deliveryId: string,
+    index: number,
+    signal?: AbortSignal,
+  ): Promise<Wire.ExportSaved>;
+  /** The person's "Send to your devices instead". No approval. */
+  sendDeliveryToDevices?(
+    deliveryId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.DeliveryView>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
@@ -1406,6 +1462,10 @@ export interface ClientTransport {
     body: Wire.ModelContextMutation,
     signal?: AbortSignal,
   ): Promise<Wire.ModelsSettingsState>;
+  updateModelVisibility?(
+    body: Wire.ModelVisibilityMutation,
+    signal?: AbortSignal,
+  ): Promise<Wire.ModelVisibilityState>;
   agentRuntimeSettings?(
     signal?: AbortSignal,
   ): Promise<Wire.AgentRuntimeSettingsState>;

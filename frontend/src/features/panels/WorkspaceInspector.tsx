@@ -1785,6 +1785,17 @@ export function WorkspaceInspector(props: WorkspaceInspectorProps) {
                     ) : null;
                   })}
                 </dl>
+                <p className="muted dev-safety-network">
+                  {policy.execution_mode === 'docker'
+                    ? policy.sandbox_network === 'off'
+                      ? 'The sandbox’s network is off, as it is by default: commands there can’t reach the internet.'
+                      : `The sandbox’s network is ${humanizeToken(policy.sandbox_network).toLowerCase()} for this folder (it is off by default).`
+                    : 'In the Docker sandbox, commands run with the network off by default.'}{' '}
+                  Prepare sandbox turns it on only while it installs the
+                  project’s test tools (from pyproject.toml, requirements files
+                  or package.json), then turns it off again. It follows your
+                  Approvals, like any install.
+                </p>
                 <p className="muted">
                   This inspector reads files; it never changes them. Commits,
                   branches and commands go through a review first, and pushing

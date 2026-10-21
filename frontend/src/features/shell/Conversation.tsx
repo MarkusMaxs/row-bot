@@ -113,6 +113,7 @@ import { DelegatedRunsContext, type DelegatedRuns } from './AgentStubs';
 import { ProcessIoContext, type ProcessIo } from './background-processes';
 import { RecordingIoContext, type RecordingIo } from './recordings';
 import { VideoEditIoContext, type VideoEditIo } from './video-edits';
+import { DeliveryIoContext, type DeliveryIo } from './deliveries';
 import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
@@ -180,6 +181,7 @@ function TranscriptContexts({
   processes,
   recordings,
   videoEdits,
+  deliveries,
   children,
 }: {
   cardActions: CardActions;
@@ -188,6 +190,7 @@ function TranscriptContexts({
   processes: ProcessIo;
   recordings: RecordingIo;
   videoEdits: VideoEditIo;
+  deliveries: DeliveryIo;
   children: ReactNode;
 }) {
   return (
@@ -197,7 +200,9 @@ function TranscriptContexts({
           <ProcessIoContext.Provider value={processes}>
             <RecordingIoContext.Provider value={recordings}>
               <VideoEditIoContext.Provider value={videoEdits}>
-                {children}
+                <DeliveryIoContext.Provider value={deliveries}>
+                  {children}
+                </DeliveryIoContext.Provider>
               </VideoEditIoContext.Provider>
             </RecordingIoContext.Provider>
           </ProcessIoContext.Provider>
@@ -2623,6 +2628,19 @@ export default function Conversation({
     }),
     [controller],
   );
+  const deliveries = useMemo<DeliveryIo>(
+    () => ({
+      load: (delivery, signal) => controller.delivery(delivery, signal),
+      download: (delivery, index, signal) =>
+        controller.downloadDelivery(delivery, index, signal),
+      saveToExports: (delivery, index) =>
+        controller.saveDelivery(delivery, index),
+      reveal: async (fileName) =>
+        (await controller.revealExport(fileName)).status === 'opened',
+      sendToDevices: (delivery) => controller.sendDeliveryToDevices(delivery),
+    }),
+    [controller],
+  );
   const videoEdits = useMemo<VideoEditIo>(
     () => ({
       load: (conversation, signal) =>
@@ -2998,6 +3016,7 @@ export default function Conversation({
       processes={processes}
       recordings={recordings}
       videoEdits={videoEdits}
+      deliveries={deliveries}
     >
       <div
         className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ' details-wide' : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}
