@@ -104,13 +104,17 @@ test('a test run that lacked pytest offers Prepare sandbox, which installs with 
   await expect(offer).toContainText(
     "The sandbox's network is off; it's on only while they install, then off again.",
   );
-  // A phone shows the chat, not the code folder's panel over it.
+  // A phone shows the chat, not the code folder's panel over it. The panel can
+  // cover the chat a moment after the resize, so wait for its way back first.
   const chat = async () => {
     const back = page.getByRole('button', {
       name: 'Back to conversation',
       exact: true,
     });
+    if ((page.viewportSize()?.width ?? 0) <= PHONE.width)
+      await back.waitFor({ state: 'visible', timeout: 2_000 }).catch(() => {});
     if (await back.isVisible()) await back.click();
+    await expect(back).toBeHidden();
   };
   await everywhere(page, info, 'prepare-offer', async () => {
     await chat();
