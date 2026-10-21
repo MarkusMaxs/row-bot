@@ -244,6 +244,27 @@ def app_for_tool(tool_name: str) -> dict | None:
             "view": views.has_view(tool_name, item)}
 
 
+def app_named_by_tool(tool_name: str) -> dict | None:
+    """For an approval's words only (B388): the one set-up app whose connection an ``mcp_<server>_`` runtime
+    name starts with, when this runtime never issued that name (an approval still waiting from before a
+    restart). A name two connections could make names neither: "Counter" + "update_counter" and "Counter
+    update" + "counter" look alike. Never used to scope or allow tools."""
+    if not tool_name.startswith("mcp_"):
+        return None
+    from row_bot.mcp_client.safety import sanitize_name_component
+    found = []
+    for item in _mcp_items():
+        prefix = f"mcp_{sanitize_name_component(item['server'])}_"
+        words = " ".join(tool_name[len(prefix):].replace("_", " ").replace("-", " ").split())
+        if tool_name.startswith(prefix) and words:
+            found.append((item, words))
+    if len(found) != 1:
+        return None
+    item, words = found[0]
+    return {"item_id": item["id"], "name": _name(item)[:128], "icon": item["icon"],
+            "tool": (words[:1].upper() + words[1:])[:128]}
+
+
 MAX_SUGGESTIONS = 3
 
 

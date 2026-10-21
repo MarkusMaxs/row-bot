@@ -12,6 +12,7 @@ import { WaitingSince } from './InPlaceApproval';
 import { readPendingApprovalsNow } from './pending-approvals';
 import {
   approvalAction,
+  rawToolName,
   approvalQuestion,
   keyArgument,
   plainApprovalReason,
@@ -99,6 +100,14 @@ function ApprovalDetails({ view }: { view: ApprovalView }) {
       <dl>
         <dt>Action</dt>
         <dd>{approvalAction(view.action_label || '', view.app)}</dd>
+        {rawToolName(view.action_label || '') && (
+          <>
+            <dt>Tool</dt>
+            <dd>
+              <code>{rawToolName(view.action_label || '')}</code>
+            </dd>
+          </>
+        )}
         {risk && (
           <>
             <dt>Risk</dt>
@@ -348,7 +357,7 @@ export default function ApprovalCard({
       aria-label={
         view?.question || hint?.question
           ? `Approval required: ${question}`
-          : `Approval required for ${app?.tool || action || 'requested action'}${app ? ` in ${app.name}` : ''}`
+          : `Approval required for ${app?.tool || (rawToolName(action) ? approvalAction(action) : action) || 'requested action'}${app ? ` in ${app.name}` : ''}`
       }
       data-risk={risk}
     >

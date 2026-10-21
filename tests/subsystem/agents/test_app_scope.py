@@ -234,6 +234,24 @@ def test_an_approval_names_the_app_asking_with_its_logo(identities):
     assert "app" not in project_approval_context({"tool": "workspace_file_delete", "args": {}})  # Row-Bot's own.
 
 
+def test_an_approval_for_a_tool_this_runtime_never_issued_still_names_its_app_in_words(identities, apps):
+    """B388: an approval still waiting from before a restart (its tool not issued again yet) read "Allow MCP
+    stripe create product?". It names the set-up app whose connection the name starts with, in words only:
+    such a name is never given that app's tools (a look-alike stays unscoped)."""
+    from row_bot.application.approval_projection import project_approval_context
+    apps.items.append({**apps.items[1], "id": "mcp:stripe", "server": "Stripe", "name": "Stripe",
+                       "app": {"id": "stripe", "name": "Stripe"}, "icon": "letter:S"})
+    asked = project_approval_context({"tool": "mcp_stripe_create_product", "args": {"name": "Gift card"}})
+    assert asked["app"] == {"item_id": "mcp:stripe", "name": "Stripe", "icon": "letter:S", "tool": "Create product"}
+    assert asked["action_label"] == "mcp_stripe_create_product"  # The raw name, for Details.
+    assert scope.app_for_tool("mcp_stripe_create_product") is None
+    assert "app" not in project_approval_context({"tool": "mcp_unknown_delete_everything", "args": {}})
+    # A name two connections could make names neither.
+    apps.items.append({**apps.items[1], "id": "mcp:stripe-create", "server": "Stripe create", "name": "Stripe create",
+                       "app": {"id": "stripe-create", "name": "Stripe create"}, "icon": "letter:S"})
+    assert "app" not in project_approval_context({"tool": "mcp_stripe_create_product", "args": {}})
+
+
 def test_a_settled_tool_step_names_its_app_even_when_found_through_discovery(identities):
     from row_bot.application.conversation_traces import project_assistant_row_traces
     records = [

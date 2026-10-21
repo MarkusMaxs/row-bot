@@ -223,7 +223,9 @@ it('reads an app tool’s call as labelled fields with their own line breaks, ne
   const card = screen.getByRole('complementary', {
     name: 'Approval required for Save issue in Linear',
   });
-  expect(within(card).getByText('Allow Linear to save issue?')).toBeVisible();
+  expect(
+    within(card).getByText('Allow Linear to save an issue?'),
+  ).toBeVisible();
   // Real line breaks, as the server wrote them: nothing re-read, escaped or repeated.
   expect(
     within(card).getByText(/^Title: Daily summary crashes/).textContent,
@@ -232,7 +234,7 @@ it('reads an app tool’s call as labelled fields with their own line breaks, ne
   expect(card).not.toHaveTextContent(/mcp_|\\n/);
   fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
   const details = open.mock.calls[0][0];
-  expect(details.title).toBe('Allow Linear to save issue?');
+  expect(details.title).toBe('Allow Linear to save an issue?');
   render(details.content);
   expect(screen.getByText('Linear · Save issue')).toBeVisible();
   expect(
@@ -240,6 +242,34 @@ it('reads an app tool’s call as labelled fields with their own line breaks, ne
       .getAllByText(/^Title: Daily summary crashes/)
       .map((node) => node.textContent),
   ).toEqual([reason, reason]);
+});
+
+it('titles an app tool Row-Bot never named with the app and the action, keeping its raw name under Details (B388)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'mcp_stripe_create_product',
+    reason: 'Create a product.',
+    safe_argument_summary: '{"name": "Gift card"}',
+    // Named by the server from the one connection the name can come from.
+    app: {
+      item_id: 'mcp:stripe',
+      name: 'Stripe',
+      icon: 'letter:S',
+      tool: 'Create product',
+    },
+  });
+  await renderCard();
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required for Create product in Stripe',
+  });
+  expect(
+    within(card).getByText('Allow Stripe to create a product?'),
+  ).toBeVisible();
+  expect(card).not.toHaveTextContent(/mcp_|MCP/);
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  expect(screen.getByText('Stripe · Create product')).toBeVisible();
+  expect(screen.getByText('mcp_stripe_create_product')).toBeVisible();
 });
 
 it('re-reads the waiting approvals at once after an answer (B302)', async () => {
