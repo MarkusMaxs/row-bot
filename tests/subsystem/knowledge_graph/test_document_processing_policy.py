@@ -10,10 +10,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-pytestmark = [pytest.mark.subsystem, pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="Strict document processing requires a descriptor-backed SQLite path bridge",
-), pytest.mark.platform]
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
 @pytest.fixture(autouse=True)
@@ -468,6 +465,15 @@ def test_snapshot_candidate_is_pinned_and_handle_released(snapshot_job):
     from pathlib import Path
     jobs,service,job,source = snapshot_job
     candidate = service.work_root / job.id / f"source-{job.content_sha256}{job.extension}"
+    if jobs.sys.platform == "darwin":
+        # macOS readers open the private copy by name: a swapped copy is refused, never read as reviewed.
+        with pytest.raises(jobs.DocumentJobError, match="changed during processing"):
+            with service.source_snapshot(job,validate=lambda:None) as (path, extension, check):
+                assert Path(path).read_bytes() == source.read_bytes()
+                candidate.rename(candidate.with_name("retained.txt"))
+                candidate.write_bytes(b"foreign")
+                check()
+        return
     with service.source_snapshot(job,validate=lambda:None) as (path, extension, check):
         assert Path(path).read_bytes() == source.read_bytes()
         if jobs.os.name == "nt":
