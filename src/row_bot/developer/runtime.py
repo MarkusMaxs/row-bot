@@ -754,6 +754,38 @@ def classify_command_action(command: str) -> str:
     return "run_command"
 
 
+_GIT_IDENTITY_KEYS = ("user.name", "user.email", "author.name", "author.email", "committer.name", "committer.email")
+_GIT_IDENTITY_VARIABLES = ("git_author_name", "git_author_email", "git_committer_name", "git_committer_email")
+
+
+def sets_git_identity(command: str) -> bool:
+    """Whether a command sets or changes the name and email Git records on commits.
+
+    ``git config user.email …`` (any scope, or --unset), ``git -c user.name=… commit`` and the
+    GIT_AUTHOR_*/GIT_COMMITTER_* variables all choose who a commit says it is from: only the
+    person can choose that. Reading them (``git config --get user.name``) does not.
+    """
+    text = _unquoted_text(str(command or "")).lower()
+    try:
+        tokens = [token.lower() for token in shlex.split(str(command or ""), posix=True)]
+    except ValueError:
+        tokens = str(command or "").lower().split()
+    if any(name in text for name in _GIT_IDENTITY_VARIABLES):
+        return True
+    if any(token.startswith(tuple(f"{key}=" for key in _GIT_IDENTITY_KEYS)) for token in tokens):
+        return True
+    if "git" not in tokens or "config" not in tokens:
+        return False
+    keys = [index for index, token in enumerate(tokens) if token in _GIT_IDENTITY_KEYS]
+    if not keys:
+        return False
+    reading = {"--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin", "--show-scope"}
+    # A value after the key, or --unset/--replace-all, changes it; a bare key or --get only reads it.
+    return any(token.startswith("--unset") or token == "--replace-all" for token in tokens) or (
+        not reading & set(tokens) and any(index + 1 < len(tokens) for index in keys)
+    )
+
+
 def reviewed_command_action(command: str) -> str:
     """The action for a custom tool's own command: its code was reviewed when the person created the tool,
     so only network, install, delete, Git and server actions still ask."""
