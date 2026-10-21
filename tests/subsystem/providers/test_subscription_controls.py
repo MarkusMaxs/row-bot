@@ -129,6 +129,43 @@ def test_saved_credentials_decide_the_account_state_the_client_offers_actions_fo
     assert {item.provider_id: item.saved_state for item in snapshot.accounts} == dict.fromkeys(controls.PROVIDERS, state)
 
 
+def test_a_locked_keychain_stops_a_sign_in_before_it_starts(account, monkeypatch):
+    """B370: no flow that would read as connected, or keep another provider waiting."""
+    from row_bot import secret_store
+    provider, owner, _, calls, *_ = account
+    with monkeypatch.context() as locked:
+        locked.setattr(secret_store, "is_available", lambda: False)
+        with pytest.raises(controls.SubscriptionError, match="subscription_storage_unavailable"):
+            execute(owner, command(provider))
+    assert calls == [] and not owner._flows
+    start = execute(owner, command(provider))
+    if provider == "xai_oauth":
+        _wait_listener(account)
+    assert start["flow"]["state"] in {"waiting", "starting"}
+
+
+def test_a_sign_in_the_keychain_refuses_ends_without_blocking_the_next(account, monkeypatch):
+    from row_bot import secret_store
+    provider, owner, module, calls, *_ = account
+    start = execute(owner, command(provider))
+    if provider == "xai_oauth":
+        _wait_listener(account)
+    name = "save_xai_oauth_tokens" if provider == "xai_oauth" else f"save_{provider}_oauth_tokens"
+
+    def refuse(*_a, **_kw):
+        raise secret_store.SecretStoreError("secure_storage_write_failed")
+
+    with monkeypatch.context() as locked:
+        locked.setattr(module, name, refuse)
+        with pytest.raises(controls.SubscriptionError, match="subscription_storage_unavailable"):
+            finish(account, start["flow"])
+    assert controls.read_accounts().accounts[controls.PROVIDERS.index(provider)].saved_state == "disconnected"
+    again = execute(owner, command(provider))  # Not "subscription_busy": the refused sign-in ended.
+    if provider == "xai_oauth":
+        _wait_listener(account)
+    assert again["flow"]["flow_id"] != start["flow"]["flow_id"]
+
+
 def test_explicit_signin_publishes_once_and_durable_receipt_is_redacted(account):
     provider, owner, _, calls, _, listener_done = account
     cmd = command(provider)

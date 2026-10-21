@@ -928,6 +928,11 @@ const CATALOG: Record<string, Entry> = {
     'retry',
     RETRY,
   ],
+  subscription_storage_unavailable: [
+    "Row-Bot can't save the sign-in: this computer's keychain is locked or unavailable. Unlock it (on a Mac, in Keychain Access), then try again.",
+    'retry',
+    PROVIDERS,
+  ],
   subscription_uncertain: [
     "Row-Bot couldn't confirm the sign-in. Check the subscription before trying again.",
     'review',
