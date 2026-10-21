@@ -2,6 +2,62 @@
 
 ---
 
+## v5.2.1 - Fixes For The Mac, Skills And Sign-In
+
+A fix release, mostly for the Mac. On a Mac installed from the DMG, documents,
+Row-Bot's browser, Computer Use and Skills now work as they do on Windows and
+Linux. Row-Bot 5.2.0 updates to 5.2.1 in the background.
+
+### Mac
+
+- **Documents process on a Mac** - processing never started on macOS (since
+  5.0). It does now, from Settings › Documents and from a chat.
+- **Browser Automation and design exports** - installing Row-Bot's browser works
+  with the current Playwright build, so design exports to PNG, PDF and
+  PowerPoint work on a Mac too.
+- **Computer Use installs** - Cua Driver installs on macOS, on slower
+  connections too, and then asks for the macOS permissions it needs.
+- **Skills** - Settings › Skills lists your skills, and adding a featured skill
+  opens it, on a Mac installed from the DMG.
+- **Background processes** - Developer background processes, such as a dev
+  server, need Windows, Linux or a Docker workspace; on a Mac, Row-Bot now says
+  so and suggests running the command in the conversation.
+
+### Everywhere
+
+- **A locked keychain** - when the system keychain is locked or unavailable,
+  connecting ChatGPT or xAI says so and how to unlock it, instead of reading
+  "Connected", and never blocks connecting the other one.
+- **Downloads that fail say so** - a browser, Cua Driver, voice or search model
+  download that fails says what failed and what to do next, instead of
+  "Row-Bot couldn't confirm that".
+- **Files on this computer** - the app asks which folder it may use, and starts
+  with it.
+- **Updates** - after Check now, the page's header shows the new check time.
+- **Running times** - a step that ran for 6 minutes 59.6 seconds reads 7m, not
+  6m 60s.
+
+### Upgrade Notes
+
+- **From 5.2.0** - Row-Bot downloads 5.2.1 in the background; restart when it
+  says Restart to update.
+- **From 5.1 or 5.0** - read the 5.2.0 notes below: the move to 5.2 needs the
+  full installer once.
+- **Files on this computer** - if you added it in 5.2.0, remove it and add it
+  again to choose its folder.
+
+### Known Issues
+
+- **Windows Firewall may ask again after an update** - with phone or LAN access
+  on, Windows can ask once more after each update. Allow it; a later release
+  keeps one fixed path.
+- **The first time on a Mac** - when Row-Bot first works in your Documents
+  folder, macOS asks for permission, and the command waits until you answer.
+- **Maths in replies** - formulas show as plain text, sometimes with LaTeX
+  marks such as \\( and \\).
+
+---
+
 ## v5.2.0 - Updates In The Background, Lower Costs & Every Device
 
 Row-Bot now keeps itself up to date in the background: it downloads only what
