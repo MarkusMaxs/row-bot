@@ -73,6 +73,8 @@ def test_each_version_gets_its_own_folder_beside_row_bot_exe() -> None:
         "{#AppStageDir}\\*": "{app}\\versions\\{#MyAppVersion}\\app",
         "build\\python\\*": "{app}\\versions\\{#MyAppVersion}\\python",
         "build\\version.json": "{app}\\versions\\{#MyAppVersion}",
+        # The server runs as Row-Bot beside python.exe, so Windows Firewall names Row-Bot (B355).
+        "build\\Row-Bot Server.exe": "{app}\\versions\\{#MyAppVersion}\\python",
     }
 
 

@@ -785,6 +785,36 @@ def test_voice_actions_are_passive_during_review_and_execute_once(
     assert calls == [field]
 
 
+def test_a_failed_download_is_reported_as_failed_not_unconfirmed(api, monkeypatch):
+    """A download that fails says so (B377), instead of "Row-Bot couldn't confirm that"."""
+    from row_bot.application import settings_commands
+
+    client, headers, data, _ = api
+    snapshot = client.get(BASE, headers=headers).json()
+    request = {
+        "settings_revision": snapshot["revision"],
+        "page": "voice",
+        "field": "whisper.install",
+        "value": True,
+    }
+    review = _review(client, headers, request)
+
+    def fail(_field):
+        raise TimeoutError("source_timeout")
+
+    monkeypatch.setattr(settings_commands, "_run_voice_action", fail)
+    command_id = str(uuid4())
+    result = _execute(client, headers, request, review, command_id)
+
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["status"] == "rejected" and body["code"] == "settings_action_failed"
+    assert body["action_result"]["message"] == "The speech model couldn't be downloaded."
+    assert "try again" in body["action_result"]["remediation"]
+    receipt = client.get(BASE + "/commands/" + command_id, headers=headers)
+    assert receipt.status_code == 200 and receipt.json() == body
+
+
 def test_voice_test_is_no_longer_a_settings_action_on_the_host(api, monkeypatch):
     """Test voice plays in the browser (/settings/voice/speech-test) instead."""
     from row_bot.application import settings_commands

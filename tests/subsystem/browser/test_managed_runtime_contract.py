@@ -17,7 +17,7 @@ def _browser_path(browsers: Path) -> Path:
     system = runtime._platform_id()
     relative = {
         "windows": "chromium-1234/chrome-win/chrome.exe",
-        "darwin": "chromium-1234/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+        "darwin": "chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
         "linux": "chromium-1234/chrome-linux/chrome",
     }[system]
     return browsers / relative

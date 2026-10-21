@@ -164,7 +164,7 @@ def _mcp_steps(row: dict, cfg: dict, intent: str) -> tuple[list[dict], dict, dic
                            sign_in={"method": method, "authorization_url": None}))
     installed = row["lifecycle"] != "available"
     accepted = setup["catalog_accepted"] and "tools_not_accepted" not in codes
-    retest = bool(codes & {"connection_failed", "expired", "tools_not_accepted", "sign_in_required", "key_required"})
+    retest = bool(codes & {"connection_failed", "tools_changed", "expired", "tools_not_accepted", "sign_in_required", "key_required"})
     checked = installed and accepted and not (intent == "fix" and retest)
     steps.append(_step("test", "done" if checked or intent == "access" else "pending", "Check the connection"))
     steps.append(_step("access", "done" if checked and intent != "access" else "pending", f"Choose what {name} can do",
@@ -1334,8 +1334,10 @@ def _stepped_up(record: dict) -> bool:
 
 
 def _mcp_test(ctx: Context, record: dict, step: dict) -> str:
-    if (record["intent"] == "settings" or _stepped_up(record)) and _disconnect(ctx, record, "test:disconnect") == "running":
-        return "running"  # The live session still uses the old settings; it ends before the new ones are checked.
+    if _disconnect(ctx, record, "test:disconnect") == "running":
+        # A live session holds the app's connection, so a check beside it is refused (B350), and it may still use
+        # old settings or an old sign-in. It ends before the check; the last step connects it again.
+        return "running"
     sign_in = next((s for s in record["steps"] if s["type"] == "sign_in"), None)
     if sign_in is not None and sign_in["state"] == "skipped" and "_signs_in" not in record:
         # One unauthenticated request shows whether the app asks for a sign-in; if it does, sign in first.

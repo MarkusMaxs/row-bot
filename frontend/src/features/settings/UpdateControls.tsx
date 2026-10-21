@@ -146,10 +146,13 @@ function noticeFor(receipt: UpdateReceipt, command: UpdateCommand) {
 export function UpdateControls({
   owner,
   onThisComputer = true,
+  onChecked,
 }: {
   owner: Owner;
   /** The desktop app on the computer Row-Bot runs on (#416). */
   onThisComputer?: boolean;
+  /** Told the time of each check these controls see, for the page header. */
+  onChecked?: (lastCheck: string | null) => void;
 }) {
   const [snapshot, setSnapshot] = useState<UpdateSnapshot | null>(null);
   const [pending, setPending] = useState<UpdateCommand | null>(savedPending);
@@ -181,6 +184,10 @@ export function UpdateControls({
     void load(abort.signal);
     return () => abort.abort();
   }, [load]);
+  const lastCheck = snapshot ? snapshot.last_check : undefined;
+  useEffect(() => {
+    if (lastCheck !== undefined) onChecked?.(lastCheck);
+  }, [lastCheck, onChecked]);
   const phase = snapshot?.engine.phase ?? 'idle';
   // Background work moves on its own: follow it while it does. A restart
   // takes the server away for a few seconds, so a failed read tries again.
@@ -881,7 +888,11 @@ export function UpdateControls({
   );
 }
 
-export default function ConnectedUpdateControls() {
+export default function ConnectedUpdateControls({
+  onChecked,
+}: {
+  onChecked?: (lastCheck: string | null) => void;
+}) {
   const { controller } = useRuntime();
   const onThisComputer = useOnThisComputer();
   const owner = useRef<Owner>({
@@ -889,6 +900,10 @@ export default function ConnectedUpdateControls() {
     send: (command) => controller.updateCommand(command),
   });
   return (
-    <UpdateControls owner={owner.current} onThisComputer={onThisComputer} />
+    <UpdateControls
+      owner={owner.current}
+      onThisComputer={onThisComputer}
+      onChecked={onChecked}
+    />
   );
 }

@@ -4,6 +4,7 @@ from dataclasses import asdict
 import hashlib
 import json
 import os
+import sys
 from uuid import uuid4
 
 import pytest
@@ -87,6 +88,28 @@ def fields(**updates):
         "version": "1.0",
         **updates,
     }
+
+
+@pytest.mark.platform
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended attributes")
+def test_skills_bundled_in_a_downloaded_mac_app_are_listed(library):
+    """A DMG install's own files carry com.apple.quarantine; its skills are still listed (B380)."""
+    import ctypes
+
+    folder = library.BUNDLED_SKILLS_DIR / "brain_dump"
+    folder.mkdir(parents=True)
+    skill = folder / "SKILL.md"
+    skill.write_text(
+        "---\nname: brain_dump\ndisplay_name: Brain dump\ndescription: Sort a brain dump\n---\n\nSort it.\n",
+        encoding="utf-8",
+    )
+    system = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    system.setxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                                ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    value = b"0081;6ad7c449;Safari;"
+    assert system.setxattr(os.fsencode(skill), b"com.apple.quarantine", value, len(value), 0, 0) == 0
+
+    assert {"brain_dump", "sample"} <= set(library.read_client_skills()["items"])
 
 
 def test_passive_snapshot_uses_current_bytes_without_loading_or_writing(

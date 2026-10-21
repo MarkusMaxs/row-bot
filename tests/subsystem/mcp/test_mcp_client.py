@@ -27,6 +27,9 @@ from row_bot.agent_budget import new_execution_budget
 
 pytestmark = pytest.mark.platform
 
+# Playwright's Chromium on macOS is a Chrome for Testing build.
+MAC_CHROME = Path("Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")
+
 
 class McpClientFoundationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -394,7 +397,7 @@ class McpClientFoundationTests(unittest.TestCase):
             if os.name == "nt":
                 executable = browsers / f"chromium-{contract.chromium_revision}" / "chrome-win" / "chrome.exe"
             elif requirements.platform.system().lower() == "darwin":
-                executable = browsers / f"chromium-{contract.chromium_revision}" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+                executable = browsers / f"chromium-{contract.chromium_revision}" / "chrome-mac-arm64" / MAC_CHROME
             else:
                 executable = browsers / f"chromium-{contract.chromium_revision}" / "chrome-linux" / "chrome"
             executable.parent.mkdir(parents=True, exist_ok=True)
@@ -450,7 +453,7 @@ class McpClientFoundationTests(unittest.TestCase):
         if system == "windows":
             browser_exe = browsers_dir / "chromium-1234" / "chrome-win" / "chrome.exe"
         elif system == "darwin":
-            browser_exe = browsers_dir / "chromium-1234" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+            browser_exe = browsers_dir / "chromium-1234" / "chrome-mac-arm64" / MAC_CHROME
         else:
             browser_exe = browsers_dir / "chromium-1234" / "chrome-linux" / "chrome"
         browser_exe.parent.mkdir(parents=True)
@@ -508,7 +511,7 @@ class McpClientFoundationTests(unittest.TestCase):
             if system == "windows":
                 browser_exe = browsers_dir / f"chromium-{revision}" / "chrome-win" / "chrome.exe"
             elif system == "darwin":
-                browser_exe = browsers_dir / f"chromium-{revision}" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+                browser_exe = browsers_dir / f"chromium-{revision}" / "chrome-mac-arm64" / MAC_CHROME
             else:
                 browser_exe = browsers_dir / f"chromium-{revision}" / "chrome-linux" / "chrome"
             browser_exe.parent.mkdir(parents=True, exist_ok=True)
