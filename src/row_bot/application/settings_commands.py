@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -162,6 +163,17 @@ _ACTION_FIELDS = {
     ("documents", "local_model.download"),
     ("documents", "local_model.repair"),
 }
+# A download or install that fails is reported as failed, never as an unconfirmed save (B377).
+_ACTION_FAILURES = {
+    ("system", "browser.install"): "Row-Bot couldn't install its browser.",
+    ("system", "computer_use.install"): "Row-Bot couldn't install Cua Driver.",
+    ("voice", "tts.install"): "The read-aloud voice couldn't be downloaded.",
+    ("voice", "whisper.install"): "The speech model couldn't be downloaded.",
+    ("voice", "sensevoice.install"): "The speech model couldn't be downloaded.",
+    ("documents", "local_model.download"): "The search model couldn't be downloaded.",
+    ("documents", "local_model.repair"): "The search model couldn't be repaired.",
+}
+_LOG = logging.getLogger(__name__)
 _TEXT_FIELDS = {
     ("voice", "runtime.talk_model"): 128,
     ("voice", "runtime.dictation_model"): 128,
@@ -1102,13 +1114,29 @@ def execute_settings_update(
             "action_result": action_result,
         }
     except Exception:
-        result = {
-            "command_id": command_id,
-            "status": "partial",
-            "code": "settings_save_unconfirmed",
-            "settings_revision": None,
-            "snapshot": None,
-        }
+        failure = _ACTION_FAILURES.get((intent["page"], intent["field"]))
+        if failure is None:
+            result = {
+                "command_id": command_id,
+                "status": "partial",
+                "code": "settings_save_unconfirmed",
+                "settings_revision": None,
+                "snapshot": None,
+            }
+        else:
+            _LOG.warning("Settings action %s.%s failed", intent["page"], intent["field"], exc_info=True)
+            result = {
+                "command_id": command_id,
+                "status": "rejected",
+                "code": "settings_action_failed",
+                "settings_revision": None,
+                "snapshot": None,
+                "action_result": {
+                    "code": "failed",
+                    "message": failure,
+                    "remediation": "Check your connection and try again. Settings › System › Logs says why.",
+                },
+            }
     return admissions.complete_command(owner_id, key, result)
 
 

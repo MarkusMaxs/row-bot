@@ -492,10 +492,18 @@ class SubscriptionFlows:
         flow.thread.start()
 
     def _publish(self, flow, tokens, proof, validate):
+        from row_bot.secret_store import SecretStoreError
         module = self._module(flow.provider_id)
         name = "save_xai_oauth_tokens" if flow.provider_id == "xai_oauth" else f"save_{flow.provider_id}_oauth_tokens"
-        getattr(module, name)(tokens, expected_revision=flow.revision,
-            validate=lambda: self._guard(flow, validate), command_proof=proof)
+        try:
+            getattr(module, name)(tokens, expected_revision=flow.revision,
+                validate=lambda: self._guard(flow, validate), command_proof=proof)
+        except SecretStoreError:
+            # The keychain refused the tokens, so nothing was saved: this sign-in ends here, and never
+            # reads as connected or blocks another one (B370).
+            flow.pending_tokens = flow.authorization = flow.flow = None
+            flow.cancel.set()
+            raise SubscriptionError("subscription_storage_unavailable") from None
         flow.published = True
         from row_bot.application.provider_settings_commands import invalidate_provider_runtime
         invalidate_provider_runtime()
@@ -576,6 +584,9 @@ class SubscriptionFlows:
             _provider(provider_id)
             if not isinstance(command.get("command_id"), str) or not 1 <= len(command["command_id"]) <= 128:
                 raise SubscriptionError("invalid_command")
+            from row_bot import secret_store
+            if not secret_store.is_available():  # A locked keychain: say so before any sign-in begins (B370).
+                raise SubscriptionError("subscription_storage_unavailable")
             with self._lock:
                 if self._closed:
                     raise SubscriptionError("subscription_flow_unavailable")
@@ -727,7 +738,8 @@ class SubscriptionFlows:
             validate()
             return result
         except BaseException as exc:
-            if isinstance(exc, SubscriptionError) and exc.code == "subscription_cancelled" and flow is not None and not flow.published:
+            if isinstance(exc, SubscriptionError) and exc.code in {"subscription_cancelled", "subscription_storage_unavailable"} \
+                    and flow is not None and not flow.published:
                 admissions.reject_command(owner_id, key, exc.code)
             if isinstance(exc, SubscriptionError) and exc.code in {"invalid_command", "subscription_listener_active"} and flow is not None and flow.state == "waiting":
                 admissions.reject_command(owner_id, key, exc.code)
