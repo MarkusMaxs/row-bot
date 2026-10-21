@@ -482,6 +482,7 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
                           "seconds_per_run": round(item.seconds / item.ran, 1) if item.ran else None,
                           "tokens": item.measured_tokens, "causes": dict(item.causes), "kept": item.cached}
     out["per_arm"] = per_arm
+    out["product_verdict"] = product_verdicts(per_arm, arms[0].name, out["analysis"]["hidden"])
     seen = set((results.data.get("rows") or {}).get("seen_visible") or ())
     out["visible_seen_in_training"] = len([task for task in chosen if task.id in seen])
     out["visible_unseen"] = _unseen(shown, seen, [(arms[0].name, arm.name) for arm in arms[1:]] + pairs)
@@ -491,6 +492,39 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
         results.data["compare"] = out
     results.save()
     _say(f"compare: {done[0]} runs in {out['seconds']} s")
+
+
+def product_verdicts(per_arm: dict[str, Any], base: str, hidden_analysis: dict[str, Any]) -> dict[str, Any]:
+    """What the product's own rule (E4: at least two tasks and a tenth of them) says for each arm
+    against ``base`` per kind of work (visible and hidden together, as the product counts them),
+    beside what the interval says (``evaluation``'s combined analysis)."""
+
+    from row_bot.learning import model_compare
+
+    def table(arm: str) -> dict[str, list[int]]:
+        found: dict[str, list[int]] = {}
+        for part in ("visible", "hidden"):
+            for label, (passed, total) in ((per_arm.get(arm) or {}).get(part, {}).get("by_kind") or {}).items():
+                row = found.setdefault(model_compare.family_key(label), [0, 0])
+                row[0] += int(passed)
+                row[1] += int(total)
+        return found
+
+    baseline = table(base)
+    out: dict[str, Any] = {}
+    for arm in per_arm:
+        if arm == base:
+            continue
+        mine = table(arm)
+        interval = (hidden_analysis.get("combined") or {}).get(arm) or {}
+        out[arm] = {kind: {"passed": mine[kind][0], "baseline": baseline[kind][0], "of": mine[kind][1],
+                           "verdict": model_compare.verdict(mine[kind][0], baseline[kind][0],
+                                                            min(mine[kind][1], baseline[kind][1])),
+                           "interval_verdict": ((interval.get("by_kind") or {}).get(kind) or {}).get(
+                               "interval_verdict")}
+                    for kind in sorted(set(mine) & set(baseline))}
+        out[arm]["overall_interval_verdict"] = (interval.get("overall") or {}).get("interval_verdict")
+    return out
 
 
 def _unseen(shown: Any, seen: set[str], pairs: list[tuple[str, str]]) -> dict[str, Any]:
