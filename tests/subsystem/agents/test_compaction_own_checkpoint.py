@@ -196,7 +196,8 @@ def test_a_real_change_to_the_conversation_mid_compaction_still_stops_it(monkeyp
     assert turn.saved_summary() is None
 
 
-def test_a_checkpoint_that_lost_messages_since_the_preparation_is_a_change() -> None:
+@pytest.mark.parametrize("since", ["the turn's own message landed", "the last answer was removed"])
+def test_a_newer_checkpoint_is_the_same_conversation_only_when_it_grew_toward_the_turn(since) -> None:
     thread_id = f"own-checkpoint-{uuid.uuid4().hex[:10]}"
     threads.create_thread("Own checkpoint", thread_id=thread_id, seed_default_skills=False)
     history = [HumanMessage(content="q1", id="q1"), AIMessage(content="a1", id="a1"),
@@ -209,8 +210,19 @@ def test_a_checkpoint_that_lost_messages_since_the_preparation_is_a_change() -> 
         "boundary_message_count": 2, "boundary_digest": threads.context_boundary_digest(holds, 2, "agent"),
         "summary": SUMMARY,
     }
-    # The last answer is removed: what is left is still the start of what the turn holds.
-    assert threads.remove_latest_checkpoint_ai_message(thread_id, "a2")
+    if since == "the turn's own message landed":
+        assert threads.append_checkpoint_messages(thread_id, holds[-1:])
+    else:
+        # What is left is still the start of what the turn holds, but the turn didn't remove it.
+        assert threads.remove_latest_checkpoint_ai_message(thread_id, "a2")
 
-    assert not threads.save_summary_state_cas(thread_id, state, expected_revision=prepared_at, messages=holds)
-    assert threads.load_validated_summary_state(thread_id, "agent", messages=history[:3]) is None
+    saved = threads.save_summary_state_cas(thread_id, state, expected_revision=prepared_at, messages=holds)
+
+    newest = threads.get_latest_checkpoint_revision(thread_id)
+    loaded = threads.load_validated_summary_state(
+        thread_id, "agent", messages=threads.get_latest_checkpoint_messages(thread_id))
+    if since == "the turn's own message landed":
+        assert saved and newest != prepared_at
+        assert loaded is not None and loaded["source_revision"] == newest
+    else:
+        assert not saved and loaded is None

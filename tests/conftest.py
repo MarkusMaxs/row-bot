@@ -495,7 +495,11 @@ def reload_for_data_dir(monkeypatch: pytest.MonkeyPatch):
     The namespace is recorded through monkeypatch just before the first reload, so
     the undo puts it back in order: after undoing the patches the test made to the
     reloaded module (which would otherwise write the test's values back over it) and
-    before undoing any it made earlier.
+    before undoing any it made earlier. It is recorded with ``setattr``, the stack
+    the test's own attribute patches are on: pytest undoes every ``setattr`` before
+    any ``setitem``, so a namespace kept with ``setitem`` put back a value the test
+    had patched before the reload (``threads.DB_PATH`` stayed on the test's folder
+    while ``threads.checkpointer`` was back on the session's).
     """
     kept: dict[str, tuple[Any, set[str]]] = {}
     first_imported: list[str] = []
@@ -512,7 +516,7 @@ def reload_for_data_dir(monkeypatch: pytest.MonkeyPatch):
                 namespace = vars(module)
                 kept[name] = (module, set(namespace))
                 for key, value in list(namespace.items()):
-                    monkeypatch.setitem(namespace, key, value)
+                    monkeypatch.setattr(module, key, value)
             importlib.reload(importlib.import_module(name))
         return [sys.modules[name] for name in names]
 
