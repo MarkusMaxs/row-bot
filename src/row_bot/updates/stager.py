@@ -608,7 +608,10 @@ class Stager:
             for name in ASSET_DIRS:
                 if (current_app / name).is_dir() and not (app / name).exists():
                     try:
-                        clone_tree(current_app / name, app / name, method=self.clone_method)
+                        # Copied, never hard-linked: Buddy packs, Designer fonts and other bundled files are read
+                        # only as single-link files, so linked ones would stop loading in both versions (B366).
+                        # About 50 MB; the large python runtime keeps its links.
+                        clone_tree(current_app / name, app / name, method="copy")
                     except OSError as exc:
                         raise StageError("unpack", f"could not reuse {name}: {exc}") from exc
         if self.layout.kind is install_layout.InstallKind.LINUX:
