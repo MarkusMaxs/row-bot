@@ -2,13 +2,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { absoluteTime } from '../../ui/format';
 import {
-  FAILED_RUN_STATUSES,
-  WAITING_RUN_STATUSES,
   When,
   clockTime,
   cronDays,
   greeting,
-  overnightStart,
   plural,
   runStatus,
   scheduleWords,
@@ -169,13 +166,6 @@ describe('runStatus', () => {
     expect(runStatus(null)).toEqual({ label: 'Never run', tone: 'neutral' });
     expect(runStatus('  ')).toEqual({ label: 'Never run', tone: 'neutral' });
   });
-
-  it('groups failed and waiting statuses without overlap', () => {
-    for (const status of FAILED_RUN_STATUSES)
-      expect(WAITING_RUN_STATUSES.has(status)).toBe(false);
-    expect(FAILED_RUN_STATUSES.has('completed')).toBe(false);
-    expect(WAITING_RUN_STATUSES.has('running')).toBe(false);
-  });
 });
 
 describe('greeting', () => {
@@ -190,24 +180,6 @@ describe('greeting', () => {
     [23, 'Good evening'],
   ])('greets at %i:00 with %s', (hour, expected) => {
     expect(greeting(new Date(2026, 8, 26, hour, 0, 0))).toBe(expected);
-  });
-});
-
-describe('overnightStart', () => {
-  it('starts at 6 PM on the previous local day', () => {
-    expect(overnightStart(now)).toEqual(new Date(2026, 8, 25, 18, 0, 0, 0));
-    expect(overnightStart(new Date(2026, 8, 26, 23, 59, 59))).toEqual(
-      new Date(2026, 8, 25, 18, 0, 0, 0),
-    );
-  });
-
-  it('rolls back across month and year boundaries without mutating the input', () => {
-    const first = new Date(2026, 9, 1, 7, 0, 0);
-    expect(overnightStart(first)).toEqual(new Date(2026, 8, 30, 18, 0, 0, 0));
-    expect(first).toEqual(new Date(2026, 9, 1, 7, 0, 0));
-    expect(overnightStart(new Date(2027, 0, 1, 8, 0, 0))).toEqual(
-      new Date(2026, 11, 31, 18, 0, 0, 0),
-    );
   });
 });
 

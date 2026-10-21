@@ -331,9 +331,18 @@ def test_a_record_naming_another_container_is_never_acted_on(sandbox):
     job = env.module.start(env.workspace, env.thread_id)
     assert env.docker.started.wait(5)
     saved_path = env.module.jobs_root() / f"{job.job_id}.json"
-    saved = json.loads(saved_path.read_text(encoding="utf-8"))
-    saved["container"] = "row-bot-dev-main"  # Tampered: the sandbox's own container.
-    saved_path.write_text(json.dumps(saved), encoding="utf-8", newline="\n")
+    # Tampered: the sandbox's own container. On Windows the job's own save (an atomic replace) can hold
+    # the file for a moment, so a refused rewrite is tried again (B387c).
+    for attempt in range(100):
+        try:
+            saved = json.loads(saved_path.read_text(encoding="utf-8"))
+            saved["container"] = "row-bot-dev-main"
+            saved_path.write_text(json.dumps(saved), encoding="utf-8", newline="\n")
+            break
+        except PermissionError:
+            if attempt == 99:
+                raise
+            threading.Event().wait(0.02)
     env.module._RECORDS.clear()
     env.module.sweep_leftovers(wait=True)
     assert "row-bot-dev-main" in env.docker.containers

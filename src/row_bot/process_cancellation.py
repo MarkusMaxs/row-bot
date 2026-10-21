@@ -152,6 +152,27 @@ def request_process_stop(proc: subprocess.Popen, *, kill_after: float = 0.75) ->
     threading.Thread(target=_late_kill, name="row-bot-process-cancel", daemon=True).start()
 
 
+def kill_process_tree(process: Any, *, timeout: float = 3.0) -> bool:
+    """Kill a psutil process and everything it started; True when all of it ended.
+
+    The descendants are listed before anything is killed: on Windows a child
+    whose parent has gone is no longer found from it.
+    """
+    import psutil
+
+    try:
+        family = process.children(recursive=True) + [process]
+    except psutil.Error:
+        family = [process]
+    for member in family:
+        try:
+            member.kill()
+        except psutil.Error:
+            pass
+    _gone, alive = psutil.wait_procs(family, timeout=timeout)
+    return not alive
+
+
 def _stop_process_tree_sync(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return

@@ -50,7 +50,6 @@
         "provider_id": {
           "enum": [
             "codex",
-            "claude_subscription",
             "xai_oauth"
           ],
           "title": "Provider Id",
@@ -122,8 +121,8 @@
       "items": {
         "$ref": "#/$defs/SubscriptionProbeResult"
       },
-      "maxItems": 6,
-      "minItems": 6,
+      "maxItems": 4,
+      "minItems": 4,
       "title": "Items",
       "type": "array"
     },

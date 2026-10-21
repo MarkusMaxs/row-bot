@@ -6,14 +6,13 @@ from threading import Event
 import pytest
 
 from row_bot import secret_store
-from row_bot.providers import auth_store, config, codex, claude_subscription, xai_oauth
+from row_bot.providers import auth_store, config, codex, xai_oauth
 from tests.subsystem.providers.test_provider_settings_controls import store as store
 
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 CASES = [
     ("codex", codex.CodexTokenSet, codex.save_codex_oauth_tokens, codex.disconnect_codex_metadata, codex.codex_runtime_credentials, codex, "refresh_codex_token"),
-    ("claude_subscription", claude_subscription.ClaudeSubscriptionTokenSet, claude_subscription.save_claude_subscription_oauth_tokens, claude_subscription.disconnect_claude_subscription_metadata, claude_subscription.claude_subscription_runtime_credentials, claude_subscription, "refresh_claude_subscription_token"),
     ("xai_oauth", xai_oauth.XAIOAuthTokenSet, xai_oauth.save_xai_oauth_tokens, xai_oauth.disconnect_xai_oauth_metadata, xai_oauth.xai_oauth_runtime_credentials, xai_oauth, "refresh_xai_oauth_token"),
 ]
 

@@ -15,10 +15,7 @@ import SubscriptionOptions, {
 const snapshot: SubscriptionOptionsSnapshot = {
   schema_version: 1,
   revision: 'a'.repeat(64),
-  references: [
-    { provider_id: 'codex', metadata_saved: false },
-    { provider_id: 'claude_subscription', metadata_saved: false },
-  ],
+  references: [{ provider_id: 'codex', metadata_saved: false }],
   xai_client_id_source: 'default',
   xai_saved_client_id: null,
   xai_default_available: true,
@@ -142,10 +139,7 @@ it('settles an in-flight command in the retained session after panel unmount', a
   await act(async () =>
     resolve({
       ...snapshot,
-      references: [
-        { provider_id: 'codex', metadata_saved: true },
-        snapshot.references[1],
-      ],
+      references: [{ provider_id: 'codex', metadata_saved: true }],
     }),
   );
   render(<SubscriptionOptions {...p} />);

@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 PACKAGE = "imageio-ffmpeg"
 PACKAGE_VERSION = "0.6.0"
 HOST = "files.pythonhosted.org"
+# A slow connection gets this long for the download (about 30 MB), as runtime archives do (B372);
+# a read that stalls still fails after its own 20 s timeout.
+DOWNLOAD_SECONDS = 20 * 60
 _FOLDER = "ffmpeg"
 _RECORD = "install.json"
 _CHUNK = 1024 * 1024
@@ -533,7 +536,8 @@ def install(*, check: Callable[[], None] = lambda: None) -> Ffmpeg:
             return found
         _set(status="downloading", received=0, total=wheel.size, error="")
         try:
-            data = fetch(wheel.url, hosts={HOST}, max_bytes=wheel.size, timeout=60, redirects=0,
+            data = fetch(wheel.url, hosts={HOST}, max_bytes=wheel.size, timeout=20, duration=DOWNLOAD_SECONDS,
+                         redirects=0,
                          headers={"User-Agent": f"Row-Bot-ffmpeg/{PACKAGE_VERSION}"}, check=check,
                          progress=lambda received, _total: _set(received=received),
                          refused="ffmpeg_source_refused", too_large="ffmpeg_download_too_large")

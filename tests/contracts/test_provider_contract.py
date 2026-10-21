@@ -252,3 +252,160 @@ def test_every_request_for_a_local_chat_model_keeps_its_context_size_and_lifetim
 
     assert {params["options"]["num_ctx"] for params in requests} == {8_192}
     assert {params["keep_alive"] for params in requests} == {OLLAMA_CHAT_KEEP_ALIVE}
+
+
+# ── Claude (your Claude plan): the person's own Claude Code per call (N1) ─────
+
+
+def _claude_reply(events):
+    from langchain_core.messages import AIMessageChunk
+
+    from row_bot.providers.transports.claude_plan_cli import ClaudeTurnReader
+
+    reader = ClaudeTurnReader(names={"read_calendar": "read_calendar"}, model="claude-sonnet-5")
+    message = AIMessageChunk(content="")
+    for event in events:
+        for chunk in reader.feed(event):
+            message += chunk.message
+        if reader.finished:
+            break
+    return reader, message + reader.last_chunk().message
+
+
+def test_a_claude_plan_reply_streams_text_and_thinking_and_ends_with_usage_and_why() -> None:
+    from tests.helpers.fake_claude import text_reply
+
+    reader, message = _claude_reply(text_reply("The result of 2+2 is 4.", thinking="Add them.", cache_read=900))
+
+    assert message.content == "The result of 2+2 is 4."
+    assert message.additional_kwargs["reasoning_content"] == "Add them."
+    assert message.response_metadata["stop_reason"] == "end_turn"
+    assert message.response_metadata["model_name"] == "claude-sonnet-5"
+    # Input counts cache reads, as every other route reports it.
+    assert message.usage_metadata["input_tokens"] == 1056 + 900
+    assert message.usage_metadata["output_tokens"] == 15
+    assert message.usage_metadata["input_token_details"]["cache_read"] == 900
+    assert reader.finished
+
+
+def test_a_claude_plan_tool_call_is_read_from_the_stream_under_row_bots_own_name() -> None:
+    from tests.helpers.fake_claude import tool_reply
+
+    reader, message = _claude_reply(tool_reply("read_calendar", {"day": "Friday", "count": 3}))
+
+    assert message.tool_calls == [{"name": "read_calendar", "args": {"day": "Friday", "count": 3},
+                                   "id": "toolu_synthetic01", "type": "tool_call"}]
+    assert message.response_metadata["stop_reason"] == "tool_use"
+    # The turn ends at the model's own stop; Claude Code's next turn is never read.
+    assert message.usage_metadata["input_tokens"] == 1160
+
+
+def test_claude_plan_tool_names_fit_mcp_and_come_back_unchanged() -> None:
+    from row_bot.providers.transports.claude_plan_cli import ClaudeTurnReader, wire_tool_name
+
+    long_name = "mcp_google_workspace_calendar_events_list_for_a_shared_calendar"
+    odd_name = "plugin.tool/with spaces"
+    for name in ("read_calendar", long_name, odd_name):
+        wire = wire_tool_name(name)
+        assert len("mcp__rowbot__" + wire) <= 64 and wire.replace("_", "").replace("-", "").isalnum()
+        assert wire_tool_name(name) == wire  # the same name on every call, so history replays match
+        assert ClaudeTurnReader(names={wire: name}).tool_name("mcp__rowbot__" + wire) == name
+    assert wire_tool_name("read_calendar") == "read_calendar"
+    assert wire_tool_name(long_name) != wire_tool_name(long_name + "_2")
+
+
+def test_a_claude_plan_conversation_goes_as_frames_and_only_the_last_asks_the_model() -> None:
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    from row_bot.providers.transports.claude_plan_cli import conversation_frames
+
+    system, frames = conversation_frames([
+        SystemMessage(content="You are Row-Bot."),
+        HumanMessage(content=[{"type": "text", "text": "What's on Friday?"},
+                              {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]),
+        AIMessage(content=[{"type": "thinking", "thinking": "Look it up.", "signature": "bound-to-a-prefix"},
+                           {"type": "text", "text": "Checking."}],
+                  tool_calls=[{"name": "read_calendar", "args": {"day": "Friday"}, "id": "toolu_1", "type": "tool_call"}]),
+        ToolMessage(content="Dentist at 3pm", tool_call_id="toolu_1", name="read_calendar"),
+        ToolMessage(content="failed", tool_call_id="toolu_2", name="read_calendar", status="error"),
+    ])
+
+    assert system == "You are Row-Bot."
+    assert [(frame["type"], frame.get("shouldQuery")) for frame in frames] == [
+        ("user", False), ("assistant", None), ("user", None)]
+    assert frames[0]["message"]["content"][1] == {
+        "type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+    # Thinking is never replayed: its signature is bound to a request prefix Claude Code builds.
+    assert frames[1]["message"]["content"] == [
+        {"type": "text", "text": "Checking."},
+        {"type": "tool_use", "id": "toolu_1", "name": "mcp__rowbot__read_calendar", "input": {"day": "Friday"}}]
+    # Every result of one batch goes back together, in one user turn.
+    assert frames[2]["message"]["content"] == [
+        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Dentist at 3pm"},
+        {"type": "tool_result", "tool_use_id": "toolu_2", "content": "failed", "is_error": True}]
+    with pytest.raises(ValueError, match="end with a message to Claude"):
+        conversation_frames([HumanMessage(content="hi"), AIMessage(content="hello")])
+    assert conversation_frames([HumanMessage(content="hi")])[0]  # never Claude Code's own default prompt
+
+
+@pytest.mark.parametrize(("code", "text", "state"), [
+    ("rate_limit", "You've hit your session limit · resets 3pm (Europe/London)", "plan_limit"),
+    ("rate_limit", "API Error: 429 rate_limit_error", "rate_limited"),
+    ("billing_error", "Fable 5.1 requires usage credits", "billing"),
+    ("invalid_request", "400 Claude Code 2.1.200 does not support this model", "too_old"),
+    ("server_error", "API Error: 503", "unavailable"),
+    ("", "Prompt is too long", "error"),
+])
+def test_claude_code_errors_say_what_happened_and_what_to_do(code, text, state) -> None:
+    from row_bot.providers.transports.claude_plan_cli import claude_code_error
+
+    error = claude_code_error(code, text)
+
+    assert error.state == state
+    message = str(error)
+    if state == "plan_limit":
+        assert "usage limit" in message and "resets 3pm" in message
+    if state == "too_old":
+        assert "claude update" in message
+    if code == "":
+        assert "Prompt is too long" in message  # Row-Bot's context handling reads Claude Code's own words
+
+
+def test_a_claude_code_sign_in_problem_asks_the_person_to_sign_in_again() -> None:
+    from row_bot.providers.runtime import ProviderSignInRequired
+    from row_bot.providers.transports.claude_plan_cli import claude_code_error
+
+    error = claude_code_error("authentication_failed", "OAuth token has expired")
+
+    assert isinstance(error, ProviderSignInRequired)
+    assert error.provider_id == "claude_subscription" and error.label == "Claude"
+    assert "claude auth login" in str(error)
+
+
+def test_claude_code_runs_without_row_bots_keys_or_anything_that_leaves_the_plan(monkeypatch) -> None:
+    """Security: no API key, token, endpoint, header or other cloud reaches Claude Code from Row-Bot."""
+    from row_bot.providers.claude_subscription import claude_code_environment
+
+    monkeypatch.setattr("row_bot.api_keys.saved_key_names", lambda: frozenset({"OPENROUTER_API_KEY"}))
+    inherited = {
+        "PATH": "/usr/bin", "HOME": "/home/person", "HTTPS_PROXY": "http://proxy.example:8080",
+        "CLAUDE_CONFIG_DIR": "/home/person/.claude-work", "OPENROUTER_API_KEY": "saved-in-row-bot",
+        "ANTHROPIC_API_KEY": "sk-ant-stray", "ANTHROPIC_AUTH_TOKEN": "stray-bearer",
+        "ANTHROPIC_BASE_URL": "https://relay.example", "ANTHROPIC_CUSTOM_HEADERS": "Authorization: Bearer x",
+        "ANTHROPIC_MODEL": "claude-other", "CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1",
+        "CLAUDE_CODE_USE_FOUNDRY": "1", "CLAUDE_CODE_OAUTH_TOKEN": "env-token", "CLAUDE_CODE_EXTRA_BODY": "{}",
+        "CLAUDE_CODE_EFFORT_LEVEL": "max", "MAX_THINKING_TOKENS": "1", "CLAUDECODE": "1",
+        "CLAUDE_CODE_SESSION_ID": "parent-session", "ROW_BOT_LAUNCH_SECRET": "launch",
+    }
+
+    env = claude_code_environment(inherited)
+
+    assert {"PATH", "HOME", "HTTPS_PROXY", "CLAUDE_CONFIG_DIR"} <= set(env)
+    assert not [name for name in env if name.startswith("ANTHROPIC_")]
+    for name in ("OPENROUTER_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+                 "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_EXTRA_BODY", "CLAUDE_CODE_EFFORT_LEVEL", "MAX_THINKING_TOKENS",
+                 "CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "ROW_BOT_LAUNCH_SECRET"):
+        assert name not in env, name
+    # Its own telemetry, error reports and auto-updates are off for these runs (AGENTS.md ground rule).
+    assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+
