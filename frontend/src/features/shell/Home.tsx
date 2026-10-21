@@ -32,7 +32,6 @@ import { BuddyPortrait } from '../buddy/BuddySurface';
 import ResourceSetup from './ResourceSetup';
 import { setupDeferred } from './FirstRun';
 import KnowledgeEditorDialog from '../knowledge/KnowledgeEditorDialog';
-import { idPath } from '../apps/parts';
 import { neverUsed } from './new-chat';
 
 const homeTabs = ['overview', 'workflows', 'knowledge', 'monitor', 'insights'];
@@ -42,26 +41,6 @@ const REUSE_MS = 20_000;
 // in well under a second) and "Show all" reads up to the server's 5,000 (B251).
 const GRAPH_DEFAULT_LIMIT = 2000;
 const GRAPH_ALL_LIMIT = 5000;
-/** Overview's Memory card pictures the few most connected memories. */
-const OVERVIEW_GRAPH_LIMIT = 8;
-
-/** One read shared by every reader for a short while; a failed one is dropped. */
-function useSharedRead<T>(read: () => Promise<T>, key: string) {
-  const cache = useRef<{ at: number; key: string; value: Promise<T> } | null>(
-    null,
-  );
-  return useCallback(() => {
-    const cached = cache.current;
-    if (cached && cached.key === key && Date.now() - cached.at < REUSE_MS)
-      return cached.value;
-    const value = read();
-    cache.current = { at: Date.now(), key, value };
-    value.catch(() => {
-      if (cache.current?.value === value) cache.current = null;
-    });
-    return value;
-  }, [read, key]);
-}
 
 export default function Home({
   onAsk,
@@ -269,29 +248,6 @@ export default function Home({
     (signal?: AbortSignal) => controller.systemHealth(signal),
     [controller],
   );
-  const loadApps = useCallback(
-    async (signal?: AbortSignal) => {
-      const read = (cursor?: string) =>
-        controller.integrationItems(
-          { scope: 'installed', kind: 'app', cursor },
-          signal,
-        );
-      let page = await read();
-      const items = [...page.items];
-      // Every app, not just the first page, so none that needs you is missed.
-      for (let more = 0; page.next_cursor && more < 8; more += 1) {
-        page = await read(page.next_cursor);
-        items.push(...page.items);
-      }
-      return { ...page, items };
-    },
-    [controller],
-  );
-  const openApp = useCallback(
-    (itemId: string, fix = false) =>
-      navigate(`${idPath('app', itemId)}${fix ? '&fix=1' : ''}`),
-    [navigate],
-  );
   const refreshConversation = useCallback(
     (id: string, signal: AbortSignal) =>
       controller.refreshListedConversation(id, signal),
@@ -318,18 +274,6 @@ export default function Home({
       return value;
     },
     [controller, identity],
-  );
-  // Overview's Memory card, read again after a change in Knowledge.
-  const loadMemory = useSharedRead(
-    useCallback(
-      () => controller.knowledgeGraph(OVERVIEW_GRAPH_LIMIT),
-      [controller],
-    ),
-    `${identity}:${knowledgeReload}`,
-  );
-  const loadInsights = useSharedRead(
-    useCallback(() => controller.insights(), [controller]),
-    identity ?? '',
   );
   /** A new design or code folder: set up in a new chat, like its + menu. */
   const newResource = (kind: 'artifact' | 'workspace') =>
@@ -585,14 +529,11 @@ export default function Home({
                 monitor={monitor}
                 loadTasks={identity ? loadTasks : undefined}
                 loadHealth={identity ? loadHealth : undefined}
-                loadApps={identity ? loadApps : undefined}
-                onOpenApp={openApp}
                 onRunDiagnosis={() => controller.systemDiagnosis()}
                 loadApprovals={
                   identity ? controller.pendingApprovals : undefined
                 }
-                loadMemory={identity ? loadMemory : undefined}
-                loadInsights={loadInsights}
+                loadAttention={identity ? controller.attention : undefined}
                 buddy={<BuddyPortrait />}
                 onAsk={onAsk}
                 asking={asking}

@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import type {
   AttentionSnapshot,
+  ConversationView,
   PendingApproval,
   PendingApprovalPage,
 } from '../../api/types';
@@ -21,11 +22,14 @@ function Where() {
   );
 }
 
-function show(snapshot: AttentionSnapshot) {
+function show(
+  snapshot: AttentionSnapshot,
+  conversations: ConversationView[] = [],
+) {
   const load = vi.fn(async () => snapshot);
   render(
     <MemoryRouter initialEntries={['/c/synthetic']}>
-      <AttentionIndicator load={load} />
+      <AttentionIndicator load={load} conversations={conversations} />
       <Routes>
         <Route path="*" element={<Where />} />
       </Routes>
@@ -46,31 +50,44 @@ it('stays quiet while everything is healthy', async () => {
   expect(screen.queryByRole('link')).toBeNull();
 });
 
-it('names the problems and opens Monitor', async () => {
-  show({
-    schema_version: 1,
-    problems: [
+it('counts problems and conversations waiting on you, and opens Home where each has its fix', async () => {
+  show(
+    {
+      schema_version: 1,
+      problems: [
+        {
+          id: 'channel:telegram',
+          title: 'Telegram stopped',
+          detail: 'It is set to start with Row-Bot but isn’t running.',
+          place: 'channels',
+        },
+        {
+          id: 'plugin:rss-reader',
+          title: 'The plugin rss-reader didn’t load',
+          detail: 'Open it in Settings › Plugins.',
+          place: 'plugins',
+        },
+      ],
+      // A problem comes first; the update waits.
+      update: { version: '9.1.0' },
+    },
+    [
       {
-        id: 'channel:telegram',
-        title: 'Telegram stopped',
-        detail: 'It is set to start with Row-Bot but isn’t running.',
-        place: 'channels',
+        id: 'chat-goal',
+        revision: 'r',
+        title: 'Autumn launch',
+        pinned: false,
+        activity_state: 'attention',
+        activity_phase: 'goal_needs_you',
       },
-      {
-        id: 'plugin:rss-reader',
-        title: 'The plugin rss-reader didn’t load',
-        detail: 'Open it in Settings › Plugins.',
-        place: 'plugins',
-      },
+      { id: 'chat-idle', revision: 'r', title: 'Notes', pinned: false },
     ],
-    // A problem comes first; the update waits.
-    update: { version: '9.1.0' },
-  });
+  );
   const link = await screen.findByRole('link', {
-    name: '2 things need attention. Open Monitor',
+    name: '3 things need you. Open Home',
   });
   fireEvent.click(link);
-  expect(screen.getByLabelText('Location')).toHaveTextContent('/?tab=monitor');
+  expect(screen.getByLabelText('Location')).toHaveTextContent(/^\/$/);
 });
 
 it('offers an update, opens Updates, and "Remind me later" hides it for a day', async () => {
@@ -146,16 +163,16 @@ it('counts waiting approvals and answers them in place (B255)', async () => {
   );
   fireEvent.click(
     await screen.findByRole('button', {
-      name: '2 approvals are waiting. Review',
+      name: '3 things need you. Review',
     }),
   );
   const list = screen.getByRole('dialog', {
     name: 'Waiting for your approval',
   });
-  // The problems stay one step away.
+  // The rest stay one step away, on Home.
   expect(
-    within(list).getByRole('link', { name: /1 thing needs attention/ }),
-  ).toHaveAttribute('href', '/?tab=monitor');
+    within(list).getByRole('link', { name: /1 more needs you/ }),
+  ).toHaveAttribute('href', '/');
   const news = within(list).getByRole('listitem', {
     name: 'Daily News needs your approval',
   });
@@ -171,7 +188,7 @@ it('counts waiting approvals and answers them in place (B255)', async () => {
   );
   expect(
     await screen.findByRole('button', {
-      name: '1 approval is waiting. Review',
+      name: '2 things need you. Review',
     }),
   ).toBeInTheDocument();
   expect(
@@ -209,7 +226,7 @@ it('keeps "Restart to update" beside a problem, each opening its own page (B364)
     update: { version: '9.1.0', ready: true },
   });
   const problem = await screen.findByRole('link', {
-    name: '1 thing needs attention. Open Monitor',
+    name: '1 thing needs you. Open Home',
   });
   const update = screen.getByRole('link', {
     name: 'Restart to update to 9.1.0. Open Updates',
@@ -219,5 +236,25 @@ it('keeps "Restart to update" beside a problem, each opening its own page (B364)
     '/settings/updates',
   );
   fireEvent.click(problem);
-  expect(screen.getByLabelText('Location')).toHaveTextContent('/?tab=monitor');
+  expect(screen.getByLabelText('Location')).toHaveTextContent(/^\/$/);
+});
+
+it('says only approvals are waiting when nothing else needs you', async () => {
+  render(
+    <MemoryRouter>
+      <AttentionIndicator
+        load={async () => ({ schema_version: 1, problems: [], update: null })}
+        loadApprovals={async () => ({
+          schema_version: 1,
+          items: [waiting('news', 'Daily News')],
+          total: 1,
+        })}
+      />
+    </MemoryRouter>,
+  );
+  expect(
+    await screen.findByRole('button', {
+      name: '1 approval is waiting. Review',
+    }),
+  ).toBeVisible();
 });

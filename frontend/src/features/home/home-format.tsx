@@ -156,12 +156,6 @@ export const FAILED_RUN_STATUSES = new Set([
   'completed_delivery_failed',
 ]);
 
-export const WAITING_RUN_STATUSES = new Set([
-  'paused',
-  'waiting_approval',
-  'approval_pending',
-]);
-
 export function plural(count: number, one: string, many = `${one}s`) {
   return `${count.toLocaleString()} ${count === 1 ? one : many}`;
 }
@@ -173,12 +167,4 @@ export function greeting(now: Date) {
   if (hour < 12) return 'Good morning';
   if (hour < 18) return 'Good afternoon';
   return 'Good evening';
-}
-
-/** Start of "overnight": 6 PM yesterday, local time. */
-export function overnightStart(now: Date) {
-  const start = new Date(now);
-  start.setDate(start.getDate() - 1);
-  start.setHours(18, 0, 0, 0);
-  return start;
 }

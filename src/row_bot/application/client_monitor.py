@@ -299,10 +299,10 @@ def read_monitor_snapshot(*, include_logs: bool) -> dict[str, Any]:
 
 
 # ── Attention (NiceGUI parity rows 12 and 13) ──────────────────────────────
-# One sidebar indicator: problems that need the person (it opens Monitor) and
-# an update (it opens Updates). Quiet when everything is healthy. Reads are
-# passive: Python state and Monitor's kept check results only, no probes,
-# nothing started.
+# What needs the person, one list for the sidebar's indicator and Home's Needs
+# you, so both count the same things (B383), and an update (it opens Updates).
+# Quiet when everything is healthy. Reads are passive: Python state, saved
+# workflows and Monitor's kept check results only, no probes, nothing started.
 
 _MAX_PROBLEMS = 20
 _MODULE = __import__("sys").modules
@@ -422,6 +422,65 @@ def _mcp_problems() -> list[dict[str, str]]:
                      _open("/settings/apps", "Apps"))]
 
 
+# An app that is on but can't be used until the person acts, in words.
+_APP_NEEDS = {"needs_sign_in": "Sign in to {}", "needs_key": "{} needs its key",
+              "attention": "{} needs attention"}
+_APP_ID = re.compile(r"[A-Za-z0-9._:-]{1,120}")
+
+
+def _app_problems() -> list[dict[str, Any]]:
+    """Your apps that are on but signed out, missing a key or broken. Channels
+    are left to their own reader."""
+    facts = _MODULE.get("row_bot.integrations.facts")
+    builtin = _MODULE.get("row_bot.integrations.builtin")
+    if facts is None:
+        return []
+    rows, _errors = facts.inventory()
+    if builtin is not None:
+        rows = rows + [row for row in builtin.rows(wait=False)
+                       if not str(row.get("owner_ref") or "").startswith("channel:")]
+    problems = []
+    for item in (item for row in rows for item in (row, *row.get("children", ()))):
+        words = _APP_NEEDS.get(item.get("readiness") or "")
+        if item.get("lifecycle") != "installed" or words is None:
+            continue
+        name = str((item.get("app") or {}).get("name") or item["name"])
+        detail = next((str(b["message"]) for b in item.get("blockers", ()) if b.get("message")),
+                      "It can't be used until this is fixed.")
+        item_id = str(item["id"])
+        # Its page with its fix (a sign-in, its key) started at once.
+        href = f"/settings/apps/item?id={item_id}&fix=1" if _APP_ID.fullmatch(item_id) else "/settings/apps"
+        problems.append(_problem(f"app:{item_id}", words.format(name), detail, "mcp", _open(href, name)))
+    return problems
+
+
+# A workflow whose newest run ended like this needs the person.
+_FAILED_RUNS = {
+    "failed": "{} failed",
+    "blocked": "{} was blocked",
+    "timed_out": "{} timed out",
+    "completed_delivery_failed": "{} couldn't deliver its result",
+}
+_TASK_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
+
+
+def _workflow_problems() -> list[dict[str, Any]]:
+    """Workflows whose last run failed and that aren't running again."""
+    tasks = _MODULE.get("row_bot.tasks")
+    if tasks is None:
+        return []
+    problems = []
+    for row in tasks.iter_task_summary_snapshot():
+        words = _FAILED_RUNS.get(str(row.get("last_status") or "").lower())
+        if words is None or row.get("active_run_json"):
+            continue
+        task_id, name = str(row["id"]), str(row.get("name") or "A workflow")
+        href = f"/?tab=workflows&workflow={task_id}" if _TASK_ID.fullmatch(task_id) else "/?tab=workflows"
+        problems.append(_problem(f"workflow:{task_id}", words.format(name),
+                                 "Run it again, or open it to see why.", "workflows", _open(href, name)))
+    return problems
+
+
 def _available_update() -> Any:
     updater = _MODULE.get("row_bot.updater")
     if updater is None:
@@ -452,13 +511,17 @@ def _health_problems() -> list[dict[str, str]]:
 
 def read_attention(*, include_update: bool) -> dict[str, Any]:
     """What needs the person now, for the sidebar's one indicator."""
-    problems: list[dict[str, str]] = []
+    problems: list[dict[str, Any]] = []
     for reader in (_channel_problems, _tunnel_problems, _plugin_problems,
-                   _mcp_problems, _health_problems):
+                   _app_problems, _mcp_problems, _workflow_problems, _health_problems):
         try:
-            problems.extend(reader())
+            found = reader()
         except Exception:
             continue
+        # The apps that need attention, by name, say more than "An app isn't connected".
+        if reader is _mcp_problems and any(p["id"].startswith("app:") for p in problems):
+            continue
+        problems.extend(found)
     update = None
     if include_update:
         ready = _bounded(_ready_update() or "", 64)
