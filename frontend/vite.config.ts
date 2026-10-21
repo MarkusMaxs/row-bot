@@ -32,6 +32,10 @@ const GRAPH_MODULES =
 // when the desktop terminal dock first opens.
 const TERMINAL_MODULES = /\/node_modules\/@xterm\//;
 
+// KaTeX and its stylesheet and fonts: a lazy `math` chunk loaded the first
+// time a message has maths, never at startup.
+const MATH_MODULES = /\/node_modules\/katex\//;
+
 // Dev-only same-loopback proxy. Production access policy is untouched.
 const loopbackProxy: ProxyOptions = {
   target: backend.origin,
@@ -110,6 +114,7 @@ export default defineConfig({
           if (SYNTAX_MODULES.test(id)) return 'syntax';
           if (GRAPH_MODULES.test(id)) return 'graph';
           if (TERMINAL_MODULES.test(id)) return 'terminal';
+          if (MATH_MODULES.test(id)) return 'math';
           if (id.includes('/node_modules/')) return 'vendor';
           if (id.includes('/contracts/client-platform/')) return 'protocol';
         },
