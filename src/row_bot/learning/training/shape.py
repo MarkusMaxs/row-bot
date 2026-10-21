@@ -13,9 +13,10 @@ teach direct calls to tools the served model can only reach through the bridge.
 :func:`render` re-renders one row into the serving envelope, using Row-Bot's own pieces for that
 context (:func:`envelope_for`):
 
-- **System prompt** (agent rows only): the root prompt leaves out what the small profile sends as
-  guides; the static self-knowledge block is dropped; the full tool guides become the index (with
-  the TASKS and MEMORY guidance for the groups still bound).
+- **System prompt** (agent rows only; its sections joined as a system-first endpoint receives them,
+  and as Row-Bot itself joins them for one): the root prompt leaves out what the small profile sends
+  as guides; the static self-knowledge block goes; the full tool guides become the index, with the
+  TASKS and MEMORY guidance for the groups still bound.
 - **Turn context**: the "Current state:" block the small profile leaves out is removed.
 - **Tools**: the tools the profile binds stay; the rest go behind ``tool_search`` /
   ``tool_invoke``, built by Row-Bot's own bridge over them (its catalog and its search).
@@ -73,17 +74,18 @@ class Envelope:
     profile: Profile
     bound: frozenset[str] = frozenset()
     deferred: frozenset[str] = frozenset()
-    # The small root prompt, and the part of the large root it leaves out (TASKS and MEMORY).
-    small_root: str = ""
+    # The part of the large root prompt the small one leaves out (TASKS and MEMORY), and the text
+    # that follows it in the large root (so only the root's own copy is taken out).
     root_removed: str = ""
+    root_follows: str = ""
     # (group, its tools' names, the guidance text) that move from the root into the guides.
     root_guides: tuple[tuple[str, frozenset[str], str], ...] = ()
     # Every tool guide: (instructions, the tool groups it is for).
     guides: tuple[tuple[str, tuple[str, ...]], ...] = ()
     # The small profile's guide index for some groups: (groups, loadable) -> text.
     guide_index: Callable[[Sequence[str], bool], str] = field(default=lambda groups, loadable: "", repr=False)
-    # System sections the profile leaves out (their opening text).
-    dropped_sections: tuple[str, ...] = ()
+    # Texts the profile leaves out of the system prompt (the static self-knowledge block's parts).
+    dropped_texts: tuple[str, ...] = ()
     # Where a deferred tool comes from, for its search result ("core" when unknown).
     sources: Mapping[str, str] = field(default_factory=dict)
     # The group a deferred built-in tool belongs to (its record's parent).
@@ -169,8 +171,9 @@ def _sources() -> dict[str, str]:
     return found
 
 
-def _difference(large: str, small: str) -> str:
-    """The part of ``large`` that ``small`` leaves out (one contiguous span), or ""."""
+def _difference(large: str, small: str) -> tuple[str, str]:
+    """The part of ``large`` that ``small`` leaves out (one contiguous span) and up to 200 characters of
+    what follows it, or ("", "")."""
 
     prefix = 0
     while prefix < min(len(large), len(small)) and large[prefix] == small[prefix]:
@@ -180,7 +183,9 @@ def _difference(large: str, small: str) -> str:
            and large[len(large) - 1 - suffix] == small[len(small) - 1 - suffix]):
         suffix += 1
     middle = large[prefix:len(large) - suffix]
-    return middle if len(large) - len(middle) == len(small) else ""
+    if not middle or len(large) - len(middle) != len(small):
+        return "", ""
+    return middle, large[len(large) - suffix:][:200]
 
 
 def envelope_for(serve_context: int) -> Envelope:
@@ -215,13 +220,12 @@ def envelope_for(serve_context: int) -> Envelope:
     guides = tuple((str(item.instructions or ""), tuple(str(tool) for tool in item.tools))
                    for item in skills.get_all_skills() if skills.is_tool_guide(item) and not item.on_demand
                    and str(item.instructions or "").strip())
-    small_root = prompts.get_agent_system_prompt(small_context=True)
-    large_root = prompts.get_agent_system_prompt()
+    removed, follows = _difference(prompts.get_agent_system_prompt(), prompts.get_agent_system_prompt(small_context=True))
     dropped: list[str] = []
     try:
-        from row_bot.self_knowledge import ABOUT_ROW_BOT
+        from row_bot.self_knowledge import ABOUT_ROW_BOT, SKILL_CREATION_GUIDANCE
 
-        dropped.append(str(ABOUT_ROW_BOT)[:400])
+        dropped += [str(ABOUT_ROW_BOT).strip(), str(SKILL_CREATION_GUIDANCE).strip()]
     except Exception:  # noqa: BLE001
         logger.debug("Learning couldn't read the self-knowledge block for the serving shape", exc_info=True)
 
@@ -230,10 +234,9 @@ def envelope_for(serve_context: int) -> Envelope:
 
     return Envelope(
         serve_context=context, profile=profile, bound=frozenset(bound), deferred=frozenset(deferred),
-        small_root=small_root if profile == "small" else "",
-        root_removed=_difference(large_root, small_root) if profile == "small" else "",
+        root_removed=removed if profile == "small" else "", root_follows=follows if profile == "small" else "",
         root_guides=tuple(root_guides) if profile == "small" else (), guides=guides if profile == "small" else (),
-        guide_index=index, dropped_sections=tuple(item for item in dropped if item) if profile == "small" else (),
+        guide_index=index, dropped_texts=tuple(item for item in dropped if item) if profile == "small" else (),
         sources=_sources(), parents=parents,
     )
 
@@ -310,34 +313,46 @@ def _fenced_search(raw: str) -> str:
 
 def _render_system(parts: list[str], envelope: Envelope, bound_names: set[str], loadable: bool,
                    stats: Stats) -> list[str]:
-    """The agent system sections as the small profile sends them (root, self-knowledge, guides)."""
+    """The agent's system prompt as the small profile sends it (root, self-knowledge, guides), on its
+    sections joined (Row-Bot joins them the same way for an endpoint that takes one system message)."""
 
     if envelope.profile != "small" or not parts:
         return parts
-    result = list(parts)
-    root = result[0]
-    # The large root (with the captured identity line) loses what the small one sends as guides;
-    # any other root (already small, or not Row-Bot's agent prompt) is kept as it is.
-    if root != envelope.small_root and envelope.root_removed and envelope.root_removed in root:
-        result[0] = root.replace(envelope.root_removed, "", 1)
-    kept: list[str] = [result[0]]
-    for text in result[1:]:
-        if any(opening and text.startswith(opening) for opening in envelope.dropped_sections):
-            continue
-        guides = [(instructions, groups) for instructions, groups in envelope.guides
-                  if instructions.strip() and instructions.strip() in text]
-        if guides and any(text.lstrip().startswith(instructions.strip()[:200]) for instructions, _ in guides):
-            groups = sorted({group for _, items in guides for group in items})
-            parts_out = [guidance for group, names, guidance in envelope.root_guides if names & bound_names]
-            index = envelope.guide_index(groups, loadable)
-            if index:
-                parts_out.append(index)
-            text = "\n\n".join(item for item in parts_out if item).strip()
-            if not text:
-                continue
-        kept.append(text)
-    stats.system_changed = kept != parts
-    return kept
+    text = "\n\n".join(part for part in parts if part)
+    out = text
+    # The root's own TASKS and MEMORY guidance (the copy followed by the root's last part) goes.
+    marker = envelope.root_removed + envelope.root_follows
+    root_changed = bool(envelope.root_removed and envelope.root_follows and marker in out)
+    if root_changed:
+        out = out.replace(marker, envelope.root_follows, 1)
+    for dropped in envelope.dropped_texts:
+        if dropped and dropped in out:
+            out = out.replace(dropped, "", 1)
+    spans: list[tuple[int, int, tuple[str, ...]]] = []
+    for instructions, groups in envelope.guides:
+        body = instructions.strip()
+        start = out.find(body) if body else -1
+        if start >= 0 and not any(start < end and begin < start + len(body) for begin, end, _ in spans):
+            spans.append((start, start + len(body), groups))
+    spans.sort()
+    if spans or root_changed:
+        guides = [guidance for _group, names, guidance in envelope.root_guides if names & bound_names]
+        index = envelope.guide_index(sorted({group for _, _, items in spans for group in items}), loadable) \
+            if spans else ""
+        small = "\n\n".join(item.strip() for item in [*guides, index] if item and item.strip())
+        pieces, position = [], 0
+        for number, (begin, end, _groups) in enumerate(spans):
+            pieces.append(out[position:begin])
+            if number == 0:
+                pieces.append(small)
+            position = end
+        pieces.append(out[position:])
+        out = "".join(pieces) if spans else f"{out}\n\n{small}"
+    if out == text:
+        return parts
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()  # where a removed part leaves a gap
+    stats.system_changed = True
+    return [out]
 
 
 def _remove_state(messages: list[dict[str, Any]], stats: Stats) -> None:

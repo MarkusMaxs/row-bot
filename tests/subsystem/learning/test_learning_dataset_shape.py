@@ -50,11 +50,11 @@ def _index(groups, loadable):
 
 ENVELOPE = shape.Envelope(
     serve_context=32_768, profile="small", bound=frozenset({"workspace_read_file", "save_memory"}),
-    small_root=SMALL_ROOT, root_removed="TASKS: use the task tools for reminders.\nMEMORY: save what lasts.\n",
+    root_removed="TASKS: use the task tools for reminders.\nMEMORY: save what lasts.\n", root_follows="TAIL RULES",
     root_guides=(("task", frozenset({"task_create"}), "TASKS: use the task tools for reminders."),
                  ("memory", frozenset({"save_memory"}), "MEMORY: save what lasts.")),
     guides=((FILES_GUIDE, ("filesystem",)), (CALENDAR_GUIDE, ("calendar",))),
-    guide_index=_index, dropped_sections=("ABOUT YOU (SELF-KNOWLEDGE)",),
+    guide_index=_index, dropped_texts=(SELF_KNOWLEDGE,),
 )
 CLOUD_SYSTEM = [LARGE_ROOT, SELF_KNOWLEDGE, PLATFORM, FILES_GUIDE + "\n\n" + CALENDAR_GUIDE]
 
@@ -299,7 +299,8 @@ def test_row_bots_own_envelope_binds_its_core_groups_at_32k(data_dir):
     assert {"workspace_read_file", "save_memory", "task_create"} <= small.bound
     assert small.defers("row_bot_status") and small.defers("calendar_create_event")
     assert not small.defers("tool_search") and not small.defers("read_tool_output")
-    assert small.small_root == prompts.get_agent_system_prompt(small_context=True)
-    assert small.root_removed and small.root_removed not in small.small_root
+    # Taking the root's TASKS and MEMORY guidance out of the large root gives exactly the small one.
+    large, small_root = prompts.get_agent_system_prompt(), prompts.get_agent_system_prompt(small_context=True)
+    assert large.replace(small.root_removed + small.root_follows, small.root_follows, 1) == small_root
     assert window.profile == "window" and window.defers("row_bot_status") and not window.defers("calendar_create_event")
     assert shape.envelope_for(200_000).profile == "full"
