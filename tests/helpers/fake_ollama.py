@@ -9,7 +9,8 @@ flushed as its own chunk, so a client reading the stream sees hundreds of small 
 
 ``replies`` scripts one chat reply per request, in order (the last repeats): each a dict with ``tokens``,
 ``tool_calls``, ``eval_count`` and ``prompt_eval_count`` (reported on the last chunk), or ``status`` and
-``error`` for a failed request, which the real server answers with that status and ``{"error": ...}``.
+``error`` for a failed request, which the real server answers with that status and ``{"error": ...}``, or
+``stream_error`` for an error the real server sends inside the stream after what it already sent.
 """
 
 from __future__ import annotations
@@ -101,6 +102,11 @@ def fake_streaming_ollama(
             if chat and reply.get("tool_calls"):
                 calls = {"role": "assistant", "content": "", "tool_calls": reply["tool_calls"]}
                 chunk({"model": state.model, "done": False, "message": calls})
+            if reply.get("stream_error"):
+                chunk({"error": reply["stream_error"]})
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+                return
             last = {"message": {"role": "assistant", "content": ""}} if chat else {"response": ""}
             counts = {key: reply[key] for key in ("eval_count", "prompt_eval_count") if key in reply}
             chunk({"model": state.model, "done": True, "done_reason": "stop", **last, **counts})
@@ -109,7 +115,8 @@ def fake_streaming_ollama(
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     state.url = f"http://127.0.0.1:{server.server_address[1]}"
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll, so shutting the fake down doesn't add half a second to every test.
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     try:
         yield state

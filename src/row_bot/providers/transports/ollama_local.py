@@ -18,17 +18,23 @@ wrote. langchain-ollama parses every string argument that is valid JSON (its
 band-aid for ollama#6155, where some models send an object argument as a JSON
 string), so a model writing ``[1, 2]`` to a file handed the file tool a list.
 
-When Ollama can't hand back a tool call, the model is asked once more, with a
-short note, instead of the turn ending:
+When Ollama can't hand back a tool call, the model is asked once more instead
+of the turn ending:
 
 - a slightly malformed call (Qwen3.5's XML tool format) makes Ollama's parser
-  answer HTTP 500 ("XML syntax error …") before anything streams;
+  answer HTTP 500 ("XML syntax error …") before anything streams. The model is
+  asked again with a short note on writing the call;
 - a call to a tool that isn't bound in the request (a deferred tool behind
   ``tool_search``/``tool_invoke``, called by its own name) is dropped, and the
-  reply comes back empty although tokens were generated.
+  reply comes back empty although tokens were generated. The model is asked
+  again with the deferred tools (``deferred_tools.offered()``) bound as bare
+  stubs, so Ollama keeps the call, and a call to a stub is handed on as
+  ``tool_invoke(name, arguments)``: the bridge checks the arguments against the
+  tool's schema and keeps its approvals. Without deferred tools or
+  ``tool_invoke``, the model gets a short note instead.
 
-Only those two cases, only while tools are bound, only once, and only before
-anything of the reply has been passed on.
+Only those two cases, only while tools are bound, at most once each, and only
+before anything of the reply has been passed on. Every attempt's tokens count.
 """
 
 from __future__ import annotations
@@ -45,6 +51,8 @@ from langchain_ollama import ChatOllama
 from langchain_ollama.chat_models import _parse_arguments_from_tool_call
 from ollama import ResponseError
 from pydantic import Field
+
+from row_bot.providers import deferred_tools
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +201,33 @@ def _bound_names(tools: Any) -> set[str]:
     return names
 
 
+def _stub(name: str) -> dict[str, Any]:
+    """A bare entry for a deferred tool: enough for Ollama's parser to keep a call to it."""
+    return {
+        "type": "function",
+        "function": {"name": name, "description": "", "parameters": {"type": "object", "properties": {}}},
+    }
+
+
+def _through_bridge(response: Any, stubbed: frozenset[str]) -> Any:
+    """``response`` with each call to a stubbed tool made through ``tool_invoke`` instead."""
+    if not stubbed or isinstance(response, str) or "message" not in response:
+        return response
+    calls = response["message"].get("tool_calls") or ()
+    if not any(str((call.get("function") or {}).get("name") or "") in stubbed for call in calls):
+        return response
+    response = copy.deepcopy(response)
+    for call in response["message"].get("tool_calls") or ():
+        function = call.get("function")
+        name = str((function or {}).get("name") or "")
+        if name not in stubbed:
+            continue
+        arguments = function.get("arguments")
+        function["name"] = "tool_invoke"
+        function["arguments"] = {"name": name, "arguments": dict(arguments) if isinstance(arguments, Mapping) else {}}
+    return response
+
+
 class _Attempt:
     """One request's responses, held back until the reply shows something, so a request asked
     again never repeats what was already passed on."""
@@ -216,8 +251,57 @@ class _Attempt:
         return not self.shown and _counts(self.held)[1] > 0
 
 
-def _ask_again(messages: list[BaseMessage], note: str) -> list[BaseMessage]:
-    return [*messages, HumanMessage(content=note)]
+class _Asking:
+    """The requests of one model call: as asked, then at most one more for a call Ollama couldn't
+    read and at most one more for a reply that came back empty."""
+
+    def __init__(self, messages: list[BaseMessage], kwargs: dict[str, Any]) -> None:
+        self.messages = list(messages)
+        self.kwargs = kwargs
+        self.tools = kwargs.get("tools")
+        self.text_parameters = _text_parameters(self.tools)
+        self.stubbed: frozenset[str] = frozenset()
+        self.carried = (0, 0)
+        self.asked_again: set[str] = set()
+
+    def request(self) -> dict[str, Any]:
+        if not self.stubbed:
+            return self.kwargs
+        return {**self.kwargs, "tools": [*self.tools, *(_stub(name) for name in sorted(self.stubbed))]}
+
+    def read(self, response: Any) -> Any:
+        return _keep_text_arguments(_through_bridge(response, self.stubbed), self.text_parameters)
+
+    def counted(self, response: Any) -> Any:
+        return _with_counts(response, self.carried)
+
+    def again_after_error(self, error: BaseException, attempt: _Attempt) -> bool:
+        """Ask once more, with a note on writing the call, when Ollama couldn't read it."""
+        if not self.tools or attempt.shown or "malformed" in self.asked_again or not _is_tool_call_parse_error(error):
+            return False
+        self.asked_again.add("malformed")
+        logger.info("Ollama couldn't read the model's tool call; asking it once more")
+        self.messages.append(HumanMessage(content=MALFORMED_CALL_NOTE))
+        return True
+
+    def again_after_empty(self, attempt: _Attempt) -> bool:
+        """Ask once more when the reply came back empty: with the deferred tools bound as stubs, so
+        Ollama keeps a call to one (it then goes through ``tool_invoke``), or else with a note."""
+        if not self.tools or "empty" in self.asked_again or not attempt.came_back_empty():
+            return False
+        self.asked_again.add("empty")
+        prompt, generated = _counts(attempt.held)
+        self.carried = (self.carried[0] + prompt, self.carried[1] + generated)
+        bound = _bound_names(self.tools)
+        deferred = deferred_tools.offered() - bound if "tool_invoke" in bound else frozenset()
+        if deferred:
+            logger.info("Ollama returned an empty reply; asking once more with %d deferred tools bound", len(deferred))
+            self.stubbed = deferred
+        else:
+            logger.info("Ollama returned an empty reply with tools bound; asking the model once more")
+            note = EMPTY_REPLY_NOTE if "tool_invoke" in bound else EMPTY_REPLY_NOTE_WITHOUT_BRIDGE
+            self.messages.append(HumanMessage(content=note))
+        return True
 
 
 class RowBotChatOllama(ChatOllama):
@@ -244,28 +328,21 @@ class RowBotChatOllama(ChatOllama):
         stop: list[str] | None = None,
         **kwargs: Any,
     ) -> Iterator[Mapping[str, Any] | str]:
-        tools = kwargs.get("tools")
-        text_parameters = _text_parameters(tools)
-        asked, carried = list(messages), (0, 0)
-        for first in (True, False):
+        asking = _Asking(messages, kwargs)
+        while True:
             attempt = _Attempt()
             try:
-                for response in super()._create_chat_stream(asked, stop, **kwargs):
-                    for ready in attempt.take(_keep_text_arguments(response, text_parameters)):
-                        yield _with_counts(ready, carried)
+                for response in super()._create_chat_stream(asking.messages, stop, **asking.request()):
+                    for ready in attempt.take(asking.read(response)):
+                        yield asking.counted(ready)
             except ResponseError as error:
-                if first and tools and not attempt.shown and _is_tool_call_parse_error(error):
-                    logger.info("Ollama couldn't read the model's tool call; asking it once more")
-                    asked = _ask_again(list(messages), MALFORMED_CALL_NOTE)
+                if asking.again_after_error(error, attempt):
                     continue
                 raise
-            if first and tools and attempt.came_back_empty():
-                logger.info("Ollama returned an empty reply with tools bound; asking the model once more")
-                carried = _counts(attempt.held)
-                asked = _ask_again(list(messages), self._empty_reply_note(tools))
+            if asking.again_after_empty(attempt):
                 continue
             for ready in attempt.held:
-                yield _with_counts(ready, carried)
+                yield asking.counted(ready)
             return
 
     async def _acreate_chat_stream(
@@ -274,30 +351,19 @@ class RowBotChatOllama(ChatOllama):
         stop: list[str] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[Mapping[str, Any] | str]:
-        tools = kwargs.get("tools")
-        text_parameters = _text_parameters(tools)
-        asked, carried = list(messages), (0, 0)
-        for first in (True, False):
+        asking = _Asking(messages, kwargs)
+        while True:
             attempt = _Attempt()
             try:
-                async for response in super()._acreate_chat_stream(asked, stop, **kwargs):
-                    for ready in attempt.take(_keep_text_arguments(response, text_parameters)):
-                        yield _with_counts(ready, carried)
+                async for response in super()._acreate_chat_stream(asking.messages, stop, **asking.request()):
+                    for ready in attempt.take(asking.read(response)):
+                        yield asking.counted(ready)
             except ResponseError as error:
-                if first and tools and not attempt.shown and _is_tool_call_parse_error(error):
-                    logger.info("Ollama couldn't read the model's tool call; asking it once more")
-                    asked = _ask_again(list(messages), MALFORMED_CALL_NOTE)
+                if asking.again_after_error(error, attempt):
                     continue
                 raise
-            if first and tools and attempt.came_back_empty():
-                logger.info("Ollama returned an empty reply with tools bound; asking the model once more")
-                carried = _counts(attempt.held)
-                asked = _ask_again(list(messages), self._empty_reply_note(tools))
+            if asking.again_after_empty(attempt):
                 continue
             for ready in attempt.held:
-                yield _with_counts(ready, carried)
+                yield asking.counted(ready)
             return
-
-    @staticmethod
-    def _empty_reply_note(tools: Any) -> str:
-        return EMPTY_REPLY_NOTE if "tool_invoke" in _bound_names(tools) else EMPTY_REPLY_NOTE_WITHOUT_BRIDGE
