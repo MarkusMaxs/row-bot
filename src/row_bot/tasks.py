@@ -6392,8 +6392,7 @@ def create_approval_request(
         step_id=step_id,
         approval_id=req_id,
         resume_token=resume_token,
-        # Buddy names the helper that waits (B348).
-        label=f"{source_label} needs approval" if resume_kind == "agent_run" and source_label else "Approval pending",
+        label="Approval pending",
         message=message,
     )
     return resume_token, req_id

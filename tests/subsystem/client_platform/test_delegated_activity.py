@@ -305,12 +305,10 @@ def test_a_delegated_agents_approval_is_answered_in_its_thread_and_in_the_parent
 
 def test_a_helpers_approval_waits_in_the_chat_that_started_it(service, monkeypatch):
     """B348: a helper stalled on an approval its chat never showed. The approval
-    belongs to the parent's pending approvals, marks the parent as waiting for
-    you, and Buddy names the helper."""
+    belongs to the parent's pending approvals and marks the parent as waiting
+    for you."""
     from row_bot import agent_runs, threads
     from row_bot.application.client_monitor import read_pending_approvals
-    from row_bot.buddy.brain import BuddyBrain
-    import row_bot.buddy.brain as brain_mod
     parent = threads.create_thread("Parent", seed_default_skills=False)
     run, _resumed = _waiting_child(monkeypatch, parent)
     name = agent_runs.get_agent_run(run["id"])["display_name"]
@@ -319,11 +317,6 @@ def test_a_helpers_approval_waits_in_the_chat_that_started_it(service, monkeypat
     assert service.get_conversation(parent)["activity_phase"] == "waiting_approval"
     listed = {row["id"]: row for row in service.list_conversations()["items"]}
     assert listed[parent]["activity_phase"] == "waiting_approval"
-    monkeypatch.setattr(brain_mod, "get_buddy_config", lambda: {"enabled": True, "mode": "sidebar", "pack_id": "glyph"})
-    brain = BuddyBrain()
-    later = brain_mod.time.time() + 3600  # past Buddy's reconcile interval
-    monkeypatch.setattr(brain_mod.time, "time", lambda: later)
-    assert brain.resolve(None).message == f"{name} needs approval"
 
 
 def test_two_helper_approvals_that_read_alike_each_reach_the_parent(service):

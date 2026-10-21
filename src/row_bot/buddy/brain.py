@@ -401,21 +401,19 @@ class BuddyBrain:
                 approval_owners.pop(owner_id, None)
         for approval in pending:
             owner_id = str(approval.get("id") or approval.get("resume_token") or "approval")
-            helper = str(approval.get("source_label") or "") if approval.get("resume_kind") == "agent_run" else ""
-            label = str(approval.get("task_name") or (f"{helper} needs approval" if helper else "Needs approval"))
             approval_owners[owner_id] = _Activity(
                 kind="approval",
                 event_type=BuddyEventType.APPROVAL_NEEDED,
                 owner_id=owner_id,
                 source="tasks.reconcile",
-                label=label,
+                label=str(approval.get("task_name") or "Needs approval"),
                 payload={
                     "approval_id": owner_id,
                     "resume_token": str(approval.get("resume_token") or ""),
                     "run_id": str(approval.get("run_id") or ""),
                     "task_id": str(approval.get("task_id") or ""),
                     "step_id": str(approval.get("step_id") or ""),
-                    "label": label,
+                    "label": str(approval.get("task_name") or "Needs approval"),
                 },
                 updated_at=now,
                 reconciled=True,
