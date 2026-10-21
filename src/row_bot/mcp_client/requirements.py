@@ -29,6 +29,9 @@ from row_bot.mcp_client.logging import log_event
 
 RUNTIMES_DIR = DATA_DIR / "runtimes"
 ARCHIVE_BYTE_LIMIT = 256 * 1024 * 1024
+# A slow connection gets this long for a reviewed archive (Cua Driver for macOS is 65 MB);
+# a read that stalls still fails after its own 20 s timeout.
+ARCHIVE_DOWNLOAD_SECONDS = 20 * 60
 EXTRACTED_BYTE_LIMIT = 1024 * 1024 * 1024
 ARCHIVE_ENTRY_LIMIT = 20000
 METADATA_BYTE_LIMIT = 2 * 1024 * 1024
@@ -546,14 +549,14 @@ def _find_playwright_chromium_executable(browsers_dir: Path) -> Path | None:
     system = platform.system().lower()
     patterns = (
         ("chromium-*/chrome-win/chrome.exe", "chromium-*/chrome.exe") if system == "windows"
-        else ("chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium", "chromium-*/Chromium.app/Contents/MacOS/Chromium") if system == "darwin"
+        else ("chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",) if system == "darwin"
         else ("chromium-*/chrome-linux/chrome", "chromium-*/chrome")
     )
     for pattern in patterns:
         for candidate in sorted(browsers_dir.glob(pattern), reverse=True):
             if candidate.exists():
                 return candidate
-    executable_name = "chrome.exe" if system == "windows" else "Chromium" if system == "darwin" else "chrome"
+    executable_name = "chrome.exe" if system == "windows" else "Google Chrome for Testing" if system == "darwin" else "chrome"
     for candidate in sorted(browsers_dir.rglob(executable_name), reverse=True):
         if "chromium" in str(candidate).lower() and candidate.exists():
             return candidate
@@ -722,13 +725,13 @@ _HOSTS = frozenset({"nodejs.org", "api.github.com", "github.com", "objects.githu
 
 
 def _fetched(url: str, maximum: int, *, method: str = "GET", timeout: float = 30, meta: dict | None = None,
-             check: Callable[[], None] = lambda: None) -> bytes:
+             check: Callable[[], None] = lambda: None, duration: float | None = None) -> bytes:
     """One bounded fetch through the one safe path: https only, reviewed hosts, each redirect hop
     checked again, a size cap, one deadline, and the system proxy for these hosts only."""
     from row_bot.integrations.safe import fetch
     try:
         return fetch(_safe_url(url), hosts=_HOSTS, max_bytes=maximum, timeout=timeout, redirects=5, method=method, meta=meta,
-                     check=check, headers={"User-Agent": "Row-Bot-MCP-Runtime-Installer/1.0"},
+                     check=check, duration=duration, headers={"User-Agent": "Row-Bot-MCP-Runtime-Installer/1.0"},
                      refused="runtime_source_refused", too_large="runtime_download_too_large")
     except ValueError as exc:  # A refused host or an oversized answer fails like any other runtime problem.
         if str(exc) in {"runtime_source_refused", "runtime_download_too_large"}:
@@ -745,7 +748,7 @@ def _download(url: str, destination: Path, progress: Callable[[str], None] | Non
     if progress:
         progress("Downloading the reviewed runtime archive")
     validate()
-    data = _fetched(url, ARCHIVE_BYTE_LIMIT, timeout=20, check=validate)  # One deadline of two minutes in all.
+    data = _fetched(url, ARCHIVE_BYTE_LIMIT, timeout=20, duration=ARCHIVE_DOWNLOAD_SECONDS, check=validate)
     with destination.open("xb") as handle:
         handle.write(data)
         handle.flush()
