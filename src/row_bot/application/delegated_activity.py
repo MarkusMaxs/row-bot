@@ -29,7 +29,10 @@ def _require(service: Any, conversation_id: str) -> None:
 
 
 def _public(service: Any, run: dict) -> dict:
+    from row_bot.agent_runner import helper_thinking
     child = str(run.get("thread_id") or "")
+    # A listed row read its event already (None: it has none); a single run reads it now.
+    thinking = helper_thinking(str(run["id"]), (run.get("thinking_json") or {}) if "thinking_json" in run else None)
     return {
         "run_id": str(run["id"]),
         "parent_conversation_id": str(run["parent_thread_id"]),
@@ -41,6 +44,10 @@ def _public(service: Any, run: dict) -> dict:
         "profile_id": str(run.get("profile_id") or "")[:256],
         # What a running helper is doing now, for one line in the list (F16).
         "activity": _activity(run),
+        # The model and reasoning it started with, shown as quietly as a chat's pill (B386).
+        "model_ref": thinking.get("model_ref") or None,
+        "reasoning": thinking.get("reasoning") or None,
+        "reasoning_not_offered": thinking.get("not_offered") or None,
     }
 
 
@@ -141,6 +148,7 @@ def message_run(service: Any, conversation_id: str, run_id: str, text: str, mess
 def start_run(service: Any, conversation_id: str, text: str) -> dict:
     """Start a delegated agent from ``/agent [profile] <task>`` in the composer."""
     from row_bot.agent_commands import parse_agent_spawn_text, spawn_agent_from_request
+    from row_bot.agent_runner import HelperReasoningError
     from row_bot.tools import registry as tool_registry
     _require(service, conversation_id)
     if service.registry.active(conversation_id):
@@ -153,6 +161,8 @@ def start_run(service: Any, conversation_id: str, text: str) -> dict:
             conversation_id, request,
             enabled_tool_names=[tool.name for tool in tool_registry.get_enabled_tools()],
         )
+    except HelperReasoningError as exc:
+        raise ClientPlatformError("helper_reasoning_unavailable") from exc
     except ValueError as exc:
         raise ClientPlatformError("invalid_command") from exc
     return _public(service, run)
@@ -172,7 +182,8 @@ def read_activity(service: Any, conversation_id: str, *, cursor: str | None = No
     with closing(agent_runs._get_conn()) as conn:
         rows = conn.execute(
             "SELECT id,parent_thread_id,thread_id,display_name,status,substr(summary,1,4096) AS summary,profile_id,"
-            "activity_json "
+            "activity_json,(SELECT payload_json FROM agent_run_events e WHERE e.run_id=agent_runs.id "
+            "AND e.type='reasoning.chosen' ORDER BY e.ts DESC LIMIT 1) AS thinking_json "
             "FROM agent_runs WHERE parent_thread_id=? AND kind='subagent' AND id>? ORDER BY id LIMIT 51",
             (conversation_id, after),
         ).fetchall()
