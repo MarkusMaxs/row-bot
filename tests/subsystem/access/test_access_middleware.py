@@ -343,6 +343,46 @@ def test_trusted_proxy_supplies_validated_origin_and_effective_client() -> None:
     }
 
 
+def test_trusted_cloudflare_tunnel_admits_remote_browsers_but_not_as_owner() -> None:
+    client = _app(
+        AccessConfig.build(
+            deployment_mode="desktop",
+            trusted_proxy_cidrs=("127.0.0.1/32",),
+            allowed_hosts=("rowbot.example.com",),
+            public_origins=("https://rowbot.example.com",),
+        )
+    )
+    # What cloudflared on this computer passes on: the original Host, the
+    # X-Forwarded-For Cloudflare appends to, and Cloudflare's own metadata.
+    cloudflare = {
+        "host": "rowbot.example.com",
+        "x-forwarded-for": "203.0.113.7",
+        "x-forwarded-proto": "https",
+        "cf-connecting-ip": "203.0.113.7",
+        "cf-ray": "8f1c2d3e4f5a6b7c-LHR",
+        "cf-visitor": '{"scheme":"https"}',
+        "cdn-loop": "cloudflare",
+    }
+
+    signed_in = client.get(
+        "http://rowbot.example.com/context",
+        headers={**cloudflare, "x-test-session": "phone"},
+    )
+    anonymous = client.get(
+        "http://rowbot.example.com/api/private",
+        headers={**cloudflare, "accept": "application/json"},
+    )
+
+    assert signed_in.status_code == 200
+    assert signed_in.json() == {
+        "authentication_kind": "session",
+        "origin": "https://rowbot.example.com",
+        "effective_client": "203.0.113.7",
+    }
+    assert anonymous.status_code == 401
+    assert anonymous.json() == {"ok": False, "error": "authentication_required"}
+
+
 def test_owned_tailscale_route_accepts_its_loopback_forwarding_headers() -> None:
     origin = "https://rowbot-device.example.ts.net"
     ownership = TailscaleOwnership(

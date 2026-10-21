@@ -471,7 +471,10 @@
     "overlaps_native": ["filesystem", "documents"],
     "last_reviewed": "2026-04-27",
     "notes": ["Row-Bot already has native filesystem/document tools. Kept as an advanced reference option, not a recommended starter."],
-    "install": {"transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}
+    "install": {"transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "{folder}"],
+      "inputs": [
+        {"key": "folder", "label": "Folder", "description": "The full path of the one folder it may read and change, for example /Users/you/Documents/Notes or C:\\Users\\you\\Documents\\Notes.", "secret": false, "required": true, "target": "argument", "name": "folder", "default": "", "choices": [], "help_url": "", "format": "filepath", "flag": ""}
+      ]}
   },
   {
     "id": "modelcontextprotocol-fetch",

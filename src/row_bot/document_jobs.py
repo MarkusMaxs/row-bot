@@ -417,14 +417,21 @@ class DocumentJobService:
                     if total != job.size_bytes or digest.hexdigest() != job.content_sha256:
                         raise DocumentJobError("Document snapshot differs from reviewed bytes")
                     os.lseek(fd,0,os.SEEK_SET)
+                    # macOS's /dev/fd/N shares this descriptor's read offset, so a second reader would
+                    # start at the end: there, as on Windows, readers open the private snapshot by name.
+                    named_copy = os.name == "nt" or sys.platform == "darwin"
                     def check():
                         current = os.fstat(fd)
                         if (initial.st_dev,initial.st_ino,initial.st_size,initial.st_mtime_ns,1) != (
                                 current.st_dev,current.st_ino,current.st_size,current.st_mtime_ns,current.st_nlink):
                             raise DocumentJobError("Document snapshot changed during processing")
+                        if sys.platform == "darwin":
+                            named = os.stat(name,dir_fd=work_fd,follow_symlinks=False)
+                            if (named.st_dev,named.st_ino) != (initial.st_dev,initial.st_ino):
+                                raise DocumentJobError("Document snapshot changed during processing")
                     check()
                     validate()
-                    path = str(work / name) if os.name == "nt" else (
+                    path = str(work / name) if named_copy else (
                         f"/proc/self/fd/{fd}" if pathlib.Path("/proc/self/fd").is_dir() else f"/dev/fd/{fd}")
                     yield path, job.extension, check
                     validate()
@@ -683,7 +690,17 @@ class DocumentJobService:
                     # directory, including SQLite's ordinary WAL/SHM sidecars.
                     # Never fall back to the mutable configured pathname.
                     bridge = None
-                    for candidate in (pathlib.Path(f"/proc/self/fd/{directory}"), pathlib.Path(f"/dev/fd/{directory}")):
+                    candidates = [pathlib.Path(f"/proc/self/fd/{directory}"), pathlib.Path(f"/dev/fd/{directory}")]
+                    if sys.platform == "darwin":
+                        # macOS can't open a path through /dev/fd/N: F_GETPATH names the held
+                        # directory instead, and the identity checks refuse it if it moved.
+                        import fcntl
+                        try:
+                            held = fcntl.fcntl(directory, fcntl.F_GETPATH, bytes(1024))
+                            candidates.append(pathlib.Path(os.fsdecode(held.split(b"\0", 1)[0])))
+                        except OSError:
+                            pass
+                    for candidate in candidates:
                         try:
                             info = candidate.stat()
                             if stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == (parent_info.st_dev, parent_info.st_ino):
@@ -707,6 +724,14 @@ class DocumentJobService:
                         connection = sqlite3.connect((bridge / "jobs.db").as_uri() + "?mode=rw", uri=True, timeout=10)
                     except sqlite3.Error as error:
                         raise DocumentJobError("Document processing descriptor SQLite path unavailable") from error
+                    try:
+                        opened_dir, opened_db = bridge.stat(), (bridge / "jobs.db").stat()
+                    except OSError:
+                        opened_dir = opened_db = None
+                    if (opened_dir is None or (opened_dir.st_dev, opened_dir.st_ino) != (parent_info.st_dev, parent_info.st_ino)
+                            or (opened_db.st_dev, opened_db.st_ino) != (database_info.st_dev, database_info.st_ino)):
+                        connection.close()
+                        raise DocumentJobError("Document processing database ownership changed")
                 with contextlib.closing(connection) as conn, conn:
                     if directory is not None:
                         current_database = os.stat("jobs.db", dir_fd=directory, follow_symlinks=False)

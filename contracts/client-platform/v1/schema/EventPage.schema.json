@@ -1075,8 +1075,17 @@
       "additionalProperties": false,
       "properties": {
         "code": {
-          "const": "generation_failed",
+          "enum": [
+            "generation_failed",
+            "sign_in_required"
+          ],
           "title": "Code",
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "maxLength": 64,
+          "title": "Provider",
           "type": "string"
         }
       },

@@ -27,6 +27,7 @@ BLOCKING = {
     "expired": ("needs_sign_in", "sign_in"),
     "key_required": ("needs_key", "add_key"),
     "inputs_required": ("needs_setup", "continue_setup"),
+    "tools_changed": ("attention", "fix"),
     "connection_failed": ("attention", "fix"),
     "cleanup_incomplete": ("attention", "retry"),
     "source_removed": ("attention", "fix"),
@@ -172,7 +173,9 @@ def mcp_blockers(setup: dict, runtime: dict, *, enabled: bool) -> list[dict]:
         found.append(blocker("expired"))
     if setup.get("inputs_missing"):
         found.append(blocker("inputs_required"))
-    if state in _FAILED and not runtime.get("sign_in_failed"):
+    if state == "error" and runtime.get("tools_changed"):
+        found.append(blocker("tools_changed", _tools_changed(runtime["tools_changed"])))
+    elif state in _FAILED and not runtime.get("sign_in_failed"):
         found.append(blocker("cleanup_incomplete" if state == "cleanup_incomplete" else "connection_failed"))
     if state == "dependency_missing" or any(not r["available"] for r in setup["requirements"]):
         found.append(blocker("missing_runtime"))
@@ -183,6 +186,13 @@ def mcp_blockers(setup: dict, runtime: dict, *, enabled: bool) -> list[dict]:
     elif enabled and state != "connected" and not found:
         found.append(blocker("not_connected"))
     return found
+
+
+def _tools_changed(counts: dict) -> str:
+    """Why a connected app waits for review: its tools changed since they were accepted (B349)."""
+    words = {"added": "new", "changed": "changed", "removed": "removed"}
+    parts = [f"{counts[key]} {word}" for key, word in words.items() if counts.get(key)]
+    return f"Its tools changed since you set it up ({', '.join(parts)}). Review them to keep using it."
 
 
 def _requirements(cfg: dict) -> list[dict]:

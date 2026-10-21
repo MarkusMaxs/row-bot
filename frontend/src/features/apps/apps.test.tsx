@@ -981,6 +981,37 @@ it('checks an unfinished change again when no plan owns it, and never starts a n
   expect(controller.reviewInstallPlan).not.toHaveBeenCalled();
 });
 
+it('an app that needs attention says why beside Fix (B349)', async () => {
+  const reason =
+    'Its tools changed since you set it up (6 new). Review them to keep using it.';
+  const controller = {
+    integrationDetail: vi.fn(async () =>
+      detail({
+        entry: entry({
+          id: 'mcp:notion',
+          name: 'Notion',
+          installed: true,
+          lifecycle: 'installed',
+          readiness: 'attention',
+          blockers: [
+            {
+              code: 'tools_changed',
+              severity: 'blocking',
+              message: reason,
+              subject: '',
+            },
+          ],
+          next_action: { kind: 'fix', label: 'Fix' },
+        }),
+        plan: null,
+      }),
+    ),
+  };
+  show('/settings/apps/item?id=mcp%3Anotion', controller);
+  expect(await screen.findByRole('button', { name: 'Fix' })).toBeVisible();
+  expect(screen.getByText(reason)).toBeVisible();
+});
+
 it('after an abandoned sign-in, Retry leads back to one clear way to finish connecting (B338)', async () => {
   const blocker = (code: string) => ({
     code,

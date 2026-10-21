@@ -55,7 +55,8 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
 function Build-RowBotLauncher {
-    # Row-Bot.exe: installer\windows\row_bot_launcher.c with its icon, manifest and version.
+    # Row-Bot.exe: installer\windows\row_bot_launcher.c with its icon, manifest and version; and
+    # Row-Bot Server.exe (row_bot_server.c), which runs the server so Windows names Row-Bot (B355).
     param([string]$Version, [string]$OutDir)
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -83,17 +84,24 @@ function Build-RowBotLauncher {
     $resource = Join-Path $OutDir "row_bot_launcher.res"
     $object = Join-Path $OutDir "row_bot_launcher.obj"
     $exe = Join-Path $OutDir "Row-Bot.exe"
-    Remove-Item -LiteralPath $exe -ErrorAction SilentlyContinue
+    $serverSource = Join-Path $sourceDir "row_bot_server.c"
+    $serverResourceScript = Join-Path $sourceDir "row_bot_server.rc"
+    $serverResource = Join-Path $OutDir "row_bot_server.res"
+    $serverObject = Join-Path $OutDir "row_bot_server.obj"
+    $serverExe = Join-Path $OutDir "Row-Bot Server.exe"
+    Remove-Item -LiteralPath $exe, $serverExe -ErrorAction SilentlyContinue
     $commands = @(
         "`"$vcvars`" >nul",
         "rc /nologo /I `"$OutDir`" /I `"$sourceDir`" /I `"$ProjectRoot`" /fo `"$resource`" `"$resourceScript`"",
-        "cl /nologo /utf-8 /W4 /WX /O2 /MT /GS /guard:cf /DNDEBUG /Fo`"$object`" /Fe`"$exe`" `"$source`" `"$resource`" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /DYNAMICBASE /NXCOMPAT /GUARD:CF /CETCOMPAT"
+        "cl /nologo /utf-8 /W4 /WX /O2 /MT /GS /guard:cf /DNDEBUG /Fo`"$object`" /Fe`"$exe`" `"$source`" `"$resource`" /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /DYNAMICBASE /NXCOMPAT /GUARD:CF /CETCOMPAT",
+        "rc /nologo /I `"$OutDir`" /I `"$sourceDir`" /I `"$ProjectRoot`" /fo `"$serverResource`" `"$serverResourceScript`"",
+        "cl /nologo /utf-8 /W4 /WX /O2 /MT /GS /guard:cf /DNDEBUG /Fo`"$serverObject`" /Fe`"$serverExe`" `"$serverSource`" `"$serverResource`" /link /SUBSYSTEM:CONSOLE /MANIFEST:NO /DYNAMICBASE /NXCOMPAT /GUARD:CF /CETCOMPAT"
     ) -join " && "
     & cmd.exe /d /c $commands
-    if ($LASTEXITCODE -ne 0 -or !(Test-Path $exe)) {
-        throw "Building Row-Bot.exe failed."
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path $exe) -or !(Test-Path $serverExe)) {
+        throw "Building Row-Bot.exe and Row-Bot Server.exe failed."
     }
-    Write-Host "      Built $exe" -ForegroundColor Green
+    Write-Host "      Built $exe and $serverExe" -ForegroundColor Green
 }
 
 # â”€â”€ Create build directory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
