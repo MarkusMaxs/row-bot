@@ -497,6 +497,8 @@ class ClientPlatformService:
         A paused turn is quiesced, so it has no live generation state; the
         durable request is the only signal that the conversation needs you.
         A delegated agent's thread counts too: its turn waits the same way (B162).
+        So does the conversation that started it: a helper never waits on an
+        approval its chat doesn't show (B348).
         """
         if not conversation_ids:
             return set()
@@ -505,9 +507,12 @@ class ClientPlatformService:
         try:
             with closing(_get_conn()) as conn:
                 return {str(row[0]) for row in conn.execute(
-                    "SELECT DISTINCT source_thread_id FROM approval_requests "
+                    "SELECT source_thread_id FROM approval_requests "
                     "WHERE resume_kind IN ('conversation','agent_run') AND status='pending' "
-                    f"AND source_thread_id IN ({placeholders})", conversation_ids)}
+                    f"AND source_thread_id IN ({placeholders}) "
+                    "UNION SELECT parent_thread_id FROM approval_requests "
+                    "WHERE resume_kind='agent_run' AND status='pending' "
+                    f"AND parent_thread_id IN ({placeholders})", [*conversation_ids, *conversation_ids])}
         except sqlite3.Error:
             return set()
 

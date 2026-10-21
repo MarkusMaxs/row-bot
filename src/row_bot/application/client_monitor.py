@@ -571,6 +571,8 @@ def read_pending_approvals() -> dict[str, Any]:
     for row in shown:
         kind = str(row.get("resume_kind") or "")
         conversation_id = str(row.get("source_thread_id") or row.get("parent_thread_id") or "") or None
+        # A helper's approval also belongs to the chat that started it (B348).
+        parent_id = str(row.get("parent_thread_id") or "") if kind == "agent_run" else ""
         task_id = None
         if kind in {"conversation", "mcp_app"}:  # A view's call waits in its chat.
             source, title = "conversation", titles.get(conversation_id or "") or "Untitled conversation"
@@ -589,6 +591,7 @@ def read_pending_approvals() -> dict[str, Any]:
             "requested_at": _bounded(row.get("requested_at"), 80),
             "expires_at": _bounded(row["timeout_at"], 80) if row.get("timeout_at") else None,
             "conversation_id": conversation_id,
+            "parent_conversation_id": parent_id if parent_id and parent_id != conversation_id else None,
             "task_id": task_id,
         })
     return {"schema_version": 1, "items": items, "total": len(rows)}

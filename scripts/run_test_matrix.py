@@ -76,6 +76,7 @@ BROWSER_SMOKE_SPECS = (
     "conversation-delivery",
     "workspace-folders",
     "sandbox-prepare",
+    "helpers",
     "workflow-flowchart",
     "apps-sign-in-elsewhere",
     "model-visibility",

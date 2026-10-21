@@ -456,6 +456,10 @@ const CATALOG: Record<string, Entry> = {
     'This agent work can’t resume: turn on the Agents tool and check that its model is ready, or dismiss it.',
     'review',
   ],
+  helper_reasoning_unavailable: [
+    'That model doesn’t offer this thinking level. Leave out --reasoning to use its default, or pick another level.',
+    'none',
+  ],
   action_unavailable: ["That isn't available here.", 'none'],
   authentication_required: [
     'Connect to Row-Bot to continue.',
