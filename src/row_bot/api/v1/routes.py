@@ -1219,23 +1219,28 @@ def cached_choices() -> dict:
     """Read existing caches/catalogues; opening a client never refreshes a provider."""
     from row_bot.providers.model_catalog_cache import read_model_catalog_cache
     from row_bot.providers.client_status import picker_choices
+    from row_bot.providers.model_visibility import annotate
     from row_bot.tools import registry as tool_registry
     from row_bot.plugins import registry as plugin_registry, state as plugin_state
     from row_bot.mcp_client.runtime import get_catalog_snapshot
 
     snapshot = read_model_catalog_cache()
-    # The composer offers the Brain picker's list, judged by the same rule.
-    models = [
-        {
-            "provider_id": option["provider_id"],
-            "model_ref": option["selection_ref"],
-            "label": option["label"],
-            "available": option["available"],
-            "unavailable_reason": option["unavailable_reason"],
-            "billing": option["billing"],
-        }
-        for option in picker_choices("chat")
-    ]
+    # The composer offers the Brain picker's list, judged by the same rule,
+    # with each person's favourites and hidden models marked (F10).
+    models = annotate(
+        (
+            {
+                "provider_id": option["provider_id"],
+                "model_ref": option["selection_ref"],
+                "label": option["label"],
+                "available": option["available"],
+                "unavailable_reason": option["unavailable_reason"],
+                "billing": option["billing"],
+            }
+            for option in picker_choices("chat")
+        ),
+        key="model_ref",
+    )
     capabilities = []
 
     def add(identifier: str, enabled: bool, destructive: bool) -> None:
@@ -8310,6 +8315,29 @@ def create_router(
         except ValueError as exc:
             raise ProtocolError(str(exc), 422) from None
         return await respond(request, dto.ModelsSettingsState, result)
+
+    @router.post("/settings/models/visibility")
+    async def models_visibility_update(request: Request) -> JSONResponse:
+        # A display preference (F10): favourites first, hidden models under
+        # "More models". It never changes which model a chat uses.
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.ModelVisibilityMutation, 2048)
+        from row_bot.providers.config import ProviderConfigError
+        from row_bot.providers.model_visibility import update_model_visibility
+
+        try:
+            result = await call(
+                update_model_visibility,
+                body.action,
+                body.model_ref,
+                validate=dispatch_validation(request, current),
+            )
+        except ProviderConfigError as exc:
+            # The settings file can't be read or written right now.
+            raise ProtocolError(exc.code, 503) from None
+        except ValueError as exc:
+            raise ProtocolError(str(exc), 422) from None
+        return await respond(request, dto.ModelVisibilityState, result.as_dict())
 
     @router.get("/settings/models/agents")
     async def models_agent_settings(request: Request) -> JSONResponse:

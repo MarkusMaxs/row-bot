@@ -47,6 +47,7 @@ import TaskGraphEditor from './TaskGraphEditor';
 import AppTemplates from './AppTemplates';
 import TaskSettingsEditor from './TaskSettingsEditor';
 import { approvalLevel, approvalTag } from '../shell/approval-levels';
+import { favouritesFirst } from '../shell/model-choices';
 import { webhookReach } from './webhook-reach';
 import { writeClipboardText } from '../../platform/clipboard';
 import { RunSparkline } from './RunSparkline';
@@ -1177,9 +1178,13 @@ export default function TaskLibrary() {
     );
     return () => abort.abort();
   }, [controller, settingsOpen, state.handshake]);
-  const modelOptions = (state.handshake?.models ?? [])
-    .filter((model) => model.available)
-    .map((model) => ({ id: model.model_ref, label: model.label }));
+  const modelOptions = favouritesFirst(
+    (state.handshake?.models ?? []).filter((model) => model.available),
+  ).map((model) => ({
+    id: model.model_ref,
+    label: model.label,
+    ...(model.hidden ? { group: 'More models' } : {}),
+  }));
   // The draft in the editor is not waiting to be continued. Its row stays
   // mounted (hidden) so closing the editor returns focus to it.
   const waitingDrafts = sessions.drafts.filter((draft) => !draft.open);

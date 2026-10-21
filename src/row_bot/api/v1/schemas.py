@@ -2383,6 +2383,11 @@ class LocalRuntimeModel(WireModel):
     model_ref: str = Field(min_length=1, max_length=1024)
     name: str = Field(max_length=512)
     agent_ready: bool | None = None
+    # F10: a favourite's place in the list (from 1), a hidden model, and
+    # Row-Bot's suggested first picks. Absent when not set.
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
+    recommended: bool = False
 
 
 class LocalRuntimeSnapshot(WireModel):
@@ -4792,6 +4797,8 @@ class ModelPickerOption(WireModel):
     context_window: int | None = Field(default=None, ge=1)
     reason: str = Field(default="", max_length=256)
     billing: Literal["subscription", "pay_per_use", "credits", "local"] | None = None
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
 
 
 class ModelPickerSurface(WireModel):
@@ -4833,6 +4840,27 @@ class ModelSurfaceMutation(WireModel):
 class ModelContextMutation(WireModel):
     policy_kind: Literal["local", "provider"]
     cap: int | None = Field(default=None, ge=16384, le=10000000)
+
+
+class ModelVisibilityMutation(WireModel):
+    """Favourite or hide one model (by its provider-qualified reference), or show every hidden one."""
+
+    action: Literal["favourite", "unfavourite", "hide", "show", "show_all"]
+    model_ref: str | None = Field(default=None, min_length=1, max_length=647)
+
+    @model_validator(mode="after")
+    def one_model(self) -> ModelVisibilityMutation:
+        if (self.action == "show_all") != (self.model_ref is None):
+            raise ValueError("Every action but show_all names one model.")
+        return self
+
+
+class ModelVisibilityState(WireModel):
+    """Favourites in their order, and the hidden models (F10)."""
+
+    schema_version: Literal[1] = 1
+    favourites: list[str] = Field(max_length=64)
+    hidden: list[str] = Field(max_length=512)
 
 
 class AgentRuntimeSettingsState(WireModel):
@@ -7346,6 +7374,9 @@ class ModelChoice(WireModel):
     available: bool
     unavailable_reason: Literal["configuration_required", "metadata_missing", "unavailable"] | None = None
     billing: ProviderBilling | None = None
+    # F10: listed first (a favourite's place, from 1) or under "More models".
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
 
 
 class CapabilityChoice(WireModel):

@@ -49,7 +49,8 @@ export interface TaskSettingsEditorProps {
   onSaved: (snapshot: TaskSettingsSnapshot) => void;
   onCancel: () => void;
   profileOptions?: ReadonlyArray<{ id: string; label: string }>;
-  modelOptions?: ReadonlyArray<{ id: string; label: string }>;
+  /** Favourites first; hidden models carry the group "More models" (F10). */
+  modelOptions?: ReadonlyArray<{ id: string; label: string; group?: string }>;
   /** Shown in the page's one-line description. */
   taskName?: string;
   /** The saved webhook's address and reachability (parity rows 20, 52). */
@@ -112,6 +113,7 @@ export default function TaskSettingsEditor({
     ...modelOptions.map((option) => ({
       value: option.id,
       label: option.label,
+      ...(option.group ? { group: option.group } : {}),
     })),
     ...(current && !modelOptions.some((option) => option.id === current)
       ? [{ value: current, label: `${current} (not available)` }]

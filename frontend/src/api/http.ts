@@ -2580,6 +2580,12 @@ export class HttpTransport implements ClientTransport {
   updateModelContext(body: wire.ModelContextMutation, signal?: AbortSignal) {
     return wire.updateModelContext(this.base, this.session(), body, signal);
   }
+  updateModelVisibility(
+    body: wire.ModelVisibilityMutation,
+    signal?: AbortSignal,
+  ) {
+    return wire.updateModelVisibility(this.base, this.session(), body, signal);
+  }
   agentRuntimeSettings(signal?: AbortSignal) {
     return wire.getAgentRuntimeSettings(this.base, this.session(), signal);
   }
