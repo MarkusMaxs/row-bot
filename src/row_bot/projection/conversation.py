@@ -195,8 +195,14 @@ class ConversationProjection:
                 state.event_bytes -= size
             self._trim_global(conversation_id)
             result = copy.deepcopy(event)
+            latest = result["projection_revision"]
+            if event_type == "transcript.delta":
+                # The answer can be read in before it streams: its live row is then a twin from the start.
+                retired = self._retire_saved_twins_locked(state, conversation_id)
+                if retired:
+                    latest = retired[-1]["projection_revision"]
         if _notify_observers:
-            self._notify(conversation_id, result["projection_revision"])
+            self._notify(conversation_id, latest)
         return result
 
     def install_checkpoint(self, conversation_id: str, checkpoint_revision: str,
