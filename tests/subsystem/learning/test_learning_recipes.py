@@ -8,6 +8,7 @@ import json
 import pytest
 
 from row_bot.learning.training import hardware, recipes
+from tests.fixtures.learning import save_learning_settings
 
 pytestmark = [pytest.mark.subsystem]
 
@@ -82,3 +83,36 @@ def test_an_unknown_tier_is_refused():
     with pytest.raises(recipes.RecipeError) as error:
         recipes.load("64gb")
     assert error.value.code == "unknown_recipe"
+
+
+# ── The larger tiers (L2x, O90) ──────────────────────────────────────────────
+
+
+def test_every_certified_recipe_trains_a_pinned_model_its_tier_fits_and_says_what_it_needs():
+    from row_bot.learning.training import weights
+
+    tiers = {tier.id: tier for tier in hardware.TIERS}
+    for recipe in recipes.all_recipes():
+        tier = tiers[recipe.tier]
+        assert tier.certified == recipe.certified  # the tier table reads the recipe files
+        if not recipe.certified:
+            assert not tier.models and tier.summary.endswith("measured soon.")
+            continue
+        assert recipe.starting_model in weights.MODELS and [model.id for model in tier.models] == [recipe.starting_model]
+        assert recipe.max_seq_length >= recipes.MIN_TRAINING_CONTEXT and recipe.serve_context >= recipe.max_seq_length
+        size_mib = int(recipe.tier.removesuffix("gb")) * 1024
+        assert recipe.memory_mib <= size_mib  # measured within its tier's memory
+
+
+def test_the_recipe_follows_the_starting_model_the_person_chose(data_dir):
+    card = _card(32_607, driver="610.60")
+    certified = recipes.certified_for(card)
+    assert certified and certified[0] == recipes.for_hardware(card)  # the card's own tier first
+
+    for recipe in certified:
+        save_learning_settings(data_dir, enabled=True, starting_model=recipe.starting_model)
+        assert recipes.current(data_dir, card) == recipe  # a smaller tier's model trains with its own recipe
+    # A model this card has no certified recipe for (or none chosen): the card's own recipe.
+    small = _card(8_188)
+    save_learning_settings(data_dir, enabled=True, starting_model=certified[0].starting_model)
+    assert recipes.current(data_dir, small).id == "8gb"
