@@ -840,7 +840,8 @@ it('says a failed Computer Use install failed, and what to do (B377)', async () 
     action_result: {
       code: 'failed',
       message: "Row-Bot couldn't install Cua Driver.",
-      remediation: 'Check your connection and try again. Settings › System › Logs says why.',
+      remediation:
+        'Check your connection and try again. Settings › System › Logs says why.',
     },
   }));
   render(
@@ -851,7 +852,9 @@ it('says a failed Computer Use install failed, and what to do (B377)', async () 
     screen.getByRole('button', { name: 'Install Computer Use runtime' }),
   );
   expect(
-    await screen.findByText(/Row-Bot couldn't install Cua Driver\. Check your connection and try again/),
+    await screen.findByText(
+      /Row-Bot couldn't install Cua Driver\. Check your connection and try again/,
+    ),
   ).toBeVisible();
   expect(screen.queryByText(/couldn't confirm/)).toBeNull();
 });
