@@ -127,6 +127,42 @@ it('shows each agent on one line: icon, name, and its status in words (B240)', a
   expect(await screen.findByRole('tooltip')).toHaveTextContent(long);
 });
 
+it('says quietly which model and reasoning each helper runs on (B386)', async () => {
+  show({
+    modelName: (ref) => (ref === 'model:anthropic:opus' ? 'Opus 5.5' : ref),
+    loadPage: async () => ({
+      ...page,
+      items: [
+        {
+          ...run,
+          run_id: 'run-high',
+          name: 'Date review',
+          status: 'running',
+          model_ref: 'model:anthropic:opus',
+          reasoning: 'High',
+        },
+        {
+          ...run,
+          run_id: 'run-default',
+          name: 'Lookup',
+          status: 'running',
+          model_ref: 'model:anthropic:opus',
+          reasoning: 'Provider default',
+          reasoning_not_offered: 'XHigh',
+        },
+        { ...run, run_id: 'run-old', name: 'Older helper', status: 'running' },
+      ],
+    }),
+  });
+  expect(await screen.findByText('Opus 5.5 · High')).toBeVisible();
+  expect(
+    screen.getByText('Opus 5.5 · Provider default: XHigh isn’t offered'),
+  ).toBeVisible();
+  // A helper from before this release shows no line rather than a guess.
+  const older = screen.getByRole('button', { name: /^Older helper,/ });
+  expect(within(older.closest('li')!).queryByText(/ · /)).toBeNull();
+});
+
 it('opens the agent’s conversation from its row, asking again for a queued one', async () => {
   const open = vi.fn().mockResolvedValue(undefined);
   const loadRun = vi
