@@ -161,6 +161,21 @@ const EXACT: Record<string, Verb> = {
   run_command: verb('Ran a command', 'Running a command', Terminal),
   shell: verb('Ran a command', 'Running a command', Terminal),
   read_terminal: verb('Read the terminal', 'Reading the terminal', Terminal),
+  start_process: verb(
+    'Started a background process',
+    'Starting a background process',
+    Terminal,
+  ),
+  check_process: verb(
+    'Checked a background process',
+    'Checking a background process',
+    Terminal,
+  ),
+  stop_process: verb(
+    'Stopped a background process',
+    'Stopping a background process',
+    Terminal,
+  ),
   read_tool_output: verb(
     'Read more of a result',
     'Reading more of a result',

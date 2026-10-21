@@ -4166,6 +4166,52 @@ class PendingApprovalPage(WireModel):
     total: int = Field(ge=0)
 
 
+ProcessId = Annotated[str, StringConstraints(pattern=r"^proc-[0-9a-f]{8}$")]
+
+
+class BackgroundProcessView(WireModel):
+    """A background process the agent started, or a command that carried on in the background (F1, F6)."""
+    process_id: ProcessId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    # The conversation it belongs to, as the list names it ("" when that conversation has no title).
+    conversation_title: str = Field(max_length=200)
+    command: str = Field(max_length=4096)
+    name: str = Field(max_length=80)
+    folder: str = Field(max_length=4096)
+    kind: Literal["process", "command"]
+    status: Literal["running", "stopping", "finished", "failed", "stopped"]
+    exit_code: int | None
+    started_at: str = Field(max_length=80)
+    ended_at: str | None = Field(max_length=80)
+    runtime_seconds: float = Field(ge=0)
+    # Local addresses it printed or listens on (http://localhost:5173).
+    local_urls: list[str] = Field(max_length=8)
+    pid: int | None
+    stopped_by: Literal["", "you", "agent", "quit", "restart", "conversation", "limit"]
+    env_names: list[str] = Field(max_length=64)
+    output_size: int = Field(ge=0)
+
+
+class BackgroundProcessPage(WireModel):
+    """Every background process: running ones first, then finished ones, newest first."""
+    items: list[BackgroundProcessView] = Field(max_length=200)
+    running: int = Field(ge=0)
+    limit_per_conversation: int = Field(ge=1)
+    limit_total: int = Field(ge=1)
+
+
+class BackgroundProcessOutput(WireModel):
+    """One page of a process's output, by position from its first byte; older output may be gone."""
+    process_id: ProcessId
+    text: str = Field(max_length=65536)
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    size: int = Field(ge=0)
+    # The page starts later than asked: the output before it is no longer kept.
+    earlier_dropped: bool
+    running: bool
+
+
 class McpChatState(WireModel):
     """Whether connected MCP servers' tools reach the chat ("Enable in chat", B130)."""
     schema_version: Literal[1]
@@ -6838,7 +6884,8 @@ class AppViewAppSetting(WireModel):
 
 class TraceSpecialization(WireModel):
     kind: Literal[
-        "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps"
+        "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
+        "background_process",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -6859,6 +6906,8 @@ class TraceSpecialization(WireModel):
     settings_page: Literal["", "accounts", "channels"] = ""
     # connect_apps: apps from Row-Bot's catalog the person may connect; nothing is installed by the card.
     apps: list[TraceAppRef] = Field(default_factory=list, max_length=3)
+    # background_process: the process the card follows live, re-read by id (F1, F6).
+    process_id: str = Field(default="", max_length=64, pattern=r"^(proc-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):

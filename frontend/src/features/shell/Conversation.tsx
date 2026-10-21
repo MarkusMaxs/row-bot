@@ -110,6 +110,7 @@ import {
 import ApprovalCard from './ApprovalCard';
 import ChatEmpty from './ChatEmpty';
 import { DelegatedRunsContext, type DelegatedRuns } from './AgentStubs';
+import { ProcessIoContext, type ProcessIo } from './background-processes';
 import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
@@ -166,25 +167,30 @@ const FIELD_SIZING =
 const SINGLE_LINE_COMPOSER = 480;
 
 /**
- * What the transcript's rows share: card actions, who speaks (B271) and the
- * delegated feed its agent stubs follow (B241).
+ * What the transcript's rows share: card actions, who speaks (B271), the
+ * delegated feed its agent stubs follow (B241) and the background processes
+ * its cards follow (F1, F6).
  */
 function TranscriptContexts({
   cardActions,
   speakers,
   delegatedRuns,
+  processes,
   children,
 }: {
   cardActions: CardActions;
   speakers: Speakers;
   delegatedRuns: DelegatedRuns;
+  processes: ProcessIo;
   children: ReactNode;
 }) {
   return (
     <CardActionsContext.Provider value={cardActions}>
       <SpeakersContext.Provider value={speakers}>
         <DelegatedRunsContext.Provider value={delegatedRuns}>
-          {children}
+          <ProcessIoContext.Provider value={processes}>
+            {children}
+          </ProcessIoContext.Provider>
         </DelegatedRunsContext.Provider>
       </SpeakersContext.Provider>
     </CardActionsContext.Provider>
@@ -2589,6 +2595,16 @@ export default function Conversation({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [controller, delegatedPage, id, overlay],
   );
+  const processes = useMemo<ProcessIo>(
+    () => ({
+      load: (conversation, signal) =>
+        controller.backgroundProcesses(conversation, signal),
+      output: (process, after, limit, signal) =>
+        controller.backgroundProcessOutput(process, after, limit, signal),
+      stop: (process) => controller.stopBackgroundProcess(process),
+    }),
+    [controller],
+  );
   const delegatedRuns = useMemo(
     () => ({
       runs: new Map(
@@ -2953,6 +2969,7 @@ export default function Conversation({
       cardActions={cardActions}
       speakers={speakers}
       delegatedRuns={delegatedRuns}
+      processes={processes}
     >
       <div
         className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ' details-wide' : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}

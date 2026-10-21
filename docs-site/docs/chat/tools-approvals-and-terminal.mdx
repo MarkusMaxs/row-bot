@@ -82,6 +82,20 @@ An approval card offers **Details**, **Deny** and **Approve** (⌘/Ctrl+Enter), 
 
 Row-Bot's data folder holds your conversations, settings and keys, so the Shell tool refuses commands that name it, and file tools refuse paths inside it. To let the agent read it, turn on **Let the agent read Row-Bot's data folder** in [Settings › System](/docs/settings/system) › Advanced; such commands then ask you under **Ask**; under **Auto** the reviewer approves one only when you clearly asked for it, **Hands-off** runs them, and **Block** still refuses them. With the setting off, no level reads the folder.
 
+## Background Processes
+
+Row-Bot can start a program that keeps running after its reply, such as a development server or a file watcher, in any folder and with extra environment variables. Starting one asks exactly as running a command does: **Ask** asks ("Start a background process?", with the command, its variables and the folder), **Auto**'s reviewer decides or asks, **Hands-off** starts it, and **Block** refuses anything that isn't read-only. Blocked commands and Row-Bot's own data folder stay out of reach at every level, through a variable's value or the folder too.
+
+A command that is still running after 2 minutes, such as a long build or a download, carries on in the background the same way instead of holding up the reply. Row-Bot can also start a long command in the background straight away.
+
+- **In the conversation**, the step leaves a card: what runs, for how long, the local address it serves (such as `localhost:5173`), **View output** and **Stop**. Once it ends, the card says how: finished, failed, or stopped and by whom. The exit code and process number are under **Details** in **View output**.
+- **Home › Monitor › Background processes** lists every one with the conversation it belongs to, a **Stop** for each and **Stop all**; finished ones fold under **Recently finished**.
+- **Stopping** ends the process and everything it started, and needs no approval. Row-Bot can stop only the processes of the conversation it is working in; you can stop any of them.
+- **Limits**: at most 5 run at once in a conversation, and 12 in all. Each keeps the latest 4 MB of its output; Row-Bot reads the end and pages through the rest.
+- **Row-Bot quitting** stops every background process, and deleting a conversation stops its own. If Row-Bot closed unexpectedly and left one running, it stops it on the next start and says so in Monitor's start-up warnings.
+
+An app that a finished command opened (an editor, say) keeps running, as before; stopping a command that is still running ends everything it started.
+
 ## Interactive Terminal
 
 In the Row-Bot desktop app, a conversation can open a real interactive terminal docked at the bottom of the window. Open or close it with the terminal button in the header, **Open panel › Interactive terminal**, the command palette (**Toggle terminal**), or Ctrl+`.
@@ -108,3 +122,4 @@ The terminal is for you: what you type runs as your own commands on this compute
 - If a tool result is confusing, ask Row-Bot to explain the last tool call.
 - If the terminal says it needs the Row-Bot desktop app, open the conversation there; the button is not offered on other devices.
 - If you denied by mistake, ask Row-Bot to try again and review the next approval.
+- If a background process won't start because too many are running, stop one in **Home › Monitor › Background processes**.

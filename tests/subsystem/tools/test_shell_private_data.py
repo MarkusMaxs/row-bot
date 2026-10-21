@@ -92,7 +92,7 @@ def test_with_the_setting_on_auto_shows_it_to_the_reviewer_as_private_data(shell
         tuple(risks)) or ReviewVerdict(decision, "You asked to read the settings file."))
     monkeypatch.setattr(shell_tool.approval_gate, "current_approval_mode", lambda: "auto")
     monkeypatch.setattr(shell_tool._session_manager, "get_session", lambda *_a: type("S", (), {
-        "run_command": lambda self, command: {"output": "{}", "exit_code": 0, "duration": 0.01, "cwd": "."}})())
+        "run_command": lambda self, command, **_kwargs: {"output": "{}", "exit_code": 0, "duration": 0.01, "cwd": "."}})())
 
     output = shell_tool.ShellTool().execute("cat ~/.row-bot/settings.json")
 
@@ -110,7 +110,7 @@ def test_with_the_setting_on_full_autonomy_reads_it_without_asking(shell, monkey
     monkeypatch.setattr("langgraph.types.interrupt", lambda _payload: pytest.fail("must not ask"))
     monkeypatch.setattr(shell_tool.approval_gate, "current_approval_mode", lambda: "full")
     monkeypatch.setattr(shell_tool._session_manager, "get_session", lambda *_a: type("S", (), {
-        "run_command": lambda self, command: {"output": "{}", "exit_code": 0, "duration": 0.01, "cwd": "."}})())
+        "run_command": lambda self, command, **_kwargs: {"output": "{}", "exit_code": 0, "duration": 0.01, "cwd": "."}})())
 
     assert shell_tool.ShellTool().execute("cat ~/.row-bot/settings.json").startswith(
         "Approval: allowed by Hands-off")

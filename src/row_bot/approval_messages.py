@@ -209,7 +209,7 @@ def compact_message(payload: Mapping[str, Any] | None, *, max_chars: int = 420) 
         parts.append(note)
     if raw_action:
         tool = str(data.get("tool") or "").strip()
-        label = "Command" if tool in {"run_command", "developer_run_command", "shell"} else "Action"
+        label = "Command" if tool in {"run_command", "developer_run_command", "shell", "start_process"} else "Action"
         parts.append(f"{label}: {raw_action}")
     return _truncate("\n".join(parts), max_chars)
 

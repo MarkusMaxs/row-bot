@@ -75,7 +75,7 @@ def test_shell_full_autonomy_and_an_approving_reviewer_run_without_asking(tmp_pa
     seen: list[str] = []
 
     class FakeSession:
-        def run_command(self, command: str) -> dict:
+        def run_command(self, command: str, **_kwargs) -> dict:
             seen.append(command)
             return {
                 "output": "ran",
@@ -142,7 +142,7 @@ def test_shell_results_say_whether_approval_was_needed_and_given(
     ran: list[str] = []
 
     class FakeSession:
-        def run_command(self, command: str) -> dict:
+        def run_command(self, command: str, **_kwargs) -> dict:
             ran.append(command)
             return {"output": "done", "exit_code": 0, "duration": 0.24, "cwd": str(tmp_path)}
 
