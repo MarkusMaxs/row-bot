@@ -201,6 +201,7 @@ export default function SettingRoute() {
   const [selectedSubscription, setSelectedSubscription] = useState<{
     provider: string;
     action: 'connect' | 'manage' | 'disconnect';
+    expired: boolean;
   } | null>(null);
   const [selectedSubscriptionOption, setSelectedSubscriptionOption] =
     useState('');
@@ -525,8 +526,8 @@ export default function SettingRoute() {
               refreshState={controller.liveProviderRefresh}
               testRuntime={controller.testLiveProviderRuntime}
               owner={providerSettingsSessions}
-              onSubscription={(provider, action) =>
-                setSelectedSubscription({ provider, action })
+              onSubscription={(provider, action, expired) =>
+                setSelectedSubscription({ provider, action, expired })
               }
               onSubscriptionOption={setSelectedSubscriptionOption}
               hideCustom={Boolean(providerConfigurationOwner?.get())}
@@ -549,6 +550,7 @@ export default function SettingRoute() {
                         'codex' | 'claude_subscription' | 'xai_oauth'
                     }
                     initialAction={selectedSubscription.action}
+                    signInExpired={selectedSubscription.expired}
                     onClose={() => setSelectedSubscription(null)}
                     session={subscriptionAccountsOwner.get()}
                     load={controller.subscriptionAccounts}

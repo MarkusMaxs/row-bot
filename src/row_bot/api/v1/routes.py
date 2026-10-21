@@ -587,6 +587,7 @@ _STATUS.update(
             "subscription_listener_active",
             "subscription_cancelled",
             "subscription_expired",
+            "subscription_storage_unavailable",
         ),
         409,
     )

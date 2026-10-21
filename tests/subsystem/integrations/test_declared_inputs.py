@@ -44,6 +44,19 @@ def test_templates_fill_at_use_and_optional_inputs_drop_what_they_carry():
             inputs.resolve({**cfg, "input_values": {"tenant": value, "space": "s"}}, {"api_key": SECRET})
 
 
+def test_files_on_this_computer_asks_for_its_folder_and_passes_it():
+    """The filesystem server exits without a folder (B378): the app asks for one and starts with it."""
+    from row_bot.mcp_client import marketplace
+
+    entry = next(e for e in marketplace._load_curated_catalog() if e.id == "modelcontextprotocol-filesystem")
+    cfg = marketplace.entry_to_server_config(entry)
+    assert [i["key"] for i in inputs.check(cfg["inputs"]) if i["required"]] == ["folder"]
+    with pytest.raises(inputs.InputError, match="mcp_inputs_required"):
+        inputs.resolve(cfg, {})
+    filled = inputs.resolve({**cfg, "input_values": {"folder": "/data/notes"}}, {})
+    assert filled["args"] == ["-y", "@modelcontextprotocol/server-filesystem", "/data/notes"]
+
+
 @pytest.mark.parametrize(("template", "typed", "sent"), [
     ("{key}", "abc123", "Bearer abc123"), ("Bearer {key}", "Bearer abc123", "Bearer abc123"),
     ("{key}", "apikey abc123", "apikey abc123"), ("{key}", "Basic YWJj", "Basic YWJj")])
