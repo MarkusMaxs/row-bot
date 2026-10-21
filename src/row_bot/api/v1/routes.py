@@ -6789,14 +6789,9 @@ def create_router(
         provider_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        if provider_id == "claude_subscription":
-            from row_bot.providers.claude_subscription import (
-                run_claude_subscription_runtime_probe as probe,
-            )
-        elif provider_id == "xai_oauth":
-            from row_bot.providers.xai_oauth import run_xai_oauth_runtime_probe as probe
-        else:
+        if provider_id != "xai_oauth":
             raise ProtocolError("not_found", 404)
+        from row_bot.providers.xai_oauth import run_xai_oauth_runtime_probe as probe
         await call(dispatch_validation(request, current))
         try:
             result = await call(probe)

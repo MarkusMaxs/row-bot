@@ -15,7 +15,7 @@ Public documentation index for Row-Bot.
 - [Row-Bot Interface](/docs/app-shell/navigation)
   Route: /docs/app-shell/navigation. Find your way around Row-Bot: the sidebar, Home, a conversation and its details card, panels, the terminal, the command palette and Settings.
 - [Home: Overview](/docs/home/overview)
-  Route: /docs/home/overview. Start from Home Overview: ask Row-Bot anything, answer what needs you, see live status, and pick up recent work.
+  Route: /docs/home/overview. Start from Home Overview: ask Row-Bot anything, answer what needs you, and pick up recent work, in one calm column.
 - [Chat](/docs/chat/)
   Route: /docs/chat/. Use Row-Bot conversations: the composer, models, attachments, context and token usage, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library.
 - [Model Picker](/docs/chat/model-picker)

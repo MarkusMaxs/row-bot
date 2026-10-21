@@ -8,10 +8,7 @@
           "type": "boolean"
         },
         "provider_id": {
-          "enum": [
-            "codex",
-            "claude_subscription"
-          ],
+          "const": "codex",
           "title": "Provider Id",
           "type": "string"
         }
@@ -30,8 +27,8 @@
       "items": {
         "$ref": "#/$defs/SubscriptionReferenceState"
       },
-      "maxItems": 2,
-      "minItems": 2,
+      "maxItems": 1,
+      "minItems": 1,
       "title": "References",
       "type": "array"
     },

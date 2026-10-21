@@ -32,8 +32,7 @@
         "submit",
         "cancel",
         "disconnect",
-        "restore",
-        "import_token"
+        "restore"
       ],
       "title": "Operation",
       "type": "string"
@@ -41,7 +40,6 @@
     "provider_id": {
       "enum": [
         "codex",
-        "claude_subscription",
         "xai_oauth"
       ],
       "title": "Provider Id",

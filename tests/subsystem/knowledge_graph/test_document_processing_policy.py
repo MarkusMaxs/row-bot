@@ -211,7 +211,7 @@ def test_captured_buffered_response_is_bounded(runtime, asynchronous):
         assert response.is_closed
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude_subscription", "xai_oauth"])
+@pytest.mark.parametrize("provider", ["codex", "xai_oauth"])
 def test_missing_captured_subscription_never_falls_back(runtime, monkeypatch, provider):
     from row_bot.providers import auth_store
     monkeypatch.setattr(auth_store,"read_provider_oauth_bundle_snapshot",lambda provider:subscription_snapshot(provider,token=""))
@@ -1016,17 +1016,17 @@ def test_wiki_projection_revocation_after_writer_admission_creates_no_files(proc
     assert list(vault.iterdir()) == []
 
 
-@pytest.mark.parametrize("provider",["codex","claude_subscription","xai_oauth","ollama_cloud"])
+@pytest.mark.parametrize("provider",["codex","xai_oauth","ollama_cloud"])
 @pytest.mark.parametrize("status",[200,401])
 def test_actual_retained_transport_captured_request_no_refresh_or_retry(runtime, monkeypatch, provider, status):
     import json
-    from row_bot.providers import auth_store, codex, claude_subscription, xai_oauth
+    from row_bot.providers import auth_store, codex, xai_oauth
     from row_bot.providers.transports import cancellable_http
     snapshot = subscription_snapshot(provider)
     monkeypatch.setattr(auth_store,"read_provider_oauth_bundle_snapshot",lambda provider:snapshot)
     captured = runtime.capture_chat_runtime("model:" + provider + ":synthetic")
     monkeypatch.setattr(auth_store,"read_provider_oauth_bundle_snapshot",lambda provider:pytest.fail("account reread"))
-    for owner,name in [(codex,"refresh_codex_token"),(claude_subscription,"refresh_claude_subscription_token"),(xai_oauth,"refresh_xai_oauth_token")]:
+    for owner,name in [(codex,"refresh_codex_token"),(xai_oauth,"refresh_xai_oauth_token")]:
         monkeypatch.setattr(owner,name,lambda *a,**kw:pytest.fail("implicit OAuth refresh"))
     monkeypatch.setenv("ANTHROPIC_API_KEY","foreign-api-key")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN","foreign-oauth-token")
@@ -1036,9 +1036,6 @@ def test_actual_retained_transport_captured_request_no_refresh_or_retry(runtime,
         calls.append(request)
         if status == 401:
             return httpx.Response(401,json={"error":{"type":"authentication_error","message":"synthetic failure"}})
-        if provider == "claude_subscription":
-            return httpx.Response(200,json={"id":"synthetic","type":"message","role":"assistant","model":"synthetic",
-                "content":[{"type":"text","text":"accepted"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}})
         if provider == "ollama_cloud":
             return httpx.Response(200,json={"message":{"role":"assistant","content":"accepted"},"done":True})
         payload = {"type":"response.completed","response":{"id":"synthetic","status":"completed",
@@ -1053,14 +1050,12 @@ def test_actual_retained_transport_captured_request_no_refresh_or_retry(runtime,
                 model.invoke(["synthetic"])
         else:
             assert model.invoke(["synthetic"]).content == "accepted"
-        if provider in {"codex","xai_oauth","claude_subscription"}:
+        if provider in {"codex","xai_oauth"}:
             assert "captured-token" not in str(model._model.model_dump())
     assert len(calls) == 1
     assert calls[0].url.host != "foreign.invalid"
     expected = "captured-secret" if provider == "ollama_cloud" else "captured-token"
     assert calls[0].headers["authorization"] == "Bearer " + expected
-    if provider == "claude_subscription":
-        assert not calls[0].headers.get("x-api-key")
     if provider == "codex":
         assert calls[0].headers["chatgpt-account-id"] == "captured-account"
     if provider == "xai_oauth":

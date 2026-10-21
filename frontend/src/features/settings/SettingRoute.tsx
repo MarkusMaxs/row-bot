@@ -546,8 +546,7 @@ export default function SettingRoute() {
                   <SubscriptionAccounts
                     compact
                     initialProvider={
-                      selectedSubscription.provider as
-                        'codex' | 'claude_subscription' | 'xai_oauth'
+                      selectedSubscription.provider as 'codex' | 'xai_oauth'
                     }
                     initialAction={selectedSubscription.action}
                     signInExpired={selectedSubscription.expired}
@@ -579,8 +578,7 @@ export default function SettingRoute() {
                   <SubscriptionOptions
                     compact
                     initialProvider={
-                      selectedSubscriptionOption as
-                        'codex' | 'claude_subscription' | 'xai_oauth'
+                      selectedSubscriptionOption as 'codex' | 'xai_oauth'
                     }
                     onClose={() => setSelectedSubscriptionOption('')}
                     session={subscriptionOptionsOwner.get()}
