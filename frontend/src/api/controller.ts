@@ -2385,6 +2385,14 @@ export class ClientController {
     this.query(() => this.transport.continueInstallPlan?.(plan, body, signal));
   cancelInstallPlan = (plan: string, signal?: AbortSignal) =>
     this.query(() => this.transport.cancelInstallPlan?.(plan, signal));
+  finishInstallPlanSignIn = (
+    plan: string,
+    body: import('./types').PlanSignInRequest,
+    signal?: AbortSignal,
+  ) =>
+    this.query(() =>
+      this.transport.finishInstallPlanSignIn?.(plan, body, signal),
+    );
   mcpConfiguration = (
     query: string,
     cursor?: string,

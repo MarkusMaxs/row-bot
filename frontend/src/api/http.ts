@@ -1357,6 +1357,19 @@ export class HttpTransport implements ClientTransport {
   cancelInstallPlan(plan: string, signal?: AbortSignal) {
     return wire.cancelInstallPlan(this.base, this.session(), plan, signal);
   }
+  finishInstallPlanSignIn(
+    plan: string,
+    body: wire.PlanSignInRequest,
+    signal?: AbortSignal,
+  ) {
+    return wire.finishInstallPlanSignIn(
+      this.base,
+      this.session(),
+      plan,
+      body,
+      signal,
+    );
+  }
   mcpConfiguration(
     query: string,
     cursor?: string,

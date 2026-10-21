@@ -230,6 +230,12 @@ export interface ClientTransport {
     plan: string,
     signal?: AbortSignal,
   ): Promise<Wire.InstallPlan>;
+  /** The address another device's browser ended on after signing in (F27). */
+  finishInstallPlanSignIn?(
+    plan: string,
+    body: Wire.PlanSignInRequest,
+    signal?: AbortSignal,
+  ): Promise<Wire.InstallPlan>;
 
   conversationActions?(
     conversation: string,

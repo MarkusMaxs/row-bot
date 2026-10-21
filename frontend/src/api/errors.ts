@@ -126,6 +126,23 @@ const CATALOG: Record<string, Entry> = {
     'review',
     MCP,
   ],
+  // An address pasted back to finish a sign-in from another device (F27).
+  mcp_auth_address_invalid: [
+    "That doesn't look like the address. After you sign in, copy the whole address from your browser's address bar. It starts with http://127.0.0.1.",
+    'review',
+  ],
+  mcp_auth_address_other: [
+    'That address is from a different sign-in. Open the sign-in page from here, then paste the address you land on.',
+    'review',
+  ],
+  mcp_auth_address_used: [
+    "That address has already been used. If signing in didn't finish, start again.",
+    'review',
+  ],
+  mcp_auth_address_expired: [
+    'This sign-in has ended. Start again to get a new link.',
+    'review',
+  ],
   mcp_auth_busy: [
     'Several sign-ins are pending. Cancel an unused sign-in before starting another.',
     'review',

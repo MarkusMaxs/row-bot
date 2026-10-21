@@ -8431,9 +8431,26 @@ class PlanInput(WireModel):
     saved: bool = False
 
 
+class PlanDeviceCode(WireModel):
+    """A code to enter on the service's own page, on any device (RFC 8628)."""
+
+    user_code: str = Field(min_length=1, max_length=64)
+    verification_uri: str = Field(min_length=1, max_length=2048)
+    # The same page with the code filled in, when the service offers one.
+    verification_uri_complete: str = Field(default="", max_length=2048)
+
+
 class PlanSignIn(WireModel):
     method: Literal["oauth_dcr", "oauth_cimd", "oauth_preregistered", "oauth_client", "api_key"]
     authorization_url: str | None = Field(default=None, max_length=8192)
+    # How the sign-in's answer comes back: this computer's browser or Row-Bot's public address return by
+    # themselves; "paste" asks for the address another device's browser ends on; "device" shows a code.
+    delivery: Literal["this_computer", "public", "paste", "device"] = "this_computer"
+    # While it waits: seconds its link or code still works, by Row-Bot's clock.
+    expires_in: int | None = Field(default=None, ge=0, le=3600)
+    # Its answer came and it is finishing (a pasted address was accepted).
+    received: bool = False
+    device: PlanDeviceCode | None = None
 
 
 class PlanRuntime(WireModel):
@@ -8614,6 +8631,12 @@ class PlanStartRequest(WireModel):
     tools_digest: str = Field(default="", max_length=64)
     overrides: ToolOverrides = Field(default_factory=dict, max_length=256)
     cleanup: bool = False
+
+
+class PlanSignInRequest(WireModel):
+    """The address another device's browser ended on after signing in, pasted back to finish the sign-in."""
+
+    address: str = Field(min_length=1, max_length=8192)
 
 
 class PlanContinueRequest(WireModel):
