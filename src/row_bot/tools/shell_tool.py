@@ -423,6 +423,13 @@ def _split_cwd(output: str) -> tuple[str, str]:
     return (output[:position] + after).rstrip(), folder.strip()
 
 
+
+def _sets_git_identity(command: str) -> bool:
+    """Whether the command chooses who Git says a commit is from (only the person may)."""
+    from row_bot.developer.runtime import sets_git_identity
+
+    return sets_git_identity(command)
+
 class ShellSession:
     """A logical shell session that tracks cwd across commands.
 
@@ -866,6 +873,8 @@ class ShellTool(BaseTool):
         risks: tuple[str, ...] = ("runs a command that can change things on this computer",)
         if background:
             risks += (_BACKGROUND_RISK,)
+        if _sets_git_identity(command):
+            risks += (approval_gate.GIT_IDENTITY_RISK,)
         refusal, approval = self._gate(
             command=command,
             classification=classification,
@@ -974,6 +983,7 @@ class ShellTool(BaseTool):
             risks=(
                 "runs a command that can change things on this computer",
                 _BACKGROUND_RISK,
+                *((approval_gate.GIT_IDENTITY_RISK,) if _sets_git_identity(command) else ()),
             ),
             private_description=(
                 "This starts a background process that reads Row-Bot's private data folder "

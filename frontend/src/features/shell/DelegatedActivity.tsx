@@ -56,6 +56,8 @@ type Props = {
   ) => Promise<DelegatedActivityView>;
   loadRun: (runId: string, signal?: AbortSignal) => Promise<DelegatedRun>;
   openConversation: (id: string) => Promise<void>;
+  /** A model's short name, as the conversation header shows it. */
+  modelName?: (modelRef: string) => string;
   /** Stop a delegated agent (parity row 9). */
   stopRun?: (runId: string) => Promise<void>;
   /** Send a delegated agent a message it reads at its next step. */
@@ -185,8 +187,10 @@ function AgentRow({
   stopRun,
   messageRun,
   onChanged,
+  modelName,
 }: {
   run: DelegatedRun;
+  modelName?: (modelRef: string) => string;
   /** Absent for the conversation's own agent: it is already open. */
   onOpen?: () => void;
   stopRun?: Props['stopRun'];
@@ -223,6 +227,7 @@ function AgentRow({
     </>
   );
   const label = `${run.name}, ${AGENT_STATE_WORDS[state]}`;
+  const thinking = thinkingLine(run, modelName);
   return (
     <li className="agent-row" data-state={state}>
       <div className="agent-row-line">
@@ -276,6 +281,7 @@ function AgentRow({
         // What a working helper is doing now (F16).
         <p className="agent-row-step">{stepLine(run.activity)}</p>
       )}
+      {thinking && <p className="agent-row-step agent-row-model">{thinking}</p>}
       {writing && canMessage && (
         <form
           className="agent-message"
@@ -327,6 +333,20 @@ function AgentRow({
       )}
     </li>
   );
+}
+
+/**
+ * "Opus 5.5 · High": the model and reasoning a helper started with (B386),
+ * saying which level its model didn't offer when it fell back.
+ */
+export function thinkingLine(
+  run: DelegatedRun,
+  modelName: (modelRef: string) => string = (ref) => ref,
+): string {
+  const model = run.model_ref ? modelName(run.model_ref) : '';
+  const line = [model, run.reasoning].filter(Boolean).join(' · ');
+  if (!line || !run.reasoning_not_offered) return line;
+  return `${line}: ${run.reasoning_not_offered} isn’t offered`;
 }
 
 /** "2 done · 1 stopped": finished agents fold under the live ones. */
@@ -503,6 +523,7 @@ export default function DelegatedActivity(props: Props) {
       stopRun={props.stopRun}
       messageRun={props.messageRun}
       onChanged={refresh}
+      modelName={props.modelName}
     />
   );
   return (
@@ -539,6 +560,7 @@ export default function DelegatedActivity(props: Props) {
             stopRun={props.stopRun}
             messageRun={props.messageRun}
             onChanged={refresh}
+            modelName={props.modelName}
           />
         </ul>
       )}
