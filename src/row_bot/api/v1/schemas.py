@@ -4284,6 +4284,103 @@ class VideoEditPage(WireModel):
     running: int = Field(ge=0)
 
 
+SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
+
+
+class SandboxJobView(WireModel):
+    """Prepare sandbox, or the sandbox image's download (F18): one job of a conversation's code folder."""
+    job_id: SandboxJobId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    workspace_name: str = Field(max_length=200)
+    kind: Literal["prepare", "pull"]
+    status: Literal["pulling", "installing", "finishing", "ready", "failed", "stopped"]
+    # What it installs, in words: "pytest and the project with its test extra".
+    summary: str = Field(max_length=300)
+    # The project files it read: "pyproject.toml", "requirements-dev.txt", "package.json".
+    sources: list[str] = Field(max_length=16)
+    # The commands it runs in the sandbox, one line each.
+    commands: list[str] = Field(max_length=4)
+    image: str = Field(max_length=256)
+    started_at: str = Field(max_length=80)
+    ended_at: str | None = Field(max_length=80)
+    seconds: float = Field(ge=0)
+    # The sandbox network for the install: "on" only while it installs.
+    network: Literal["on", "off"]
+    network_on_at: str | None = Field(max_length=80)
+    network_off_at: str | None = Field(max_length=80)
+    # False only when Row-Bot couldn't confirm the install container (and its network) went away.
+    network_off_confirmed: bool
+    process_id: str | None = Field(max_length=64, pattern=r"^proc-[0-9a-f]{8}$")
+    # The install's latest line of output while it runs.
+    progress: str = Field(max_length=160)
+    by: Literal["you", "agent"]
+    stopped_by: Literal["", "you", "agent", "conversation", "quit"]
+    problem: Literal["", "pull_failed", "install_failed", "not_finished"]
+    detail: str = Field(max_length=400)
+
+
+class SandboxJobPage(WireModel):
+    """Sandbox jobs: those running now first, then finished ones, newest first."""
+    items: list[SandboxJobView] = Field(max_length=100)
+    running: int = Field(ge=0)
+
+
+class SandboxPlanView(WireModel):
+    """What Prepare sandbox would install, read from the project's own files."""
+    summary: str = Field(max_length=300)
+    sources: list[str] = Field(max_length=16)
+    commands: list[str] = Field(max_length=4)
+
+
+class SandboxStatusView(WireModel):
+    """A conversation's code folder's sandbox: Docker, its image, Prepare, and the latest job (F18)."""
+    workspace_name: str = Field(max_length=200)
+    execution_mode: Literal["local", "docker"]
+    # The sandbox's own network setting (Prepare never changes it).
+    network: Literal["off", "ask", "on"]
+    image: str = Field(max_length=256)
+    # The image's download size in words, when Row-Bot knows it ("about 570 MB").
+    image_download: str | None = Field(max_length=40)
+    runtime: Literal["ready", "unavailable", "not_checked"]
+    runtime_detail: str = Field(max_length=300)
+    # None until Docker was asked (Docker mode only).
+    image_present: bool | None
+    prepare: SandboxPlanView | None
+    job: SandboxJobView | None
+
+
+class SandboxStartPayload(WireModel):
+    """The person confirmed it in the app (their approval for this one)."""
+    confirmed: Literal[True]
+
+
+class WorkspaceFolderCrumb(WireModel):
+    """One folder on the way from the workspace root to the folder shown."""
+    name: str = Field(min_length=1, max_length=260)
+    # Its names under the root joined with "/" ("" is the root).
+    path: str = Field(max_length=1024)
+
+
+class WorkspaceFolderEntry(WireModel):
+    """A folder inside the folder shown: a code folder to choose, or a folder to open."""
+    name: str = Field(min_length=1, max_length=260)
+    path: str = Field(min_length=1, max_length=1024)
+    # It is a Git repository (it has .git).
+    is_git: bool
+
+
+class WorkspaceFolderPage(WireModel):
+    """The folders in one folder of the Developer workspace root (F19): folders only, no host path."""
+    path: str = Field(max_length=1024)
+    # The folder shown: the root's own name ("Row-Bot") at the root.
+    name: str = Field(min_length=1, max_length=4096)
+    crumbs: list[WorkspaceFolderCrumb] = Field(min_length=1, max_length=32)
+    folders: list[WorkspaceFolderEntry] = Field(max_length=500)
+    # More folders are here than are listed.
+    truncated: bool
+    is_root: bool
+
+
 DeliveryId = Annotated[str, StringConstraints(pattern=r"^send-[0-9a-f]{8}$")]
 
 
@@ -4900,6 +4997,12 @@ class ResourceSetupPayload(WireModel):
     draft_name: str | None = Field(default=None, min_length=1, max_length=120)
     clone_workspace: CloneWorkspaceSetupPayload | None = None
     folder_grant: OpaqueId | None = None
+    # A folder chosen in the workspace root's folder browser (F19), instead of the desktop
+    # picker's grant: its names under the root joined with "/" ("" is the root itself, which
+    # can be a parent to create or clone into but never the code folder itself).
+    root_folder: str | None = Field(default=None, max_length=1024)
+    # The person confirmed a clone's download (it reaches the network): needed under Ask.
+    confirm_network: bool | None = None
     # Create a copy of this design (with its revision in expected_resource_revision).
     duplicate_of: OpaqueId | None = None
 
@@ -4916,6 +5019,13 @@ class ResourceSetupPayload(WireModel):
             raise ValueError("A duplicate names one design and its current revision.")
         if self.draft_name is not None and self.draft_workspace is not True:
             raise ValueError("Only a new draft workspace takes a draft name.")
+        if self.root_folder is not None and (
+            self.kind != "workspace" or self.intent != "create" or self.folder_grant is not None
+            or self.resource_id is not None or self.draft_workspace is not None or self.duplicate_of is not None
+        ):
+            raise ValueError("A folder from the workspace root is chosen for a new code folder only.")
+        if self.confirm_network is not None and self.clone_workspace is None:
+            raise ValueError("Only a clone reaches the network.")
         if self.artifact is not None and (
             self.kind != "artifact"
             or self.intent != "create"
@@ -4932,7 +5042,7 @@ class ResourceSetupPayload(WireModel):
         if self.empty_workspace is not None and (
             self.kind != "workspace"
             or self.intent != "create"
-            or self.folder_grant is None
+            or (self.folder_grant is None and self.root_folder is None)
             or self.resource_id is not None
             or self.deck is not None
             or self.artifact is not None
@@ -4953,7 +5063,7 @@ class ResourceSetupPayload(WireModel):
             raise ValueError("A draft workspace uses the configured local Drafts folder.")
         if self.clone_workspace is not None and (
             self.kind != 'workspace' or self.intent != 'create'
-            or self.folder_grant is None or self.resource_id is not None
+            or (self.folder_grant is None and self.root_folder is None) or self.resource_id is not None
             or any(value is not None for value in (self.deck, self.artifact, self.empty_workspace))
         ):
             raise ValueError('Repository clone requires an explicit parent grant.')
@@ -4967,10 +5077,14 @@ class SetupContinuePayload(WireModel):
     )
     expected_origin_id: OpaqueId | None = None
     folder_grant: OpaqueId | None = None
+    # The same parent chosen again in the workspace root's folder browser (F19).
+    root_folder: str | None = Field(default=None, max_length=1024)
 
     @model_validator(mode="after")
     def recovery_target(self) -> SetupContinuePayload:
-        if self.expected_resource_revision is None and self.folder_grant is None:
+        if self.folder_grant is not None and self.root_folder is not None:
+            raise ValueError("A folder is chosen once: by the picker or in the workspace root.")
+        if self.expected_resource_revision is None and self.folder_grant is None and self.root_folder is None:
             raise ValueError(
                 "Continuation requires a resource revision or renewed folder grant."
             )
@@ -6201,11 +6315,14 @@ class Command(WireModel):
                 and "confirm_full_autonomy" not in supplied):
             self.payload.pop("confirm_full_autonomy", None)  # Existing durable verifiers stay as they were.
         if self.type == "resource.setup":
-            for field in ("artifact", "empty_workspace", "draft_workspace", "draft_name", "clone_workspace"):
+            for field in ("artifact", "empty_workspace", "draft_workspace", "draft_name", "clone_workspace",
+                          "root_folder", "confirm_network"):
                 if field not in supplied:
                     self.payload.pop(field, None)
-        if self.type == "resource.continue" and "folder_grant" not in supplied:
-            self.payload.pop("folder_grant", None)
+        if self.type == "resource.continue":
+            for field in ("folder_grant", "root_folder"):
+                if field not in supplied:
+                    self.payload.pop(field, None)
         return self
 
     @classmethod
@@ -7028,7 +7145,7 @@ class AppViewAppSetting(WireModel):
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-        "background_process", "recording", "video_edit", "delivery",
+        "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7057,6 +7174,10 @@ class TraceSpecialization(WireModel):
     edit_id: str = Field(default="", max_length=64, pattern=r"^(edit-[0-9a-f]{8})?$")
     # delivery: the files a step sent to the person's devices or a chat app, re-read by id (F7).
     delivery_id: str = Field(default="", max_length=64, pattern=r"^(send-[0-9a-f]{8})?$")
+    # sandbox_job: Prepare sandbox or the sandbox image's download, followed live by id (F18).
+    # sandbox_unprepared (a test run that lacked its tools) says which in error_code:
+    # "pytest_missing" or "packages_missing".
+    job_id: str = Field(default="", max_length=64, pattern=r"^(prep-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):

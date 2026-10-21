@@ -813,6 +813,34 @@ export interface ClientTransport {
     recordingId: string,
     signal?: AbortSignal,
   ): Promise<Wire.RecordingView>;
+  /** A conversation's code folder's sandbox (F18): Docker, its image, Prepare, the latest job. */
+  conversationSandbox?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxStatusView>;
+  /** Prepare sandbox, confirmed by the person in the app. */
+  prepareSandbox?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  /** Download the sandbox image, confirmed by the person in the app. */
+  pullSandboxImage?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  sandboxJob?(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  stopSandboxJob?(
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.SandboxJobView>;
+  /** The folders in one folder of the Developer workspace root (F19). */
+  workspaceFolders?(
+    path?: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.WorkspaceFolderPage>;
   /** Video edits (F3): every one, or one conversation's. */
   videoEdits?(
     conversationId?: string,

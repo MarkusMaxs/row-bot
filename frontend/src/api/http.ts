@@ -249,6 +249,39 @@ export class HttpTransport implements ClientTransport {
   stopRecording(recordingId: string, signal?: AbortSignal) {
     return wire.stopRecording(this.base, this.session(), recordingId, signal);
   }
+  conversationSandbox(conversationId: string, signal?: AbortSignal) {
+    return wire.getConversationSandbox(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  prepareSandbox(conversationId: string, signal?: AbortSignal) {
+    return wire.prepareConversationSandbox(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  pullSandboxImage(conversationId: string, signal?: AbortSignal) {
+    return wire.pullConversationSandboxImage(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  sandboxJob(jobId: string, signal?: AbortSignal) {
+    return wire.getSandboxJob(this.base, this.session(), jobId, signal);
+  }
+  stopSandboxJob(jobId: string, signal?: AbortSignal) {
+    return wire.stopSandboxJob(this.base, this.session(), jobId, signal);
+  }
+  workspaceFolders(path = '', signal?: AbortSignal) {
+    return wire.getWorkspaceFolders(this.base, this.session(), path, signal);
+  }
   videoEdits(conversationId?: string, signal?: AbortSignal) {
     return wire.getVideoEdits(
       this.base,

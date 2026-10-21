@@ -33,6 +33,7 @@ import {
   Wrench,
   Zap,
   type LucideIcon,
+  PackageOpen,
 } from 'lucide-react';
 import type {
   TranscriptTraceGroup,
@@ -243,6 +244,11 @@ const EXACT: Record<string, Verb> = {
     'Applied the sandbox changes',
     'Applying the sandbox changes',
     FilePen,
+  ),
+  developer_prepare_sandbox: verb(
+    'Prepared the sandbox',
+    'Preparing the sandbox',
+    PackageOpen,
   ),
   developer_read_file: verb('Read a file', 'Reading a file', FileText),
   workspace_read_file: verb('Read a file', 'Reading a file', FileText),

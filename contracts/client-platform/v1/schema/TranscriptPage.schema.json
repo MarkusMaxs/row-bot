@@ -458,6 +458,13 @@
           "title": "Evicted Skill Id",
           "type": "string"
         },
+        "job_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(prep-[0-9a-f]{8})?$",
+          "title": "Job Id",
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "skill_load",
@@ -470,7 +477,9 @@
             "background_process",
             "recording",
             "video_edit",
-            "delivery"
+            "delivery",
+            "sandbox_job",
+            "sandbox_unprepared"
           ],
           "title": "Kind",
           "type": "string"

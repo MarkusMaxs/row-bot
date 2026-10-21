@@ -21,6 +21,7 @@ PLATFORM_SENSITIVE = frozenset({
     "row_bot.background_processes",
     "row_bot.developer.client_processes",
     "row_bot.developer.process_worker",
+    "row_bot.developer.workspace_folders",
     "row_bot.document_jobs",
     "row_bot.ffmpeg_runtime",
     "row_bot.file_ownership",

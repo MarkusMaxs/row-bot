@@ -2540,6 +2540,42 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.stopRecording(recordingId, signal);
     });
+  /** A conversation's code folder's sandbox (F18): Docker, its image, what Prepare would install. */
+  conversationSandbox = (conversationId: string, signal?: AbortSignal) =>
+    this.query(() =>
+      this.transport.conversationSandbox?.(conversationId, signal),
+    );
+  /** One Prepare sandbox (or image download) job, read live. */
+  sandboxJob = (jobId: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.sandboxJob?.(jobId, signal));
+  /** Prepare sandbox, after the person confirmed it: the network is on for the install only. */
+  prepareSandbox = (conversationId: string) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.prepareSandbox)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.prepareSandbox(conversationId, signal);
+    });
+  /** Download the sandbox image, after the person confirmed it. */
+  pullSandboxImage = (conversationId: string) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.pullSandboxImage)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.pullSandboxImage(conversationId, signal);
+    });
+  /** Stop a sandbox job; the network goes off again. No approval. */
+  stopSandboxJob = (jobId: string) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.stopSandboxJob)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.stopSandboxJob(jobId, signal);
+    });
+  /**
+   * The folders in one folder of the Developer workspace root (F19): how a
+   * device with no folder picker chooses a code folder. The server checks
+   * every path against the root.
+   */
+  workspaceFolders = (path = '', signal?: AbortSignal) =>
+    this.query(() => this.transport.workspaceFolders?.(path, signal));
   /** Video edits (F3): every one, or one conversation's, running ones first. */
   videoEdits = (conversationId?: string, signal?: AbortSignal) =>
     this.query(() => this.transport.videoEdits?.(conversationId, signal));

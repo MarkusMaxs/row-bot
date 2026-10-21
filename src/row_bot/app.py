@@ -622,6 +622,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Video edit leftover check failed")
 
+    # A Prepare sandbox a crash cut short is marked, and its install container removed (F18).
+    try:
+        from row_bot.developer.sandbox_prepare import sweep_leftovers as sweep_sandbox_jobs
+        with _startup_phase("sandbox_job_leftovers"):
+            await asyncio.to_thread(sweep_sandbox_jobs)
+    except Exception:
+        logger.exception("Sandbox job leftover check failed")
+
     # Files sent to the devices whose time ran out, and anything a send cut short, are removed (F7).
     try:
         from row_bot.file_deliveries import sweep as sweep_deliveries
@@ -1168,6 +1176,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             _safe_console_print(f"[shutdown] Stopped {_edits} video edit(s)")
     except Exception as exc:
         _safe_console_print(f"[shutdown] Video edit cleanup error: {exc}")
+    try:
+        # Prepare sandbox stops with its network off: its install container is removed (F18).
+        from row_bot.developer.sandbox_prepare import stop_all as _stop_sandbox_jobs
+        _jobs = await asyncio.to_thread(_stop_sandbox_jobs, timeout=15.0)
+        if _jobs:
+            _safe_console_print(f"[shutdown] Stopped {_jobs} sandbox job(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Sandbox job cleanup error: {exc}")
     try:
         from row_bot.tools.browser_tool import get_session_manager as _get_bsm
         _get_bsm().kill_all()

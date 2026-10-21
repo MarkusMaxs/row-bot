@@ -72,6 +72,8 @@ BROWSER_SMOKE_SPECS = (
     "conversation-browser",
     "conversation-media",
     "conversation-delivery",
+    "workspace-folders",
+    "sandbox-prepare",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
