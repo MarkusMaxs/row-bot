@@ -618,7 +618,15 @@ class ChatClaudePlan(BaseChatModel):
                 system_file=_write(folder / "system.md", system),
                 mcp_file=_write(folder / "mcp.json", json.dumps({"mcpServers": servers})),
             )
-            run = ClaudeCodeRun(argv, env=env, cwd=claude_code_workdir())
+            try:
+                run = ClaudeCodeRun(argv, env=env, cwd=claude_code_workdir())
+            except OSError as exc:
+                from row_bot.providers.claude_subscription import ClaudePlanUnavailable, forget_claude_plan_status
+
+                forget_claude_plan_status()
+                raise ClaudePlanUnavailable(
+                    "Claude Code didn't start on this computer. Check Claude in Settings › Providers, then try "
+                    "again.") from exc
             unregister = scope.register(run.stop, "claude_plan.stop") if scope is not None else None
             try:
                 yield from self._turn(run, frames, ClaudeTurnReader(names=names, model=self.model_name),

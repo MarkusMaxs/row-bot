@@ -289,7 +289,7 @@ export default function ProviderStatus({
     const claude = card.claude_plan;
     if (claude?.state === 'ready')
       menu.push({
-        label: 'Claude Code status',
+        label: 'Check Claude Code',
         icon: <SquareTerminal size={16} />,
         onSelect: () => setClaudeOpen(true),
       });

@@ -369,8 +369,8 @@ it('a ready Claude row: the plan and its models, with Claude Code’s status in 
   await act(async () => fireEvent.keyDown(more, { key: 'Enter' }));
   expect(
     screen.getAllByRole('menuitem').map((item) => item.textContent),
-  ).toEqual(['Claude Code status']);
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Claude Code status' }));
+  ).toEqual(['Check Claude Code']);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Check Claude Code' }));
   expect(
     await screen.findByRole('dialog', { name: 'Claude (your Claude plan)' }),
   ).toHaveTextContent('Ready Claude Max · Claude Code 2.1.282');

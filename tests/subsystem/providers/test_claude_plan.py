@@ -243,6 +243,17 @@ def test_a_failed_call_says_what_happened_and_what_to_do(store, tmp_path, monkey
     assert words in str(caught.value)
 
 
+def test_claude_code_gone_since_it_was_checked_says_so_and_is_checked_again(store, tmp_path, monkeypatch):
+    fake = install_fake_claude(tmp_path, monkeypatch)
+    assert claude.claude_plan_status().ready
+    for shim in fake.bin_dir.glob("claude*"):
+        shim.unlink()
+
+    with pytest.raises(claude.ClaudePlanUnavailable, match="Claude Code didn't start on this computer"):
+        _model().invoke([HumanMessage(content="Hello")])
+    assert claude.claude_plan_status().state == "not_installed"
+
+
 def test_stop_ends_claude_code_and_everything_it_started(store, tmp_path, monkeypatch):
     from row_bot.cancellation import CancellationScope, use_cancellation_scope
 

@@ -132,7 +132,7 @@ test('Claude plan: ready shows the plan and Claude Code’s version', async ({
   await row
     .getByRole('button', { name: 'More actions for Claude (your Claude plan)' })
     .click();
-  await page.getByRole('menuitem', { name: 'Claude Code status' }).click();
+  await page.getByRole('menuitem', { name: 'Check Claude Code' }).click();
   const dialog = page.getByRole('dialog', {
     name: 'Claude (your Claude plan)',
   });
