@@ -264,6 +264,22 @@ def test_a_settled_tool_step_names_its_app_even_when_found_through_discovery(ide
     assert [item.get("app") for item in items] == [{**identities, "tool": "Search", "view": False}] * 2 + [None]
 
 
+def test_a_step_for_a_tool_this_runtime_never_issued_names_its_app_in_words_only(identities, apps):
+    """B391: such a step's row read "Running MCP counter create tally". It names the one set-up app the name can
+    come from, as its approval card does; the Auto reviewer still sees no app for it (words, never authority)."""
+    from row_bot.application.conversation_traces import project_assistant_row_traces
+    from row_bot.approval_review import action_from_payload
+    apps.items.append({**apps.items[1], "id": "mcp:stripe", "server": "Stripe", "name": "Stripe",
+                       "app": {"id": "stripe", "name": "Stripe"}, "icon": "letter:S"})
+    records = [{"row": {"id": "assistant:checkpoint:parent", "message_id": "parent", "role": "assistant", "blocks": []},
+                "tool_calls": [{"id": "call-1", "name": "mcp_stripe_create_product", "args": {}},
+                               {"id": "call-2", "name": "mcp_unknown_delete_everything", "args": {}}]}]
+    items = [item for group in project_assistant_row_traces(records)[0]["traces"] for item in group["items"]]
+    assert [item.get("app") for item in items] == [
+        {"item_id": "mcp:stripe", "name": "Stripe", "icon": "letter:S", "tool": "Create product"}, None]
+    assert action_from_payload({"tool": "mcp_stripe_create_product"}).app == ""
+
+
 def test_a_built_in_app_follows_the_same_rules_through_its_own_tools(apps):
     import row_bot.agent as agent
     apps.items.append({"id": "builtin:account:google", "kind": "builtin", "tools": ["gmail", "calendar"],

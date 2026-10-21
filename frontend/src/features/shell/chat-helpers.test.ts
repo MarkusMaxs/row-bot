@@ -169,6 +169,13 @@ describe('tool activity', () => {
     expect(approvalAction('mcp_stripe_create_product')).toBe(
       'Stripe create product',
     );
+    // Its step row too, never "Running MCP stripe create product" (B391).
+    expect(stepVerb('mcp_stripe_create_product', 'pending')).toBe(
+      'Running stripe create product',
+    );
+    expect(stepVerb('mcp_stripe_create_product', 'failed')).toBe(
+      'Stripe create product failed',
+    );
     expect(
       approvalQuestion('mcp_x', { ...app, name: 'Counter', tool: 'Counter' }),
     ).toBe('Allow Counter to use “Counter”?');

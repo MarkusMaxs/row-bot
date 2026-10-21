@@ -214,6 +214,11 @@ test('an approval for an app tool reads as the app and the action, and a phone s
       card.getByText('Allow Counter to create a tally?'),
     ).toBeVisible();
     await expect(card).not.toContainText('mcp_');
+    // Its step row names the app too, never "MCP counter create tally" (B391).
+    const log = page.getByRole('log', { name: 'Conversation', exact: true });
+    await expect(log.getByText(/Counter · Create tally/).first()).toBeVisible();
+    // (Its raw name stays in the step's own collapsed details.)
+    await expect(log).not.toContainText('MCP');
     const approve = card.getByRole('button', { name: 'Approve', exact: true });
     await expect(approve).not.toHaveText('Approve'); // Ctrl ↵ with a keyboard.
     await everywhere(page, info, 'approval-plain-title', async () => {

@@ -1598,7 +1598,7 @@ class ClientPlatformService:
             from row_bot.application.conversation_traces import app_of_tool
             apps = handle.__dict__.setdefault("tool_apps", {})
             if call_id not in apps:
-                apps[call_id] = app_of_tool(getter("runtime_name") or raw_tool, getter("args"))
+                apps[call_id] = app_of_tool(getter("runtime_name") or raw_tool, getter("args"), words=True)
             app = apps[call_id]
             item = build_trace_item(
                 item_id=call_id,

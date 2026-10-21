@@ -320,7 +320,9 @@ export function stepVerb(
     return tool;
   }
   const known = describe(name);
-  const fallback = humanizeToken(bareName(name)) || 'Tool';
+  // An app's tool with no app named reads as its words, never "MCP …" (B391).
+  const fallback =
+    (!known && unnamedAppTool(name)) || humanizeToken(bareName(name)) || 'Tool';
   if (status === 'pending')
     return known?.running ?? `Running ${midSentence(fallback)}`;
   // A step that failed or never ran must not read as done ("Deleted a file").
