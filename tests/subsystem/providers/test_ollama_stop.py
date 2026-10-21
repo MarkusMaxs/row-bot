@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 
 from row_bot.cancellation import CancellationScope, use_cancellation_scope
+from row_bot.providers import deferred_tools
 from row_bot.providers.transports import ollama_local
 from row_bot.providers.transports.ollama_local import OllamaSilentError, RowBotChatOllama
 from tests.helpers.fake_ollama import fake_streaming_ollama
@@ -36,7 +37,12 @@ def _calculate(expression: str) -> str:
     return "4"
 
 
+def _tool_invoke(name: str, arguments: dict) -> str:
+    return "ok"
+
+
 CALCULATE = StructuredTool.from_function(_calculate, name="calculate", description="Calculate.")
+TOOL_INVOKE = StructuredTool.from_function(_tool_invoke, name="tool_invoke", description="Run a tool by name.")
 
 
 def _model(server):
@@ -130,6 +136,22 @@ def test_a_request_that_receives_nothing_gives_up_in_plain_words(monkeypatch) ->
         assert server.hung_up.wait(PROMPTLY)  # given up, the connection is closed, so Ollama stops too
         assert len(server.chat_requests()) == 1
         assert model.invoke(PROMPT).content == "4"
+
+
+def test_a_reply_that_filled_the_window_showing_nothing_ends_in_plain_words() -> None:
+    # A model stuck in a tool call runs to num_predict and Ollama shows none of it. Asked again (even with the
+    # deferred tools as stubs, which an empty reply otherwise gets), it fills the window again: it ends here.
+    ran_out = {"eval_count": 8_192, "done_reason": "length"}
+    with fake_streaming_ollama(tokens=[], model=MODEL, replies=[ran_out, ANSWER]) as server:
+
+        def run() -> None:
+            deferred_tools.offer(("mail_send",))
+            model = RowBotChatOllama(model=MODEL, base_url=server.url, num_ctx=8_192)
+            with pytest.raises(OllamaSilentError, match="filled its whole context window"):
+                model.bind_tools([CALCULATE, TOOL_INVOKE]).invoke(PROMPT)
+
+        contextvars.copy_context().run(run)
+        assert len(server.chat_requests()) == 1
 
 
 def test_a_reply_is_never_longer_than_the_context_window() -> None:

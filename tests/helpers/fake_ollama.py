@@ -8,7 +8,7 @@ flushed as its own chunk, so a client reading the stream sees hundreds of small 
 ``tool_calls`` (Ollama's wire form) are sent in one chat chunk before the last, as the real server does.
 
 ``replies`` scripts one chat reply per request, in order (the last repeats): each a dict with ``tokens``,
-``tool_calls``, ``eval_count`` and ``prompt_eval_count`` (reported on the last chunk), or ``status`` and
+``tool_calls``, ``eval_count``, ``prompt_eval_count`` and ``done_reason`` (on the last chunk), or ``status`` and
 ``error`` for a failed request, which the real server answers with that status and ``{"error": ...}``, or
 ``stream_error`` for an error the real server sends inside the stream after what it already sent.
 
@@ -132,7 +132,7 @@ def fake_streaming_ollama(
                 return
             last = {"message": {"role": "assistant", "content": ""}} if chat else {"response": ""}
             counts = {key: reply[key] for key in ("eval_count", "prompt_eval_count") if key in reply}
-            chunk({"model": state.model, "done": True, "done_reason": "stop", **last, **counts})
+            chunk({"model": state.model, "done": True, "done_reason": reply.get("done_reason", "stop"), **last, **counts})
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
 

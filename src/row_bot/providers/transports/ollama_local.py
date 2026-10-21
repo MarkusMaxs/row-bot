@@ -48,7 +48,9 @@ backstops for runs nobody is watching:
   request's ``num_ctx`` unless the caller sets one): a reply that long no
   longer fits beside the model's own prompt, nor in the next step's request;
 - a request that receives nothing for ``LOCAL_CHAT_IDLE_SECONDS`` ends with
-  ``OllamaSilentError``, which says so in plain words.
+  ``OllamaSilentError``, which says so in plain words, and so does a reply
+  that reached its length limit with nothing of it shown (it isn't asked
+  again: a model stuck in a tool call fills the window again).
 """
 
 from __future__ import annotations
@@ -106,12 +108,19 @@ EMPTY_REPLY_NOTE_WITHOUT_BRIDGE = (
 
 
 class OllamaSilentError(RuntimeError):
-    """Ollama sent nothing for longer than the request's idle limit, so the call was given up."""
+    """The local model's reply never came: Ollama sent nothing for longer than the request's idle limit, or the
+    model wrote until the reply's length limit without any of it showing (a tool call it never closed)."""
 
-    def __init__(self, seconds: float | None) -> None:
+    @classmethod
+    def idle(cls, seconds: float | None) -> OllamaSilentError:
         span = "too long" if not seconds else f"{seconds / 60:g} minutes" if seconds >= 60 else f"{seconds:g} seconds"
-        super().__init__(f"The local model sent nothing for {span}, so Row-Bot stopped waiting for it. "
-                         "Try again, or try another model.")
+        return cls(f"The local model sent nothing for {span}, so Row-Bot stopped waiting for it. "
+                   "Try again, or try another model.")
+
+    @classmethod
+    def filled_window(cls) -> OllamaSilentError:
+        return cls("The local model filled its whole context window without sending a reply, so Row-Bot stopped it. "
+                   "Try again, or try another model.")
 
 
 def ollama_chat_keep_alive() -> str | None:
@@ -360,6 +369,11 @@ class _Attempt:
         """Tokens were generated but nothing of the reply arrived (a dropped tool call)."""
         return not self.shown and _counts(self.held)[1] > 0
 
+    def ran_out(self) -> bool:
+        """The reply reached its length limit with nothing of it shown: asked again, it would only do so again."""
+        return not self.shown and any(
+            not isinstance(response, str) and response.get("done_reason") == "length" for response in self.held)
+
 
 class _Asking:
     """The requests of one model call: as asked, then at most one more for a call Ollama couldn't
@@ -473,11 +487,13 @@ class RowBotChatOllama(ChatOllama):
             except Exception as error:
                 _raise_if_stopped(scope, error)
                 if isinstance(error, httpx.ReadTimeout):
-                    raise OllamaSilentError(_silent_for(error)) from error
+                    raise OllamaSilentError.idle(_silent_for(error)) from error
                 if asking.again_after_error(error, attempt):
                     continue
                 raise
             _raise_if_stopped(scope)
+            if attempt.ran_out():
+                raise OllamaSilentError.filled_window()
             if asking.again_after_empty(attempt):
                 continue
             for ready in attempt.held:
@@ -502,11 +518,13 @@ class RowBotChatOllama(ChatOllama):
             except Exception as error:
                 _raise_if_stopped(scope, error)
                 if isinstance(error, httpx.ReadTimeout):
-                    raise OllamaSilentError(_silent_for(error)) from error
+                    raise OllamaSilentError.idle(_silent_for(error)) from error
                 if asking.again_after_error(error, attempt):
                     continue
                 raise
             _raise_if_stopped(scope)
+            if attempt.ran_out():
+                raise OllamaSilentError.filled_window()
             if asking.again_after_empty(attempt):
                 continue
             for ready in attempt.held:
