@@ -957,6 +957,11 @@ const CATALOG: Record<string, Entry> = {
     'retry',
     RETRY,
   ],
+  subscription_storage_unavailable: [
+    "Row-Bot can't save the sign-in: this computer's keychain is locked or unavailable. Unlock it (on a Mac, in Keychain Access), then try again.",
+    'retry',
+    PROVIDERS,
+  ],
   subscription_uncertain: [
     "Row-Bot couldn't confirm the sign-in. Check the subscription before trying again.",
     'review',
@@ -1678,8 +1683,9 @@ const CATALOG: Record<string, Entry> = {
     RETRY,
   ],
   process_command_invalid: ["That command isn't valid here.", 'review'],
+  // Local background processes need Windows or Linux containment; macOS has none yet (B376).
   process_containment_unavailable: [
-    "Commands can't run safely here right now.",
+    'Background processes need Windows, Linux or a Docker workspace. Here, run the command in the conversation instead.',
     'none',
   ],
   process_cursor_invalid: [
