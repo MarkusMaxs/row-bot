@@ -19,6 +19,9 @@ const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
 
 async function views(page: Page, info: TestInfo, name: string) {
+  // The passing new-approval notice would cover what the shot is of.
+  const notices = page.getByRole('button', { name: 'Dismiss notification' });
+  while (await notices.count()) await notices.first().click();
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(
