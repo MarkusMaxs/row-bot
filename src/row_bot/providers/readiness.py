@@ -290,8 +290,8 @@ def evaluate_agent_readiness(
             tool_round_trip = None
             errors.append("Requesty tool metadata is missing or inconclusive")
             actions.append("Choose a model with explicit Requesty tool support metadata.")
-    elif resolved.provider_id in {"claude_subscription", "xai_oauth"}:
-        provider_label = "Claude Subscription" if resolved.provider_id == "claude_subscription" else "xAI Grok"
+    elif resolved.provider_id == "xai_oauth":
+        provider_label = "xAI Grok"
         probe = status_info.get("last_runtime_probe") if isinstance(status_info.get("last_runtime_probe"), dict) else {}
         if probe and probe.get("ok") is False:
             tool_calling = probe.get("tool_calling") if probe.get("tool_calling") in (True, False) else None
@@ -562,8 +562,8 @@ def evaluate_chat_readiness(
             actions.append("Run the custom endpoint probe for this model.")
         if context_policy and getattr(context_policy, "cap_source", "") in {"profile_default", "heuristic"}:
             warnings.append("custom endpoint context is inferred; provider metadata or a manual context setting is safer")
-    elif resolved.provider_id in {"claude_subscription", "xai_oauth"}:
-        provider_label = "Claude Subscription" if resolved.provider_id == "claude_subscription" else "xAI Grok"
+    elif resolved.provider_id == "xai_oauth":
+        provider_label = "xAI Grok"
         probe = status_info.get("last_runtime_probe") if isinstance(status_info.get("last_runtime_probe"), dict) else {}
         if probe and probe.get("ok") is False and probe.get("chat_ok") is not True:
             source = "runtime_probe"

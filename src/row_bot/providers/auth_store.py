@@ -34,7 +34,7 @@ PROVIDER_API_KEY_ENV: dict[str, str] = {
     "minimax": "MINIMAX_API_KEY",
 }
 PROVIDER_SECRET_CHUNK_SIZE = 512
-OAUTH_PROVIDER_IDS = frozenset({"codex", "claude_subscription", "xai_oauth"})
+OAUTH_PROVIDER_IDS = frozenset({"codex", "xai_oauth"})
 OAUTH_SECRET_NAMES = ("access_token", "refresh_token", "id_token", "user_id", "account")
 CHUNK_MARKER_SUFFIX = "__chunks"
 CHUNK_VALUE_PREFIX = "v1:"
@@ -359,6 +359,36 @@ def disconnect_provider_oauth_metadata(provider_id: str, *, update_metadata: Cal
         cfg.setdefault("providers", {}).setdefault(provider_id, {}).update({**retained, "provider_id": provider_id, "configured": False})
     validate()
     save_provider_config(cfg, expected_revision=revision)
+
+
+@_serialized_provider_writer
+def forget_provider_oauth_credentials(provider_id: str, *, entry: dict) -> bool:
+    """Delete every sign-in credential Row-Bot stored for ``provider_id`` and replace its settings with ``entry``.
+
+    Both saved token generations, the older per-name secrets and any session copy go, wherever they were
+    kept (system keychain or encrypted file). True when Row-Bot had stored anything for it.
+    """
+    cfg = load_provider_config(strict=True)
+    revision = provider_config_revision(cfg)
+    old = cfg.get("providers", {}).get(provider_id, {})
+    old = old if isinstance(old, dict) else {}
+    previous = old.get("oauth_bundle_previous")
+    references = [old.get("oauth_bundle_ref"), previous.get("reference") if isinstance(previous, dict) else None]
+    found = any(isinstance(reference, dict) and reference.get("values") for reference in references)
+    for reference in references:
+        _delete_oauth_bundle_ref(provider_id, reference)
+    for name in OAUTH_SECRET_NAMES:
+        found = found or bool(_get_provider_secret_value(provider_id, name))
+        _delete_session_provider_secret(provider_id, name)
+        _delete_chunked_provider_secret(provider_id, name)
+        try:
+            secret_store.delete_secret(name, namespace=_namespace(provider_id))
+        except secret_store.SecretStoreError:
+            if secret_store.persistent_server_store_configured():
+                raise
+    cfg.setdefault("providers", {})[provider_id] = dict(entry)
+    save_provider_config(cfg, expected_revision=revision)
+    return found
 
 
 def _credential_name(credential_name: str) -> str:

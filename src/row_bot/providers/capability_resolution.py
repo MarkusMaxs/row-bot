@@ -78,11 +78,11 @@ def resolve_capability_metadata(
 
     if provider == "claude_subscription":
         try:
-            from row_bot.providers.claude_subscription import list_claude_subscription_model_infos_for_status
+            from row_bot.providers.claude_subscription import claude_plan_model_info
 
-            for model_info in list_claude_subscription_model_infos_for_status():
-                if model_info.model_id == model:
-                    return ResolvedCapabilitySnapshot(model_info.capability_snapshot(), "claude_subscription_status_catalog")
+            model_info = claude_plan_model_info(model)
+            if model_info is not None:
+                return ResolvedCapabilitySnapshot(model_info.capability_snapshot(), "claude_subscription_status_catalog")
         except Exception:
             pass
 
@@ -215,9 +215,10 @@ def _subscription_status_capability_snapshot(provider: str, model: str) -> dict[
 
             infos = list_codex_model_infos_for_status()
         elif provider == "claude_subscription":
-            from row_bot.providers.claude_subscription import list_claude_subscription_model_infos_for_status
+            from row_bot.providers.claude_subscription import claude_plan_model_info
 
-            infos = list_claude_subscription_model_infos_for_status()
+            info = claude_plan_model_info(model)
+            return info.capability_snapshot() if info is not None else {}
         elif provider == "xai_oauth":
             from row_bot.providers.xai_oauth import list_xai_oauth_model_infos_for_status
 

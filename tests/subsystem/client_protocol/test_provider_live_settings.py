@@ -86,20 +86,19 @@ def test_refresh_is_explicit_targeted_and_reports_completion(monkeypatch):
 
 
 def test_runtime_icon_runs_the_explicit_provider_probe(monkeypatch):
-    from row_bot.providers import claude_subscription, xai_oauth
+    from row_bot.providers import xai_oauth
 
     calls = []
-    monkeypatch.setattr(claude_subscription, "run_claude_subscription_runtime_probe", lambda: calls.append("claude") or {"ok": True})
     monkeypatch.setattr(xai_oauth, "run_xai_oauth_runtime_probe", lambda: calls.append("xai") or {"ok": False, "errors": ["PRIVATE_SENTINEL"]})
     client, _, _ = client_app()
     with client:
         _, headers = bootstrap(client)
         assert client.post("/api/v1/settings/providers/live/openai/runtime-test", headers=headers).status_code == 404
-        passed = client.post("/api/v1/settings/providers/live/claude_subscription/runtime-test", headers=headers)
+        # Claude runs the person's own Claude Code for every call: Row-Bot has no sign-in of its own to test.
+        assert client.post("/api/v1/settings/providers/live/claude_subscription/runtime-test",
+                           headers=headers).status_code == 404
         failed = client.post("/api/v1/settings/providers/live/xai_oauth/runtime-test", headers=headers)
-        assert passed.status_code == 200, passed.text
-        assert passed.json()["ok"] is True
         assert failed.status_code == 200, failed.text
         assert failed.json()["ok"] is False
         assert "PRIVATE_SENTINEL" not in failed.text
-        assert calls == ["claude", "xai"]
+        assert calls == ["xai"]

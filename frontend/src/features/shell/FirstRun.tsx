@@ -30,6 +30,9 @@ import { RuntimeContext, useRuntime } from '../../runtime';
 import { writeClipboardText } from '../../platform/clipboard';
 import { Button, Disclosure, Input, Segmented } from '../../ui/primitives';
 import SubscriptionAccounts from '../settings/SubscriptionAccounts';
+import ClaudePlanSetup, {
+  CLAUDE_PLAN_SUMMARY,
+} from '../settings/ClaudePlanSetup';
 import ProviderSettingsPanel from '../settings/ProviderSettingsPanel';
 import {
   MORE_KEY_PROVIDERS,
@@ -567,6 +570,7 @@ export default function FirstRun({
   const [subscription, setSubscription] = useState<Subscription>('codex');
   const [keyProvider, setKeyProvider] = useState<string | null>(null);
   const [step, setStep] = useState<Step>({ kind: 'pick' });
+  const [checkingClaude, setCheckingClaude] = useState(false);
   const importSources = useRef(snapshot.import_sources ?? []);
   const connected = useMemo(
     () =>
@@ -752,6 +756,22 @@ export default function FirstRun({
                   }
                   onPick={pick}
                 />
+              ) : subscription === 'claude_subscription' ? (
+                <div className="stack">
+                  <p>{CLAUDE_PLAN_SUMMARY}</p>
+                  <ClaudePlanSetup
+                    plan={
+                      cards.find(
+                        (card) => card.provider_id === 'claude_subscription',
+                      )?.claude_plan
+                    }
+                    checking={checkingClaude}
+                    onCheck={() => {
+                      setCheckingClaude(true);
+                      void reload().finally(() => setCheckingClaude(false));
+                    }}
+                  />
+                </div>
               ) : subscriptionAccountsOwner?.get() ? (
                 <SubscriptionAccounts
                   key={subscription}

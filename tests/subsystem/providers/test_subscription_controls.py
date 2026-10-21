@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from row_bot.application import subscription_controls as controls
-from row_bot.providers import codex, claude_subscription, xai_oauth, config, auth_store
+from row_bot.providers import codex, xai_oauth, config, auth_store
 from row_bot.runtime import admissions
 from tests.subsystem.providers.test_provider_settings_controls import store as store
 
@@ -26,7 +26,7 @@ class Client:
 @pytest.fixture(params=controls.PROVIDERS)
 def account(request, store, monkeypatch):
     provider = request.param
-    real = {"codex": codex, "claude_subscription": claude_subscription, "xai_oauth": xai_oauth}[provider]
+    real = {"codex": codex, "xai_oauth": xai_oauth}[provider]
     calls = []
     flow = SimpleNamespace(verification_uri="https://example.invalid/device" if provider == "codex" else None,
         authorization_url="https://example.invalid/authorize?state=synthetic", user_code="SYNTHETIC" if provider == "codex" else None,
@@ -38,10 +38,10 @@ def account(request, store, monkeypatch):
         return flow
     def exchange(*_a, **_kw):
         calls.append("exchange")
-        token_class = codex.CodexTokenSet if provider == "codex" else claude_subscription.ClaudeSubscriptionTokenSet if provider == "claude_subscription" else xai_oauth.XAIOAuthTokenSet
+        token_class = codex.CodexTokenSet if provider == "codex" else xai_oauth.XAIOAuthTokenSet
         return token_class(access_token="synthetic-access", refresh_token="synthetic-refresh", account_id="synthetic-account")
-    setattr(module, {"codex": "start_codex_device_flow", "claude_subscription": "start_claude_subscription_oauth_flow", "xai_oauth": "start_xai_oauth_flow"}[provider], start)
-    setattr(module, {"codex": "exchange_codex_device_authorization", "claude_subscription": "exchange_claude_subscription_authorization", "xai_oauth": "exchange_xai_oauth_authorization"}[provider], exchange)
+    setattr(module, {"codex": "start_codex_device_flow", "xai_oauth": "start_xai_oauth_flow"}[provider], start)
+    setattr(module, {"codex": "exchange_codex_device_authorization", "xai_oauth": "exchange_xai_oauth_authorization"}[provider], exchange)
     module.poll_codex_device_authorization = lambda *_a, **_kw: SimpleNamespace()
     module.authorization_from_xai_oauth_callback = lambda *_a: SimpleNamespace()
     clients = []
@@ -93,7 +93,7 @@ def _wait_listener(account):
 
 def finish(account, flow):
     provider, owner, *_ = account
-    operation = "submit" if provider == "claude_subscription" else "check"
+    operation = "check"
     return execute(owner, command(provider, operation, flow, "synthetic-code" if operation == "submit" else None))
 
 
@@ -102,7 +102,7 @@ def test_passive_account_views_have_no_secrets_runtime_or_effects(account, store
     before = config.CONFIG_PATH.read_bytes()
     monkeypatch.setattr(auth_store, "get_provider_secret", lambda *_a, **_kw: pytest.fail("No secret reads"))
     snapshot = controls.read_accounts()
-    assert len(snapshot.accounts) == 3 and all(item.runtime_state == "unknown" for item in snapshot.accounts)
+    assert len(snapshot.accounts) == 2 and all(item.runtime_state == "unknown" for item in snapshot.accounts)
     assert calls == [] and config.CONFIG_PATH.read_bytes() == before
     assert "private" not in json.dumps(asdict(snapshot))
 
@@ -238,7 +238,7 @@ def test_cancel_during_exchange_retains_admission_until_real_return(account, mon
     if provider == "xai_oauth":
         _wait_listener(account)
     arrived, release = Event(), Event()
-    name = {"codex": "exchange_codex_device_authorization", "claude_subscription": "exchange_claude_subscription_authorization", "xai_oauth": "exchange_xai_oauth_authorization"}[provider]
+    name = {"codex": "exchange_codex_device_authorization", "xai_oauth": "exchange_xai_oauth_authorization"}[provider]
     original = getattr(module, name)
     def wait(*args, **kwargs):
         arrived.set()
@@ -276,12 +276,12 @@ def test_uncertain_exchange_is_not_replayed(account, monkeypatch):
     flow = execute(owner, command(provider))["flow"]
     if provider == "xai_oauth":
         _wait_listener(account)
-    name = {"codex": "exchange_codex_device_authorization", "claude_subscription": "exchange_claude_subscription_authorization", "xai_oauth": "exchange_xai_oauth_authorization"}[provider]
+    name = {"codex": "exchange_codex_device_authorization", "xai_oauth": "exchange_xai_oauth_authorization"}[provider]
     def fail(*_a, **_kw):
         calls.append("uncertain-exchange")
         raise OSError("synthetic lost reply")
     monkeypatch.setattr(module, name, fail)
-    operation = "submit" if provider == "claude_subscription" else "check"
+    operation = "check"
     cmd = command(provider, operation, flow, "synthetic-code" if operation == "submit" else None)
     with pytest.raises(controls.SubscriptionError, match="subscription_uncertain"):
         execute(owner, cmd)
@@ -295,7 +295,7 @@ def test_publication_failure_reuses_held_tokens_without_second_exchange(account,
     flow = execute(owner, command(provider))["flow"]
     if provider == "xai_oauth":
         _wait_listener(account)
-    operation = "submit" if provider == "claude_subscription" else "check"
+    operation = "check"
     cmd = command(provider, operation, flow, "synthetic-code" if operation == "submit" else None)
     original = auth_store.save_provider_config
     monkeypatch.setattr(auth_store, "save_provider_config", lambda *_a, **_kw: (_ for _ in ()).throw(OSError("synthetic failure")))
@@ -311,7 +311,7 @@ def test_passive_published_receipt_and_exact_recovery_do_not_reexchange(account,
     flow = execute(owner, command(provider))["flow"]
     if provider == "xai_oauth":
         _wait_listener(account)
-    operation = "submit" if provider == "claude_subscription" else "check"
+    operation = "check"
     cmd = command(provider, operation, flow, "synthetic-code" if operation == "submit" else None)
     original = admissions.complete_command
     monkeypatch.setattr(admissions, "complete_command", lambda *_a: (_ for _ in ()).throw(OSError("synthetic reply failure")))
@@ -339,17 +339,6 @@ def test_explicit_disconnect_and_restore_preserve_original_bytes(account):
     assert calls.count("exchange") == 1
 
 
-def test_explicit_claude_import_has_no_signin_network(account):
-    provider, owner, _, calls, *_ = account
-    if provider != "claude_subscription":
-        with pytest.raises(controls.SubscriptionError, match="subscription_review_invalid"):
-            execute(owner, command(provider, "import_token", value="synthetic-token"))
-    else:
-        execute(owner, command(provider, "import_token", value="synthetic-token"))
-        assert auth_store.get_provider_secret(provider, "access_token") == "synthetic-token"
-    assert "start" not in calls and "exchange" not in calls
-
-
 def test_cold_subscription_snapshot_creates_nothing(tmp_path):
     import os
     import subprocess
@@ -359,7 +348,7 @@ def test_cold_subscription_snapshot_creates_nothing(tmp_path):
 from pathlib import Path
 import os,sys
 from row_bot.application.subscription_controls import read_accounts
-assert len(read_accounts().accounts) == 3
+assert len(read_accounts().accounts) == 2
 assert 'row_bot.api_keys' not in sys.modules
 assert not Path(os.environ['ROW_BOT_DATA_DIR']).exists()
 """
@@ -427,7 +416,7 @@ def test_original_start_cancel_during_admission_wait_retains_real_drain(account,
 def test_original_start_cancel_during_provider_wait_and_wrong_owner_denial(account, monkeypatch):
     provider, owner, module, calls, *_ = account
     arrived, release = Event(), Event()
-    name = {"codex": "start_codex_device_flow", "claude_subscription": "start_claude_subscription_oauth_flow", "xai_oauth": "start_xai_oauth_flow"}[provider]
+    name = {"codex": "start_codex_device_flow", "xai_oauth": "start_xai_oauth_flow"}[provider]
     original = getattr(module, name)
     def waiting(**kwargs):
         arrived.set()
