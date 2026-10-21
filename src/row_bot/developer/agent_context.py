@@ -93,6 +93,7 @@ def build_developer_agent_context(workspace_id: str, thread_id: str = "") -> str
         "never in the sandbox; only commands run in the sandbox.",
         "Do not clone repositories into Row-Bot app data. If cloning is needed, ask for an explicit destination.",
         "Do not install dependencies, delete files, commit, push, or use external network without the configured approval policy.",
+        "Never set Git's user.name or user.email: if a commit needs a name and email, ask the person which to use.",
     ]
     if workspace.execution_mode == "docker":
         lines.append("The Docker Sandbox's network is off. If tests fail there because pytest or the project's "
