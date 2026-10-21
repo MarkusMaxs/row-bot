@@ -42,10 +42,14 @@ class RequestStopped(InterruptedError):
 
 def _shut(sock: Any) -> None:
     # A shutdown, not a close: only a shutdown wakes a read blocked in another thread on Linux, and it tells the
-    # provider the client has gone. The plain socket's shutdown also takes a TLS socket's, with no TLS goodbye.
+    # provider the client has gone. The plain socket's shutdown also takes a TLS socket's, with no TLS goodbye;
+    # an async client's socket is asyncio's wrapper, which has its own.
     try:
-        socket.socket.shutdown(sock, socket.SHUT_RDWR)
-    except (OSError, TypeError):
+        if isinstance(sock, socket.socket):
+            socket.socket.shutdown(sock, socket.SHUT_RDWR)
+        else:
+            sock.shutdown(socket.SHUT_RDWR)
+    except (AttributeError, OSError):
         pass  # already closed
 
 
