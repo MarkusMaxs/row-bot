@@ -563,6 +563,15 @@ def list_configured_provider_ids() -> list[str]:
     return configured
 
 
+class ProviderSignInRequired(ValueError):
+    """A subscription's sign-in can't be used: the person signs in again (B351)."""
+
+    def __init__(self, provider_id: str, label: str, message: str) -> None:
+        super().__init__(message)
+        self.provider_id = provider_id
+        self.label = label
+
+
 def provider_status(provider_id: str, *, refresh_tokens: bool = True) -> dict:
     if provider_id == "codex":
         from row_bot.providers.codex import check_codex_token_health
@@ -974,7 +983,8 @@ def _create_chat_model(
         from row_bot.providers.transports.codex_responses import ChatCodexResponses
 
         if not codex_runtime_available():
-            raise ValueError(
+            raise ProviderSignInRequired(
+                "codex", "ChatGPT",
                 "Codex subscription runtime needs an in-app ChatGPT login with runnable OAuth tokens. "
                 "Connect ChatGPT in Settings -> Providers, then try the Codex model again."
             )
@@ -984,7 +994,8 @@ def _create_chat_model(
         from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
 
         if not claude_subscription_runtime_available():
-            raise ValueError(
+            raise ProviderSignInRequired(
+                "claude_subscription", "Claude Subscription",
                 "Claude Subscription runtime needs Row-Bot-owned OAuth tokens. "
                 "Connect Claude Subscription in Settings -> Providers, then try the provider-qualified model again."
             )
@@ -994,7 +1005,8 @@ def _create_chat_model(
         from row_bot.providers.xai_oauth import xai_oauth_runtime_available
 
         if not xai_oauth_runtime_available():
-            raise ValueError(
+            raise ProviderSignInRequired(
+                "xai_oauth", "xAI Grok",
                 "xAI Grok runtime needs Row-Bot-owned OAuth tokens. "
                 "Connect xAI Grok in Settings -> Providers, then try the provider-qualified model again."
             )

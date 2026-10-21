@@ -1371,10 +1371,10 @@ class _RowBotProcess:
         if host is not None:
             self.host = _resolve_launch_host(host)
 
-        # Use the same Python that's running this launcher
-        python = sys.executable
+        # The same Python that's running this launcher, as Row-Bot Server.exe where an install has it (B355).
+        from row_bot.runtime_paths import server_python
 
-        cmd = [python, str(app_py)]
+        cmd = [server_python(), str(app_py)]
 
         # Log file for diagnosing startup crashes.
         log_dir = _row_bot_data_dir()

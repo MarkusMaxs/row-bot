@@ -32,8 +32,13 @@ def _leaf(filename: str) -> None:
 
 
 def read_bytes(directory: int | None, path: Path, name: str, *, max_bytes: int = 65536,
-               unavailable_code: str = "file_unavailable") -> tuple[bytes | None, str, str, int, str]:
-    """One bounded, single-link opened snapshot under a held parent guard."""
+               unavailable_code: str = "file_unavailable",
+               unknown_metadata_ok: bool = False) -> tuple[bytes | None, str, str, int, str]:
+    """One bounded, single-link opened snapshot under a held parent guard.
+
+    With ``unknown_metadata_ok``, metadata a replacement could lose (for example
+    com.apple.quarantine on a downloaded app's own files) doesn't block the read: its
+    metadata reads as "", and publishing reads it strictly and still refuses the file."""
     _limit(max_bytes)
     _leaf(name)
     from row_bot.developer.edits import FileEditError, file_edit_metadata_digest
@@ -52,7 +57,12 @@ def read_bytes(directory: int | None, path: Path, name: str, *, max_bytes: int =
         if not os.path.samestat(before, opened) or opened.st_nlink != 1:
             raise FileEditError("file_revision_conflict")
         value = handle.read(max_bytes + 1)
-        metadata = file_edit_metadata_digest(handle.fileno() if directory is not None else target)
+        try:
+            metadata = file_edit_metadata_digest(handle.fileno() if directory is not None else target)
+        except FileEditError as error:
+            if not unknown_metadata_ok or str(error) != "file_metadata_unavailable":
+                raise
+            metadata = ""
         finished = os.fstat(handle.fileno())
     named = os.stat(name, dir_fd=directory, follow_symlinks=False) if directory is not None else target.lstat()
     if (not os.path.samestat(opened, named) or named.st_nlink != 1 or len(value) > max_bytes
