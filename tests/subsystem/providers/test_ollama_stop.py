@@ -21,6 +21,9 @@ from row_bot.providers.transports import ollama_local
 from row_bot.providers.transports.ollama_local import OllamaSilentError, RowBotChatOllama
 from tests.helpers.fake_ollama import fake_streaming_ollama
 
+# How a blocked read is ended differs by OS (closing a socket doesn't wake it on Linux), so these run everywhere.
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
+
 MODEL = "fake-local:7b"
 PROMPT = [HumanMessage(content="What is 2 + 2?")]
 HANG = {"hang": True}
