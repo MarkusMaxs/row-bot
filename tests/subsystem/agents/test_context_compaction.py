@@ -246,7 +246,7 @@ def test_successful_compaction_preserves_two_atomic_groups_and_emits_one_event(m
     )
     monkeypatch.setattr(
         "row_bot.threads.save_summary_state_cas",
-        lambda thread_id, state, expected_revision: saved.append(dict(state)) or True,
+        lambda thread_id, state, expected_revision, **_kwargs: saved.append(dict(state)) or True,
     )
     token = agent._current_thread_id_var.set("thread-1")
     try:
@@ -326,7 +326,7 @@ def test_existing_summary_with_oversized_two_group_tail_ages_preceding_atomic_gr
     monkeypatch.setattr("row_bot.threads.context_boundary_digest", lambda *args, **kwargs: "b" * 64)
     monkeypatch.setattr(
         "row_bot.threads.save_summary_state_cas",
-        lambda thread_id, state, expected_revision: saved.append(dict(state)) or True,
+        lambda thread_id, state, expected_revision, **_kwargs: saved.append(dict(state)) or True,
     )
     thread_id = "thread-existing-summary"
     token = agent._current_thread_id_var.set(thread_id)
@@ -378,7 +378,7 @@ def test_exact_rebuild_falls_back_once_and_persists_only_final_summary(monkeypat
     monkeypatch.setattr("row_bot.threads.context_boundary_digest", lambda *args, **kwargs: "c" * 64)
     monkeypatch.setattr(
         "row_bot.threads.save_summary_state_cas",
-        lambda thread_id, state, expected_revision: saved.append(dict(state)) or True,
+        lambda thread_id, state, expected_revision, **_kwargs: saved.append(dict(state)) or True,
     )
     thread_id = "thread-exact-fallback"
     token = agent._current_thread_id_var.set(thread_id)
@@ -431,7 +431,7 @@ def test_current_group_too_large_fails_after_one_fallback_without_persisting(mon
     monkeypatch.setattr("row_bot.threads.context_boundary_digest", lambda *args, **kwargs: "d" * 64)
     monkeypatch.setattr(
         "row_bot.threads.save_summary_state_cas",
-        lambda thread_id, state, expected_revision: saved.append(dict(state)) or True,
+        lambda thread_id, state, expected_revision, **_kwargs: saved.append(dict(state)) or True,
     )
     thread_id = "thread-oversized-current"
     token = agent._current_thread_id_var.set(thread_id)

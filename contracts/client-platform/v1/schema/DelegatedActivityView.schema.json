@@ -29,6 +29,19 @@
           "default": null,
           "title": "Child Conversation Id"
         },
+        "model_ref": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Ref"
+        },
         "name": {
           "maxLength": 256,
           "title": "Name",
@@ -46,6 +59,32 @@
           "maxLength": 256,
           "title": "Profile Id",
           "type": "string"
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning"
+        },
+        "reasoning_not_offered": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reasoning Not Offered"
         },
         "run_id": {
           "maxLength": 128,
