@@ -2307,27 +2307,40 @@ export default function Conversation({
     if (isRunning) setRunStartedAt((value) => value ?? Date.now());
     else setRunStartedAt(undefined);
   }, [isRunning]);
-  const lastError =
-    [...state.activity]
-      .reverse()
-      .find((record) => record.event.type === 'generation.error')?.event
-      .event_id ?? '';
+  const lastErrorEvent = [...state.activity]
+    .reverse()
+    .find((record) => record.event.type === 'generation.error')?.event;
+  const lastError = lastErrorEvent?.event_id ?? '';
   const [failure, setFailure] = useState<{
     event: string;
     generation: string;
+    // Whose sign-in can't be used any more ("ChatGPT"); "" for any other failure.
+    signIn: string;
   } | null>(null);
   const captureFailure = useEffectEvent((event: string) =>
-    setFailure({ event, generation: generation?.generation_id ?? '' }),
+    setFailure({
+      event,
+      generation: generation?.generation_id ?? '',
+      signIn:
+        lastErrorEvent?.type === 'generation.error' &&
+        lastErrorEvent.payload.code === 'sign_in_required'
+          ? lastErrorEvent.payload.provider || 'your account'
+          : '',
+    }),
   );
   useEffect(() => {
     if (lastError) captureFailure(lastError);
   }, [lastError]);
-  const interrupted = !isRunning && generation?.status === 'interrupted';
-  const failed =
-    !isRunning &&
-    !interrupted &&
-    Boolean(failure) &&
-    failure!.generation === (generation?.generation_id ?? '');
+  const thisFailure =
+    !isRunning && failure?.generation === (generation?.generation_id ?? '')
+      ? failure
+      : null;
+  // A sign-in that can't be used fails every resume the same way: say so,
+  // with the one fix, instead of "interrupted · Resume" (B351).
+  const signInNeeded = thisFailure?.signIn ?? '';
+  const interrupted =
+    !isRunning && generation?.status === 'interrupted' && !signInNeeded;
+  const failed = !interrupted && !signInNeeded && Boolean(thisFailure);
   const settledMedia = useMemo(
     () =>
       new Set(
@@ -2972,7 +2985,9 @@ export default function Conversation({
         stopped: 'Stopped.',
         waiting_approval: 'Waiting for your approval.',
         completed: 'Response complete.',
-        interrupted: 'The response was interrupted.',
+        interrupted: signInNeeded
+          ? `Sign in to ${signInNeeded} again.`
+          : 'The response was interrupted.',
       }[generation.status] ?? '')
     : '';
   return (
@@ -3304,6 +3319,23 @@ export default function Conversation({
                       </Button>
                     </div>
                   )}
+                </div>
+              )}
+              {signInNeeded && (
+                <div className="turn-notice" data-tone="warning">
+                  <TriangleAlert className="turn-notice-icon" aria-hidden />
+                  <div className="turn-notice-text">
+                    <strong>Sign in to {signInNeeded} again</strong>
+                    <span>
+                      Your {signInNeeded} sign-in can't be used any more.
+                      Reconnect it, then send your message again.
+                    </span>
+                  </div>
+                  <div className="turn-notice-actions">
+                    <Button onClick={() => navigate('/settings/providers')}>
+                      Reconnect
+                    </Button>
+                  </div>
                 </div>
               )}
               {(interrupted || failed) && (

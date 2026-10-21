@@ -194,3 +194,30 @@ it('says "Restart to update" once an update is downloaded and ready', async () =
     '/settings/updates',
   );
 });
+
+it('keeps "Restart to update" beside a problem, each opening its own page (B364)', async () => {
+  show({
+    schema_version: 1,
+    problems: [
+      {
+        id: 'mcp',
+        title: "An app isn't connected",
+        detail: '1 of 2 apps that are on are connected.',
+        place: 'mcp',
+      },
+    ],
+    update: { version: '9.1.0', ready: true },
+  });
+  const problem = await screen.findByRole('link', {
+    name: '1 thing needs attention. Open Monitor',
+  });
+  const update = screen.getByRole('link', {
+    name: 'Restart to update to 9.1.0. Open Updates',
+  });
+  fireEvent.click(update);
+  expect(screen.getByLabelText('Location')).toHaveTextContent(
+    '/settings/updates',
+  );
+  fireEvent.click(problem);
+  expect(screen.getByLabelText('Location')).toHaveTextContent('/?tab=monitor');
+});
