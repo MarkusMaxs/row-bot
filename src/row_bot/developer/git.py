@@ -119,8 +119,20 @@ def commit_changes(path: str, message: str, paths: list[str] | None = None) -> G
         raise ValueError("Commit message is required.")
     add_paths = paths or ["."]
     _run_git(folder, ["add", "--", *add_paths])
-    _run_git(folder, ["commit", "-m", msg], timeout=60)
+    try:
+        _run_git(folder, ["commit", "-m", msg], timeout=60)
+    except subprocess.CalledProcessError as exc:
+        if _NO_IDENTITY_RE.search(f"{exc.stderr or ''}\n{exc.stdout or ''}"):
+            raise ValueError(NO_GIT_IDENTITY) from exc
+        raise
     return get_git_status(str(folder))
+
+
+NO_GIT_IDENTITY = (
+    "Git has no name and email for commits on this computer, so nothing was committed. "
+    "Ask the person which name and email their commits should use; never choose or set one yourself."
+)
+_NO_IDENTITY_RE = re.compile(r"Please tell me who you are|Author identity unknown|empty ident name", re.I)
 
 
 def fast_forward_merge(path: str, branch_name: str) -> GitStatus:

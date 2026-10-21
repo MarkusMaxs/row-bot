@@ -302,12 +302,23 @@ def _decide_in_graph(payload: dict[str, Any], *, mode: str, risks: Iterable[str]
     return _decide_afresh(payload, mode=mode, risks=risks, ask=ask, ledger=ledger)
 
 
+GIT_IDENTITY_RISK = "sets the name and email Git records on commits, which only the person can choose"
+# Risks the Auto reviewer never accepts for the person: they go straight to the person's card.
+_PERSON_ONLY_RISKS = {GIT_IDENTITY_RISK: "Only you can choose the name and email your commits are from."}
+
+
 def _decide_afresh(payload: dict[str, Any], *, mode: str, risks: Iterable[str], ask: Callable[[dict[str, Any]], Any],
                    ledger: _Ledger | None) -> tuple[Any, str]:
     """Decide a question nobody has decided yet: the reviewer first under Auto, then the person."""
 
     reason = ""
-    if mode == "auto":
+    risks = tuple(risks)
+    person_only = next((_PERSON_ONLY_RISKS[risk] for risk in risks if risk in _PERSON_ONLY_RISKS), "")
+    if mode == "auto" and person_only:
+        reason = person_only
+        if ledger is not None:
+            ledger.append({_RECORD_KEY: question_id(payload), "review": "ask", "reason": reason})
+    elif mode == "auto":
         from row_bot.approval_review import review
 
         verdict = review(payload, risks=risks)
