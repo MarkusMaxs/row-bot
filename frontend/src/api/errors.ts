@@ -1649,8 +1649,9 @@ const CATALOG: Record<string, Entry> = {
     RETRY,
   ],
   process_command_invalid: ["That command isn't valid here.", 'review'],
+  // Local background processes need Windows or Linux containment; macOS has none yet (B376).
   process_containment_unavailable: [
-    "Commands can't run safely here right now.",
+    'Background processes need Windows, Linux or a Docker workspace. Here, run the command in the conversation instead.',
     'none',
   ],
   process_cursor_invalid: [
