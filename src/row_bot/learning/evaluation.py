@@ -1049,8 +1049,9 @@ class ArmCache:
     """Pack results of cached arms (the main model, O31), kept :data:`CACHE_DAYS` days.
 
     Keys are hashes of (model, the task's own content, metric version, budget, runner): a changed
-    pack task, metric or budget is a new key. Values are counts only (status, tokens, steps, time),
-    never a task or its id, so the file says nothing about the hidden tasks (E10).
+    pack task, metric or budget is a new key. Values are counts and codes only (status, why it didn't
+    pass, tokens, steps, time), never a task or its id, so the file says nothing about the hidden
+    tasks (E10).
     """
 
     def __init__(self, root: Any = None, *, clock: Callable[[], float] = time.time) -> None:
@@ -1098,7 +1099,8 @@ class ArmCache:
         self.hits += 1
         return CaseResult(task.id, "pack", task.kind_of_work, found["status"], str(found.get("check") or ""),
                           int(found.get("tokens") or 0), int(found.get("local_tokens") or 0),
-                          int(found.get("steps") or 0), float(found.get("seconds") or 0.0), "kept from an earlier test")
+                          int(found.get("steps") or 0), float(found.get("seconds") or 0.0), "kept from an earlier test",
+                          str(found.get("cause") or ""))
 
     def put(self, key: str, case: CaseResult) -> None:
         if case.status not in ("passed", "failed", "budget"):
@@ -1106,7 +1108,7 @@ class ArmCache:
         entries = self._load()
         entries[key] = {"at": round(float(self.clock()), 3), "status": case.status, "check": case.check,
                         "tokens": case.tokens, "local_tokens": case.local_tokens, "steps": case.steps,
-                        "seconds": case.seconds}
+                        "seconds": case.seconds, "cause": case.cause}
         if len(entries) > _CACHE_ENTRIES:
             for old in sorted(entries, key=lambda item: entries[item]["at"])[: len(entries) - _CACHE_ENTRIES]:
                 entries.pop(old, None)

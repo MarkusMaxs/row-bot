@@ -21,7 +21,9 @@ it runs Row-Bot's own code end to end and writes one results file of counts, rat
 4. ``compare``: Row-Bot's evaluation worker runs every arm on the visible packs (``--visible-repeats``
    runs a task), the hidden pack split and the folder's held-out work (``--hidden-repeats`` runs a
    problem; aggregates only, E10), at the same budget; the paired analysis of each arm against the
-   starting model comes from ``evaluation``.
+   starting model comes from ``evaluation``. Each pack result is kept as it comes, so a stopped
+   comparison continues; ``--packs-only --thinking off`` (then ``on``) runs it in parts, and the
+   full run reuses them.
 5. ``tidy``: removes every model it made in Ollama (``--keep`` keeps them).
 
 Each phase saves its results to ``<out>/l2w_ablation.json`` and is skipped on a second run when
@@ -312,8 +314,13 @@ def phase_serve(ctx: dict[str, Any], results: Results) -> None:
                                                 ctx["out"] / "serve" / "start-think", data, thinking=True)
         results.save()
     for arm, item in (results.data.get("train") or {}).items():
-        if arm in served or item.get("state") != "evaluating" and not item.get("ready"):
+        if not isinstance(item, dict) or (item.get("state") != "evaluating" and not item.get("ready")):
+            continue  # an attempt that failed, or an arm with nothing trained
+        before = served.get(arm)
+        if before and before.get("off"):
             continue
+        if before:  # its export or serving failed before (a busy computer): kept, then tried again
+            served.setdefault(f"{arm}_attempts", []).append(before)
         job = jobs.get(item["job"])
         maker = releases.ReleaseMaker(data, jobs=jobs, recipe_for=lambda: recipe, start_threads=False)
         started = time.monotonic()
@@ -400,8 +407,10 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
                 continue
             name = f"{arm}-{mode}"
             # Every arm serves at 32K behind the bridge, so its replayed decisions come in that shape (O71).
+            # ``cache``: each pack result is kept as it comes (counts and codes only, E10), so a stopped
+            # comparison continues where it was and the parts run with --packs-only are reused.
             arms.append(evaluation.Arm(name, model_ref=ref, subject_kind="baseline" if arm == "start" else "release",
-                                       serve_context=SERVE_CONTEXT))
+                                       serve_context=SERVE_CONTEXT, cache=True))
             names[name] = ref
             if mode == "on":
                 think_refs.add(ref)
@@ -431,25 +440,30 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
     packs = [pack for pack in PACKS if container or pack != "small_coding"]
     budget = evaluation.Budget(task_tokens=150_000)
     meter = TokenMeter(10**12)
+    cache = evaluation.ArmCache(data)
+    packs_only = bool(ctx.get("packs_only"))
     done = [0]
-
-    def counted(_arm: str, case: Any) -> None:
-        done[0] += 1
-        if done[0] % 25 == 0:
-            _say(f"compare: {done[0]} runs")
-
     started = time.monotonic()
+
+    def counted(_arm: str = "", _case: Any = None) -> None:
+        done[0] += 1
+        cache.save()
+        if done[0] % 25 == 0:
+            _say(f"compare: {done[0]} runs in {round((time.monotonic() - started) / 60)} min"
+                 f" ({cache.hits} kept from before)")
+
     worker = eval_worker.EvalWorker(spec, credentials=credentials, person_data=data)
     try:
         worker.start()
         runner = eval_worker.RuntimeRunner(worker, worker_arms, record_usage=None, unsupported=set(unsupported))
         shown = evaluation.compare(arms, tasks=chosen, runner=runner, meter=meter, store=store, save=False,
                                    on_case=counted, budget=budget, repeats=ctx["visible_repeats"],
-                                   kind_key=model_compare.family_key, pairs=pairs)
+                                   kind_key=model_compare.family_key, pairs=pairs, cache=cache)
         hidden = evaluation.audit_check(arms, asked_by="the L2w ablation", store=store, runner=runner, meter=meter,
                                         client=_ServedClient(think_refs), packs=packs, verifiers=verifiers,
                                         budget=budget, save=False, repeats=ctx["hidden_repeats"], combine_with=shown,
-                                        kind_key=model_compare.family_key, pairs=pairs)
+                                        kind_key=model_compare.family_key, pairs=pairs, cache=cache,
+                                        include_replay=not packs_only, on_progress=lambda *_done: counted())
     finally:
         worker.stop()
     out: dict[str, Any] = {"arms": names, "container": container, "visible_tasks": len(chosen),
@@ -466,12 +480,15 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
             row[label] = {"by_kind": {kind: list(value) for kind, value in item.by_kind.items()},
                           "runs_passed": item.run.passed, "runs_counted": item.run.total, "ran": item.ran,
                           "seconds_per_run": round(item.seconds / item.ran, 1) if item.ran else None,
-                          "tokens": item.measured_tokens, "causes": dict(item.causes)}
+                          "tokens": item.measured_tokens, "causes": dict(item.causes), "kept": item.cached}
     out["per_arm"] = per_arm
     seen = set((results.data.get("rows") or {}).get("seen_visible") or ())
     out["visible_seen_in_training"] = len([task for task in chosen if task.id in seen])
     out["visible_unseen"] = _unseen(shown, seen, [(arms[0].name, arm.name) for arm in arms[1:]] + pairs)
-    results.data["compare"] = out
+    if packs_only:  # a part (no replayed decisions): kept apart, the comparison itself still to run
+        results.data.setdefault("compare_packs", {})[thinking] = out
+    else:
+        results.data["compare"] = out
     results.save()
     _say(f"compare: {done[0]} runs in {out['seconds']} s")
 
@@ -503,6 +520,8 @@ def phase_tidy(ctx: dict[str, Any], results: Results) -> None:
     ollama = serving.OllamaRuntime()
     removed = []
     for entry in (results.data.get("serve") or {}).values():
+        if not isinstance(entry, dict):
+            continue  # attempts that failed
         for mode in ("off", "on"):
             ref = str(entry.get(mode) or "")
             if not ref.startswith("model:ollama:"):
@@ -528,6 +547,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--visible-repeats", type=int, default=3)
     parser.add_argument("--hidden-repeats", type=int, default=3)
     parser.add_argument("--thinking", choices=("both", "off", "on"), default="both")
+    parser.add_argument("--packs-only", action="store_true",
+                        help="compare: run only the pack tasks (kept for the full comparison), so it can run in parts")
     parser.add_argument("--runtimes-from", help="a data folder whose training engine and starting model to copy in")
     args = parser.parse_args(argv)
     data = Path(args.data).resolve()
@@ -559,7 +580,8 @@ def main(argv: list[str] | None = None) -> int:
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout
     results.data["build"] = commit.strip()
     ctx = {"data": data, "out": out, "cap_gb": args.cap_gb, "a32_cap_gb": args.a32_cap_gb, "visible_per_pack": args.visible_per_pack,
-           "visible_repeats": args.visible_repeats, "hidden_repeats": args.hidden_repeats, "thinking": args.thinking}
+           "visible_repeats": args.visible_repeats, "hidden_repeats": args.hidden_repeats, "thinking": args.thinking,
+           "packs_only": args.packs_only}
     wanted = [phase.strip() for phase in args.phases.split(",") if phase.strip()]
     for phase in wanted:
         if phase not in PHASES:

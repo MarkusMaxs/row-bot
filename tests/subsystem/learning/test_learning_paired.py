@@ -151,6 +151,26 @@ def test_a_cached_arms_repeats_are_each_kept_and_reused(data_dir):
     assert result.arms[1].cached == 6 and result.arms[1].by_kind == {"Document lookups": (2, 2)}
 
 
+def test_a_cached_result_keeps_why_it_didnt_pass(data_dir):
+    tasks = [task for task in visible_tasks() if task.pack == "document_lookups"][:2]
+
+    class Malformed(Runner):
+        def run(self, task, arm, *, budget, meter, arm_left):
+            super().run(task, arm, budget=budget, meter=meter, arm_left=arm_left)
+            return CaseResult(task.id, "pack", task.kind_of_work, "failed", "answer", tokens=900, steps=3,
+                              cause=evaluation.MALFORMED_CALL)
+
+    arms = [Arm("start"), Arm("main", cache=True)]
+    first = compare(arms, tasks=tasks, runner=Malformed(), cache=evaluation.ArmCache(data_dir),
+                    meter=TokenMeter(10**9), save=False)
+
+    again = compare(arms, tasks=tasks, runner=Malformed(), cache=evaluation.ArmCache(data_dir),
+                    meter=TokenMeter(10**9), save=False)
+
+    assert again.arms[1].cached == 2
+    assert again.arms[1].causes == first.arms[1].causes == {evaluation.MALFORMED_CALL: 2}
+
+
 # ── O70: a malformed call is the model's, an outage isn't ──────────────────
 
 
