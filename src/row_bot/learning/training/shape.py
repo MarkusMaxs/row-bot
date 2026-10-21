@@ -188,9 +188,28 @@ def _difference(large: str, small: str) -> tuple[str, str]:
     return middle, large[len(large) - suffix:][:200]
 
 
-def envelope_for(serve_context: int) -> Envelope:
-    """Row-Bot's serving envelope at this context, from its own prompt, guides and tool groups."""
+_ENVELOPES: dict[tuple[int, str], tuple[float, Envelope]] = {}
+ENVELOPE_SECONDS = 300.0
 
+
+def envelope_for(serve_context: int) -> Envelope:
+    """Row-Bot's serving envelope at this context, from its own prompt, guides and tool groups
+    (kept a few minutes: a count and the compile that follows it build it once)."""
+
+    import time
+
+    from row_bot import learning
+
+    key = (int(serve_context), str(learning.data_dir()))
+    found = _ENVELOPES.get(key)
+    if found is not None and time.monotonic() - found[0] < ENVELOPE_SECONDS:
+        return found[1]
+    envelope = _build(int(serve_context))
+    _ENVELOPES[key] = (time.monotonic(), envelope)
+    return envelope
+
+
+def _build(serve_context: int) -> Envelope:
     from row_bot import agent, prompts, skills
 
     context = int(serve_context)

@@ -329,10 +329,18 @@ class _ServedClient:
     def invoke(self, messages: Any, *, tools: Any, model_ref: str | None, purpose: str) -> Any:
         if model_ref not in self._thinking:
             return self._inner.invoke(messages, tools=tools, model_ref=model_ref, purpose=purpose)
+        from row_bot import models
         from row_bot.learning.evaluation import ModelReply, estimate_tokens
+        from row_bot.providers.reasoning import canonical_reasoning_model_ref, request_plan_for
+        from row_bot.providers.resolution import resolve_provider_config
         from row_bot.providers.usage_ledger import with_usage_purpose
 
-        llm, selection_ref, provider = self._inner._resolve(model_ref, purpose)  # noqa: SLF001 - its model, as served
+        # The model's own reasoning plan, as an Agent turn would use it (not Learning's lowest effort).
+        resolved = resolve_provider_config(str(model_ref), allow_legacy_local=True)
+        plan = request_plan_for(None, canonical_reasoning_model_ref(resolved.provider_id, resolved.runtime_model),
+                                use_snapshot=False)
+        llm = models.get_llm_for(resolved.selection_ref, reasoning_plan=plan)
+        selection_ref = resolved.selection_ref
         runnable = llm.bind_tools(list(tools)) if tools else llm
         message = with_usage_purpose(runnable, purpose).invoke(list(messages))
         usage = getattr(message, "usage_metadata", None) or {}
