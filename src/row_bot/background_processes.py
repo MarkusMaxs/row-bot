@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
+from row_bot.process_cancellation import kill_process_tree
+
 logger = logging.getLogger(__name__)
 
 # At most this many run at once in one conversation, and in all of Row-Bot (D1).
@@ -414,22 +416,7 @@ def _same_process(pid: int | None, birth: float | None):
         return None
 
 
-def _kill_tree(process) -> bool:
-    import psutil
-
-    try:
-        family = process.children(recursive=True) + [process]
-    except psutil.Error:
-        family = [process]
-    for member in family:
-        try:
-            member.kill()
-        except psutil.NoSuchProcess:
-            pass
-        except psutil.Error:
-            pass
-    _gone, alive = psutil.wait_procs(family, timeout=3)
-    return not alive
+_kill_tree = kill_process_tree
 
 
 def _stop_left_over(record: BackgroundProcess) -> None:

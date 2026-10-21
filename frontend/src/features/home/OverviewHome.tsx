@@ -1,12 +1,11 @@
 import {
   useEffect,
-  useMemo,
   useState,
   type CSSProperties,
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowUp,
@@ -14,31 +13,21 @@ import {
   Bot,
   Brain,
   CalendarClock,
-  Check,
   ChevronDown,
   ChevronRight,
-  Clock,
   Code2,
-  CornerDownRight,
-  Hand,
   HeartPulse,
-  Lightbulb,
   MessageSquare,
-  Moon,
   Palette,
   Paperclip,
-  Pin,
   ShieldAlert,
-  Sparkles,
   Workflow,
   X,
 } from 'lucide-react';
 import type {
+  AttentionProblem,
+  AttentionSnapshot,
   ConversationView,
-  InsightsSnapshot,
-  IntegrationEntry,
-  IntegrationEntryPage,
-  KnowledgeGraphSnapshot,
   MonitorSnapshot,
   OnboardingSnapshot,
   PendingApproval,
@@ -47,44 +36,25 @@ import type {
   TaskSummary,
   TaskSummaryPage,
 } from '../../api/types';
-import { clientError } from '../../api/errors';
-import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
-import {
-  Button,
-  Hint,
-  IconButton,
-  InlineEmpty,
-  StatusDot,
-} from '../../ui/primitives';
+import { Hint, IconButton } from '../../ui/primitives';
 import { parseTimestamp, relativeTime } from '../../ui/format';
 import { useReducedMotion } from '../buddy/BuddyAvatar';
 import { ConversationGlyph } from '../shell/ConversationGlyph';
-import { agentWorkLabel } from '../shell/agent-activity';
-import { AppIcon } from '../apps/parts';
-import {
-  conversationKinds,
-  type ConversationKind,
-} from '../shell/conversation-groups';
+import { conversationKinds } from '../shell/conversation-groups';
 import {
   InterruptedWorkControls,
   interruptedWork,
 } from '../shell/DelegatedActivity';
 import { ApprovalDecision, WaitingSince } from '../shell/InPlaceApproval';
-import { usePendingApprovals } from '../shell/pending-approvals';
-import { useWorkspaceActions } from '../shell/workspace-actions';
-import FixAction, { RunAgain } from './FixAction';
-import { typeToken } from './knowledge-palette';
 import {
-  FAILED_RUN_STATUSES,
-  WAITING_RUN_STATUSES,
-  When,
-  clockTime,
-  greeting,
-  overnightStart,
-  plural,
-  runStatus,
-  scheduleWords,
-} from './home-format';
+  conversationsWaiting,
+  needsCount,
+  useAttention,
+  waitingOnYou,
+} from '../shell/needs';
+import { usePendingApprovals } from '../shell/pending-approvals';
+import FixAction, { RunAgain } from './FixAction';
+import { When, greeting, plural } from './home-format';
 
 export type OverviewHomeProps = {
   conversations: readonly ConversationView[];
@@ -92,16 +62,14 @@ export type OverviewHomeProps = {
   monitor: MonitorSnapshot | null;
   /** Absent until the workspace is connected. */
   loadTasks?: (signal: AbortSignal) => Promise<TaskSummaryPage>;
-  /** Monitor's kept check results (B252); a red one needs you. */
+  /** Monitor's kept check results (B252): a warning shows under Today. */
   loadHealth?: (signal: AbortSignal) => Promise<SystemDiagnosis>;
   /** Run every check now: a red check's "Check again". */
   onRunDiagnosis?: () => Promise<SystemDiagnosis>;
   /** Every approval waiting for the person, the shell's shared read (B255). */
   loadApprovals?: (signal?: AbortSignal) => Promise<PendingApprovalPage>;
-  /** The memory count and the few most connected memories (Memory card). */
-  loadMemory?: (signal: AbortSignal) => Promise<KnowledgeGraphSnapshot>;
-  /** Insights, where this device may read them. */
-  loadInsights?: (signal: AbortSignal) => Promise<InsightsSnapshot>;
+  /** What needs the person, the sidebar indicator's shared read (B383). */
+  loadAttention?: (signal?: AbortSignal) => Promise<AttentionSnapshot>;
   /** Buddy's live avatar beside the greeting. */
   buddy?: ReactNode;
   /**
@@ -117,11 +85,7 @@ export type OverviewHomeProps = {
   onOpenConversation: (id: string) => void;
   /** Workflows tab, optionally with one workflow's runs open. */
   onOpenWorkflows: (taskId?: string) => void;
-  onOpenTab: (tab: 'knowledge' | 'monitor' | 'insights') => void;
-  /** Your apps (installed), so a broken one or one that needs a sign-in shows here. */
-  loadApps?: (signal?: AbortSignal) => Promise<IntegrationEntryPage>;
-  /** Open an app's page; `fix` starts its fix there at once. */
-  onOpenApp?: (itemId: string, fix?: boolean) => void;
+  onOpenTab: (tab: 'knowledge' | 'monitor') => void;
   onHideSetup?: () => void;
   setupError?: string;
   /** Re-read one listed conversation (approvals and runs change live). */
@@ -137,23 +101,14 @@ export type OverviewHomeProps = {
 
 /** Tinted icon tiles: one recipe, a tone per type (chart series 1–6). */
 type TileTone =
-  | 'accent'
-  | '1'
-  | '2'
-  | '3'
-  | '4'
-  | '5'
-  | '6'
-  | 'success'
-  | 'warning'
-  | 'danger'
-  | 'muted';
+  'accent' | '2' | '3' | '4' | '5' | 'success' | 'warning' | 'danger';
 
 type Item = {
+  key: string;
   icon: ReactNode;
-  tone: 'warning' | 'danger';
+  tone: TileTone;
   title: string;
-  meta: ReactNode;
+  meta?: ReactNode;
   time?: ReactNode;
   label: string;
   onOpen: () => void;
@@ -161,49 +116,12 @@ type Item = {
   actions?: ReactNode;
 };
 
-type Need =
-  { key: string; approval: PendingApproval } | { key: string; item: Item };
-
-type Moment = {
-  key: string;
-  at: Date;
-  tone: TileTone;
-  icon: ReactNode;
-  title: string;
-  detail: string;
-  onOpen: () => void;
-};
-
-/** Needs you keeps the first row even: two items, then "+N more waiting". */
-const NEEDS_SHOWN = 2;
-const CONTINUE_COUNT = 4;
-const TIMELINE_LIMIT = 7;
-const CHIP_LIMIT = 5;
-const AVATAR_LIMIT = 4;
-const RUN_MARKS = 12;
+/** Needs you shows three at first, then "+N more waiting". */
+const NEEDS_SHOWN = 3;
+const RECENT_COUNT = 3;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-/** Where the Memory card's few memories sit, most connected first. */
-const GRAPH_POINTS: readonly [number, number][] = [
-  [40, 15],
-  [24, 8],
-  [56, 7],
-  [54, 24],
-  [22, 24],
-  [8, 16],
-  [70, 15],
-  [78, 25],
-];
 
-const KIND_TONES: Record<ConversationKind, TileTone> = {
-  designer: '5',
-  code: '2',
-  workflow: '4',
-};
-const KIND_WORDS: Record<ConversationKind, string> = {
-  designer: 'Design',
-  code: 'Code folder',
-  workflow: 'Workflow',
-};
+const KIND_TONES = { designer: '5', code: '2', workflow: '4' } as const;
 const SOURCE_TILES: Record<
   PendingApproval['source'],
   { tone: TileTone; icon: ReactNode }
@@ -212,17 +130,6 @@ const SOURCE_TILES: Record<
   conversation: { tone: 'accent', icon: <MessageSquare size={16} /> },
   agent: { tone: '3', icon: <Bot size={16} /> },
 };
-
-function waitingApproval(row: ConversationView) {
-  return (
-    row.activity_state === 'attention' ||
-    Boolean(
-      row.generation_state?.some(
-        (state) => state.status === 'waiting_approval',
-      ),
-    )
-  );
-}
 
 function working(row: ConversationView) {
   return (
@@ -237,19 +144,11 @@ function working(row: ConversationView) {
 
 const titleOf = (row: ConversationView) => row.title || 'Untitled conversation';
 
-function within(value: string | null | undefined, from: Date, to: Date) {
-  const date = parseTimestamp(value);
-  return date && date >= from && date <= to ? date : null;
-}
-
-/** "A", "A and B", "A, B and 3 more". */
+/** "A", "A and B", "A, B and C". */
 function listWords(items: readonly string[]) {
   if (items.length <= 2) return items.join(' and ');
-  return `${items.slice(0, 2).join(', ')} and ${items.length - 2} more`;
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
-
-const capitalize = (text: string) =>
-  text.charAt(0).toUpperCase() + text.slice(1);
 
 function Tile({ tone, children }: { tone: TileTone; children: ReactNode }) {
   return (
@@ -259,82 +158,26 @@ function Tile({ tone, children }: { tone: TileTone; children: ReactNode }) {
   );
 }
 
-/** One section card: a tile, a title, and an optional link on the right. */
-function Card({
-  id,
-  title,
-  tone,
-  icon,
-  action,
-  className = '',
-  span,
-  order,
-  calm,
-  children,
-}: {
-  id: string;
-  title: ReactNode;
-  tone: TileTone;
-  icon: ReactNode;
-  action?: ReactNode;
-  className?: string;
-  span?: 2 | 3;
-  order: number;
-  calm?: boolean;
-  children: ReactNode;
-}) {
+/** One plain row: a tile, a title and a line, opening its place. */
+function Row({ item }: { item: Item }) {
   return (
-    <section
-      className={`overview-card overview-cell ${className}`}
-      data-span={span}
-      data-calm={calm ? 'true' : undefined}
-      style={{ '--overview-order': order } as CSSProperties}
-      aria-labelledby={id}
-    >
-      <header className={`overview-card-head${calm ? ' visually-hidden' : ''}`}>
-        <Tile tone={tone}>{icon}</Tile>
-        <h3 id={id}>{title}</h3>
-        {action}
-      </header>
-      {children}
-    </section>
-  );
-}
-
-function SectionLink({
-  children,
-  onClick,
-}: {
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button type="button" className="overview-section-link" onClick={onClick}>
-      {children}
-      <ChevronRight size={13} aria-hidden />
-    </button>
-  );
-}
-
-function NeedRow({ item }: { item: Item }) {
-  return (
-    <li className="overview-need">
+    <li className="overview-row">
       <button
         type="button"
-        className="overview-need-button"
+        className="overview-row-button"
         aria-label={item.label}
         onClick={item.onOpen}
       >
         <Tile tone={item.tone}>{item.icon}</Tile>
-        <span className="overview-need-text">
-          <span className="overview-need-title">{item.title}</span>
-          <span className="overview-need-meta">{item.meta}</span>
+        <span className="overview-row-text">
+          <span className="overview-row-title">{item.title}</span>
+          {item.meta && <span className="overview-row-meta">{item.meta}</span>}
         </span>
-        {item.time && <span className="overview-need-time">{item.time}</span>}
-        <ChevronRight className="overview-need-chevron" size={15} aria-hidden />
+        {item.time && <span className="overview-row-time">{item.time}</span>}
+        <ChevronRight className="overview-row-chevron" size={15} aria-hidden />
       </button>
       {item.actions && (
-        <div className="overview-need-actions">{item.actions}</div>
+        <div className="overview-row-actions">{item.actions}</div>
       )}
     </li>
   );
@@ -356,18 +199,18 @@ function ApprovalRow({
   const where = item.task_id ? 'Open the workflow' : 'Open the conversation';
   const tile = SOURCE_TILES[item.source];
   return (
-    <li className="overview-need overview-need-approval">
-      <div className="overview-need-body">
+    <li className="overview-row overview-row-approval">
+      <div className="overview-row-body">
         <Tile tone={tile.tone}>{tile.icon}</Tile>
-        <span className="overview-need-text">
-          <strong className="overview-need-title">{item.title}</strong>
-          <span className="overview-need-meta">
+        <span className="overview-row-text">
+          <strong className="overview-row-title">{item.title}</strong>
+          <span className="overview-row-meta">
             {item.what && <>{item.what} · </>}
             <WaitingSince value={item.requested_at} />
           </span>
         </span>
       </div>
-      <div className="overview-need-actions">
+      <div className="overview-row-actions">
         {to && (
           <Hint label={where}>
             <Link
@@ -434,303 +277,46 @@ function AskBox({
   );
 }
 
-/** One live status card: a picture, a value and a line; it opens its tab. */
-function Stat({
-  label,
-  tone,
-  icon,
-  value,
-  line,
-  lineTone,
-  picture,
-  note,
-  onOpen,
+/** One section of the column: a heading, an optional link, its rows. */
+function Section({
+  id,
+  title,
+  action,
+  className = '',
+  order,
+  children,
 }: {
-  label: string;
-  tone: TileTone;
-  icon: ReactNode;
-  value: string;
-  line: string;
-  lineTone?: 'success';
-  picture?: ReactNode;
-  note?: string;
-  /** Opens the card's place; given the card, for focus to come back to. */
-  onOpen?: (opener: HTMLButtonElement) => void;
+  id: string;
+  title: ReactNode;
+  action?: ReactNode;
+  className?: string;
+  order: number;
+  children: ReactNode;
 }) {
-  const body = (
-    <>
-      <span className="overview-stat-head">
-        <Tile tone={tone}>{icon}</Tile>
-        {label}
-        {onOpen && (
-          <ChevronRight
-            className="overview-stat-chevron"
-            size={14}
-            aria-hidden
-          />
-        )}
-      </span>
-      <span className="overview-stat-value">{value}</span>
-      <span className="overview-stat-line" data-tone={lineTone}>
-        {line}
-      </span>
-      <span className="overview-stat-picture">
-        {picture}
-        {note && <span className="overview-stat-note">{note}</span>}
-      </span>
-    </>
-  );
   return (
-    <li>
-      {onOpen ? (
-        <button
-          type="button"
-          className="overview-stat"
-          aria-label={[`${label}: ${value}`, line, note]
-            .filter(Boolean)
-            .join('. ')}
-          onClick={(event) => onOpen(event.currentTarget)}
-        >
-          {body}
-        </button>
-      ) : (
-        <div className="overview-stat">{body}</div>
-      )}
-    </li>
-  );
-}
-
-/** The few most connected memories as a still picture (no WebGL here). */
-function MemoryGraph({ graph }: { graph: KnowledgeGraphSnapshot }) {
-  const nodes = graph.nodes.slice(0, GRAPH_POINTS.length);
-  const place = new Map(nodes.map((node, index) => [node.id, index]));
-  return (
-    <svg
-      className="overview-graph"
-      width="84"
-      height="30"
-      viewBox="0 0 84 30"
-      aria-hidden
-      focusable="false"
+    <section
+      className={`overview-section overview-cell ${className}`}
+      style={{ '--overview-order': order } as CSSProperties}
+      aria-labelledby={id}
     >
-      <g className="overview-graph-edges">
-        {graph.edges.map((edge) => {
-          const from = place.get(edge.source_id);
-          const to = place.get(edge.target_id);
-          if (from === undefined || to === undefined) return null;
-          return (
-            <line
-              key={edge.id}
-              x1={GRAPH_POINTS[from][0]}
-              y1={GRAPH_POINTS[from][1]}
-              x2={GRAPH_POINTS[to][0]}
-              y2={GRAPH_POINTS[to][1]}
-            />
-          );
-        })}
-      </g>
-      {nodes.map((node, index) => (
-        <circle
-          key={node.id}
-          cx={GRAPH_POINTS[index][0]}
-          cy={GRAPH_POINTS[index][1]}
-          r={Math.min(5, 2.5 + node.relation_count * 0.5)}
-          fill={`var(${typeToken(node.entity_type)})`}
-        />
-      ))}
-    </svg>
+      <header className="overview-section-title">
+        <h3 id={id}>{title}</h3>
+        {action}
+      </header>
+      {children}
+    </section>
   );
 }
 
-function AgentFaces({
-  rows,
-  live,
-  pulse,
-}: {
-  rows: readonly ConversationView[];
-  live: boolean;
-  pulse: boolean;
-}) {
-  if (!rows.length) return null;
-  return (
-    <span className="overview-agents">
-      {rows.slice(0, AVATAR_LIMIT).map((row) => (
-        <span key={row.id} className="overview-agent">
-          {/* The list carries no profile, so the icon follows the thread. */}
-          <AgentAvatar seed={agentSeed(null, row.id)} size={24} />
-          <StatusDot
-            className="overview-agent-dot"
-            tone={live ? 'info' : 'success'}
-            label={live ? 'Working' : 'Finished'}
-            pulse={live && pulse}
-          />
-        </span>
-      ))}
-    </span>
-  );
-}
-
-/**
- * What Row-Bot learned this week: memories saved from conversations and the
- * subjects Dream Cycle added to, both from Monitor's journals.
- */
-function learnedThisWeek(
-  monitor: MonitorSnapshot | null,
-  from: Date,
-  to: Date,
-) {
-  const extractions = (monitor?.extraction_journal ?? []).filter((entry) =>
-    within(entry.timestamp, from, to),
-  );
-  const saved = extractions.reduce(
-    (sum, entry) =>
-      sum + entry.threads.reduce((total, thread) => total + thread.saved, 0),
-    0,
-  );
-  const threads = new Set(
-    extractions.flatMap((entry) =>
-      entry.threads
-        .filter((thread) => thread.saved > 0)
-        .map((thread) => thread.label),
-    ),
-  );
-  const seen = new Set<string>();
-  const subjects = (monitor?.dream_journal ?? [])
-    .filter((entry) => within(entry.timestamp, from, to))
-    .sort(
-      (left, right) =>
-        parseTimestamp(right.timestamp)!.getTime() -
-        parseTimestamp(left.timestamp)!.getTime(),
-    )
-    .flatMap((entry) => [
-      ...entry.enrichments.map((item) => item.subject),
-      ...entry.merges.map((item) => item.survivor_subject),
-      ...entry.inferred_relations.flatMap((item) => [
-        item.source_subject,
-        item.target_subject,
-      ]),
-    ])
-    .filter((subject) => {
-      const key = subject.trim().toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  return { saved, threads: threads.size, subjects };
-}
-
-/** Since 6 PM yesterday, oldest first: runs, learning, Dream Cycle, agents. */
-function sinceYesterday({
-  tasks,
-  monitor,
-  conversations,
-  from,
-  to,
-  open,
-}: {
-  tasks: readonly TaskSummary[] | null;
-  monitor: MonitorSnapshot | null;
-  conversations: readonly ConversationView[];
-  from: Date;
-  to: Date;
-  open: {
-    workflow: (id: string) => void;
-    tab: (tab: 'knowledge' | 'monitor') => void;
-    conversation: (id: string) => void;
-  };
-}): Moment[] {
-  const moments: Moment[] = [];
-  for (const task of tasks ?? [])
-    for (const [index, run] of (task.recent_runs ?? []).entries()) {
-      const date = within(run.started_at, from, to);
-      if (!date) continue;
-      const status = runStatus(run.status);
-      const failed = status.tone === 'danger';
-      moments.push({
-        key: `run:${task.id}:${index}`,
-        at: date,
-        tone: failed
-          ? 'danger'
-          : status.tone === 'warning'
-            ? 'warning'
-            : status.tone === 'success'
-              ? 'success'
-              : '4',
-        icon: failed ? <X size={12} /> : <Workflow size={12} />,
-        title: `${task.name} ${failed ? 'failed' : 'ran'}`,
-        detail: status.label,
-        onOpen: () => open.workflow(task.id),
-      });
-    }
-  for (const [index, entry] of (monitor?.extraction_journal ?? []).entries()) {
-    const date = within(entry.timestamp, from, to);
-    const learned = entry.threads.filter((thread) => thread.saved > 0);
-    const saved = learned.reduce((sum, thread) => sum + thread.saved, 0);
-    if (!date || !saved) continue;
-    moments.push({
-      key: `learned:${index}`,
-      at: date,
-      tone: '3',
-      icon: <Sparkles size={12} />,
-      title: `Learned ${plural(saved, 'new thing')}`,
-      detail: `From ${listWords(learned.map((thread) => thread.label))}`,
-      onOpen: () => open.tab('knowledge'),
-    });
-  }
-  const dreams = (monitor?.dream_journal ?? []).filter((entry) =>
-    within(entry.timestamp, from, to),
-  );
-  for (const [index, entry] of dreams.entries()) {
-    const changes = [
-      entry.merges.length &&
-        `merged ${plural(entry.merges.length, 'duplicate')}`,
-      entry.enrichments.length &&
-        `enriched ${plural(entry.enrichments.length, 'memory', 'memories')}`,
-      entry.inferred_relations.length &&
-        `inferred ${plural(entry.inferred_relations.length, 'connection')}`,
-    ].filter(Boolean);
-    moments.push({
-      key: `dream:${index}`,
-      at: parseTimestamp(entry.timestamp)!,
-      tone: '2',
-      icon: <Moon size={12} />,
-      title: changes.length ? 'Dream Cycle tidied memory' : 'Dream Cycle ran',
-      detail: changes.length
-        ? capitalize(changes.join(', '))
-        : 'Found nothing to change',
-      onOpen: () => open.tab('monitor'),
-    });
-  }
-  const dreamRun =
-    monitor?.dream.availability === 'available' &&
-    within(monitor.dream.last_run, from, to);
-  if (!dreams.length && dreamRun)
-    moments.push({
-      key: 'dream',
-      at: dreamRun,
-      tone: '2',
-      icon: <Moon size={12} />,
-      title: 'Dream Cycle ran',
-      detail: '',
-      onOpen: () => open.tab('monitor'),
-    });
-  for (const row of conversations) {
-    const date = within(row.updated_at, from, to);
-    if (!date || !row.parent_conversation_id) continue;
-    if (row.activity_state !== 'terminal') continue;
-    moments.push({
-      key: `agent:${row.id}`,
-      at: date,
-      tone: 'success',
-      icon: <Check size={12} />,
-      title: `${titleOf(row)} finished`,
-      detail: 'Agent',
-      onOpen: () => open.conversation(row.id),
-    });
-  }
-  return moments
-    .sort((left, right) => left.at.getTime() - right.at.getTime())
-    .slice(-TIMELINE_LIMIT);
+/** Memories saved this week, from Monitor's extraction journal. */
+function savedThisWeek(monitor: MonitorSnapshot | null, from: Date, to: Date) {
+  return (monitor?.extraction_journal ?? []).reduce((sum, entry) => {
+    const date = parseTimestamp(entry.timestamp);
+    if (!date || date < from || date > to) return sum;
+    return (
+      sum + entry.threads.reduce((total, thread) => total + thread.saved, 0)
+    );
+  }, 0);
 }
 
 export default function OverviewHome({
@@ -741,8 +327,7 @@ export default function OverviewHome({
   loadHealth,
   onRunDiagnosis,
   loadApprovals,
-  loadMemory,
-  loadInsights,
+  loadAttention,
   buddy,
   onAsk,
   asking = false,
@@ -751,8 +336,6 @@ export default function OverviewHome({
   onOpenConversation,
   onOpenWorkflows,
   onOpenTab,
-  loadApps,
-  onOpenApp,
   onHideSetup,
   setupError = '',
   refreshConversation,
@@ -761,27 +344,28 @@ export default function OverviewHome({
   now: suppliedNow,
   refreshKey,
 }: OverviewHomeProps) {
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<readonly TaskSummary[] | null>(null);
-  const [tasksError, setTasksError] = useState('');
+  const [tasksFailed, setTasksFailed] = useState(false);
   const [health, setHealth] = useState<SystemDiagnosis | null>(null);
   const [healthFailed, setHealthFailed] = useState(false);
-  const [apps, setApps] = useState<readonly IntegrationEntry[]>([]);
-  const [memory, setMemory] = useState<KnowledgeGraphSnapshot | null>(null);
-  const [memoryFailed, setMemoryFailed] = useState(false);
-  const [insights, setInsights] = useState<InsightsSnapshot | null>(null);
   const [needsOpen, setNeedsOpen] = useState(false);
-  // A fix in Needs you changed something: read workflows and checks again.
+  // A fix changed something: read workflows and checks again.
   const [fixed, setFixed] = useState(0);
-  const refixed = () => setFixed((value) => value + 1);
   const [clock, setClock] = useState(() => new Date());
   const now = suppliedNow ?? clock;
   const reduced = useReducedMotion();
   const approvalsFeed = usePendingApprovals(loadApprovals);
-  const waiting = approvalsFeed.page?.items ?? [];
+  const attentionFeed = useAttention(loadAttention);
+  const refixed = () => {
+    setFixed((value) => value + 1);
+    attentionFeed.refresh();
+  };
 
   useEffect(() => {
     if (!loadHealth) return;
     const abort = new AbortController();
+    setHealthFailed(false);
     loadHealth(abort.signal).then(
       (value) => {
         if (!abort.signal.aborted) setHealth(value);
@@ -794,62 +378,24 @@ export default function OverviewHome({
   }, [fixed, loadHealth, refreshKey]);
 
   useEffect(() => {
-    if (!loadApps) return;
-    const abort = new AbortController();
-    loadApps(abort.signal).then(
-      (page) => {
-        if (!abort.signal.aborted) setApps(page.items);
-      },
-      () => undefined, // Apps can't be read: nothing to add here.
-    );
-    return () => abort.abort();
-  }, [fixed, loadApps, refreshKey]);
-
-  useEffect(() => {
     if (!loadTasks) return;
     const abort = new AbortController();
-    setTasksError('');
+    setTasksFailed(false);
     loadTasks(abort.signal).then(
       (page) => {
         if (!abort.signal.aborted) setTasks(page.items);
       },
-      (cause: unknown) => {
-        if (!abort.signal.aborted) setTasksError(clientError(cause).message);
+      () => {
+        if (!abort.signal.aborted) setTasksFailed(true);
       },
     );
     return () => abort.abort();
   }, [fixed, loadTasks, refreshKey]);
 
-  useEffect(() => {
-    if (!loadMemory) return;
-    const abort = new AbortController();
-    loadMemory(abort.signal).then(
-      (value) => {
-        if (!abort.signal.aborted) setMemory(value);
-      },
-      () => {
-        if (!abort.signal.aborted) setMemoryFailed(true);
-      },
-    );
-    return () => abort.abort();
-  }, [loadMemory, refreshKey]);
-
-  useEffect(() => {
-    if (!loadInsights) return;
-    const abort = new AbortController();
-    loadInsights(abort.signal).then(
-      (value) => {
-        if (!abort.signal.aborted) setInsights(value);
-      },
-      () => undefined,
-    );
-    return () => abort.abort();
-  }, [loadInsights, refreshKey]);
-
   // Listed rows are read when the list loads; approvals and runs change after
   // that. Re-read the live ones on open and while Overview stays open.
   const liveIds = conversations
-    .filter((row) => waitingApproval(row) || working(row))
+    .filter((row) => waitingOnYou(row) || working(row))
     .slice(0, 12)
     .map((row) => row.id)
     .join('|');
@@ -877,353 +423,248 @@ export default function OverviewHome({
     return () => window.clearInterval(timer);
   }, [suppliedNow]);
 
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const weekStart = new Date(now.getTime() - WEEK_MS);
-  const since = overnightStart(now);
-
-  const view = useMemo(() => {
-    const topLevel = conversations.filter((row) => !row.parent_conversation_id);
-    const agents = new Map<string, ConversationView[]>();
-    for (const row of conversations)
-      if (row.parent_conversation_id)
-        agents.set(row.parent_conversation_id, [
-          ...(agents.get(row.parent_conversation_id) ?? []),
-          row,
-        ]);
-    const taskRows = tasks ?? [];
-    return {
-      topLevel,
-      agents,
-      approvals: conversations.filter(waitingApproval),
-      running: conversations.filter(
-        (row) => !waitingApproval(row) && working(row),
-      ),
-      waitingWorkflows: taskRows.filter(
-        (task) =>
-          task.active_run && WAITING_RUN_STATUSES.has(task.active_run.status),
-      ),
-      failed: taskRows.filter(
-        (task) =>
-          !task.active_run &&
-          FAILED_RUN_STATUSES.has(String(task.last_status ?? '').toLowerCase()),
-      ),
-      scheduled: taskRows
-        .filter((task) => task.enabled && parseTimestamp(task.next_run))
-        .sort(
-          (left, right) =>
-            parseTimestamp(left.next_run)!.getTime() -
-            parseTimestamp(right.next_run)!.getTime(),
-        ),
-    };
-  }, [conversations, tasks]);
-
+  const needsModel = Boolean(setup?.needs_model);
   const setupDone = setup ? new Set(setup.completed_steps).size : 0;
   const setupSkipped = setup
     ? setup.skipped_steps.filter(
         (step) => !setup.completed_steps.includes(step),
       ).length
     : 0;
-  const needsModel = Boolean(setup?.needs_model);
   const showSetup =
     setup &&
-    (needsModel ||
-      (!setup.dismissed_home_card &&
-        setupDone + setupSkipped < setup.steps.length));
+    !needsModel &&
+    !setup.dismissed_home_card &&
+    setupDone + setupSkipped < setup.steps.length;
 
-  // An approval answered in place is not listed again as its conversation
-  // or workflow.
-  const answeredHere = new Set(
-    waiting.flatMap((item) => [item.conversation_id, item.task_id]),
-  );
-  const needs: Need[] = [
-    ...waiting.map<Need>((approval) => ({
-      key: `waiting:${approval.id}`,
-      approval,
-    })),
-    ...view.approvals.flatMap<Need>((row) => {
+  // Needs you: the same items, and the same number, as the sidebar (B383).
+  const waiting = approvalsFeed.page?.items ?? [];
+  const problems = attentionFeed.value?.problems ?? [];
+  const attention = needsCount({
+    approvals: approvalsFeed.page,
+    problems,
+    conversations,
+  });
+  const conversationNeeds = conversationsWaiting(conversations, waiting).map(
+    (row): Item => {
       const title = titleOf(row);
       const work = interruptedWork(row);
-      if (work)
-        return {
-          key: `approval:${row.id}`,
-          item: {
-            icon: <AlertTriangle size={16} />,
-            tone: 'warning',
-            title,
-            meta: 'Agent work was interrupted',
-            time: <When value={row.updated_at} now={now} />,
-            label: `Review agent work in ${title}`,
-            onOpen: () => onOpenConversation(row.id),
-            actions: (
-              <InterruptedWorkControls
-                resumable={work.resumable}
-                resumeWork={onResumeAgentWork && (() => onResumeAgentWork(row))}
-                dismissWork={
-                  onDismissAgentWork && (() => onDismissAgentWork(row))
-                }
-              />
-            ),
-          },
-        };
-      if (answeredHere.has(row.id)) return [];
+      const goal = row.activity_phase === 'goal_needs_you';
       return {
-        key: `approval:${row.id}`,
-        item: {
-          icon: <ShieldAlert size={16} />,
-          tone: 'warning',
-          title,
-          meta:
-            row.activity_phase === 'goal_needs_you'
-              ? 'Goal waiting for your answer'
-              : row.activity_state === 'attention' &&
-                  row.activity_phase !== 'waiting_approval'
-                ? 'Agent work needs your attention'
-                : 'Waiting for your approval',
-          time: <When value={row.updated_at} now={now} />,
-          label:
-            row.activity_phase === 'goal_needs_you'
-              ? `Answer the goal in ${title}`
-              : `Review approval in ${title}`,
-          onOpen: () => onOpenConversation(row.id),
-        },
-      };
-    }),
-    ...view.waitingWorkflows
-      .filter((task) => !answeredHere.has(task.id))
-      .map<Need>((task) => ({
-        key: `workflow-approval:${task.id}`,
-        item: {
-          icon: <ShieldAlert size={16} />,
-          tone: 'warning',
-          title: task.name,
-          meta: 'Workflow waiting for your approval',
-          time: <When value={task.active_run?.started_at} now={now} />,
-          label: `Review workflow approval: ${task.name}`,
-          onOpen: () => onOpenWorkflows(task.id),
-        },
-      })),
-    ...view.failed.map<Need>((task) => ({
-      key: `failed:${task.id}`,
-      item: {
-        icon: <AlertTriangle size={16} />,
-        tone: 'danger',
-        title: task.name,
-        meta: `${runStatus(task.last_status).label} · ${scheduleWords(task.schedule, task.at)}`,
-        time: (
-          <When
-            value={task.recent_runs?.[0]?.started_at ?? task.last_run}
-            now={now}
+        key: `conversation:${row.id}`,
+        icon: work ? <AlertTriangle size={16} /> : <ShieldAlert size={16} />,
+        tone: 'warning',
+        title,
+        meta: work
+          ? 'Agent work was interrupted'
+          : goal
+            ? 'Goal waiting for your answer'
+            : row.activity_state === 'attention' &&
+                row.activity_phase !== 'waiting_approval'
+              ? 'Agent work needs your attention'
+              : 'Waiting for your approval',
+        time: <When value={row.updated_at} now={now} />,
+        label: work
+          ? `Review agent work in ${title}`
+          : goal
+            ? `Answer the goal in ${title}`
+            : `Review approval in ${title}`,
+        onOpen: () => onOpenConversation(row.id),
+        actions: work && (
+          <InterruptedWorkControls
+            resumable={work.resumable}
+            resumeWork={onResumeAgentWork && (() => onResumeAgentWork(row))}
+            dismissWork={onDismissAgentWork && (() => onDismissAgentWork(row))}
           />
         ),
-        label: `Open failed workflow: ${task.name}`,
-        onOpen: () => onOpenWorkflows(task.id),
-        actions: (
-          <RunAgain taskId={task.id} name={task.name} onStarted={refixed} />
-        ),
-      },
-    })),
-    // An app that is on but broken or signed out: its fix is one click away.
-    ...apps
-      .flatMap((entry) => [entry, ...entry.children]) // A package's connections too.
-      .filter(
-        (entry) =>
-          entry.lifecycle === 'installed' &&
-          ['needs_sign_in', 'needs_key', 'attention'].includes(
-            entry.readiness ?? '',
-          ),
-      )
-      .map<Need>((entry) => {
-        const name = entry.app?.name || entry.name;
-        const fix = entry.next_action;
-        return {
-          key: `app:${entry.id}`,
-          item: {
-            icon: <AppIcon icon={entry.icon} size={16} />,
-            tone: entry.readiness === 'attention' ? 'danger' : 'warning',
-            title:
-              entry.readiness === 'needs_sign_in'
-                ? `Sign in to ${name}`
-                : entry.readiness === 'needs_key'
-                  ? `${name} needs its key`
-                  : `${name} needs attention`,
-            meta:
-              entry.blockers.find((blocker) => blocker.message)?.message ??
-              'It can’t be used until this is fixed.',
-            label: `Open ${name}`,
-            onOpen: () => onOpenApp?.(entry.id),
-            actions: onOpenApp && fix.kind !== 'none' && (
-              <Button
-                className="small"
-                onClick={() => onOpenApp(entry.id, true)}
-              >
-                {fix.label}
-              </Button>
-            ),
-          },
-        };
-      }),
-    // A Monitor check that turned red, checked in the background (B252).
-    ...(health?.checks ?? [])
-      .filter((check) => check.status === 'error')
-      .map<Need>((check) => ({
-        key: `health:${check.id}`,
-        item: {
-          icon: <AlertTriangle size={16} />,
-          tone: 'danger',
-          title: `${check.name} needs attention`,
-          meta: check.detail,
-          time: (
-            <When
-              value={new Date(check.checked_at * 1000).toISOString()}
-              now={now}
-            />
-          ),
-          label: `Open Monitor: ${check.name} needs attention`,
-          onOpen: () => onOpenTab('monitor'),
-          // Its one fix beside it (Phase 18).
-          actions: check.fix && (
-            <FixAction
-              look="icon"
-              fix={check.fix}
-              onCheckAgain={
-                onRunDiagnosis &&
-                (() =>
-                  void onRunDiagnosis().then(setHealth, () =>
-                    setFixed((value) => value + 1),
-                  ))
-              }
-              onFixed={refixed}
-            />
-          ),
-        },
-      })),
-  ];
-  const attention = needs.length + (showSetup ? 1 : 0);
-  const readingNeeds =
-    (loadTasks && tasks === null && !tasksError) ||
-    (loadApprovals && !approvalsFeed.page);
-  const caughtUp = !attention && !readingNeeds && !tasksError;
-
-  const week = learnedThisWeek(monitor, weekStart, now);
-  const timeline = sinceYesterday({
-    tasks,
-    monitor,
-    conversations,
-    from: since,
-    to: now,
-    open: {
-      workflow: onOpenWorkflows,
-      tab: onOpenTab,
-      conversation: onOpenConversation,
+      };
     },
+  );
+  const problemNeeds = problems.map((problem: AttentionProblem): Item => {
+    const taskId =
+      problem.place === 'workflows' ? problem.id.replace(/^workflow:/, '') : '';
+    const open = taskId
+      ? () => onOpenWorkflows(taskId)
+      : problem.place === 'health' || !problem.fix?.href
+        ? () => onOpenTab('monitor')
+        : () => navigate(problem.fix!.href!);
+    return {
+      key: `problem:${problem.id}`,
+      icon: taskId ? <Workflow size={16} /> : <AlertTriangle size={16} />,
+      tone: taskId || problem.place === 'health' ? 'danger' : 'warning',
+      title: problem.title,
+      meta: problem.detail,
+      label: `Open ${problem.title}`,
+      onOpen: open,
+      actions: taskId ? (
+        <RunAgain
+          taskId={taskId}
+          name={problem.fix?.name ?? problem.title}
+          onStarted={refixed}
+        />
+      ) : (
+        problem.fix && (
+          <FixAction
+            look="icon"
+            fix={problem.fix}
+            onCheckAgain={
+              onRunDiagnosis &&
+              (() => void onRunDiagnosis().then(refixed, refixed))
+            }
+            onFixed={refixed}
+          />
+        )
+      ),
+    };
   });
+  const needRows = [
+    ...waiting.map((approval) => ({
+      key: `approval:${approval.id}`,
+      approval,
+    })),
+    ...conversationNeeds.map((item) => ({ key: item.key, item })),
+    ...problemNeeds.map((item) => ({ key: item.key, item })),
+  ];
+  const readingNeeds =
+    (loadApprovals && !approvalsFeed.page) ||
+    (loadAttention && !attentionFeed.value);
 
-  // Status strip.
-  const finishedToday = conversations.filter(
-    (row) =>
-      row.parent_conversation_id &&
-      row.activity_state === 'terminal' &&
-      within(row.updated_at, today, now),
+  // Today: up to four rows, only facts that exist, each opening its tab.
+  const running = conversations.filter(
+    (row) => !waitingOnYou(row) && working(row),
   );
-  const agentTarget = view.running[0] ?? finishedToday[0];
-  // With no agent to show, the card opens the Agents library instead.
-  const openAgents = useWorkspaceActions()?.openAgentProfiles;
-  const next = view.scheduled.find(
-    (task) => parseTimestamp(task.next_run)! > now,
+  const next = (tasks ?? [])
+    .filter((task) => task.enabled && parseTimestamp(task.next_run))
+    .map((task) => ({ task, at: parseTimestamp(task.next_run)! }))
+    .filter(({ at }) => at > now)
+    .sort((left, right) => left.at.getTime() - right.at.getTime())[0]?.task;
+  // A kept warning that is current; a stale one may be from before a
+  // channel was turned off or Row-Bot updated (B384). Red checks are needs.
+  const warnings = (health?.checks ?? []).filter(
+    (check) => check.status === 'warn' && !check.stale,
   );
-  const todayRuns = (tasks ?? [])
-    .flatMap((task) =>
-      (task.recent_runs ?? []).flatMap((run) => {
-        const date = within(run.started_at, today, now);
-        return date
-          ? [{ date, failed: runStatus(run.status).tone === 'danger' }]
-          : [];
-      }),
-    )
-    .sort((left, right) => left.date.getTime() - right.date.getTime());
-  const failedToday = todayRuns.filter((run) => run.failed).length;
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  const nextToday = next && parseTimestamp(next.next_run)! < tomorrow;
-  const checks = health?.checks ?? [];
-  const redChecks = checks.filter((check) => check.status === 'error');
-  const amberChecks = checks.filter((check) => check.status === 'warn');
-  const firstIssue = redChecks[0] ?? amberChecks[0];
-  const lastChecked = Math.max(0, ...checks.map((check) => check.checked_at));
+  const saved = savedThisWeek(monitor, new Date(now.getTime() - WEEK_MS), now);
+  const today: Item[] = [];
+  if (running.length)
+    today.push({
+      key: 'running',
+      icon: <Bot size={16} />,
+      tone: '3',
+      title:
+        running.length === 1
+          ? `${titleOf(running[0])} is working`
+          : `${plural(running.length, 'agent')} are working`,
+      label: 'Open Monitor: agents at work',
+      onOpen: () => onOpenTab('monitor'),
+    });
+  if (next)
+    today.push({
+      key: 'next',
+      icon: <CalendarClock size={16} />,
+      tone: '4',
+      title: `${next.name} runs ${relativeTime(next.next_run, now)}`,
+      label: `Open Workflows: ${next.name}`,
+      onOpen: () => onOpenWorkflows(next.id),
+    });
+  if (warnings.length) {
+    const first = warnings[0];
+    today.push({
+      key: 'health',
+      icon: <HeartPulse size={16} />,
+      tone: 'warning',
+      title: `${first.name}: ${first.detail}`,
+      meta:
+        warnings.length > 1
+          ? `And ${plural(warnings.length - 1, 'more warning')}`
+          : undefined,
+      label: `Open Monitor: ${first.name}`,
+      onOpen: () => onOpenTab('monitor'),
+      actions: first.fix && (
+        <FixAction
+          look="icon"
+          fix={first.fix}
+          onCheckAgain={
+            onRunDiagnosis &&
+            (() => void onRunDiagnosis().then(setHealth, refixed))
+          }
+          onFixed={refixed}
+        />
+      ),
+    });
+  }
+  if (saved)
+    today.push({
+      key: 'memory',
+      icon: <Brain size={16} />,
+      tone: '2',
+      title: `${plural(saved, 'memory', 'memories')} saved this week`,
+      label: 'Open Knowledge',
+      onOpen: () => onOpenTab('knowledge'),
+    });
+  const unread = [
+    tasksFailed && 'workflows',
+    healthFailed && 'health checks',
+  ].filter((name): name is string => Boolean(name));
 
-  const recent = view.topLevel.slice(0, CONTINUE_COUNT);
-  const last = [...view.topLevel].sort(
-    (left, right) =>
-      (parseTimestamp(right.updated_at)?.getTime() ?? 0) -
-      (parseTimestamp(left.updated_at)?.getTime() ?? 0),
-  )[0];
-  // An insight that may no longer apply is not the one to lead with (B124).
-  const current = insights?.items.filter((item) => !item.out_of_date) ?? [];
-  const insight =
-    current.find((item) => item.status === 'pinned') ?? current[0];
+  const recent = conversations
+    .filter((row) => !row.parent_conversation_id)
+    .map((row) => ({ row, at: parseTimestamp(row.updated_at)?.getTime() ?? 0 }))
+    .sort((left, right) => right.at - left.at)
+    .slice(0, RECENT_COUNT)
+    .map(({ row }): Item => {
+      const kinds = conversationKinds(row);
+      return {
+        key: row.id,
+        icon: <ConversationGlyph row={row} size={15} />,
+        tone: kinds.length ? KIND_TONES[kinds[0]] : 'accent',
+        title: titleOf(row),
+        time: <When value={row.updated_at} now={now} fallback="" />,
+        label: `Open ${titleOf(row)}`,
+        onOpen: () => onOpenConversation(row.id),
+      };
+    });
 
-  // One plain sentence that changes with the state.
+  // One sentence: the most important thing.
   const lead = attention
     ? `${plural(attention, 'thing')} ${attention === 1 ? 'needs' : 'need'} you.`
-    : "You're all caught up.";
-  const busy = [
-    view.running.length &&
-      `${plural(view.running.length, 'agent')} ${view.running.length === 1 ? 'is' : 'are'} working`,
-    next && `${next.name} runs ${relativeTime(next.next_run, now)}`,
-  ].filter((part): part is string => Boolean(part));
-  const rest = busy.length
-    ? `${capitalize(busy.join(', and '))}.`
-    : !attention && week.saved
-      ? `Row-Bot learned ${plural(week.saved, 'new thing')} this week.`
-      : '';
+    : readingNeeds || (loadTasks && tasks === null && !tasksFailed)
+      ? ''
+      : next
+        ? `Next: ${next.name} ${relativeTime(next.next_run, now)}.`
+        : 'All quiet.';
 
-  const order = (value: number) =>
-    ({ '--overview-order': value }) as CSSProperties;
   const quickStarts = [
     onNewResource && (
-      <Button
+      <IconButton
         key="design"
+        label="New design"
         className="overview-quick-start"
         data-tone="5"
         onClick={() => onNewResource('artifact')}
       >
-        <Palette size={15} aria-hidden />
-        New design
-      </Button>
+        <Palette size={17} aria-hidden />
+      </IconButton>
     ),
     onNewResource && (
-      <Button
+      <IconButton
         key="code"
+        label="New code folder"
         className="overview-quick-start"
         data-tone="2"
         onClick={() => onNewResource('workspace')}
       >
-        <Code2 size={15} aria-hidden />
-        New code folder
-      </Button>
+        <Code2 size={17} aria-hidden />
+      </IconButton>
     ),
     onNewWorkflow && (
-      <Button
+      <IconButton
         key="workflow"
+        label="New workflow"
         className="overview-quick-start"
         data-tone="4"
         onClick={onNewWorkflow}
       >
-        <Workflow size={15} aria-hidden />
-        New workflow
-      </Button>
-    ),
-    last && (
-      <Button
-        key="continue"
-        className="overview-quick-start"
-        data-tone="accent"
-        onClick={() => onOpenConversation(last.id)}
-      >
-        <CornerDownRight size={15} aria-hidden />
-        <span className="overview-quick-title">Continue “{titleOf(last)}”</span>
-      </Button>
+        <Workflow size={17} aria-hidden />
+      </IconButton>
     ),
   ].filter(Boolean);
 
@@ -1233,44 +674,63 @@ export default function OverviewHome({
       aria-labelledby="overview-title"
       data-entrance={reduced ? undefined : 'stagger'}
     >
-      <div className="overview-bento">
-        <header
-          className="overview-hero overview-card overview-cell"
-          data-span={2}
-          style={order(0)}
-        >
-          <div className="overview-greet">
-            {buddy && (
-              <span
-                className="overview-buddy"
-                data-state={attention ? 'waiting' : 'calm'}
-              >
-                {buddy}
-              </span>
-            )}
-            <div className="overview-greet-text">
-              <h2 id="overview-title">{greeting(now)}</h2>
-              <p className="overview-summary">
-                <strong>{lead}</strong>
-                {rest && ` ${rest}`}
-              </p>
-            </div>
-          </div>
-          {onAsk && <AskBox onAsk={onAsk} asking={asking} />}
-          {quickStarts.length > 0 && (
-            <div
-              className="overview-quick"
-              role="group"
-              aria-label="Quick starts"
+      <header
+        className="overview-hero overview-card overview-cell"
+        style={{ '--overview-order': 0 } as CSSProperties}
+      >
+        <div className="overview-greet">
+          {buddy && (
+            <span
+              className="overview-buddy"
+              data-state={attention ? 'waiting' : 'calm'}
             >
-              {quickStarts}
-            </div>
+              {buddy}
+            </span>
           )}
-        </header>
+          <div className="overview-greet-text">
+            <h2 id="overview-title">{greeting(now)}</h2>
+            {!needsModel && lead && <p className="overview-summary">{lead}</p>}
+          </div>
+        </div>
+        {needsModel ? (
+          <div
+            className="overview-setup overview-setup-first"
+            role="region"
+            aria-label="Continue setup"
+          >
+            <span className="overview-row-text">
+              <strong className="overview-row-title">
+                Choose how Row-Bot thinks
+              </strong>
+              <span className="overview-row-meta">
+                Row-Bot needs a model before it can answer. It takes a minute.
+              </span>
+            </span>
+            <Link className="button primary small" to="/setup">
+              Choose a model
+            </Link>
+          </div>
+        ) : (
+          <>
+            {onAsk && <AskBox onAsk={onAsk} asking={asking} />}
+            {quickStarts.length > 0 && (
+              <div
+                className="overview-quick"
+                role="group"
+                aria-label="Quick starts"
+              >
+                {quickStarts}
+              </div>
+            )}
+          </>
+        )}
+      </header>
 
-        <Card
+      {!needsModel && (needRows.length > 0 || showSetup) && (
+        <Section
           id="overview-needs"
-          className="overview-needs"
+          className="overview-card overview-needs"
+          order={1}
           title={
             <>
               Needs you
@@ -1279,86 +739,28 @@ export default function OverviewHome({
               ) : null}
             </>
           }
-          tone="warning"
-          icon={<Hand size={15} />}
-          order={1}
-          calm={caughtUp}
         >
-          {showSetup &&
-            (!needsModel ? (
-              <div
-                className="overview-setup"
-                role="region"
-                aria-label="Continue setup"
-              >
-                <Tile tone="accent">
-                  <CalendarClock size={16} />
-                </Tile>
-                <span className="overview-need-text">
-                  <strong className="overview-need-title">Finish setup</strong>
-                  <span className="overview-need-meta">
-                    {setupDone} of {setup.steps.length} done
-                    {setupSkipped ? ` · ${setupSkipped} skipped` : ''}
-                  </span>
-                </span>
-                <Link className="button small" to="/setup">
-                  Continue setup
-                </Link>
-                {onHideSetup && (
-                  <IconButton
-                    size="sm"
-                    label="Hide setup reminder"
-                    onClick={onHideSetup}
-                  >
-                    <X size={15} aria-hidden />
-                  </IconButton>
-                )}
-                {setupError && (
-                  <p role="status" className="overview-setup-error">
-                    {setupError}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <div
-                className="overview-setup overview-setup-first"
-                role="region"
-                aria-label="Continue setup"
-              >
-                <span className="overview-need-text">
-                  <strong className="overview-need-title">
-                    Choose how Row-Bot thinks
-                  </strong>
-                  <span className="overview-need-meta">
-                    Row-Bot needs a model before it can answer. It takes a
-                    minute.
-                  </span>
-                </span>
-                <Link className="button primary small" to="/setup">
-                  Choose a model
-                </Link>
-              </div>
-            ))}
-          {needs.length > 0 && (
+          {needRows.length > 0 && (
             <ul
               id="overview-needs-list"
-              className="overview-needs-list"
+              className="overview-rows"
               aria-label="Needs you"
             >
-              {(needsOpen ? needs : needs.slice(0, NEEDS_SHOWN)).map((need) =>
-                'approval' in need ? (
-                  <ApprovalRow
-                    key={need.key}
-                    item={need.approval}
-                    onChanged={approvalsFeed.refresh}
-                  />
-                ) : (
-                  <NeedRow key={need.key} item={need.item} />
-                ),
+              {(needsOpen ? needRows : needRows.slice(0, NEEDS_SHOWN)).map(
+                (need) =>
+                  'approval' in need ? (
+                    <ApprovalRow
+                      key={need.key}
+                      item={need.approval}
+                      onChanged={approvalsFeed.refresh}
+                    />
+                  ) : (
+                    <Row key={need.key} item={need.item} />
+                  ),
               )}
             </ul>
           )}
-          {needs.length > NEEDS_SHOWN && (
+          {needRows.length > NEEDS_SHOWN && (
             <button
               type="button"
               className="overview-needs-more"
@@ -1368,7 +770,7 @@ export default function OverviewHome({
             >
               {needsOpen
                 ? 'Show fewer'
-                : `+${needs.length - NEEDS_SHOWN} more waiting`}
+                : `+${needRows.length - NEEDS_SHOWN} more waiting`}
               {needsOpen ? (
                 <ChevronDown size={13} aria-hidden />
               ) : (
@@ -1376,398 +778,78 @@ export default function OverviewHome({
               )}
             </button>
           )}
-          {caughtUp && (
-            <div className="overview-caughtup">
-              <span className="overview-caughtup-mark" aria-hidden>
-                <Check size={28} strokeWidth={2.5} />
+          {showSetup && (
+            <div
+              className="overview-setup"
+              role="region"
+              aria-label="Continue setup"
+            >
+              <span className="overview-row-text">
+                <strong className="overview-row-title">Finish setup</strong>
+                <span className="overview-row-meta">
+                  {setupDone} of {setup.steps.length} done
+                  {setupSkipped ? ` · ${setupSkipped} skipped` : ''}
+                </span>
               </span>
-              <strong className="overview-caughtup-title">All caught up</strong>
-              <p>
-                Nothing is waiting for you. Approvals and failed runs show up
-                here.
-              </p>
+              <Link className="button small" to="/setup">
+                Continue setup
+              </Link>
+              {onHideSetup && (
+                <IconButton
+                  size="sm"
+                  label="Hide setup reminder"
+                  onClick={onHideSetup}
+                >
+                  <X size={15} aria-hidden />
+                </IconButton>
+              )}
+              {setupError && (
+                <p role="status" className="overview-setup-error">
+                  {setupError}
+                </p>
+              )}
             </div>
           )}
-          {!attention && readingNeeds && (
-            <p className="overview-loading" role="status">
-              Checking what needs you…
-            </p>
-          )}
-          {tasksError && (
-            <p className="overview-error" role="status">
-              Workflows could not be read: {tasksError}
-            </p>
-          )}
-        </Card>
+        </Section>
+      )}
 
-        <ul
-          className="overview-strip overview-cell"
-          data-span={3}
-          style={order(2)}
-          aria-label="Live status"
-        >
-          <Stat
-            label="Agents"
-            tone="3"
-            icon={<Bot size={14} />}
-            value={
-              view.running.length ? `${view.running.length} working` : 'Resting'
-            }
-            line={
-              view.running.length
-                ? `${titleOf(view.running[0])}${view.running.length > 1 ? ` and ${view.running.length - 1} more` : ''}`
-                : finishedToday.length
-                  ? `${plural(finishedToday.length, 'agent')} finished today`
-                  : 'No agents at work'
-            }
-            picture={
-              <AgentFaces
-                rows={view.running.length ? view.running : finishedToday}
-                live={view.running.length > 0}
-                pulse={!reduced}
-              />
-            }
-            onOpen={
-              agentTarget
-                ? () => onOpenConversation(agentTarget.id)
-                : openAgents
-            }
-          />
-          <Stat
-            label="Workflows"
-            tone="4"
-            icon={<Workflow size={14} />}
-            value={
-              tasksError || !loadTasks
-                ? 'Unavailable'
-                : tasks === null
-                  ? 'Reading…'
-                  : next
-                    ? relativeTime(next.next_run, now)
-                    : 'Nothing scheduled'
-            }
-            line={
-              tasksError
-                ? "Couldn't read workflows"
-                : tasks === null
-                  ? 'Reading workflows…'
-                  : next
-                    ? `Next: ${next.name}`
-                    : plural(tasks.length, 'workflow')
-            }
-            picture={
-              todayRuns.length || nextToday ? (
-                <span className="overview-runs" aria-hidden>
-                  {todayRuns.slice(-RUN_MARKS).map((run, index) => (
-                    <i
-                      key={index}
-                      data-status={run.failed ? 'failed' : 'done'}
-                    />
-                  ))}
-                  {nextToday && <i data-status="next" />}
-                </span>
-              ) : undefined
-            }
-            note={
-              tasks === null
-                ? ''
-                : todayRuns.length
-                  ? `${todayRuns.length} today${failedToday ? ` · ${failedToday} failed` : ''}`
-                  : 'No runs today'
-            }
-            onOpen={() => onOpenWorkflows()}
-          />
-          <Stat
-            label="Memory"
-            tone="2"
-            icon={<Brain size={14} />}
-            value={
-              memory
-                ? memory.total_entities
-                  ? plural(memory.total_entities, 'memory', 'memories')
-                  : 'No memories yet'
-                : memoryFailed || !loadMemory
-                  ? 'Unavailable'
-                  : 'Reading…'
-            }
-            line={
-              memoryFailed
-                ? 'Memory could not be read'
-                : week.saved
-                  ? // Saves include updates to memories already there, so not "+12" beside "5 memories".
-                    `${plural(week.saved, 'update')} this week`
-                  : 'Nothing new this week'
-            }
-            lineTone={week.saved ? 'success' : undefined}
-            picture={
-              memory?.nodes.length ? <MemoryGraph graph={memory} /> : undefined
-            }
-            onOpen={() => onOpenTab('knowledge')}
-          />
-          <Stat
-            label="Health"
-            tone={
-              redChecks.length
-                ? 'danger'
-                : amberChecks.length
-                  ? 'warning'
-                  : 'success'
-            }
-            icon={<HeartPulse size={14} />}
-            value={
-              healthFailed || !loadHealth
-                ? 'Unavailable'
-                : !health
-                  ? 'Checking…'
-                  : !checks.length
-                    ? 'Not checked yet'
-                    : redChecks.length
-                      ? plural(redChecks.length, 'issue')
-                      : amberChecks.length
-                        ? plural(amberChecks.length, 'warning')
-                        : 'All good'
-            }
-            line={
-              firstIssue
-                ? `${firstIssue.name}: ${firstIssue.detail}`
-                : checks.length
-                  ? `Checked ${relativeTime(new Date(lastChecked * 1000), now)}`
-                  : 'Monitor checks run by themselves'
-            }
-            picture={
-              checks.length ? (
-                <span className="overview-checks" aria-hidden>
-                  {checks.map((check) => (
-                    <i key={check.id} data-status={check.status} />
-                  ))}
-                </span>
-              ) : undefined
-            }
-            note={checks.length ? plural(checks.length, 'check') : ''}
-            onOpen={() => onOpenTab('monitor')}
-          />
-        </ul>
-
-        <section
-          className="overview-continue overview-cell"
-          data-span={2}
-          style={order(3)}
-          aria-labelledby="overview-continue"
-        >
-          <header className="overview-section-title">
-            <h3 id="overview-continue">Continue where you left off</h3>
+      {!needsModel && recent.length > 0 && (
+        <Section
+          id="overview-recent"
+          title="Recent"
+          order={2}
+          action={
             <Link className="overview-section-link" to="/library">
-              Library
+              All
               <ChevronRight size={13} aria-hidden />
             </Link>
-          </header>
-          {recent.length ? (
-            <ul
-              className="overview-conversations"
-              aria-label="Continue where you left off"
-            >
-              {recent.map((row) => {
-                const kinds = conversationKinds(row);
-                const agents = view.agents.get(row.id) ?? [];
-                const live = working(row);
-                const line = waitingApproval(row)
-                  ? interruptedWork(row)
-                    ? 'Agent work was interrupted'
-                    : 'Waiting for you'
-                  : live
-                    ? row.activity_state === 'active'
-                      ? agentWorkLabel(row.activity_phase)
-                      : 'Replying'
-                    : kinds.length
-                      ? capitalize(
-                          kinds
-                            .map((kind) => KIND_WORDS[kind].toLowerCase())
-                            .join(' and '),
-                        )
-                      : 'Chat';
-                return (
-                  <li key={row.id}>
-                    <button
-                      type="button"
-                      className="overview-conversation"
-                      aria-label={`Open ${titleOf(row)}`}
-                      onClick={() => onOpenConversation(row.id)}
-                    >
-                      <span className="overview-conversation-head">
-                        <Tile
-                          tone={kinds.length ? KIND_TONES[kinds[0]] : 'accent'}
-                        >
-                          <ConversationGlyph row={row} size={15} />
-                        </Tile>
-                        <span className="overview-conversation-title">
-                          {titleOf(row)}
-                        </span>
-                        {row.pinned && (
-                          <span className="overview-conversation-pin">
-                            <Pin size={13} aria-hidden />
-                            <span className="visually-hidden">Pinned</span>
-                          </span>
-                        )}
-                      </span>
-                      <span className="overview-conversation-line">{line}</span>
-                      <span className="overview-conversation-meta">
-                        {live && (
-                          <StatusDot
-                            tone="info"
-                            label="Working"
-                            pulse={!reduced}
-                          />
-                        )}
-                        {agents.length > 0 && (
-                          <span className="overview-agents overview-agents-small">
-                            {agents.slice(0, 3).map((agent) => (
-                              <AgentAvatar
-                                key={agent.id}
-                                seed={agentSeed(null, agent.id)}
-                                size={20}
-                              />
-                            ))}
-                            <span className="visually-hidden">
-                              {plural(agents.length, 'agent')}
-                            </span>
-                          </span>
-                        )}
-                        <span className="overview-conversation-time">
-                          <When value={row.updated_at} now={now} fallback="" />
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <InlineEmpty>No conversations yet.</InlineEmpty>
-          )}
-        </section>
-
-        <Card
-          id="overview-today"
-          className="overview-today"
-          title="Since yesterday evening"
-          tone="6"
-          icon={<Clock size={15} />}
-          order={4}
-          action={
-            <SectionLink onClick={() => onOpenTab('monitor')}>
-              Monitor
-            </SectionLink>
           }
         >
-          {timeline.length ? (
-            <ol
-              className="overview-timeline"
-              aria-label="Since yesterday evening"
-            >
-              {timeline.map((moment) => (
-                <li key={moment.key}>
-                  <button type="button" onClick={moment.onOpen}>
-                    <time dateTime={moment.at.toISOString()}>
-                      {clockTime(moment.at.getHours(), moment.at.getMinutes())}
-                    </time>
-                    <span
-                      className="overview-timeline-dot"
-                      data-tone={moment.tone}
-                      aria-hidden
-                    >
-                      {moment.icon}
-                    </span>
-                    <span className="overview-timeline-what">
-                      {moment.title}
-                      {moment.detail && <small>{moment.detail}</small>}
-                    </span>
-                  </button>
-                </li>
+          <ul className="overview-rows" aria-label="Recent">
+            {recent.map((item) => (
+              <Row key={item.key} item={item} />
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {!needsModel && (today.length > 0 || unread.length > 0) && (
+        <Section id="overview-today" title="Today" order={3}>
+          {today.length > 0 && (
+            <ul className="overview-rows" aria-label="Today">
+              {today.map((item) => (
+                <Row key={item.key} item={item} />
               ))}
-            </ol>
-          ) : (
-            <InlineEmpty>Quiet. Nothing ran since 6 PM yesterday.</InlineEmpty>
+            </ul>
           )}
-        </Card>
-
-        <Card
-          id="overview-learned"
-          className="overview-learned"
-          title="Learned this week"
-          tone="3"
-          icon={<Sparkles size={15} />}
-          span={3}
-          order={5}
-          action={
-            <SectionLink onClick={() => onOpenTab('knowledge')}>
-              Knowledge
-            </SectionLink>
-          }
-        >
-          <div className="overview-learned-body">
-            {week.saved || week.subjects.length ? (
-              <>
-                {week.saved > 0 && (
-                  <p className="overview-learned-line">
-                    {/* Saves include updates to memories already there, not only new ones. */}
-                    {plural(week.saved, 'memory update')} from{' '}
-                    {plural(week.threads, 'conversation')}
-                  </p>
-                )}
-                {week.subjects.length > 0 && (
-                  <ul
-                    className="overview-chips"
-                    aria-label="Memories added to this week"
-                  >
-                    {week.subjects.slice(0, CHIP_LIMIT).map((subject) => (
-                      <li key={subject}>
-                        <button
-                          type="button"
-                          className="overview-chip"
-                          onClick={() => onOpenTab('knowledge')}
-                        >
-                          {subject}
-                        </button>
-                      </li>
-                    ))}
-                    {week.subjects.length > CHIP_LIMIT && (
-                      <li>
-                        <button
-                          type="button"
-                          className="overview-chip"
-                          data-more="true"
-                          onClick={() => onOpenTab('knowledge')}
-                        >
-                          +{week.subjects.length - CHIP_LIMIT} more
-                        </button>
-                      </li>
-                    )}
-                  </ul>
-                )}
-              </>
-            ) : (
-              <InlineEmpty>
-                Nothing new this week. Row-Bot learns from your conversations as
-                you go.
-              </InlineEmpty>
-            )}
-          </div>
-          {insight && (
-            <div className="overview-insight">
-              <Tile tone="4">
-                <Lightbulb size={15} />
-              </Tile>
-              <div className="overview-insight-text">
-                <strong>{insight.title}</strong>
-                <p>{insight.suggestion || insight.body}</p>
-                <Button className="small" onClick={() => onOpenTab('insights')}>
-                  Open Insights
-                </Button>
-              </div>
-            </div>
+          {unread.length > 0 && (
+            <p className="overview-error" role="status">
+              Couldn’t read {listWords(unread)} just now. Their tabs may say
+              more.
+            </p>
           )}
-        </Card>
-      </div>
+        </Section>
+      )}
     </section>
   );
 }
