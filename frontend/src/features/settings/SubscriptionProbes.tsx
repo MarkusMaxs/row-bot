@@ -20,12 +20,10 @@ type Kind = SubscriptionProbeRequest['kind'];
 type Pending = { commandId: string; review: SubscriptionProbeReview };
 const names: Record<Provider, string> = {
   codex: 'Codex',
-  claude_subscription: 'Claude subscription',
   xai_oauth: 'xAI subscription',
 };
 const kinds: Record<Provider, Kind[]> = {
   codex: ['tokens'],
-  claude_subscription: ['tokens', 'runtime'],
   xai_oauth: ['tokens', 'runtime', 'vision'],
 };
 const labels: Record<Kind, string> = {

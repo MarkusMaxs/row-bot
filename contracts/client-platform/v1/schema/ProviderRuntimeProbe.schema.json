@@ -11,10 +11,7 @@
       "type": "boolean"
     },
     "provider_id": {
-      "enum": [
-        "claude_subscription",
-        "xai_oauth"
-      ],
+      "const": "xai_oauth",
       "title": "Provider Id",
       "type": "string"
     }
