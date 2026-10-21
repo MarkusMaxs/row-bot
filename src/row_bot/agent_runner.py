@@ -408,6 +408,32 @@ def _with_code_folder_reads(
     return snapshot
 
 
+def _with_chat_apps(profile_snapshot: Mapping[str, Any], enabled_tool_names: Sequence[str]) -> dict[str, Any]:
+    """A helper keeps the apps of the chat that delegated it (B344).
+
+    The built-in profiles list their tools and none lists the apps, so a research
+    helper could not read the Notion page its chat had on. When the delegating turn
+    has apps, a built-in profile's list gains them: the apps the chat left out stay
+    out (its app scope), and a read-only profile's capability refuses every app tool
+    that isn't a read at dispatch, before any approval. A person's own profile keeps
+    the tool list they chose for it.
+    """
+    snapshot = dict(profile_snapshot)
+    tool_policy = snapshot.get("tool_policy_json")
+    if (
+        "mcp" not in enabled_tool_names
+        or snapshot.get("source") != "builtin"
+        or not isinstance(tool_policy, Mapping)
+    ):
+        return snapshot
+    allow = [str(name) for name in tool_policy.get("allow_tools") or []]
+    deny = [str(name) for name in tool_policy.get("deny_tools") or []]
+    if not allow or "mcp" in deny or any(name == "mcp" or name.startswith("mcp_") for name in allow):
+        return snapshot
+    snapshot["tool_policy_json"] = {**tool_policy, "allow_tools": [*allow, "mcp"]}
+    return snapshot
+
+
 def _profile_child_skills(
     _parent_skills_override: Sequence[str] | None,
     profile_snapshot: Mapping[str, Any],
@@ -835,6 +861,7 @@ def spawn_agent_run(
         parent_workspace_id=str(parent_defaults.get("developer_workspace_id") or ""),
         child_workspace_id=effective_developer_workspace_id,
     )
+    profile_snapshot = _with_chat_apps(profile_snapshot, _enabled_tool_names(enabled_tool_names))
 
     packet = build_child_agent_prompt(
         objective=objective,
