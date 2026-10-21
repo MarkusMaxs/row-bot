@@ -6209,6 +6209,9 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
         except (ExecutionBudgetExhausted, AgentNoProgress) as exc:
             return _handle_agent_terminal(agent, config, exc)
         except Exception as exc:
+            if stop_event.is_set():
+                # Stop ended the model call (it closes a request mid-way): stopped, not failed.
+                raise TaskStoppedError("Task stopped during execution") from exc
             exc_str = str(exc)
             if "tool_call" in exc_str and ("do not have a corresponding" in exc_str
                                             or "did not have response" in exc_str
@@ -7677,6 +7680,8 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
     except (ExecutionBudgetExhausted, AgentNoProgress) as exc:
         return _handle_agent_terminal(agent, config, exc)
     except Exception as exc:
+        if stop_event and stop_event.is_set():
+            raise TaskStoppedError("Task stopped during resume") from exc
         exc_str = str(exc)
         _err_msg = _friendly_api_error(exc_str)
         logger.error(
@@ -8469,6 +8474,10 @@ def _stream_graph(agent, input_data, config: dict,
         yield ("done", terminal["message"])
         return
     except Exception as exc:
+        if stop_event and stop_event.is_set():
+            # Stop ended the model call (it closes a request mid-way): stopped, not an API error.
+            logger.info("_stream_graph: the model call ended after Stop (%s)", type(exc).__name__)
+            return
         exc_str = str(exc)
         # Auto-repair orphaned tool calls and retry once. Never replay overflow (its retry was in the call).
         if _is_context_overflow_error(exc):

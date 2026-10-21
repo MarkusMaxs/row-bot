@@ -11,6 +11,10 @@ flushed as its own chunk, so a client reading the stream sees hundreds of small 
 ``tool_calls``, ``eval_count`` and ``prompt_eval_count`` (reported on the last chunk), or ``status`` and
 ``error`` for a failed request, which the real server answers with that status and ``{"error": ...}``, or
 ``stream_error`` for an error the real server sends inside the stream after what it already sent.
+
+``hang`` holds the request open as Ollama does while the model writes a tool call it never finishes: nothing is
+sent (not even headers), or nothing after the reply's ``tokens``, until the client goes away. ``hanging`` is set
+when a request starts to hang and ``hung_up`` when its client has gone (Ollama then stops generating).
 """
 
 from __future__ import annotations
@@ -22,6 +26,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# How long a hanging request waits for its client before giving up, so a broken test can't hang the suite.
+HANG_LIMIT_SECONDS = 10
+
 
 @dataclass
 class FakeOllama:
@@ -31,6 +38,8 @@ class FakeOllama:
     requests: list[dict] = field(default_factory=list)
     tool_calls: list[dict] = field(default_factory=list)
     replies: list[dict] = field(default_factory=list)
+    hanging: threading.Event = field(default_factory=threading.Event)
+    hung_up: threading.Event = field(default_factory=threading.Event)
 
     def chat_requests(self) -> list[dict]:
         return [request for request in self.requests if request["path"] == "/api/chat"]
@@ -86,19 +95,33 @@ def fake_streaming_ollama(
                 self.end_headers()
                 self.wfile.write(body)
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "application/x-ndjson")
-            self.send_header("Transfer-Encoding", "chunked")
-            self.end_headers()
 
             def chunk(payload: dict) -> None:
                 line = json.dumps(payload).encode() + b"\n"
                 self.wfile.write(f"{len(line):x}\r\n".encode() + line + b"\r\n")
                 self.wfile.flush()
 
+            if reply.get("tokens") or not reply.get("hang"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
             for token in reply.get("tokens") or ():
                 part = {"message": {"role": "assistant", "content": token}} if chat else {"response": token}
                 chunk({"model": state.model, "done": False, **part})
+            if reply.get("hang"):
+                self.close_connection = True
+                self.connection.settimeout(HANG_LIMIT_SECONDS)
+                state.hanging.set()
+                try:
+                    gone = self.connection.recv(1) == b""
+                except TimeoutError:
+                    gone = False
+                except OSError:
+                    gone = True  # the client reset the connection
+                if gone:
+                    state.hung_up.set()
+                return
             if chat and reply.get("tool_calls"):
                 calls = {"role": "assistant", "content": "", "tool_calls": reply["tool_calls"]}
                 chunk({"model": state.model, "done": False, "message": calls})
