@@ -117,9 +117,9 @@ before upgrading from 5.1 or 5.0.
 - **Compaction at the right moment** - near the limit, after clearing, on a
   calibrated estimate; small-window models get a leaner first turn without
   losing any tool.
-- **Cheaper background work** - memory extraction, Dream Cycle, documents,
-  goals and helper agents use the same model at the lowest effort, with caps
-  and structured answers.
+- **Cheaper background work** - memory extraction, Dream Cycle, documents and
+  goal checks use the same model at the lowest effort, with caps and
+  structured answers; helper agents keep the conversation's model.
 
 ### Every Signed-In Device
 
