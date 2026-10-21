@@ -146,7 +146,8 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
           headers: Mapping[str, str] | None = None, redirects: int = 0,
           exact_redirects: Mapping[str, str] | None = None, meta: dict | None = None,
           refused: str = "package_source_not_supported", too_large: str = "package_download_too_large",
-          method: str = "GET", check: Callable[[], None] | None = None) -> bytes:
+          method: str = "GET", check: Callable[[], None] | None = None,
+          duration: float | None = None) -> bytes:
     """Bounded https GET without automatic redirects.
 
     ``hosts`` is a reviewed allow-list; ``None`` admits any public name. A direct
@@ -157,7 +158,8 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
     chosen again, and credentials never cross to another host. An exact
     ``source -> destination`` pair allows one reviewed migration off the list.
     Bodies are never decompressed, so ``max_bytes`` bounds what is held, and the
-    whole fetch has one deadline as well as the per-read ``timeout``. ``meta``
+    whole fetch has one deadline (``duration``, six times ``timeout`` unless given) as well
+    as the per-read ``timeout``. ``meta``
     receives the final response's status and headers. ``check`` (or the one set by
     ``checked``) runs before each hop and about four times a second while reading,
     and stops the fetch by raising. ``HEAD`` returns no body.
@@ -167,7 +169,7 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
         raise ValueError(refused)
     allowed = None if hosts is None else frozenset(hosts)
     pairs, budget, sent, previous, reviewed = dict(exact_redirects or {}), redirects, dict(headers or {}), "", False
-    deadline = time.monotonic() + timeout * 6
+    deadline = time.monotonic() + (timeout * 6 if duration is None else duration)
     while True:
         check()
         parts = urlsplit(url)

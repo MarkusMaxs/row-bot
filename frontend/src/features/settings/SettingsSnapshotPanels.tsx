@@ -565,7 +565,11 @@ function SavedSetting({
         setNotice("Row-Bot couldn't confirm that. Check again.");
       } else {
         setPendingCommand('');
-        setError('The change was rejected. Refresh and try again.');
+        setError(
+          receipt.action_result
+            ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+            : 'The change was rejected. Refresh and try again.',
+        );
       }
     } catch (cause) {
       if (!abort.current.signal.aborted) {
@@ -603,7 +607,11 @@ function SavedSetting({
             : `${label} save confirmed.`,
         );
       } else {
-        setError('The original change was rejected.');
+        setError(
+          receipt.action_result
+            ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+            : 'The original change was rejected.',
+        );
       }
     } catch (cause) {
       if (!abort.current.signal.aborted) setError(clientError(cause).message);
@@ -882,7 +890,11 @@ function ReviewedSettingsAction({
       } else {
         storePending('');
         setPendingCommand('');
-        setError('The action was rejected. Refresh and try again.');
+        setError(
+          receipt.action_result
+            ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+            : 'The action was rejected. Refresh and try again.',
+        );
       }
     } catch (cause) {
       if (!abort.current.signal.aborted) {
@@ -915,7 +927,12 @@ function ReviewedSettingsAction({
               ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
               : `${label} confirmed.`,
           );
-        } else setError('The original action was rejected.');
+        } else
+          setError(
+            receipt.action_result
+              ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+              : 'The original action was rejected.',
+          );
       }
     } catch (cause) {
       setError(clientError(cause).message);
@@ -5174,6 +5191,9 @@ export function PreferencesSnapshotPanel({
   /** Preferences, or the Updates / Data pages that share its snapshot. */
   part?: 'preferences' | 'updates' | 'data';
 }) {
+  // The controls' own check time, newer than this page's snapshot after Check now (B373).
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  const lastCheck = checkedAt ?? snapshot.updates.last_check;
   if (part === 'updates')
     return (
       <div className="stack settings-snapshot-page settings-updates-page">
@@ -5181,14 +5201,11 @@ export function PreferencesSnapshotPanel({
           tone="neutral"
           more={[
             snapshot.updates.channel === 'beta' ? 'Beta' : 'Stable',
-            snapshot.updates.last_check ? (
+            lastCheck ? (
               <>
                 checked{' '}
-                <time
-                  dateTime={snapshot.updates.last_check}
-                  title={absoluteTime(snapshot.updates.last_check)}
-                >
-                  {relativeTime(snapshot.updates.last_check)}
+                <time dateTime={lastCheck} title={absoluteTime(lastCheck)}>
+                  {relativeTime(lastCheck)}
                 </time>
               </>
             ) : (
@@ -5200,7 +5217,7 @@ export function PreferencesSnapshotPanel({
         </SettingsStatus>
         <SettingsGroup label="Updates" anchor="updates">
           {showUpdateControls ? (
-            <ConnectedUpdateControls />
+            <ConnectedUpdateControls onChecked={setCheckedAt} />
           ) : (
             <SettingsItem
               label={`Row-Bot ${snapshot.updates.current_version}`}
