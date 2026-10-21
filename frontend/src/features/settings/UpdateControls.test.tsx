@@ -108,6 +108,29 @@ it('loads cached status without checking and checks from one explicit click', as
   );
 });
 
+it('tells the page when it last checked, after Check now too (B373)', async () => {
+  const checked = vi.fn();
+  const load = vi.fn(async () => ({
+    ...snapshot,
+    last_check: '2026-10-20T19:51:04Z',
+  }));
+  const send = vi.fn(async (command: UpdateCommand) =>
+    receipt(command, {
+      ...snapshot,
+      last_check: '2026-10-21T07:30:03Z',
+      last_success: '2026-10-21T07:30:03Z',
+    }),
+  );
+  render(<UpdateControls owner={{ load, send }} onChecked={checked} />);
+  await waitFor(() =>
+    expect(checked).toHaveBeenLastCalledWith('2026-10-20T19:51:04Z'),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
+  await waitFor(() =>
+    expect(checked).toHaveBeenLastCalledWith('2026-10-21T07:30:03Z'),
+  );
+});
+
 it('shows a release, skips it from one click and shows it again', async () => {
   const offered: UpdateSnapshot = {
     ...snapshot,

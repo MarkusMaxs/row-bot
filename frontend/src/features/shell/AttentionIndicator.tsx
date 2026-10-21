@@ -114,6 +114,10 @@ export default function AttentionIndicator({
   const waitingTotal = approvals.page?.total ?? 0;
   // The list closed with its last approval; the next one doesn't reopen it.
   if (!waitingTotal && listOpen) setListOpen(false);
+  // An update keeps its own link beside approvals and problems (B364): "Restart to update" never hides.
+  const updateLink = update ? (
+    <UpdateLink update={update} compact={compact} onNavigate={onNavigate} />
+  ) : null;
   if (waitingTotal) {
     const words = `${waitingTotal} ${waitingTotal === 1 ? 'approval is' : 'approvals are'} waiting`;
     const problemWords = `${problems.length} ${problems.length === 1 ? 'thing needs' : 'things need'} attention`;
@@ -122,85 +126,112 @@ export default function AttentionIndicator({
       onNavigate?.(to)(event);
     };
     return (
-      <Popover.Root open={listOpen} onOpenChange={setListOpen}>
-        <Hint label={waiting.map((item) => item.title).join(' · ')}>
-          <Popover.Trigger asChild>
-            <button
-              type="button"
-              className={`nav-attention${compact ? ' is-compact button ghost icon-button icon-action icon-action-md' : ''}`}
-              data-tone="warning"
-              aria-label={`${words}. Review`}
-            >
-              <ShieldAlert size={compact ? 18 : 15} aria-hidden />
-              {compact ? (
-                <span className="nav-attention-count" aria-hidden>
-                  {waitingTotal}
-                </span>
-              ) : (
-                <span>{words}</span>
-              )}
-            </button>
-          </Popover.Trigger>
-        </Hint>
-        <Popover.Portal>
-          <Popover.Content
-            className="popover surface-effect pending-approvals-popover"
-            side="top"
-            align="start"
-            sideOffset={8}
-            collisionPadding={12}
-            aria-label="Waiting for your approval"
-          >
-            <strong>Waiting for your approval</strong>
-            <PendingApprovalList
-              items={waiting}
-              onChanged={approvals.refresh}
-              onNavigate={close}
-            />
-            {waitingTotal > waiting.length && (
-              <small>
-                The {waiting.length} newest of {waitingTotal} are shown.
-              </small>
-            )}
-            {problems.length > 0 && (
-              <Link
-                className="button ghost small"
-                to="/?tab=monitor"
-                onClick={close('/?tab=monitor')}
+      <>
+        <Popover.Root open={listOpen} onOpenChange={setListOpen}>
+          <Hint label={waiting.map((item) => item.title).join(' · ')}>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                className={`nav-attention${compact ? ' is-compact button ghost icon-button icon-action icon-action-md' : ''}`}
+                data-tone="warning"
+                aria-label={`${words}. Review`}
               >
-                <TriangleAlert size={15} aria-hidden />
-                {problemWords}
-              </Link>
-            )}
-          </Popover.Content>
-        </Popover.Portal>
-      </Popover.Root>
+                <ShieldAlert size={compact ? 18 : 15} aria-hidden />
+                {compact ? (
+                  <span className="nav-attention-count" aria-hidden>
+                    {waitingTotal}
+                  </span>
+                ) : (
+                  <span>{words}</span>
+                )}
+              </button>
+            </Popover.Trigger>
+          </Hint>
+          <Popover.Portal>
+            <Popover.Content
+              className="popover surface-effect pending-approvals-popover"
+              side="top"
+              align="start"
+              sideOffset={8}
+              collisionPadding={12}
+              aria-label="Waiting for your approval"
+            >
+              <strong>Waiting for your approval</strong>
+              <PendingApprovalList
+                items={waiting}
+                onChanged={approvals.refresh}
+                onNavigate={close}
+              />
+              {waitingTotal > waiting.length && (
+                <small>
+                  The {waiting.length} newest of {waitingTotal} are shown.
+                </small>
+              )}
+              {problems.length > 0 && (
+                <Link
+                  className="button ghost small"
+                  to="/?tab=monitor"
+                  onClick={close('/?tab=monitor')}
+                >
+                  <TriangleAlert size={15} aria-hidden />
+                  {problemWords}
+                </Link>
+              )}
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+        {updateLink}
+      </>
     );
   }
-  if (!problems.length && !update) return null;
-  const to = problems.length ? '/?tab=monitor' : '/settings/updates';
-  const words = problems.length
-    ? `${problems.length} ${problems.length === 1 ? 'thing needs' : 'things need'} attention`
-    : update!.ready
-      ? 'Restart to update'
-      : `Update to ${update!.version} available`;
-  const detail = problems.length
-    ? problems.map((problem) => problem.title).join(' · ')
-    : update!.ready
-      ? `Version ${update!.version} is ready. Restart to install it, or it installs when you quit.`
-      : 'Open Updates to install it or be reminded later.';
+  if (!problems.length) return updateLink;
+  const words = `${problems.length} ${problems.length === 1 ? 'thing needs' : 'things need'} attention`;
+  return (
+    <>
+      <Hint label={problems.map((problem) => problem.title).join(' · ')}>
+        <Link
+          className={`nav-attention${compact ? ' is-compact button ghost icon-button icon-action icon-action-md' : ''}`}
+          data-tone="warning"
+          to="/?tab=monitor"
+          aria-label={`${words}. Open Monitor`}
+          onClick={onNavigate?.('/?tab=monitor')}
+        >
+          <TriangleAlert size={compact ? 18 : 15} aria-hidden />
+          {!compact && <span>{words}</span>}
+        </Link>
+      </Hint>
+      {updateLink}
+    </>
+  );
+}
+
+/** The update, downloaded and ready ("Restart to update") or available; opens Updates. */
+function UpdateLink({
+  update,
+  compact,
+  onNavigate,
+}: {
+  update: NonNullable<AttentionSnapshot['update']>;
+  compact: boolean;
+  onNavigate?: (to: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
+}) {
+  const to = '/settings/updates';
+  const words = update.ready
+    ? 'Restart to update'
+    : `Update to ${update.version} available`;
+  const detail = update.ready
+    ? `Version ${update.version} is ready. Restart to install it, or it installs when you quit.`
+    : 'Open Updates to install it or be reminded later.';
   return (
     <Hint label={detail}>
       <Link
         className={`nav-attention${compact ? ' is-compact button ghost icon-button icon-action icon-action-md' : ''}`}
-        data-tone={problems.length ? 'warning' : 'info'}
+        data-tone="info"
         to={to}
-        aria-label={`${words}${update?.ready && !problems.length ? ` to ${update.version}` : ''}. ${problems.length ? 'Open Monitor' : 'Open Updates'}`}
+        aria-label={`${words}${update.ready ? ` to ${update.version}` : ''}. Open Updates`}
         onClick={onNavigate?.(to)}
       >
-        {problems.length ? (
-          <TriangleAlert size={compact ? 18 : 15} aria-hidden />
-        ) : update!.ready ? (
+        {update.ready ? (
           <RefreshCw size={compact ? 18 : 15} aria-hidden />
         ) : (
           <ArrowUpCircle size={compact ? 18 : 15} aria-hidden />

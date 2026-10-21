@@ -55,6 +55,8 @@ export type SubscriptionAccountsProps = {
   compact?: boolean;
   initialProvider?: SubscriptionFlowSnapshot['provider_id'];
   initialAction?: 'connect' | 'manage' | 'disconnect';
+  /** The saved sign-in can't be used any more: it says so and offers Reconnect (B342). */
+  signInExpired?: boolean;
   onClose?: () => void;
   session?: SubscriptionAccountsSession;
   load: (signal?: AbortSignal) => Promise<SubscriptionAccountsSnapshot>;
@@ -173,11 +175,16 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
   const retained = session.hasRetained();
   // Waiting device-code (ChatGPT / Codex) and loopback (xAI) sign-ins are
   // checked every few seconds, so nobody has to press Check (U7). A failed
-  // check stops the loop and leaves "Check now".
+  // check stops the loop and leaves "Check now". ChatGPT's code is checked on
+  // the server, page open or not (B342), so its loop only reads how it went.
   const polling = !!props.compact && active && POLLED.has(provider) && !error;
+  // ChatGPT's Check reads the sign-in too: a Check command carries the
+  // revision the page loaded, which the server's own finish has moved (B357).
+  const checkNow = () =>
+    provider === 'codex' ? inspect() : performDirect('check');
   const check = useRef<() => void>(() => undefined);
   check.current = () => {
-    if (!locked) void performDirect('check');
+    if (!locked) void checkNow();
   };
   useEffect(() => {
     if (!polling) return;
@@ -391,6 +398,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
   }
   async function inspect() {
     if (!flow || busy || !session.active) return;
+    const generation = epoch.current;
     const abort = session.read();
     setBusy('inspect');
     try {
@@ -402,6 +410,13 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
         )
           throw { code: 'operation_uncertain' };
         setFlow(current);
+        setError('');
+        if (current.state === 'connected' && flow.state !== 'connected') {
+          const accounts = await props.load(abort.signal);
+          setSnapshot(accounts);
+          setNotice(`Signed in to ${labels[provider]}.`);
+          if (generation === epoch.current) props.onSaved(accounts);
+        }
       }
     } catch (cause) {
       if (!abort.signal.aborted) setError(clientError(cause).message);
@@ -494,7 +509,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
             <Button
               disabled={locked}
               onClick={() =>
-                void (POLLED.has(provider) ? performDirect('check') : inspect())
+                void (POLLED.has(provider) ? checkNow() : inspect())
               }
             >
               Check now
@@ -520,12 +535,17 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
         {notice && <p role="status">{notice}</p>}
         {account && (
           <p>
-            {account.saved_state === 'saved'
-              ? 'Connected'
-              : account.saved_state === 'metadata_only'
-                ? 'CLI login referenced'
-                : 'Not connected'}
-            {account.expires_at
+            {account.saved_state === 'saved' && props.signInExpired
+              ? 'Sign-in expired'
+              : account.saved_state === 'saved'
+                ? 'Connected'
+                : account.saved_state === 'metadata_only'
+                  ? 'CLI login referenced'
+                  : 'Not connected'}
+            {/* An access token renews itself; only a time still ahead means anything. */}
+            {account.expires_at &&
+            !props.signInExpired &&
+            (parseTimestamp(account.expires_at)?.getTime() ?? 0) > Date.now()
               ? ` · Expires ${parseTimestamp(account.expires_at)?.toLocaleString() ?? account.expires_at}`
               : ''}
           </p>
@@ -573,9 +593,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
                 <Button
                   disabled={locked}
                   onClick={() =>
-                    void (POLLED.has(provider)
-                      ? performDirect('check')
-                      : inspect())
+                    void (POLLED.has(provider) ? checkNow() : inspect())
                   }
                 >
                   Check now
@@ -610,14 +628,15 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
             </Field>
           )}
         <div className="actions">
-          {!active && props.initialAction === 'connect' && (
-            <Button
-              disabled={locked}
-              onClick={() => void performDirect('start')}
-            >
-              {account?.saved_state === 'saved' ? 'Reconnect' : 'Connect'}
-            </Button>
-          )}
+          {!active &&
+            (props.initialAction === 'connect' || props.signInExpired) && (
+              <Button
+                disabled={locked}
+                onClick={() => void performDirect('start')}
+              >
+                {account?.saved_state === 'saved' ? 'Reconnect' : 'Connect'}
+              </Button>
+            )}
           {active && provider !== 'codex' && (
             <Button
               disabled={locked || !code}
@@ -811,7 +830,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
           {active && provider !== 'claude_subscription' && (
             <Button
               disabled={locked || flow?.state === 'uncertain'}
-              onClick={() => void performDirect('check')}
+              onClick={() => void checkNow()}
             >
               Check login
             </Button>

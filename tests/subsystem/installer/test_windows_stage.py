@@ -49,7 +49,7 @@ def archive(tmp_path: Path, checkout: Path) -> Path:
 def test_the_stage_unpacks_whole_with_its_empty_folders(tmp_path, archive) -> None:
     unpacked = stage.unpack(archive, tmp_path / "s", run_id=RUN, sha=SHA)
 
-    assert (unpacked["files"], unpacked["run_id"], unpacked["sha"]) == (8, RUN, SHA)
+    assert (unpacked["files"], unpacked["run_id"], unpacked["sha"]) == (9, RUN, SHA)
     assert (tmp_path / "s/installer/build/python/Lib/empty").is_dir()
     assert (tmp_path / "s/installer/row_bot_setup.iss").read_bytes() == b"installer/row_bot_setup.iss"
     assert not (tmp_path / "s/installer/build/unrelated.obj").exists()
@@ -87,6 +87,7 @@ def test_a_short_stage_is_refused_and_not_reused(tmp_path, archive) -> None:
         (RUN, OTHER_SHA, None, "belongs to run"),
         (RUN, SHA, "installer/build/python/Lib/site-packages/six.py", "files changed"),
         (RUN, SHA, "installer/build/Row-Bot.exe", None),  # signed in place: still the same stage
+        (RUN, SHA, "installer/build/Row-Bot Server.exe", None),  # signed in place too (B355)
     ],
 )
 def test_an_unpacked_stage_is_reused_only_for_its_own_run(tmp_path, archive, run_id, sha, change, reason) -> None:
@@ -111,4 +112,4 @@ def test_the_packed_stage_names_its_run(tmp_path, archive) -> None:
     with tarfile.open(archive) as tar:
         packed = json.loads(tar.extractfile(stage.STAGE_JSON).read())
 
-    assert (packed["run_id"], packed["sha"], packed["files"]) == (RUN, SHA, 8)
+    assert (packed["run_id"], packed["sha"], packed["files"]) == (RUN, SHA, 9)
