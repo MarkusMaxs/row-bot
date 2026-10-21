@@ -128,14 +128,14 @@ it('reports a targeted refresh failure even if the catalog worker had no provide
 it('runs a real subscription runtime test from the row and shows its outcome', async () => {
   const subscription: ProviderLiveCard = {
     ...card,
-    provider_id: 'claude_subscription',
-    display_name: 'Claude Subscription',
+    provider_id: 'xai_oauth',
+    display_name: 'xAI Grok',
     group: 'subscription',
     risk_label: 'subscription',
     media_count: 0,
   };
   const testRuntime = vi.fn(async () => ({
-    provider_id: 'claude_subscription' as const,
+    provider_id: 'xai_oauth' as const,
     ok: true,
     detail: 'Runtime and tool calls work',
   }));
@@ -148,19 +148,15 @@ it('runs a real subscription runtime test from the row and shows its outcome', a
     />,
   );
   const more = await screen.findByRole('button', {
-    name: 'More actions for Claude Subscription',
+    name: 'More actions for xAI Grok',
   });
   await act(async () => fireEvent.keyDown(more, { key: 'Enter' }));
   fireEvent.click(
-    screen.getByRole('menuitem', { name: 'Test Claude Subscription runtime' }),
+    screen.getByRole('menuitem', { name: 'Test xAI Grok runtime' }),
   );
-  await waitFor(() =>
-    expect(testRuntime).toHaveBeenCalledWith('claude_subscription'),
-  );
+  await waitFor(() => expect(testRuntime).toHaveBeenCalledWith('xai_oauth'));
   expect(
-    await screen.findByText(
-      'Claude Subscription: Runtime and tool calls work.',
-    ),
+    await screen.findByText('xAI Grok: Runtime and tool calls work.'),
   ).toBeVisible();
 });
 
@@ -228,8 +224,8 @@ it('says in plain words when a subscription can borrow another app’s sign-in',
         providers: [
           {
             ...card,
-            provider_id: 'claude_subscription',
-            display_name: 'Claude Subscription',
+            provider_id: 'codex',
+            display_name: 'ChatGPT / Codex',
             group: 'subscription',
             configured: false,
             runtime_enabled: false,
@@ -245,7 +241,7 @@ it('says in plain words when a subscription can borrow another app’s sign-in',
   );
   expect(
     await screen.findByText(
-      /Claude Code is signed in on this computer; not used yet · 4 models/,
+      /Codex is signed in on this computer; not used yet · 4 models/,
     ),
   ).toBeVisible();
   expect(screen.queryByText(/CLI|chat/)).toBeNull();
@@ -278,4 +274,124 @@ it('a ChatGPT row that says Reconnect offers Reconnect and says the sign-in expi
     await screen.findByRole('button', { name: 'Reconnect ChatGPT' }),
   );
   expect(onSubscription).toHaveBeenCalledWith('codex', 'connect', true);
+});
+
+const claude = (plan: Partial<NonNullable<ProviderLiveCard['claude_plan']>>) =>
+  ({
+    ...card,
+    provider_id: 'claude_subscription',
+    display_name: 'Claude (your Claude plan)',
+    group: 'subscription',
+    icon: 'C',
+    configured: plan.state === 'ready',
+    runtime_enabled: plan.state === 'ready',
+    source: 'claude_code',
+    model_count: plan.state === 'ready' ? 3 : null,
+    fingerprint: '',
+    risk_label: 'subscription',
+    billing: 'subscription',
+    claude_plan: {
+      state: 'not_installed',
+      version: '',
+      minimum_version: '2.1.263',
+      plan: '',
+      detail: '',
+      set_up_again: false,
+      ...plan,
+    },
+  }) satisfies ProviderLiveCard;
+
+it('Claude says what Claude Code says, and Set up Claude opens the one next step', async () => {
+  const load = vi.fn(async () => ({
+    schema_version: 1 as const,
+    providers: [claude({ state: 'signed_out', version: '2.1.282' })],
+  }));
+  render(
+    <ProviderStatus
+      load={load}
+      refresh={vi.fn()}
+      refreshState={vi.fn()}
+      onSubscription={vi.fn()}
+    />,
+  );
+  const row = (await screen.findByText('Claude (your Claude plan)')).closest(
+    'li',
+  )!;
+  expect(row).toHaveTextContent('Not signed in');
+  expect(row).toHaveTextContent('Sign in to Claude Code to use your plan');
+  // No Row-Bot sign-in, token import or disconnect: Claude Code signs in by itself.
+  expect(
+    within(row).queryByRole('button', { name: /More actions/ }),
+  ).toBeNull();
+  expect(
+    within(row).queryByRole('button', { name: /Connect|Disconnect/ }),
+  ).toBeNull();
+
+  fireEvent.click(within(row).getByRole('button', { name: 'Set up Claude' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Claude (your Claude plan)',
+  });
+  expect(dialog).toHaveTextContent(
+    'Runs Claude Code on this computer; uses your Claude plan’s limits.',
+  );
+  expect(within(dialog).getByText('claude auth login')).toBeVisible();
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Check again' }));
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+});
+
+it('a ready Claude row: the plan and its models, with Claude Code’s status in the menu', async () => {
+  render(
+    <ProviderStatus
+      load={async () => ({
+        schema_version: 1,
+        providers: [
+          claude({ state: 'ready', version: '2.1.282', plan: 'Claude Max' }),
+        ],
+      })}
+      refresh={vi.fn()}
+      refreshState={vi.fn()}
+      onSubscription={vi.fn()}
+    />,
+  );
+  const row = (await screen.findByText('Claude (your Claude plan)')).closest(
+    'li',
+  )!;
+  expect(row).toHaveTextContent('Ready');
+  expect(row).toHaveTextContent(
+    'Runs Claude Code on this computer · Claude Max · 3 models',
+  );
+  expect(
+    within(row).queryByRole('button', { name: 'Set up Claude' }),
+  ).toBeNull();
+  const more = within(row).getByRole('button', {
+    name: 'More actions for Claude (your Claude plan)',
+  });
+  await act(async () => fireEvent.keyDown(more, { key: 'Enter' }));
+  expect(
+    screen.getAllByRole('menuitem').map((item) => item.textContent),
+  ).toEqual(['Check Claude Code']);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Check Claude Code' }));
+  expect(
+    await screen.findByRole('dialog', { name: 'Claude (your Claude plan)' }),
+  ).toHaveTextContent('Ready Claude Max · Claude Code 2.1.282');
+});
+
+it('a profile the old Claude sign-in had set up says to set Claude up again', async () => {
+  render(
+    <ProviderStatus
+      load={async () => ({
+        schema_version: 1,
+        providers: [claude({ state: 'signed_out', set_up_again: true })],
+      })}
+      refresh={vi.fn()}
+      refreshState={vi.fn()}
+    />,
+  );
+  const row = (await screen.findByText('Claude (your Claude plan)')).closest(
+    'li',
+  )!;
+  expect(row).toHaveTextContent('Set up again');
+  expect(row).toHaveTextContent(
+    'Claude now works through Claude Code. Set it up again',
+  );
 });

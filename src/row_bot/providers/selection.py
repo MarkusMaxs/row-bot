@@ -722,7 +722,7 @@ _PROVIDER_ICON_LABELS: dict[str, str] = {
     "local": "Local",
     "ollama": "Local",
     "openai": "OpenAI",
-    "claude_subscription": "Claude Subscription",
+    "claude_subscription": "Claude plan",
     "openrouter": "OpenRouter",
     "anthropic": "Anthropic",
     "google": "Google",
@@ -1025,9 +1025,9 @@ def _surface_inactive_reason(choice: dict[str, Any], surface: str, diagnostics: 
     if choice.get("provider_id") == "claude_subscription":
         try:
             if not _provider_status_for_picker("claude_subscription", diagnostics).get("runtime_enabled"):
-                return "Claude Subscription runtime needs a Row-Bot OAuth connection."
+                return "Set up Claude in Settings › Providers: it runs Claude Code on this computer."
         except Exception:
-            return "Claude Subscription runtime is not enabled yet."
+            return "Claude isn't set up yet."
     if choice.get("provider_id") == "xai_oauth":
         try:
             if not _provider_status_for_picker("xai_oauth", diagnostics).get("runtime_enabled"):

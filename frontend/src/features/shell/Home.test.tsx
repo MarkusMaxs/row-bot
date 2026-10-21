@@ -264,9 +264,7 @@ it('keeps the old welcome, examples, and connection chrome out of Overview while
     screen.queryByRole('region', { name: 'Start with an example' }),
   ).toBeNull();
   expect(screen.queryByText('Connected · local workspace')).toBeNull();
-  const recent = screen.getByRole('list', {
-    name: 'Continue where you left off',
-  });
+  const recent = screen.getByRole('list', { name: 'Recent' });
   fireEvent.click(
     within(recent).getByRole('button', { name: 'Open Design review' }),
   );
@@ -289,7 +287,9 @@ it('never offers to continue a chat that was started and left empty', async () =
   ];
   show();
   expect(
-    screen.getByRole('button', { name: 'Continue “Design review”' }),
+    within(screen.getByRole('list', { name: 'Recent' })).getByRole('button', {
+      name: 'Open Design review',
+    }),
   ).toBeInTheDocument();
   expect(screen.queryByText(/New conversation/)).toBeNull();
   await waitFor(() =>
@@ -344,11 +344,28 @@ it('opens a workflow from Overview with a one-shot workflow intent', async () =>
       },
     ]),
   );
+  // Its failed run is one of the things that need you (B383).
+  mock.controller.attention.mockResolvedValue({
+    schema_version: 1,
+    problems: [
+      {
+        id: 'workflow:task-7',
+        title: 'Morning digest failed',
+        detail: 'Run it again, or open it to see why.',
+        place: 'workflows',
+        fix: {
+          kind: 'open',
+          href: '/?tab=workflows&workflow=task-7',
+          target: null,
+          name: 'Morning digest',
+        },
+      },
+    ],
+    update: null,
+  });
   show();
   fireEvent.click(
-    await screen.findByRole('button', {
-      name: 'Open failed workflow: Morning digest',
-    }),
+    await screen.findByRole('button', { name: 'Open Morning digest failed' }),
   );
   expect(location()).toBe('/?tab=workflows&workflow=task-7');
   expect(screen.getByRole('tab', { name: 'Workflows' })).toHaveAttribute(
@@ -357,14 +374,12 @@ it('opens a workflow from Overview with a one-shot workflow intent', async () =>
   );
   chooseTab('Overview');
   expect(location()).toBe('/?tab=overview');
-  fireEvent.click(await screen.findByRole('button', { name: /^Workflows: / }));
-  expect(location()).toBe('/?tab=workflows');
-  chooseTab('Overview');
-  fireEvent.click(await screen.findByRole('button', { name: 'Monitor' }));
-  expect(location()).toBe('/?tab=monitor');
-  expect(
-    await screen.findByRole('region', { name: 'System Monitor' }),
-  ).toBeVisible();
+  fireEvent.click(
+    await screen.findByRole('button', {
+      name: 'Open Workflows: Morning digest',
+    }),
+  );
+  expect(location()).toBe('/?tab=workflows&workflow=task-7');
 });
 
 it('starts a new chat from Overview through the shell’s New chat owner', async () => {
@@ -408,7 +423,7 @@ it('opens New design and New code folder setup, and a new workflow’s editor', 
   expect(location()).toBe('/?tab=workflows');
 });
 
-it('reads Insights for Overview on any signed-in device', async () => {
+it('reads what needs you for Overview on any signed-in device', async () => {
   // A paired phone or a browser on another computer: the owner's full authority.
   mock.state.handshake = {
     instance_id: 'server-b',
@@ -416,7 +431,7 @@ it('reads Insights for Overview on any signed-in device', async () => {
     authentication_kind: 'session',
   };
   show();
-  await waitFor(() => expect(mock.controller.insights).toHaveBeenCalledOnce());
+  await waitFor(() => expect(mock.controller.attention).toHaveBeenCalled());
 });
 
 it('checks Dream Cycle from one click and opens the irreversible-change confirmation', async () => {
@@ -541,7 +556,7 @@ it('keeps Knowledge and Monitor as passive, truthful boundaries', async () => {
 it('reuses monitor, knowledge, and workflow reads across tab switches for 20 seconds', async () => {
   let clock = 1_000_000;
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
-  // Overview's Memory card reads 8 memories; Knowledge reads the map.
+  // Knowledge reads the map; Overview reads no memories.
   const graphReads = (limit: number) =>
     mock.controller.knowledgeGraph.mock.calls.filter(
       ([value]) => value === limit,
@@ -553,7 +568,6 @@ it('reuses monitor, knowledge, and workflow reads across tab switches for 20 sec
   await waitFor(() =>
     expect(mock.controller.savedTasks).toHaveBeenCalledTimes(1),
   );
-  await waitFor(() => expect(graphReads(8)).toBe(1));
   chooseTab('Knowledge');
   await waitFor(() => expect(graphReads(2000)).toBe(1));
   expect(mock.controller.knowledgeGraph).toHaveBeenCalledWith(
@@ -568,7 +582,7 @@ it('reuses monitor, knowledge, and workflow reads across tab switches for 20 sec
   await screen.findByRole('button', { name: 'Run Dream Cycle' });
   expect(mock.controller.monitorSnapshot).toHaveBeenCalledTimes(1);
   expect(graphReads(2000)).toBe(1);
-  expect(graphReads(8)).toBe(1);
+  expect(mock.controller.knowledgeGraph).toHaveBeenCalledTimes(1);
   expect(mock.controller.savedTasks).toHaveBeenCalledTimes(1);
 
   clock += 20_001;
@@ -579,7 +593,6 @@ it('reuses monitor, knowledge, and workflow reads across tab switches for 20 sec
   await waitFor(() =>
     expect(mock.controller.savedTasks).toHaveBeenCalledTimes(2),
   );
-  await waitFor(() => expect(graphReads(8)).toBe(2));
   chooseTab('Knowledge');
   await waitFor(() => expect(graphReads(2000)).toBe(2));
 });
@@ -590,7 +603,7 @@ it('does not cache a failed workflow read', async () => {
     .mockResolvedValue(taskPage());
   show();
   expect(
-    await screen.findByText(/^Workflows could not be read:/),
+    await screen.findByText(/^Couldn’t read workflows just now\./),
   ).toBeVisible();
   chooseTab('Monitor');
   await waitFor(() =>
