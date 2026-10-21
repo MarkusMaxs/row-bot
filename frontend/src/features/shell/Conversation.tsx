@@ -83,6 +83,7 @@ import SlashPalette, { type SlashPaletteHandle } from './SlashPalette';
 import MentionPalette, { type MentionItem } from './MentionPalette';
 import { AppIcon } from '../apps/parts';
 import {
+  agentReasoningOption,
   goalRequest,
   profileChoice,
   reasoningChoice,
@@ -108,6 +109,10 @@ import {
   ATTACHMENT_LIMITS,
 } from './attachment-limits';
 import ApprovalCard from './ApprovalCard';
+import {
+  readPendingApprovalsNow,
+  usePendingApprovals,
+} from './pending-approvals';
 import ChatEmpty from './ChatEmpty';
 import { DelegatedRunsContext, type DelegatedRuns } from './AgentStubs';
 import { ProcessIoContext, type ProcessIo } from './background-processes';
@@ -726,6 +731,27 @@ export default function Conversation({
                       : 'Choose a model to send. Your message stays here.'
                     : '';
   const rows = (state.history ?? state.projection)?.rows ?? EMPTY_ROWS;
+  // A helper this chat started waits on an approval: its card shows here
+  // even when no notice reached the transcript, so no helper waits on an
+  // approval nobody can see (B348).
+  const approvalsFeed = usePendingApprovals(controller.pendingApprovals);
+  const helperApprovals = useMemo(
+    () =>
+      (approvalsFeed.page?.items ?? []).filter(
+        (item) =>
+          item.parent_conversation_id === id &&
+          !rows.some((row) => row.approval_id === item.id),
+      ),
+    [approvalsFeed.page, id, rows],
+  );
+  const lastAgentActivity =
+    state.activity
+      .filter((record) => record.event.type === 'agent.activity')
+      .at(-1)?.event.event_id ?? '';
+  useEffect(() => {
+    // A helper paused or went on: read the waiting approvals now.
+    if (lastAgentActivity) readPendingApprovalsNow(controller.pendingApprovals);
+  }, [controller.pendingApprovals, lastAgentActivity]);
   useEffect(() => {
     if (
       pending?.conversation === id &&
@@ -1007,21 +1033,38 @@ export default function Conversation({
       const current = controller.getDraft(target);
       controller.setDraft(target, { ...current, text: '' });
     };
+    // The chat's own thinking levels, for /reasoning and a helper on its model.
+    const chatReasoning =
+      state.workspace.reasoning?.model_ref ===
+      controls.model_selection?.model_ref
+        ? state.workspace.reasoning
+        : null;
+    const notALevel = (value: string) =>
+      chatReasoning?.available
+        ? `“${value}” isn't a thinking level for this model. Try ${chatReasoning.choices.map((item) => item.label).join(', ')}.`
+        : 'This model has no thinking levels to choose from.';
+    if (command.handler_kind === 'agent') {
+      // A helper on the chat's model takes one of its levels (B386).
+      const option = agentReasoningOption(argument);
+      if (
+        option &&
+        !option.otherModel &&
+        !(
+          option.value.toLocaleLowerCase() === 'budget' ||
+          reasoningChoice(option.value, chatReasoning)
+        )
+      ) {
+        setError(notALevel(option.value));
+        return;
+      }
+    }
     setBusy(true);
     try {
       if (command.handler_kind === 'reasoning') {
-        const reasoning =
-          state.workspace.reasoning?.model_ref ===
-          controls.model_selection?.model_ref
-            ? state.workspace.reasoning
-            : null;
+        const reasoning = chatReasoning;
         const choice = reasoningChoice(argument, reasoning);
         if (!reasoning?.available || !choice) {
-          setError(
-            reasoning?.available
-              ? `“${argument}” isn't a thinking level for this model. Try ${reasoning.choices.map((item) => item.label).join(', ')}.`
-              : 'This model has no thinking levels to choose from.',
-          );
+          setError(notALevel(argument));
           return;
         }
         await controller.intent(
@@ -2170,15 +2213,17 @@ export default function Conversation({
       onFirstPage={(page) => setDelegated({ conversation: id, page })}
       recentRead={recentDelegatedRead}
       ready={Boolean(state.handshake) && state.status === 'ready'}
-      refreshKey={
-        state.activity
-          .filter((record) => record.event.type === 'agent.activity')
-          .at(-1)?.event.event_id ?? ''
-      }
+      refreshKey={lastAgentActivity}
       loadPage={(cursor, signal) =>
         controller.delegatedActivity(id, cursor, signal)
       }
       loadRun={(run, signal) => controller.delegatedRun(id, run, signal)}
+      modelName={(ref) => {
+        const model = state.handshake?.models.find(
+          (item) => item.model_ref === ref,
+        );
+        return model ? splitModelLabel(model.label).name : modelRefName(ref);
+      }}
       // The dialog keeps these from when it opened: read the conversation's
       // revision when the person acts, not the render's.
       stopRun={async (run) => {
@@ -3043,7 +3088,12 @@ export default function Conversation({
               id && state.conversation && state.status === 'ready',
             )}
             onRename={rename}
-            model={id ? modelName : undefined}
+            model={
+              id
+                ? // A helper's header also says how it thinks (B386).
+                  [modelName, ownRun?.reasoning].filter(Boolean).join(' · ')
+                : undefined
+            }
             onFind={id ? findConversation : undefined}
             onShare={id ? manageConversation : undefined}
             onContext={
@@ -3221,6 +3271,23 @@ export default function Conversation({
                   )}
                 />
               )}
+              {id &&
+                !state.history &&
+                helperApprovals.map((item) => (
+                  <div
+                    key={item.id}
+                    className="message message-assistant"
+                    role="group"
+                    aria-label={`${item.title} needs your approval`}
+                  >
+                    <div className="transcript-content">
+                      <p className="message-text">
+                        {item.title} is waiting for your approval.
+                      </p>
+                      <ApprovalCard id={item.id} notice />
+                    </div>
+                  </div>
+                ))}
               {pendingShown && (
                 <article
                   className="message message-user message-pending"

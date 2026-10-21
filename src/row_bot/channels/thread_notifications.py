@@ -79,7 +79,8 @@ def append_parent_thread_message_once(
                     return False
                 if goal_completion_for and _clean_text(existing_metadata.get("goal_completion_for")) == goal_completion_for:
                     return False
-                if _message_content(message).strip() == clean_text:
+                # Two approvals can read alike ("create a product"): each keeps its own card (B348).
+                if not metadata.get("approval_request_id") and _message_content(message).strip() == clean_text:
                     return False
             appended = bool(
                 append_checkpoint_messages(

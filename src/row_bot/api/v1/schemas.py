@@ -4383,6 +4383,8 @@ class PendingApproval(WireModel):
     requested_at: str = Field(max_length=80)
     expires_at: str | None = Field(max_length=80)
     conversation_id: OpaqueId | None
+    # A helper's approval: the conversation that started it, which shows it too (B348).
+    parent_conversation_id: OpaqueId | None = None
     task_id: OpaqueId | None
 
 
@@ -7959,6 +7961,11 @@ class DelegatedRun(WireModel):
     profile_id: str = Field(default="", max_length=256)
     # The step a running helper is on: a tool and its redacted key argument (F16).
     activity: DelegatedStep | None = None
+    # The model and reasoning it started with (B386); the conversation's level
+    # that its model doesn't offer, when it fell back to the model's default.
+    model_ref: str | None = Field(default=None, max_length=120)
+    reasoning: str | None = Field(default=None, max_length=120)
+    reasoning_not_offered: str | None = Field(default=None, max_length=120)
 
 
 class DelegatedActivityView(WireModel):
