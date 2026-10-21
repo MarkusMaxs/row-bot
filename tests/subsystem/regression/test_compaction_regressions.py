@@ -357,7 +357,7 @@ def test_compaction_strips_thinking_from_completed_kept_turns_but_not_from_a_too
     monkeypatch.setattr(agent, "_emit_context_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent, "_record_compaction_event", lambda *args, **kwargs: {})
     monkeypatch.setattr("row_bot.threads.save_summary_state_cas",
-                        lambda thread_id, state, expected_revision: saved.append(dict(state)) or True)
+                        lambda thread_id, state, expected_revision, **_kwargs: saved.append(dict(state)) or True)
     monkeypatch.setattr(agent, "_choose_compaction_boundary", lambda inputs, previous: 2)
     _summarizer(monkeypatch)
     token = agent._current_thread_id_var.set("thread-thinking")

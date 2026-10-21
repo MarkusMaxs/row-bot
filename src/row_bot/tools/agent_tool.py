@@ -331,6 +331,13 @@ class _DelegateWorkInput(BaseModel):
             "Leave empty to inherit the parent model."
         ),
     )
+    reasoning: str = Field(
+        default="",
+        description=(
+            "Optional reasoning level in /reasoning words (e.g. low, high, off, 'budget 4000'). "
+            "Empty keeps the conversation's level."
+        ),
+    )
     developer_workspace_id: str = Field(
         default="",
         description="Optional Developer workspace id to use. Omit to inherit the current thread workspace.",
@@ -455,6 +462,7 @@ def _delegate_work(
     context_mode: str = "auto",
     display_name: str = "",
     model: str = "",
+    reasoning: str = "",
     parent_thread_id: str = "",
     developer_workspace_id: str = "",
     developer_workspace_path: str = "",
@@ -601,6 +609,7 @@ def _delegate_work(
             context_mode=context_mode,
             enabled_tool_names=enabled_tool_names,
             model_override=effective_child_model,
+            reasoning=str(reasoning or "").strip(),
             approval_mode=str(runtime.get("approval_mode") or ""),
             developer_workspace_id=developer_workspace_id,
             use_worktree=use_worktree,
@@ -625,6 +634,9 @@ def _delegate_work(
             message = "Child Agent is still running after the wait timeout."
     else:
         message = "Child Agent started."
+    thinking = agent_runner.thinking_line(agent_runner.helper_thinking(str((run or {}).get("id") or "")))
+    if thinking:
+        message += f" It runs on {thinking}."
     return _json_response({
         "ok": True,
         "run": _public_run(run),

@@ -117,6 +117,7 @@ _STATUS.update(
         "agent_run_finished": 409,
         "agent_work_not_resumable": 409,
         "agent_resume_unavailable": 409,
+        "helper_reasoning_unavailable": 422,
         "media_scope_conflict": 403,
         "media_type_conflict": 422,
         "media_destination_unavailable": 409,
