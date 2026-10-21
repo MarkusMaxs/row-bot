@@ -186,6 +186,9 @@ def test_recipe_settings_stay_within_their_limits():
     assert settings["bits"] == 16  # only 4 or 16
     assert settings["seed"] == trainer.DEFAULTS["seed"]  # a switch isn't a number
     assert "report_to" not in settings  # never a reporting integration
+    # A large card can stand in for a smaller tier's (8 GB of a 32 GB card), never for no card at all.
+    assert trainer.settings_from({"vram_cap": 0.2375})["vram_cap"] == 0.2375
+    assert trainer.settings_from({"vram_cap": 0.05})["vram_cap"] == trainer.DEFAULTS["vram_cap"]
 
 
 class FakeTokenizer:

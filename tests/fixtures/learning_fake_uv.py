@@ -4,8 +4,9 @@ Run as ``python learning_fake_uv.py <uv arguments>``. It understands the two com
 runs and nothing else:
 
 - ``python install <version> --install-dir <dir> --no-bin --no-registry``: makes
-  ``<dir>/cpython-<version>-fake/python.exe`` (``bin/python3`` elsewhere): a placeholder, not a
-  real interpreter (the install tests skip the engine's own check);
+  ``<dir>/cpython-<version>-fake/python.exe`` (``bin/python3`` elsewhere), and the minor version's
+  folder beside it as uv does: placeholders, not real interpreters (the install tests skip the
+  engine's own check);
 - ``pip install --python <p> --target <dir> --offline --no-index --find-links <wheels>
   --require-hashes --no-deps --no-build --compile-bytecode --requirement <file>``: for each pin
   ``name==version --hash=sha256:<h>`` it finds that wheel among ``<wheels>``, refuses it unless
@@ -46,10 +47,14 @@ def _normal(name: str) -> str:
 
 def python_install(argv: list[str]) -> int:
     version = argv[2]
-    folder = Path(_option(argv, "--install-dir")) / f"cpython-{version}-fake"
-    executable = folder / ("python.exe" if os.name == "nt" else "bin/python3")
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    executable.write_bytes(b"fake interpreter")
+    # As uv does since 0.8: the exact version's folder, and one for its minor version that leads to it
+    # (a link in real uv; a copy here).
+    minor = ".".join(version.split(".")[:2])
+    for name in (version, minor):
+        folder = Path(_option(argv, "--install-dir")) / f"cpython-{name}-fake"
+        executable = folder / ("python.exe" if os.name == "nt" else "bin/python3")
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"fake interpreter")
     return 0
 
 

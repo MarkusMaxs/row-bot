@@ -714,11 +714,18 @@ class EngineInstaller:
             if result.code != 0:
                 logger.warning("uv couldn't install the engine's Python: %s", result.stderr[-400:])
                 raise EngineError("install_failed")
+        depth = len(Path(_PYTHON_NAME).parts) - 1
         found = sorted(path for path in target.glob(f"*/{_PYTHON_NAME}") if path.is_file())
+        if len(found) > 1:
+            # uv also links the minor version's folder (cpython-3.12-…) to the one it installed
+            # (cpython-3.12.15-…): the exact version's folder is the interpreter.
+            exact = f"cpython-{self.plan.python_version}-"
+            found = [path for path in found if path.parents[depth].name.startswith(exact)
+                     and _plain_dir(path.parents[depth])]
         if len(found) != 1:
             raise EngineError("install_failed")
         home = staging / "py"
-        fetch.rename(found[0].parents[len(Path(_PYTHON_NAME).parts) - 1], home)
+        fetch.rename(found[0].parents[depth], home)
         _remove_tree(target)
         return home / _PYTHON_NAME
 

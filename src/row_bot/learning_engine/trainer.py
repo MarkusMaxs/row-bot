@@ -66,7 +66,9 @@ LIMITS: dict[str, tuple[float, float]] = {
     "gradient_accumulation": (1, 256),
     "warmup_steps": (0, 10000),
     "weight_decay": (0.0, 1.0),
-    "vram_cap": (0.5, 0.99),
+    # The share of the card training may use. As low as a fifth, so a large card can stand in for a
+    # smaller tier's (an 8 GB check on a 32 GB card caps at 0.2375, O77).
+    "vram_cap": (0.2, 0.99),
     "seed": (0, 2**31 - 1),
 }
 
