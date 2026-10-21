@@ -31,7 +31,6 @@
         "provider_id": {
           "enum": [
             "codex",
-            "claude_subscription",
             "xai_oauth"
           ],
           "title": "Provider Id",
@@ -77,8 +76,8 @@
       "items": {
         "$ref": "#/$defs/SubscriptionAccountSnapshot"
       },
-      "maxItems": 3,
-      "minItems": 3,
+      "maxItems": 2,
+      "minItems": 2,
       "title": "Accounts",
       "type": "array"
     },

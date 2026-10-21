@@ -303,11 +303,7 @@ export default function SubscriptionOptions(props: SubscriptionOptionsProps) {
         aria-busy={!!busy}
       >
         <h2>
-          {provider === 'xai_oauth'
-            ? 'xAI OAuth Client ID'
-            : provider === 'codex'
-              ? 'Codex CLI login'
-              : 'Claude Code login'}
+          {provider === 'xai_oauth' ? 'xAI OAuth Client ID' : 'Codex CLI login'}
         </h2>
         {busy === 'load' && <Skeleton label="Loading account options" />}
         {error && <p role="alert">{error}</p>}
@@ -408,10 +404,7 @@ export default function SubscriptionOptions(props: SubscriptionOptionsProps) {
             <ul>
               {snapshot.references.map((reference) => (
                 <li key={reference.provider_id}>
-                  {reference.provider_id === 'codex'
-                    ? 'Codex CLI'
-                    : 'Claude Code'}
-                  :{' '}
+                  Codex CLI:{' '}
                   {reference.metadata_saved
                     ? 'metadata reference saved'
                     : 'no saved metadata reference'}
@@ -430,12 +423,6 @@ export default function SubscriptionOptions(props: SubscriptionOptionsProps) {
             onClick={() => void review('codex', 'reference')}
           >
             Reference Codex CLI login
-          </Button>
-          <Button
-            disabled={locked || !snapshot || dirty}
-            onClick={() => void review('claude_subscription', 'reference')}
-          >
-            Reference Claude Code login
           </Button>
         </div>
         <Field

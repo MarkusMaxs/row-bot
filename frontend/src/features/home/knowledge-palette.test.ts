@@ -6,10 +6,9 @@ import {
   mix,
   readGraphTheme,
   typeSlot,
-  typeToken,
 } from './knowledge-palette';
 
-describe('typeSlot and typeToken', () => {
+describe('typeSlot', () => {
   it('gives common memory types fixed slots within the nine graph colours', () => {
     const fixed = {
       concept: 1,
@@ -26,7 +25,6 @@ describe('typeSlot and typeToken', () => {
     };
     for (const [type, slot] of Object.entries(fixed)) {
       expect(typeSlot(type)).toBe(slot);
-      expect(typeToken(type)).toBe(`--graph-${slot}`);
       expect(slot).toBeGreaterThanOrEqual(1);
       expect(slot).toBeLessThanOrEqual(GRAPH_SLOTS);
     }
@@ -40,7 +38,6 @@ describe('typeSlot and typeToken', () => {
   it('sends unknown types to the neutral Other colour', () => {
     expect(typeSlot('recipe')).toBe(0);
     expect(typeSlot('')).toBe(0);
-    expect(typeToken('recipe')).toBe('--graph-other');
   });
 });
 

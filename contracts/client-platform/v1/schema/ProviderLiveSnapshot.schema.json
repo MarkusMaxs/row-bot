@@ -1,5 +1,56 @@
 {
   "$defs": {
+    "ClaudePlanStatus": {
+      "additionalProperties": false,
+      "description": "Claude Code on the computer running Row-Bot: never a credential, a path or an account name.",
+      "properties": {
+        "detail": {
+          "maxLength": 256,
+          "title": "Detail",
+          "type": "string"
+        },
+        "minimum_version": {
+          "maxLength": 40,
+          "title": "Minimum Version",
+          "type": "string"
+        },
+        "plan": {
+          "maxLength": 80,
+          "title": "Plan",
+          "type": "string"
+        },
+        "set_up_again": {
+          "title": "Set Up Again",
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "not_installed",
+            "signed_out",
+            "too_old",
+            "ready",
+            "error"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 40,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "version",
+        "minimum_version",
+        "plan",
+        "detail",
+        "set_up_again"
+      ],
+      "title": "ClaudePlanStatus",
+      "type": "object"
+    },
     "ProviderLiveCard": {
       "additionalProperties": false,
       "properties": {
@@ -30,6 +81,17 @@
           "minimum": 0,
           "title": "Chat Count",
           "type": "integer"
+        },
+        "claude_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClaudePlanStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "configured": {
           "title": "Configured",

@@ -18,17 +18,15 @@ const revision = 'a'.repeat(64);
 const snapshot: SubscriptionAccountsSnapshot = {
   schema_version: 1,
   revision,
-  accounts: ['codex', 'claude_subscription', 'xai_oauth'].map(
-    (provider_id) => ({
-      provider_id,
-      revision,
-      saved_state: 'disconnected',
-      credential_storage: 'unknown',
-      has_recovery: false,
-      expires_at: null,
-      runtime_state: 'unknown',
-    }),
-  ) as SubscriptionAccountsSnapshot['accounts'],
+  accounts: ['codex', 'xai_oauth'].map((provider_id) => ({
+    provider_id,
+    revision,
+    saved_state: 'disconnected',
+    credential_storage: 'unknown',
+    has_recovery: false,
+    expires_at: null,
+    runtime_state: 'unknown',
+  })) as SubscriptionAccountsSnapshot['accounts'],
 };
 const flow: SubscriptionFlowSnapshot = {
   flow_id: '10000000-0000-4000-8000-000000000001',
@@ -257,28 +255,49 @@ it('loads saved state passively and sends one exact command on click', async () 
 });
 it('retains an unsent private code across remount and allows editing', async () => {
   const session = new SubscriptionAccountsSession();
-  const p = props({ session });
+  const xai: SubscriptionFlowSnapshot = {
+    ...flow,
+    provider_id: 'xai_oauth',
+    method: 'loopback',
+    device_code: null,
+  };
+  const p = props({
+    session,
+    apply: vi.fn<SubscriptionAccountsProps['apply']>(
+      async (_intent, _review, commandId) => ({
+        command_id: commandId,
+        status: 'completed',
+        accounts: snapshot,
+        flow: xai,
+      }),
+    ),
+  });
   const view = render(<SubscriptionAccounts {...p} />);
   await screen.findByText(/Saved status:/);
   fireEvent.change(screen.getByLabelText('Subscription provider'), {
-    target: { value: 'claude_subscription' },
+    target: { value: 'xai_oauth' },
   });
-  fireEvent.change(screen.getByLabelText('Claude setup token'), {
-    target: { value: 'synthetic-private-token' },
-  });
+  await startSignIn(p);
+  fireEvent.change(
+    await screen.findByLabelText('Authorization code or callback URL'),
+    { target: { value: 'synthetic-private-code' } },
+  );
   view.unmount();
   render(<SubscriptionAccounts {...p} />);
-  expect(screen.getByLabelText('Claude setup token')).toHaveValue(
-    'synthetic-private-token',
-  );
-  expect(session.hasRetained()).toBe(true);
-  fireEvent.change(screen.getByLabelText('Claude setup token'), {
-    target: { value: 'replacement-token' },
-  });
   expect(
-    screen.getByRole('button', { name: 'Import setup token' }),
+    screen.getByLabelText('Authorization code or callback URL'),
+  ).toHaveValue('synthetic-private-code');
+  expect(session.hasRetained()).toBe(true);
+  fireEvent.change(
+    screen.getByLabelText('Authorization code or callback URL'),
+    {
+      target: { value: 'replacement-code' },
+    },
+  );
+  expect(
+    screen.getByRole('button', { name: 'Connect with code' }),
   ).toBeEnabled();
-  expect(p.apply).not.toHaveBeenCalled();
+  expect(p.apply).toHaveBeenCalledOnce(); // the start; the code was never sent
   session.dispose();
 });
 it('retains an uncertain original receipt and locks input without resending', async () => {

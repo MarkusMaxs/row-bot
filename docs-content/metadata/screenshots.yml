@@ -48,22 +48,22 @@ screenshots:
     <<: *desktop
     title: Row-Bot window on Home
     output: app-shell-overview.png
-    alt: The whole Row-Bot window on Home, Overview, with the sidebar of agents and conversations on the left and the Overview with Needs you, status cards and recent activity.
+    alt: The whole Row-Bot window on Home, Overview, with the sidebar of agents and conversations on the left and Overview's one column of Needs you, Recent and Today.
     docs_pages: [/docs/app-shell/navigation]
     route: /app-v2/
     capture_selector: '[data-home-tab="overview"]'
-    expected_text: ["Needs you", "Continue where you left off"]
+    expected_text: ["Needs you", "Recent"]
   home-overview:
     <<: *desktop
     title: Home Overview
     output: home-overview.png
-    alt: Home Overview with the sidebar collapsed, showing the greeting and composer, Needs you with two approvals, the Agents, Workflows, Memory and Health cards, and what happened since yesterday evening.
+    alt: Home Overview with the sidebar collapsed, showing the greeting and the Ask box, Needs you with two approvals, the recent conversations and today's few facts in one column.
     docs_pages: [/docs/home/overview]
     route: /app-v2/
     actions:
       - click_selector: button[aria-label="Toggle navigation"]
     capture_selector: '[data-home-tab="overview"]'
-    expected_text: ["Needs you", "Since yesterday evening"]
+    expected_text: ["Needs you", "Recent"]
   chat-main:
     <<: *desktop
     title: Chat conversation
