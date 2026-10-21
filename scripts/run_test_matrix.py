@@ -53,8 +53,9 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # approval levels (Hands-off's one-time dialog, the reviewer's notes), background
 # processes (start, view output, stop), Row-Bot's browser (a local address asked
 # for once per chat, screenshots, page sizes, recordings) and video edits and many
-# images at once (the ffmpeg download asked for once, edits with Stop, contact sheets), and
-# files sent to the person's devices (the download on another device, its notice) or a chat app.
+# images at once (the ffmpeg download asked for once, edits with Stop, contact sheets),
+# files sent to the person's devices (the download on another device, its notice) or a chat app,
+# and a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -74,6 +75,7 @@ BROWSER_SMOKE_SPECS = (
     "conversation-delivery",
     "workspace-folders",
     "sandbox-prepare",
+    "workflow-flowchart",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
