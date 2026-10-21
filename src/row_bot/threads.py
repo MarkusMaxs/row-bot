@@ -1287,13 +1287,52 @@ def _latest_checkpoint_revision_conn(conn: sqlite3.Connection, thread_id: str) -
         return ""
 
 
+def _checkpoint_messages_conn(conn: sqlite3.Connection, thread_id: str, revision: str) -> list | None:
+    """The messages of one parent-thread checkpoint, or None when it can't be read."""
+    try:
+        row = conn.execute(
+            "SELECT type, checkpoint FROM checkpoints "
+            "WHERE thread_id = ? AND COALESCE(checkpoint_ns, '') = '' AND checkpoint_id = ?",
+            (thread_id, revision),
+        ).fetchone()
+        checkpoint = checkpointer.serde.loads_typed((row[0], row[1])) if row else None
+    except Exception:
+        logger.debug("Checkpoint of thread %s could not be read", str(thread_id)[:8], exc_info=True)
+        return None
+    messages = checkpoint.get("channel_values", {}).get("messages") if isinstance(checkpoint, dict) else None
+    return list(messages) if isinstance(messages, list) else None
+
+
+def _only_grew_toward(before: list, after: list, toward: list) -> bool:
+    """Whether *after* holds *before* plus only the messages *toward* has next (by their content)."""
+
+    def same_start(left: list, right: list, count: int) -> bool:
+        # Not memoized: the memo would keep these one-off checkpoint copies alive.
+        return _context_boundary_digest(tuple(left[:count]), "agent") == _context_boundary_digest(
+            tuple(right[:count]), "agent")
+
+    return (
+        len(before) <= len(after) <= len(toward)
+        and same_start(before, after, len(before))
+        and same_start(after, toward, len(after))
+    )
+
+
 def save_summary_state_cas(
     thread_id: str,
     state: dict,
     *,
     expected_revision: str,
+    messages: list | None = None,
 ) -> bool:
-    """Persist validated rolling-summary state if the checkpoint is unchanged."""
+    """Persist validated rolling-summary state if the checkpoint is unchanged.
+
+    *messages* is the conversation the summary was prepared from, as the compacting turn holds it.
+    The turn writes its own checkpoints in the background (LangGraph's default durability), so one
+    can land while it compacts: a newer checkpoint holding the expected one plus only messages that
+    *messages* has next is the same conversation, and the state is saved against it. Any other
+    change (another turn's message, an edit, a removal) still refuses.
+    """
     if _thread_write_blocked(thread_id):
         return False
     _ensure_thread_db()
@@ -1306,18 +1345,23 @@ def save_summary_state_cas(
     boundary_digest = str(payload.get("boundary_digest") or "")
     if not summary or mode not in {"agent", "chat_only"} or boundary_count <= 0 or len(boundary_digest) != 64:
         return False
-    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    expected = str(expected_revision or "")
     column = _SUMMARY_STATE_COLUMNS[mode]
     with sqlite3.connect(DB_PATH, timeout=30) as conn:
         conn.execute("BEGIN IMMEDIATE")
         current_revision = _latest_checkpoint_revision_conn(conn, thread_id)
-        if current_revision != str(expected_revision or ""):
-            conn.rollback()
-            return False
+        if current_revision != expected:
+            before = _checkpoint_messages_conn(conn, thread_id, expected) if messages is not None else None
+            after = _checkpoint_messages_conn(conn, thread_id, current_revision) if before is not None else None
+            if after is None or not _only_grew_toward(before, after, list(messages)):
+                conn.rollback()
+                return False
+            payload["source_revision"] = current_revision
         existing_state = _summary_state_slot(conn, thread_id, mode) or {}
-        if str(existing_state.get("source_revision") or "") == str(expected_revision or ""):
+        if str(existing_state.get("source_revision") or "") in {expected, current_revision}:
             conn.rollback()
             return False
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         conn.execute(
             f"UPDATE thread_meta SET {column} = ?, summary = ?, summary_msg_count = ? "
             "WHERE thread_id = ?",
