@@ -68,3 +68,44 @@ def test_a_page_reading_after_the_answer_is_saved_but_before_it_is_bound_sees_it
         assert handle.producer_done.wait(10)
     final = [row["id"] for row in platform.snapshot("conversation-a")["rows"] if row["role"] == "assistant"]
     assert final == ["assistant:checkpoint:" + native_id]
+
+
+def test_an_answer_saved_before_it_starts_streaming_shows_once(platform):
+    """The other order: a page reads the saved answer in before its live row starts (a tool step's refresh
+    lands between the save and the first token). Twins were only retired when saved messages were read in,
+    so every later read showed the answer twice until it was bound. Found in the browser smoke (21 Oct, #466):
+    the reply after two reviewed tool steps."""
+    from tests.helpers.client_platform_fakes import StreamBarrier
+
+    text = "Saved the summary and committed the tidy-up."
+    native_id = fixture_id("saved-before-streamed-answer")
+    saved, streamed = StreamBarrier(), StreamBarrier()
+    fake = ScriptedAgentStream((CheckpointCommit((AIMessage(content=text, id=native_id),)), saved,
+                               ("token", text), streamed, ("done", text)))
+    handle = platform.registry.get(submit(platform, fake, "saved-before-streamed")["execution_id"])
+    try:
+        assert saved.entered.wait(10)
+        page = platform.snapshot("conversation-a")  # A page reads the saved answer in before it streams.
+        saved.release.set()
+        assert streamed.entered.wait(10)
+        # The page applies each delta that follows to its own rows, as the client does, until a settle
+        # or checkpoint sends it to read again.
+        rows = {row["id"]: row for row in page["rows"]}
+        for event in platform.events_since("conversation-a", page["cursor"])["events"]:
+            if event["type"] in {"transcript.settled", "transcript.checkpoint"}:
+                break
+            if event["type"] == "transcript.delta":
+                delta = event["payload"]
+                live = rows.setdefault(delta["row_id"], {"id": delta["row_id"], "role": "assistant",
+                                                         "blocks": [{"type": "text", "text": ""}]})
+                live["blocks"][0]["text"] += delta["public_text_delta"]
+        for view in (list(rows.values()), platform.snapshot("conversation-a")["rows"]):  # and when it reads again
+            shown = [row for row in view if row["role"] == "assistant"
+                     and "".join(block.get("text", "") for block in row.get("blocks", [])) == text]
+            assert len(shown) == 1, [row["id"] for row in shown]
+    finally:
+        saved.release.set()
+        streamed.release.set()
+        assert handle.producer_done.wait(10)
+    final = [row["id"] for row in platform.snapshot("conversation-a")["rows"] if row["role"] == "assistant"]
+    assert final == ["assistant:checkpoint:" + native_id]
