@@ -52,6 +52,21 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      // KaTeX's fonts as WOFF2 only, which every supported browser and
+      // webview reads: its stylesheet also lists WOFF and TrueType copies,
+      // which would ship unused and are not served as client assets.
+      name: 'row-bot-katex-woff2',
+      enforce: 'pre',
+      transform(code, id) {
+        if (!/\/node_modules\/katex\/dist\/katex(?:\.min)?\.css$/.test(id))
+          return null;
+        return code.replace(
+          /,\s*url\(fonts\/[\w-]+\.(?:woff|ttf)\)\s*format\("(?:woff|truetype)"\)/g,
+          '',
+        );
+      },
+    },
+    {
       // Dev only: serve the desktop Buddy document at the route the native
       // host opens (/app-v2/buddy-overlay), as the backend does when built.
       name: 'row-bot-buddy-overlay-route',
