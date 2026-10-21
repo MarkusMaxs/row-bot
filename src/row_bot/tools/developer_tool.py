@@ -133,12 +133,15 @@ def _ask(payload: dict) -> object:
     The person under Ask; the reviewer first under Auto (the person when it asks); the level
     itself under Hands-off. Returns what ``interrupt()`` would: True when approved.
     """
-    from row_bot.tools.approval_gate import request_approval
+    from row_bot.developer.runtime import sets_git_identity
+    from row_bot.tools.approval_gate import GIT_IDENTITY_RISK, request_approval
 
     tool = str(payload.get("tool") or "")
     risks = [f"a Developer action in the conversation's code folder: {payload.get('label') or tool}"]
     if tool in _DEVELOPER_RISKS:
         risks.append(_DEVELOPER_RISKS[tool])
+    if sets_git_identity(str((payload.get("args") or {}).get("command") or "")):
+        risks.append(GIT_IDENTITY_RISK)
     return request_approval(
         payload,
         approval_mode=_active_approval_mode(),
