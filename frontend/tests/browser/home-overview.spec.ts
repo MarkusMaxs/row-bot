@@ -40,7 +40,14 @@ const unavailable = (route: Route) =>
     }),
   });
 
-async function patched(route: Route, change: (body: any) => object) {
+/** A read's own answer as an object, so a state changes only its fields. */
+type Answer = Record<string, unknown> & {
+  steps: { id: string }[];
+  completed_steps: string[];
+  skipped_steps: string[];
+};
+
+async function patched(route: Route, change: (body: Answer) => object) {
   const response = await route.fetch();
   await route.fulfill({ response, json: change(await response.json()) });
 }
@@ -137,7 +144,7 @@ async function stage(context: BrowserContext, page: Page, staged: Staged) {
         needs_model: Boolean(staged.needsModel),
         dismissed_home_card: !staged.setupReminder,
         completed_steps: staged.setupReminder
-          ? body.steps.slice(0, 3).map((step: { id: string }) => step.id)
+          ? body.steps.slice(0, 3).map((step) => step.id)
           : body.completed_steps,
         skipped_steps: staged.setupReminder ? [] : body.skipped_steps,
       })),
