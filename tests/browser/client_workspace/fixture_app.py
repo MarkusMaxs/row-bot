@@ -4084,6 +4084,10 @@ class _FixtureDownloads:
             self.total = 6_789_270_885
         elif name == "failed":
             self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 6_789_270_885
+        elif name == "server":  # L2x: an engine from before Row-Bot's own model server, only that missing
+            self.engine_state, self.engine_bytes = "installed", 4_033_251_988
+            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.state, self.total = "ready", 578_117_583
         elif name != "ready":
             raise HTTPException(404, "Unknown download state")
 
@@ -4154,6 +4158,68 @@ def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
     elif action == "old-driver":
         found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 3080 Laptop GPU", 8192, "560.94")])
         hardware.check = lambda *, refresh=False, detector=None: found
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
+# ── Learning (preview), L2x: Row-Bot's own model server, "Runs in" and the larger tiers ──
+
+_l2x: dict[str, object] = {}
+
+
+@app.post("/__l2x_fixture/learning/{action}")
+def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(default="")) -> dict:
+    """Row-Bot's own model server for the L2x spec: an RTX 5090 (or no NVIDIA card), the server's
+    files installed or not, and a version at each of its states there. Nothing starts a server,
+    reaches the network or needs a GPU."""
+    predecessor._authorize(x_fixture_token)
+    from dataclasses import replace as _replace
+
+    from row_bot.learning.training import hardware, lockfile, releases, server_files
+
+    if action == "restore":
+        for module, attribute in (("hardware", "check"), ("hardware", "peek"), ("lockfile", "tools_platform"),
+                                  ("server_files", "status")):
+            original = _l2x.pop(f"{module}.{attribute}", None)
+            if original is not None:
+                setattr({"hardware": hardware, "lockfile": lockfile, "server_files": server_files}[module],
+                        attribute, original)
+        _l2x.clear()
+        return {"action": action}
+    for module, attribute, owner in (("hardware", "check", hardware), ("hardware", "peek", hardware),
+                                     ("lockfile", "tools_platform", lockfile),
+                                     ("server_files", "status", server_files)):
+        _l2x.setdefault(f"{module}.{attribute}", getattr(owner, attribute))
+    if action == "card":  # name: 5090 (the 32 GB tier) or none (no NVIDIA card: not on this computer)
+        gpus = [] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")]
+        found = hardware.classify(gpus)
+        hardware.check = lambda *, refresh=False, detector=None: found
+        hardware.peek = lambda: found
+        lockfile.tools_platform = lambda platforms=None: "windows-x64"  # a build for this computer
+    elif action == "server":  # name: installed or missing
+        state = "installed" if name == "installed" else "not_installed"
+        found_files = server_files.ServerFiles(state, "cu130", bytes=747_386_477 if state == "installed" else 0)
+        server_files.status = lambda root=None, **kwargs: found_files
+    elif action == "version":  # name: starting, ready, missing, memory, unavailable (v1 in Row-Bot's server)
+        _l2c_version({"starting": "making-ready"}.get(name, "ready"))
+        folder = releases.version_dir(1)
+        state = releases.read_state(folder)
+        from row_bot.application.settings_commands import write_learning_settings
+
+        write_learning_settings({"serve_runtime": "row_bot"})
+        if name == "starting":
+            state = _replace(state, runtime="row_bot")
+        elif name == "ready":
+            state = _replace(state, runtime="row_bot",
+                             model_ref="model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v1")
+        else:
+            failure = {"missing": "server_missing", "memory": "load_failed", "unavailable": "server_unavailable"}
+            if name not in failure:
+                raise HTTPException(404, "Unknown version state")
+            state = _replace(state, phase=releases.RUNTIME_FAILED, runtime="row_bot", failure=failure[name],
+                             model_ref=None)
+        releases.write_state(folder, state)
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
     return {"action": action}

@@ -192,9 +192,12 @@ test('the personal model: needs more examples, training, preparing, making ready
   const sheet = page.getByRole('dialog', {
     name: 'Where your personal model runs',
   });
+  // L2x (O75): Row-Bot's own runner is the recommendation on a computer with an NVIDIA card;
+  // this profile chose Ollama, which stays a choice.
+  await expect(sheet.getByRole('radio', { name: /^Ollama/ })).toBeChecked();
   await expect(
-    sheet.getByRole('radio', { name: /Ollama · recommended/ }),
-  ).toBeChecked();
+    sheet.getByRole('radio', { name: /^Row-Bot · recommended/ }),
+  ).toBeEnabled();
   await shoot(page, info, 'runs-in');
   await sheet.getByRole('radio', { name: /LM Studio/ }).check();
   await sheet.getByRole('button', { name: 'Use LM Studio' }).click();

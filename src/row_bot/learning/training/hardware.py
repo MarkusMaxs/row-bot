@@ -45,15 +45,21 @@ class StartingModel:
     download_bytes: int
 
 
-# Qwen/Qwen3.5-2B at the revision L0d measured: 4.57 GB of weights (D5, D13), every file pinned
-# in ``weights.py``.
-QWEN35_2B = StartingModel(_weights.QWEN35_2B.id, _weights.QWEN35_2B.name, _weights.QWEN35_2B.licence,
-                          _weights.QWEN35_2B.download_bytes)
+def _starting(pinned: _weights.PinnedModel) -> StartingModel:
+    return StartingModel(pinned.id, pinned.name, pinned.licence, pinned.download_bytes)
+
+
+# Qwen/Qwen3.5-2B at the revision L0d measured: 4.57 GB of weights (D5, D13), and the larger tiers'
+# starting models (L2x, O90); every file pinned in ``weights.py``.
+QWEN35_2B = _starting(_weights.QWEN35_2B)
+QWEN35_4B = _starting(_weights.QWEN35_4B)
+QWEN35_9B = _starting(_weights.QWEN35_9B)
+QWEN38_27B = _starting(_weights.QWEN38_27B)
 # The training engine's download when its lock can't be read (CUDA PyTorch, Unsloth, TRL, PEFT,
 # and llama.cpp's tools for the export): 2.3 GB on Windows (L0d, L2c). The real figure comes from
 # the lock and the pinned tools (``engine_download_bytes``).
 ENGINE_DOWNLOAD_BYTES = 2_280_000_000
-STARTING_MODELS = {QWEN35_2B.id: QWEN35_2B}
+STARTING_MODELS = {model.id: model for model in (QWEN35_2B, QWEN35_4B, QWEN35_9B, QWEN38_27B)}
 # Drivers (O25): CUDA 13.0 needs 580, CUDA 12.8 needs 570.
 CUDA13_DRIVER = 580
 MIN_DRIVER = 570
@@ -143,6 +149,15 @@ class HardwareCheck:
         """The training engine's build for this card (None when it can't train here)."""
 
         return engine_variant(self.gpu) if self.can_train else None
+
+    @property
+    def starting_models(self) -> tuple[StartingModel, ...]:
+        """Every certified starting model this card trains, its own tier's first (the recommendation)."""
+
+        if self.tier is None:
+            return ()
+        fits = [tier for tier in TIERS if tier.certified and tier.min_memory_mib <= self.tier.min_memory_mib]
+        return tuple(model for tier in reversed(fits) for model in tier.models)
 
 
 def engine_download_bytes(variant: str | None) -> int:

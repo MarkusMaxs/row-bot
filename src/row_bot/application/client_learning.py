@@ -754,7 +754,7 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
         if found.gpu else None,
         "tier": tier(found.tier) if found.tier else None,
         "larger_tiers": [tier(item) for item in found.larger_tiers],
-        "starting_models": [_model_view(item) for item in (found.tier.models if found.tier else ())],
+        "starting_models": [_model_view(item) for item in found.starting_models],
         "engine_download_bytes": hardware.engine_download_bytes(found.variant),
         "free_bytes": free,
     }
@@ -948,6 +948,17 @@ def found_job_id(found: Any) -> str:
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 
+def _trainable_models() -> set[str]:
+    """The starting models setup may choose: the certified ones this computer's card trains (the 8 GB
+    tier's alone before the card was read, or on a computer that can't train)."""
+
+    from row_bot.learning.training import hardware
+
+    found = hardware.peek()
+    models = {item.id for item in found.starting_models} if found is not None and found.can_train else set()
+    return models or {learning.STARTING_MODELS[0]}
+
+
 def _setup_values(setup: Any) -> dict[str, Any]:
     if not isinstance(setup, dict):
         raise ClientPlatformError("invalid_learning_command")
@@ -961,7 +972,7 @@ def _setup_values(setup: Any) -> dict[str, Any]:
     limit = setup.get("monthly_token_limit")
     if (setup.get("apply_mode") not in learning.APPLY_MODES
             or setup.get("train_where") not in learning.TRAIN_PLACES
-            or setup.get("starting_model", learning.STARTING_MODELS[0]) not in learning.STARTING_MODELS
+            or setup.get("starting_model", learning.STARTING_MODELS[0]) not in _trainable_models()
             or type(setup.get("train_in_quiet_hours")) is not bool
             or type(limit) is not int or not 0 <= limit <= learning.MAX_MONTHLY_TOKEN_LIMIT):
         raise ClientPlatformError("invalid_learning_command")
