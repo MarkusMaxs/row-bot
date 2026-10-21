@@ -334,9 +334,8 @@ class _DelegateWorkInput(BaseModel):
     reasoning: str = Field(
         default="",
         description=(
-            "Optional reasoning level for this child Agent, in /reasoning words: default, on, off, "
-            "none, minimal, low, medium, high, xhigh, max, or 'budget <tokens>'. Leave empty to keep "
-            "the conversation's level (or the model's default when another model lacks it)."
+            "Optional reasoning level in /reasoning words (e.g. low, high, off, 'budget 4000'). "
+            "Empty keeps the conversation's level."
         ),
     )
     developer_workspace_id: str = Field(
