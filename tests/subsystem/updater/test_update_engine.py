@@ -116,7 +116,14 @@ def test_unchanged_assets_and_lock_reuse_the_running_versions_files(tmp_path):
     staged = layout.versions_dir / "5.2.1"
     reused = staged / "app" / "static" / "buddy.json"
     assert reused.read_bytes() == (app / "static" / "buddy.json").read_bytes()
-    assert reused.stat().st_ino == (app / "static" / "buddy.json").stat().st_ino
+    # A copy, not a link: bundled files are read only as single-link files (B366), in either version.
+    assert reused.stat().st_ino != (app / "static" / "buddy.json").stat().st_ino
+    assert reused.stat().st_nlink == 1 and (app / "static" / "buddy.json").stat().st_nlink == 1
+    from row_bot.buddy.assets import read_buddy_asset
+
+    for version_app in (app, staged / "app"):  # Buddy's strict reader loads it in both versions.
+        static = version_app / "static"
+        assert read_buddy_asset(static / "buddy.json", root=static) == reused.read_bytes()
 
 
 def test_a_failed_self_test_removes_the_staging_folder_and_leaves_state_untouched(tmp_path):

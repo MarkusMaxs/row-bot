@@ -78,6 +78,33 @@ def test_pinned_installer_still_installs_when_windows_briefly_refuses_a_move(tmp
     assert Path(manifest["executable_path"]).read_bytes() == b"reviewed-binary"
 
 
+def test_macos_cua_install_finds_the_driver_in_the_reviewed_release_layout(tmp_path, monkeypatch) -> None:
+    from row_bot.computer_use import readiness
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(readiness.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(readiness.platform, "machine", lambda: "arm64")
+    readiness.acknowledge_disclosure()
+    asset = readiness.selected_asset()
+    top = asset["name"].removesuffix(".tar.gz")  # The release's archive unpacks into this folder.
+    archive = tmp_path / asset["name"]
+    sha = _tar_gz(archive, {
+        f"{top}/cua-driver": b"command-line copy",
+        f"{top}/CuaDriver.app/Contents/Info.plist": b"reviewed-plist",
+        f"{top}/CuaDriver.app/Contents/MacOS/cua-driver": b"reviewed-binary",
+    })
+    monkeypatch.setattr(readiness, "selected_asset", lambda: {**asset, "sha256": sha})
+    monkeypatch.setattr(requirements, "RUNTIMES_DIR", tmp_path / "runtimes")
+    monkeypatch.setattr(requirements, "_download", lambda _url, destination, _progress=None: shutil.copyfile(archive, destination))
+
+    result = readiness.install_cua_runtime()
+
+    assert result.ok is True, result
+    executable = Path(requirements._read_manifest("cua-driver")["executable_path"])
+    assert executable.read_bytes() == b"reviewed-binary"
+    assert executable.parents[2].name == "CuaDriver.app"
+
+
 def test_pinned_installer_preserves_a_reviewed_macos_app_bundle(tmp_path, monkeypatch) -> None:
     archive = tmp_path / "cua-driver.tar.gz"
     sha = _tar_gz(

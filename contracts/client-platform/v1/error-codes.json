@@ -603,6 +603,7 @@
     "subscription_reference_unavailable": 409,
     "subscription_response_invalid": 503,
     "subscription_review_invalid": 409,
+    "subscription_storage_unavailable": 409,
     "subscription_uncertain": 409,
     "task_advanced_edit_required": 409,
     "task_approval_unconfirmed": 409,
