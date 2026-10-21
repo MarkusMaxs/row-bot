@@ -13,7 +13,9 @@ it runs Row-Bot's own code end to end and writes one results file of counts, rat
    fit as captured, **A32** is the only way captured rows train on 8 GB (O23's fallback: QLoRA at
    32K) and stands in for A.
 2. ``train``: trains each arm through Row-Bot's own worker, the same recipe and one pass each, the
-   graphics card capped to the 8 GB tier's memory (``--cap-gb``); times and peak memory.
+   graphics card capped to the 8 GB tier's memory (``--cap-gb``); times, and whether the cap held.
+   When A32 doesn't fit the cap, ``--a32-cap-gb`` trains it again with more memory (off the tier, so
+   the shapes can still be compared at equal rows and steps); every attempt is kept.
 3. ``serve``: exports each version (Q8_0) and serves it in Ollama as Row-Bot does (32K, the bridge,
    thinking off), plus a thinking-on copy; the untouched starting model the same way.
 4. ``compare``: Row-Bot's evaluation worker runs every arm on the visible packs (``--visible-repeats``
@@ -212,12 +214,19 @@ def phase_train(ctx: dict[str, Any], results: Results) -> None:
         raise SystemExit("Training needs an NVIDIA graphics card.")
     hardware.check(refresh=True, detector=lambda: found)
     total = int(found.gpu.memory_mib)
-    share = round(min(0.95, ctx["cap_gb"] * 1024 * 0.95 / total), 4)
     trained = results.data.setdefault("train", {})
     store = LearningStore(data)
     for arm in _arms_to_train(results):
-        if (trained.get(arm) or {}).get("state") == "evaluating" or (trained.get(arm) or {}).get("version"):
+        before = trained.get(arm) or {}
+        if before.get("state") in ("evaluating", "no_rows"):
             continue
+        cap_gb = ctx["a32_cap_gb"] if arm == "A32" and ctx.get("a32_cap_gb") else ctx["cap_gb"]
+        if before:  # an attempt that failed (out of the cap's memory): kept, then tried again
+            if before.get("cap_gb", ctx["cap_gb"]) == cap_gb:
+                _say(f"{arm}: failed before at {cap_gb} GB ({before.get('error')}); not tried again")
+                continue
+            trained.setdefault(f"{arm}_attempts", []).append(before)
+        share = round(min(0.95, cap_gb * 1024 * 0.95 / total), 4)
         recipe = recipes.load("8gb")
         shape = "serving" if arm == "B" else "captured"
         settings = {**recipe.settings, "vram_cap": share}
@@ -250,7 +259,7 @@ def phase_train(ctx: dict[str, Any], results: Results) -> None:
             "seconds": round(time.monotonic() - started, 1),
             "seconds_per_step": finished.seconds_per_step if finished else None,
             "loss": finished.loss if finished else None, "error": finished.error_code if finished else None,
-            "vram_cap": share, "max_seq_length": recipe.max_seq_length, "bits": settings["bits"],
+            "vram_cap": share, "cap_gb": cap_gb, "max_seq_length": recipe.max_seq_length, "bits": settings["bits"],
             "card_mib_added_at_peak": peak.added_mib, "gpu_hours": round((time.monotonic() - started) / 3600, 3),
         }
         results.save()
@@ -514,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", help="where the results go (default: <data>/../shape-ablation)")
     parser.add_argument("--phases", default=",".join(PHASES))
     parser.add_argument("--cap-gb", type=float, default=8.0, help="graphics memory training may use (the tier)")
+    parser.add_argument("--a32-cap-gb", type=float, help="graphics memory for A32 when it doesn't fit --cap-gb")
     parser.add_argument("--visible-per-pack", type=int, default=16)
     parser.add_argument("--visible-repeats", type=int, default=3)
     parser.add_argument("--hidden-repeats", type=int, default=3)
@@ -548,7 +558,7 @@ def main(argv: list[str] | None = None) -> int:
     results.data.setdefault("started_at", time.strftime("%Y-%m-%d %H:%M"))
     commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout
     results.data["build"] = commit.strip()
-    ctx = {"data": data, "out": out, "cap_gb": args.cap_gb, "visible_per_pack": args.visible_per_pack,
+    ctx = {"data": data, "out": out, "cap_gb": args.cap_gb, "a32_cap_gb": args.a32_cap_gb, "visible_per_pack": args.visible_per_pack,
            "visible_repeats": args.visible_repeats, "hidden_repeats": args.hidden_repeats, "thinking": args.thinking}
     wanted = [phase.strip() for phase in args.phases.split(",") if phase.strip()]
     for phase in wanted:
