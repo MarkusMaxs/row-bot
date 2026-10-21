@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 import json
+import logging
 import sys
 from typing import Any
 
@@ -24,6 +25,7 @@ from row_bot.runtime import admissions
 # The processing scope Settings › Documents uses instead of a conversation.
 # Conversation ids are generated hex, so this name never belongs to one.
 SETTINGS_PROCESSING_SCOPE = "settings_documents"
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, repr=False)
@@ -282,6 +284,7 @@ def execute_document_processing(command: dict, *, service: DocumentJobService | 
     except Exception:
         if authority_error is not None:
             raise authority_error
+        _LOG.warning("Document processing could not start", exc_info=True)
         return receipt()
     admissions.complete_command(policy.owner_id,key,{"command_id":command_id,"status":"completed",
         "batch_id":payload["batch_id"],"_document_processing":proof})

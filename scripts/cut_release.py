@@ -98,7 +98,7 @@ def bump(root: Path, version: str) -> None:
         )
     replace_once(
         root / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml",
-        r'placeholder: v\d+\.\d+\.\d+',
+        rf'placeholder: v{VERSION_PATTERN}',  # A pre-release's suffix too, or a later cut would keep it.
         f'placeholder: v{version}',
     )
     # The docs site's screenshot URLs carry the release as a cache-busting query.

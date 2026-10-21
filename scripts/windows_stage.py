@@ -5,7 +5,7 @@ certificate never leaves the maintainer's machine (D4). release.yml therefore
 ships the stage ISCC needs, laid out as in a checkout:
 
 - ``installer/row_bot_setup.iss`` and ``row-bot.ico``
-- ``installer/build/{Row-Bot.exe,version.json,inno-version.txt}``
+- ``installer/build/{Row-Bot.exe,Row-Bot Server.exe,version.json,inno-version.txt}``
 - ``installer/build/app/`` and ``installer/build/python/`` (about 86,000 files)
 
 ``pack`` writes them into one tar (Python's tarfile: Windows' bsdtar can skip
@@ -37,12 +37,12 @@ from pathlib import Path
 from typing import Any
 
 FILES = ("installer/row_bot_setup.iss", "row-bot.ico", "installer/build/Row-Bot.exe",
-         "installer/build/version.json", "installer/build/inno-version.txt")
+         "installer/build/Row-Bot Server.exe", "installer/build/version.json", "installer/build/inno-version.txt")
 FOLDERS = ("installer/build/app", "installer/build/python")
 STAGE_JSON = "installer/build/stage.json"
 VERIFIED_JSON = "installer/build/stage.verified.json"
-#: Signed in place on the signing machine, so its bytes are not counted.
-SIGNED_IN_PLACE = "installer/build/Row-Bot.exe"
+#: Signed in place on the signing machine, so their bytes are not counted.
+SIGNED_IN_PLACE = ("installer/build/Row-Bot.exe", "installer/build/Row-Bot Server.exe")
 
 
 class StageError(Exception):
@@ -66,9 +66,9 @@ def _walk(root: Path) -> list[str]:
 
 
 def count(root: Path) -> dict[str, int]:
-    """Files and bytes of a stage (``Row-Bot.exe`` counted, its bytes not: it gets signed)."""
+    """Files and bytes of a stage (the two programs counted, their bytes not: they get signed)."""
     names = _walk(root)
-    total = sum((root / name).stat().st_size for name in names if name != SIGNED_IN_PLACE)
+    total = sum((root / name).stat().st_size for name in names if name not in SIGNED_IN_PLACE)
     return {"files": len(names), "bytes": total}
 
 
