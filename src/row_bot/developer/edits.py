@@ -982,6 +982,11 @@ def _windows_edit_metadata(path: pathlib.Path) -> bytes:
     return (flags & ~(0x20 | 0x80)).to_bytes(4, "little") + descriptor.raw[:size.value]
 
 
+# macOS tags every file a downloaded app writes, the replacement included, with
+# com.apple.provenance, so a replacement cannot lose it.
+_SYSTEM_EDIT_XATTRS = frozenset({"com.apple.provenance"})
+
+
 def _has_edit_xattrs(path: pathlib.Path | int) -> bool:
     if sys.platform == "darwin":
         # CPython exposes os.listxattr on Linux, not macOS. Use the native
@@ -1000,7 +1005,14 @@ def _has_edit_xattrs(path: pathlib.Path | int) -> bool:
         size = query(target, None, 0, options)
         if size < 0:
             raise FileEditError("file_metadata_unavailable")
-        return size != 0
+        if size == 0:
+            return False
+        names = ctypes.create_string_buffer(size)
+        size = query(target, names, size, options)
+        if size < 0:
+            raise FileEditError("file_metadata_unavailable")
+        listed = {os.fsdecode(name) for name in names.raw[:size].split(b"\0") if name}
+        return bool(listed - _SYSTEM_EDIT_XATTRS)
     if not hasattr(os, "listxattr"):
         raise FileEditError("file_metadata_unavailable")
     return bool(os.listxattr(path) if isinstance(path, int)

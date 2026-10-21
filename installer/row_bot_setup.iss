@@ -1,5 +1,5 @@
 ; =============================================================================
-; Row-Bot v5.1.0 - Inno Setup Script
+; Row-Bot v5.2.1 - Inno Setup Script
 ; Self-contained per-user installer: bundles embedded Python with all pip
 ; packages pre-installed. No internet downloads at install time.
 ; =============================================================================
@@ -100,7 +100,7 @@
 #endif
 
 #define MyAppName      "Row-Bot"
-#define MyAppVersion   "5.1.0"
+#define MyAppVersion   "5.2.1"
 #define MyAppPublisher "Row-Bot"
 #define MyAppURL       "https://row-bot.ai"
 #define MyAppUserModelID "ai.row-bot.desktop"
@@ -145,6 +145,18 @@ SetupLogging=yes
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Messages]
+; The progress page says what it is doing in a few plain steps, not every file it copies (B356).
+StatusClosingApplications=Closing Row-Bot...
+StatusCreateDirs=Copying Row-Bot...
+StatusExtractFiles=Copying Row-Bot...
+StatusCreateIcons=Creating shortcuts...
+StatusCreateIniEntries=Finishing up...
+StatusCreateRegistryEntries=Finishing up...
+StatusRegisterFiles=Finishing up...
+StatusSavingUninstall=Finishing up...
+StatusRollback=Undoing the changes...
+
 [InstallDelete]
 ; Reinstalling a version replaces its folder whole, so nothing a build no
 ; longer ships stays behind. User data lives in the profile folder, never
@@ -160,6 +172,8 @@ Source: "{#AppStageDir}\*";       DestDir: "{#VersionDir}\app"; Flags: ignorever
 ; Embedded Python with all packages pre-installed.
 Source: "build\python\*";         DestDir: "{#VersionDir}\python"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "build\version.json";     DestDir: "{#VersionDir}"; Flags: ignoreversion
+; Runs the server beside python.exe, so Windows Firewall names Row-Bot, not Python (B355).
+Source: "build\Row-Bot Server.exe"; DestDir: "{#VersionDir}\python"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\Row-Bot.exe"; AppUserModelID: "{#MyAppUserModelID}"; Comment: "Launch Row-Bot"
@@ -193,6 +207,8 @@ function MoveFileEx(ExistingFileName, NewFileName: string; Flags: Cardinal): Boo
 var
   FirstInstall: Boolean;
   LegacyInstallPending: Boolean;
+  { An earlier Row-Bot (this user's, or a 5.x install for all users) is being replaced. }
+  Updating: Boolean;
 
 function HasParam(const Name: string): Boolean;
 var
@@ -295,6 +311,7 @@ begin
   Result := '';
   FirstInstall := not FileExists(ExpandConstant('{app}\state.json')) and
     not FileExists(ExpandConstant('{app}\Row-Bot.exe'));
+  Updating := not FirstInstall or LegacyInstallPresent;
   LegacyInstallPending := not RemoveLegacyInstall;
   MoveRunningLauncherAside;
 end;
@@ -329,10 +346,38 @@ begin
     MoveFileEx(State + '.setup.tmp', State, MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH);
 end;
 
+procedure InitializeWizard;
+begin
+  { One status line, no file names (B356). }
+  WizardForm.FilenameLabel.Visible := False;
+end;
+
+{ An update run by an earlier Row-Bot (5.0 and 5.1 run this with /SILENT and quit) says that Row-Bot
+  closed on purpose and comes back by itself (B358). }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID <> wpInstalling then
+    Exit;
+  if Updating then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Updating Row-Bot';
+    WizardForm.PageDescriptionLabel.Caption :=
+      'Row-Bot closed to install the update. It opens again by itself when this finishes.';
+  end
+  else
+  begin
+    WizardForm.PageNameLabel.Caption := 'Installing Row-Bot';
+    WizardForm.PageDescriptionLabel.Caption := 'Row-Bot opens by itself when this finishes.';
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
+    WizardForm.StatusLabel.Caption := 'Getting Row-Bot ready...';
     RecordInstall;
+  end;
 end;
 
 function InitializeUninstall: Boolean;

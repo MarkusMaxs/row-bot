@@ -346,8 +346,12 @@ test('retained settings expose real capability state without leaving the unified
     page.getByRole('heading', { name: 'System', exact: true }),
   ).toBeVisible();
 
-  for (let remaining = 5; remaining > 0; remaining -= 1)
+  // Each step back lands before the next: going back again while a full page
+  // load is still starting can detach the page in Chromium (B360).
+  for (let remaining = 5; remaining > 0; remaining -= 1) {
     await page.goBack({ waitUntil: 'commit' });
+    await page.waitForLoadState('domcontentloaded');
+  }
   await expect(page).toHaveURL(`/app-v2/conversations/${conversation}`);
   await expect(composer(page)).toHaveValue(
     'Retained settings navigation draft',

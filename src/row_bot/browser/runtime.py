@@ -229,10 +229,7 @@ def _find_chromium_executable(browsers_dir: Path, revision: str) -> Path | None:
     base = browsers_dir / f"chromium-{revision}"
     patterns = {
         "windows": ("chrome-win/chrome.exe", "chrome-win64/chrome.exe", "chrome.exe"),
-        "darwin": (
-            "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
-            "chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
-        ),
+        "darwin": ("chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",),
         "linux": ("chrome-linux/chrome", "chrome-linux64/chrome", "chrome"),
     }.get(_platform_id(), ())
     for relative in patterns:

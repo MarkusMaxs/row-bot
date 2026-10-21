@@ -1196,6 +1196,39 @@ it('offers interrupted recovery in the transcript with a cause and next steps, a
   expect(mock.intent.mock.calls[0][1]).toBe('conversation.resume');
 });
 
+it('a sign-in that can no longer be used asks to reconnect instead of offering Resume (B351)', async () => {
+  interruptedConversation();
+  mock.state.activity = [
+    {
+      cursor: '5',
+      event: {
+        event_id: 'event-sign-in',
+        type: 'generation.error',
+        topic: 'conversation-a',
+        conversation_id: 'conversation-a',
+        projection_revision: '5',
+        protocol_version: '1.0',
+        server_epoch: 'epoch',
+        source: 'runtime',
+        source_epoch: 'epoch',
+        source_stream_id: 'conversation-a',
+        source_sequence_start: '5',
+        source_sequence_end: '5',
+        payload: { code: 'sign_in_required', provider: 'ChatGPT' },
+      },
+    },
+  ] as unknown as typeof mock.state.activity;
+  await act(async () => conversation());
+  const log = screen.getByRole('log', { name: 'Conversation' });
+  expect(log).toHaveTextContent('Sign in to ChatGPT again');
+  expect(log).not.toHaveTextContent('The response was interrupted');
+  expect(within(log).queryByRole('button', { name: 'Resume' })).toBeNull();
+  await userEvent
+    .setup()
+    .click(within(log).getByRole('button', { name: 'Reconnect' }));
+  expect(mock.navigate).toHaveBeenLastCalledWith('/settings/providers');
+});
+
 it('says when a stop left the last message unanswered and offers to send it again', async () => {
   idleConversation();
   mock.state.projection = {
