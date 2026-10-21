@@ -11,6 +11,7 @@ parallel load. A real change to the conversation in that window still stops the 
 from __future__ import annotations
 
 import threading
+import uuid
 from typing import Any
 
 import pytest
@@ -193,3 +194,23 @@ def test_a_real_change_to_the_conversation_mid_compaction_still_stops_it(monkeyp
     assert "done" not in [kind for kind, _payload in events]
     assert len(turn.model.seen) == 1
     assert turn.saved_summary() is None
+
+
+def test_a_checkpoint_that_lost_messages_since_the_preparation_is_a_change() -> None:
+    thread_id = f"own-checkpoint-{uuid.uuid4().hex[:10]}"
+    threads.create_thread("Own checkpoint", thread_id=thread_id, seed_default_skills=False)
+    history = [HumanMessage(content="q1", id="q1"), AIMessage(content="a1", id="a1"),
+               HumanMessage(content="q2", id="q2"), AIMessage(content="a2", id="a2")]
+    assert threads.append_checkpoint_messages(thread_id, history)
+    prepared_at = threads.get_latest_checkpoint_revision(thread_id)
+    holds = [*history, HumanMessage(content="q3", id="q3")]
+    state = {
+        "schema_version": threads.SUMMARY_STATE_SCHEMA_VERSION, "mode": "agent", "source_revision": prepared_at,
+        "boundary_message_count": 2, "boundary_digest": threads.context_boundary_digest(holds, 2, "agent"),
+        "summary": SUMMARY,
+    }
+    # The last answer is removed: what is left is still the start of what the turn holds.
+    assert threads.remove_latest_checkpoint_ai_message(thread_id, "a2")
+
+    assert not threads.save_summary_state_cas(thread_id, state, expected_revision=prepared_at, messages=holds)
+    assert threads.load_validated_summary_state(thread_id, "agent", messages=history[:3]) is None
