@@ -44,8 +44,8 @@ PROVIDER_DEFINITIONS: dict[str, ProviderDefinition] = {
     ),
     "claude_subscription": ProviderDefinition(
         id="claude_subscription",
-        display_name="Claude Subscription",
-        auth_methods=(AuthMethod.EXTERNAL_CLI, AuthMethod.OAUTH_PKCE),
+        display_name="Claude (your Claude plan)",
+        auth_methods=(AuthMethod.EXTERNAL_CLI,),
         default_transport=TransportMode.ANTHROPIC_MESSAGES,
         risk_label="subscription",
         experimental=True,
