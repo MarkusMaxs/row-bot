@@ -1412,7 +1412,10 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
     judge_before = int(getattr(judge, "tokens", 0) or 0)
     started = float(clock())
     results: dict[str, list[CaseResult]] = {arm.name: [] for arm in arms}
+    # What this comparison spent per arm, and the part of it local models used: a result kept from an
+    # earlier test (O31) spent nothing now, so it adds to neither.
     spent: dict[str, int] = {arm.name: 0 for arm in arms}
+    spent_local: dict[str, int] = {arm.name: 0 for arm in arms}
     cached_count: dict[str, int] = {arm.name: 0 for arm in arms}
     signature = str(getattr(runner, "signature", "") or "in-process-1")
     stopped = ""
@@ -1451,6 +1454,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                     cache.put(key, result)
                 round_results[arm.name] = result
                 spent[arm.name] += result.tokens
+                spent_local[arm.name] += result.local_tokens
                 if on_case is not None:
                     on_case(arm.name, result)
         except _LimitReached:
@@ -1477,7 +1481,7 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
         cases = results[arm.name]
         passed = sum(case.passed for case in cases)
         counted = [case for case in cases if case.counted]
-        local = sum(case.local_tokens for case in cases)
+        local = spent_local[arm.name]
         run = TestRun(
             id=new_id("run"), subject_kind=arm.subject_kind, suite=suite, started_at=started,  # type: ignore[arg-type]
             subject_id=arm.subject_id, baseline_id=baseline_id, pack=packs[0] if len(packs) == 1 and not replay else None,

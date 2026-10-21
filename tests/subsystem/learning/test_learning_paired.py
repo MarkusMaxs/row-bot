@@ -8,6 +8,8 @@ malformed tool call is a failure, a real outage stays outside."""
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -169,6 +171,26 @@ def test_a_cached_result_keeps_why_it_didnt_pass(data_dir):
 
     assert again.arms[1].cached == 2
     assert again.arms[1].causes == first.arms[1].causes == {evaluation.MALFORMED_CALL: 2}
+
+
+def test_a_local_main_models_kept_results_cost_nothing_the_second_time(data_dir):
+    tasks = [task for task in visible_tasks() if task.pack == "document_lookups"][:2]
+
+    class Local(Runner):  # a main model on this computer: every token it uses is local
+        def run(self, task, arm, *, budget, meter, arm_left):
+            return replace(super().run(task, arm, budget=budget, meter=meter, arm_left=arm_left),
+                           local_tokens=1_000 if arm.name == "steady" else 0)
+
+    arms = [Arm("sometimes"), Arm("steady", cache=True)]
+    compare(arms, tasks=tasks, runner=Local(), cache=evaluation.ArmCache(data_dir), meter=TokenMeter(10**9),
+            save=False)
+
+    again = compare(arms, tasks=tasks, runner=Local(), cache=evaluation.ArmCache(data_dir), meter=TokenMeter(10**9),
+                    save=False)
+
+    steady = again.arms[1]
+    assert (steady.cached, steady.tokens, steady.local_tokens, steady.run.cost.tokens) == (2, 0, 0, 0)
+    assert steady.measured_tokens == 2_000  # what the kept results measured is still reported
 
 
 # ── O70: a malformed call is the model's, an outage isn't ──────────────────
