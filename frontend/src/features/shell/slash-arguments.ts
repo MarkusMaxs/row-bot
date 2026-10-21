@@ -61,6 +61,25 @@ export function reasoningChoice(
   return choice ? { selection: choice.selection, label: choice.label } : null;
 }
 
+/**
+ * "/agent --reasoning low …" → "low", and whether --model chose another
+ * model (whose levels only the server knows). Null without --reasoning.
+ */
+export function agentReasoningOption(
+  argument: string,
+): { value: string; otherModel: boolean } | null {
+  const parts = argument.trim().split(/\s+/);
+  let value: string | null = null;
+  let otherModel = false;
+  parts.forEach((part, index) => {
+    if (part === '--model' || part.startsWith('--model=')) otherModel = true;
+    if (part.startsWith('--reasoning='))
+      value = part.slice('--reasoning='.length);
+    else if (part === '--reasoning') value = parts[index + 1] ?? '';
+  });
+  return value === null ? null : { value, otherModel };
+}
+
 /** "/profile writer" → the profile whose name or id starts with it. */
 export function profileChoice(
   argument: string,

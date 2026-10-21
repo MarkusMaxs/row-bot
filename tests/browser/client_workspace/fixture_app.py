@@ -4431,5 +4431,70 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
     return {"action": action}
 
 
+# ── S11: helpers ────────────────────────────────────────────────────────────
+# A chat's helpers as the runner records them: each with the model and reasoning
+# it started on (B386), and one waiting on an approval that no notice put in the
+# chat's transcript (B348). Nothing runs: the runs and the approval are records.
+_S11_RUNS: list[str] = []
+
+
+@app.post("/__s11_fixture/helpers")
+def s11_helpers(payload: dict, x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    from row_bot import agent_runs, tasks
+    from row_bot.approval_messages import normalize_interrupts
+    from row_bot.threads import create_thread
+
+    parent = str(payload.get("conversation_id") or "")
+    model_ref = str(_reasoning_fixture.get("model") or "")
+    if not parent or not model_ref:
+        raise HTTPException(status_code=409)
+    model_id = model_ref.split(":", 2)[-1]
+    from row_bot.threads import append_checkpoint_messages
+
+    append_checkpoint_messages(parent, [
+        HumanMessage(id=fixture_id("s11-ask:" + parent), content="Set up the shop's catalogue in Stripe and file "
+                     "the month-end notes in Notion."),
+        AIMessage(id=fixture_id("s11-reply:" + parent), content="I've asked three helpers: one checks the dates, "
+                  "one finds the right Notion page, and one adds the products to Stripe."),
+    ])
+    helpers = [
+        ("Date review", "running", "High", "", {"tool": "developer_read_file", "detail": "src/dates.py"}),
+        ("Notion destination lookup", "completed", "Provider default", "XHigh", None),
+        ("Catalogue helper", "waiting_approval", "Low", "", None),
+    ]
+    made = {}
+    for name, status, reasoning, not_offered, activity in helpers:
+        child = create_thread(name, thread_type="agent_child", seed_default_skills=False)
+        run = agent_runs.create_agent_run(parent_thread_id=parent, thread_id=child, display_name=name,
+                                          status=status, model_override=model_ref, prompt=name,
+                                          summary="Found the Finance › Month-end page." if status == "completed" else "")
+        agent_runs.append_agent_event(run["id"], "reasoning.chosen", {
+            "model_ref": model_ref, "model": model_id, "reasoning": reasoning, "not_offered": not_offered})
+        if activity:
+            agent_runs.record_agent_run_activity(run["id"], activity["tool"], activity["detail"])
+        _S11_RUNS.append(run["id"])
+        made[name] = {"run_id": run["id"], "conversation_id": child}
+    waiting = made["Catalogue helper"]
+    interrupts = [{"id": "s11-interrupt", "tool": "mcp_stripe_create_product", "label": "Create a product in Stripe",
+                   "approval_reason": "Add the blue mug to the catalogue.", "args": {"name": "Blue mug"}}]
+    approval_payload = normalize_interrupts(interrupts, source_label="Catalogue helper",
+                                            agent_run_id=waiting["run_id"], parent_thread_id=parent)
+    _token, approval_id = tasks.create_approval_request(
+        waiting["run_id"], "", "agent_interrupt", "Catalogue helper needs approval: Create a product in Stripe",
+        agent_run_id=waiting["run_id"], resume_kind="agent_run", source_label="Catalogue helper",
+        source_thread_id=waiting["conversation_id"], parent_thread_id=parent, approval_payload_json=approval_payload)
+    return {"helpers": made, "approval_id": approval_id}
+
+
+@app.post("/__s11_fixture/reset")
+def s11_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Withdraw the helpers' waiting approval, so later journeys find nothing waiting."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+
+    while _S11_RUNS:
+        tasks.cancel_agent_run_approvals(_S11_RUNS.pop())
+    return {"ok": True}
 if __name__ == "__main__":
     main()

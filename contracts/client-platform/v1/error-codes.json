@@ -211,6 +211,7 @@
     "hatch_job_unavailable": 409,
     "hatch_source_changed": 409,
     "hatch_worker_unavailable": 409,
+    "helper_reasoning_unavailable": 422,
     "hermes_recipe_unsupported": 409,
     "history_unavailable": 409,
     "idempotency_expired": 409,
