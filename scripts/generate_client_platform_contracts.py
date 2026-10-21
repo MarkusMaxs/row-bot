@@ -72,7 +72,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -208,6 +208,11 @@ OPERATIONS = (
     ("get", "/video-edits", None, "VideoEditPage"),
     ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
     ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
+    ("get", "/deliveries", None, "DeliveryPage"),
+    ("get", "/deliveries/{delivery_id}", None, "DeliveryView"),
+    ("get", "/deliveries/{delivery_id}/files/{index}", None, "bytes"),
+    ("post", "/deliveries/{delivery_id}/files/{index}/save", None, "ExportSaved"),
+    ("post", "/deliveries/{delivery_id}/to-devices", None, "DeliveryView"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
@@ -733,6 +738,28 @@ export const getVideoEdit = (base: string, proof: SessionProof, edit: string, si
 /** Stop a video edit; nothing is saved. It needs no approval. */
 export const stopVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
   jsonRequest(base, `/video-edits/${id(edit)}/stop`, 'VideoEditView', proof, 'POST', undefined, undefined, signal);
+/** Files sent to the person's devices or a chat app (F7), or one conversation's: newest first. */
+export const getDeliveries = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<DeliveryPage> =>
+  jsonRequest(base, '/deliveries' + query({conversation_id}), 'DeliveryPage', proof, 'GET', undefined, undefined, signal);
+export const getDelivery = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}`, 'DeliveryView', proof, 'GET', undefined, undefined, signal);
+/** One file sent to the devices, with the person's session; refused once it expired. */
+export async function readDeliveryFile(base: string, proof: SessionProof, delivery: string, index: number, signal?: AbortSignal): Promise<Blob> {
+  if (!Number.isInteger(index) || index < 0 || index > 9) throw new Error('invalid_request');
+  const response = await fetch(`${base}/api/v1/deliveries/${id(delivery)}/files/${index}`, {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  const data = await response.blob();
+  if (data.size > 104857600) throw new Error('protocol_incompatible');
+  return data;
+}
+/** Desktop window: the file is saved into Exports on this computer (it can't download). */
+export const saveDeliveryFile = (base: string, proof: SessionProof, delivery: string, index: number, signal?: AbortSignal): Promise<ExportSaved> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}/files/${index}/save`, 'ExportSaved', proof, 'POST', {}, undefined, signal);
+/** The person's "Send to your devices instead" for files that didn't go to a chat app. No approval. */
+export const sendDeliveryToDevices = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}/to-devices`, 'DeliveryView', proof, 'POST', {}, undefined, signal);
 export const getAttention = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AttentionSnapshot> =>
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>

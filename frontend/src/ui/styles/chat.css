@@ -1351,6 +1351,63 @@
   max-width: 100%;
 }
 
+/* Files a step sent (F7): where they went, each file with Download while it
+   lasts on the person's devices, or why it didn't go with one way out. */
+.delivery-advice {
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  line-height: 18px;
+}
+.delivery-files {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.delivery-file {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 6px 6px 6px 8px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.delivery-file:not([data-sent]) .media-file-text strong {
+  color: var(--text-secondary);
+}
+@container transcript (max-width: 520px) {
+  /* A phone: the whole name, on two lines if it needs them, beside Download. */
+  .delivery-file .media-file-text strong {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}
+.delivery-saved {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 2 / -1;
+  align-items: center;
+  gap: 2px 8px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+}
+.delivery-actions {
+  grid-column: 2 / -1;
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+.delivery-card[data-state='failed'] .transcript-card-icon,
+.delivery-card[data-state='expired'] .transcript-card-icon,
+.delivery-card[data-state='loading'] .transcript-card-icon,
+.delivery-card[data-state='unavailable'] .transcript-card-icon {
+  color: var(--text-muted);
+}
+
 /* A video edit (F3): what it does, its progress and Stop while it is made
    (getting ffmpeg first, the first time), then the result with a player. */
 .video-edit-progress {

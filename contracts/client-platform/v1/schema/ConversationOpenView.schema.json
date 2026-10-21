@@ -1887,6 +1887,13 @@
           "title": "Binding Id",
           "type": "string"
         },
+        "delivery_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(send-[0-9a-f]{8})?$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
         "display_name": {
           "default": "",
           "maxLength": 180,
@@ -1923,7 +1930,8 @@
             "connect_apps",
             "background_process",
             "recording",
-            "video_edit"
+            "video_edit",
+            "delivery"
           ],
           "title": "Kind",
           "type": "string"

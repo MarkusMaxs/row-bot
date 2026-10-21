@@ -360,7 +360,9 @@ export default function Workspace() {
     Boolean(
       state.handshake?.application_capabilities?.includes('native:terminal'),
     );
-  useBackgroundNotices();
+  useBackgroundNotices(conversationId, (id) =>
+    navigate(`/conversations/${encodeURIComponent(id)}`),
+  );
   useApprovalNotices(conversationId);
   const connectionAction =
     state.error?.recovery === 'update' ? (

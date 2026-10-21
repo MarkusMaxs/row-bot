@@ -70,6 +70,7 @@ run_command: 902
 save_memory: 732
 search_conversations: 703
 search_memory: 620
+send_file: 885
 start_process: 1180
 stop_process: 332
 suggest_apps: 861
@@ -96,4 +97,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (98 tools): 69624
+TOTAL (99 tools): 70509

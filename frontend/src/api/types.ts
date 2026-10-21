@@ -822,6 +822,28 @@ export interface ClientTransport {
     editId: string,
     signal?: AbortSignal,
   ): Promise<Wire.VideoEditView>;
+  /** Files sent to the person's devices or a chat app (F7). */
+  delivery?(
+    deliveryId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.DeliveryView>;
+  /** One file sent to the devices, with this session; refused once it expired. */
+  downloadDelivery?(
+    deliveryId: string,
+    index: number,
+    signal?: AbortSignal,
+  ): Promise<Blob>;
+  /** Desktop window: the file saved into Exports on this computer. */
+  saveDelivery?(
+    deliveryId: string,
+    index: number,
+    signal?: AbortSignal,
+  ): Promise<Wire.ExportSaved>;
+  /** The person's "Send to your devices instead". No approval. */
+  sendDeliveryToDevices?(
+    deliveryId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.DeliveryView>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;

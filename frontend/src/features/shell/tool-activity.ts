@@ -26,6 +26,7 @@ import {
   Plug,
   Scissors,
   Search,
+  Send,
   Smartphone,
   Terminal,
   Video,
@@ -125,6 +126,7 @@ const EXACT: Record<string, Verb> = {
   animate_image: verb('Animated an image', 'Animating an image', Clapperboard),
   generate_video: verb('Generated a video', 'Generating a video', Clapperboard),
   edit_video: verb('Edited a video', 'Editing a video', Scissors),
+  send_file: verb('Sent files', 'Sending files', Send),
   create_chart: verb('Created a chart', 'Creating a chart', ChartColumn),
   create_design: verb('Created a design', 'Creating a design', Palette),
   create_code_folder: verb(

@@ -14,6 +14,7 @@ import AppViewFrame from '../apps/AppViewFrame';
 import { ProcessCard } from './BackgroundProcess';
 import { RecordingCard } from './RecordingCard';
 import { VideoEditCard } from './VideoEditCard';
+import { DeliveryCard } from './DeliveryCard';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
@@ -49,7 +50,9 @@ export type TranscriptCard =
   /** A recording of Row-Bot's browser or the screen a step started or stopped (F2). */
   | { kind: 'recording'; recordingId: string }
   /** A video edit a step started, followed or stopped (F3). */
-  | { kind: 'video_edit'; editId: string };
+  | { kind: 'video_edit'; editId: string }
+  /** Files a step sent to the person's devices or a chat app (F7). */
+  | { kind: 'delivery'; deliveryId: string };
 
 type Specialization = NonNullable<
   TranscriptTraceGroup['items'][number]['specialization']
@@ -82,6 +85,11 @@ export function cardOf(value: Specialization | null | undefined) {
       kind: 'recording',
       recordingId: value.recording_id,
     } satisfies TranscriptCard;
+  if (value.kind === 'delivery' && value.delivery_id)
+    return {
+      kind: 'delivery',
+      deliveryId: value.delivery_id,
+    } satisfies TranscriptCard;
   if (value.kind === 'video_edit' && value.edit_id)
     return {
       kind: 'video_edit',
@@ -113,7 +121,9 @@ export function cardKey(card: TranscriptCard) {
             ? `recording:${card.recordingId}`
             : card.kind === 'video_edit'
               ? `video_edit:${card.editId}`
-              : `connect:${card.target}`;
+              : card.kind === 'delivery'
+                ? `delivery:${card.deliveryId}`
+                : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -398,6 +408,8 @@ export function TranscriptCards({
             recordingId={card.recordingId}
             conversationId={conversation}
           />
+        ) : card.kind === 'delivery' ? (
+          <DeliveryCard key={cardKey(card)} deliveryId={card.deliveryId} />
         ) : card.kind === 'video_edit' ? (
           <VideoEditCard
             key={cardKey(card)}

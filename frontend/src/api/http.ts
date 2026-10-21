@@ -260,6 +260,35 @@ export class HttpTransport implements ClientTransport {
   stopVideoEdit(editId: string, signal?: AbortSignal) {
     return wire.stopVideoEdit(this.base, this.session(), editId, signal);
   }
+  delivery(deliveryId: string, signal?: AbortSignal) {
+    return wire.getDelivery(this.base, this.session(), deliveryId, signal);
+  }
+  downloadDelivery(deliveryId: string, index: number, signal?: AbortSignal) {
+    return wire.readDeliveryFile(
+      this.base,
+      this.session(),
+      deliveryId,
+      index,
+      signal,
+    );
+  }
+  saveDelivery(deliveryId: string, index: number, signal?: AbortSignal) {
+    return wire.saveDeliveryFile(
+      this.base,
+      this.session(),
+      deliveryId,
+      index,
+      signal,
+    );
+  }
+  sendDeliveryToDevices(deliveryId: string, signal?: AbortSignal) {
+    return wire.sendDeliveryToDevices(
+      this.base,
+      this.session(),
+      deliveryId,
+      signal,
+    );
+  }
   browserLocalAddresses(conversation: string, signal?: AbortSignal) {
     return wire.getBrowserLocalAddresses(
       this.base,

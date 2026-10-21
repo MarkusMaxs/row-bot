@@ -5245,7 +5245,8 @@ def _collect_agent_tool_candidates(
 # profile limits and guides unchanged). On every window, Developer tools come with a code folder (WP A5):
 # without one each of them fails, and their 22 schemas and guide went with every call of every chat.
 SMALL_CONTEXT_TOKENS = 65_536
-ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder", "video_editing"})
+ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder", "video_editing",
+                                   "file_delivery"})
 _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
     "current_on_demand_tools", default={}
 )
