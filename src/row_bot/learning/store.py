@@ -71,6 +71,9 @@ MARK_CHAT_EXCLUDED = "source_chat_excluded"
 MARK_MEMORY_DELETED = "memory_deleted"
 # A decision the audit vault holds as a hidden test: never training data, never drafting evidence.
 MARK_HELD_OUT = "held_out"
+# A corrected decision held out as a hidden problem (O87; L3a puts it in the vault). It is also
+# ``held_out``, so everything that leaves held-out decisions out leaves it out.
+MARK_HELD_OUT_CORRECTION = "held_out_correction"
 VAULT_FILE = "audit.db"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -995,13 +998,40 @@ class LearningStore:
         return len(rows)
 
     def held_out_ids(self) -> set[str]:
-        """Decisions the audit vault holds (or held): never training data, never drafting evidence."""
+        """Decisions the audit vault holds (or held), and corrections held out for it (O87): never
+        training data, never drafting evidence."""
 
         with self._reader() as connection:
             if connection is None:
                 return set()
             return {str(row[0]) for row in connection.execute(
                 "SELECT id FROM marks WHERE kind = 'decision' AND mark = ?", (MARK_HELD_OUT,))}
+
+    def held_out_correction_ids(self) -> set[str]:
+        """The corrected decisions held out as hidden problems (O87), a subset of :meth:`held_out_ids`."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return set()
+            return {str(row[0]) for row in connection.execute(
+                "SELECT id FROM marks WHERE kind = 'decision' AND mark = ?", (MARK_HELD_OUT_CORRECTION,))}
+
+    def meta_value(self, key: str, default: str = "") -> str:
+        """One of the store's own values (``meta``), or ``default``."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return default
+            row = connection.execute("SELECT value FROM meta WHERE key = ?", (str(key),)).fetchone()
+        return str(row[0]) if row else default
+
+    def set_meta_values(self, values: dict[str, str]) -> None:
+        """Set some of the store's own values (one transaction)."""
+
+        with self._transaction() as connection:
+            connection.executemany(
+                "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [(str(key), str(value)) for key, value in values.items()])
 
     def _vault_exists(self) -> bool:
         try:
@@ -1126,6 +1156,7 @@ __all__ = [
     "MARK_CHAT_DELETED",
     "MARK_CHAT_EXCLUDED",
     "MARK_HELD_OUT",
+    "MARK_HELD_OUT_CORRECTION",
     "MARK_MEMORY_DELETED",
     "MAX_BLOB_BYTES",
     "MIGRATIONS",

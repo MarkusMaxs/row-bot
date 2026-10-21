@@ -78,8 +78,9 @@ def test_a_jsonl_stream_of_mixed_records_round_trips():
 
 
 def test_every_record_carries_its_kind_and_schema_version():
-    # Episode v2: the next-message marker (follows_decision_id); Job v2: training (L2a).
-    versions = {"episode": 2, "job": 2}
+    # Episode v2: the next-message marker (follows_decision_id); Job v2: training (L2a); Release v2:
+    # the data spec names its rendering (L2w).
+    versions = {"episode": 2, "job": 2, "release": 2}
     for record in ALL:
         data = record.to_dict()
         assert data["record"] == record.KIND

@@ -224,6 +224,12 @@ def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState
         lines.append(f"- Left out: {words}.")
     lines.append("- Only the assistant's own answers and tool calls were learned from; tool and web results "
                  "were context only.")
+    rendering = dataset.get("rendering") if isinstance(dataset.get("rendering"), Mapping) else {}
+    derived = int(dataset.get("derived") or 0)
+    if rendering.get("serve_context"):
+        lines.append(f"- Examples were shown as this model is served ({int(rendering['serve_context']):,}-token "
+                     "context, the tools it reaches through tool search); "
+                     f"{derived:,} were rewritten that way, so they are not the main model's own words.")
     providers = [str(item) for item in dataset.get("providers") or ()]
     named = sorted({_provider_name(item, dataset_module.TERMS_PROVIDERS) for item in providers})
     lines.append(f"- Answers from: {', '.join(named) if named else 'unknown'}.")
@@ -554,10 +560,12 @@ class ReleaseMaker:
             template = _pin_file(f"{model.repo} chat template", weights_folder, "chat_template.jinja", model.revision)
         data = None
         if manifest.get("id"):
+            rendering = manifest.get("rendering") if isinstance(manifest.get("rendering"), dict) else {}
             data = DataSpec(dataset_id=str(manifest["id"]), sha256=manifest.get("sha256"),
                             examples=int(manifest.get("examples") or 0),
                             sources=("main_model_work",) if manifest.get("examples") else (),
-                            providers=tuple(str(item)[:64] for item in manifest.get("providers") or ())[:64])
+                            providers=tuple(str(item)[:64] for item in manifest.get("providers") or ())[:64],
+                            rendering=str(rendering.get("name"))[:64] if rendering.get("name") else None)
         recipe_pin = Pin(recipe.name, str(recipe.version), recipe.sha256)
         release = Release(
             id=contracts.new_id("rel"), kind="model", version=state.version, created_at=float(self.clock()),

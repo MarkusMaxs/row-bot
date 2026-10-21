@@ -32,6 +32,9 @@ def recipe():
 
 def _compile(root, chats, recipe, **kwargs):
     kwargs.setdefault("refresh_vault", False)
+    # These rules hold whatever the rows' shape; the serving shape has its own tests
+    # (test_learning_dataset_shape.py), so here rows stay as captured.
+    kwargs.setdefault("shape", "captured")
     return dataset.compile_dataset(LearningStore(root), recipe, lookup=chats, **kwargs)
 
 

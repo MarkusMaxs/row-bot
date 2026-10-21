@@ -32,8 +32,17 @@ engine is installed (``measure``), estimated otherwise.
 the rows) are the validation slice, the rest trains; with fewer than five conversations everything
 trains. Below the recipe's minimum the Personal model says "Needs more examples".
 
+**Shape** (O71): rows are trained in the shape the personal model serves in. Each row is
+re-rendered into the serving envelope of the recipe's ``serve_context`` (``shape.render``: the
+small-context profile's prompt and tool exposure at 32K, a call to a tool now behind the bridge
+written as the ``tool_search`` / ``tool_invoke`` steps the served model would take). A row whose
+rendering changed anything is **derived**, never the main model's raw output (E3); the manifest
+names the rendering and counts derived rows. ``shape="captured"`` keeps rows exactly as captured
+(the paper's ablation compares the two).
+
 **Identity**: deterministic and content-addressed: the same records and recipe give the same rows
-and the same ``ds_…`` id. The ``DataSpec`` records which providers' answers it holds (D7).
+and the same ``ds_…`` id. The ``DataSpec`` records which providers' answers it holds (D7) and the
+rendering the rows have.
 """
 
 from __future__ import annotations
@@ -51,10 +60,12 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from row_bot.learning.contracts import DataSpec, Decision, Episode
+from row_bot.learning.training import shape as shape_module
 
 logger = logging.getLogger(__name__)
 
-COMPILER_VERSION = 1
+# 2 (L2w): rows are rendered in the serving shape (O71); held-out corrections' next turns are left out (O87).
+COMPILER_VERSION = 2
 FORMAT = "row-bot-dataset"
 EXAMPLES_FILE = "examples.jsonl"
 VALIDATION_FILE = "validation.jsonl"
@@ -261,6 +272,8 @@ class Example:
     row: Mapping[str, Any]
     estimated_tokens: int
     tokens: int | None = None
+    # Re-rendered into the serving shape (O71): derived, never the model's raw output (E3).
+    derived: bool = False
 
 
 @dataclass(frozen=True)
@@ -278,6 +291,8 @@ class CompiledDataset:
     corrections_waiting: int = 0
     measured: bool = False
     paths_made_relative: int = 0
+    # How the rows were shaped (``shape.describe``) and what rendering changed (counts).
+    rendering: Mapping[str, Any] = field(default_factory=lambda: shape_module.describe(None))
 
     @property
     def examples(self) -> int:
@@ -295,19 +310,28 @@ class CompiledDataset:
 
         return any(provider in TERMS_PROVIDERS for provider in self.providers)
 
+    @property
+    def rendering_name(self) -> str:
+        return str(self.rendering.get("name") or "captured")
+
     def data_spec(self) -> DataSpec:
         return DataSpec(dataset_id=self.id, sha256=self.sha256, examples=self.examples,
-                        sources=("main_model_work",) if self.train else (), providers=self.providers[:64])
+                        sources=("main_model_work",) if self.train else (), providers=self.providers[:64],
+                        rendering=self.rendering_name)
 
     def manifest(self) -> dict[str, Any]:
         """What the dataset is, without its content: counts, ids and providers (for the release)."""
 
         dates = [item.started_at for item in (*self.train, *self.validation)]
+        rows = (*self.train, *self.validation)
         return {
             "format": FORMAT, "version": COMPILER_VERSION, "id": self.id, "sha256": self.sha256,
             "recipe": self.recipe, "max_seq_length": self.max_seq_length, "measured": self.measured,
             "examples": self.examples, "validation": len(self.validation),
             "historical": sum(item.historical for item in self.train),
+            # The shape the rows are in, and which rows rendering changed (derived, E3).
+            "rendering": dict(self.rendering), "derived": sum(item.derived for item in rows),
+            "derived_ids": sorted(item.id for item in rows if item.derived),
             "left_out": dict(sorted(self.left_out.items())), "providers": list(self.providers),
             "terms_note": self.terms_note, "corrections_waiting": self.corrections_waiting,
             "paths_made_relative": self.paths_made_relative,
@@ -367,6 +391,9 @@ class _Book:
             if signal.kind == "teach" and (signal.note or "").strip():
                 self.corrections_waiting += 1
         self.held = store.held_out_ids()
+        # Corrections held out as hidden problems (O87): the turn after one (the person's
+        # correction and the redo) would teach its corrected action, so it is left out too.
+        self.held_corrections = store.held_out_correction_ids()
         # What each held reply looked like (its tool call ids, its text), by conversation: a later
         # turn's history repeats it, and no row may hold it even as context (O18).
         self.held_replies: dict[str, list[tuple[float, frozenset[str], str]]] = defaultdict(list)
@@ -428,8 +455,13 @@ def _scope_reason(conversation: str, *, historical: bool, goal: bool, store: Any
     return reason
 
 
-def _example(episode: Episode, book: _Book, *, roots: Sequence[str]) -> tuple[Example | None, str, int]:
-    """One episode as an example, or why it is left out. Returns (example, reason, paths changed)."""
+def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
+             envelope: shape_module.Envelope | None = None,
+             stats: shape_module.Stats | None = None) -> tuple[Example | None, str, int]:
+    """One episode as an example, or why it is left out. Returns (example, reason, paths changed).
+
+    With an ``envelope`` the row is rendered in the serving shape (O71); ``stats`` adds up what that
+    changed."""
 
     from row_bot.learning import capture
 
@@ -442,6 +474,8 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str]) -> tuple[Ex
         return None, "partial", 0
     if episode.id in book.signalled_episodes or any(item.id in book.signalled_decisions for item in decisions):
         return None, "corrected_or_stopped", 0
+    if episode.follows_decision_id and episode.follows_decision_id in book.held_corrections:
+        return None, "held_out", 0  # O87: the turn after a held-out correction shows its corrected action
     retried = {item.retry_of for item in decisions if item.retry_of}
     calls = [item for item in decisions if item.kind == "model_call" and item.id not in retried]
     if any(item.status != "ok" for item in calls):
@@ -502,8 +536,6 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str]) -> tuple[Ex
                 if start is None:
                     return None, "held_out", 0
                 messages = messages[start:]
-        if system:
-            messages.insert(0, {"role": "system", "content": "\n\n".join(text for text in system if text)})
         answer = openai_message(output) if output is not None else None
     except _Unsupported:
         return None, "unsupported_content", 0
@@ -521,20 +553,37 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str]) -> tuple[Ex
     else:
         while messages and messages[-1]["role"] != "assistant":  # the row ends at its last reply
             messages.pop()
-    targets =[message for message in messages if message.get("role") == "assistant" and message.get("weight")]
+    tools: list[dict[str, Any]] | None = [dict(item) for item in request.get("tools") or ()
+                                          if isinstance(item, Mapping)] or None
+    derived = False
+    if envelope is not None and not episode.historical:
+        # O71: the row as the personal model will be served (its prompt, its tool exposure, its calls).
+        try:
+            system, messages, tools, rendered = shape_module.render(
+                system, messages, tools, envelope, agent=request.get("purpose") == "agent")
+        except shape_module.RenderError:
+            return None, "unrenderable", 0
+        derived = rendered.changed
+        if stats is not None and derived:
+            for name in ("tools_deferred", "calls_bridged", "searches_added", "state_removed"):
+                setattr(stats, name, getattr(stats, name) + getattr(rendered, name))
+            stats.system_changed = stats.system_changed or rendered.system_changed
+    if system:
+        # One system message, first (as a system-first endpoint receives them).
+        messages.insert(0, {"role": "system", "content": "\n\n".join(text for text in system if text)})
+    targets = [message for message in messages if message.get("role") == "assistant" and message.get("weight")]
     if not targets:
         return None, "held_out" if held is not None else "no_target", 0
     if any(_EXTERNAL_FENCE in str(message.get("content") or "") for message in targets):
         return None, "tool_content_in_answer", 0
     changed = sum(_relative_calls(message, roots) for message in targets)
     row: dict[str, Any] = {"messages": messages}
-    tools = request.get("tools")
     if tools:
-        row["tools"] = [dict(item) for item in tools if isinstance(item, Mapping)]
+        row["tools"] = tools
     return Example(
         id=episode.id, conversation_id=episode.conversation_id, thread_id=episode.thread_id,
         started_at=float(episode.started_at), provider=_provider(model_ref), historical=episode.historical,
-        row=row, estimated_tokens=estimate_tokens(row),
+        row=row, estimated_tokens=estimate_tokens(row), derived=derived,
     ), "", changed
 
 
@@ -572,17 +621,26 @@ def compile_dataset(
     measure: Measure | None = None,
     workspace_roots: Sequence[str] = (),
     refresh_vault: bool = True,
+    shape: str = "serving",
+    envelope: shape_module.Envelope | None = None,
 ) -> CompiledDataset:
     """The dataset for ``recipe`` from what Learning recorded (see the module's docstring).
 
     ``measure`` counts each row's tokens and target tokens with the engine (exact); without it the
     length is estimated. ``refresh_vault`` lets the audit vault take its share first (O18).
+    ``shape``: ``serving`` renders rows in the serving envelope of the recipe's ``serve_context``
+    (``envelope`` overrides Row-Bot's own, for tests); ``captured`` keeps them as captured.
     """
 
     from row_bot import learning as gate
+    from row_bot.learning import holdout
 
     if not gate.store_exists(store.root):
         raise DatasetError("no_data")
+    if shape not in shape_module.SHAPES:
+        raise DatasetError("unknown_shape")
+    # O87: corrections held out as hidden problems are marked before anything reads the marks.
+    holdout.mark_corrections(store)
     if refresh_vault:
         try:
             from row_bot.learning import evaluation
@@ -593,10 +651,15 @@ def compile_dataset(
                            type(error).__name__)
             raise DatasetError("vault_unavailable") from error
     settings = settings if settings is not None else gate.read_settings(store.root)
+    if shape == "serving" and envelope is None:
+        envelope = shape_module.envelope_for(int(recipe.serve_context))
+    elif shape == "captured":
+        envelope = None
     book = _Book(store)
     left_out: Counter[str] = Counter()
     scope_cache: dict[tuple[str, bool, bool], str | None] = {}
     candidates: list[Example] = []
+    changes: dict[str, shape_module.Stats] = {}
     paths = 0
     episodes = [item for item in store.find("episode", limit=100_000) if isinstance(item, Episode)]
     episodes.sort(key=lambda item: (item.started_at, item.id))
@@ -605,9 +668,12 @@ def compile_dataset(
                                goal=episode.source == "goal", store=store, lookup=lookup, settings=settings,
                                cache=scope_cache)
         if reason is None:
-            example, reason, changed = _example(episode, book, roots=workspace_roots)
+            stats = shape_module.Stats()
+            example, reason, changed = _example(episode, book, roots=workspace_roots, envelope=envelope,
+                                                stats=stats)
             if example is not None:
                 candidates.append(example)
+                changes[example.id] = stats
                 paths += changed
                 continue
         left_out[reason] += 1
@@ -634,8 +700,20 @@ def compile_dataset(
             else:
                 kept.append(item)
     train, validation = _split(kept, float(recipe.validation_share))
+    rendering = shape_module.describe(envelope)
+    if envelope is not None:
+        rendered = [changes[item.id] for item in kept if item.derived and item.id in changes]
+        rendering.update({
+            "rows": len(rendered),
+            "tools_deferred": sum(item.tools_deferred for item in rendered),
+            "calls_bridged": sum(item.calls_bridged for item in rendered),
+            "searches_added": sum(item.searches_added for item in rendered),
+            "system_rewritten": sum(item.system_changed for item in rendered),
+            "state_removed": sum(item.state_removed for item in rendered),
+        })
     body = {
         "compiler": COMPILER_VERSION, "recipe": recipe.name, "max_seq_length": max_seq,
+        "rendering": rendering.get("name"),
         "train": [item.row for item in train], "validation": [item.row for item in validation],
     }
     digest = hashlib.sha256(_canonical(body)).hexdigest()
@@ -644,6 +722,7 @@ def compile_dataset(
         id=f"ds_{digest[:32]}", sha256=digest, recipe=recipe.name, max_seq_length=max_seq, train=tuple(train),
         validation=tuple(validation), left_out=dict(left_out), providers=providers,
         corrections_waiting=book.corrections_waiting, measured=measured, paths_made_relative=paths,
+        rendering=rendering,
     )
 
 
