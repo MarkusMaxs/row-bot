@@ -9,6 +9,11 @@ from row_bot.providers.catalog import provider_billing
 def read_live_provider_cards() -> dict:
     """Read the provider connection facts without exposing credentials."""
     cards = []
+    if not docs_capture_fake_provider_status():
+        # Settings always shows what Claude Code says now (after a sign-in in a terminal, say).
+        from row_bot.providers.claude_subscription import forget_claude_plan_status
+
+        forget_claude_plan_status()
     source_cards = (
         docs_capture_provider_cards()
         if docs_capture_fake_provider_status()
@@ -46,5 +51,24 @@ def read_live_provider_cards() -> dict:
             "risk_label": card.get("risk_label") or "api_key",
             "last_runtime_probe_ok": bool(probe.get("ok")) if probe else None,
             "billing": provider_billing(card["provider_id"]),
+            "claude_plan": card.get("claude_plan") if card["provider_id"] == "claude_subscription" else None,
         })
+    _list_claude_models_once_ready(cards)
     return {"schema_version": 1, "providers": cards}
+
+
+def _list_claude_models_once_ready(cards: list[dict]) -> None:
+    """Claude just became ready with no model list yet: ask Claude Code for it in the background."""
+    claude = next((card for card in cards if card["provider_id"] == "claude_subscription"), None)
+    plan = (claude or {}).get("claude_plan") or {}
+    if plan.get("state") != "ready" or (claude or {}).get("model_count"):
+        return
+    try:
+        from row_bot.providers.model_catalog_cache import start_model_catalog_refresh_background
+
+        start_model_catalog_refresh_background(reason="claude_plan_ready", provider_id="claude_subscription",
+                                               force=True)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).debug("Could not start listing Claude's models", exc_info=True)

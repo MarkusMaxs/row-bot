@@ -2845,6 +2845,40 @@
 .subscription-device-code small {
   color: var(--text-muted);
 }
+/* Claude (your Claude plan): Claude Code's state and the command to run (N1). */
+.claude-plan-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+}
+.claude-plan-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.claude-plan-command code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font: var(--weight-medium) var(--text-14) / 1.4 var(--font-mono);
+  user-select: all;
+}
+.claude-plan-setup .settings-help.claude-plan-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-12);
+}
 /* The default model: the composer's searchable picker behind one trigger (U12). */
 .settings-default-model.button {
   justify-content: flex-start;
