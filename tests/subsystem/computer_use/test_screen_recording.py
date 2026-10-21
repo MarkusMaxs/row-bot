@@ -1,7 +1,8 @@
 """Recording the screen through Cua Driver (F2): only with Computer use set up, always asking first.
 
-Without Computer use the tool says plainly what's needed and how to set it up; without ffmpeg
-(Windows) it says that instead and leaves nothing running. The recording runs on a Cua client of
+Without Computer use the tool says plainly what's needed and how to set it up. On Windows Cua's
+video needs ffmpeg: without one the same card asks to download it first (F3), and Cua then finds
+the downloaded ffmpeg first on its PATH; if Cua still can't, it says so and leaves nothing running. The recording runs on a Cua client of
 its own, always into one private folder under Row-Bot's data, which goes once the video is saved
 to the conversation. The model's actions and the generic client paths still can't reach the
 recording tools. Cua is a fake transport here: nothing records.
@@ -9,6 +10,7 @@ recording tools. Cua is a fake transport here: nothing records.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +23,7 @@ from row_bot.mcp_client.results import RawCallContent, RawCallResult
 from row_bot.tools import approval_gate
 from tests.subsystem.client_protocol.test_protocol_application import service  # noqa: F401
 
-pytestmark = pytest.mark.subsystem
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 _MP4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 64
 
@@ -67,8 +69,13 @@ def screen(service, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setattr("platform.system", lambda: "Windows")
     acknowledge_disclosure()
     chat = threads.create_thread("Demo", seed_default_skills=False)
+    from row_bot import ffmpeg_runtime
+
     state = SimpleNamespace(chat=chat, mode="approve", answer=True, asked=[], transport=_RecordingTransport(),
-                            ready=ReadinessCode.READY)
+                            ready=ReadinessCode.READY, environments=[], installs=[],
+                            ffmpeg=ffmpeg_runtime.Ffmpeg(executable="C:/Tools/ffmpeg/ffmpeg.exe", source="path",
+                                                         version="7.1", licence="GPL version 3 or later"))
+    monkeypatch.setattr(ffmpeg_runtime, "find", lambda: state.ffmpeg)
     monkeypatch.setattr("row_bot.agent.get_current_thread_id", lambda: state.chat)
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: state.mode)
     monkeypatch.setattr("langgraph.types.interrupt", lambda payload: state.asked.append(payload) or state.answer)
@@ -76,7 +83,8 @@ def screen(service, tmp_path, monkeypatch):  # noqa: F811
                         lambda **_kw: CuaReadiness(state.ready, "fixture"))
     monkeypatch.setattr("row_bot.computer_use.recording._default_client",
                         lambda: CuaClient("fake-cua-driver.exe",
-                                          transport_factory=lambda *_args: state.transport))
+                                          transport_factory=lambda _exe, _session, env: state.environments.append(
+                                              env) or state.transport))
     yield state
     recordings.stop_all(timeout=5)
 
@@ -132,12 +140,65 @@ def test_without_ffmpeg_it_says_so_and_leaves_nothing_running(screen):
     screen.transport = _RecordingTransport(video_active=False, last_error="ffmpeg not found on PATH")
     result = _computer("start_recording")
 
-    assert result.startswith("Recording your screen on this computer needs ffmpeg, which isn't installed.")
+    assert result.startswith("Recording your screen on this computer needs ffmpeg, and Cua Driver couldn't find it.")
     assert [name for name, _args in screen.transport.calls if "recording" in name] == [
         "start_recording", "stop_recording"]
     assert screen.transport.closed is True
     assert recordings.list_recordings(screen.chat) == []
     assert not screen.transport.folder.exists()
+
+
+def _without_ffmpeg(screen, monkeypatch, wheel_key: str | None = "windows-x86_64"):
+    from row_bot import ffmpeg_runtime
+
+    from row_bot.data_paths import get_row_bot_data_dir
+
+    screen.ffmpeg = None
+    folder = get_row_bot_data_dir() / "ffmpeg" / "imageio-ffmpeg-0.6.0-windows-x86_64"
+    downloaded = ffmpeg_runtime.Ffmpeg(executable=str(folder / "ffmpeg.exe"), source="row_bot", version="7.1",
+                                       licence="GPL version 3 or later")
+    monkeypatch.setattr(ffmpeg_runtime, "current_wheel",
+                        lambda *_a, **_k: ffmpeg_runtime.WHEELS.get(wheel_key or ""))
+    monkeypatch.setattr(ffmpeg_runtime, "install", lambda **_kw: screen.installs.append(1) or downloaded)
+    return downloaded
+
+
+def test_without_ffmpeg_one_card_asks_to_download_it_and_record_and_cua_finds_it(screen, monkeypatch):
+    downloaded = _without_ffmpeg(screen, monkeypatch)
+
+    started = _computer("start_recording", minutes=2)
+
+    [asked] = screen.asked
+    assert asked["question"] == ("Recording your screen needs ffmpeg (about 30 MB) from PyPI. Download it and "
+                                 "record your screen?")
+    assert "from PyPI (files.pythonhosted.org)" in asked["description"]
+    assert "This happens once. Then Row-Bot will record everything on your main screen" in asked["description"]
+    assert asked["args"]["from"] == "files.pythonhosted.org" and asked["args"]["minutes"] == 2
+    assert screen.installs == [1] and started.startswith("Recording rec-")
+    path = screen.environments[-1].get("PATH") or screen.environments[-1].get("Path")
+    assert path.split(os.pathsep)[0] == downloaded.folder
+
+
+def test_a_denied_ffmpeg_download_records_nothing(screen, monkeypatch):
+    _without_ffmpeg(screen, monkeypatch)
+    screen.answer = False
+
+    assert "didn't allow recording the screen" in _computer("start_recording")
+    assert screen.installs == [] and screen.transport.calls == []
+
+
+def test_where_ffmpeg_cant_be_downloaded_it_says_how_to_install_it(screen, monkeypatch):
+    _without_ffmpeg(screen, monkeypatch, wheel_key=None)
+    monkeypatch.setattr("platform.machine", lambda: "ARM64")
+
+    assert "winget install Gyan.FFmpeg" in _computer("start_recording")
+    assert screen.asked == [] and screen.transport.calls == []
+
+
+def test_an_ffmpeg_on_path_is_left_to_cua_s_own_path(screen):
+    assert _computer("start_recording").startswith("Recording rec-")
+    path = screen.environments[-1].get("PATH") or screen.environments[-1].get("Path") or ""
+    assert not path.startswith("C:/Tools/ffmpeg")
 
 
 def test_block_refuses_and_a_denial_records_nothing(screen):

@@ -13,6 +13,7 @@ import ChatConnect from '../apps/ChatConnect';
 import AppViewFrame from '../apps/AppViewFrame';
 import { ProcessCard } from './BackgroundProcess';
 import { RecordingCard } from './RecordingCard';
+import { VideoEditCard } from './VideoEditCard';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
@@ -46,7 +47,9 @@ export type TranscriptCard =
   /** A server, watcher or long command a step left running in the background. */
   | { kind: 'process'; processId: string }
   /** A recording of Row-Bot's browser or the screen a step started or stopped (F2). */
-  | { kind: 'recording'; recordingId: string };
+  | { kind: 'recording'; recordingId: string }
+  /** A video edit a step started, followed or stopped (F3). */
+  | { kind: 'video_edit'; editId: string };
 
 type Specialization = NonNullable<
   TranscriptTraceGroup['items'][number]['specialization']
@@ -79,6 +82,11 @@ export function cardOf(value: Specialization | null | undefined) {
       kind: 'recording',
       recordingId: value.recording_id,
     } satisfies TranscriptCard;
+  if (value.kind === 'video_edit' && value.edit_id)
+    return {
+      kind: 'video_edit',
+      editId: value.edit_id,
+    } satisfies TranscriptCard;
   if (
     value.kind === 'setup_needed' &&
     (value.settings_page === 'accounts' || value.settings_page === 'channels')
@@ -103,7 +111,9 @@ export function cardKey(card: TranscriptCard) {
           ? `process:${card.processId}`
           : card.kind === 'recording'
             ? `recording:${card.recordingId}`
-            : `connect:${card.target}`;
+            : card.kind === 'video_edit'
+              ? `video_edit:${card.editId}`
+              : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -386,6 +396,12 @@ export function TranscriptCards({
           <RecordingCard
             key={cardKey(card)}
             recordingId={card.recordingId}
+            conversationId={conversation}
+          />
+        ) : card.kind === 'video_edit' ? (
+          <VideoEditCard
+            key={cardKey(card)}
+            editId={card.editId}
             conversationId={conversation}
           />
         ) : card.kind === 'view' ? (

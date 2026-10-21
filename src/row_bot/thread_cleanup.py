@@ -177,6 +177,9 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.recordings import delete_conversation as delete_recordings
 
     removed += delete_recordings(thread_id)  # Its recordings' records (the videos are its media).
+    from row_bot.video_edits import delete_conversation as delete_video_edits
+
+    removed += delete_video_edits(thread_id)  # Its video edits' records (the results are its media).
     return removed
 
 
@@ -231,6 +234,13 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
         recordings.stop_conversation(thread_id)  # Its recordings stop with it (F2).
     except Exception:
         logger.debug("Could not stop recordings for %s", thread_id, exc_info=True)
+
+    try:
+        from row_bot import video_edits
+
+        video_edits.stop_conversation(thread_id)  # Its video edits stop with it (F3).
+    except Exception:
+        logger.debug("Could not stop video edits for %s", thread_id, exc_info=True)
 
     try:
         from row_bot.tools.shell_tool import clear_shell_history, get_session_manager

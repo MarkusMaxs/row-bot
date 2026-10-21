@@ -24,6 +24,7 @@ import {
   MousePointerClick,
   Palette,
   Plug,
+  Scissors,
   Search,
   Smartphone,
   Terminal,
@@ -123,6 +124,7 @@ const EXACT: Record<string, Verb> = {
   analyze_image: verb('Looked at an image', 'Looking at an image', Image),
   animate_image: verb('Animated an image', 'Animating an image', Clapperboard),
   generate_video: verb('Generated a video', 'Generating a video', Clapperboard),
+  edit_video: verb('Edited a video', 'Editing a video', Scissors),
   create_chart: verb('Created a chart', 'Creating a chart', ChartColumn),
   create_design: verb('Created a design', 'Creating a design', Palette),
   create_code_folder: verb(

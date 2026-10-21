@@ -628,6 +628,7 @@
     "use_computer_use_for_external_browser": 409,
     "use_workspace_process_review": 409,
     "use_workspace_setup": 409,
+    "video_edit_unavailable": 404,
     "view_busy": 409,
     "view_rate_limited": 429,
     "view_tool_denied": 403,

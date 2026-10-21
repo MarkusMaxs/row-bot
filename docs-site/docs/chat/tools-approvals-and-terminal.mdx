@@ -125,6 +125,30 @@ Ask Row-Bot to record what it does in its browser and it asks first, then record
 - **Hidden in browser recordings**: pages with a password, one-time code or card field, and anything shown while you've taken over the browser, record as a blank frame.
 - Recording needs Row-Bot's video support, which comes with the full install; Row-Bot says so if it's missing.
 
+## Video Editing
+
+Row-Bot can edit videos you already have: its recordings, files in the conversation, and videos in the workspace (the conversation's code folder when it has one, otherwise the workspace folder). Ask for the result you want, for example "cut the demo to the sign-up, speed up the typing with a label and add captions". One edit can trim, join several videos, speed up or slow down a part (with a visible "2×" label), add text badges and titles, zoom in on a detail for a while, crop, burn in captions, or take stills. The result is an H.264 MP4 saved to the conversation's files, so nothing you have is replaced.
+
+- **In the conversation**, the step leaves a card: what the edit does, its progress and **Stop** while it's made, then the video with a player and **Download**. Stills show as one contact sheet. **Details** says which ffmpeg made it.
+- **Long edits** carry on in the background, so the reply isn't held up; they also show in **Home › Monitor › Background processes**. Stopping one needs no approval and saves nothing.
+- **Into the workspace**: ask Row-Bot to save a finished edit there. Replacing a file that's already there asks first; in a code folder, files are never replaced and each new one is recorded as a change you can undo.
+- Edits stop when their conversation is deleted and when Row-Bot quits. A result larger than a conversation can hold (25 MB) isn't saved; Row-Bot says how to make it smaller.
+
+### ffmpeg
+
+Video editing uses [ffmpeg](https://ffmpeg.org). Row-Bot doesn't include it: it uses the ffmpeg already on this computer (on `PATH`) when there is one. Otherwise, the first time it's needed, Row-Bot asks "Video editing needs ffmpeg (about 30 MB) from PyPI. Download it now?" as a network download: **Ask** asks, **Auto**'s reviewer may approve it when you asked for an edit, **Hands-off** allows it, and **Block** refuses.
+
+- It downloads the `imageio-ffmpeg` 0.6.0 package for this computer from PyPI (`files.pythonhosted.org`) by its exact address, checks it against fingerprints saved in Row-Bot, and keeps only its ffmpeg program in Row-Bot's data folder. Nothing is installed with pip, and Row-Bot's own files aren't changed.
+- **Licence**: these ffmpeg programs are free software under the GNU GPL (version 3 or later on Windows and Linux, version 2 or later on Macs with Apple silicon). Row-Bot runs ffmpeg as a separate program; the source is at [ffmpeg.org](https://ffmpeg.org/download.html).
+- **Intel Macs and Windows on Arm**: Row-Bot can't download ffmpeg for these. Install it yourself (for example `brew install ffmpeg` on a Mac, or `winget install Gyan.FFmpeg` on Windows), then restart Row-Bot.
+- Recording the screen on Windows uses the same ffmpeg (see [Computer Use](/docs/computer-use)).
+
+## Looking At Images
+
+Row-Bot can look at up to 8 pictures in one go: files in the conversation, pictures in the workspace, the page in its browser, and frames from recordings and videos. For more, or to keep it quick, it tiles them into one **contact sheet**: a numbered, captioned picture that also shows in the conversation, so you see what it looked at. Frames from a video need ffmpeg (see above).
+
+If the conversation's model can't see images, Row-Bot says so and gathers nothing; choose a model that can for **Vision** in **Settings › Models**, or switch the conversation to one. Looking at your screen or through your camera still asks first every time, on its own.
+
 ## Interactive Terminal
 
 In the Row-Bot desktop app, a conversation can open a real interactive terminal docked at the bottom of the window. Open or close it with the terminal button in the header, **Open panel › Interactive terminal**, the command palette (**Toggle terminal**), or Ctrl+`.
@@ -154,3 +178,4 @@ The terminal is for you: what you type runs as your own commands on this compute
 - If a background process won't start because too many are running, stop one in **Home › Monitor › Background processes**.
 - If a local app shows "Nothing answered at localhost:5173", start its server first; if Row-Bot started it, check its card in the conversation.
 - If Row-Bot asks again for a local address you allowed, its hour ran out or it was removed; allow it again.
+- If video editing says ffmpeg couldn't be downloaded, check the internet connection and ask again, or install ffmpeg yourself and restart Row-Bot.

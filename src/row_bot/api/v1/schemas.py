@@ -4242,6 +4242,48 @@ class RecordingPage(WireModel):
     recording: int = Field(ge=0)
 
 
+VideoEditId = Annotated[str, StringConstraints(pattern=r"^edit-[0-9a-f]{8}$")]
+
+
+class VideoEditView(WireModel):
+    """A video edit (F3): an edited video, or stills from one, saved to its conversation's files."""
+    edit_id: VideoEditId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    kind: Literal["video", "frames"]
+    # What it does, in words: "Trimmed, sped up 2× and captioned".
+    summary: str = Field(max_length=200)
+    status: Literal["getting_ffmpeg", "preparing", "editing", "saving", "saved", "failed", "stopped"]
+    # How far it is, 0 to 1, when that is known (downloading ffmpeg, editing a video).
+    progress: float | None = Field(ge=0, le=1)
+    # While ffmpeg downloads (the first time only): bytes so far and in all.
+    download_received: int | None = Field(ge=0)
+    download_total: int | None = Field(ge=0)
+    started_at: str = Field(max_length=80)
+    ended_at: str | None = Field(max_length=80)
+    # How long it has run (so far, or in all).
+    seconds: float = Field(ge=0)
+    # How long the edited video is (None for stills, or before it is known).
+    duration_seconds: float | None = Field(ge=0)
+    output_name: str = Field(max_length=120)
+    # The saved video, or the contact sheet of the stills, shown with a preview (None until saved).
+    media_ref: str | None = Field(max_length=512)
+    mime_type: Literal["video/mp4", "image/jpeg", "image/png"] | None
+    size_bytes: int | None = Field(ge=0)
+    frame_count: int = Field(ge=0, le=64)
+    stopped_by: Literal["", "you", "agent", "conversation", "quit"]
+    problem: Literal["", "ffmpeg_unavailable", "download_failed", "edit_failed", "too_large", "not_saved"]
+    # Why it failed, in plain words.
+    detail: str = Field(max_length=400)
+    # Which ffmpeg made it: "ffmpeg 7.1 (GPL version 3 or later), downloaded from PyPI".
+    ffmpeg: str | None = Field(max_length=200)
+
+
+class VideoEditPage(WireModel):
+    """Video edits: those running now first, then finished ones, newest first."""
+    items: list[VideoEditView] = Field(max_length=200)
+    running: int = Field(ge=0)
+
+
 class LocalAddressGrantView(WireModel):
     """An address on this computer one conversation's browser may open (F4): one origin, for an hour."""
     grant_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
@@ -6936,7 +6978,7 @@ class AppViewAppSetting(WireModel):
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-        "background_process", "recording",
+        "background_process", "recording", "video_edit",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -6961,6 +7003,8 @@ class TraceSpecialization(WireModel):
     process_id: str = Field(default="", max_length=64, pattern=r"^(proc-[0-9a-f]{8})?$")
     # recording: the recording the card follows live and then shows, re-read by id (F2).
     recording_id: str = Field(default="", max_length=64, pattern=r"^(rec-[0-9a-f]{8})?$")
+    # video_edit: the edit the card follows live and then shows, re-read by id (F3).
+    edit_id: str = Field(default="", max_length=64, pattern=r"^(edit-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):

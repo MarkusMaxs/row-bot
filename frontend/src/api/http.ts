@@ -249,6 +249,17 @@ export class HttpTransport implements ClientTransport {
   stopRecording(recordingId: string, signal?: AbortSignal) {
     return wire.stopRecording(this.base, this.session(), recordingId, signal);
   }
+  videoEdits(conversationId?: string, signal?: AbortSignal) {
+    return wire.getVideoEdits(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  stopVideoEdit(editId: string, signal?: AbortSignal) {
+    return wire.stopVideoEdit(this.base, this.session(), editId, signal);
+  }
   browserLocalAddresses(conversation: string, signal?: AbortSignal) {
     return wire.getBrowserLocalAddresses(
       this.base,

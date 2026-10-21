@@ -6,7 +6,7 @@ agent_retry: 301
 agent_status: 1139
 agent_stop: 355
 agent_wait: 725
-analyze_image: 945
+analyze_image: 1500
 arxiv: 607
 calculate: 1020
 check_process: 638
@@ -41,6 +41,7 @@ developer_workspace_info: 233
 developer_write_file: 719
 documents: 438
 duckduckgo: 368
+edit_video: 2641
 explore_connections: 474
 export_to_pdf: 687
 get_current_weather: 418
@@ -95,4 +96,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (97 tools): 66428
+TOTAL (98 tools): 69624

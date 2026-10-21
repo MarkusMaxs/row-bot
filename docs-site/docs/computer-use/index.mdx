@@ -30,7 +30,7 @@ When accessibility data is insufficient, Row-Bot may send one ephemeral target-w
 
 With Computer Use set up, Row-Bot can record your main screen to a video when you ask. It asks first ("Record your screen?"): the recording shows everything on the screen, including other apps and notifications. The conversation shows **Recording · 0:42** with **Stop**; the video (MP4) is saved to the conversation's files and shows there with a player. It stops when you or Row-Bot stop it, at its time limit (5 minutes unless asked otherwise, at most 10), before it gets too large for the chat, when the conversation is deleted, and when Row-Bot quits.
 
-- On Windows, Cua Driver records video with ffmpeg, which must be installed (for example `winget install Gyan.FFmpeg`); Row-Bot says so if it's missing. On macOS it needs macOS 15 or later and Screen Recording permission.
+- On Windows, Cua Driver records video with ffmpeg. Row-Bot uses the one on this computer, or asks on the same card to download it first (about 30 MB, from PyPI; see [Video Editing](/docs/chat/tools-approvals-and-terminal)). On macOS it needs macOS 15 or later and Screen Recording permission.
 - The recording runs in a Cua session of its own, into a private folder in Row-Bot's data; the folder (including Cua's per-step pictures) is removed once the video is saved.
 - Without Computer Use set up, Row-Bot says that recording the screen needs it and how to set it up. Its own browser can be recorded without it (see [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal)).
 

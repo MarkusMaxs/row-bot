@@ -72,7 +72,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -205,6 +205,9 @@ OPERATIONS = (
     ("get", "/recordings", None, "RecordingPage"),
     ("get", "/recordings/{recording_id}", None, "RecordingView"),
     ("post", "/recordings/{recording_id}/stop", None, "RecordingView"),
+    ("get", "/video-edits", None, "VideoEditPage"),
+    ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
+    ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
@@ -722,6 +725,14 @@ export const getRecording = (base: string, proof: SessionProof, recording: strin
 /** Stop a recording; its video is saved to its conversation's files. It needs no approval. */
 export const stopRecording = (base: string, proof: SessionProof, recording: string, signal?: AbortSignal): Promise<RecordingView> =>
   jsonRequest(base, `/recordings/${id(recording)}/stop`, 'RecordingView', proof, 'POST', undefined, undefined, signal);
+/** Every video edit (F3), or one conversation's: running ones first. */
+export const getVideoEdits = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<VideoEditPage> =>
+  jsonRequest(base, '/video-edits' + query({conversation_id}), 'VideoEditPage', proof, 'GET', undefined, undefined, signal);
+export const getVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
+  jsonRequest(base, `/video-edits/${id(edit)}`, 'VideoEditView', proof, 'GET', undefined, undefined, signal);
+/** Stop a video edit; nothing is saved. It needs no approval. */
+export const stopVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
+  jsonRequest(base, `/video-edits/${id(edit)}/stop`, 'VideoEditView', proof, 'POST', undefined, undefined, signal);
 export const getAttention = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AttentionSnapshot> =>
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>

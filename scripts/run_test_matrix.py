@@ -51,8 +51,9 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # One PR browser pass: boot, first run, shell, overlays, a turn's lifecycle, chat,
 # providers, restart recovery, the desktop Buddy window, the UI primitives and the
 # approval levels (Hands-off's one-time dialog, the reviewer's notes), background
-# processes (start, view output, stop) and Row-Bot's browser (a local address asked
-# for once per chat, screenshots, page sizes, recordings).
+# processes (start, view output, stop), Row-Bot's browser (a local address asked
+# for once per chat, screenshots, page sizes, recordings) and video edits and many
+# images at once (the ffmpeg download asked for once, edits with Stop, contact sheets).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -68,6 +69,7 @@ BROWSER_SMOKE_SPECS = (
     "conversation-approvals",
     "conversation-processes",
     "conversation-browser",
+    "conversation-media",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (

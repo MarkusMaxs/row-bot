@@ -614,6 +614,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Recording leftover check failed")
 
+    # Video edits a crash cut short are marked, and their working files removed (F3).
+    try:
+        from row_bot.video_edits import sweep_leftovers as sweep_video_edits
+        with _startup_phase("video_edit_leftovers"):
+            await asyncio.to_thread(sweep_video_edits)
+    except Exception:
+        logger.exception("Video edit leftover check failed")
+
     # Background processes a crash left running are stopped, and reported once (F1).
     try:
         from row_bot.background_processes import report_leftovers
@@ -1144,6 +1152,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             _safe_console_print(f"[shutdown] Stopped {_recorded} recording(s)")
     except Exception as exc:
         _safe_console_print(f"[shutdown] Recording cleanup error: {exc}")
+    try:
+        # Video edits stop before the background processes they run in (F3); nothing half-made is kept.
+        from row_bot.video_edits import stop_all as _stop_video_edits
+        _edits = await asyncio.to_thread(_stop_video_edits, by="quit", timeout=10.0)
+        if _edits:
+            _safe_console_print(f"[shutdown] Stopped {_edits} video edit(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Video edit cleanup error: {exc}")
     try:
         from row_bot.tools.browser_tool import get_session_manager as _get_bsm
         _get_bsm().kill_all()

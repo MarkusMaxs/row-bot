@@ -53,7 +53,7 @@ def _video_problem(structured: dict[str, Any]) -> str:
     if detail and "ffmpeg" not in detail:
         return "Cua Driver couldn't start recording the screen. Try again in a moment."
     return (
-        "Recording your screen on this computer needs ffmpeg, which isn't installed. Install it "
+        "Recording your screen on this computer needs ffmpeg, and Cua Driver couldn't find it. Install it "
         "(for example with: winget install Gyan.FFmpeg), restart Row-Bot and ask again. "
         "Row-Bot's own browser can be recorded without it."
     )
@@ -77,8 +77,11 @@ class ScreenRecording:
         on_end: Callable[[str, Path | None], None],
         client_factory: Callable[[], Any] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        ffmpeg_folder: str = "",
     ) -> None:
         self.folder = Path(folder)
+        # On Windows Cua's video needs ffmpeg on its PATH: the folder of the one Row-Bot downloaded (F3).
+        self.ffmpeg_folder = str(ffmpeg_folder or "")
         self.max_seconds = float(max_seconds)
         self.size_limit = int(size_limit)
         self._on_end = on_end
@@ -102,6 +105,8 @@ class ScreenRecording:
         self.folder.mkdir(parents=True, exist_ok=True)
         try:
             client = self._client_factory()
+            if self.ffmpeg_folder:
+                client.path_prefix = self.ffmpeg_folder
             client.start()
         except Exception as exc:
             logger.info("Screen recording could not reach Cua Driver", exc_info=True)
