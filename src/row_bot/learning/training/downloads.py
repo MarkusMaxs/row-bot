@@ -51,7 +51,7 @@ STATE_FILE = "download.json"
 # Room left over after a download (logs, checkpoints, the system's own needs).
 MARGIN_BYTES = 1_000_000_000
 # Unpacked, the model server is larger than its download (its CUDA libraries are compressed).
-SERVER_INSTALLED_FACTOR = 2.0
+SERVER_INSTALLED_FACTOR = 1.4
 FAILURES = frozenset({"network", "mismatch", "install_failed", "check_failed", "no_cuda", "refused"})
 
 State = Literal["none", "ready", "downloading", "paused", "not_enough_disk", "failed"]

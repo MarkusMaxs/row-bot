@@ -307,6 +307,41 @@ def fake_llama(index: FakeIndex, monkeypatch: Any) -> tuple[Any, Any]:
     return pins[0], pins[1]
 
 
+def fake_llama_server(index: FakeIndex, monkeypatch: Any, *, variant: str = "cu130") -> tuple[Any, Any]:
+    """Pin Row-Bot's model server (L2x) to stand-ins on ``index``: its build (``llama-server`` and a CUDA
+    backend) and the CUDA runtime beside it. Use with :func:`fake_llama` (the "test" platform)."""
+
+    from row_bot.learning.training import lockfile
+
+    build = _zip({"llama-server.exe": b"server", "llama-server": b"server", "ggml-cuda.dll": b"cuda",
+                  "libggml-cuda.so": b"cuda"})
+    runtime = _zip({"cudart64_13.dll": b"runtime", "libcudart.so.13": b"runtime"})
+    pins = []
+    for name, data in ((f"llama-b11669-bin-test-cuda-{variant}.zip", build),
+                       (f"cudart-llama-bin-test-cuda-{variant}.zip", runtime)):
+        path = index.add(f"/ggml-org/llama.cpp/releases/download/b11669/{name}", data)
+        pins.append(lockfile.LockedWheel("llama.cpp-server", "b11669", "https://github.com" + path, name,
+                                         hashlib.sha256(data).hexdigest(), len(data)))
+    monkeypatch.setattr(lockfile, "LLAMA_CPP_SERVER", {("test", variant): (pins[0], pins[1])})
+    monkeypatch.setattr(lockfile, "tools_platform", lambda platforms=None: "test")
+    return pins[0], pins[1]
+
+
+def server_version_runner(code: int = 0, text: str = "version: 11669 (620d2225c)") -> Any:
+    """Stands in for running ``llama-server --version`` (the install's check that it starts)."""
+
+    from row_bot.learning.training.engine import Run
+
+    calls: list[list[str]] = []
+
+    def run(argv: Any, **_kwargs: Any) -> Run:
+        calls.append(list(argv))
+        return Run(code, text, "")
+
+    run.calls = calls  # type: ignore[attr-defined]
+    return run
+
+
 # ── The engine's packages, as tiny stand-ins (for the engine's own check) ─────
 
 _TORCH = '''
@@ -455,9 +490,11 @@ __all__ = [
     "fake_engine_site",
     "fake_llama",
     "fake_llama_archives",
+    "fake_llama_server",
     "fake_lock",
     "loopback_opener",
     "make_wheel",
+    "server_version_runner",
     "uv_command",
     "wheel",
 ]

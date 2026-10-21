@@ -350,3 +350,65 @@ def test_the_real_worker_runs_a_pack_task_as_a_real_agent_turn(tmp_path, monkeyp
     assert case["task_id"] == task.id and case["status"] in ("passed", "failed"), (case, worker.notes, tail[-2000:])
     assert case["tokens"] > 0 and frame["usage"]
     assert scripted.requests > 0 and not folder.exists()
+
+
+def test_the_tasks_time_limit_reaches_a_local_request_stuck_in_its_runtime(data_dir, monkeypatch):
+    """The worker runs each turn under a cancellation scope its timer cancels, so the limit ends a request
+    that streams nothing (a model stuck in a tool call), not only the agent's checks between chunks."""
+
+    import threading
+
+    from row_bot import agent, models, threads
+    from row_bot.cancellation import current_cancellation_scope
+    from row_bot.tools import registry
+
+    monkeypatch.setattr(threads, "create_thread", lambda *args, **kwargs: None)
+    monkeypatch.setattr(models, "adopt_saved_default", lambda ref: None)
+    monkeypatch.setattr(registry, "set_tool_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(eval_worker, "_ledger_rows", lambda after: ([], 0))
+    monkeypatch.setattr(eval_worker, "_forget_task", lambda thread_id: None)
+    closed = threading.Event()
+
+    def stuck(prompt, tools, config, stop_event=None):
+        scope = current_cancellation_scope()
+        assert scope is not None and scope.stop_event is stop_event
+        scope.register(closed.set, "request")  # what a transport does when its request starts (#509)
+        closed.wait(10)
+        raise InterruptedError("execution_cancelled")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(agent, "stream_agent", stuck)
+    task = next(item for item in visible_tasks() if item.pack == "document_lookups")
+    spec = {"arms": [{"name": "new", "model_ref": "model:ollama:row-bot-personal-v1:abcd"}], "code_backend": "local"}
+    message = {"id": 1, "task": task.to_dict(), "arm": "new", "budget": {"task_tokens": 1000}, "timeout": 0.1}
+
+    frame = eval_worker._run_task(message, spec, [], eval_worker._TaskGate(), data_dir)  # noqa: SLF001
+
+    assert closed.is_set()
+    assert frame["case"]["status"] == "budget" and frame["case"]["detail"] == "ran out of time"
+
+
+def test_row_bots_own_server_is_handed_over_while_it_runs_with_its_current_key(monkeypatch):
+    from row_bot.providers import auth_store, custom
+
+    endpoint = {"id": "row-bot-personal-row-bot", "name": "Personal model (Row-Bot)", "provider_id":
+                "custom_openai_row-bot-personal-row-bot", "base_url": "http://127.0.0.1:8123/v1", "profile": "llama_cpp",
+                "execution_location": "local", "auth_required": False, "managed": "learning", "enabled": True}
+    monkeypatch.setattr(custom, "get_custom_endpoint", lambda provider: dict(endpoint))
+    monkeypatch.setattr(custom, "managed_connection", lambda found, start=True: ("http://127.0.0.1:8124/v1", "key-1"))
+    monkeypatch.setattr(auth_store, "get_provider_secret", lambda *args, **kwargs: pytest.fail("no stored key"))
+
+    credentials, providers, unsupported = eval_worker.gather([
+        eval_worker.WorkerArm("new", "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v2")])
+
+    assert unsupported == []
+    handed = providers["custom_endpoints"][0]
+    assert handed["base_url"] == "http://127.0.0.1:8124/v1" and handed["auth_required"] is True
+    assert "managed" not in handed  # in the worker it is a plain local endpoint
+    assert [(item.provider, item.values["api_key"]) for item in credentials] == [
+        ("custom_openai_row-bot-personal-row-bot", "key-1")]
+
+    monkeypatch.setattr(custom, "managed_connection", lambda found, start=True: None)  # it can't run now
+    _credentials, _providers, unsupported = eval_worker.gather([
+        eval_worker.WorkerArm("new", "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v2")])
+    assert unsupported == ["new"]

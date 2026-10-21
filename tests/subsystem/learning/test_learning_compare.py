@@ -345,3 +345,39 @@ def test_comparisons_wait_while_learning_is_paused(ready):
                                         start_threads=False)
 
     assert not service.tick() and FakeWorker.instances == []
+
+
+def test_a_version_running_in_row_bot_is_compared_there_with_its_starting_model_held_running(learning_on):
+    """Both arms serve through Row-Bot's own server (L2x): the starting model is asked for in the
+    version's runtime, and the server is held running (so its key stays valid) for the whole run."""
+
+    import contextlib
+
+    LearningStore(learning_on).create()
+    personal = "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v1"
+    releases.write_state(releases.version_dir(1, learning_on), releases.VersionState(
+        version=1, phase=releases.READY, job_id="job_1", model_ref=personal, runtime="row_bot"))
+    FakeWorker.instances.clear()
+    held: list[str] = []
+    asked_runtimes: list[str] = []
+
+    @contextlib.contextmanager
+    def hold(runtime):
+        held.append(f"enter {runtime}")
+        yield
+        held.append("exit")
+
+    def starting(runtime):
+        asked_runtimes.append(runtime)
+        assert held == ["enter row_bot"]  # the server runs before the starting model is asked for
+        return "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-base", None
+
+    comparer = _comparer(learning_on)
+    comparer._server_hold = hold  # noqa: SLF001 - the comparer's own collaborator
+    comparer._baseline_model = starting  # noqa: SLF001
+
+    result = comparer.run(1)
+
+    assert asked_runtimes == ["row_bot"] and held == ["enter row_bot", "exit"]
+    arms = {arm["key"]: arm["model_ref"] for arm in result["arms"]}
+    assert arms["v1"] == personal and arms["base"].endswith(":row-bot-personal-base")

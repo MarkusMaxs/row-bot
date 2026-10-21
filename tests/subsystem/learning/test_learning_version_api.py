@@ -117,10 +117,11 @@ def test_the_snapshot_says_where_versions_run_and_has_no_version_yet(on):
 
 
 def test_with_an_nvidia_card_personal_models_run_in_row_bots_own_server_by_default(on, monkeypatch):
-    from row_bot.learning.training import hardware
+    from row_bot.learning.training import hardware, lockfile
 
     client, headers, data, _maker = on
     card = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")])
+    monkeypatch.setattr(lockfile, "tools_platform", lambda platforms=None: "windows-x64")  # any CI computer
     monkeypatch.setattr(hardware, "peek", lambda: card)
     monkeypatch.setattr(hardware, "check", lambda **_kwargs: card)
 
