@@ -61,7 +61,7 @@ def read_options(*, validate: Callable[[], None] = lambda: None) -> Subscription
     result = SubscriptionOptionsSnapshot(1, provider_config_revision(cfg), tuple(
         SubscriptionReferenceState(provider, providers.get(provider, {}).get("source") == "external_cli"
             and providers.get(provider, {}).get("external_reference_exists") is True)
-        for provider in ("codex", "claude_subscription")),
+        for provider in ("codex",)),
         "environment" if environment else "override" if saved else "default" if default else "missing",
         saved, default)
     validate()
@@ -115,9 +115,8 @@ def _capture_file(target: Path) -> tuple[bool, tuple]:
 
 
 def _capture_reference(provider_id: str) -> tuple[dict, str]:
-    from row_bot.providers import codex, claude_subscription
-    paths = [codex.codex_auth_path()] if provider_id == "codex" else [
-        claude_subscription.claude_credentials_path(), claude_subscription.claude_legacy_credentials_path()]
+    from row_bot.providers import codex
+    paths = [codex.codex_auth_path()]
     try:
         captures = [_capture_file(path) for path in paths]
     except (OSError, ValueError) as exc:
@@ -127,13 +126,13 @@ def _capture_reference(provider_id: str) -> tuple[dict, str]:
     if not any(item[0] for item in captures):
         raise ProviderConfigError("subscription_reference_unavailable")
     metadata = {"provider_id": provider_id, "source": "external_cli", "external_reference_exists": True,
-        "external_reference_label": "Codex CLI" if provider_id == "codex" else "Claude Code",
+        "external_reference_label": "Codex CLI",
         "external_reference_metadata_only": True}
     return metadata, admissions.keyed_digest({"provider_id": provider_id, "captures": captures})
 
 
 def _intent(provider_id: str, revision: str, operation: str, value: str | None) -> dict:
-    if operation not in COMMANDS or provider_id not in (("codex", "claude_subscription") if operation == "reference" else ("xai_oauth",)):
+    if operation not in COMMANDS or provider_id not in (("codex",) if operation == "reference" else ("xai_oauth",)):
         raise ProviderConfigError("invalid_subscription_options")
     if operation == "client_id_save":
         value = _client_id(value)
@@ -194,12 +193,11 @@ def execute_options(*, owner_id: str, key: str, command: dict, validate: Callabl
             if current != reviewed:
                 raise ProviderConfigError("subscription_reference_changed")
         try:
-            from row_bot.providers import codex, claude_subscription, xai_oauth
+            from row_bot.providers import codex, xai_oauth
             kwargs = {"expected_revision": intent["provider_revision"], "validate": authority, "command_proof": proof}
             if operation == "reference":
                 metadata, _ = _capture_reference(provider)
-                module = codex if provider == "codex" else claude_subscription
-                module.save_external_reference(_captured_metadata=metadata, **kwargs)
+                codex.save_external_reference(_captured_metadata=metadata, **kwargs)
             elif operation == "client_id_save":
                 xai_oauth.save_xai_oauth_client_id(intent["value"], **kwargs)
             else:
@@ -219,7 +217,7 @@ def execute_options(*, owner_id: str, key: str, command: dict, validate: Callabl
 def read_options_receipt(*, owner_id: str, command_id: str, validate: Callable[[], None]) -> dict | None:
     validate()
     row = admissions.read_command_metadata(owner_id, command_id)
-    if row is None or row["type"] not in COMMANDS.values() or row["target"] not in {f"subscription_options:{provider}" for provider in ("codex", "claude_subscription", "xai_oauth")}:
+    if row is None or row["type"] not in COMMANDS.values() or row["target"] not in {f"subscription_options:{provider}" for provider in ("codex", "xai_oauth")}:
         validate()
         return None
     provider = row["target"].removeprefix("subscription_options:")

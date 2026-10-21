@@ -4,33 +4,22 @@ from threading import Event
 
 import pytest
 
-from row_bot.providers import auth_store, config, claude_subscription, xai_oauth
+from row_bot.providers import auth_store, config, xai_oauth
 from tests.subsystem.providers.test_provider_settings_controls import store as store
 
 pytestmark = pytest.mark.subsystem
 
 
-@pytest.fixture(params=["claude_subscription", "xai_oauth"])
+@pytest.fixture(params=["xai_oauth"])
 def transport(request, store, monkeypatch):
-    from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
     from row_bot.providers.transports.xai_oauth_responses import ChatXAIOAuthResponses
-    from tests.subsystem.providers.test_claude_subscription_transport import _FakeAnthropicClient, _ClientFactory, _SDKError
     from tests.subsystem.providers.test_xai_oauth_transport import _HttpClient, _SSETextResponse
     provider = request.param
-    monkeypatch.setattr(claude_subscription, "claude_subscription_cli_version", lambda: "synthetic-version")
-    if provider == "claude_subscription":
-        client = _FakeAnthropicClient(creates=[_SDKError(401, "private-synthetic-wire-body")])
-        factory = _ClientFactory([client])
-        model = ChatClaudeSubscriptionMessages(model_name="claude-sonnet-4-6", client_factory=factory)
-        module, save, token = claude_subscription, claude_subscription.save_claude_subscription_oauth_tokens, claude_subscription.ClaudeSubscriptionTokenSet
-        def count():
-            return len(client.messages.create_calls)
-    else:
-        client = _HttpClient([_SSETextResponse(status_code=401, payload={"error": {"message": "private-synthetic-wire-body"}})])
-        model = ChatXAIOAuthResponses(model_name="grok-4", http_client=client)
-        module, save, token = xai_oauth, xai_oauth.save_xai_oauth_tokens, xai_oauth.XAIOAuthTokenSet
-        def count():
-            return len(client.calls)
+    client = _HttpClient([_SSETextResponse(status_code=401, payload={"error": {"message": "private-synthetic-wire-body"}})])
+    model = ChatXAIOAuthResponses(model_name="grok-4", http_client=client)
+    module, save, token = xai_oauth, xai_oauth.save_xai_oauth_tokens, xai_oauth.XAIOAuthTokenSet
+    def count():
+        return len(client.calls)
     save(token(access_token="old-synthetic-token", refresh_token="old-synthetic-refresh", expires_at="2030-01-01T00:00:00+00:00"))
     return provider, model, module, save, token, count
 
@@ -45,7 +34,7 @@ def test_actual_401_late_refresh_cannot_replace_disconnected_or_new_account(tran
         arrived.set()
         assert release.wait(5)
         return token(access_token="late-synthetic-token", refresh_token=value)
-    monkeypatch.setattr(module, "refresh_claude_subscription_token" if provider == "claude_subscription" else "refresh_xai_oauth_token", refresh)
+    monkeypatch.setattr(module, "refresh_xai_oauth_token", refresh)
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(model.invoke, [HumanMessage(content="synthetic probe")])
         try:
@@ -69,8 +58,7 @@ def test_strict_probe_401_does_not_refresh_or_replay(transport, monkeypatch, cap
     provider, model, module, _, _, count = transport
     captured = auth_store.read_provider_oauth_bundle_snapshot(provider)
     model.bind_probe_credentials(captured, lambda: None)
-    monkeypatch.setattr(module, "refresh_claude_subscription_token" if provider == "claude_subscription" else "refresh_xai_oauth_token",
-        lambda *_a, **_kw: pytest.fail("Strict probe must not refresh"))
+    monkeypatch.setattr(module, "refresh_xai_oauth_token", lambda *_a, **_kw: pytest.fail("Strict probe must not refresh"))
     before = config.CONFIG_PATH.read_bytes()
     with pytest.raises(RuntimeError):
         model.invoke([HumanMessage(content="synthetic probe")])
@@ -98,15 +86,12 @@ def controls_revision():
     return config.provider_config_revision(config.load_provider_config(strict=True))
 
 
-@pytest.fixture(params=["claude-runtime", "xai-runtime", "xai-vision"])
+@pytest.fixture(params=["xai-runtime", "xai-vision"])
 def runner(request, store, monkeypatch):
     kind = request.param
-    module = claude_subscription if kind == "claude-runtime" else xai_oauth
-    name = "run_claude_subscription_runtime_probe" if kind == "claude-runtime" else "run_xai_oauth_vision_probe" if kind == "xai-vision" else "run_xai_oauth_runtime_probe"
-    provider = "claude_subscription" if kind == "claude-runtime" else "xai_oauth"
-    model_id = "claude-sonnet-4-6" if kind == "claude-runtime" else "grok-4"
+    name = "run_xai_oauth_vision_probe" if kind == "xai-vision" else "run_xai_oauth_runtime_probe"
     monkeypatch.setattr(xai_oauth, "list_xai_oauth_model_infos", lambda **_kw: pytest.fail("No incidental catalog refresh"))
-    return getattr(module, name), provider, model_id
+    return getattr(xai_oauth, name), "xai_oauth", "grok-4"
 
 
 def test_strict_runner_bounds_diagnostics_and_uses_canonical_cas(runner):
@@ -152,13 +137,6 @@ def test_strict_runner_requires_explicit_model_and_injected_transport(runner):
     assert config.CONFIG_PATH.read_bytes() == before
 
 
-def test_strict_claude_headers_use_cache_without_cli_process(monkeypatch):
-    monkeypatch.setattr(claude_subscription, "_claude_subscription_cli_version_cache", None)
-    monkeypatch.setattr(claude_subscription, "claude_cli_info", lambda: pytest.fail("No CLI execution"))
-    headers = claude_subscription.claude_subscription_oauth_headers(allow_cli_probe=False)
-    assert claude_subscription.CLAUDE_SUBSCRIPTION_OAUTH_USER_AGENT_VERSION_FALLBACK in headers["user-agent"]
-
-
 @pytest.fixture
 def probes(store, monkeypatch):
     from types import SimpleNamespace
@@ -167,7 +145,7 @@ def probes(store, monkeypatch):
     monkeypatch.setattr(provider_default_model, "_saved_catalog", lambda: SimpleNamespace(cloud_cache={
         f"model:{provider}:{model}": {"provider": provider, "model_id": model,
             "capabilities_snapshot": {"tasks": ["chat"], "input_modalities": ["text", "image"], "output_modalities": ["text"]}}
-        for provider, model in (("claude_subscription", "claude-sonnet-4-6"), ("xai_oauth", "grok-4"))
+        for provider, model in (("xai_oauth", "grok-4"),)
     }, ollama_rows=[]))
     owner = SubscriptionFlows()
     yield owner
@@ -179,7 +157,7 @@ def probe_command(provider="xai_oauth", kind="runtime"):
     from row_bot.application import subscription_probes as controls
     return {"command_id": str(uuid4()), "type": "provider.subscription.probe", "expected_revision": "0", "payload": {
         "provider_id": provider, "provider_revision": controls.read_probes().revision, "kind": kind,
-        "model_ref": None if kind == "tokens" else f"model:{provider}:" + ("grok-4" if provider == "xai_oauth" else "claude-sonnet-4-6")}}
+        "model_ref": None if kind == "tokens" else f"model:{provider}:grok-4"}}
 
 
 def fake_probe_model(provider, _model_id, _captured, _validate, _client, _stack):
@@ -190,7 +168,7 @@ def fake_probe_model(provider, _model_id, _captured, _validate, _client, _stack)
             return self
         def invoke(self, _messages):
             self.calls += 1
-            return SimpleNamespace(content="image row-bot-claude-smoke-ok row-bot-xai-smoke-ok", tool_calls=[
+            return SimpleNamespace(content="image row-bot-xai-smoke-ok", tool_calls=[
                 {"name": "calculate", "args": {"expression": "1 + 1"}, "id": "synthetic-call"}])
     return Model()
 
@@ -201,8 +179,8 @@ def run_probe(owner, command, *, factory=fake_probe_model, validate=lambda: None
         validate=validate, validate_review=validate_review, model_factory=factory)
 
 
-@pytest.mark.parametrize("provider,kind", [("codex", "tokens"), ("claude_subscription", "tokens"), ("xai_oauth", "tokens"),
-    ("claude_subscription", "runtime"), ("xai_oauth", "runtime"), ("xai_oauth", "vision")])
+@pytest.mark.parametrize("provider,kind", [("codex", "tokens"), ("xai_oauth", "tokens"),
+    ("xai_oauth", "runtime"), ("xai_oauth", "vision")])
 def test_explicit_probe_returns_closed_saved_checks_and_quiescent_owner(probes, provider, kind):
     from row_bot.application import subscription_probes as controls
     command = probe_command(provider, kind)
@@ -285,22 +263,17 @@ def test_probe_passive_snapshot_never_reads_tokens_or_constructs_provider(probes
     monkeypatch.setattr(auth_store, "read_provider_oauth_bundle_snapshot", lambda *_a: pytest.fail("No token read"))
     monkeypatch.setattr(controls, "_make_model", lambda *_a: pytest.fail("No provider construction"))
     before = config.CONFIG_PATH.read_bytes()
-    assert len(controls.read_probes().items) == 6
+    assert len(controls.read_probes().items) == 4
     assert config.CONFIG_PATH.read_bytes() == before
 
 
-@pytest.mark.parametrize("provider,kind", [("claude_subscription", "runtime"), ("xai_oauth", "runtime"), ("xai_oauth", "vision")])
+@pytest.mark.parametrize("provider,kind", [("xai_oauth", "runtime"), ("xai_oauth", "vision")])
 def test_actual_strict_model_and_sdk_use_bounded_fake_http_only(probes, monkeypatch, provider, kind):
     import json
     import httpx
     from row_bot.application import subscription_probes as controls
     from tests.subsystem.providers.test_xai_oauth_transport import _text_sse, _sse_event
-    if provider == "claude_subscription":
-        claude_subscription.save_claude_subscription_oauth_tokens(claude_subscription.ClaudeSubscriptionTokenSet(access_token="synthetic-bearer"))
-        monkeypatch.setattr(claude_subscription, "claude_cli_info", lambda: pytest.fail("No CLI process"))
-        monkeypatch.setattr(claude_subscription, "_known_row_bot_tool", lambda *_a: pytest.fail("No global tool/plugin discovery during a synthetic probe"))
-    else:
-        xai_oauth.save_xai_oauth_tokens(xai_oauth.XAIOAuthTokenSet(access_token="synthetic-bearer"))
+    xai_oauth.save_xai_oauth_tokens(xai_oauth.XAIOAuthTokenSet(access_token="synthetic-bearer"))
     calls, closed = [], []
     class Response:
         status_code = 200
@@ -309,12 +282,7 @@ def test_actual_strict_model_and_sdk_use_bounded_fake_http_only(probes, monkeypa
             body = json.loads(kwargs["content"]) if "content" in kwargs else kwargs["json"]
             calls.append((url, httpx.Headers(kwargs["headers"]), body))
             self.headers = {"content-type": "application/json"}
-            if provider == "claude_subscription":
-                content = [{"type": "tool_use", "id": "synthetic-call", "name": "mcp_calculate", "input": {"expression": "1 + 1"}}] if len(calls) == 2 else [{"type": "text", "text": "row-bot-claude-smoke-ok"}]
-                payload = {"id": "synthetic-message", "type": "message", "role": "assistant", "model": "claude-sonnet-4-6", "content": content,
-                    "stop_reason": "tool_use" if len(calls) == 2 else "end_turn", "stop_sequence": None, "usage": {"input_tokens": 1, "output_tokens": 1}}
-                self.data = json.dumps(payload).encode()
-            elif kind == "vision":
+            if kind == "vision":
                 self.data = json.dumps({"id": "synthetic-response", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "image"}]}]}).encode()
             else:
                 self.headers = {"content-type": "text/event-stream"}
@@ -354,7 +322,7 @@ def test_probe_cold_read_creates_no_data_or_credential_import(tmp_path):
 from pathlib import Path
 import os,sys
 from row_bot.application.subscription_probes import read_probes
-assert len(read_probes().items) == 6
+assert len(read_probes().items) == 4
 assert 'row_bot.api_keys' not in sys.modules
 assert not Path(os.environ['ROW_BOT_DATA_DIR']).exists()
 """
