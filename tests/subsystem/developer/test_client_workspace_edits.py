@@ -585,6 +585,26 @@ def test_macos_extended_attributes_are_not_discarded(domain):
     assert target.read_bytes() == b"original"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended attributes")
+def test_macos_quarantined_file_reads_but_is_never_replaced(tmp_path):
+    """Reading a file macOS quarantined works (B380); replacing it, which would drop the quarantine, is refused."""
+    from uuid import uuid4
+    from row_bot import file_publication
+    from row_bot.developer.edits import FileEditError
+
+    target = tmp_path / "settings.json"
+    target.write_bytes(b"{}")
+    _set_macos_xattr(target, "com.apple.quarantine", b"0081;6ad7c449;Safari;")
+    with pytest.raises(FileEditError, match="file_metadata_unavailable"):
+        file_publication.read_bytes(None, tmp_path, target.name)
+    value, revision, *_ = file_publication.read_bytes(None, tmp_path, target.name, unknown_metadata_ok=True)
+    assert value == b"{}"
+    with pytest.raises(FileEditError, match="file_metadata_unavailable"):
+        file_publication.publish_bytes(tmp_path, target.name, b'{"changed": true}', expected_revision=revision,
+                                       command_id=str(uuid4()), validate=lambda: None, checkpoint=lambda _proof: None)
+    assert target.read_bytes() == b"{}"
+
+
 def test_metadata_change_during_retirement_restores_original(domain, monkeypatch):
     d = domain
     target = d.root / "hello.txt"

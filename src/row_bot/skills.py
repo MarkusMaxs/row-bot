@@ -842,8 +842,9 @@ def _client_file(path: pathlib.Path, *, maximum: int = 65536):
     if not path.parent.exists():
         return None, 'missing', '', 0, ''
     with guard_directory(path.parent.absolute(), directory_identity(path.parent, parent=True)) as directory:
+        # Bundled skills in a downloaded Mac app carry com.apple.quarantine (B380).
         return read_bytes(directory, path.parent, path.name, max_bytes=maximum,
-                          unavailable_code='skill_unavailable')
+                          unavailable_code='skill_unavailable', unknown_metadata_ok=True)
 
 
 _client_snapshot_cache: tuple[tuple, dict] | None = None
