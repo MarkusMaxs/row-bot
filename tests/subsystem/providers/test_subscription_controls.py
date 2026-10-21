@@ -13,7 +13,7 @@ from row_bot.providers import codex, claude_subscription, xai_oauth, config, aut
 from row_bot.runtime import admissions
 from tests.subsystem.providers.test_provider_settings_controls import store as store
 
-pytestmark = pytest.mark.subsystem
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
 class Client:
