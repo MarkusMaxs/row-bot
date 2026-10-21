@@ -45,8 +45,8 @@ a call that Stop ended passes nothing more on and isn't asked again. Two
 backstops for runs nobody is watching:
 
 - a reply is never longer than the context window (``num_predict`` is the
-  request's ``num_ctx`` unless the caller sets one): past that point the
-  model has lost its own prompt, and the next step couldn't hold the reply;
+  request's ``num_ctx`` unless the caller sets one): a reply that long no
+  longer fits beside the model's own prompt, nor in the next step's request;
 - a request that receives nothing for ``LOCAL_CHAT_IDLE_SECONDS`` ends with
   ``OllamaSilentError``, which says so in plain words.
 """
@@ -75,10 +75,10 @@ from row_bot.providers import deferred_tools
 logger = logging.getLogger(__name__)
 
 OLLAMA_CHAT_KEEP_ALIVE = "30m"
-# The longest a local chat request may receive nothing. Silence is normal while Ollama loads the model (it gives up
-# on a load that stalls for 5 minutes), reads the prompt and writes a tool call, which it holds back until the
-# call is complete. On an 8 GB GPU all of that takes well under 2 minutes; 10 minutes leaves room for slower
-# hardware, while a call stuck in a tool call it never closes no longer holds the GPU for half an hour.
+# The longest a local chat request may receive nothing. Ollama is silent while it loads the model (it gives up on a
+# load that stalls for 5 minutes), reads the prompt and writes a tool call, which it holds back until the call is
+# complete. 10 minutes leaves room for all three on slow hardware, while a model stuck in a tool call it never
+# closes no longer holds the GPU for half an hour.
 LOCAL_CHAT_IDLE_SECONDS = 600.0
 # One connection per request, so Stop can find the request's own socket (connections are local and cheap).
 _ONE_REQUEST_PER_CONNECTION = httpx.Limits(max_keepalive_connections=0)
