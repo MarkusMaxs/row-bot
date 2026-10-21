@@ -565,7 +565,11 @@ function SavedSetting({
         setNotice("Row-Bot couldn't confirm that. Check again.");
       } else {
         setPendingCommand('');
-        setError('The change was rejected. Refresh and try again.');
+        setError(
+          receipt.action_result
+            ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+            : 'The change was rejected. Refresh and try again.',
+        );
       }
     } catch (cause) {
       if (!abort.current.signal.aborted) {
@@ -603,7 +607,11 @@ function SavedSetting({
             : `${label} save confirmed.`,
         );
       } else {
-        setError('The original change was rejected.');
+        setError(
+          receipt.action_result
+            ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+            : 'The original change was rejected.',
+        );
       }
     } catch (cause) {
       if (!abort.current.signal.aborted) setError(clientError(cause).message);
@@ -882,7 +890,11 @@ function ReviewedSettingsAction({
       } else {
         storePending('');
         setPendingCommand('');
-        setError('The action was rejected. Refresh and try again.');
+        setError(
+          receipt.action_result
+            ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+            : 'The action was rejected. Refresh and try again.',
+        );
       }
     } catch (cause) {
       if (!abort.current.signal.aborted) {
@@ -915,7 +927,12 @@ function ReviewedSettingsAction({
               ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
               : `${label} confirmed.`,
           );
-        } else setError('The original action was rejected.');
+        } else
+          setError(
+            receipt.action_result
+              ? `${receipt.action_result.message} ${receipt.action_result.remediation}`.trim()
+              : 'The original action was rejected.',
+          );
       }
     } catch (cause) {
       setError(clientError(cause).message);

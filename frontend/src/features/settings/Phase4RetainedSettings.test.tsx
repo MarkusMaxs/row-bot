@@ -831,6 +831,31 @@ it('runs Computer Use diagnostics only after the explicit click', async () => {
   ).toBeVisible();
 });
 
+it('says a failed Computer Use install failed, and what to do (B377)', async () => {
+  mutation.page = 'system';
+  mutation.execute = vi.fn(async (_request, _review, commandId) => ({
+    command_id: commandId,
+    status: 'rejected' as const,
+    code: 'settings_action_failed',
+    action_result: {
+      code: 'failed',
+      message: "Row-Bot couldn't install Cua Driver.",
+      remediation: 'Check your connection and try again. Settings › System › Logs says why.',
+    },
+  }));
+  render(
+    <SystemSnapshotPanel snapshot={snapshot.system} mutation={mutation} />,
+  );
+  openSetup();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Install Computer Use runtime' }),
+  );
+  expect(
+    await screen.findByText(/Row-Bot couldn't install Cua Driver\. Check your connection and try again/),
+  ).toBeVisible();
+  expect(screen.queryByText(/couldn't confirm/)).toBeNull();
+});
+
 it('sets up Computer Use from another device, leaving its screen actions to the desktop app', () => {
   mutation.page = 'system';
   render(
