@@ -1684,6 +1684,32 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         finally:
             call["quiesced"] = True
         return
+    if "maths fixture" in text:
+        # S12: a reply with maths, inline and display, beside a price that stays text.
+        call = predecessor._record("submit", config, "maths")
+        try:
+            yield from _natural_final(call, call["conversation_id"], _S12_MATHS, "maths")
+        finally:
+            call["quiesced"] = True
+        return
+    if "unnamed app tool fixture" in text:
+        # S12 (B388): an approval for a Counter tool this runtime never issued (as one left waiting from before a
+        # restart): the card names the app from its one set-up connection, in plain words.
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "unnamed-app-tool")
+        thread = call["conversation_id"]
+        identity = f"unnamed-app-tool:{call['generation_id']}"
+        name, call_id = "mcp_counter_create_tally", fixture_id(identity + ":call")
+        try:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+                tool_calls=[{"id": call_id, "name": name, "args": {"label": "Visitors"}}])])
+            yield "tool_call", {"tool_call_id": call_id, "name": name, "raw_name": name, "runtime_name": name,
+                                "args": {"label": "Visitors"}}
+            yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), "tool": name,
+                                 "description": "Create a tally named Visitors.", "args": {"label": "Visitors"}}]
+        finally:
+            call["quiesced"] = True
+        return
     if "app tool fixture" in text or "connected now" in text:
         # Apps in chat: a step through the connected synthetic app (its logo and name on the step), then
         # one change that asks first (its approval names the app). What the turn left out is recorded.
@@ -3934,6 +3960,83 @@ def p6_web_search_key(x_fixture_token: str = Header(default="")) -> dict:
     registry.set_enabled("web_search", True)
     api_keys.set_key("TAVILY_API_KEY", "synthetic-search-key")
     return {"ready": True}
+
+
+_S12_MATHS = "\n".join([
+    "The area under \\(y = x^2\\) from 0 to 1 is $\\tfrac{1}{3}$, and the plan costs $5 a month.",
+    "",
+    "$$",
+    "\\int_0^1 x^2 \\, dx = \\left[ \\frac{x^3}{3} \\right]_0^1 = \\frac{1}{3}",
+    "$$",
+    "",
+    "A wide one scrolls in its own box:",
+    "",
+    "\\[ \\sum_{n=1}^{\\infty} \\frac{1}{n^2} = 1 + \\frac{1}{4} + \\frac{1}{9} + \\frac{1}{16} + \\frac{1}{25}"
+    " + \\frac{1}{36} + \\frac{1}{49} + \\frac{1}{64} + \\cdots = \\frac{\\pi^2}{6} \\]",
+    "",
+    "Written as code it stays code: `$x^2$`.",
+])
+
+
+@app.post("/__s12_fixture/monthly-workflow")
+def s12_monthly_workflow(x_fixture_token: str = Header(default="")) -> dict:
+    """B345: a switched-off workflow made from "at 08:00 on the 1st of every month", its prompt step naming the
+    fixture Counter app (set up first with /__p6_fixture/views)."""
+    p4_provider_credentials(x_fixture_token)
+    from row_bot import tasks
+    from row_bot.integrations import scope
+    item = next(item for item in scope._mcp_items() if item["server"] == "Counter")
+    task_id = tasks.create_task(
+        name="Month-end close", description="The month's count, on the 1st.", icon="🗓️",
+        schedule="cron:0 8 1 * *", enabled=False, safety_mode="approve", apply_default_skills=False,
+        agent_profile_id=tasks.DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
+        steps=[{"id": "close", "type": "prompt", "apps": [item["id"]],
+                "prompt": "Using Counter, total last month's count and note what changed."}])
+    return {"task_id": task_id}
+
+
+_s12_google: dict = {}
+
+
+@app.post("/__s12_fixture/google/{action}")
+def s12_google(action: str, x_fixture_token: str = Header(default="")) -> dict:
+    """F29: Google as a first sign-in leaves it (a synthetic client and token in the in-memory keychain, saved
+    through the real sign-in path); ``remove`` puts the account and its switches back."""
+    from row_bot import account_tokens
+    from row_bot.application import client_account_oauth
+    if action == "signed-in":
+        p4_provider_credentials(x_fixture_token)
+        _s12_google.update(gmail=_tool_registry.is_enabled("gmail"), calendar=_tool_registry.is_enabled("calendar"))
+        _tool_registry.set_enabled("gmail", False)
+        _tool_registry.set_enabled("calendar", False)
+        account_tokens.write("google_client", {"installed": {
+            "client_id": "synthetic-client", "client_secret": "synthetic-secret",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost"]}})
+        client_account_oauth._save_sign_in("google", {"token": "synthetic-token", "refresh_token": "synthetic-refresh",
+                                                      "scopes": list(account_tokens.GOOGLE_SCOPES)})
+        # Documentation-capture mode (this fixture) never remembers a check; a real sign-in's passes.
+        account_tokens._CHECKS["google"] = (account_tokens.digest("google"), True)
+        return {"gmail": _tool_registry.is_enabled("gmail"), "calendar": _tool_registry.is_enabled("calendar")}
+    if action == "remove":
+        predecessor._authorize(x_fixture_token)
+        account_tokens.delete("google")
+        account_tokens.delete("google_client")
+        for tool in ("gmail", "calendar"):
+            _tool_registry.set_enabled(tool, _s12_google.get(tool, False))
+        return {"removed": True}
+    raise HTTPException(status_code=404)
+
+
+@app.post("/__s12_fixture/remove")
+def s12_remove(x_fixture_token: str = Header(default="")) -> dict:
+    """Take the S12 workflow away again (the Counter app goes with /__p6_fixture/views/remove)."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+    for task in tasks.list_tasks():
+        if task.get("name") == "Month-end close":
+            tasks.delete_task(task["id"])
+    return {"removed": True}
 
 
 @app.post("/__p6_fixture/views/remove")
