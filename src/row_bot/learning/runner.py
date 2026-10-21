@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -223,6 +224,17 @@ class LearningRunner:
             return RunnerStatus("scheduled", "now")
         if self.comparisons is not None and self.comparisons.running():
             return RunnerStatus("waiting", "comparing")  # a version's comparison has the card
+        # Row-Bot's own model server (O75) gives the card back first: it holds personal models only while
+        # they answer, and nothing answers now (training starts only when no chat runs, the lease).
+        server = sys.modules.get("row_bot.learning.training.llama_server")
+        if server is not None:
+            try:
+                if server.release_card():
+                    from row_bot.learning.training import hardware
+
+                    hardware.forget_memory_reading()
+            except Exception:
+                logger.debug("Learning couldn't stop its model server for training", exc_info=True)
         if (trigger == "quiet_hours" and self.unloader is not None and not self.supervisor.gpu_free()
                 and self.hours.inside()):
             # O51: in quiet hours, with nobody using Row-Bot for 30 minutes, Row-Bot's own resident

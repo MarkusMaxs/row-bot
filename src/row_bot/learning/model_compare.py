@@ -34,6 +34,7 @@ table and Overview's Needs you as "Personal model v1 is ready to compare".
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -240,7 +241,7 @@ class Comparer:
         gather: Callable[..., Any] | None = None,
         tools: Callable[[], list[str]] | None = None,
         container: Callable[[], Any] | None = None,
-        baseline_model: Callable[[], tuple[str | None, str | None]] | None = None,
+        baseline_model: Callable[..., tuple[str | None, str | None]] | None = None,
         main_ref: Callable[[], str] | None = None,
         model_name: Callable[[str], str] | None = None,
         meter: Callable[[], Any] | None = None,
@@ -248,6 +249,7 @@ class Comparer:
         record_usage: Callable[..., Any] | None = None,
         busy: Callable[[], bool] | None = None,
         serving_context: Callable[[str], int | None] | None = None,
+        server_hold: Callable[[str], Any] | None = None,
     ) -> None:
         self._root = root
         self._store = store
@@ -265,6 +267,7 @@ class Comparer:
         self._record_usage = record_usage
         self._busy = busy
         self._serving_context = serving_context
+        self._server_hold = server_hold
 
     @property
     def root(self) -> Path:
@@ -303,10 +306,12 @@ class Comparer:
         except Exception:  # noqa: BLE001
             return False
 
-    def _starting_model(self) -> tuple[str | None, str | None]:
+    def _starting_model(self, runtime: str = "ollama") -> tuple[str | None, str | None]:
+        """The untouched starting model, served in ``runtime`` (where the new version runs)."""
+
         if self._baseline_model is not None:
-            return self._baseline_model()
-        from row_bot.learning.training import base_model, engine, hardware, recipes, weights
+            return self._baseline_model(runtime)
+        from row_bot.learning.training import base_model, engine, recipes, weights
 
         model = weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
         found = weights.status(model, self._root)
@@ -315,11 +320,12 @@ class Comparer:
         main = next((item for item in model.files if item.name.endswith(".safetensors")), None)
         return base_model.ensure(root=self._root, engine_status=engine.status(self._root), model=model,
                                  weights_folder=found.folder, weights_bytes=main.size if main else model.download_bytes,
-                                 recipe=recipes.for_hardware(hardware.peek()) or recipes.default())
+                                 recipe=recipes.current(self._root), runtime=runtime)
 
-    def _baseline(self, version: int) -> tuple[str, str, str | None, str | None, str | None]:
+    def _baseline(self, version: int, runtime: str = "ollama") -> tuple[str, str, str | None, str | None, str | None]:
         """(key, label, model_ref, release id, why it couldn't run) of the arm the new version is
-        compared with: the newest other version in use, else the untouched starting model."""
+        compared with: the newest other version in use, else the untouched starting model served where
+        the new version runs (``runtime``)."""
 
         from row_bot.learning import use
         from row_bot.learning.training import releases
@@ -330,7 +336,7 @@ class Comparer:
             state = releases.read_state(releases.version_dir(other, self._root))
             if state is not None and state.phase == releases.READY and state.model_ref:
                 return f"v{other}", f"v{other} (in use)", state.model_ref, state.release_id or None, None
-        ref, reason = self._starting_model()
+        ref, reason = self._starting_model(runtime)
         return "base", "the starting model", ref, None, reason
 
     # ── The run ─────────────────────────────────────────────────────────
@@ -347,19 +353,39 @@ class Comparer:
     def run(self, version: int, *, stop: threading.Event | None = None) -> dict[str, Any]:
         """Compare ``version`` now; returns (and saves) the result."""
 
-        from row_bot.learning import eval_worker, evaluation
-        from row_bot.learning.packs import PACKS, visible_tasks
         from row_bot.learning.training import releases
 
         stop = stop or threading.Event()
         state = releases.read_state(releases.version_dir(int(version), self._root))
         if state is None or state.phase != releases.READY or not state.model_ref:
             raise CompareError("not_ready")
+        with self._server_held(state.runtime):
+            return self._run(version, stop, state)
+
+    def _server_held(self, runtime: str) -> Any:
+        """Row-Bot's own model server (O75) stays running for the whole comparison when the version
+        runs there (its starting model is served there too): idle unloading never stops it between
+        tasks, and its key, handed to the evaluation worker, stays valid."""
+
+        if self._server_hold is not None:
+            return self._server_hold(runtime)
+        from row_bot.learning.training import serving
+
+        if runtime != serving.ROW_BOT:
+            return contextlib.nullcontext()
+        from row_bot.learning.training import llama_server
+
+        return llama_server.get(self._root).hold()
+
+    def _run(self, version: int, stop: threading.Event, state: Any) -> dict[str, Any]:
+        from row_bot.learning import eval_worker, evaluation
+        from row_bot.learning.packs import PACKS, visible_tasks
+
         started = float(self.clock())
         self._progress(version, state="running", phase="starting", done=0, total=0, started_at=started,
                        reason=None)
         main_ref = self._main()
-        base_key, base_label, base_ref, base_release, base_reason = self._baseline(version)
+        base_key, base_label, base_ref, base_release, base_reason = self._baseline(version, state.runtime)
         container = self._has_container()
         new_key = f"v{int(version)}"
         arms: list[evaluation.Arm] = []

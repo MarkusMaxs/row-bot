@@ -199,6 +199,39 @@ def for_hardware(check: Any) -> Recipe | None:
     return chosen
 
 
+def fits(recipe: Recipe, check: Any) -> bool:
+    """Whether a certified recipe trains on this computer's card (its tier, or a smaller one)."""
+
+    if not recipe.certified or check is None or not getattr(check, "can_train", False):
+        return False
+    tier = getattr(check, "tier", None)
+    return tier is not None and tier.id in ORDER and ORDER.index(recipe.tier) <= ORDER.index(tier.id)
+
+
+def certified_for(check: Any) -> tuple[Recipe, ...]:
+    """Every certified recipe this computer's card trains, largest tier first."""
+
+    return tuple(recipe for recipe in reversed(all_recipes()) if fits(recipe, check))
+
+
+def for_model(model_id: str, check: Any) -> Recipe | None:
+    """The certified recipe that trains ``model_id`` on this card, or None."""
+
+    return next((recipe for recipe in certified_for(check) if recipe.starting_model == model_id), None)
+
+
+def current(root: Any = None, check: Any = None) -> Recipe:
+    """The recipe the person's choices train with: the one for their starting model when this card
+    trains it, else the card's own (``for_hardware``), else the 8 GB recipe."""
+
+    from row_bot import learning
+    from row_bot.learning.training import hardware
+
+    found = check if check is not None else hardware.peek()
+    chosen = learning.read_settings(root).starting_model
+    return for_model(chosen, found) or for_hardware(found) or default()
+
+
 def default() -> Recipe:
     """The certified 8 GB recipe (used before the hardware check has run)."""
 
@@ -207,6 +240,10 @@ def default() -> Recipe:
 
 __all__ = [
     "FOLDER",
+    "certified_for",
+    "current",
+    "fits",
+    "for_model",
     "MIN_TRAINING_CONTEXT",
     "ORDER",
     "Recipe",

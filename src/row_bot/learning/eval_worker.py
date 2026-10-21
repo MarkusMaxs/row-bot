@@ -317,12 +317,19 @@ def gather(arms: Sequence[WorkerArm]) -> tuple[list[Credential], dict[str, Any],
             continue
         if provider.startswith("custom_openai_"):
             endpoint = custom.get_custom_endpoint(provider) or {}
-            if not endpoint:
+            live = custom.managed_connection(endpoint) if endpoint.get("managed") else None
+            if not endpoint or (endpoint.get("managed") and live is None):
                 unsupported.append(arm.name)
                 continue
             endpoints[provider] = {key: endpoint[key] for key in (
                 "id", "name", "base_url", "profile", "execution_location", "auth_required", "reasoning_mode",
                 "manual_capabilities", "enabled") if key in endpoint}
+            if live is not None:
+                # Row-Bot's own model server (O75), held running by the comparison: handed over as the
+                # plain local endpoint it is while it runs, with the key it was given at this start.
+                endpoints[provider].update(base_url=live[0], auth_required=True)
+                credentials[provider] = Credential(provider, "api_key", {"api_key": live[1]})
+                continue
             if endpoint.get("auth_required") and provider not in credentials:
                 key = auth_store.get_provider_secret(provider, "api_key")
                 if not key:
@@ -1120,8 +1127,14 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
     _, baseline = _ledger_rows(0)
     thread_id = f"eval-{uuid.uuid4().hex[:16]}"
     threads.create_thread(f"Evaluation {task.id}", thread_id=thread_id, seed_default_skills=False)
+    from row_bot.cancellation import CancellationScope, use_cancellation_scope
+
+    # The turn runs under a cancellation scope, as a chat does: a transport registers each request with it
+    # when it starts (#509), so the time limit ends a local request stuck in a tool call, not only the
+    # agent's checks between chunks.
     stop = threading.Event()
-    timer = threading.Timer(float(message.get("timeout") or TASK_SECONDS), stop.set)
+    scope = CancellationScope(stop)
+    timer = threading.Timer(float(message.get("timeout") or TASK_SECONDS), scope.cancel, args=("time_limit",))
     timer.daemon = True
     timer.start()
     config = {"configurable": {
@@ -1130,7 +1143,9 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
     }}
     record = TurnRecord(keep=bool(message.get("trace")))
     try:
-        outcome = _consume(agent.stream_agent(task.prompt, names, config, stop_event=stop), stop, max_calls, record)
+        with use_cancellation_scope(scope):
+            outcome = _consume(agent.stream_agent(task.prompt, names, config, stop_event=stop), stop, max_calls,
+                               record)
     except Exception as error:  # noqa: BLE001 - a failed turn is a result
         outcome = {"answer": "", "status": "error", "calls": 0, "errors": [type(error).__name__]}
         record.add("error", type(error).__name__)

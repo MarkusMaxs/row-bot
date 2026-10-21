@@ -65,9 +65,10 @@ STARTING_MODELS = ("qwen3.5-2b",)
 # ("waiting": the person agreed; L2b downloads when they tap it, and an old answer reads
 # as "Ready to download", O36) or Not now.
 MODEL_DOWNLOADS = ("not_asked", "waiting", "not_now")
-# Where the personal model runs ("Runs in", D10): Ollama by default (automated), or a runtime the
+# Where the personal model runs ("Runs in", D10): Row-Bot's own llama.cpp server by default (O75;
+# Ollama where it has no build, ``serving.effective_runtime``), Ollama (automated), or a runtime the
 # person starts (LM Studio, llama.cpp server, vLLM on Linux) with one command Row-Bot shows.
-SERVE_RUNTIMES = ("ollama", "lmstudio", "llama_cpp", "vllm")
+SERVE_RUNTIMES = ("row_bot", "ollama", "lmstudio", "llama_cpp", "vllm")
 DEFAULT_MONTHLY_TOKEN_LIMIT = 2_000_000
 MAX_MONTHLY_TOKEN_LIMIT = 1_000_000_000
 _MAX_SETTINGS_BYTES = 64 * 1024

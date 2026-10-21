@@ -330,7 +330,7 @@ def training_need_mib(found: HardwareCheck | None = None) -> int | None:
     from row_bot.learning.training import recipes
 
     try:
-        recipe = recipes.for_hardware(found if found is not None else peek())
+        recipe = recipes.current(check=found if found is not None else peek())
     except Exception:  # noqa: BLE001 - no recipe: the share of the card decides
         return None
     match = re.fullmatch(r"(\d+)gb", str(getattr(recipe, "tier", "") or ""))

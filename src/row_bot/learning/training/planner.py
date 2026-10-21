@@ -135,9 +135,9 @@ class Planner:
 
         if self._recipe_for is not None:
             return advanced.apply(self._recipe_for(), self._root)
-        from row_bot.learning.training import hardware, recipes
+        from row_bot.learning.training import recipes
 
-        return advanced.apply(recipes.for_hardware(hardware.peek()) or recipes.default(), self._root)
+        return advanced.apply(recipes.current(self._root), self._root)
 
     def trained_ids(self) -> set[str]:
         if self._trained_ids is not None:

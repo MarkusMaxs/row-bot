@@ -3969,14 +3969,16 @@ class LearningDownload(WireModel):
 
 
 class LearningRuntime(WireModel):
-    """Where a personal model can run ("Runs in", D10)."""
+    """Where a personal model can run ("Runs in", D10; Row-Bot's own server, O75)."""
 
-    id: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    id: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
     name: str = Field(max_length=64)
-    # Row-Bot registers the model there itself (Ollama); the others are loaded with one command.
+    # Row-Bot registers the model there itself (its own server, Ollama); the others are loaded with one command.
     automated: bool
-    # Whether the runtime is installed here (known for Ollama only).
+    # Whether the runtime is installed here (known for Row-Bot's own server and Ollama).
     installed: bool | None = None
+    # False where it can't run on this computer (Row-Bot's own server without an NVIDIA card that can train).
+    available: bool = True
 
 
 class LearningExamples(WireModel):
@@ -4000,8 +4002,9 @@ class LearningVersion(WireModel):
     failure: Literal[
         "not_enough_disk", "adapter_missing", "engine_missing", "tools_missing", "export_failed", "not_installed",
         "not_running", "not_local", "create_failed", "not_loaded", "probe_failed", "tool_turn_failed",
+        "server_missing", "server_unavailable", "server_failed", "load_failed",
     ] | None = None
-    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
     quantization: Literal["Q8_0", "Q4_K_M"]
     file_name: str | None = Field(default=None, max_length=128)
     file_bytes: int = Field(ge=0)
@@ -4166,7 +4169,7 @@ class LearningPersonalModel(WireModel):
     starting_model_bytes: int = Field(ge=0)
     download_state: LearningDownload
     # Where personal models run (the person's choice) and the choices here.
-    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"] = "ollama"
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = "row_bot"
     runtimes: list[LearningRuntime] = Field(default_factory=list, max_length=8)
     # The count of usable examples once the engine is installed; null before.
     examples: LearningExamples | None = None
@@ -4400,7 +4403,7 @@ class LearningCommand(WireModel):
     advanced: LearningAdvancedValues | None = None
     item_id: str = Field(default="", max_length=128)
     # choose_runtime: where personal models run.
-    runtime: Literal["", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
+    runtime: Literal["", "row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
     # The training run a training action is for (the one the person saw).
     job_id: str = Field(default="", max_length=128)
     conversation_id: str = Field(default="", max_length=256)

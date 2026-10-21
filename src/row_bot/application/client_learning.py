@@ -77,7 +77,8 @@ _VERSION_PHASES = frozenset({"exporting", "export_failed", "making_ready", "read
                              "waiting_for_you"})
 _VERSION_FAILURES = frozenset({"not_enough_disk", "adapter_missing", "engine_missing", "tools_missing",
                                "export_failed", "not_installed", "not_running", "not_local", "create_failed",
-                               "not_loaded", "probe_failed", "tool_turn_failed"})
+                               "not_loaded", "probe_failed", "tool_turn_failed", "server_missing",
+                               "server_unavailable", "server_failed", "load_failed"})
 _FAILURES = frozenset({"out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"})
 _SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
 # The owner id each channel needs before its direct chats count as the owner's (O2), in words.
@@ -269,7 +270,7 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "starting_model_state": starting if starting in ("downloaded", "damaged") else "not_downloaded",
         "starting_model_bytes": view.model_bytes if view is not None and starting == "downloaded" else 0,
         "download_state": _download_view(None if configured else view),
-        "runtime": settings.serve_runtime,
+        "runtime": _runtime_now(settings),
         "runtimes": _runtimes(),
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
@@ -285,20 +286,45 @@ def _use_parts() -> dict[str, Any]:
             "export_folder": _text(suggested_folder(), 1024)}
 
 
-def _runtimes() -> list[dict[str, Any]]:
-    """Where a personal model can run here, and whether Row-Bot can register it there itself."""
+def _runtime_now(settings: learning.LearningSettings) -> str:
+    """Where new versions run: the person's choice, Row-Bot's own server by default where it can run."""
 
     from row_bot.learning.training import serving
+
+    try:
+        return serving.effective_runtime(settings.serve_runtime)
+    except Exception:
+        logger.debug("Learning could not tell where personal models run", exc_info=True)
+        return "ollama"
+
+
+def _runtimes() -> list[dict[str, Any]]:
+    """Where a personal model can run here, and whether Row-Bot can register it there itself. Row-Bot's
+    own server is listed everywhere, marked not available where it has no build (no NVIDIA card that
+    can train, macOS, Arm); ``installed`` says whether its files are here yet."""
+
+    from row_bot.learning.training import serving, server_files
 
     try:
         ollama = serving.OllamaRuntime().executable() is not None
     except Exception:
         ollama = False
+    here = set(serving.available_runtimes())
     shown = []
-    for runtime in serving.available_runtimes():
+    for runtime in serving.RUNTIMES:
+        if runtime == "vllm" and runtime not in here:
+            continue
+        installed: bool | None = None
+        if runtime == "ollama":
+            installed = ollama
+        elif runtime == serving.ROW_BOT and runtime in here:
+            try:
+                installed = server_files.status(learning.data_dir()).installed
+            except Exception:
+                installed = False
         shown.append({
-            "id": runtime, "name": serving.RUNTIME_NAMES[runtime], "automated": runtime == "ollama",
-            "installed": ollama if runtime == "ollama" else None,
+            "id": runtime, "name": serving.RUNTIME_NAMES[runtime], "automated": runtime in serving.AUTOMATED,
+            "installed": installed, "available": runtime in here,
         })
     return shown
 
@@ -493,9 +519,9 @@ def _advanced_view() -> dict[str, Any] | None:
     """Advanced ›: the next run's settings, the recommended ones and the choices (D9)."""
 
     try:
-        from row_bot.learning.training import advanced, hardware, recipes
+        from row_bot.learning.training import advanced, recipes
 
-        recipe = recipes.for_hardware(hardware.peek()) or recipes.default()
+        recipe = recipes.current()
         found = advanced.view(recipe)
     except Exception:
         logger.debug("Learning could not read its advanced settings", exc_info=True)
@@ -1073,7 +1099,7 @@ def _version_action(action: str, runtime: str) -> str:
         return f"Preparing v{state.version} again."
     if state.phase == "waiting_for_you":
         return f"Checking whether v{state.version} is loaded in {serving.RUNTIME_NAMES.get(state.runtime, 'it')}."
-    return f"Making v{state.version} ready in {serving.RUNTIME_NAMES.get(learning.read_settings().serve_runtime, 'it')}."
+    return f"Making v{state.version} ready in {serving.RUNTIME_NAMES.get(_runtime_now(learning.read_settings()), 'it')}."
 
 
 _VERSION_ERRORS = {
@@ -1158,9 +1184,9 @@ def _use_action(action: str, wire: dict[str, Any]) -> str:
                     if undone else "")
             return f"v{int(version)} deleted.{freed}{back}"
         if action == "save_advanced":
-            from row_bot.learning.training import advanced, hardware, recipes
+            from row_bot.learning.training import advanced, recipes
 
-            recipe = recipes.for_hardware(hardware.peek()) or recipes.default()
+            recipe = recipes.current()
             advanced.save(wire.get("advanced") or {}, recipe)
             return "Saved. The next training run uses these settings."
         if action == "reset_advanced":
@@ -1266,7 +1292,9 @@ def _download(action: str) -> str:
         if task.running() or _training_runs():
             raise downloads.DownloadError("busy")
         if action == "remove_engine":
-            freed = engine.remove()
+            from row_bot.learning.training import llama_server
+
+            freed = llama_server.remove() + engine.remove()
             task.forget()
             if settings.model_download == "waiting":
                 _save({"model_download": "not_now"})

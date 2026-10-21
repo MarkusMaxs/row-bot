@@ -268,7 +268,28 @@ def normalize_custom_endpoint(endpoint: dict[str, Any]) -> dict[str, Any]:
     scope = endpoint.get("credential_scope")
     if isinstance(scope, str) and re.fullmatch(r"[a-f0-9]{32}", scope):
         normalized["credential_scope"] = scope
+    if endpoint.get("managed") in MANAGED_SERVERS:
+        normalized["managed"] = str(endpoint["managed"])
     return normalized
+
+
+# Local servers Row-Bot runs itself, by owner (Learning's llama.cpp server for personal models, O75). Such
+# a server runs only while it is needed, on a loopback port with a key it is given at each start, so
+# requests and probes ask its owner for the address and key each time (the owner starts it then).
+MANAGED_SERVERS = {"learning": "row_bot.learning.training.llama_server"}
+
+
+def managed_connection(endpoint: dict[str, Any] | None, *, start: bool = True) -> tuple[str, str] | None:
+    """``(base_url, api_key)`` of a managed endpoint's server now (started when ``start``), or None:
+    not a managed endpoint, or its server can't run."""
+
+    owner = MANAGED_SERVERS.get(str((endpoint or {}).get("managed") or ""))
+    if owner is None:
+        return None
+    import importlib
+
+    found = importlib.import_module(owner).endpoint_connection(start=start)
+    return (str(found[0]), str(found[1])) if found else None
 
 
 def list_custom_endpoints() -> list[dict]:
@@ -1256,6 +1277,12 @@ def _stream_line_has_usable_delta(line: str) -> bool:
 
 def _custom_endpoint_headers(endpoint: dict[str, Any]) -> dict[str, str]:
     headers = dict(endpoint.get("headers") or {})
+    if endpoint.get("managed"):
+        live = managed_connection(endpoint)
+        if live is None:
+            raise ValueError("Row-Bot's own model server isn't available on this computer.")
+        headers["Authorization"] = f"Bearer {live[1]}"
+        return headers
     secret = custom_endpoint_secret(str(endpoint["provider_id"])) if endpoint.get("auth_required") else ""
     if endpoint.get("auth_required") and not secret:
         raise ValueError(custom_endpoint_auth_missing_message(endpoint))

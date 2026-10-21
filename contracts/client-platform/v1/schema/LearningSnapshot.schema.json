@@ -856,8 +856,9 @@
           "type": "string"
         },
         "runtime": {
-          "default": "ollama",
+          "default": "row_bot",
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -1051,14 +1052,20 @@
     },
     "LearningRuntime": {
       "additionalProperties": false,
-      "description": "Where a personal model can run (\"Runs in\", D10).",
+      "description": "Where a personal model can run (\"Runs in\", D10; Row-Bot's own server, O75).",
       "properties": {
         "automated": {
           "title": "Automated",
           "type": "boolean"
         },
+        "available": {
+          "default": true,
+          "title": "Available",
+          "type": "boolean"
+        },
         "id": {
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -1542,7 +1549,11 @@
                 "create_failed",
                 "not_loaded",
                 "probe_failed",
-                "tool_turn_failed"
+                "tool_turn_failed",
+                "server_missing",
+                "server_unavailable",
+                "server_failed",
+                "load_failed"
               ],
               "type": "string"
             },
@@ -1624,6 +1635,7 @@
         },
         "runtime": {
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",

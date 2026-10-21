@@ -2,7 +2,12 @@
 
 Where a version runs is the person's choice ("Runs in"):
 
-- **Ollama** (the default, automated): ``ollama create`` from the version's GGUF with a Modelfile
+- **Row-Bot** (the default where it can run, O75): Row-Bot's own llama.cpp server
+  (``llama_server.py``), which Row-Bot downloads with the training engine, starts when a request needs
+  it and stops when it is idle. The version's GGUF is registered under its name, loaded for the checks
+  and unloaded after them. llama.cpp's grammar keeps the model's tool calls well formed (L2v: the same
+  GGUF passed 20 of 48 tasks there against 13 in Ollama).
+- **Ollama** (automated, and the default where Row-Bot's server has no build): ``ollama create`` from the version's GGUF with a Modelfile
   that carries Ollama's own Qwen3.5 renderer and parser and the context it serves at; the model is
   addressed by its tag (``row-bot-personal-v1:latest``), its capabilities are what Ollama's own
   ``/api/show`` says (the local catalog is refreshed from it, O33), and Row-Bot saves the served
@@ -37,8 +42,15 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-RUNTIMES = ("ollama", "lmstudio", "llama_cpp", "vllm")
-RUNTIME_NAMES = {"ollama": "Ollama", "lmstudio": "LM Studio", "llama_cpp": "llama.cpp server", "vllm": "vLLM"}
+ROW_BOT = "row_bot"
+RUNTIMES = (ROW_BOT, "ollama", "lmstudio", "llama_cpp", "vllm")
+RUNTIME_NAMES = {ROW_BOT: "Row-Bot", "ollama": "Ollama", "lmstudio": "LM Studio", "llama_cpp": "llama.cpp server",
+                 "vllm": "vLLM"}
+# Runtimes Row-Bot registers a version in by itself (the others show a command to run).
+AUTOMATED = frozenset({ROW_BOT, "ollama"})
+# Why Row-Bot's own server couldn't make a version ready, as the version's failure.
+SERVER_FAILURES = {"unavailable": "server_unavailable", "not_installed": "server_missing",
+                   "load_failed": "load_failed", "unknown_model": "load_failed"}
 # Where each manual runtime serves on this computer, and Row-Bot's endpoint profile for it.
 PORTS = {"lmstudio": 1234, "llama_cpp": 8181, "vllm": 8000}
 PROFILES = {"lmstudio": "lmstudio", "llama_cpp": "llama_cpp", "vllm": "vllm"}
@@ -81,10 +93,32 @@ def endpoint_id(runtime: str) -> str:
     return f"{NAME_PREFIX}-{runtime.replace('_', '-')}"
 
 
-def available_runtimes() -> tuple[str, ...]:
-    """The runtimes this computer can offer (vLLM runs on Linux, or in WSL)."""
+def row_bot_here(check: Any = None) -> bool:
+    """Whether Row-Bot's own server has a build for this computer (an NVIDIA card that can train, on
+    Windows or Linux x86-64), installed or not."""
 
-    return tuple(item for item in RUNTIMES if item != "vllm" or sys.platform.startswith("linux"))
+    from row_bot.learning.training import hardware, server_files
+
+    found = check if check is not None else hardware.peek()
+    variant = found.variant if found is not None and getattr(found, "can_train", False) else None
+    return bool(server_files.plan(variant))
+
+
+def available_runtimes(check: Any = None) -> tuple[str, ...]:
+    """The runtimes this computer can offer: Row-Bot's own server where it has a build, and vLLM on
+    Linux (or in WSL)."""
+
+    return tuple(item for item in RUNTIMES if (item != "vllm" or sys.platform.startswith("linux"))
+                 and (item != ROW_BOT or row_bot_here(check)))
+
+
+def effective_runtime(choice: str | None, check: Any = None) -> str:
+    """Where a new version runs: the person's choice, with Row-Bot's own server as the default where
+    it can run and Ollama where it can't (O75)."""
+
+    if choice in RUNTIMES and choice != ROW_BOT:
+        return str(choice)
+    return ROW_BOT if row_bot_here(check) else "ollama"
 
 
 @dataclass(frozen=True)
@@ -94,7 +128,8 @@ class ServeOutcome:
     state: Outcome
     runtime: str
     model_ref: str | None = None
-    # not_installed · not_running · not_local · create_failed · not_loaded · probe_failed · tool_turn_failed
+    # not_installed · not_running · not_local · create_failed · not_loaded · probe_failed · tool_turn_failed;
+    # Row-Bot's own server: server_missing · server_unavailable · server_failed · load_failed
     reason: str | None = None
     command: str | None = None
     runtime_version: str | None = None
@@ -338,6 +373,15 @@ class RowBotVerifier:
         return agent_tool_turn(model_ref)
 
 
+def _check_events(events: Any) -> Any:
+    """The check turn's events up to its first approval question (a version that asks fails it)."""
+
+    for event in events:
+        yield event
+        if event[0] == "interrupt":
+            return
+
+
 def agent_tool_turn(model_ref: str, *, timeout: float = CHECK_SECONDS) -> dict[str, Any]:
     """One real Agent turn with the model: Row-Bot's own prompt, runtime and the calculator tool, on a
     throwaway conversation that is never saved (no chat appears, Learning records nothing of it) and
@@ -345,6 +389,7 @@ def agent_tool_turn(model_ref: str, *, timeout: float = CHECK_SECONDS) -> dict[s
 
     from row_bot import agent
     from row_bot import threads
+    from row_bot.cancellation import CancellationScope, use_cancellation_scope
     from row_bot.thread_cleanup import delete_thread
 
     thread_id = f"learning-check-{uuid.uuid4().hex[:12]}"
@@ -352,15 +397,19 @@ def agent_tool_turn(model_ref: str, *, timeout: float = CHECK_SECONDS) -> dict[s
         "thread_id": thread_id, "model_override": model_ref, "runtime_mode": "agent",
         "runtime_surface": "normal_chat", "approval_mode": "approve", "generation_id": uuid.uuid4().hex,
     }}
+    # Under a cancellation scope, as a chat: the time limit ends a request stuck in the runtime too.
     stop = threading.Event()
-    timer = threading.Timer(timeout, stop.set)
+    scope = CancellationScope(stop)
+    timer = threading.Timer(timeout, scope.cancel, args=("time_limit",))
     timer.daemon = True
     calls: list[str] = []
     answer, errors = "", []
     started = time.monotonic()
     timer.start()
     try:
-        for event, payload in agent.stream_agent(CHECK_PROMPT, list(CHECK_TOOLS), config, stop_event=stop):
+        with use_cancellation_scope(scope):
+            turn = list(_check_events(agent.stream_agent(CHECK_PROMPT, list(CHECK_TOOLS), config, stop_event=stop)))
+        for event, payload in turn:
             if event == "tool_call":
                 name = getattr(payload, "runtime_name", "") or getattr(payload, "raw_name", "") or (
                     payload.get("name") if isinstance(payload, Mapping) else str(payload))
@@ -412,20 +461,25 @@ def serve(
     root: Path | None = None,
     tag: str | None = None,
     tool_turn: bool = True,
+    managed: Any = None,
 ) -> ServeOutcome:
     """Register ``gguf`` in ``runtime`` and check it is ready (the probe and a real tool turn).
     ``root``: the data folder (its Ollama tag). ``tag`` names the Ollama model instead of the
     version's own name (the untouched starting model a first version is compared with, L2c2), and
-    ``tool_turn=False`` checks only Row-Bot's probe (that model never learned the tool bridge)."""
+    ``tool_turn=False`` checks only Row-Bot's probe (that model never learned the tool bridge).
+    ``managed``: Row-Bot's own server (``llama_server.get()`` by default; tests pass a fake)."""
 
     from row_bot.providers.selection import model_ref as make_ref
 
     if runtime not in RUNTIMES:
         raise ValueError("unknown runtime")
-    if tag is not None and runtime != "ollama":
-        raise ValueError("a named model is served in Ollama")
+    if tag is not None and runtime not in AUTOMATED:
+        raise ValueError("a named model is served by Row-Bot or in Ollama")
     started = time.monotonic()
     verifier = verifier or RowBotVerifier()
+    if runtime == ROW_BOT:
+        return _serve_row_bot(tag or model_name(version), gguf=gguf, serve_context=serve_context, root=root,
+                              verifier=verifier, tool_turn=tool_turn, managed=managed, started=started)
     served = ""  # the Ollama model this call made (none for the runtimes the person starts)
     if runtime == "ollama":
         ollama = ollama or OllamaRuntime()
@@ -485,6 +539,50 @@ def serve(
                         seconds=time.monotonic() - started)
 
 
+def _serve_row_bot(name: str, *, gguf: Path, serve_context: int, root: Path | None, verifier: Verifier,
+                   tool_turn: bool, managed: Any, started: float) -> ServeOutcome:
+    """Row-Bot's own server: register the GGUF under ``name``, load it, run the checks, unload it.
+    A version that fails is taken off the server's list (its file stays)."""
+
+    from row_bot.learning.training import llama_server, lockfile
+    from row_bot.providers.custom import custom_provider_id
+    from row_bot.providers.selection import model_ref as make_ref
+
+    server = managed if managed is not None else llama_server.get(root)
+    files = server.files()
+    if not files.installed:
+        reason = "server_unavailable" if files.state == "unavailable" else "server_missing"
+        return ServeOutcome("failed", ROW_BOT, reason=reason, seconds=time.monotonic() - started)
+    server.register(name, gguf, serve_context)
+    provider = custom_provider_id(llama_server.ENDPOINT_ID)
+    reference = make_ref(provider, name)
+    probe: dict[str, Any] = {}
+    turn: dict[str, Any] = {}
+    reason = ""
+    try:
+        with server.hold():
+            server.load(name)
+            probe = dict(verifier.probe(reference, runtime=ROW_BOT, endpoint=provider, model_id=name))
+            reason = "" if probe.get("agent_ready") else "probe_failed"
+            if not reason and tool_turn:
+                turn = dict(verifier.tool_turn(reference))
+                reason = "" if turn.get("ok") else "tool_turn_failed"
+            # The checks loaded it: its graphics memory goes back now (training or the person's own
+            # local model may need the card; it loads again when asked for).
+            server.unload(name)
+    except llama_server.ServerError as error:
+        reason = SERVER_FAILURES.get(error.code, "server_failed")
+    if reason:
+        try:
+            server.unregister(name)  # nothing half-working stays on its list
+        except Exception:  # noqa: BLE001
+            logger.debug("Learning couldn't take a model off its server's list", exc_info=True)
+        return ServeOutcome("failed", ROW_BOT, model_ref=reference, reason=reason, probe=probe, tool_turn=turn,
+                            seconds=time.monotonic() - started)
+    return ServeOutcome("ready", ROW_BOT, model_ref=reference, runtime_version=lockfile.LLAMA_CPP_RELEASE,
+                        probe=probe, tool_turn=turn, seconds=time.monotonic() - started)
+
+
 def _take_back(ollama: OllamaRuntime, tag: str, catalog: Callable[[], int] | None = None) -> None:
     """Remove ``tag`` from Ollama with its saved settings (and refresh the model list)."""
 
@@ -505,8 +603,14 @@ def _take_back(ollama: OllamaRuntime, tag: str, catalog: Callable[[], int] | Non
 
 def withdraw(runtime: str, version: int, *, ollama: OllamaRuntime | None = None, root: Path | None = None,
              catalog: Callable[[], int] | None = None) -> None:
-    """Remove a version from a runtime Row-Bot registered it in (Ollama), and its saved settings."""
+    """Remove a version from a runtime Row-Bot registered it in (its own server, or Ollama with its
+    saved settings)."""
 
+    if runtime == ROW_BOT:
+        from row_bot.learning.training import llama_server
+
+        llama_server.get(root).unregister(model_name(version))
+        return
     if runtime != "ollama":
         return
     _take_back(ollama or OllamaRuntime(), ollama_tag(version, root), catalog)
@@ -521,12 +625,14 @@ def describe(outcome: ServeOutcome) -> dict[str, Any]:
 
 
 __all__ = [
+    "AUTOMATED",
     "CHECK_ANSWER",
     "CHECK_PROMPT",
     "NAME_PREFIX",
     "OllamaRuntime",
     "PORTS",
     "RUNTIMES",
+    "ROW_BOT",
     "RUNTIME_NAMES",
     "RowBotVerifier",
     "ServeOutcome",
@@ -535,12 +641,14 @@ __all__ = [
     "available_runtimes",
     "command_for",
     "describe",
+    "effective_runtime",
     "endpoint_id",
     "model_name",
     "modelfile_text",
     "ollama_tag",
     "refresh_ollama_catalog",
     "register_endpoint",
+    "row_bot_here",
     "serve",
     "served_models",
     "withdraw",

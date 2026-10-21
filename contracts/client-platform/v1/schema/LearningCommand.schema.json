@@ -284,6 +284,7 @@
       "default": "",
       "enum": [
         "",
+        "row_bot",
         "ollama",
         "lmstudio",
         "llama_cpp",

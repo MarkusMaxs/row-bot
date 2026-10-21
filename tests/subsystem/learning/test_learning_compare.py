@@ -78,7 +78,7 @@ def _comparer(root, *, container=False, limit=10_000_000, plan=None, recorded=No
         root, plan=plan or model_compare.Plan(visible_per_pack=2, hidden_repeats=1), worker_factory=FakeWorker,
         gather=lambda arms: ([], {"custom_endpoints": [], "local_model_settings": {}}, []),
         tools=lambda: ["filesystem", "calculator", "shell"], container=lambda: container,
-        baseline_model=lambda: (BASE, None), main_ref=lambda: MAIN, model_name=lambda ref: "GPT-6.1 Sol",
+        baseline_model=lambda runtime: (BASE, None), main_ref=lambda: MAIN, model_name=lambda ref: "GPT-6.1 Sol",
         meter=lambda: TokenMeter(limit), record_usage=(recorded.extend if recorded is not None else lambda rows: None),
     )
 
