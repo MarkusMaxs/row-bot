@@ -619,6 +619,11 @@
     width: 56px;
     height: 56px;
   }
+  /* A phone wraps a row's words rather than cutting them short. */
+  .overview-row-title,
+  .overview-row-meta {
+    white-space: normal;
+  }
 }
 @media (pointer: coarse) {
   .overview-needs-more {
