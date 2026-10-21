@@ -45,6 +45,8 @@ _EVENT_REACTIONS: dict[BuddyEventType, tuple[BuddyMood, str, int, int, int, str]
     BuddyEventType.WORKFLOW_CANCELLED: (BuddyMood.CONCERNED, "pause", 48, 38, 24, "Workflow cancelled"),
     # A long command carrying on in the background (F6); servers the agent started are not "working".
     BuddyEventType.BACKGROUND_COMMAND: (BuddyMood.FOCUSED, "step_check", 68, 58, 0, "Command running"),
+    # Row-Bot's browser or the screen being recorded (F2): watchful while it lasts.
+    BuddyEventType.RECORDING: (BuddyMood.FOCUSED, "listen", 70, 60, 6, "Recording"),
     BuddyEventType.NOTIFICATION: (BuddyMood.EXCITED, "ping", 80, 35, 36, "Notification"),
     BuddyEventType.VOICE_LISTENING: (BuddyMood.CURIOUS, "listen", 78, 62, 8, "Listening"),
     BuddyEventType.IDLE: (BuddyMood.CURIOUS, "idle_breathe", 64, 20, 0, "Idle"),
@@ -53,7 +55,7 @@ _EVENT_REACTIONS: dict[BuddyEventType, tuple[BuddyMood, str, int, int, int, str]
 _IDLE_GRACE_SECONDS = 2.0
 _STALE_ACTIVITY_SECONDS = 120.0
 _DURABLE_RECONCILE_SECONDS = 5.0
-_ACTIVE_PRIORITY = ("approval", "tool", "generation", "orchestration", "workflow", "voice", "command")
+_ACTIVE_PRIORITY = ("approval", "tool", "generation", "orchestration", "workflow", "voice", "recording", "command")
 _ACTIVITY_STARTS: dict[BuddyEventType, str] = {
     BuddyEventType.GENERATION_STARTED: "generation",
     BuddyEventType.THINKING: "generation",
@@ -505,6 +507,25 @@ class BuddyBrain:
             )
         if not command_owners:
             self._active.pop("command", None)
+
+        # Recordings of Row-Bot's browser or the screen (F2), while one runs.
+        recording_owners = self._active.setdefault("recording", {})
+        recording_owners.clear()
+        recordings = sys.modules.get("row_bot.recordings")
+        for record in recordings.active_recordings() if recordings is not None else ():
+            label = "Recording the screen" if record.kind == "screen" else "Recording the browser"
+            recording_owners[record.recording_id] = _Activity(
+                kind="recording",
+                event_type=BuddyEventType.RECORDING,
+                owner_id=record.recording_id,
+                source="recordings.reconcile",
+                label=label,
+                payload={"recording_id": record.recording_id, "label": label},
+                updated_at=now,
+                reconciled=True,
+            )
+        if not recording_owners:
+            self._active.pop("recording", None)
 
     def tick(self) -> BuddyState:
         events = get_buddy_event_bus().recent(after_id=self._last_event_id, limit=512)

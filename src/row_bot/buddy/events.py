@@ -34,6 +34,7 @@ class BuddyEventType(StrEnum):
     WORKFLOW_ERROR = "workflow.error"
     WORKFLOW_CANCELLED = "workflow.cancelled"
     BACKGROUND_COMMAND = "background.command"
+    RECORDING = "recording"
     NOTIFICATION = "notification"
     VOICE_LISTENING = "voice.listening"
     IDLE = "idle"

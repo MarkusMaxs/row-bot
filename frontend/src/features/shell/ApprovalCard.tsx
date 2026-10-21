@@ -24,6 +24,7 @@ type Hint_ = {
   risk_class?: string;
   setup?: ApprovalSetup | null;
   reviewer_reason?: string;
+  question?: string;
 };
 
 /** Under Auto: why the reviewer asked the person rather than approving it (quiet, one line). */
@@ -262,6 +263,11 @@ export default function ApprovalCard({
   const action = view?.action_label || hint?.action_label || '';
   // The app asking, shown as the catalog knows it.
   const app = view?.app ?? null;
+  // The tool's own question when it has one ("Allow Row-Bot's browser to open localhost:5173 in this chat?").
+  const question =
+    view?.question ||
+    hint?.question ||
+    approvalQuestion(view?.action_label || action, app);
   const risk = view?.risk_class || hint?.risk_class || 'unknown';
   // The reason names every field already when an app's tool asks; the key argument would repeat one.
   const argument =
@@ -339,7 +345,11 @@ export default function ApprovalCard({
   return (
     <aside
       className="approval-card"
-      aria-label={`Approval required for ${app?.tool || action || 'requested action'}${app ? ` in ${app.name}` : ''}`}
+      aria-label={
+        view?.question || hint?.question
+          ? `Approval required: ${question}`
+          : `Approval required for ${app?.tool || action || 'requested action'}${app ? ` in ${app.name}` : ''}`
+      }
       data-risk={risk}
     >
       <span className="approval-card-icon" aria-hidden>
@@ -349,7 +359,7 @@ export default function ApprovalCard({
         <>
           <div className="approval-card-context">
             {app && <span className="approval-card-app">{app.name}</span>}
-            <strong>{approvalQuestion(view.action_label || '', app)}</strong>
+            <strong>{question}</strong>
             <span
               className="approval-card-reason"
               data-fields={fieldsWritten(view) || undefined}
@@ -377,7 +387,7 @@ export default function ApprovalCard({
               disabled={busy || Boolean(resolution)}
               onClick={() =>
                 overlay.open({
-                  title: approvalQuestion(view.action_label || '', app),
+                  title: question,
                   description: 'What Row-Bot wants to do, and what it affects.',
                   content: <ApprovalDetails view={view} />,
                 })

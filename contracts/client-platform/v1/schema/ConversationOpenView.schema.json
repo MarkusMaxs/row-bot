@@ -1914,7 +1914,8 @@
             "resource_bound",
             "setup_needed",
             "connect_apps",
-            "background_process"
+            "background_process",
+            "recording"
           ],
           "title": "Kind",
           "type": "string"
@@ -1950,6 +1951,13 @@
           "maxLength": 64,
           "pattern": "^(proc-[0-9a-f]{8})?$",
           "title": "Process Id",
+          "type": "string"
+        },
+        "recording_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(rec-[0-9a-f]{8})?$",
+          "title": "Recording Id",
           "type": "string"
         },
         "resource_id": {

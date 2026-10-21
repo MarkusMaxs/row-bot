@@ -111,6 +111,7 @@ import ApprovalCard from './ApprovalCard';
 import ChatEmpty from './ChatEmpty';
 import { DelegatedRunsContext, type DelegatedRuns } from './AgentStubs';
 import { ProcessIoContext, type ProcessIo } from './background-processes';
+import { RecordingIoContext, type RecordingIo } from './recordings';
 import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
@@ -176,12 +177,14 @@ function TranscriptContexts({
   speakers,
   delegatedRuns,
   processes,
+  recordings,
   children,
 }: {
   cardActions: CardActions;
   speakers: Speakers;
   delegatedRuns: DelegatedRuns;
   processes: ProcessIo;
+  recordings: RecordingIo;
   children: ReactNode;
 }) {
   return (
@@ -189,7 +192,9 @@ function TranscriptContexts({
       <SpeakersContext.Provider value={speakers}>
         <DelegatedRunsContext.Provider value={delegatedRuns}>
           <ProcessIoContext.Provider value={processes}>
-            {children}
+            <RecordingIoContext.Provider value={recordings}>
+              {children}
+            </RecordingIoContext.Provider>
           </ProcessIoContext.Provider>
         </DelegatedRunsContext.Provider>
       </SpeakersContext.Provider>
@@ -2605,6 +2610,14 @@ export default function Conversation({
     }),
     [controller],
   );
+  const recordings = useMemo<RecordingIo>(
+    () => ({
+      load: (conversation, signal) =>
+        controller.recordings(conversation, signal),
+      stop: (recording) => controller.stopRecording(recording),
+    }),
+    [controller],
+  );
   const delegatedRuns = useMemo(
     () => ({
       runs: new Map(
@@ -2970,6 +2983,7 @@ export default function Conversation({
       speakers={speakers}
       delegatedRuns={delegatedRuns}
       processes={processes}
+      recordings={recordings}
     >
       <div
         className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ' details-wide' : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}

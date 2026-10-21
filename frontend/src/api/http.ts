@@ -238,6 +238,38 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
+  recordings(conversationId?: string, signal?: AbortSignal) {
+    return wire.getRecordings(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  stopRecording(recordingId: string, signal?: AbortSignal) {
+    return wire.stopRecording(this.base, this.session(), recordingId, signal);
+  }
+  browserLocalAddresses(conversation: string, signal?: AbortSignal) {
+    return wire.getBrowserLocalAddresses(
+      this.base,
+      this.session(),
+      conversation,
+      signal,
+    );
+  }
+  removeBrowserLocalAddress(
+    conversation: string,
+    grant: string,
+    signal?: AbortSignal,
+  ) {
+    return wire.removeBrowserLocalAddress(
+      this.base,
+      this.session(),
+      conversation,
+      grant,
+      signal,
+    );
+  }
   attention(signal?: AbortSignal) {
     return wire.getAttention(this.base, this.session(), signal);
   }

@@ -421,7 +421,8 @@ class ClientPlatformService:
                         self.projection.publish(handle.conversation_id, "approval.required", {
                             "status": "waiting_approval", "approval_id": handle.approval_id,
                             **{key: view[key] for key in ("action_label", "reason", "risk_class", "scope",
-                                                          "safe_argument_summary", "requesting_trace_id", "setup")
+                                                          "safe_argument_summary", "requesting_trace_id", "setup",
+                                                          "question")
                                if key in view}})
                 return
             if status != "waiting_approval":

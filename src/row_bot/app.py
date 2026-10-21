@@ -606,6 +606,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Data folder leftover sweep failed")
 
+    # Recordings a crash cut short are marked, and their working files removed (F2).
+    try:
+        from row_bot.recordings import sweep_leftovers
+        with _startup_phase("recording_leftovers"):
+            await asyncio.to_thread(sweep_leftovers)
+    except Exception:
+        logger.exception("Recording leftover check failed")
+
     # Background processes a crash left running are stopped, and reported once (F1).
     try:
         from row_bot.background_processes import report_leftovers
@@ -1128,6 +1136,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
                 _safe_console_print(f"[shutdown] {_ch.display_name} channel cleanup error: {exc}")
     except Exception as exc:
         _safe_console_print(f"[shutdown] Channel registry cleanup error: {exc}")
+    try:
+        # Recordings stop first, so their videos are saved before the browser and Cua go (F2).
+        from row_bot.recordings import stop_all as _stop_recordings
+        _recorded = await asyncio.to_thread(_stop_recordings, by="quit", timeout=15.0)
+        if _recorded:
+            _safe_console_print(f"[shutdown] Stopped {_recorded} recording(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Recording cleanup error: {exc}")
     try:
         from row_bot.tools.browser_tool import get_session_manager as _get_bsm
         _get_bsm().kill_all()

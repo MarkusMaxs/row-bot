@@ -4212,6 +4212,54 @@ class BackgroundProcessOutput(WireModel):
     running: bool
 
 
+RecordingId = Annotated[str, StringConstraints(pattern=r"^rec-[0-9a-f]{8}$")]
+
+
+class RecordingView(WireModel):
+    """A recording of Row-Bot's browser or of the screen (F2); its video is saved to its conversation's files."""
+    recording_id: RecordingId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    kind: Literal["browser", "screen"]
+    status: Literal["recording", "saving", "saved", "failed"]
+    started_at: str = Field(max_length=80)
+    ended_at: str | None = Field(max_length=80)
+    # How long it has recorded (so far, or in all).
+    seconds: float = Field(ge=0)
+    # It stops by itself after this long.
+    max_seconds: int = Field(ge=1)
+    stopped_by: Literal["", "you", "agent", "limit", "size", "conversation", "quit", "closed", "error"]
+    # The saved video, shown with a preview (None until it is saved).
+    media_ref: str | None = Field(max_length=512)
+    mime_type: Literal["video/mp4"] | None
+    size_bytes: int | None = Field(ge=0)
+    # Why there is no video: not saved, too large for the chat, or nothing was recorded.
+    problem: Literal["", "not_saved", "too_large", "nothing_recorded"]
+
+
+class RecordingPage(WireModel):
+    """Recordings: those running now first, then finished ones, newest first."""
+    items: list[RecordingView] = Field(max_length=200)
+    recording: int = Field(ge=0)
+
+
+class LocalAddressGrantView(WireModel):
+    """An address on this computer one conversation's browser may open (F4): one origin, for an hour."""
+    grant_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
+    # As people write it: "localhost:5173".
+    address: str = Field(min_length=1, max_length=300)
+    origin: str = Field(min_length=1, max_length=300)
+    # Who allowed it: the person, the reviewer under Auto, Hands-off, or a server Row-Bot started in the chat.
+    source: Literal["you", "reviewer", "hands_off", "row_bot_server"]
+    granted_at: str = Field(max_length=80)
+    expires_at: str = Field(max_length=80)
+
+
+class LocalAddressPage(WireModel):
+    """The local addresses a conversation's browser may open now, oldest first."""
+    conversation_id: str = Field(min_length=1, max_length=256)
+    items: list[LocalAddressGrantView] = Field(max_length=64)
+
+
 class McpChatState(WireModel):
     """Whether connected MCP servers' tools reach the chat ("Enable in chat", B130)."""
     schema_version: Literal[1]
@@ -6357,6 +6405,9 @@ class ApprovalRequired(WireModel):
     app: TraceAppRef | None = None
     # Under Auto: why the reviewer asked the person rather than approving.
     reviewer_reason: str = Field(default="", max_length=240)
+    # The card's question in Row-Bot's own words, when the action has one ("Allow Row-Bot's browser to open
+    # localhost:5173 in this chat?"); otherwise the card asks from the action's name.
+    question: str = Field(default="", max_length=240)
 
 
 class GenerationError(WireModel):
@@ -6885,7 +6936,7 @@ class AppViewAppSetting(WireModel):
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
-        "background_process",
+        "background_process", "recording",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -6908,6 +6959,8 @@ class TraceSpecialization(WireModel):
     apps: list[TraceAppRef] = Field(default_factory=list, max_length=3)
     # background_process: the process the card follows live, re-read by id (F1, F6).
     process_id: str = Field(default="", max_length=64, pattern=r"^(proc-[0-9a-f]{8})?$")
+    # recording: the recording the card follows live and then shows, re-read by id (F2).
+    recording_id: str = Field(default="", max_length=64, pattern=r"^(rec-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -7243,6 +7296,8 @@ class ApprovalView(WireModel):
     repeatable: bool = False
     # Under Auto: why the reviewer asked the person rather than approving ("The reviewer asked you: …").
     reviewer_reason: str = Field(default="", max_length=240)
+    # The card's question in Row-Bot's own words, when the action has one.
+    question: str = Field(default="", max_length=240)
     policy_revision: Revision
     nonce: str = Field(min_length=32, max_length=256)
 

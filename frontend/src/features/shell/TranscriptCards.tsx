@@ -12,6 +12,7 @@ import { Button, Input } from '../../ui/primitives';
 import ChatConnect from '../apps/ChatConnect';
 import AppViewFrame from '../apps/AppViewFrame';
 import { ProcessCard } from './BackgroundProcess';
+import { RecordingCard } from './RecordingCard';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
@@ -43,7 +44,9 @@ export type TranscriptCard =
   /** A finished step whose app shows a view (MCP Apps). */
   | { kind: 'view'; callId: string; app: TraceAppRef }
   /** A server, watcher or long command a step left running in the background. */
-  | { kind: 'process'; processId: string };
+  | { kind: 'process'; processId: string }
+  /** A recording of Row-Bot's browser or the screen a step started or stopped (F2). */
+  | { kind: 'recording'; recordingId: string };
 
 type Specialization = NonNullable<
   TranscriptTraceGroup['items'][number]['specialization']
@@ -71,6 +74,11 @@ export function cardOf(value: Specialization | null | undefined) {
       kind: 'process',
       processId: value.process_id,
     } satisfies TranscriptCard;
+  if (value.kind === 'recording' && value.recording_id)
+    return {
+      kind: 'recording',
+      recordingId: value.recording_id,
+    } satisfies TranscriptCard;
   if (
     value.kind === 'setup_needed' &&
     (value.settings_page === 'accounts' || value.settings_page === 'channels')
@@ -93,7 +101,9 @@ export function cardKey(card: TranscriptCard) {
         ? `view:${card.callId}`
         : card.kind === 'process'
           ? `process:${card.processId}`
-          : `connect:${card.target}`;
+          : card.kind === 'recording'
+            ? `recording:${card.recordingId}`
+            : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -370,6 +380,12 @@ export function TranscriptCards({
           <ProcessCard
             key={cardKey(card)}
             processId={card.processId}
+            conversationId={conversation}
+          />
+        ) : card.kind === 'recording' ? (
+          <RecordingCard
+            key={cardKey(card)}
+            recordingId={card.recordingId}
             conversationId={conversation}
           />
         ) : card.kind === 'view' ? (
