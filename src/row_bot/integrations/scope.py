@@ -207,6 +207,25 @@ def step_scope(item_ids: list[str] | tuple[str, ...] | None) -> dict | None:
             "focus": wanted, "skills": []}
 
 
+def apps_named(names: list[str] | tuple[str, ...]) -> list[str]:
+    """The set-up apps a workflow step names, by the names the composer shows (B345), as item ids.
+    A name that matches no set-up app is refused with the names that would."""
+    ready = [item for item in _items() if item["lifecycle"] == "installed" and item["readiness"] == "ready"]
+    known: dict[str, list[str]] = {}
+    for item, shown in zip(ready, _shown(ready)):
+        for name in {shown, _name(item)}:
+            known.setdefault(name.casefold(), []).append(item["id"])
+    found: list[str] = []
+    for raw in names:
+        name = str(raw or "").strip().lstrip("@")
+        ids = known.get(name.casefold())
+        if not ids:
+            choices = ", ".join(sorted(_shown(ready))) or "none are set up"
+            raise ValueError(f"No set-up app is called {name!r}. Apps: {choices}.")
+        found.extend(item for item in ids if item not in found)
+    return found[:MAX_FOCUS]
+
+
 def app_for_tool(tool_name: str) -> dict | None:
     """The app a chat tool belongs to (``{item_id, name, icon, tool}``, ``tool`` being the tool's readable
     title), from its exact runtime name; None for Row-Bot's own and for a name no app issued."""
