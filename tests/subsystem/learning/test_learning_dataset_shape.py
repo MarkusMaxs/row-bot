@@ -173,6 +173,19 @@ def test_the_prompt_is_the_small_profiles_and_the_live_state_leaves_the_turn_con
     assert example.derived
 
 
+def test_a_prompt_row_bot_sent_as_one_system_message_is_rendered_the_same(work, learning_on, chats, recipe):
+    # For an endpoint that takes one system message Row-Bot joins its sections first.
+    for joined, thread in ((False, "chat-1"), (True, "chat-2")):
+        work.turn(thread, "Read my notes", [("workspace_read_file", {"path": "notes.txt"}, "water the plants")],
+                  "Your notes say: water the plants.", system=["\n\n".join(CLOUD_SYSTEM)] if joined else None)
+
+    compiled = _compile(learning_on, chats, recipe)
+    systems = {item.thread_id: item.row["messages"][0]["content"] for item in compiled.train}
+
+    assert systems["chat-1"] == systems["chat-2"]
+    assert SELF_KNOWLEDGE not in systems["chat-2"] and CALENDAR_GUIDE not in systems["chat-2"]
+
+
 def test_a_tool_the_conversation_already_found_needs_no_new_search(work, learning_on, chats, recipe):
     first = {"title": "Dentist", "date": "2026-10-23", "start": "10:00"}
     second = {"title": "Physio", "date": "2026-10-24", "start": "09:00"}
