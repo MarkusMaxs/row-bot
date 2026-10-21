@@ -19,6 +19,26 @@ import {
   readableValue,
 } from './tool-activity';
 
+// The Ctrl ↵ hint only where a hardware keyboard is likely: a fine pointer on a wide layout, never a phone
+// or a touch screen (B389). The shortcut itself works wherever a keyboard is.
+const KEYBOARD_LAYOUT = '(pointer: fine) and (min-width: 641px)';
+function useKeyboardLayout() {
+  const read = () =>
+    typeof matchMedia === 'function'
+      ? matchMedia(KEYBOARD_LAYOUT).matches
+      : false;
+  const [keyboard, setKeyboard] = useState(read);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const media = matchMedia(KEYBOARD_LAYOUT);
+    const changed = () => setKeyboard(media.matches);
+    media.addEventListener('change', changed);
+    changed();
+    return () => media.removeEventListener('change', changed);
+  }, []);
+  return keyboard;
+}
+
 type Hint_ = {
   action_label?: string;
   reason?: string;
@@ -269,6 +289,7 @@ export default function ApprovalCard({
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
   });
+  const keyboard = useKeyboardLayout();
   const action = view?.action_label || hint?.action_label || '';
   // The app asking, shown as the catalog knows it.
   const app = view?.app ?? null;
@@ -332,9 +353,11 @@ export default function ApprovalCard({
             onClick={() => void resolve('approve')}
           >
             Turn on
-            <span aria-hidden className="approval-card-kbd">
-              <Kbd keys="Mod+Enter" />
-            </span>
+            {keyboard && (
+              <span aria-hidden className="approval-card-kbd">
+                <Kbd keys="Mod+Enter" />
+              </span>
+            )}
           </Button>
         </div>
         {resolution && (
@@ -420,7 +443,7 @@ export default function ApprovalCard({
               onClick={() => void resolve('approve')}
             >
               Approve
-              {!notice && (
+              {!notice && keyboard && (
                 <span aria-hidden className="approval-card-kbd">
                   <Kbd keys="Mod+Enter" />
                 </span>

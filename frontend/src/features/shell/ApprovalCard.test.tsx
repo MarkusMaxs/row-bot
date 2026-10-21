@@ -70,6 +70,45 @@ it('ignores Ctrl+Enter typed in a text field (B134)', async () => {
   editable.remove();
 });
 
+it('shows the Ctrl ↵ hint only with a keyboard and a wide layout, never on a phone (B389)', async () => {
+  const media = vi.mocked(window.matchMedia);
+  // A phone: a coarse pointer, a narrow layout. The setup's default matches nothing.
+  const { unmount } = render(<ApprovalCard id="approval-a" />);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled(),
+  );
+  expect(screen.getByRole('button', { name: 'Approve' })).toHaveTextContent(
+    /^Approve$/,
+  );
+  unmount();
+  // A desktop with a mouse and keyboard.
+  media.mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === '(pointer: fine) and (min-width: 641px)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+  try {
+    await renderCard();
+    expect(
+      screen.getByRole('button', { name: 'Approve' }).textContent,
+    ).not.toBe('Approve');
+  } finally {
+    media.mockImplementation(
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+  }
+});
+
 it('approves with Ctrl+Enter when no text field has focus', async () => {
   await renderCard();
   // The shortcut listens once the approval's details have loaded, which can
