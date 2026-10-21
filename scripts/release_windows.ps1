@@ -73,6 +73,9 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptRoot
 $Tag = "v$Version"
 $Utf8 = New-Object System.Text.UTF8Encoding $false
+# gh and Python print UTF-8; Windows PowerShell 5.1 otherwise reads them in the console's code page and
+# writes the garbled release notes back to the draft ("Settings ΓÇ║ Updates").
+[Console]::OutputEncoding = $Utf8
 
 function Write-Step([string]$Text) { Write-Host ""; Write-Host "== $Text" -ForegroundColor Cyan }
 function Write-Note([string]$Text) { Write-Host "   $Text" }
@@ -158,9 +161,10 @@ function Save-Artifact([string]$Name, [string]$Into, [switch]$Optional) {
 
 function Get-Draft {
     # The one draft release of the tag, by id; refuses none, several, or a published one.
-    $ids = @(Get-NativeOutput -File $Gh -Arguments @("api", "repos/$Repository/releases?per_page=100", "--paginate",
-             "--jq", ".[] | select(.tag_name == `"$Tag`") | .id"))
-    $ids = @($ids | Where-Object { $_ })
+    # No quotes inside the jq: Windows PowerShell 5.1 drops them when it calls gh, so the tag is matched here.
+    $rows = @(Get-NativeOutput -File $Gh -Arguments @("api", "repos/$Repository/releases?per_page=100", "--paginate",
+              "--jq", ".[] | [.id, .tag_name] | @tsv"))
+    $ids = @($rows | Where-Object { $_ } | ForEach-Object { $id, $name = $_ -split "`t", 2; if ($name -eq $Tag) { $id } })
     if ($ids.Count -eq 0) { Stop-Release "there is no release $Tag (release.yml creates the draft)" }
     if ($ids.Count -gt 1) { Stop-Release "$($ids.Count) releases are tagged $Tag; delete the extra drafts" }
     if ($script:ReleaseId -and $ids[0] -ne $script:ReleaseId) { Stop-Release "the release of $Tag changed (id $($ids[0]))" }
@@ -305,6 +309,7 @@ if ($ciInno -ne $localInno) {
     Write-Host "   Packing with Inno Setup $localInno; CI smoke-tested $ciInno (-AllowInnoMismatch)" -ForegroundColor Yellow
 }
 $Launcher = Join-Path $Stage "installer\build\Row-Bot.exe"
+$Server = Join-Path $Stage "installer\build\Row-Bot Server.exe"
 Write-Note "Stage of $Version from run $RunId ($($run.headSha)) ready"
 
 # ── 3. Sign Row-Bot.exe, pack, sign the installer ───────────────────────────
@@ -314,10 +319,12 @@ $InstallerName = [IO.Path]::GetFileName($Installer)
 if ($DryRun) {
     Write-Step "3. Sign, pack, sign: Row-Bot.exe and the installer are not signed (dry run)"
 } else {
-    Write-Step "3. Sign Row-Bot.exe, pack the installer, sign it"
+    Write-Step "3. Sign Row-Bot.exe and Row-Bot Server.exe, pack the installer, sign it"
     Assert-SigningReady
     Invoke-Sign $Launcher
     Assert-Signed $Launcher
+    Invoke-Sign $Server
+    Assert-Signed $Server
 }
 $packed = (Test-Path $Installer) -and ((Get-Item $Installer).LastWriteTimeUtc -gt (Get-Item $Launcher).LastWriteTimeUtc)
 if ($packed) {
@@ -329,6 +336,7 @@ if (-not (Test-Path $Installer)) { throw "ISCC did not write $Installer" }
 if (-not $DryRun) {
     Invoke-Sign $Installer
     Assert-Signed $Launcher
+    Assert-Signed $Server
     Assert-Signed $Installer
 }
 
@@ -436,7 +444,9 @@ $uploaded = @($release.assets | Where-Object { $_.name -eq $InstallerName })
 if ($uploaded.Count -ne 1 -or ($uploaded[0].PSObject.Properties["digest"] -and $uploaded[0].digest -and $uploaded[0].digest -ne "sha256:$installerHash")) {
     Stop-Release "the installer on the draft is not the one signed here"
 }
-Invoke-Native -File $Gh -Arguments @("api", "-X", "PATCH", "repos/$Repository/releases/$script:ReleaseId", "-F", "body=@$NewBody")
+# tag_name every time: editing a draft without it detaches the draft from its tag ("untagged-…").
+Invoke-Native -File $Gh -Arguments @("api", "-X", "PATCH", "repos/$Repository/releases/$script:ReleaseId",
+    "-f", "tag_name=$Tag", "-F", "body=@$NewBody")
 Write-Note "The block lists all $($listing.Count) files."
 
 # ── 6. Publish ──────────────────────────────────────────────────────────────
@@ -464,7 +474,7 @@ if (-not (Test-Python @($Publish, "same-assets", "--listing", $ListingFile, "--a
     Stop-Release "the draft changed since its block was written; run this script again"
 }
 Invoke-Native -File $Gh -Arguments @("api", "-X", "PATCH", "repos/$Repository/releases/$script:ReleaseId",
-    "-F", "draft=false", "-F", "prerelease=$(if ($prerelease) { 'true' } else { 'false' })",
+    "-f", "tag_name=$Tag", "-F", "draft=false", "-F", "prerelease=$(if ($prerelease) { 'true' } else { 'false' })",
     "-f", "make_latest=$(if ($prerelease) { 'false' } else { 'true' })")
 $published = Get-Release
 $afterFile = Join-Path $WorkDir "assets-published.json"

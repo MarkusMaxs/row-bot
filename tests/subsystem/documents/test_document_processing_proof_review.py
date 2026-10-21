@@ -12,10 +12,7 @@ from tests.subsystem.knowledge_graph.test_document_processing_policy import (
 )
 from tests.subsystem.knowledge_graph import test_document_processing_policy as owner_tests
 
-pytestmark = [pytest.mark.subsystem, pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="Strict document processing requires a descriptor-backed SQLite path bridge",
-), pytest.mark.platform]
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 processing_fixture = owner_tests.processing
 
 
@@ -191,17 +188,24 @@ def test_posix_identity_transaction_follows_held_directory_and_live_wal(processi
         assert (parent / "jobs.db-wal").exists()
         def move_before_connect(database, *args, **kwargs):
             calls.append(str(database))
-            assert str(database).startswith(("file:///proc/self/fd/", "file:///dev/fd/"))
+            if sys.platform != "darwin":
+                assert str(database).startswith(("file:///proc/self/fd/", "file:///dev/fd/"))
             parent.rename(retained)
             parent.mkdir()
             return connect(database, *args, **kwargs)
         monkeypatch.setattr(document_jobs.sqlite3, "connect", move_before_connect)
-        with service._processing_scope_lock(batch):
-            row = keeper.execute("SELECT policy_digest,processing_lock_identity FROM document_batch_admissions WHERE batch_id=?", (batch,)).fetchone()
-            assert row[0] == "live-wal" and row[1]
-            assert not list(parent.iterdir())  # No replacement DB or sidecars.
-            assert (retained / "jobs.db-wal").exists()
-            assert (retained / "jobs.db-shm").exists()
+        if sys.platform == "darwin":
+            # macOS names the held directory once (F_GETPATH): a move while connecting is refused, never followed.
+            with pytest.raises(document_jobs.DocumentJobError):
+                with service._processing_scope_lock(batch):
+                    pytest.fail("Moved directory admitted")
+        else:
+            with service._processing_scope_lock(batch):
+                row = keeper.execute("SELECT policy_digest,processing_lock_identity FROM document_batch_admissions WHERE batch_id=?", (batch,)).fetchone()
+                assert row[0] == "live-wal" and row[1]
+                assert (retained / "jobs.db-wal").exists()
+                assert (retained / "jobs.db-shm").exists()
+        assert not list(parent.iterdir())  # No replacement DB or sidecars.
         assert len(calls) == 1
 
 
@@ -216,6 +220,11 @@ def test_posix_missing_sqlite_descriptor_path_never_uses_pathname_fallback(proce
             raise FileNotFoundError("synthetic unavailable descriptor bridge")
         return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, "stat", unavailable)
+    if sys.platform == "darwin":
+        import fcntl
+        def no_path(*args):
+            raise OSError("synthetic unavailable F_GETPATH")
+        monkeypatch.setattr(fcntl, "fcntl", no_path)
     monkeypatch.setattr(service, "_connect", lambda: pytest.fail("Pathname fallback"))
     with pytest.raises(document_jobs.DocumentJobError, match="descriptor SQLite path unavailable"):
         with service._processing_scope_lock(batch):
