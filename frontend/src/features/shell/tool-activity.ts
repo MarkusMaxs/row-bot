@@ -524,9 +524,12 @@ export function activityLabel(summary: ActivitySummary): string {
 /** Compact elapsed time: "0.8s", "8.4s", "1m 12s". */
 export function formatElapsed(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '';
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1000);
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  // Whole seconds first, so 6m 59.6s reads 7m, never 6m 60s.
+  const total = Math.round(ms / 1000);
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
   return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 

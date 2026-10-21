@@ -230,6 +230,8 @@ describe('tool activity', () => {
     expect(formatElapsed(8400)).toBe('8.4s');
     expect(formatElapsed(42_000)).toBe('42s');
     expect(formatElapsed(72_000)).toBe('1m 12s');
+    expect(formatElapsed(59_600)).toBe('1m');
+    expect(formatElapsed(419_600)).toBe('7m');
     expect(formatElapsed(-1)).toBe('');
   });
 });
