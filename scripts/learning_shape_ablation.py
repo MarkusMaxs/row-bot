@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RESULTS = "l2w_ablation.json"
 PHASES = ("rows", "train", "serve", "compare", "tidy")
 MIN_ROWS = 20  # fewer rows than this as captured: A32 stands in for A
+SERVE_CONTEXT = 32_768  # the 8 GB recipe's serving context
 
 
 def _say(text: str) -> None:
@@ -369,12 +370,21 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
             if not ref or (thinking != "both" and mode != thinking):
                 continue
             name = f"{arm}-{mode}"
-            arms.append(evaluation.Arm(name, model_ref=ref, subject_kind="baseline" if arm == "start" else "release"))
+            # Every arm serves at 32K behind the bridge, so its replayed decisions come in that shape (O71).
+            arms.append(evaluation.Arm(name, model_ref=ref, subject_kind="baseline" if arm == "start" else "release",
+                                       serve_context=SERVE_CONTEXT))
             names[name] = ref
             if mode == "on":
                 think_refs.add(ref)
     if len(arms) < 2:
         raise SystemExit("Nothing to compare yet: run the serve phase first.")
+    # The contrasts beyond each arm against the untouched starting model: rows in the serving shape
+    # against rows as captured (as served, thinking off), and thinking on against off for each model.
+    present = {arm.name for arm in arms}
+    trained_a = next((name for name in ("A-off", "A32-off") if name in present), None)
+    pairs = [(trained_a, "B-off")] if trained_a and "B-off" in present else []
+    pairs += [(f"{arm}-off", f"{arm}-on") for arm in ("start", "B", "A", "A32")
+              if f"{arm}-off" in present and f"{arm}-on" in present]
     store = LearningStore(data)
     container = bool(container_runtime())
     worker_arms = {arm.name: eval_worker.WorkerArm(arm.name, str(arm.model_ref), True) for arm in arms}
@@ -406,11 +416,11 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
         runner = eval_worker.RuntimeRunner(worker, worker_arms, record_usage=None, unsupported=set(unsupported))
         shown = evaluation.compare(arms, tasks=chosen, runner=runner, meter=meter, store=store, save=False,
                                    on_case=counted, budget=budget, repeats=ctx["visible_repeats"],
-                                   kind_key=model_compare.family_key)
+                                   kind_key=model_compare.family_key, pairs=pairs)
         hidden = evaluation.audit_check(arms, asked_by="the L2w ablation", store=store, runner=runner, meter=meter,
                                         client=_ServedClient(think_refs), packs=packs, verifiers=verifiers,
                                         budget=budget, save=False, repeats=ctx["hidden_repeats"], combine_with=shown,
-                                        kind_key=model_compare.family_key)
+                                        kind_key=model_compare.family_key, pairs=pairs)
     finally:
         worker.stop()
     out: dict[str, Any] = {"arms": names, "container": container, "visible_tasks": len(chosen),

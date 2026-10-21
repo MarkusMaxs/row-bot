@@ -247,6 +247,7 @@ class Comparer:
         client: Any = None,
         record_usage: Callable[..., Any] | None = None,
         busy: Callable[[], bool] | None = None,
+        serving_context: Callable[[str], int | None] | None = None,
     ) -> None:
         self._root = root
         self._store = store
@@ -263,6 +264,7 @@ class Comparer:
         self._client = client
         self._record_usage = record_usage
         self._busy = busy
+        self._serving_context = serving_context
 
     @property
     def root(self) -> Path:
@@ -364,14 +366,14 @@ class Comparer:
         described: list[dict[str, Any]] = []
         if base_ref:
             arms.append(evaluation.Arm(base_key, model_ref=base_ref, subject_kind="release" if base_release else "baseline",
-                                       subject_id=base_release))
+                                       subject_id=base_release, serve_context=self._serves_at(base_ref)))
             described.append({"key": base_key, "label": base_label, "role": "baseline", "model_ref": base_ref})
         arms.append(evaluation.Arm(new_key, model_ref=state.model_ref, subject_kind="release",
-                                   subject_id=state.release_id or None))
+                                   subject_id=state.release_id or None, serve_context=self._serves_at(state.model_ref)))
         described.append({"key": new_key, "label": f"{new_key} (new)", "role": "new", "model_ref": state.model_ref})
         main_unavailable: str | None = None
         if main_ref:
-            arms.append(evaluation.Arm("main", model_ref=main_ref, cache=True))
+            arms.append(evaluation.Arm("main", model_ref=main_ref, cache=True, serve_context=self._serves_at(main_ref)))
             described.append({"key": "main", "label": self._name(main_ref), "role": "main", "model_ref": main_ref})
         else:
             main_unavailable = "no_main_model"
@@ -460,6 +462,22 @@ class Comparer:
         self._progress(version, state="done", done=done[0])
         self._record_tests(state, result)
         return result
+
+    def _serves_at(self, ref: str | None) -> int | None:
+        """The context a local model is served at (its saved one), so replayed decisions reach it in
+        its serving shape (O71); None for a cloud model, asked as captured."""
+
+        if not ref or not self._local(str(ref)):
+            return None
+        if self._serving_context is not None:
+            return self._serving_context(str(ref))
+        try:
+            from row_bot import models
+
+            return int(models.get_context_size(str(ref), allow_probe=False)) or None
+        except Exception:  # noqa: BLE001 - unknown: asked as captured
+            logger.debug("Learning couldn't read a local model's context", exc_info=True)
+            return None
 
     @staticmethod
     def _local(ref: str) -> bool:

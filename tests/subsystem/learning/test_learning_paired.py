@@ -105,6 +105,20 @@ def test_every_problem_runs_as_often_as_asked_and_counts_as_its_pass_fraction():
     assert result.repeated == {"steady": {"problems": 4, "identical": 4}, "sometimes": {"problems": 4, "identical": 0}}
 
 
+def test_an_ablation_names_the_pairs_it_contrasts_beyond_each_arm_against_the_first():
+    tasks = [task for task in visible_tasks() if task.pack == "document_lookups"][:4]
+
+    result = compare([Arm("sometimes"), Arm("steady"), Arm("other")], tasks=tasks, runner=Runner(),
+                     meter=TokenMeter(10**9), save=False, repeats=3, pairs=[("other", "steady")])
+
+    assert set(result.analysis["arms"]) == {"steady", "other"}  # each against the first, as before
+    contrast = result.analysis["pairs"]["steady vs other"]["overall"]
+    assert (contrast["baseline"], contrast["arm"], contrast["difference"]) == (0.333333, 1.0, 0.666667)
+    with pytest.raises(evaluation.EvaluationError, match="unknown_arm"):
+        compare([Arm("sometimes"), Arm("steady")], tasks=tasks, runner=Runner(), meter=TokenMeter(10**9),
+                save=False, pairs=[("sometimes", "missing")])
+
+
 def test_a_replayed_problem_belongs_to_its_source_chat():
     def case(decision: str, chat: str) -> ReplayCase:
         return ReplayCase(decision, chat, chat, 1.0, "Your work", "exact", False,

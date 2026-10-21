@@ -5,7 +5,6 @@ every look logged, refreshed by time, and reached by deletion and opt-out. The s
 from __future__ import annotations
 
 import json
-
 import sys
 import types
 from pathlib import Path

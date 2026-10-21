@@ -14,6 +14,7 @@ from dataclasses import replace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from row_bot.learning import evaluation
 from row_bot.learning.store import LearningStore
 from row_bot.learning.training import dataset, recipes, shape
 
@@ -317,3 +318,81 @@ def test_row_bots_own_envelope_binds_its_core_groups_at_32k(data_dir):
     assert large.replace(small.root_removed + small.root_follows, small.root_follows, 1) == small_root
     assert window.profile == "window" and window.defers("row_bot_status") and not window.defers("calendar_create_event")
     assert shape.envelope_for(200_000).profile == "full"
+
+
+# ── Replay: a decision asked as the arm serves (O71, pre-registration §4) ───
+
+
+def _replay_case(history: list | None = None) -> evaluation.ReplayCase:
+    from langchain_core.messages import messages_to_dict
+
+    event = {"title": "Dentist", "date": "2026-10-23", "start": "10:00"}
+    sent = [*(SystemMessage(content=text) for text in CLOUD_SYSTEM), *(history or []),
+            HumanMessage(content=f"Add the dentist on Friday at 10\n\n{TURN_CONTEXT}")]
+    return evaluation.ReplayCase(
+        "dec_1", "chat-1", "chat-1", 1.0, "Your work", "exact", False, tuple(messages_to_dict(sent)),
+        tuple(CLOUD_TOOLS), "model:codex:gpt-6.1-sol", evaluation.Action((("calendar_create_event", event),)),
+        "captured", "exact_action", "Add the dentist on Friday at 10")
+
+
+def _ask(case, reply: AIMessage, *, serve_context: int | None = 32_768):
+    from tests.fixtures.learning_eval import ScriptedClient
+
+    client = ScriptedClient(lambda _messages, _tools, _model: reply, local=True)
+    result = evaluation.run_replay_case(case, evaluation.Arm("v1", model_ref="model:ollama:v1",
+                                                             serve_context=serve_context), client=client)
+    return result, client.calls[0] if client.calls else None
+
+
+def _reply(*calls: tuple[str, dict]) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"r{index}", "type": "tool_call"}
+                                             for index, (name, args) in enumerate(calls)])
+
+
+@pytest.fixture
+def served_at_32k(monkeypatch):
+    monkeypatch.setattr(shape, "envelope_for", lambda context: ENVELOPE if context <= 32_768 else replace(
+        ENVELOPE, serve_context=context, profile="full"))
+
+
+def test_a_replayed_decision_reaches_a_small_context_model_in_its_serving_shape(served_at_32k):
+    event = {"title": "Dentist", "date": "2026-10-23", "start": "10:00"}
+
+    found, sent = _ask(_replay_case(), _reply(("tool_search", {"query": "calendar create event"})))
+
+    # Asked as it serves: the small prompt, the core tools and the bridge, no live state.
+    assert [tool["function"]["name"] for tool in sent["tools"]] == [
+        "workspace_read_file", "save_memory", "tool_search", "tool_invoke"]
+    system, question = sent["messages"]
+    assert SELF_KNOWLEDGE not in system.content and CALENDAR_GUIDE not in system.content
+    assert "Current state" not in question.content
+    # The calendar tool is behind the bridge and not yet found: finding it is the right first move.
+    assert (found.status, found.detail) == ("passed", "searched for the tool it needed and found it")
+    assert _ask(_replay_case(), _reply(("tool_search", {"query": "weather today"})))[0].status == "failed"
+    # Calling it through tool_invoke counts as the call it carries.
+    invoked = _ask(_replay_case(), _reply(("tool_invoke", {"name": "calendar_create_event", "arguments": event})))[0]
+    wrong = _ask(_replay_case(), _reply(("tool_invoke", {"name": "mail_send", "arguments": {"to": "dana"}})))[0]
+    assert (invoked.status, wrong.status) == ("passed", "failed")
+
+
+def test_a_tool_the_replayed_conversation_already_found_is_called_straight_through_the_bridge(served_at_32k):
+    earlier = [HumanMessage(content="Add the physio"),
+               AIMessage(content="", tool_calls=[{"name": "calendar_create_event", "args": {"title": "Physio"},
+                                                  "id": "c1", "type": "tool_call"}]),
+               ToolMessage(content='{"created": "evt_1"}', tool_call_id="c1"), AIMessage(content="Added.")]
+    event = {"title": "Dentist", "date": "2026-10-23", "start": "10:00"}
+
+    searched, sent = _ask(_replay_case(earlier), _reply(("tool_search", {"query": "calendar create event"})))
+    invoked = _ask(_replay_case(earlier), _reply(("tool_invoke", {"name": "calendar_create_event",
+                                                                   "arguments": event})))[0]
+
+    # The history shows the tool found (a search step) and called through tool_invoke, as a row would.
+    history = [message for message in sent["messages"] if getattr(message, "tool_calls", None)]
+    assert [call["name"] for message in history for call in message.tool_calls] == ["tool_search", "tool_invoke"]
+    assert (searched.status, invoked.status) == ("failed", "passed")
+
+
+def test_a_cloud_model_is_asked_the_decision_as_captured(served_at_32k):
+    _result, sent = _ask(_replay_case(), _reply(("calendar_create_event", {"title": "Dentist"})), serve_context=None)
+
+    assert sent["tools"] == CLOUD_TOOLS and len(sent["messages"]) == len(CLOUD_SYSTEM) + 1

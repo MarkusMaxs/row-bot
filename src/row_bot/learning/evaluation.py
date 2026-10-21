@@ -141,6 +141,11 @@ class Arm:
     # (by its content), metric version, budget and runner, so a comparison doesn't spend tokens again
     # on a result it already has. Replayed decisions are never cached.
     cache: bool = False
+    # The context a local model serves at (a personal model: its recipe's, 32K on the 8 GB tier).
+    # Replayed decisions reach it in that serving shape (O71, pre-registration §4): Row-Bot's
+    # small-context prompt and tools, deferred tools behind ``tool_search`` / ``tool_invoke``. None:
+    # asked as captured (a cloud main model is served as it was captured).
+    serve_context: int | None = None
 
 
 @dataclass(frozen=True)
@@ -888,18 +893,111 @@ def _with_guidance(messages: list[Any], arm: Arm) -> list[Any]:
     return messages[:index] + [block] + messages[index:]
 
 
+UNSERVABLE_DETAIL = "the decision couldn't be put in the model's serving shape"
+
+
+def _unbridged(action: Action) -> Action:
+    """The action with each ``tool_invoke(name, arguments)`` written as the call it makes: the bridge
+    carries a call, it doesn't change the decision."""
+
+    calls = []
+    for name, args in action.tool_calls:
+        if name == "tool_invoke" and str(args.get("name") or ""):
+            inner = args.get("arguments")
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner or "{}")
+                except ValueError:
+                    inner = {}
+            calls.append((str(args["name"]), dict(inner) if isinstance(inner, Mapping) else {}))
+        else:
+            calls.append((name, args))
+    return Action(tuple(calls), action.text)
+
+
+def _langchain(system: Sequence[str], messages: Sequence[Mapping[str, Any]]) -> list[Any]:
+    """OpenAI-format messages (a rendered prefix) as the messages a model client is asked with."""
+
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    out: list[Any] = [SystemMessage(content="\n\n".join(text for text in system if text))] if system else []
+    for message in messages:
+        role, content = message.get("role"), message.get("content")
+        if role == "user":
+            out.append(HumanMessage(content=content))
+        elif role == "assistant":
+            calls = []
+            for call in message.get("tool_calls") or ():
+                function = call.get("function") or {}
+                arguments = function.get("arguments")
+                try:
+                    args = json.loads(arguments or "{}") if isinstance(arguments, str) else dict(arguments or {})
+                except ValueError:
+                    args = {}
+                calls.append({"name": str(function.get("name") or ""), "args": args if isinstance(args, dict) else {},
+                              "id": str(call.get("id") or ""), "type": "tool_call"})
+            out.append(AIMessage(content=content or "", tool_calls=calls))
+        elif role == "tool":
+            out.append(ToolMessage(content=content, tool_call_id=str(message.get("tool_call_id") or "")))
+        elif role == "system":
+            out.append(SystemMessage(content=content))
+    return out
+
+
+def _served(case: ReplayCase, arm: Arm) -> tuple[list[Any], list[dict[str, Any]] | None, Any] | None:
+    """The case as ``arm`` is served (its prefix rendered for ``arm.serve_context``, O71 and §4):
+    (messages, tools, the rendered problem), or None when the arm is asked as captured. Raises
+    ``ValueError`` when the prefix can't be rendered."""
+
+    from row_bot.learning.training import dataset as dataset_module
+    from row_bot.learning.training import shape
+
+    if not arm.serve_context:
+        return None
+    envelope = shape.envelope_for(int(arm.serve_context))
+    if envelope.profile == "full":
+        return None
+    system: list[str] = []
+    messages: list[dict[str, Any]] = []
+    for item in case.messages:
+        converted = dataset_module.openai_message(item)  # raises ValueError on content it can't send
+        if converted is None:
+            continue
+        if converted["role"] == "system":
+            system.append(str(converted["content"]))  # one system message first, as rows have it
+        else:
+            messages.append(converted)
+    reference = _unbridged(case.reference)
+    problem = shape.serve_problem(system, messages, None if case.tools is None else [dict(item) for item in case.tools],
+                                  [name for name, _ in reference.tool_calls], envelope)
+    return _langchain(problem.system, problem.messages), problem.tools, problem
+
+
 def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: Budget = Budget(),
                     meter: TokenMeter | None = None, judge: Judge | None = None,
                     arm_left: int | None = None) -> CaseResult:
-    """Re-ask one decision at its captured prefix and compare the new action."""
+    """Re-ask one decision at its captured prefix and compare the new action.
+
+    An arm served at a small context (``Arm.serve_context``) is asked the prefix in its serving shape
+    (O71): a call through ``tool_invoke`` counts as the call it carries, and where the served model
+    must first find the reference's tool, a ``tool_search`` that finds it is the right move."""
 
     from langchain_core.messages import messages_from_dict
 
     started = time.monotonic()
     allowance = budget.task_tokens if arm_left is None else min(budget.task_tokens, max(0, arm_left))
-    messages = _with_guidance(list(messages_from_dict([dict(item) for item in case.messages])), arm)
     try:
-        reply = _ask(client, messages, case.tools, arm, meter, allowance)
+        served = _served(case, arm)
+    except (ValueError, TypeError, KeyError):
+        return CaseResult(case.decision_id, "replay", case.kind_of_work, "unverified", case.check,
+                          detail=UNSERVABLE_DETAIL)
+    if served is None:
+        messages, tools, problem = list(messages_from_dict([dict(item) for item in case.messages])), case.tools, None
+    else:
+        messages, tools, problem = served
+    messages = _with_guidance(messages, arm)
+    try:
+        reply = _ask(client, messages, tools, arm, meter, allowance)
     except _BudgetSpent:
         return CaseResult(case.decision_id, "replay", case.kind_of_work, "budget", case.check,
                           detail="ran out of its token budget")
@@ -911,8 +1009,17 @@ def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: 
                               detail=MALFORMED_DETAIL, cause=MALFORMED_CALL)
         return CaseResult(case.decision_id, "replay", case.kind_of_work, "error", case.check,
                           detail=f"the model call failed ({type(error).__name__})")
-    verdict, detail = compare_action(Action.from_message(reply.message), case.reference, check=case.check,
-                                     judge=judge, task_text=case.text)
+    candidate = Action.from_message(reply.message)
+    if problem is None:
+        verdict, detail = compare_action(candidate, case.reference, check=case.check, judge=judge, task_text=case.text)
+    else:
+        searched = [args for name, args in candidate.tool_calls if name == "tool_search"]
+        found = set().union(*(problem.search(args) for args in searched)) if searched and problem.search else set()
+        if problem.search_first and problem.search_first <= found:
+            verdict, detail = True, "searched for the tool it needed and found it"
+        else:
+            verdict, detail = compare_action(_unbridged(candidate), _unbridged(case.reference), check=case.check,
+                                             judge=judge, task_text=case.text)
     status: Status = "unverified" if verdict is None else ("passed" if verdict else "failed")
     judged = not case.reference.tool_calls and case.check == "exact_action" and len(case.reference.text) > SHORT_TEXT
     return CaseResult(case.decision_id, "replay", case.kind_of_work, status, "judge" if judged else case.check,
@@ -1177,6 +1284,12 @@ def _analysis(first: Sequence[CaseResult], second: Sequence[CaseResult], cluster
             "by_kind": {kind: summary(kind) for kind in sorted(key for key in rows if key != "overall")}}
 
 
+def _replay_shape(arm: Arm) -> str:
+    from row_bot.learning.training.shape import RENDERING_VERSION
+
+    return f"serving-v{RENDERING_VERSION}@{int(arm.serve_context)}" if arm.serve_context else "captured"
+
+
 def _repeat_record(cases: Sequence[CaseResult]) -> dict[str, int]:
     """How many repeated problems gave the same run every time (status, tokens and steps): a runtime
     that decodes greedily answers identically, and the report says so."""
@@ -1249,7 +1362,8 @@ def compare(arms: Sequence[Arm], *, tasks: Sequence[PackTask] = (), replay: Sequ
             save: bool = True, clock: Callable[[], float] = time.time, backend: str = "auto",
             suite: Literal["replay", "pack", "practice"] | None = None, runner: PackRunner | None = None,
             cache: ArmCache | None = None, on_case: Callable[[str, CaseResult], None] | None = None,
-            repeats: int = 1, seed: int = ANALYSIS_SEED, kind_key: Callable[[str], str] | None = None) -> Comparison:
+            repeats: int = 1, seed: int = ANALYSIS_SEED, kind_key: Callable[[str], str] | None = None,
+            pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
     """Run every arm on the same pack tasks and replayed decisions, with the same budget.
 
     The first arm is the baseline the others are compared with. A judge is used only
@@ -1257,13 +1371,15 @@ def compare(arms: Sequence[Arm], *, tasks: Sequence[PackTask] = (), replay: Sequ
     through the real Agent runtime (O56) instead of the in-process tool loop; ``cache`` keeps
     and reuses the results of arms marked ``cache`` (O31); ``on_case(arm, case)`` follows progress.
     ``repeats`` runs every problem that many times per arm (O88); the paired analysis uses ``seed``
-    and groups kinds of work with ``kind_key``.
+    and groups kinds of work with ``kind_key``. ``pairs`` ((baseline, arm) names) adds the analysis
+    of more pairs than each arm against the first (an ablation's own contrasts).
     """
 
     return _compare(arms, list(tasks), list(replay), client=client, judge=judge, calibration=calibration,
                     budget=budget, meter=meter, store=store, save=save, clock=clock, backend=backend,
                     suite=suite or ("replay" if replay and not tasks else "pack"), aggregate_only=False,
-                    runner=runner, cache=cache, on_case=on_case, repeats=repeats, seed=seed, kind_key=kind_key)
+                    runner=runner, cache=cache, on_case=on_case, repeats=repeats, seed=seed, kind_key=kind_key,
+                    pairs=pairs)
 
 
 def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase], *, client: ModelClient | None,
@@ -1272,12 +1388,16 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
              aggregate_only: bool, runner: PackRunner | None = None, cache: ArmCache | None = None,
              on_case: Callable[[str, CaseResult], None] | None = None, repeats: int = 1,
              seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
-             kind_key: Callable[[str], str] | None = None) -> Comparison:
+             kind_key: Callable[[str], str] | None = None,
+             pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
     if not arms:
         raise EvaluationError("no_arms")
     repeats = max(1, int(repeats))
     if len({arm.name for arm in arms}) != len(arms):
         raise EvaluationError("arm_names_repeat")
+    contrasts = [(str(base), str(other)) for base, other in pairs]
+    if {name for pair in contrasts for name in pair} - {arm.name for arm in arms}:
+        raise EvaluationError("unknown_arm")
     if judge is not None:
         if calibration is None or not calibration.reliable:
             judge = None  # an uncalibrated or unreliable judge decides nothing
@@ -1377,6 +1497,8 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
             "small_sample": _small(passed, len(counted)),
             "stopped": stopped, "judge": calibration_dict,
             "repeats": repeats, "repeated": _repeat_record(cases),
+            # How replayed decisions reached this arm: as captured, or in its serving shape (O71).
+            "replay_shape": _replay_shape(arm) if replay else None,
         }
         if not aggregate_only:
             body["cases"] = [{"task": case.task_id, "kind_of_work": case.kind_of_work, "status": case.status,
@@ -1414,6 +1536,9 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
     analysis: dict[str, Any] = {"seed": int(seed), "resamples": RESAMPLES, "permutations": PERMUTATIONS,
                                 "arms": {arm.name: _analysis(results[arms[0].name], results[arm.name], clusters,
                                                              seed=seed, kind_key=kind_key) for arm in arms[1:]}}
+    if contrasts:
+        analysis["pairs"] = {f"{other} vs {base}": _analysis(results[base], results[other], clusters, seed=seed,
+                                                             kind_key=kind_key) for base, other in contrasts}
     if combine_with is not None:
         # Visible and hidden problems together (a visible comparison of the same arms run before).
         joined = {**combine_with.clusters, **clusters}
@@ -1424,6 +1549,12 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                                     [*visible.get(arm.name, []), *results[arm.name]], joined, seed=seed,
                                     kind_key=kind_key)
                 for arm in arms[1:] if arm.name in visible}
+        both = [(base, other) for base, other in contrasts if base in visible and other in visible]
+        if both:
+            analysis["combined_pairs"] = {
+                f"{other} vs {base}": _analysis([*visible[base], *results[base]], [*visible[other], *results[other]],
+                                                joined, seed=seed, kind_key=kind_key)
+                for base, other in both}
     return Comparison(comparison_set, suite, arm_results, budget, stopped, calibration, paired, judge_used,
                       repeats=repeats, repeated={arm.name: _repeat_record(results[arm.name]) for arm in arms},
                       analysis=analysis, clusters={} if aggregate_only else clusters)
@@ -1478,12 +1609,13 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 verifiers: Iterable[str] | None = None,
                 on_progress: Callable[[int, int], None] | None = None, repeats: int = 3,
                 seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
-                kind_key: Callable[[str], str] | None = None) -> Comparison:
+                kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
     work and tokens per arm, and the paired analysis; no task, id or text (E10).
 
     Every hidden problem runs ``repeats`` times per arm (3, O84/O88). ``combine_with`` (a visible
-    comparison of the same arms) adds the analysis of visible and hidden problems together.
+    comparison of the same arms) adds the analysis of visible and hidden problems together, and
+    ``pairs`` the analysis of more (baseline, arm) pairs.
     ``verifiers`` leaves out hidden tasks checked any other way (``code_tests`` need a container
     for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more."""
 
@@ -1509,7 +1641,7 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
     return _compare(arms, tasks, replay, client=client, judge=judge, calibration=calibration, budget=budget,
                     meter=meter, store=saved, save=save, clock=clock, backend=backend, suite="audit",
                     aggregate_only=True, runner=runner, cache=cache, on_case=counted, repeats=repeats, seed=seed,
-                    combine_with=combine_with, kind_key=kind_key)
+                    combine_with=combine_with, kind_key=kind_key, pairs=pairs)
 
 
 def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,

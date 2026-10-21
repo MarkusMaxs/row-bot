@@ -29,6 +29,10 @@ A rendered row is **derived** (E3, O11): it is what the served model would have 
 what the main model did, never the main model's raw output. The dataset counts derived rows and
 names the rendering (``serving-v<version>@<context>``) in its manifest and the release identity.
 Rendering a row already in the serving shape (a local main model at 32K) changes nothing.
+
+:func:`serve_problem` puts a replayed decision's prefix in the same shape for a model served at a
+small context (pre-registration §4: an arm is asked as it serves, and arms that serve alike see the
+problem rendered alike), and says which tools the served model must find before it can call them.
 """
 
 from __future__ import annotations
@@ -390,6 +394,35 @@ def _remove_state(messages: list[dict[str, Any]], stats: Stats) -> None:
         message["content"] = _TURN_CONTEXT.sub(strip, content)
 
 
+def _catalog(deferred: Sequence[Mapping[str, Any]], messages: Sequence[Mapping[str, Any]],
+             envelope: Envelope) -> tuple[dict[str, Any], dict[str, str]]:
+    """The bridge's records for the deferred tools (and tools the row's own searches showed), and the
+    row's tool call ids with their tools' names."""
+
+    records = {}
+    for tool in deferred:
+        name, description, schema = _schema(tool)
+        records[name] = _record(name, description, schema, envelope)
+    known_ids: dict[str, str] = {}
+    for message in messages:
+        for call in message.get("tool_calls") or ():
+            known_ids[str(call.get("id") or "")] = str((call.get("function") or {}).get("name") or "")
+    for message in messages:
+        if message.get("role") == "tool" and known_ids.get(str(message.get("tool_call_id") or "")) == "tool_search":
+            text = message.get("content")
+            raw = text if isinstance(text, str) else json.dumps(text, default=str)
+            start, end = raw.find("{"), raw.rfind("}")
+            try:
+                value = json.loads(raw[start:end + 1]) if 0 <= start < end else {}
+            except ValueError:
+                value = {}
+            for item in (value.get("results") or ()) if isinstance(value, Mapping) else ():
+                if isinstance(item, Mapping) and item.get("name") and str(item["name"]) not in records:
+                    records[str(item["name"])] = _record(str(item["name"]), str(item.get("description") or ""),
+                                                         item.get("input_schema") or {}, envelope)
+    return records, known_ids
+
+
 def render(system: Sequence[str], messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]] | None,
            envelope: Envelope, *, agent: bool = True) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]] | None,
                                                                Stats]:
@@ -417,27 +450,7 @@ def render(system: Sequence[str], messages: Sequence[Mapping[str, Any]], tools: 
         return out_system, out_messages, (captured if tools is not None else None), stats
     # Row-Bot's own bridge over the deferred tools: its schemas, its catalog, its search. Tools the
     # captured row already reached through a bridge are kept where its own searches showed them.
-    records = {}
-    for tool in deferred:
-        name, description, schema = _schema(tool)
-        records[name] = _record(name, description, schema, envelope)
-    known_ids: dict[str, str] = {}
-    for message in out_messages:
-        for call in message.get("tool_calls") or ():
-            known_ids[str(call.get("id") or "")] = str((call.get("function") or {}).get("name") or "")
-    for message in out_messages:
-        if message.get("role") == "tool" and known_ids.get(str(message.get("tool_call_id") or "")) == "tool_search":
-            text = message.get("content")
-            raw = text if isinstance(text, str) else json.dumps(text, default=str)
-            start, end = raw.find("{"), raw.rfind("}")
-            try:
-                value = json.loads(raw[start:end + 1]) if 0 <= start < end else {}
-            except ValueError:
-                value = {}
-            for item in (value.get("results") or ()) if isinstance(value, Mapping) else ():
-                if isinstance(item, Mapping) and item.get("name") and str(item["name"]) not in records:
-                    records[str(item["name"])] = _record(str(item["name"]), str(item.get("description") or ""),
-                                                         item.get("input_schema") or {}, envelope)
+    records, known_ids = _catalog(deferred, out_messages, envelope)
     search_tool, invoke_tool = _bridge(list(records.values()), envelope.serve_context)
     stats.tools_deferred = len(deferred)
     kept = [tool for tool in captured if not envelope.defers(_name(tool)) and _name(tool) not in ALWAYS_BOUND]
@@ -500,6 +513,50 @@ def render(system: Sequence[str], messages: Sequence[Mapping[str, Any]], tools: 
     return out_system, rendered, out_tools, stats
 
 
+@dataclass(frozen=True)
+class ServedProblem:
+    """A replayed decision's prefix as a model served at the envelope's context is asked it."""
+
+    system: list[str]
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] | None
+    #: Deferred tools the reference calls that the prefix hasn't found: the served model's first
+    #: move is a search that finds them (a rendered training row shows the same step).
+    search_first: frozenset[str] = frozenset()
+    #: Runs a ``tool_search`` call's arguments through the bridge's own search: the names it finds.
+    search: Callable[[Mapping[str, Any]], set[str]] | None = field(default=None, repr=False)
+
+
+def serve_problem(system: Sequence[str], messages: Sequence[Mapping[str, Any]],
+                  tools: Sequence[Mapping[str, Any]] | None, reference_calls: Iterable[str], envelope: Envelope, *,
+                  agent: bool = True) -> ServedProblem:
+    """A replayed decision's prefix (system sections, OpenAI-format messages and tools) in the
+    serving shape, with the tools its reference calls (``reference_calls``, direct names) that the
+    served model must first find. Raises :class:`RenderError` as :func:`render` does."""
+
+    out_system, out_messages, out_tools, _ = render(system, messages, tools, envelope, agent=agent)
+    deferred = [dict(tool) for tool in tools or () if envelope.defers(_name(tool))]
+    if envelope.profile == "full" or not deferred:
+        return ServedProblem(out_system, out_messages, out_tools)
+    records, _ = _catalog(deferred, [dict(message) for message in messages], envelope)
+    search_tool, _invoke = _bridge(list(records.values()), envelope.serve_context)
+    ids = {str(call.get("id") or ""): str((call.get("function") or {}).get("name") or "")
+           for message in out_messages for call in message.get("tool_calls") or ()}
+    found: set[str] = set()
+    for message in out_messages:
+        if message.get("role") == "tool" and ids.get(str(message.get("tool_call_id") or "")) == "tool_search":
+            found |= _found_in(message.get("content"))
+    need = frozenset(name for name in reference_calls if envelope.defers(name) and name not in found)
+
+    def search(arguments: Mapping[str, Any]) -> set[str]:
+        try:
+            return _found_in(search_tool.invoke(dict(arguments)))
+        except Exception:  # noqa: BLE001 - a search the bridge refuses finds nothing
+            return set()
+
+    return ServedProblem(out_system, out_messages, out_tools, need, search)
+
+
 def describe(envelope: Envelope | None) -> dict[str, Any]:
     """The rendering a dataset's manifest names ("captured" when rows are kept as captured)."""
 
@@ -518,9 +575,11 @@ __all__ = [
     "RENDERING_VERSION",
     "RenderError",
     "SHAPES",
+    "ServedProblem",
     "Stats",
     "bound_tool_names",
     "describe",
     "envelope_for",
     "render",
+    "serve_problem",
 ]
