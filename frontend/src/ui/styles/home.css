@@ -140,28 +140,18 @@
   color: var(--accent-solid);
 }
 
-/* Overview (B269) ------------------------------------------------------- */
-/* A bento of one card style: the hero with Needs you beside it, the live
-   status strip, Continue beside Today, then Learned this week. Three columns
-   wide, two on laptops, one on phones. */
+/* Overview (N2) --------------------------------------------------------- */
+/* One calm column: the greeting and Ask box, Needs you only when something
+   does, Recent, then Today. Hierarchy from type and spacing; only the hero
+   and Needs you are boxes. The same column on phones. */
 .overview-home {
-  width: min(100%, 1120px);
-  margin: 0 auto;
-}
-.overview-bento {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: stretch;
-  gap: 16px;
+  gap: 24px;
+  width: min(100%, 720px);
+  margin: 0 auto;
 }
 .overview-cell {
   min-width: 0;
-}
-.overview-cell[data-span='2'] {
-  grid-column: span 2;
-}
-.overview-cell[data-span='3'] {
-  grid-column: 1 / -1;
 }
 /* A staggered fade-in on load; reduced motion leaves it out. */
 .overview-home[data-entrance='stagger'] .overview-cell {
@@ -175,31 +165,30 @@
   }
 }
 
-/* One card style: surface, hairline, 14px radius, the same padding. */
-.overview-card,
-.overview-stat,
-.overview-conversation {
-  border: 1px solid var(--border-hairline);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: 0 1px 2px -1px
-    color-mix(in srgb, var(--shadow-color) 40%, transparent);
-}
 .overview-card {
   position: relative;
   display: grid;
   align-content: start;
   gap: 12px;
   padding: 16px 18px 18px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px -1px
+    color-mix(in srgb, var(--shadow-color) 40%, transparent);
 }
-.overview-card-head,
+.overview-section {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
 .overview-section-title {
   display: flex;
   align-items: center;
   gap: 10px;
   min-height: 26px;
+  margin: 0 2px;
 }
-.overview-card-head h3,
 .overview-section-title h3 {
   flex: 1;
   margin: 0;
@@ -207,9 +196,6 @@
   font-size: var(--text-14);
   line-height: var(--leading-14);
   font-weight: var(--weight-semibold);
-}
-.overview-section-title {
-  margin: 2px 2px 0;
 }
 .overview-count {
   display: inline-grid;
@@ -260,10 +246,7 @@
   background: color-mix(in srgb, var(--tone) 14%, transparent);
   color: var(--tone);
 }
-/* Each type's tone, read by the tiles, timeline dots and quick starts. */
-.overview-home [data-tone='1'] {
-  --tone: var(--chart-series-1);
-}
+/* Each type's tone, read by the tiles and the quick starts. */
 .overview-home [data-tone='2'] {
   --tone: var(--chart-series-2);
 }
@@ -275,12 +258,6 @@
 }
 .overview-home [data-tone='5'] {
   --tone: var(--chart-series-5);
-}
-.overview-home [data-tone='6'] {
-  --tone: var(--chart-series-6);
-}
-.overview-home [data-tone='success'] {
-  --tone: var(--status-success-text);
 }
 .overview-home [data-tone='warning'] {
   --tone: var(--status-warning-text);
@@ -296,8 +273,7 @@
    The soft accent glow goes with reduced transparency or motion. */
 .overview-hero {
   isolation: isolate;
-  align-content: center;
-  gap: 18px;
+  gap: 16px;
   padding: 24px;
   overflow: hidden;
   background:
@@ -345,10 +321,6 @@
   color: var(--text-secondary);
   font-size: var(--text-15);
   line-height: var(--leading-15);
-}
-.overview-summary strong {
-  color: var(--text-primary);
-  font-weight: var(--weight-medium);
 }
 /* Buddy's live avatar with a status ring: amber while something waits,
    green when all is calm. */
@@ -436,41 +408,17 @@
   color: var(--text-muted);
   opacity: 1;
 }
+/* Quick starts: small icon buttons in their type's colour, under the Ask box. */
 .overview-quick {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
+  margin-top: -6px;
 }
-.overview-quick-start.button {
-  min-height: 32px;
-  max-width: 100%;
-  padding: 0 12px 0 10px;
-  gap: 7px;
-  border: 1px solid var(--border-hairline);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: var(--text-13);
-  font-weight: var(--weight-medium);
-  box-shadow: none;
-}
-.overview-quick-start.button:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
-}
-.overview-quick-start > svg {
-  flex: none;
+.overview-quick .overview-quick-start {
   color: var(--tone);
 }
-.overview-quick-title {
-  min-width: 0;
-  max-width: 14em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-/* Needs you: a prominent card; approvals are answered in place. */
+/* Needs you: the one tinted box; approvals are answered in place. */
 .overview-needs {
   border-color: color-mix(
     in srgb,
@@ -486,38 +434,29 @@
     var(--surface);
   container: needs / inline-size;
 }
-.overview-needs[data-calm='true'] {
-  align-content: center;
-  border-color: var(--border-hairline);
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--status-success-text) 6%, transparent),
-      transparent 150px
-    ),
-    var(--surface);
+.overview-needs > .overview-section-title {
+  margin: 0;
 }
-.overview-needs-list {
+
+/* Rows: a tile, a title, a quiet line or time, opening their place. */
+.overview-rows {
   display: grid;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.overview-need {
+.overview-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  padding: 10px 0;
+  padding: 8px 0;
 }
-.overview-need + .overview-need {
+.overview-row + .overview-row {
   border-top: 1px solid var(--border-hairline);
 }
-.overview-need:first-child {
-  padding-top: 2px;
-}
-.overview-need-button,
-.overview-need-body {
+.overview-row-button,
+.overview-row-body {
   display: grid;
   flex: 1 1 220px;
   grid-template-columns: 28px minmax(0, 1fr) auto;
@@ -525,7 +464,7 @@
   gap: 12px;
   min-width: 0;
 }
-.overview-need-button {
+.overview-row-button {
   grid-template-columns: 28px minmax(0, 1fr) auto 15px;
   margin: -4px -6px;
   padding: 4px 6px;
@@ -537,15 +476,15 @@
   text-align: start;
   cursor: pointer;
 }
-.overview-need-button:hover {
+.overview-row-button:hover {
   background: var(--surface-hover);
 }
-.overview-need-text {
+.overview-row-text {
   display: grid;
   gap: 1px;
   min-width: 0;
 }
-.overview-need-title {
+.overview-row-title {
   overflow: hidden;
   color: var(--text-primary);
   font-size: var(--text-14);
@@ -554,7 +493,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.overview-need-meta {
+.overview-row-meta {
   overflow: hidden;
   color: var(--text-muted);
   font-size: var(--text-12);
@@ -562,22 +501,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.overview-need-time {
+.overview-row-time {
   color: var(--text-muted);
   font-size: var(--text-12);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.overview-need-chevron {
+.overview-row-chevron {
   color: var(--text-muted);
   opacity: 0;
   transition: opacity var(--motion-popover) var(--ease-out);
 }
-.overview-need-button:hover .overview-need-chevron,
-.overview-need-button:focus-visible .overview-need-chevron {
+.overview-row-button:hover .overview-row-chevron,
+.overview-row-button:focus-visible .overview-row-chevron {
   opacity: 1;
 }
-.overview-need-actions {
+.overview-row-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -585,22 +524,22 @@
   gap: 4px;
   margin-inline-start: auto;
 }
-.overview-need-actions
+.overview-row-actions
   > :is(.agent-controls-status, .approval-decision-done, .fix-action-note) {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-12);
   line-height: var(--leading-12);
 }
-/* A narrow Needs you puts the actions under the text. */
+/* A narrow Needs you puts an approval's choices under its text. */
 @container needs (max-width: 420px) {
-  .overview-need-approval .overview-need-actions {
+  .overview-row-approval .overview-row-actions {
     flex-basis: 100%;
     padding-inline-start: 40px;
     justify-content: flex-start;
   }
-  .overview-need-approval .overview-need-title,
-  .overview-need-approval .overview-need-meta {
+  .overview-row-approval .overview-row-title,
+  .overview-row-approval .overview-row-meta {
     white-space: normal;
   }
 }
@@ -621,7 +560,7 @@
 }
 .overview-setup {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   padding: 10px 10px 10px 12px;
@@ -631,9 +570,9 @@
 .overview-setup-first {
   grid-template-columns: minmax(0, 1fr) auto;
 }
-/* A narrow card: the title wraps rather than cutting to "Finish set…". */
-.overview-setup .overview-need-title,
-.overview-setup .overview-need-meta {
+/* A narrow box: the title wraps rather than cutting to "Finish set…". */
+.overview-setup .overview-row-title,
+.overview-setup .overview-row-meta {
   white-space: normal;
 }
 .overview-setup-error {
@@ -642,479 +581,15 @@
   color: var(--status-danger-text);
   font-size: var(--text-12);
 }
-.overview-caughtup {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  padding: 16px 12px 8px;
-  text-align: center;
-}
-.overview-caughtup-mark {
-  display: grid;
-  place-items: center;
-  width: 60px;
-  height: 60px;
-  margin-bottom: 10px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--status-success-text) 14%, transparent);
-  color: var(--status-success-text);
-  box-shadow: 0 0 0 9px
-    color-mix(in srgb, var(--status-success-text) 6%, transparent);
-}
-.overview-caughtup-title {
-  color: var(--text-primary);
-  font-size: var(--text-17);
-  line-height: var(--leading-17);
-  font-weight: var(--weight-semibold);
-}
-.overview-caughtup p {
-  max-width: 36ch;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-}
-.overview-error,
-.overview-loading {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-12);
-}
-
-/* Live status strip: four picture cards, each opening its tab. */
-.overview-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.overview-strip > li {
-  display: grid;
-  min-width: 0;
-}
-.overview-stat {
-  display: grid;
-  grid-template-rows: auto auto auto 1fr;
-  gap: 4px;
-  min-width: 0;
-  min-height: 128px;
-  box-sizing: border-box;
-  padding: 14px 16px;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-}
-button.overview-stat {
-  cursor: pointer;
-}
-button.overview-stat:hover {
-  border-color: var(--border-subtle);
-  background: color-mix(in srgb, var(--surface-hover) 50%, var(--surface));
-}
-.overview-stat-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-  color: var(--text-secondary);
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-  font-weight: var(--weight-medium);
-}
-.overview-stat-head .overview-tile {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-}
-.overview-stat-chevron {
-  margin-inline-start: auto;
-  color: var(--text-muted);
-}
-.overview-stat-value {
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: var(--text-20);
-  line-height: var(--leading-20);
-  font-weight: var(--weight-semibold);
-  letter-spacing: -0.01em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.overview-stat-line {
-  overflow: hidden;
+.overview-error {
+  margin: 0 2px;
   color: var(--text-muted);
   font-size: var(--text-12);
   line-height: var(--leading-12);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.overview-stat-line[data-tone='success'] {
-  color: var(--status-success-text);
-  font-weight: var(--weight-medium);
-}
-.overview-stat-picture {
-  display: flex;
-  align-self: end;
-  align-items: flex-end;
-  gap: 10px;
-  min-width: 0;
-  min-height: 28px;
-  margin-top: 6px;
-}
-.overview-stat-note {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--text-12);
-  line-height: var(--leading-12);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.overview-agents {
-  display: flex;
-  flex: none;
-  align-items: center;
-  padding-inline-end: 6px;
-}
-.overview-agent {
-  position: relative;
-  display: grid;
-  margin-inline-end: -6px;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--surface);
-}
-.overview-agent .status-indicator.overview-agent-dot {
-  position: absolute;
-  z-index: 1;
-  right: -2px;
-  bottom: -2px;
-}
-.overview-agent-dot .status-indicator-dot {
-  width: 9px;
-  height: 9px;
-  box-sizing: border-box;
-  border: 2px solid var(--surface);
-}
-.overview-agents-small .agent-avatar {
-  margin-inline-end: -5px;
-  box-shadow: 0 0 0 1.5px var(--surface);
-}
-/* Today's runs, one mark each, in order; failures red, the next run open. */
-.overview-runs {
-  display: flex;
-  flex: none;
-  align-items: flex-end;
-  gap: 3px;
-  height: 24px;
-}
-.overview-runs > i {
-  width: 6px;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--status-success-text);
-}
-.overview-runs > i[data-status='failed'] {
-  background: var(--status-danger-text);
-}
-.overview-runs > i[data-status='next'] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--border-control);
-}
-.overview-checks {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  gap: 5px;
-  max-width: 120px;
-}
-.overview-checks > i {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--status-success-text);
-}
-.overview-checks > i[data-status='warn'] {
-  background: var(--status-warning-text);
-}
-.overview-checks > i[data-status='error'] {
-  background: var(--status-danger-text);
-}
-.overview-checks > i[data-status='inactive'] {
-  background: var(--border-control);
-}
-.overview-graph {
-  display: block;
-  flex: none;
-}
-.overview-graph-edges line {
-  stroke: var(--border-control);
-  stroke-width: 1;
-  opacity: 0.75;
-}
-
-/* Continue where you left off: richer cards, pinned first, 2 × 2. */
-.overview-continue {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-.overview-conversations {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.overview-conversations > li {
-  display: grid;
-  min-width: 0;
-}
-.overview-conversation {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 8px;
-  min-width: 0;
-  box-sizing: border-box;
-  padding: 14px 16px;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  cursor: pointer;
-}
-.overview-conversation:hover {
-  border-color: var(--border-subtle);
-  background: color-mix(in srgb, var(--surface-hover) 50%, var(--surface));
-}
-.overview-conversation-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.overview-conversation-title {
-  flex: 1;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: var(--text-14);
-  line-height: var(--leading-14);
-  font-weight: var(--weight-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.overview-conversation-pin {
-  display: inline-flex;
-  flex: none;
-  color: var(--text-muted);
-}
-.overview-conversation-line {
-  color: var(--text-secondary);
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-}
-.overview-conversation-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: var(--text-12);
-  line-height: var(--leading-12);
-  white-space: nowrap;
-}
-.overview-conversation-time {
-  margin-inline-start: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Today: a small timeline, each moment linking to where it happened. */
-.overview-timeline {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.overview-timeline > li {
-  position: relative;
-}
-.overview-timeline > li:not(:last-child)::before {
-  content: '';
-  position: absolute;
-  top: 30px;
-  bottom: -4px;
-  left: 66px;
-  width: 1.5px;
-  background: var(--border-subtle);
-}
-.overview-timeline button {
-  display: grid;
-  grid-template-columns: 44px 22px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-  width: 100%;
-  padding: 5px 6px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-  text-align: start;
-  cursor: pointer;
-}
-.overview-timeline button:hover {
-  background: var(--surface-hover);
-}
-.overview-timeline time {
-  padding-top: 3px;
-  color: var(--text-muted);
-  font-size: var(--text-12);
-  font-variant-numeric: tabular-nums;
-  text-align: end;
-  white-space: nowrap;
-}
-.overview-timeline-dot {
-  --tone: var(--accent-solid);
-  position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--tone) 18%, var(--surface));
-  color: var(--tone);
-}
-.overview-timeline-what {
-  display: grid;
-  min-width: 0;
-  padding-top: 2px;
-  color: var(--text-primary);
-}
-.overview-timeline-what small {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--text-12);
-  line-height: var(--leading-12);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Learned this week: memories as chips and the top Insight. */
-.overview-learned {
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-  align-items: start;
-  column-gap: 20px;
-}
-.overview-learned > .overview-card-head {
-  grid-column: 1 / -1;
-}
-.overview-learned-body {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-}
-.overview-learned-body:last-child {
-  grid-column: 1 / -1;
-}
-.overview-learned-line {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-}
-.overview-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.overview-chips > li {
-  display: flex;
-  min-width: 0;
-  max-width: 100%;
-}
-.overview-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  max-width: 100%;
-  min-height: 28px;
-  box-sizing: border-box;
-  padding: 0 10px 0 9px;
-  overflow: hidden;
-  border: 1px solid var(--border-hairline);
-  border-radius: 999px;
-  background: var(--surface-raised);
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-12);
-  line-height: var(--leading-12);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.overview-chip::before {
-  content: '';
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--chart-series-3);
-}
-.overview-chip:hover {
-  background: var(--surface-hover);
-}
-.overview-chip[data-more='true'] {
-  border-style: dashed;
-  background: transparent;
-  color: var(--text-link);
-}
-.overview-chip[data-more='true']::before {
-  display: none;
-}
-.overview-insight {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--chart-series-4) 26%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--chart-series-4) 7%, var(--surface));
-}
-.overview-insight-text {
-  display: grid;
-  justify-items: start;
-  gap: 3px;
-  min-width: 0;
-}
-.overview-insight-text strong {
-  color: var(--text-primary);
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-  font-weight: var(--weight-semibold);
-}
-.overview-insight-text p {
-  display: -webkit-box;
-  margin: 0 0 8px;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
 }
 
 :is(
-  .overview-need-button,
-  .overview-stat,
-  .overview-conversation,
-  .overview-timeline button,
-  .overview-chip,
+  .overview-row-button,
   .overview-needs-more,
   .overview-section-link
 ):focus-visible {
@@ -1122,38 +597,9 @@ button.overview-stat:hover {
   outline-offset: 2px;
 }
 
-/* Two columns on laptops: the cells beside the hero and Continue go full
-   width so no half row stays empty. */
-@container home (max-width: 1000px) {
-  .overview-bento {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .overview-bento > .overview-cell {
-    grid-column: 1 / -1;
-  }
-  .overview-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-/* One column on phones; the status strip stays 2 × 2. */
 @container home (max-width: 640px) {
-  .overview-bento {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
-  }
-  .overview-strip {
-    gap: 10px;
-  }
-  .overview-stat {
-    min-height: 112px;
-    padding: 12px;
-  }
-  .overview-stat-note {
-    display: none;
-  }
-  .overview-conversations,
-  .overview-learned {
-    grid-template-columns: minmax(0, 1fr);
+  .overview-home {
+    gap: 18px;
   }
   .overview-hero {
     padding: 18px;
@@ -1173,37 +619,23 @@ button.overview-stat:hover {
     width: 56px;
     height: 56px;
   }
-  .overview-quick {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .overview-quick-start.button {
-    flex: none;
-    max-width: 70vw;
-  }
 }
 @media (pointer: coarse) {
-  .overview-quick-start.button,
-  .overview-chip,
   .overview-needs-more {
     min-height: 44px;
   }
-  .overview-need-chevron {
+  .overview-row-chevron {
     opacity: 1;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .home-view .home-tabs > .tabs .tab,
-  .overview-need-chevron {
+  .overview-row-chevron {
     transition: none;
   }
 }
 @media (forced-colors: active) {
-  .overview-card,
-  .overview-stat,
-  .overview-conversation,
-  .overview-chip {
+  .overview-card {
     border: 1px solid CanvasText;
   }
 }
