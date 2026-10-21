@@ -12,28 +12,28 @@ CSS = (ROOT / "docs" / "site.css").read_text(encoding="utf-8")
 JS = (ROOT / "docs" / "site.js").read_text(encoding="utf-8")
 
 INDEX_WINDOWS_URL = (
-    "https://github.com/siddsachar/row-bot/releases/download/v5.1.0/"
-    "Row-Bot-5.1.0-Windows-x64.exe"
+    "https://github.com/siddsachar/row-bot/releases/download/v5.2.1/"
+    "Row-Bot-5.2.1-Windows-x64.exe"
 )
 INDEX_MAC_URL = (
-    "https://github.com/siddsachar/row-bot/releases/download/v5.1.0/"
-    "Row-Bot-5.1.0-macOS-arm64.dmg"
+    "https://github.com/siddsachar/row-bot/releases/download/v5.2.1/"
+    "Row-Bot-5.2.1-macOS-arm64.dmg"
 )
 INDEX_LINUX_COMMAND = (
     "curl -fsSL https://raw.githubusercontent.com/siddsachar/row-bot/main/"
-    "installer/install-linux.sh | bash -s -- 5.1.0"
+    "installer/install-linux.sh | bash -s -- 5.2.1"
 )
 SITE_WINDOWS_URL = (
-    "https://github.com/siddsachar/row-bot/releases/download/v5.1.0/"
-    "Row-Bot-5.1.0-Windows-x64.exe"
+    "https://github.com/siddsachar/row-bot/releases/download/v5.2.1/"
+    "Row-Bot-5.2.1-Windows-x64.exe"
 )
 SITE_MAC_URL = (
-    "https://github.com/siddsachar/row-bot/releases/download/v5.1.0/"
-    "Row-Bot-5.1.0-macOS-arm64.dmg"
+    "https://github.com/siddsachar/row-bot/releases/download/v5.2.1/"
+    "Row-Bot-5.2.1-macOS-arm64.dmg"
 )
 SITE_LINUX_COMMAND = (
     "curl -fsSL https://raw.githubusercontent.com/siddsachar/row-bot/main/"
-    "installer/install-linux.sh | bash -s -- 5.1.0"
+    "installer/install-linux.sh | bash -s -- 5.2.1"
 )
 MARKETING_PAGES = ("index.html", "features.html", "architecture.html", "contact.html", "404.html")
 
@@ -92,25 +92,25 @@ def test_landing_page_is_evergreen_and_current() -> None:
     )
     assert json_ld_match
     metadata = json.loads(json_ld_match.group(1))
-    assert metadata["softwareVersion"] == "5.1.0"
-    assert metadata["downloadUrl"].endswith("/releases/tag/v5.1.0")
+    assert metadata["softwareVersion"] == "5.2.1"
+    assert metadata["downloadUrl"].endswith("/releases/tag/v5.2.1")
 
     parser = _parse()
     assert all(image.get("width") and image.get("height") for image in parser.images)
     assert parser.sections == [
         "top",
         "demos",
-        "architecture",
+        "privacy",
         "faq",
         "install",
     ]
-    assert "Row-Bot 5.1.0 available" in HTML
-    assert "Row-Bot &middot; v5.1.0 &middot; Apache 2.0" in HTML
+    assert "Row-Bot 5.2.1 available" in HTML
+    assert "Row-Bot &middot; v5.2.1 &middot; Apache 2.0" in HTML
     assert 'src="media/landing-story/screenshots/research.webp"' in HTML
     assert "One private workspace to reason, build, automate, and act." in HTML
     assert "Row-Bot · Real app capture" in HTML
     assert "Recorded in-product" in HTML
-    assert "Reason.<br>Orchestrate.<br>Work.<br><em>Keep it yours.</em>" in HTML
+    assert "Reason. Orchestrate. Work. <em>Keep it yours.</em>" in HTML
     assert "PARENT-LED ORCHESTRATION" not in HTML
 
 
@@ -279,7 +279,7 @@ def test_marketing_pages_share_analytics_and_download_conversion_contract() -> N
     assert "data-row-bot-google-tag" in JS
     assert "trackAdsConversion" in JS
 
-    cache_versions = {name: "5.1.0" for name in MARKETING_PAGES}
+    cache_versions = {name: "5.2.1" for name in MARKETING_PAGES}
     for name in MARKETING_PAGES:
         content = (ROOT / "docs" / name).read_text(encoding="utf-8")
         version = cache_versions[name]

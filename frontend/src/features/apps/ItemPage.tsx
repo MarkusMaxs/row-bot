@@ -428,6 +428,12 @@ function Detail({
   const status = statusOf(entry);
   const action = entry.next_action;
   const recovering = entry.blockers.some((b) => RECOVERING.includes(b.code));
+  // What Fix fixes, in words: never a lone Fix button (B349).
+  const reason =
+    action.kind === 'fix'
+      ? entry.blockers.find((b) => b.severity === 'blocking' && b.message)
+          ?.message
+      : undefined;
   const tryIt = () => {
     const prompt =
       entry.kind === 'skill'
@@ -565,6 +571,11 @@ function Detail({
             Setup stopped before it finished. Anything already done is kept.
           </p>
         )}
+      {!recovering && !control.plan && reason && (
+        <p className="settings-help" role="status">
+          {reason}
+        </p>
+      )}
       {error && <p role="alert">{error}</p>}
       {detail.plan && !detail.plan.supported && !detail.plan.plan_id && (
         <p className="settings-help" role="status">

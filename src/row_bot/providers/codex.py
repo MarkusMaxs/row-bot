@@ -92,7 +92,8 @@ class CodexTokenHealth:
 
     @property
     def runnable(self) -> bool:
-        return self.status in {"valid", "refreshed"} and bool(
+        # "refresh_due": the access token ran out, and its refresh token renews it when it's next used.
+        return self.status in {"valid", "refreshed", "refresh_due"} and bool(
             self.credentials.access_token and self.credentials.account_id
         )
 
@@ -552,6 +553,8 @@ def check_codex_token_health(*, refresh_if_needed: bool = True, http_client: Any
             credentials,
         )
     if _expires_soon(credentials.expires_at):
+        if credentials.refresh_token:  # Not refreshed now: the next request renews it (B351).
+            return CodexTokenHealth("refresh_due", "ChatGPT token renews when it's next used.", credentials)
         return CodexTokenHealth(
             "expired",
             "ChatGPT token is expired and no refresh token is available. Reconnect ChatGPT in Settings -> Providers.",
@@ -561,8 +564,9 @@ def check_codex_token_health(*, refresh_if_needed: bool = True, http_client: Any
 
 
 def codex_runtime_available() -> bool:
+    """Whether a Codex model can run now, renewing an expired access token first (B351)."""
     try:
-        health = check_codex_token_health(refresh_if_needed=False)
+        health = check_codex_token_health(refresh_if_needed=True)
     except Exception:
         return False
     return health.runnable
