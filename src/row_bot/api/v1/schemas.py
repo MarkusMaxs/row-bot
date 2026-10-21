@@ -6620,7 +6620,9 @@ class ApprovalRequired(WireModel):
 
 
 class GenerationError(WireModel):
-    code: Literal["generation_failed"]
+    code: Literal["generation_failed", "sign_in_required"]
+    # sign_in_required: whose sign-in to renew ("ChatGPT").
+    provider: str = Field(default="", max_length=64)
 
 
 class TranscriptCheckpoint(WireModel):
