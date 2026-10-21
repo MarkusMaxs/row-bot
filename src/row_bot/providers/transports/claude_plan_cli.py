@@ -291,7 +291,8 @@ class ClaudeCodeRun:
                                         stderr=subprocess.PIPE, cwd=str(cwd), env=env, shell=False, **options)
         self._events: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._stderr: deque[str] = deque(maxlen=40)
-        self._stopped = threading.Event()
+        self._stop_lock = threading.Lock()
+        self._stopped = False
         threading.Thread(target=self._read_stdout, name="claude-code-stdout", daemon=True).start()
         threading.Thread(target=self._read_stderr, name="claude-code-stderr", daemon=True).start()
 
@@ -346,10 +347,17 @@ class ClaudeCodeRun:
         return " ".join(list(self._stderr)[-3:])[:300]
 
     def stop(self) -> None:
-        """End the process and everything it started (its tool server included)."""
-        if self._stopped.is_set():
-            return
-        self._stopped.set()
+        """End the process and everything it started (its tool server included).
+
+        Stop (another thread) and the end of the call may both stop the run; whichever comes second waits
+        until the whole tree has ended.
+        """
+        with self._stop_lock:
+            if not self._stopped:
+                self._stopped = True
+                self._stop()
+
+    def _stop(self) -> None:
         self.close_input()
         if self.process.poll() is None:
             try:
