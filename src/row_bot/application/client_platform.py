@@ -619,7 +619,7 @@ class ClientPlatformService:
             rows = conn.execute(
                 "SELECT thread_id,CASE WHEN COALESCE(pinned_at,'')<>'' THEN 1 ELSE 0 END AS pinned,"
                 "COALESCE(updated_at,'') AS recent FROM thread_meta "
-                + "WHERE " + _LIST_GROUPS[group] + " "
+                + "WHERE COALESCE(deleted_at,'')='' AND (" + _LIST_GROUPS[group] + ") "
                 + ("AND (CASE WHEN COALESCE(pinned_at,'')<>'' THEN 1 ELSE 0 END,COALESCE(updated_at,''),thread_id)"
                    "<(:pinned,:recent,:thread_id) " if after else "")
                 + "ORDER BY pinned DESC,recent DESC,thread_id DESC LIMIT :limit",
@@ -970,6 +970,12 @@ class ClientPlatformService:
             if str(command.get("expected_revision")) != approval["revision"]:
                 raise ClientPlatformError("revision_conflict", approval["revision"])
             return self._resolve_approval(target, payload, runtime_surface=runtime_surface)
+        if kind == "conversation.restore":
+            # Undo of a held delete (B343); once it has been removed, it is too late.
+            from row_bot.thread_cleanup import restore_held_thread
+            if not restore_held_thread(target):
+                raise ClientPlatformError("restore_expired")
+            return {"conversation_id": target, "status": "completed"}
         row = self._metadata(target)
         expected = command.get("expected_revision")
         if expected is None or str(expected) != str(row["client_revision"]):
@@ -1136,6 +1142,10 @@ class ClientPlatformService:
             self.registry.stop(target, reason="delete")
             if self.registry.active(target):
                 return {"conversation_id": target, "status": "DeleteBlocked"}
+            if payload.get("undo"):
+                from row_bot.thread_cleanup import hold_thread_deletion
+                hold_thread_deletion(target)
+                return {"conversation_id": target, "status": "DeleteCompleted"}
             result = delete_thread(target)
             return {
                 "conversation_id": target,

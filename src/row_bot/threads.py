@@ -61,6 +61,8 @@ _THREAD_META_COLUMNS = {
     "chat_only_summary_state_json": "TEXT NOT NULL DEFAULT ''",
     # The compaction that last failed, per mode, so it is not retried before the turn or input changes.
     "compaction_failure_json": "TEXT NOT NULL DEFAULT ''",
+    # Deleted with Undo on offer (thread_cleanup.hold_thread_deletion): hidden now, removed when Undo ends.
+    "deleted_at": "TEXT NOT NULL DEFAULT ''",
 }
 
 THREAD_NAME_SOURCE_AUTO = "auto"

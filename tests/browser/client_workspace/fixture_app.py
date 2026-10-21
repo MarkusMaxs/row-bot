@@ -2021,6 +2021,18 @@ def advance_orchestration(conversation_id: str, action: str, x_fixture_token: st
             "steering": asdict(owner.read_parent_steering(conversation_id))}
 
 
+@app.post("/__p3_fixture/named-conversation/{title}")
+def named_conversation(title: str, x_fixture_token: str = Header(default="")) -> dict:
+    """One ordinary conversation with a test-owned title, found by name in the sidebar."""
+    predecessor._authorize(x_fixture_token)
+    import re
+    from row_bot import threads
+
+    if not re.fullmatch(r"[A-Za-z0-9 -]{1,60}", title):
+        raise HTTPException(status_code=422, detail="Invalid synthetic title")
+    return {"conversation_id": threads.create_thread(title, name_source="manual", seed_default_skills=False)}
+
+
 @app.post("/__p3_fixture/large-library")
 def large_library(x_fixture_token: str = Header(default="")) -> dict:
     """Seed 1,001 ordinary conversations and 10,001 durable messages once."""
