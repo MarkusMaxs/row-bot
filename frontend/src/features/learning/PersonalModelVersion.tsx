@@ -120,7 +120,10 @@ export function versionView(version: LearningVersion): VersionView {
           detail: failure || undefined,
           actions:
             version.failure === 'server_missing'
-              ? [{ label: 'Download', kind: 'download', primary: true }, ...tryOllama]
+              ? [
+                  { label: 'Download', kind: 'download', primary: true },
+                  ...tryOllama,
+                ]
               : version.failure === 'server_unavailable'
                 ? [{ label: 'Try Ollama', kind: 'try_ollama', primary: true }]
                 : [

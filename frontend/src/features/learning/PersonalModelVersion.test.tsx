@@ -242,17 +242,23 @@ it('recommends Row-Bot’s own runner where it can run, with Ollama still a choi
     within(sheet).getByRole('radio', { name: /^Ollama/ }),
   ).not.toHaveAccessibleName(/recommended/);
   await userEvent.click(within(sheet).getByRole('radio', { name: /^Row-Bot/ }));
-  await userEvent.click(within(sheet).getByRole('button', { name: 'Use Row-Bot' }));
+  await userEvent.click(
+    within(sheet).getByRole('button', { name: 'Use Row-Bot' }),
+  );
   expect(io.run).toHaveBeenCalledWith('choose_runtime', { runtime: 'row_bot' });
 });
 
 it('says Row-Bot’s runner isn’t on a computer without an NVIDIA card, and recommends Ollama there', () => {
   const runtimes = WITH_ROW_BOT!.map((item) =>
-    item.id === 'row_bot' ? { ...item, installed: null, available: false } : item,
+    item.id === 'row_bot'
+      ? { ...item, installed: null, available: false }
+      : item,
   );
   const { sheet } = runsIn(installedModel({ runtime: 'ollama', runtimes }));
   expect(
-    within(sheet).getByRole('radio', { name: /Row-Bot · not on this computer/ }),
+    within(sheet).getByRole('radio', {
+      name: /Row-Bot · not on this computer/,
+    }),
   ).toBeDisabled();
   expect(
     within(sheet).getByText(
@@ -325,7 +331,12 @@ it('words a version in Row-Bot’s runner: starting, ready, and each way out whe
     'Try Ollama',
   ]);
   expect(
-    runsInWords(installedModel({ runtime: 'row_bot', version: versionState({ runtime: 'row_bot' }) })),
+    runsInWords(
+      installedModel({
+        runtime: 'row_bot',
+        version: versionState({ runtime: 'row_bot' }),
+      }),
+    ),
   ).toBe('Row-Bot ✓');
 });
 
