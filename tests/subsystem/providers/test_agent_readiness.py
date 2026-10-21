@@ -97,12 +97,12 @@ def test_unknown_native_explicit_override_is_ready(monkeypatch):
     assert evaluate_chat_readiness("model:openai:opaque-model").ready is True
 
 
-def test_claude_subscription_passes_agent_readiness_after_native_tool_transport(monkeypatch):
+def test_a_claude_plan_model_passes_agent_readiness_with_its_tools(monkeypatch):
     import row_bot.providers.readiness as readiness
     import row_bot.models as models
-    from row_bot.providers.claude_subscription import fallback_claude_subscription_model_infos
+    from row_bot.providers.claude_subscription import claude_plan_model_info
 
-    model_info = next(info for info in fallback_claude_subscription_model_infos() if info.model_id == "claude-sonnet-4-6")
+    model_info = claude_plan_model_info("claude-sonnet-4-6")
     monkeypatch.setattr(readiness, "provider_status", lambda provider_id: {"configured": True, "runtime_enabled": True})
     monkeypatch.setattr(models, "get_context_policy", lambda value: models.ContextPolicy(
         model_ref="model:claude_subscription:claude-sonnet-4-6",
@@ -127,11 +127,11 @@ def test_claude_subscription_passes_agent_readiness_after_native_tool_transport(
     assert result.tool_calling_source == "trusted_provider"
 
 
-def test_claude_subscription_failed_runtime_probe_blocks_agent_readiness(monkeypatch):
+def test_a_claude_plan_model_is_blocked_until_claude_code_is_ready(monkeypatch):
     import row_bot.models as models
-    from row_bot.providers.claude_subscription import fallback_claude_subscription_model_infos
+    from row_bot.providers.claude_subscription import claude_plan_model_info
 
-    model_info = next(info for info in fallback_claude_subscription_model_infos() if info.model_id == "claude-sonnet-4-6")
+    model_info = claude_plan_model_info("claude-sonnet-4-6")
     monkeypatch.setattr(models, "get_context_policy", lambda value: models.ContextPolicy(
         model_ref="model:claude_subscription:claude-sonnet-4-6",
         provider_id="claude_subscription",
@@ -147,23 +147,12 @@ def test_claude_subscription_failed_runtime_probe_blocks_agent_readiness(monkeyp
     result = evaluate_runtime_readiness(
         "model:claude_subscription:claude-sonnet-4-6",
         capability_snapshot=model_info.capability_snapshot(),
-        status={
-            "configured": True,
-            "runtime_enabled": True,
-            "last_runtime_probe": {
-                "ok": False,
-                "chat_ok": False,
-                "tool_calling": False,
-                "tool_round_trip": False,
-                "errors": ["Claude subscription rate/usage limit reached"],
-            },
-        },
+        status={"configured": False, "runtime_enabled": False},
     )
 
     assert result.agent.ready is False
     assert result.chat.ready is False
     assert result.selected_mode == "blocked"
-    assert any("runtime probe failed" in error for error in result.agent.errors)
 
 
 def test_context_below_32k_blocks_agent_mode(monkeypatch):

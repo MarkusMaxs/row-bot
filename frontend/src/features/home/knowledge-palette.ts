@@ -26,11 +26,6 @@ export function typeSlot(type: string): number {
   return FIXED[type.trim().toLowerCase()] ?? 0;
 }
 
-export function typeToken(type: string): string {
-  const slot = typeSlot(type);
-  return slot ? `--graph-${slot}` : '--graph-other';
-}
-
 /** Read the current theme's graph colours from the root style. */
 export function readGraphTheme(root: HTMLElement = document.documentElement) {
   const style = getComputedStyle(root);

@@ -673,6 +673,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.warning("Could not keep the models this profile was using", exc_info=True)
 
+    # Once: Claude now runs the person's own Claude Code; the old Claude sign-in's stored tokens go (N1).
+    try:
+        from row_bot.providers.claude_subscription import retire_old_claude_sign_in
+        with _startup_phase("claude_sign_in_retirement"):
+            await asyncio.to_thread(retire_old_claude_sign_in)
+    except Exception:
+        logger.warning("Could not retire the old Claude sign-in", exc_info=True)
+
     # Once: an off saved while off was the Developer tool's default (B259).
     try:
         from row_bot.application.developer_tool_upgrade import turn_on_developer_tools_once

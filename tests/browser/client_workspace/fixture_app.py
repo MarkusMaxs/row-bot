@@ -50,6 +50,74 @@ def _mount_static() -> None:
 _mount_static()
 
 
+# Claude (your Claude plan) runs the person's own Claude Code. Here Claude Code's answers are synthetic,
+# so no spec ever starts or asks the Claude Code installed on the machine running the fixture; a spec
+# sets the state it shows with /__s9_fixture/claude-plan/{state}.
+from row_bot.providers import claude_subscription as _claude_plan  # noqa: E402
+
+_NO_CLAUDE_CODE = "synthetic-claude-code-never-started"
+_CLAUDE_PLAN_STATES = {
+    "not_installed": _claude_plan.ClaudePlanStatus("not_installed"),
+    "signed_out": _claude_plan.ClaudePlanStatus("signed_out", version="2.1.282", program=_NO_CLAUDE_CODE),
+    "not_plan": _claude_plan.ClaudePlanStatus(
+        "signed_out", version="2.1.282", program=_NO_CLAUDE_CODE,
+        detail="Claude Code is signed in without a Claude plan, so it would bill another way."),
+    "too_old": _claude_plan.ClaudePlanStatus("too_old", version="2.1.100", program=_NO_CLAUDE_CODE),
+    "error": _claude_plan.ClaudePlanStatus(
+        "error", version="2.1.282", program=_NO_CLAUDE_CODE,
+        detail="Claude Code didn't say whether it is signed in."),
+    "ready": _claude_plan.ClaudePlanStatus("ready", version="2.1.282", plan="Claude Max", program=_NO_CLAUDE_CODE),
+}
+_claude_plan_fixture = {"status": _CLAUDE_PLAN_STATES["not_installed"]}
+_claude_plan.check_claude_code = lambda: _claude_plan_fixture["status"]
+_claude_plan.discover_claude_plan_models = lambda: _claude_plan.model_infos_from_initialize([
+    {"resolvedModel": "claude-opus-5-5[1m]", "description": "Opus 5.5 with 1M context · Best for complex tasks",
+     "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"], "supportsEffort": True,
+     "supportsAdaptiveThinking": True},
+    {"resolvedModel": "claude-sonnet-5", "description": "Sonnet 5 · Efficient for routine tasks",
+     "supportedEffortLevels": ["low", "medium", "high", "xhigh", "max"], "supportsEffort": True,
+     "supportsAdaptiveThinking": True},
+    {"resolvedModel": "claude-haiku-4-5-20251001", "description": "Haiku 4.5 · Fastest for quick answers"},
+])
+
+
+_capture_cards: list = []
+
+
+@app.post("/__s9_fixture/claude-plan/{state}")
+def s9_claude_plan(state: str, set_up_again: bool = False, x_fixture_token: str = Header(default="")) -> dict:
+    """What Claude Code says, as Settings reads it; ``set_up_again``: the old Claude sign-in had this profile.
+
+    Settings then reads provider cards through the real status path, not the display-only capture cards;
+    ``restore`` puts those back.
+    """
+    predecessor._authorize(x_fixture_token)
+    from row_bot.providers import live_settings
+    from row_bot.providers.config import update_provider_config
+
+    if not _capture_cards:
+        _capture_cards.append(live_settings.docs_capture_fake_provider_status)
+    if state == "restore":
+        live_settings.docs_capture_fake_provider_status = _capture_cards[0]
+        state = "not_installed"
+    elif state not in _CLAUDE_PLAN_STATES:
+        raise HTTPException(status_code=404, detail="Unknown Claude Code state")
+    else:
+        live_settings.docs_capture_fake_provider_status = lambda: False
+
+    def _update(cfg: dict) -> None:
+        entry = cfg.setdefault("providers", {}).setdefault("claude_subscription", {"provider_id": "claude_subscription"})
+        if set_up_again:
+            entry["set_up_again"] = True
+        else:
+            entry.pop("set_up_again", None)
+
+    update_provider_config(_update)
+    _claude_plan_fixture["status"] = _CLAUDE_PLAN_STATES[state]
+    _claude_plan.forget_claude_plan_status()
+    return {"ready": True}
+
+
 class _SyntheticBrowserControlBackend:
     """Local in-memory managed browser; it never launches or contacts a site."""
 
@@ -2635,7 +2703,7 @@ def p4_subscriptions(x_fixture_token: str = Header(default="")) -> dict:
     from types import SimpleNamespace
     from row_bot.application.client_platform import client_platform_service
     from row_bot.application.subscription_controls import SubscriptionFlows
-    from row_bot.providers import codex, claude_subscription, xai_oauth
+    from row_bot.providers import codex, xai_oauth
     if not client_platform_service.subscription_flows.dispose():
         raise HTTPException(status_code=409, detail="Previous synthetic sign-in still draining")
     class Client:
@@ -2645,16 +2713,16 @@ def p4_subscriptions(x_fixture_token: str = Header(default="")) -> dict:
         return SimpleNamespace()
     flows = SubscriptionFlows(client_factory=lambda _guard: Client(), listener=listener)
     def module(provider):
-        real = {'codex': codex, 'claude_subscription': claude_subscription, 'xai_oauth': xai_oauth}[provider]
+        real = {'codex': codex, 'xai_oauth': xai_oauth}[provider]
         synthetic = SimpleNamespace(**{name: getattr(real, name) for name in dir(real) if not name.startswith('__')})
         flow = SimpleNamespace(verification_uri='https://example.invalid/device' if provider == 'codex' else None,
             authorization_url='https://example.invalid/authorize', user_code='SYNTHETIC' if provider == 'codex' else None,
             expires_at='2030-01-01T00:00:00+00:00', code_verifier='synthetic-private-verifier',
             redirect_uri='http://127.0.0.1:9/callback', token_url='https://example.invalid/token',
             client_id='synthetic-client', state='synthetic-state')
-        setattr(synthetic, {'codex':'start_codex_device_flow','claude_subscription':'start_claude_subscription_oauth_flow','xai_oauth':'start_xai_oauth_flow'}[provider], lambda **_kwargs: flow)
-        tokens = {'codex':codex.CodexTokenSet, 'claude_subscription':claude_subscription.ClaudeSubscriptionTokenSet, 'xai_oauth':xai_oauth.XAIOAuthTokenSet}[provider]
-        setattr(synthetic, {'codex':'exchange_codex_device_authorization','claude_subscription':'exchange_claude_subscription_authorization','xai_oauth':'exchange_xai_oauth_authorization'}[provider],
+        setattr(synthetic, {'codex':'start_codex_device_flow','xai_oauth':'start_xai_oauth_flow'}[provider], lambda **_kwargs: flow)
+        tokens = {'codex':codex.CodexTokenSet, 'xai_oauth':xai_oauth.XAIOAuthTokenSet}[provider]
+        setattr(synthetic, {'codex':'exchange_codex_device_authorization','xai_oauth':'exchange_xai_oauth_authorization'}[provider],
             lambda *_args, **_kwargs: tokens(access_token='synthetic-browser-access', refresh_token='synthetic-browser-refresh', account_id='synthetic-browser-account'))
         synthetic.poll_codex_device_authorization = lambda *_args, **_kwargs: SimpleNamespace()
         synthetic.authorization_from_xai_oauth_callback = lambda *_args: SimpleNamespace()
@@ -2785,14 +2853,12 @@ def p4_subscription_probe_state(x_fixture_token: str = Header(default="")) -> di
 def p4_subscription_options(x_fixture_token: str = Header(default="")) -> dict:
     """Redirect explicit CLI reference reads to synthetic disposable files."""
     p4_provider_credentials(x_fixture_token)
-    from row_bot.providers import codex, claude_subscription
+    from row_bot.providers import codex
     folder = predecessor.DATA / 'synthetic-cli'
     folder.mkdir(exist_ok=True)
     primary = folder / 'auth.json'
     primary.write_text(json.dumps({'access_token':'synthetic-browser-cli-token'}), encoding='utf-8')
     codex.codex_auth_path = lambda *_args, **_kwargs: primary
-    claude_subscription.claude_credentials_path = lambda: primary
-    claude_subscription.claude_legacy_credentials_path = lambda: folder / 'missing.json'
     return {'ready':True}
 
 
@@ -3127,7 +3193,7 @@ def _p10_install_fakes() -> None:
     def first_run_statuses():
         result = statuses()
         if _p10_state["active"]:
-            for provider_id in ("codex", "claude_subscription", "xai_oauth"):
+            for provider_id in ("codex", "xai_oauth"):
                 status = result.get(provider_id)
                 if isinstance(status, dict) and status.get("configured"):
                     status["runtime_enabled"] = True
