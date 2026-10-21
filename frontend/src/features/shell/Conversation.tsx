@@ -109,6 +109,10 @@ import {
   ATTACHMENT_LIMITS,
 } from './attachment-limits';
 import ApprovalCard from './ApprovalCard';
+import {
+  readPendingApprovalsNow,
+  usePendingApprovals,
+} from './pending-approvals';
 import ChatEmpty from './ChatEmpty';
 import { DelegatedRunsContext, type DelegatedRuns } from './AgentStubs';
 import { ProcessIoContext, type ProcessIo } from './background-processes';
@@ -719,6 +723,27 @@ export default function Conversation({
                       : 'Choose a model to send. Your message stays here.'
                     : '';
   const rows = (state.history ?? state.projection)?.rows ?? EMPTY_ROWS;
+  // A helper this chat started waits on an approval: its card shows here
+  // even when no notice reached the transcript, so no helper waits on an
+  // approval nobody can see (B348).
+  const approvalsFeed = usePendingApprovals(controller.pendingApprovals);
+  const helperApprovals = useMemo(
+    () =>
+      (approvalsFeed.page?.items ?? []).filter(
+        (item) =>
+          item.parent_conversation_id === id &&
+          !rows.some((row) => row.approval_id === item.id),
+      ),
+    [approvalsFeed.page, id, rows],
+  );
+  const lastAgentActivity =
+    state.activity
+      .filter((record) => record.event.type === 'agent.activity')
+      .at(-1)?.event.event_id ?? '';
+  useEffect(() => {
+    // A helper paused or went on: read the waiting approvals now.
+    if (lastAgentActivity) readPendingApprovalsNow(controller.pendingApprovals);
+  }, [controller.pendingApprovals, lastAgentActivity]);
   useEffect(() => {
     if (
       pending?.conversation === id &&
@@ -2180,11 +2205,7 @@ export default function Conversation({
       onFirstPage={(page) => setDelegated({ conversation: id, page })}
       recentRead={recentDelegatedRead}
       ready={Boolean(state.handshake) && state.status === 'ready'}
-      refreshKey={
-        state.activity
-          .filter((record) => record.event.type === 'agent.activity')
-          .at(-1)?.event.event_id ?? ''
-      }
+      refreshKey={lastAgentActivity}
       loadPage={(cursor, signal) =>
         controller.delegatedActivity(id, cursor, signal)
       }
@@ -3238,6 +3259,23 @@ export default function Conversation({
                   )}
                 />
               )}
+              {id &&
+                !state.history &&
+                helperApprovals.map((item) => (
+                  <div
+                    key={item.id}
+                    className="message message-assistant"
+                    role="group"
+                    aria-label={`${item.title} needs your approval`}
+                  >
+                    <div className="transcript-content">
+                      <p className="message-text">
+                        {item.title} is waiting for your approval.
+                      </p>
+                      <ApprovalCard id={item.id} notice />
+                    </div>
+                  </div>
+                ))}
               {pendingShown && (
                 <article
                   className="message message-user message-pending"

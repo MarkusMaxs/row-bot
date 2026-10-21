@@ -303,6 +303,47 @@ def test_a_delegated_agents_approval_is_answered_in_its_thread_and_in_the_parent
     assert service.get_conversation(child)["activity_phase"] != "waiting_approval"
 
 
+def test_a_helpers_approval_waits_in_the_chat_that_started_it(service, monkeypatch):
+    """B348: a helper stalled on an approval its chat never showed. The approval
+    belongs to the parent's pending approvals, marks the parent as waiting for
+    you, and Buddy names the helper."""
+    from row_bot import agent_runs, threads
+    from row_bot.application.client_monitor import read_pending_approvals
+    from row_bot.buddy.brain import BuddyBrain
+    import row_bot.buddy.brain as brain_mod
+    parent = threads.create_thread("Parent", seed_default_skills=False)
+    run, _resumed = _waiting_child(monkeypatch, parent)
+    name = agent_runs.get_agent_run(run["id"])["display_name"]
+    item = next(item for item in read_pending_approvals()["items"] if item["conversation_id"] == run["thread_id"])
+    assert (item["parent_conversation_id"], item["title"], item["source"]) == (parent, name, "agent")
+    assert service.get_conversation(parent)["activity_phase"] == "waiting_approval"
+    listed = {row["id"]: row for row in service.list_conversations()["items"]}
+    assert listed[parent]["activity_phase"] == "waiting_approval"
+    monkeypatch.setattr(brain_mod, "get_buddy_config", lambda: {"enabled": True, "mode": "sidebar", "pack_id": "glyph"})
+    brain = BuddyBrain()
+    later = brain_mod.time.time() + 3600  # past Buddy's reconcile interval
+    monkeypatch.setattr(brain_mod.time, "time", lambda: later)
+    assert brain.resolve(None).message == f"{name} needs approval"
+
+
+def test_two_helper_approvals_that_read_alike_each_reach_the_parent(service):
+    """B348: a second "create a product" notice matched the first one's text and was dropped."""
+    from row_bot import agent_runs, tasks, threads
+    from row_bot.channels.thread_notifications import notify_agent_run_approval
+    parent = threads.create_thread("Parent", seed_default_skills=False)
+    ids = []
+    for _ in range(2):
+        run = agent_runs.create_agent_run(parent_thread_id=parent, display_name="Catalogue helper", status="waiting_approval")
+        _token, approval_id = tasks.create_approval_request(
+            run["id"], "", "agent_interrupt", "Catalogue helper needs approval: Create a product",
+            agent_run_id=run["id"], resume_kind="agent_run", source_label="Catalogue helper",
+            parent_thread_id=parent)
+        assert notify_agent_run_approval(approval_id)
+        ids.append(approval_id)
+    rows = service.snapshot(parent)["rows"]
+    assert [row["approval_id"] for row in rows if row.get("approval_id")] == ids
+
+
 def test_a_delegated_agents_thread_shows_its_task_not_the_handoff_prompt(service, monkeypatch):
     """B167: the child thread opened with AGENT PROFILE / MISSION / RUNTIME
     MODEL / PARENT REFS as the person's bubble."""

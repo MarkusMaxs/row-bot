@@ -4159,6 +4159,8 @@ class PendingApproval(WireModel):
     requested_at: str = Field(max_length=80)
     expires_at: str | None = Field(max_length=80)
     conversation_id: OpaqueId | None
+    # A helper's approval: the conversation that started it, which shows it too (B348).
+    parent_conversation_id: OpaqueId | None = None
     task_id: OpaqueId | None
 
 
