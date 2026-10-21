@@ -397,3 +397,64 @@ it('an NVIDIA driver older than 570 says to update it, in the setup sheet', asyn
     within(sheet).getByRole('button', { name: 'Check again' }),
   ).toBeVisible();
 });
+
+it('a 32 GB card offers its own tier’s model first, the smaller tiers’ as choices (L2x)', async () => {
+  const GPU_32GB = {
+    ...GPU_8GB,
+    gpu: {
+      name: 'NVIDIA GeForce RTX 5090',
+      memory_gb: 32,
+      label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+    },
+    tier: {
+      id: '32gb',
+      label: '32 GB',
+      certified: true,
+      summary: 'Can train large models (up to about 27B) on your tasks.',
+    },
+    starting_models: [
+      {
+        id: 'qwen3.8-27b',
+        name: 'Qwen3.8 27B',
+        licence: 'Apache 2.0',
+        download_bytes: 55_586_113_293,
+      },
+      ...GPU_8GB.starting_models,
+    ],
+  } satisfies typeof GPU_8GB;
+  const io = fakeIO(learningSnapshot(), {
+    hardware: GPU_32GB,
+    after: (action) => (action === 'turn_on' ? { state: 'on' } : {}),
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'Can train large models (up to about 27B) on your tasks.',
+    ),
+  ).toBeVisible();
+  const starting = within(sheet).getByRole('combobox', {
+    name: 'Starting model',
+  });
+  expect(starting).toHaveDisplayValue(
+    /^Qwen3\.8 27B · Apache 2\.0 · 55\.6\sGB download$/,
+  );
+  expect(
+    within(starting).getByRole('option', {
+      name: /^Qwen3\.5 2B · Apache 2\.0 · 4\.6\sGB download$/,
+    }),
+  ).toBeInTheDocument();
+  fireEvent.change(starting, { target: { value: 'qwen3.5-2b' } });
+  fireEvent.click(
+    within(sheet).getByRole('button', { name: 'Turn on Learning' }),
+  );
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith(
+    'turn_on',
+    expect.objectContaining({
+      setup: expect.objectContaining({ starting_model: 'qwen3.5-2b' }),
+    }),
+  );
+});
