@@ -80,9 +80,14 @@ function providerMark(card: ProviderLiveCard) {
 function hasModels(card: ProviderLiveCard) {
   return card.configured || card.runtime_enabled || card.group === 'local';
 }
+/** A saved subscription sign-in that can't be used any more. */
+function needsReconnect(card: ProviderLiveCard) {
+  return (
+    card.configured && card.group === 'subscription' && !card.runtime_enabled
+  );
+}
 function cardState(card: ProviderLiveCard) {
-  if (card.configured && card.group === 'subscription' && !card.runtime_enabled)
-    return { label: 'Reconnect', tone: 'warning' };
+  if (needsReconnect(card)) return { label: 'Reconnect', tone: 'warning' };
   if (card.configured && card.source === 'external_cli')
     return { label: 'Linked', tone: 'saved' };
   if (card.configured) return { label: 'Connected', tone: 'enabled' };
@@ -94,9 +99,13 @@ function cardState(card: ProviderLiveCard) {
 }
 function canConnect(card: ProviderLiveCard) {
   if (card.provider_id === 'codex')
-    return card.source !== 'oauth_device' || !card.configured;
+    return (
+      card.source !== 'oauth_device' || !card.configured || needsReconnect(card)
+    );
   if (card.provider_id === 'claude_subscription')
-    return card.source !== 'oauth_pkce' || !card.configured;
+    return (
+      card.source !== 'oauth_pkce' || !card.configured || needsReconnect(card)
+    );
   if (card.provider_id === 'xai_oauth')
     return (
       card.oauth_client_id_configured &&
@@ -164,6 +173,7 @@ export default function ProviderStatus({
   onSubscription?: (
     provider: string,
     action: 'connect' | 'manage' | 'disconnect',
+    expired: boolean,
   ) => void;
   onSubscriptionOption?: (provider: string) => void;
   /** Custom endpoints listed by their own editor below. */
@@ -271,7 +281,8 @@ export default function ProviderStatus({
       menu.push({
         label: 'Import Claude setup token',
         icon: <KeyRound size={16} />,
-        onSelect: () => onSubscription(card.provider_id, 'manage'),
+        onSelect: () =>
+          onSubscription(card.provider_id, 'manage', needsReconnect(card)),
       });
     if (
       card.group === 'subscription' &&
@@ -313,7 +324,8 @@ export default function ProviderStatus({
         label: `Disconnect ${card.display_name}`,
         icon: <Link2Off size={16} />,
         danger: true,
-        onSelect: () => onSubscription(card.provider_id, 'disconnect'),
+        onSelect: () =>
+          onSubscription(card.provider_id, 'disconnect', needsReconnect(card)),
       });
     return (
       <li key={card.provider_id} className="settings-provider-row">
@@ -357,7 +369,13 @@ export default function ProviderStatus({
             canConnect(card) && (
               <CompactAction
                 label={`${card.configured ? 'Reconnect' : 'Connect'} ${card.display_name}`}
-                onClick={() => onSubscription(card.provider_id, 'connect')}
+                onClick={() =>
+                  onSubscription(
+                    card.provider_id,
+                    'connect',
+                    needsReconnect(card),
+                  )
+                }
               >
                 <LogIn size={16} aria-hidden />
               </CompactAction>
