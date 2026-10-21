@@ -268,7 +268,7 @@ def test_downloads_keep_their_byte_budgets_and_never_leave_the_reviewed_hosts(tm
     asked = []
 
     def fetch(url, *, max_bytes, too_large, **kwargs):
-        asked.append((url, max_bytes, kwargs["timeout"]))
+        asked.append((url, max_bytes, kwargs["timeout"], kwargs.get("duration")))
         if max_bytes < 129:
             raise ValueError(too_large)
         return b"x" * 129
@@ -279,7 +279,8 @@ def test_downloads_keep_their_byte_budgets_and_never_leave_the_reviewed_hosts(tm
     assert not (tmp_path / "download").exists()  # Nothing is written past the budget.
     with pytest.raises(RuntimeError, match="budget"):
         runtime._remote_bytes("https://nodejs.org/dist/index.json", maximum=128)
-    assert asked[0][2] * 6 <= 120  # One two-minute deadline for an archive, as before.
+    # A stalled read fails after 20 s; a slow but moving archive download gets 20 minutes in all.
+    assert asked[0][2:] == (20, 20 * 60)
     monkeypatch.undo()
     with pytest.raises(RuntimeError, match="reviewed hosts"):  # Refused before any connection.
         runtime._remote_bytes("https://downloads.example.test/node.zip")

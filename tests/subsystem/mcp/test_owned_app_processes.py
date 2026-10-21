@@ -143,8 +143,11 @@ def test_each_connection_records_its_program_and_forgets_it_once_ended(table, le
 def test_a_real_orphaned_program_is_stopped_at_the_next_start(tmp_path, monkeypatch):
     """A real child recorded by a Row-Bot that has since ended is stopped; its pid and time are checked."""
     monkeypatch.setattr(owned_processes, "ledger_path", lambda file: tmp_path / "runtime" / file)
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    child = subprocess.Popen([sys.executable, "-c", "import time; print('running', flush=True); time.sleep(60)"],
+                             stdout=subprocess.PIPE, text=True)
     try:
+        # Recorded once it runs: read between fork and exec, its name and start are its parent's (B361).
+        assert child.stdout.readline().strip() == "running"
         assert owned_processes.record(owned_processes.ledger_path(runtime.APP_PROCESSES), child.pid, server="Notes")
         path = owned_processes.ledger_path(runtime.APP_PROCESSES)
         entries = json.loads(path.read_text(encoding="utf-8"))["agents"]

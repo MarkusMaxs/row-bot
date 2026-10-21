@@ -46,7 +46,7 @@
       "name": "cua-driver-rs-0.20.0-darwin-universal.tar.gz",
       "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.20.0/cua-driver-rs-0.20.0-darwin-universal.tar.gz",
       "sha256": "d5e61fecebd9a620e50c2b8b608c8e7e8141f74c6faebc2ae9ef5d0d96cce7b8",
-      "executable_candidates": ["CuaDriver.app/Contents/MacOS/cua-driver", "CuaDriver.app/Contents/MacOS/CuaDriver"]
+      "executable_candidates": ["cua-driver-rs-0.20.0-darwin-universal/CuaDriver.app/Contents/MacOS/cua-driver"]
     }
   }
 }
