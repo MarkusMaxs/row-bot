@@ -23,11 +23,16 @@ it runs Row-Bot's own code end to end and writes one results file of counts, rat
 5. ``tidy``: removes every model it made in Ollama (``--keep`` keeps them).
 
 Each phase saves its results to ``<out>/l2w_ablation.json`` and is skipped on a second run when
-done, so a stopped run continues. No conversation, task or reply text is written, only counts.
+done, so a stopped run continues. No conversation, task or reply text is written, and no id made
+from the data: counts, rates, intervals, times and model names only.
 
 PowerShell, from a checkout of this branch after ``uv sync``::
 
     uv run python scripts/learning_shape_ablation.py --data <scratch data folder>
+
+A scratch copy of a profile that hasn't downloaded the training engine can borrow it (and the
+starting model) from another data folder that has: ``--runtimes-from <that folder>`` copies its
+``runtimes/learning`` in first (about 8 GB).
 """
 
 from __future__ import annotations
@@ -127,6 +132,16 @@ def _lengths(values: list[int]) -> dict[str, Any]:
 # ── 1. Rows: as captured and in the serving shape ───────────────────────────
 
 
+def _visible_in(compiled: Any) -> set[str]:
+    """Visible pack tasks (public ids) whose prompt a training row of ``compiled`` holds."""
+
+    from row_bot.learning.packs import visible_tasks
+
+    asked = [str(message.get("content") or "") for item in (*compiled.train, *compiled.validation)
+             for message in item.row.get("messages") or () if message.get("role") == "user"]
+    return {task.id for task in visible_tasks() if any(task.prompt.strip()[:200] in text for text in asked)}
+
+
 def phase_rows(ctx: dict[str, Any], results: Results) -> None:
     from row_bot.learning.store import LearningStore
     from row_bot.learning.training import dataset, planner, recipes
@@ -135,6 +150,7 @@ def phase_rows(ctx: dict[str, Any], results: Results) -> None:
     store = LearningStore(data)
     recipe = recipes.load("8gb")
     found: dict[str, Any] = {}
+    seen: set[str] = set()
     for arm, shape, max_seq in (("A", "captured", recipe.max_seq_length), ("B", "serving", recipe.max_seq_length),
                                 ("A32", "captured", 32_768)):
         measured: list[int] = []
@@ -154,7 +170,7 @@ def phase_rows(ctx: dict[str, Any], results: Results) -> None:
         candidates = kept + too_long + int(compiled.left_out.get("no_target", 0)) + int(
             compiled.left_out.get("unrenderable", 0))
         found[arm] = {
-            "shape": shape, "max_seq_length": max_seq, "dataset": compiled.id, "examples": compiled.examples,
+            "shape": shape, "max_seq_length": max_seq, "examples": compiled.examples,
             "validation": len(compiled.validation), "rows_measured": candidates, "fit": kept, "too_long": too_long,
             "fit_share": round(kept / candidates, 4) if candidates else None, "left_out": dict(compiled.left_out),
             "lengths_all": _lengths(measured), "lengths_kept": _lengths([int(item.tokens or 0) for item in
@@ -164,6 +180,10 @@ def phase_rows(ctx: dict[str, Any], results: Results) -> None:
         }
         _say(f"{arm} ({shape}, {max_seq:,}): {kept} of {candidates} rows fit"
              f" ({found[arm]['fit_share']}), {compiled.examples} train")
+        seen.update(_visible_in(compiled))
+    # Visible pack tasks whose prompt is in a training row (a scratch capture that worked through them):
+    # the comparison reports them apart from the visible tasks no arm trained on.
+    found["seen_visible"] = sorted(seen)
     results.data["rows"] = found
     results.save()
 
@@ -226,7 +246,7 @@ def phase_train(ctx: dict[str, Any], results: Results) -> None:
             supervisor.wait_idle(120)
         trained[arm] = {
             "version": job.version, "job": job.id, "state": finished.state if finished else "unknown",
-            "examples": compiled.examples, "dataset": compiled.id, "steps": finished.steps_done if finished else None,
+            "examples": compiled.examples, "steps": finished.steps_done if finished else None,
             "seconds": round(time.monotonic() - started, 1),
             "seconds_per_step": finished.seconds_per_step if finished else None,
             "loss": finished.loss if finished else None, "error": finished.error_code if finished else None,
@@ -439,9 +459,29 @@ def phase_compare(ctx: dict[str, Any], results: Results) -> None:
                           "seconds_per_run": round(item.seconds / item.ran, 1) if item.ran else None,
                           "tokens": item.measured_tokens, "causes": dict(item.causes)}
     out["per_arm"] = per_arm
+    seen = set((results.data.get("rows") or {}).get("seen_visible") or ())
+    out["visible_seen_in_training"] = len([task for task in chosen if task.id in seen])
+    out["visible_unseen"] = _unseen(shown, seen, [(arms[0].name, arm.name) for arm in arms[1:]] + pairs)
     results.data["compare"] = out
     results.save()
     _say(f"compare: {done[0]} runs in {out['seconds']} s")
+
+
+def _unseen(shown: Any, seen: set[str], pairs: list[tuple[str, str]]) -> dict[str, Any]:
+    """Visible tasks no arm trained on: passes per arm and each pair's paired analysis (a pack task
+    is its own cluster)."""
+
+    from row_bot.learning import evaluation
+
+    cases = {item.arm.name: [case for case in item.cases if case.task_id not in seen] for item in shown.arms}
+    fractions = {name: evaluation.pass_fractions(found) for name, found in cases.items()}
+    out: dict[str, Any] = {"per_arm": {name: {"problems": len(found), "passed": round(sum(f for _, f in found.values()), 3)}
+                                       for name, found in fractions.items()}, "pairs": {}}
+    for base, other in pairs:
+        both = [task for task in fractions.get(base, {}) if task in fractions.get(other, {})]
+        differences = [(task, fractions[other][task][1] - fractions[base][task][1]) for task in both]
+        out["pairs"][f"{other} vs {base}"] = evaluation.paired_analysis(differences)
+    return out
 
 
 # ── 5. Tidy ─────────────────────────────────────────────────────────────────
@@ -478,9 +518,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--visible-repeats", type=int, default=3)
     parser.add_argument("--hidden-repeats", type=int, default=3)
     parser.add_argument("--thinking", choices=("both", "off", "on"), default="both")
+    parser.add_argument("--runtimes-from", help="a data folder whose training engine and starting model to copy in")
     args = parser.parse_args(argv)
     data = Path(args.data).resolve()
     _refuse_profile(data)
+    if args.runtimes_from:
+        import shutil
+
+        source = Path(args.runtimes_from).resolve() / "runtimes" / "learning"
+        target = data / "runtimes" / "learning"
+        if not source.is_dir():
+            raise SystemExit(f"{source} holds no training engine.")
+        if not target.exists():
+            _say(f"Copying the training engine and starting model from {source} …")
+            shutil.copytree(source, target, symlinks=True)
     out = Path(args.out).resolve() if args.out else data.parent / "shape-ablation"
     # Every Row-Bot module binds this folder; no desktop notification from a headless run (O68).
     os.environ["ROW_BOT_DATA_DIR"] = str(data)

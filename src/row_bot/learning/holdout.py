@@ -13,13 +13,15 @@ the reference (L3a stores and tests it; :func:`waiting_for_vault` is that seam).
 - **Exact capture** (O89): the decision's fidelity is ``exact`` or ``redacted``. Imported past
   chats (``partial``) are never held out, never hidden, and don't count towards "every 2nd".
 - **Time order, append-only**: corrections newer than the last one considered are walked in the
-  order they were made; the count and that horizon are kept in ``learning.db``, so a correction
-  once held stays held and one trained on is never hidden later. These rules are fixed points
-  (E4), like the vault's every 4th decision.
+  order they were made; the decisions counted and that horizon are kept in ``learning.db``, so a
+  correction once held stays held, a decision corrected again later is never counted twice (its
+  redo may have trained meanwhile), and one trained on is never hidden later. These rules are
+  fixed points (E4), like the vault's every 4th decision.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -33,7 +35,7 @@ HOLD_EVERY = 2
 CORRECTION_KINDS = frozenset({"teach", "next_message_correction"})
 EXACT = frozenset({"exact", "redacted"})
 _HORIZON = "held_out_corrections.horizon"
-_SEEN = "held_out_corrections.seen"
+_COUNTED = "held_out_corrections.counted"  # the decisions counted so far (ids), in order
 
 
 @dataclass(frozen=True)
@@ -57,32 +59,35 @@ def mark_corrections(store: LearningStore) -> HoldReport:
     if not store.exists():
         return HoldReport(0, 0, ())
     horizon = float(store.meta_value(_HORIZON, "0") or 0)
-    seen = int(store.meta_value(_SEEN, "0") or 0)
+    try:
+        decided: list[str] = [str(item) for item in json.loads(store.meta_value(_COUNTED, "[]"))]
+    except ValueError:
+        decided = []
     fresh = _confirmed(store.find("signal", limit=100_000), horizon)
     if not fresh:
         return HoldReport(0, 0, ())
     held: list[Decision] = []
     counted = 0
-    decided: set[str] = set()
+    known = set(decided)
     for signal in fresh:
         decision = store.get("decision", str(signal.decision_id))
-        if not isinstance(decision, Decision) or decision.id in decided:
-            continue  # gone (purged), or corrected twice: one problem
+        if not isinstance(decision, Decision) or decision.id in known:
+            continue  # gone (purged), or corrected again: one problem, counted once
         if decision.fidelity not in EXACT:
             continue  # imported (partial): never hidden, not counted
         episode = store.get("episode", decision.episode_id)
         if isinstance(episode, Episode) and episode.historical:
             continue
-        decided.add(decision.id)
-        seen += 1
+        known.add(decision.id)
+        decided.append(decision.id)
         counted += 1
-        if seen % HOLD_EVERY == 0:
+        if len(decided) % HOLD_EVERY == 0:
             held.append(decision)
     items = [("decision", item.id, item.conversation_id) for item in held]
     if items:
         store.add_marks(items, MARK_HELD_OUT)
         store.add_marks(items, MARK_HELD_OUT_CORRECTION)
-    store.set_meta_values({_HORIZON: repr(fresh[-1].created_at), _SEEN: str(seen)})
+    store.set_meta_values({_HORIZON: repr(fresh[-1].created_at), _COUNTED: json.dumps(decided)})
     if held:
         logger.info("Learning held out %d corrected decision(s) as hidden problems", len(held))
     return HoldReport(len(fresh), counted, tuple(item.id for item in held))

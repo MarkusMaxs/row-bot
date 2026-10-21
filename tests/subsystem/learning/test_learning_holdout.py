@@ -68,6 +68,21 @@ def test_once_held_always_held_and_the_count_carries_on(work, learning_on):
     assert holdout.waiting_for_vault(store) == {answers[1], answers[3]}
 
 
+def test_a_decision_corrected_again_later_is_counted_once(work, learning_on):
+    answers = [work.turn(f"chat-{index}", f"Question {index}", f"Answer {index}.")[-1] for index in range(3)]
+    store = LearningStore(learning_on)
+    _teach(store, "chat-0", answers[0], 10.0, 0)
+    assert holdout.mark_corrections(store).held == ()  # the 1st correction: not held (its redo may train)
+
+    _teach(store, "chat-0", answers[0], 20.0, 1)  # taught again a day later: still the same problem
+    again = holdout.mark_corrections(store)
+    _teach(store, "chat-1", answers[1], 30.0, 2)
+    then = holdout.mark_corrections(store)
+
+    assert (again.counted, again.held) == (0, ())
+    assert then.held == (answers[1],) and answers[0] not in store.held_out_ids()
+
+
 def test_training_never_sees_a_held_out_correction_or_the_turn_that_redid_it(work, learning_on, chats):
     first = work.turn("chat-1", "Question one", "Answer one is 41.")
     second = work.turn("chat-1", "Question two", "Answer two is 47.")
