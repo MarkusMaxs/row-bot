@@ -404,8 +404,8 @@ class BuddyBrain:
         for approval in pending:
             owner_id = str(approval.get("id") or approval.get("resume_token") or "approval")
             # Row-Bot's question (N4) says so, wherever it was asked.
-            label = ("Row-Bot has a question" if stored_question(approval.get("approval_payload_json")) is not None
-                     else str(approval.get("task_name") or "Needs approval"))
+            asking = stored_question(approval.get("approval_payload_json")) is not None
+            label = "Row-Bot has a question" if asking else str(approval.get("task_name") or "Needs approval")
             approval_owners[owner_id] = _Activity(
                 kind="approval",
                 event_type=BuddyEventType.APPROVAL_NEEDED,
@@ -419,6 +419,7 @@ class BuddyBrain:
                     "task_id": str(approval.get("task_id") or ""),
                     "step_id": str(approval.get("step_id") or ""),
                     "label": label,
+                    **({"question": True} if asking else {}),
                 },
                 updated_at=now,
                 reconciled=True,

@@ -142,9 +142,9 @@ def _buddy_follows(conversation_id: str, event: tuple, handle: Any = None) -> No
             # An action the person already approved for this turn asks
             # nobody, so Buddy never says "Needs approval" for it (B333).
             from row_bot.questions import question_item
-            _buddy(conversation_id, "approval.needed",
-                   "Row-Bot has a question" if question_item(payload) is not None else "Approval pending",
-                   approval_id=str(getattr(handle, "approval_id", "") or ""))
+            asking = question_item(payload) is not None
+            _buddy(conversation_id, "approval.needed", "Row-Bot has a question" if asking else "Approval pending",
+                   approval_id=str(getattr(handle, "approval_id", "") or ""), **({"question": True} if asking else {}))
     elif kind == "done":
         _buddy(conversation_id, "generation.done", "Done")
     elif kind == "error":

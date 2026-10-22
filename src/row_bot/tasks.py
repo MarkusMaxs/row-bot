@@ -6416,6 +6416,7 @@ def create_approval_request(
         resume_token=resume_token,
         label="Row-Bot has a question" if stored_question(payload_text) is not None else "Approval pending",
         message=message,
+        question=stored_question(payload_text) is not None,
     )
     return resume_token, req_id
 
@@ -6430,6 +6431,7 @@ def _emit_buddy_approval_event(
     resume_token: str = "",
     label: str = "",
     message: str = "",
+    question: bool = False,
 ) -> None:
     try:
         from row_bot.buddy.events import BuddyEventType, emit_buddy_event
@@ -6452,6 +6454,8 @@ def _emit_buddy_approval_event(
                 "resume_token": resume_token,
                 "label": label or message or status.replace("_", " ").title(),
                 "message": message,
+                # Row-Bot's question (N4): Buddy says so, in its own fixed words.
+                **({"question": True} if question else {}),
             },
         )
     except Exception:
