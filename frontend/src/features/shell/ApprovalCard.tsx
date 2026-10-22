@@ -12,6 +12,8 @@ import { useOverlay } from '../../ui/overlays';
 import { Button, Hint, Kbd, Skeleton } from '../../ui/primitives';
 import { absoluteTime, humanizeToken, relativeTime } from '../../ui/format';
 import FolderSetupCard from './FolderSetupCard';
+import { BrowserThumbnail } from '../browser/BrowserThumbnail';
+import { requestBrowserPane } from '../browser/open-pane';
 import QuestionCard from './QuestionCard';
 import { AppIcon } from '../apps/parts';
 import { WaitingSince } from './waiting-since';
@@ -64,6 +66,11 @@ function ReviewerNote({ reason }: { reason?: string }) {
       The reviewer asked you: {reason}
     </small>
   );
+}
+
+/** An action in Row-Bot's browser ("Browser Click"): its card shows the page. */
+function browserAction(label: string | undefined) {
+  return /^browser[ _]/i.test(label ?? '');
 }
 
 /** A notice's approval that is no longer waiting. */
@@ -448,6 +455,12 @@ export default function ApprovalCard({
           <div className="approval-card-context">
             {app && <span className="approval-card-app">{app.name}</span>}
             <strong>{question}</strong>
+            {conversationId && browserAction(view.action_label) && (
+              <BrowserThumbnail
+                conversationId={conversationId}
+                onOpen={() => requestBrowserPane(conversationId)}
+              />
+            )}
             <span
               className="approval-card-reason"
               data-fields={fieldsWritten(view) || undefined}

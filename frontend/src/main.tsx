@@ -53,7 +53,7 @@ import { createPluginSettingsSession } from './features/settings/PluginSettings'
 import { createSkillsSettingsSession } from './features/settings/SkillsSettings';
 import { createGoalProfileSettingsSession } from './features/settings/GoalProfileSettings';
 import { createConversationActionsSession } from './features/settings/ConversationActions';
-import { createBrowserControlSession } from './features/browser/BrowserLiveControls';
+import BrowserWindow from './features/browser/BrowserWindow';
 import {
   bindActiveConversationSession,
   browserSessionStorage,
@@ -95,47 +95,6 @@ function createConversationActionSessions() {
         sessions.delete(disposable[0]);
       }
       const session = createConversationActionsSession(conversationId);
-      sessions.set(conversationId, session);
-      return session;
-    },
-    hasRetained() {
-      return (
-        !disposed &&
-        [...sessions.values()].some((session) => session.hasRetained())
-      );
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      sessions.forEach((session) => session.dispose());
-      sessions.clear();
-    },
-  };
-}
-function createBrowserControlSessions() {
-  const sessions = new Map<
-    string,
-    ReturnType<typeof createBrowserControlSession>
-  >();
-  let disposed = false;
-  return {
-    get(conversationId: string) {
-      if (disposed || !conversationId) return undefined;
-      const existing = sessions.get(conversationId);
-      if (existing) {
-        sessions.delete(conversationId);
-        sessions.set(conversationId, existing);
-        return existing;
-      }
-      if (sessions.size >= 8) {
-        const disposable = [...sessions].find(
-          ([, session]) => !session.hasRetained(),
-        );
-        if (!disposable) return undefined;
-        disposable[1].dispose();
-        sessions.delete(disposable[0]);
-      }
-      const session = createBrowserControlSession(conversationId);
       sessions.set(conversationId, session);
       return session;
     },
@@ -314,10 +273,6 @@ async function start() {
     controller,
     createConversationActionSessions,
   );
-  const browserControlOwner = createAuthenticatedEditorOwner(
-    controller,
-    createBrowserControlSessions,
-  );
   if (import.meta.env.VITE_ENABLE_FIXTURES === '1') {
     Object.defineProperty(window, '__ROW_BOT_WORKSPACE_METRICS__', {
       value: () => ({ ...resourcePanelMetrics }),
@@ -372,7 +327,6 @@ async function start() {
             skillsOwner,
             goalProfileOwner,
             conversationActionsOwner,
-            browserControlOwner,
             knowledgeOwner,
             providerConfigurationOwner,
             artifactDesignSessions,
@@ -385,6 +339,10 @@ async function start() {
               <DesktopReconnecting platform={platform} />
               <Suspense fallback={<Skeleton label="Opening workspace" />}>
                 <Routes>
+                  <Route
+                    path="browser/:conversationId"
+                    element={<BrowserWindow />}
+                  />
                   <Route path="/" element={<Workspace />}>
                     <Route
                       path="conversations/:conversationId"
@@ -455,7 +413,6 @@ async function start() {
       skillsOwner.hasRetained() ||
       goalProfileOwner.hasRetained() ||
       conversationActionsOwner.hasRetained() ||
-      browserControlOwner.hasRetained() ||
       knowledgeOwner.hasRetained() ||
       providerConfigurationOwner.hasRetained() ||
       artifactDesignSessions.hasRetained(),
@@ -483,7 +440,6 @@ async function start() {
       skillsOwner.dispose();
       goalProfileOwner.dispose();
       conversationActionsOwner.dispose();
-      browserControlOwner.dispose();
       knowledgeOwner.dispose();
       providerConfigurationOwner.dispose();
       artifactDesignSessions.dispose();

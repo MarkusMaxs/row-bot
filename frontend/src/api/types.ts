@@ -256,25 +256,36 @@ export interface ClientTransport {
     command: Wire.ConversationActionCommand,
     signal?: AbortSignal,
   ): Promise<Wire.ConversationActionReceipt>;
-  browserControls?(
+  /** What the Browser pane shows for a conversation (never starts the browser). */
+  browserPane?(
     conversation: string,
     signal?: AbortSignal,
-  ): Promise<Wire.BrowserControlSnapshot>;
-  reviewBrowserControl?(
+  ): Promise<Wire.BrowserPaneState>;
+  /** The pane's state and live picture while it watches. */
+  browserLive?(
     conversation: string,
-    body: Wire.BrowserReviewRequest,
-    signal?: AbortSignal,
-  ): Promise<Wire.BrowserReview>;
-  browserControlReceipt?(
+    view: 'pane' | 'thumb',
+    width: number,
+    signal: AbortSignal,
+  ): AsyncGenerator<
+    { state: Wire.BrowserPaneState } | { frame: Wire.BrowserFrame }
+  >;
+  browserInput?(
     conversation: string,
-    command: string,
+    body: Wire.BrowserInput,
     signal?: AbortSignal,
-  ): Promise<Wire.BrowserReceipt>;
-  executeBrowserControl?(
+  ): Promise<Wire.BrowserInputResult>;
+  browserAction?(
     conversation: string,
-    command: Wire.Command,
+    body: Wire.BrowserPaneAction,
     signal?: AbortSignal,
-  ): Promise<Wire.BrowserReceipt>;
+  ): Promise<Wire.BrowserPaneState>;
+  /** Sites with saved sign-ins in Row-Bot's browser (Settings › Browser). */
+  browserSites?(signal?: AbortSignal): Promise<Wire.BrowserSitePage>;
+  clearBrowserSites?(
+    body: Wire.BrowserSitesClear,
+    signal?: AbortSignal,
+  ): Promise<Wire.BrowserSitesCleared>;
   /** The addresses on this computer a conversation's browser may open (F4). */
   browserLocalAddresses?(
     conversation: string,
@@ -948,11 +959,6 @@ export interface ClientTransport {
     body: Wire.ProviderKeyCheckRequest,
     signal?: AbortSignal,
   ): Promise<Wire.ProviderKeyCheck>;
-  browserPreview?(
-    conversationId: string,
-    revision: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.BrowserPreview>;
   reviewDreamRun?(
     body: Wire.DreamRunRequest,
     signal?: AbortSignal,

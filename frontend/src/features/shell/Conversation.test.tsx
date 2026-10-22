@@ -725,7 +725,7 @@ it('opens the managed browser as a panel and closes the Context sheet it came fr
     screen.getByRole('button', { name: 'Conversation actions' }),
   );
   await user.click(
-    await screen.findByRole('menuitem', { name: 'Manage browser' }),
+    await screen.findByRole('menuitem', { name: 'Open browser' }),
   );
   expect(onPanel).toHaveBeenCalledWith(
     expect.objectContaining({ panel_kind: 'browser.live' }),

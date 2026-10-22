@@ -108,7 +108,8 @@ import {
   type ResourcePanelRequest,
 } from '../panels/panel-requests';
 import { designCommandSets } from '../panels/design-commands';
-import BrowserLiveControls from '../browser/BrowserLiveControls';
+import BrowserPane from '../browser/BrowserPane';
+import { BROWSER_PANEL, onBrowserPaneRequest } from '../browser/open-pane';
 import {
   TERMINAL_MIN_HEIGHT,
   TerminalSlot,
@@ -239,35 +240,14 @@ function BrowserPanel({ visible }: { visible: boolean }) {
   const conversationId = useClientSelector(
     (value) => value.selectedConversationId,
   );
-  const { controller, browserControlOwner } = useRuntime();
-  const session = conversationId
-    ? browserControlOwner?.get()?.get(conversationId)
-    : undefined;
   if (!visible) return null;
-  if (!conversationId || !session)
+  if (!conversationId)
     return (
-      <EmptyState title="Managed browser unavailable">
-        Open an authenticated conversation after pending browser actions are
-        resolved.
+      <EmptyState title="No conversation open">
+        Open a conversation to see the pages Row-Bot uses in it.
       </EmptyState>
     );
-  return (
-    <BrowserLiveControls
-      session={session}
-      load={controller.browserControls}
-      loadPreview={controller.browserPreview}
-      review={(action, payload, signal) =>
-        controller.reviewBrowserControl(conversationId, action, payload, signal)
-      }
-      execute={(command, review) =>
-        controller.executeBrowserControl(conversationId, command, review)
-      }
-      localAddresses={{
-        load: controller.browserLocalAddresses,
-        remove: controller.removeBrowserLocalAddress,
-      }}
-    />
-  );
+  return <BrowserPane conversationId={conversationId} visible={visible} />;
 }
 
 function PanelContent({
@@ -457,6 +437,15 @@ export default function Workspace() {
       });
   });
   useEffect(() => onResourcePanelRequest(openRequestedPanel), []);
+  // The live browser step or an approval's picture opens the Browser pane (N12-A).
+  const openBrowserPane = useEffectEvent((conversation: string) => {
+    if (conversation === conversationId)
+      showPanel({
+        ...BROWSER_PANEL,
+        required_capabilities: [...BROWSER_PANEL.required_capabilities],
+      });
+  });
+  useEffect(() => onBrowserPaneRequest(openBrowserPane), []);
   const presentationScope = useRef({
     conversationId,
     routeKey: location.key,
