@@ -317,34 +317,27 @@ def result(item: Mapping[str, Any], value: Any) -> str:
 
 
 DESCRIPTION = (
-    "Ask the person 1 to 4 questions, each with 2 to 4 options, in a card they answer with a tap; they can "
-    "also write their own answer or skip. Use it only for a decision that is theirs to make and that changes "
-    "what you do next (a preference, a trade-off, which of several reasonable ways to go), and always give "
-    "your recommendation: put it first and end its label with \" (Recommended)\". Ask everything you need in "
-    "one call. Never use it to confirm or get permission for an action (actions that need approval ask by "
-    "themselves), for something you can find out with your tools, or for small talk. The answer is the "
-    "person's input, not an approval. If they skip, go on with your recommendation."
+    "Ask the person 1-4 multiple-choice questions (they may also write their own answer or skip). "
+    "Only for their decisions that change what you do next; always recommend one: list it first, label "
+    "ending \" (Recommended)\". Never to confirm actions (approvals do) or for what you can find out. "
+    "Answers are input, not approval; if skipped, use your recommendation."
 )
 
 
 class _Option(BaseModel):
-    label: str = Field(description="1 to 5 words the person picks, e.g. “Beta.1 now”. End your recommended "
-                                   "option's label with “ (Recommended)”.")
-    description: str = Field(default="", description="One short line: what choosing it means.")
+    label: str
+    description: str = ""  # one line
 
 
 class _Question(BaseModel):
-    header: str = Field(description=f"A chip naming the topic, at most {HEADER_CHARS} characters, e.g. "
-                                    "“Beta timing”.")
-    question: str = Field(description="The question in plain words, ending with a question mark.")
-    options: list[_Option] = Field(description=f"{MIN_OPTIONS} to {MAX_OPTIONS} distinct choices, your "
-                                               "recommended one first. Don't add “Other”: the person can always "
-                                               "write their own answer.")
-    multi_select: bool = Field(default=False, description="True when the person may pick more than one.")
+    header: str = Field(description=f"Chip, max {HEADER_CHARS} chars.")
+    question: str
+    options: list[_Option] = Field(description=f"{MIN_OPTIONS}-{MAX_OPTIONS}, recommended first, no \"Other\".")
+    multi_select: bool = False
 
 
 class _AskInput(BaseModel):
-    questions: list[_Question] = Field(description=f"1 to {MAX_QUESTIONS} questions, shown together in one card.")
+    questions: list[_Question]
 
 
 def ask_person(questions: list[Any]) -> str:
