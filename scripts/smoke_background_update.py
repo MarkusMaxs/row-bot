@@ -404,6 +404,29 @@ def _fingerprint(root: Path) -> dict[str, tuple[int, str]]:
     return out
 
 
+def _listening_program(port: int) -> str:
+    """Windows: the program listening on *port*, the one Windows Firewall names and remembers by path."""
+    script = (f"$c = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction Stop | Select-Object -First 1; "
+              "(Get-Process -Id $c.OwningProcess).Path")
+    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],  # noqa: S603, S607
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0 and out.stdout.strip(), f"no program listens on {port}: {out.stderr}"
+    return out.stdout.strip()
+
+
+def _check_server_program(root: Path, version_root: Path, before: str, after: str) -> str:
+    """A version that has the signed Row-Bot Server.exe runs the server from R\\versions, a path every
+    update keeps, so Windows Firewall asks once (B365). One older than that runs it beside its python."""
+    stable = _versions_dir(root, "windows") / "Row-Bot Server.exe"
+    if not (version_root / "python" / "Row-Bot Server.exe").is_file():
+        return f"the server listened as {before}, then {after} (this install has no Row-Bot Server.exe)"
+    assert Path(after) == stable, f"after the update the server listened as {after}, not {stable}"
+    if Path(before) != stable:
+        assert Path(before) == version_root / "python" / "Row-Bot Server.exe", before
+        return f"the server listened as {before}, and after the update as {after}, where it stays"
+    return f"the server listened as {after} before and after the update"
+
+
 def run(root: Path, kind: str, version_root: Path, port: int, command: list[str], timeout: float,
         parts: Path | None = None) -> list[str]:
     results: list[str] = []
@@ -449,6 +472,7 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
         os.environ["ROW_BOT_UPDATE_FEED_TESTING"] = "1"
         launcher = Launcher(command, work / "data", work / "launcher.log")
         _wait("/readyz", lambda: _get(f"http://127.0.0.1:{port}/readyz") == 200, timeout, launcher)
+        program_before = _listening_program(port) if kind == "windows" else ""
         client = Client(port)
         snapshot = client.updates()
         assert snapshot["mode"] == "self", snapshot
@@ -508,6 +532,8 @@ def run(root: Path, kind: str, version_root: Path, port: int, command: list[str]
 
         _wait(f"{version} to answer after Restart now", new_version_answers, timeout, launcher)
         restart_seconds = time.monotonic() - switched_at
+        if kind == "windows":
+            results.append(_check_server_program(root, version_root, program_before, _listening_program(port)))
 
         def verified() -> bool:
             current = _read_state(root)
