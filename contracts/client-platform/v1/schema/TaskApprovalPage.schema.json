@@ -139,6 +139,15 @@
           "title": "Id",
           "type": "string"
         },
+        "kind": {
+          "default": "approval",
+          "enum": [
+            "approval",
+            "question"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
         "message": {
           "maxLength": 16384,
           "title": "Message",

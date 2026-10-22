@@ -249,9 +249,49 @@
       "title": "AgentStopPayload",
       "type": "object"
     },
+    "ApprovalAnswer": {
+      "additionalProperties": false,
+      "description": "The person's answer to one of Row-Bot's questions (N4): the options picked, by position, or their own words.",
+      "properties": {
+        "choices": {
+          "items": {
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "title": "Choices",
+          "type": "array"
+        },
+        "other": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Other",
+          "type": "string"
+        }
+      },
+      "title": "ApprovalAnswer",
+      "type": "object"
+    },
     "ApprovalPayload": {
       "additionalProperties": false,
       "properties": {
+        "answers": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ApprovalAnswer"
+              },
+              "maxItems": 4,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answers"
+        },
         "decision": {
           "enum": [
             "approve",

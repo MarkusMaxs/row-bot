@@ -225,6 +225,7 @@ function ApprovalRow({
         <ApprovalDecision
           approvalId={item.id}
           subject={item.title}
+          kind={item.kind}
           onResolved={onChanged}
         />
       </div>

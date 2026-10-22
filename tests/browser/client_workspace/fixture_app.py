@@ -1495,8 +1495,72 @@ def _goal_verifier(goal, _context):
     return {"verdict": "continue", "reason": "Fixture goal: one more step."}
 
 
+# ── N4: Row-Bot asks questions with options, in cards ──────────────────────
+# The real ask_person card and answers: the model's call and the turn's final
+# are scripted; the question's result is the real tool's for the answer given.
+_N4_BETA = {"header": "Beta timing", "question": "When should the beta go out?",
+            "options": [{"label": "Beta.1 now (Recommended)",
+                         "description": "Ship the current build to testers today."},
+                        {"label": "After the fixes", "description": "Wait for the two open fixes, about two days."},
+                        {"label": "Next week", "description": "Ship with the new onboarding."}]}
+_N4_PAGES = {"header": "Pages", "question": "Which pages go in the beta?", "multi_select": True,
+             "options": [{"label": "Plans", "description": "The plan list and its filters."},
+                         {"label": "Ledger", "description": "Spending by month."},
+                         {"label": "Docs", "description": "The help pages."}]}
+_N4_APPROVALS: list[str] = []
+
+
+def _n4_stream(text: str, config: dict):
+    from row_bot.questions import card, normalize
+    from row_bot.threads import append_checkpoint_messages
+
+    asked = [_N4_BETA, _N4_PAGES] if "steps" in text else [_N4_BETA]
+    call = predecessor._record("submit", config, "n4-question")
+    thread = call["conversation_id"]
+    identity = f"n4:{call['generation_id']}"
+    tool_id = fixture_id(identity + ":tool")
+    try:
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "ask_person", "args": {"questions": asked}}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": "ask_person", "args": {"questions": asked}}
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":question"), **card(normalize(asked))}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+               stop_event=None):
+    """The question's answer goes back to its call; the turn ends with a short reply."""
+    from row_bot.questions import card, normalize, result
+    from row_bot.threads import append_checkpoint_messages, get_latest_checkpoint_messages
+
+    thread = str(config["configurable"]["thread_id"])
+    last = next((message for message in reversed(get_latest_checkpoint_messages(thread))
+                 if getattr(message, "tool_calls", None)), None)
+    asked = last.tool_calls[0] if last is not None else {}
+    if asked.get("name") != "ask_person" or not resume_values:
+        yield from _s5_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n4-answer")
+    identity = f"n4-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        content = result(card(normalize(asked["args"]["questions"])), next(iter(resume_values.values())))
+        result_id = fixture_id(identity + ":result")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="ask_person",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "ask_person",
+                            "args": asked["args"], "content": content}
+        yield from _natural_final(call, thread, "Thanks. I'll plan the beta that way.", "n4")
+    finally:
+        call["quiesced"] = True
+
+
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("n4 ") and text.rstrip().endswith("fixture"):
+        # Row-Bot asks questions with options (N4): one question, or two as steps.
+        yield from _n4_stream(text, config)
+        return
     if text.startswith("s6 ") and text.rstrip().endswith("fixture"):
         # Prepare sandbox (F18): a sandbox test run that lacked pytest; the offer, the job and
         # its card are real, Docker is a fake.
@@ -3528,7 +3592,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _s5_resume
+    agent.resume_stream_agent = _n4_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -3539,7 +3603,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _s5_resume
+    client_platform_service.resume_factory = _n4_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier
@@ -4232,6 +4296,70 @@ def n9_reset(x_fixture_token: str = Header(default="")) -> dict:
         conn.commit()
     finally:
         conn.close()
+    return {"ok": True}
+
+
+@app.post("/__n4_fixture/helper")
+def n4_helper(payload: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """A helper this chat started, waiting on its question (a record: nothing runs)."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import agent_runs, tasks
+    from row_bot.approval_messages import normalize_interrupts
+    from row_bot.questions import card, normalize
+    from row_bot.threads import create_thread
+
+    parent = str(payload.get("conversation_id") or "")
+    if not parent:
+        raise HTTPException(status_code=409)
+    child = create_thread("Launch planner", thread_type="agent_child", seed_default_skills=False)
+    run = agent_runs.create_agent_run(parent_thread_id=parent, thread_id=child, display_name="Launch planner",
+                                      status="waiting_approval", prompt="Plan the launch")
+    _S11_RUNS.append(run["id"])
+    interrupts = [{"__interrupt_id": fixture_id("n4-helper:" + run["id"]), **card(normalize([_N4_BETA]))}]
+    payload_json = normalize_interrupts(interrupts, source_label="Launch planner", agent_run_id=run["id"],
+                                        parent_thread_id=parent)
+    _token, approval_id = tasks.create_approval_request(
+        run["id"], "", "agent_interrupt", "Launch planner has a question: When should the beta go out?",
+        agent_run_id=run["id"], resume_kind="agent_run", source_label="Launch planner", source_thread_id=child,
+        parent_thread_id=parent, approval_payload_json=payload_json)
+    return {"approval_id": approval_id}
+
+
+@app.post("/__n4_fixture/workflow")
+def n4_workflow(x_fixture_token: str = Header(default="")) -> dict:
+    """An unattended run waiting on Row-Bot's question, for Needs you (a record: nothing runs)."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+    from row_bot.questions import DEFAULT_TIMEOUT_MINUTES, card, normalize
+
+    task_id = tasks.create_task("Weekly launch check", prompts=["Check the launch plan"], channels=[],
+                                enabled=False)
+    item = {"__interrupt_id": fixture_id("n4-workflow:" + task_id), **card(normalize([_N4_BETA]))}
+    _token, approval_id = tasks.create_approval_request(
+        fixture_id("n4-workflow-run:" + task_id), task_id, "step_1",
+        "Step 1/1: Row-Bot has a question: When should the beta go out?",
+        timeout_minutes=DEFAULT_TIMEOUT_MINUTES, approval_payload_json={"interrupt": [item]})
+    _N4_APPROVALS.append(approval_id)
+    return {"approval_id": approval_id, "task_id": task_id}
+
+
+@app.post("/__n4_fixture/reset")
+def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Withdraw the seeded questions, so later journeys find nothing waiting."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+
+    while _S11_RUNS:
+        tasks.cancel_agent_run_approvals(_S11_RUNS.pop())
+    conn = tasks._get_conn()
+    try:
+        for approval_id in _N4_APPROVALS:
+            conn.execute("UPDATE approval_requests SET status='cancelled' WHERE id=? AND status='pending'",
+                         (approval_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    _N4_APPROVALS.clear()
     return {"ok": True}
 
 

@@ -475,6 +475,7 @@
     "provider_settings_unavailable": 503,
     "provider_unavailable": 404,
     "pull_request_failed": 409,
+    "question_answer_invalid": 422,
     "queue_capacity": 413,
     "queue_content_unavailable": 503,
     "queue_pending": 409,

@@ -3651,7 +3651,8 @@ def _workflow_final_status_for_delivery(delivery_status: str) -> str:
 
 def _push_approval_to_channels(task: dict, approval_id: str,
                                resume_token: str,
-                               approval_msg: str, *, validate: Callable[[], None] | None = None) -> None:
+                               approval_msg: str, *, validate: Callable[[], None] | None = None,
+                               question: dict | None = None) -> None:
     """Push a task approval request to all configured channels.
 
     Uses the unified ``channels`` field (null = workflow default).
@@ -3676,7 +3677,8 @@ def _push_approval_to_channels(task: dict, approval_id: str,
                 "message": approval_msg,
             }
             _check_workflow_effect(validate)
-            msg_ref = ch.send_approval_request(target, {}, config)
+            # Row-Bot's question (N4) goes as the question itself: each channel asks it its own way.
+            msg_ref = ch.send_approval_request(target, question or {}, config)
             if msg_ref:
                 _store_approval_channel_ref(approval_id, ch.name, msg_ref)
         except _WorkflowEffectDenied:
@@ -4011,9 +4013,12 @@ def push_approval_to_parent_channel(approval_id: str) -> bool:
             if not ch or not ch.is_running():
                 return False
             payload = payload_from_row(approval)
+            from row_bot.questions import stored_question
+
             msg_ref = ch.send_approval_request(
                 target,
-                {},
+                # A helper's question (N4) goes as the question, answered in the chat app.
+                stored_question(approval.get("approval_payload_json")) or {},
                 {
                     "approval_kind": "agent_run",
                     "task_name": str(
@@ -4616,6 +4621,21 @@ def run_task_background(
                                     break
 
                                 interrupts = result.get("interrupts", [])
+                                from row_bot.questions import question_item
+
+                                asked = question_item(interrupts)
+                                if asked is not None:
+                                    # Row-Bot asks the person; no approval level answers for them (N4).
+                                    _pause_for_question(
+                                        task=task, run_id=run_id, thread_id=thread_id, step=step,
+                                        step_id=step_id, step_index=step_index, total=total,
+                                        step_outputs=step_outputs, config=config, interrupts=interrupts,
+                                        asked=asked, validate=effect_kwargs.get("validate"),
+                                    )
+                                    paused = True
+                                    paused_message = "Row-Bot has a question"
+                                    _task_log(f"⏸ Step {step_index + 1}: Row-Bot has a question")
+                                    break
                                 if not interrupts:
                                     # Empty interrupt list — auto-continue
                                     logger.warning(
@@ -6815,6 +6835,8 @@ def create_approval_request(
     )
     conn.commit()
     conn.close()
+    from row_bot.questions import stored_question
+
     _emit_buddy_approval_event(
         "needed",
         run_id=run_id,
@@ -6822,8 +6844,9 @@ def create_approval_request(
         step_id=step_id,
         approval_id=req_id,
         resume_token=resume_token,
-        label="Approval pending",
+        label="Row-Bot has a question" if stored_question(payload_text) is not None else "Approval pending",
         message=message,
+        question=stored_question(payload_text) is not None,
     )
     return resume_token, req_id
 
@@ -6838,6 +6861,7 @@ def _emit_buddy_approval_event(
     resume_token: str = "",
     label: str = "",
     message: str = "",
+    question: bool = False,
 ) -> None:
     try:
         from row_bot.buddy.events import BuddyEventType, emit_buddy_event
@@ -6860,6 +6884,8 @@ def _emit_buddy_approval_event(
                 "resume_token": resume_token,
                 "label": label or message or status.replace("_", " ").title(),
                 "message": message,
+                # Row-Bot's question (N4): Buddy says so, in its own fixed words.
+                **({"question": True} if question else {}),
             },
         )
     except Exception:
@@ -6934,8 +6960,13 @@ def cancel_agent_run_approvals(agent_run_id: str) -> int:
 @_schema_retry
 def respond_to_approval(resume_token: str, approved: bool,
                          note: str = "",
-                         source: str = "web") -> bool:
-    """Approve or deny a pending request. Returns True if found and processed."""
+                         source: str = "web",
+                         answer: dict | None = None) -> bool:
+    """Approve or deny a pending request. Returns True if found and processed.
+
+    Row-Bot's question (N4) takes ``answer`` instead (``questions.answer`` or ``questions.skipped``); a denial
+    skips it. An approval never answers a question and an answer never approves an action: either is refused.
+    """
     resume_pipeline = _resume_pipeline
     conn = _get_conn()
     row = conn.execute(
@@ -6947,11 +6978,32 @@ def respond_to_approval(resume_token: str, approved: bool,
         return False
 
     r = dict(row)
+    from row_bot import questions
+
+    asked = questions.stored_question(r.get("approval_payload_json"))
+    if asked is None and answer is not None:
+        conn.close()
+        return False
+    if asked is not None:
+        if answer is None and approved:
+            conn.close()
+            return False
+        answer = answer if answer is not None else questions.skipped()
+        if questions.outcome(answer) == "answered":
+            try:
+                answer = questions.answer(asked, answer.get("answers"))
+            except questions.QuestionError:
+                conn.close()
+                return False
+        approved = questions.outcome(answer) == "answered"
     if str(r.get("resume_kind") or "") == "conversation":
         conn.close()
         from row_bot.application.client_platform import client_platform_service, ClientPlatformError
+        decision = {"decision": "approve" if approved else "reject"}
+        if asked is not None and approved:
+            decision["answers"] = answer["answers"]
         try:
-            client_platform_service._resolve_approval(str(r["id"]), {"decision": "approve" if approved else "reject"})
+            client_platform_service._resolve_approval(str(r["id"]), decision)
             return True
         except ClientPlatformError:
             return False
@@ -6982,6 +7034,10 @@ def respond_to_approval(resume_token: str, approved: bool,
         conn.commit()
         conn.close()
         logger.info("Approval %s was already expired when user responded", r["id"])
+        if asked is not None:
+            # Too late for the answer: the question goes on as nobody answered in time (N4).
+            _apply_approval_timeout(r)
+            return False
         _emit_buddy_approval_event(
             "timed_out",
             run_id=str(r.get("run_id") or ""),
@@ -7016,12 +7072,18 @@ def respond_to_approval(resume_token: str, approved: bool,
         step_id=str(r.get("step_id") or ""),
         approval_id=approval_id,
         resume_token=resume_token,
-        label="Approved" if approved else "Denied",
+        label=("Answered" if approved else "Skipped") if asked is not None else ("Approved" if approved else "Denied"),
         message=str(r.get("message") or ""),
     )
 
     # Update all channel messages (cross-channel resolution)
-    _resolve_approval_on_channels(approval_id, new_status, source_channel=source)
+    _resolve_approval_on_channels(approval_id, questions.outcome(answer) if asked is not None else new_status,
+                                  source_channel=source)
+
+    if asked is not None:
+        # The question's own interrupt goes on with the answer; anything asked beside it asks again (N4).
+        _answer_question(r, answer)
+        return True
 
     # Resume the pipeline — for graph-interrupted steps, denial resumes
     # the graph with approved=False so the tool returns "cancelled" and
@@ -7161,6 +7223,10 @@ def claim_reviewed_task_approval(
         capture = state["config"].get("_reviewed_task_run")
         if not capture or approval.get("resume_kind") not in {None, "", "workflow"}:
             raise TaskMutationError("task_approval_owner_required", task_id)
+        from row_bot.questions import stored_question
+        if stored_question(approval.get("approval_payload_json")) is not None:
+            # Row-Bot's question is answered on its card; Approve and Reject never answer it (N4).
+            raise TaskMutationError("task_approval_owner_required", task_id)
         from row_bot.runtime.executions import generation_registry
         if any(h.domain == "workflow" and h.domain_id == run_id
                for h in generation_registry.active(state["thread_id"])):
@@ -7236,6 +7302,9 @@ def _apply_approval_timeout(r: dict) -> None:
     # this lets the tool return "cancelled" and the pipeline
     # continues to subsequent steps.  For explicit approval steps
     # this stops the pipeline.
+    from row_bot import questions
+
+    asked = questions.stored_question(r.get("approval_payload_json"))
     _resolve_approval_on_channels(r["id"], "timed_out",
                                   source_channel="system")
     _emit_buddy_approval_event(
@@ -7245,9 +7314,17 @@ def _apply_approval_timeout(r: dict) -> None:
         step_id=str(r.get("step_id") or ""),
         approval_id=str(r.get("id") or ""),
         resume_token=str(r.get("resume_token") or ""),
-        label="Approval timed out",
+        label=questions.NO_ANSWER_IN_TIME if asked is not None else "Approval timed out",
         message=str(r.get("message") or ""),
     )
+    if asked is not None:
+        # Nobody answered Row-Bot's question (N4): it goes on with its recommendation; with none, the run stops.
+        if questions.has_recommendation(asked):
+            _answer_question(r, questions.timed_out())
+        elif str(r.get("resume_kind") or "") in {"", "workflow"}:
+            _stop_unanswered_run(r)
+        logger.info("Question %s timed out for task %s", r["id"], r["task_id"])
+        return
     if str(r.get("resume_kind") or "") == "agent_run":
         from row_bot.agent_runner import resume_agent_run
 
@@ -7274,6 +7351,98 @@ def _apply_approval_timeout(r: dict) -> None:
                  r["id"], r["task_id"])
 
 
+def _answer_question(r: dict, answer: dict) -> None:
+    """Go on from Row-Bot's question (N4) with the person's answer, a skip or no answer in time.
+
+    Only the question's own interrupt is resumed with it; never an approval of anything.
+    """
+    from row_bot import questions
+
+    try:
+        context = json.loads(str(r.get("approval_payload_json") or "{}"))
+    except (TypeError, ValueError):
+        context = {}
+    group = (context.get("interrupt") or context.get("interrupts")) if isinstance(context, dict) else None
+    try:
+        values = questions.resume_values(group, answer)
+    except questions.QuestionError:
+        logger.warning("Question %s can no longer be answered", r.get("id"))
+        return
+    kind = str(r.get("resume_kind") or "")
+    if kind == "agent_run":
+        from row_bot.agent_runner import resume_agent_run
+
+        resume_agent_run(str(r.get("agent_run_id") or r.get("run_id") or ""),
+                         resume_token=str(r.get("resume_token") or ""), approved=True, resume_values=values)
+    elif kind == "parent_orchestration":
+        from row_bot.agent_orchestrator import resume_parent_orchestration
+
+        resume_parent_orchestration(str(r.get("step_id") or "").removeprefix("orchestration:"),
+                                    resume_token=str(r.get("resume_token") or ""), approved=True, answer=answer)
+    elif kind in {"", "workflow"}:
+        _resume_pipeline(str(r["resume_token"]), approved=True, resume_values=values)
+
+
+def _stop_unanswered_run(r: dict) -> None:
+    """A workflow's question had no recommended option and nobody answered in time: the run stops."""
+    from row_bot import questions
+
+    run_id = str(r.get("run_id") or "")
+    state = _load_pipeline_state(str(r.get("resume_token") or "")) or {}
+    _update_pipeline_status(run_id, "stopped")
+    _finish_run(run_id, "stopped", status_message=questions.NO_ANSWER_IN_TIME)
+    _emit_buddy_workflow_event(
+        "cancelled",
+        task_id=str(r.get("task_id") or ""),
+        thread_id=str(state.get("thread_id") or ""),
+        label=questions.NO_ANSWER_IN_TIME,
+    )
+
+
+def _pause_for_question(
+    *,
+    task: dict,
+    run_id: str,
+    thread_id: str,
+    step: dict,
+    step_id: str,
+    step_index: int,
+    total: int,
+    step_outputs: dict,
+    config: dict,
+    interrupts: list,
+    asked: dict,
+    validate: Callable[[], None] | None = None,
+) -> None:
+    """An unattended run waits on Row-Bot's question like an approval step (N4).
+
+    Every approval level asks: a question is not a permission, so neither Hands-off nor Block decides it. It
+    shows in Needs you, goes to the run's channels and waits until the step's timeout (24 hours by default).
+    """
+    from row_bot import questions
+
+    question = asked["questions"][0]["question"]
+    message = f"Step {step_index + 1}/{total}: Row-Bot has a question: {question}"
+    resume_token, approval_id = create_approval_request(
+        run_id=run_id, task_id=str(task.get("id") or ""), step_id=step_id, message=message,
+        timeout_minutes=int(step.get("timeout_minutes") or 0) or questions.DEFAULT_TIMEOUT_MINUTES,
+        approval_payload_json={"interrupt": interrupts},
+    )
+    _save_pipeline_state(
+        run_id=run_id, task_id=str(task.get("id") or ""), thread_id=thread_id,
+        current_step_index=step_index, step_outputs=step_outputs, config=config,
+        resume_token=resume_token, status="paused", graph_interrupted=True,
+    )
+    logger.info("Task '%s' paused at step %d/%d for a question", task.get("name", ""), step_index + 1, total)
+    _push_approval_to_channels(task, approval_id, resume_token, message, question=asked,
+                               **({"validate": validate} if validate is not None else {}))
+    from row_bot.notifications import notify
+
+    _check_workflow_effect(validate)
+    notify(title="Row-Bot has a question", message=f"{task.get('name', '')}: {question}", sound="workflow",
+           toast_type="warning", source="workflow", in_app=False)
+
+
 def _resume_graph_interrupted(
     state: dict,
     task: dict,
@@ -7282,6 +7451,7 @@ def _resume_graph_interrupted(
     paused_step_index: int,
     approved: bool = True,
     validate: Callable[[], None] | None = None,
+    resume_values: dict | None = None,
 ) -> None:
     """Resume a graph-interrupted pipeline step in a background thread.
 
@@ -7341,8 +7511,9 @@ def _resume_graph_interrupted(
         _stop_event = scope.stop_event if scope else threading.Event()
         try:
             result = resume_invoke_agent(
-                effective_tool_names, config, approved=approved,
-                stop_event=_stop_event,
+                effective_tool_names, config, approved=approved, stop_event=_stop_event,
+                # A question's answer goes to its own interrupt only (N4).
+                **({"resume_values": resume_values} if resume_values else {}),
             )
         except TaskStoppedError:
             _update_pipeline_status(run_id, "stopped")
@@ -7397,6 +7568,17 @@ def _resume_graph_interrupted(
             return
         if isinstance(result, dict) and result.get("type") == "interrupt":
             interrupts = result.get("interrupts", [])
+            from row_bot.questions import question_item
+
+            asked = question_item(interrupts)
+            if asked is not None:
+                # Row-Bot asks the person; no approval level answers for them (N4).
+                _pause_for_question(
+                    task=task, run_id=run_id, thread_id=thread_id, step=paused_step, step_id=step_id,
+                    step_index=paused_step_index, total=total, step_outputs=step_outputs, config=config,
+                    interrupts=interrupts, asked=asked, validate=validate,
+                )
+                return
             person_held = _person_only_interrupt(interrupts)
 
             # Empty interrupts — auto-continue
@@ -7553,7 +7735,8 @@ def _resume_graph_interrupted(
 
 
 def _resume_pipeline(resume_token: str, approved: bool = True, *,
-                     reviewed_state: dict | None = None, validate: Callable[[], None] | None = None) -> None:
+                     reviewed_state: dict | None = None, validate: Callable[[], None] | None = None,
+                     resume_values: dict | None = None) -> None:
     """Resume a paused pipeline from saved state.
 
     *approved* is ``False`` when the user denied the approval.  For
@@ -7609,6 +7792,7 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
             paused_step_index=paused_step_index,
             approved=approved,
             validate=validate,
+            resume_values=resume_values,
         )
         return
 

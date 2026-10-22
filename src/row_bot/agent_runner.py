@@ -557,6 +557,7 @@ def _resume_invoke_agent(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict[str, Any] | None = None,
     stop_event: threading.Event,
 ) -> str | dict:
     from row_bot.agent import resume_invoke_agent
@@ -567,6 +568,7 @@ def _resume_invoke_agent(
         approved,
         interrupt_ids=interrupt_ids,
         stop_event=stop_event,
+        **({"resume_values": resume_values} if resume_values else {}),
     )
 
 
@@ -1447,8 +1449,14 @@ def resume_agent_run(
     *,
     resume_token: str = "",
     approved: bool = True,
+    resume_values: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Resume or stop an interrupted child Agent after approval response."""
+    """Resume or stop an interrupted child Agent after approval response.
+
+    ``resume_values``: the helper asked a question (N4) and this is the answer (or a skip) for that question's
+    own interrupt. The helper always goes on: skipping a question never stops it, and an action asked beside
+    the question asks again for itself.
+    """
     from row_bot.agent_runs import append_agent_event, finish_agent_run, get_agent_run
 
     run = get_agent_run(run_id)
@@ -1477,6 +1485,7 @@ def resume_agent_run(
                 str(orchestration["id"]),
                 kind="child_approval_resolved",
                 content=(
+                    f"Child {run_id}'s question was answered." if resume_values else
                     f"Approval for child {run_id} was "
                     f"{'approved' if approved else 'denied'}."
                 ),
@@ -1493,7 +1502,7 @@ def resume_agent_run(
             )
     except Exception:
         logger.debug("Could not publish child approval resolution", exc_info=True)
-    if not approved:
+    if not approved and not resume_values:
         append_agent_event(
             run_id,
             "approval.resolved",
@@ -1549,7 +1558,7 @@ def resume_agent_run(
         answer = bound_answer(True, str(resume_state["person_binding"]))
     thread = generation_registry.thread(
         target=_resume_agent_thread,
-        args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event, answer),
+        args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event, resume_values, answer),
         conversation_id=str(config["configurable"]["thread_id"]),
         stop_event=stop_event,
         domain="agent",
@@ -1574,6 +1583,7 @@ def _resume_agent_thread(
     config: dict[str, Any],
     interrupt_ids: list[str],
     stop_event: threading.Event,
+    resume_values: dict[str, Any] | None = None,
     answer: Any = True,
 ) -> None:
     from row_bot.agent_runs import (
@@ -1607,6 +1617,7 @@ def _resume_agent_thread(
             answer,
             interrupt_ids=interrupt_ids or None,
             stop_event=stop_event,
+            **({"resume_values": resume_values} if resume_values else {}),
         )
         if not stop_event.is_set() and not (
             isinstance(result, dict)

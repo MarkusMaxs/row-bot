@@ -77,6 +77,8 @@ class TaskApprovalReview:
     approval_mode: str
     message_truncated: bool
     response_available: bool
+    # "question": Row-Bot's question (N4), answered on its own card rather than approved here.
+    kind: str = "approval"
     # The person's own "Always ask me" approval (N9): no level answers it for them, and its card
     # says exactly what will happen (action, destination, account, full text, media).
     person_only: bool = False
@@ -300,6 +302,8 @@ def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None,
                 draining = any(h.domain == "workflow" and h.domain_id == run_id
                                for h in generation_registry.active(state["thread_id"]))
                 expired = bool(approval.get("timeout_at") and approval["timeout_at"] <= tasks.datetime.now().isoformat())
+                from row_bot.questions import stored_question
+                question = stored_question(approval.get("approval_payload_json")) is not None
                 item = TaskApprovalReview(
                     approval["id"], task_id, run_id, revision, message[:16384],
                     str(approval.get("requested_at") or "")[:80],
@@ -307,7 +311,8 @@ def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None,
                     str(capture["policy"]["approval_mode"]) if capture else "unknown",
                     truncated, bool(capture and not truncated and not draining and not expired and state["status"] == "paused"
                                     and state.get("resume_token") == approval.get("resume_token")
-                                    and approval.get("resume_kind") in {None, "", "workflow"}),
+                                    and approval.get("resume_kind") in {None, "", "workflow"} and not question),
+                    "question" if question else "approval",
                     card is not None, card,
                 )
                 item_size = len(json.dumps(asdict(item), ensure_ascii=True).encode()) + 2

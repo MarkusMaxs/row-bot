@@ -157,6 +157,12 @@ def normalize_interrupts(
     title = f"{source} needs approval to {action}."
     reason = _reason_from_item(first)
     raw_action = _raw_action_from_item(first)
+    from row_bot.questions import question_item
+
+    asked = question_item(items)
+    if asked is not None:
+        # A helper's question (N4) is asked, not approved: the notice names the question.
+        title, reason, raw_action = f"{source} has a question: {asked['questions'][0]['question']}", "", ""
     return {
         "kind": "agent_run",
         "source_label": source,
