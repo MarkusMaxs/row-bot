@@ -176,3 +176,13 @@ def test_the_card_on_the_runs_page_says_exactly_what_will_happen(run):
     assert item.person_only is True
     assert item.card == {"action": "Post on X", "destination": None, "account": "X account",
                          "text": "Launch day!", "media": CARD["media"]}
+
+
+def test_a_channel_the_workflow_always_asks_about_waits_before_it_sends(run):
+    task_id, run_id = run.start([{"type": "notify", "channel": "telegram", "message": "Ship it today"}],
+                                always_ask=["builtin:channel:telegram"])
+
+    [approval] = _pending(run.tasks, run_id)
+    assert json.loads(approval["approval_payload_json"])["person_only"] is True
+    assert run.seen["delivered"] == []
+    assert _run(run.tasks, task_id, run_id).status == "paused"

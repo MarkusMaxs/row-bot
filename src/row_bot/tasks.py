@@ -5213,7 +5213,7 @@ def run_task_background(
                         step_outputs=step_outputs,
                     )
                     notify_channel = step.get("channel", "desktop")
-                    if step.get("always_ask") or notify_channel in (task.get("always_ask") or []):
+                    if step.get("always_ask") or f"builtin:channel:{notify_channel}" in (task.get("always_ask") or []):
                         # "Always ask me" (N9): the message goes out only once the person approved
                         # exactly this text to this destination.
                         card = _delivery_card(task, notify_channel, notify_msg)
