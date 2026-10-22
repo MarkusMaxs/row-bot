@@ -257,13 +257,21 @@ def looks(nights: Mapping[str, Any]) -> dict[str, Any]:
 
     total: dict[str, Any] = {"nights": 0, "found": 0, "diagnosed": 0, "drafted": 0, "refused": 0,
                              "needs_examples": 0, "train": 0, "waits": 0, "bugs": 0, "tokens": 0, "drafts": {},
-                             "refusals": {}, "states": {}, "held_out_corrections_stored": None}
+                             "refusals": {}, "states": {}, "held_out_corrections_stored": None,
+                             # L3b: the drafts tested, those that came out ready or not better, and use → Undo.
+                             "tests": {"nights": 0, "tested": 0, "ready": 0, "not_better": 0, "unclear": 0,
+                                       "tokens": 0, "use_undo_survived": 0, "use_undo_failed": 0}}
     for day in sorted(nights, key=lambda value: int(value) if str(value).isdigit() else 0):
         steps = (nights[day] or {}).get("steps") or {}
         found = (steps.get("look") or {}).get("outcome") or {}
         vault = ((steps.get("vault") or {}).get("outcome") or {}).get("summary") or {}
         if "correction_tasks" in vault:
             total["held_out_corrections_stored"] = int(vault["correction_tasks"])
+        tests = (found or {}).get("tests") or {}
+        if tests.get("ran"):
+            total["tests"]["nights"] += 1
+            for key in ("tested", "ready", "not_better", "unclear", "tokens", "use_undo_survived", "use_undo_failed"):
+                total["tests"][key] += int(tests.get(key) or 0)
         if not found or found.get("ran") is False:
             continue
         total["nights"] += 1
@@ -496,11 +504,17 @@ def markdown(report: Mapping[str, Any]) -> str:
             drafts = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in sorted(look["drafts"].items()))
             refused = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in sorted(look["refusals"].items()))
             lines.append(f"- Looks for things to improve (L3a): {look['nights']} nights, {look['found']} issues found, "
-                         f"{look['diagnosed']} diagnosed, {look['drafted']} drafts ({drafts or 'none'}; waiting to be "
-                         f"tested: L3b isn't built yet), {look['refused']} refused by E9 ({refused or 'none'}), "
+                         f"{look['diagnosed']} diagnosed, {look['drafted']} drafts ({drafts or 'none'}), "
+                         f"{look['refused']} refused by E9 ({refused or 'none'}), "
                          f"{look['needs_examples']} need more examples, {look['bugs']} look like a bug, "
                          f"{look['tokens']:,} diagnosis tokens; held-out corrections in the vault: "
                          f"{look['held_out_corrections_stored'] if look['held_out_corrections_stored'] is not None else '–'}.")
+        tests = look.get("tests") or {}
+        if tests.get("nights"):
+            lines.append(f"- Changes tested (L3b): {tests['tested']} tested on {tests['nights']} nights, "
+                         f"{tests['ready']} ready, {tests['not_better']} not better, {tests['unclear']} with too "
+                         f"little of their kind to tell; use → Undo {tests['use_undo_survived']} survived, "
+                         f"{tests['use_undo_failed']} failed; {tests['tokens']:,} testing tokens.")
         lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}{_survival_note(check)}"
                                                for name, check in person["survival"].items()))
         lines.append("- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
