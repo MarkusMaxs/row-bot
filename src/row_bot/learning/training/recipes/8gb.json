@@ -22,6 +22,7 @@
     "seed": 3407
   },
   "epochs": 3,
+  "best_pass": true,
   "checkpoint_every": 10,
   "min_examples": 100,
   "min_new_examples": 50,

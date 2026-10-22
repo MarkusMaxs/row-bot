@@ -2,7 +2,8 @@
 
 A recipe says how a personal model is trained on a tier's graphics card: the starting model,
 the trainer's settings (``learning_engine/trainer.py`` clamps each to its limits), how many
-passes over the examples, how often a checkpoint is saved, the fewest examples worth training
+passes over the examples (with ``best_pass``, the most: the pass with the lowest validation loss
+is kept and a pass that doesn't lower it ends training, O117), how often a checkpoint is saved, the fewest examples worth training
 on, the context it is served at (O30), its quantization (O26) and that it is non-thinking
 (O24). Only **certified** recipes are ever chosen: today the 8 GB tier (Qwen3.5 2B, bf16 LoRA
 at 16K, measured in L0d and L2b). The larger tiers are listed, uncertified, until the RTX 5090
@@ -37,7 +38,7 @@ SETTING_NAMES = frozenset({
 MIN_TRAINING_CONTEXT = 16_384
 _KEYS = frozenset({
     "format", "version", "id", "tier", "certified", "title", "starting_model", "method", "evidence", "settings",
-    "epochs", "checkpoint_every", "min_examples", "min_new_examples", "validation_share", "serve_context",
+    "epochs", "best_pass", "checkpoint_every", "min_examples", "min_new_examples", "validation_share", "serve_context",
     "quantization", "reasoning",
 })
 
@@ -64,6 +65,7 @@ class Recipe:
     evidence: str
     settings: Mapping[str, int | float]
     epochs: int
+    best_pass: bool
     checkpoint_every: int
     min_examples: int
     min_new_examples: int
@@ -96,9 +98,11 @@ class Recipe:
         return max(1, min(self.checkpoint_every, int(steps)))
 
     def spec(self) -> dict[str, Any]:
-        """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting)."""
+        """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting),
+        with its passes and whether the trainer keeps the best one (O117)."""
 
-        return {"name": self.name, "settings": {**dict(self.settings), "report_to": "none"}}
+        return {"name": self.name, "settings": {**dict(self.settings), "report_to": "none", "passes": self.epochs,
+                                                "best_pass": int(self.best_pass)}}
 
 
 def _number(value: Any, where: str, *, integer: bool = False, low: float = 0.0, high: float = math.inf) -> Any:
@@ -135,13 +139,13 @@ def parse(text: str, *, source: str = "") -> Recipe:
             raise RecipeError("invalid_recipe", key)
     if data["method"] not in METHODS or data["quantization"] not in QUANTIZATIONS or data["reasoning"] != "off":
         raise RecipeError("invalid_recipe", "method, quantization or reasoning")
-    if not isinstance(data["certified"], bool):
-        raise RecipeError("invalid_recipe", "certified")
+    if not isinstance(data["certified"], bool) or not isinstance(data["best_pass"], bool):
+        raise RecipeError("invalid_recipe", "certified or best_pass")
     recipe = Recipe(
         id=data["id"], version=int(data["version"]), tier=data["tier"], certified=data["certified"],
         title=data["title"], starting_model=data["starting_model"], method=data["method"],
         evidence=data["evidence"], settings=MappingProxyType(dict(settings)),
-        epochs=_number(data["epochs"], "epochs", integer=True, low=1, high=100),
+        epochs=_number(data["epochs"], "epochs", integer=True, low=1, high=100), best_pass=data["best_pass"],
         checkpoint_every=_number(data["checkpoint_every"], "checkpoint_every", integer=True, low=1, high=100_000),
         min_examples=_number(data["min_examples"], "min_examples", integer=True, low=1, high=1_000_000),
         min_new_examples=_number(data["min_new_examples"], "min_new_examples", integer=True, low=1, high=1_000_000),
