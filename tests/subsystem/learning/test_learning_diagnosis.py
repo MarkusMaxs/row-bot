@@ -309,7 +309,7 @@ def test_an_unreadable_answer_is_kept_as_a_failed_attempt(work, store, clock):
     assert store.find("attempt")[0].reason == "unreadable"
 
 
-def test_a_draft_from_a_deleted_chat_leaves_the_list(work, store, clock):
+def test_a_draft_from_a_deleted_chat_leaves_the_list_and_its_text_goes_by_the_next_night(work, store, clock):
     lookups(work, store, clock, 2)
     diagnosis.run(store, client=answers(LESSON), night=NIGHT, context="")
     assert len(diagnosis.drafts(store)) == 1
@@ -317,6 +317,22 @@ def test_a_draft_from_a_deleted_chat_leaves_the_list(work, store, clock):
     store.purge_thread("chat-0")
 
     assert diagnosis.drafts(store) == []
+    diagnosis.run(store, client=answers(LESSON), night=NIGHT, context="")
+    assert not any((item.get("payload") or {}).get("learning") for item in evolution.list_proposals())
+
+
+def test_delete_learning_data_takes_every_unused_draft_with_it(work, store, clock):
+    lookups(work, store, clock, 2)
+    diagnosis.run(store, client=answers(LESSON), night=NIGHT, context="")
+    [proposal] = diagnosis.drafts(store)
+    evolution.reject_proposal(proposal["id"], "no")
+    evolution.create_proposal(insight_ids=["ins_1"], proposal_type="investigate", title="Someone else's",
+                              rationale="Not Learning's.", status="draft")
+
+    assert evolution.remove_learning_drafts() == 1
+
+    assert [item["title"] for item in evolution.list_proposals()] == ["Someone else's"]
+    assert evolution.list_rejected_proposals() == []
 
 
 def test_single_signal_issues_are_one_per_signal(work, store, clock):

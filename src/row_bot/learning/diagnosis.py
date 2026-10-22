@@ -671,6 +671,7 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
     if not store.exists() or not gate.is_enabled(store.root):
         report.state = "off"
         return report
+    forget_gone(store)
     corrections.confirm(store, clock=lambda: moment)
     book = corrections.Book(store)
     issues, report.left_out = collect(store, now=moment, book=book, single=single)
@@ -751,18 +752,33 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
     return report
 
 
+def _gone_attempts(store: LearningStore) -> set[str]:
+    from row_bot.learning.store import MARK_CHAT_DELETED, MARK_CHAT_EXCLUDED
+
+    if not store.exists():
+        return set()
+    return {mark.id for mark in store.marks("attempt") if mark.mark in (MARK_CHAT_DELETED, MARK_CHAT_EXCLUDED)}
+
+
+def forget_gone(store: LearningStore) -> int:
+    """Remove drafts whose source chat was deleted or switched off since (their text came from it)."""
+
+    gone = _gone_attempts(store)
+    if not gone:
+        return 0
+    from row_bot import evolution
+
+    return evolution.remove_learning_drafts(gone)
+
+
 def drafts(store: LearningStore | None = None) -> list[dict[str, Any]]:
     """Learning's drafted changes (evolution proposals with a Learning block), newest first, with the
     attempt each came from; drafts whose source chats were deleted or switched off are left out."""
 
     from row_bot import evolution
-    from row_bot.learning.store import MARK_CHAT_DELETED, MARK_CHAT_EXCLUDED
 
     saved = store if store is not None else LearningStore()
-    gone: set[str] = set()
-    if saved.exists():
-        gone = {mark.id for mark in saved.marks("attempt")
-                if mark.mark in (MARK_CHAT_DELETED, MARK_CHAT_EXCLUDED)}
+    gone = _gone_attempts(saved)
     found = []
     for proposal in evolution.list_proposals():
         learning = (proposal.get("payload") or {}).get("learning")
@@ -799,6 +815,7 @@ __all__ = [
     "describe",
     "drafts",
     "e9_problems",
+    "forget_gone",
     "kind_of",
     "last_night",
     "note_night",

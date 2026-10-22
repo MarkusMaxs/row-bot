@@ -369,6 +369,11 @@ def test_delete_learning_data_removes_it_and_switched_off_chats_stay_off(api, no
     _turn_on(client, headers)
     _captured_reply(data, "chat-b", "run-msg-3")
     _ok(_command(client, headers, "opt_out", conversation_id="chat-a"))
+    from row_bot import evolution
+
+    evolution.create_proposal(insight_ids=[], proposal_type="lesson", title="Drafted from chat-b",
+                              rationale="r", status="draft",
+                              payload={"text": "t", "learning": {"attempt_id": "att_1", "state": "waiting_to_test"}})
 
     receipt = _ok(_command(client, headers, "delete_data"))
 
@@ -377,6 +382,7 @@ def test_delete_learning_data_removes_it_and_switched_off_chats_stay_off(api, no
     assert store.find("decision") == [] and store.find("episode") == []
     assert store.opted_out_chats() == ["chat-a"]
     assert receipt["snapshot"]["opted_out_conversations"] == ["chat-a"]
+    assert evolution.list_proposals() == [] and receipt["snapshot"]["changes"] == []  # its drafts went too
 
 
 def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, monkeypatch):

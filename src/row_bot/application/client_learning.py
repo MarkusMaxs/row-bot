@@ -1719,6 +1719,9 @@ def _perform(
             report = _store().delete_all()
         except LearningStoreError:
             raise ClientPlatformError("learning_data_busy") from None
+        from row_bot import evolution
+
+        evolution.remove_learning_drafts()  # the changes drafted from it go too (never one in use)
         summary = f"Learning data deleted ({_size_words(report.bytes_freed + runs_bytes)})."
     else:
         # An action no branch handles is refused: it never falls through to deleting learning data.

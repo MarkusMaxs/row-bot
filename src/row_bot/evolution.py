@@ -365,6 +365,31 @@ def learning_untested(proposal: dict[str, Any]) -> bool:
     return isinstance(learning, dict) and learning.get("state") != "tested"
 
 
+def remove_learning_drafts(attempt_ids: set[str] | None = None) -> int:
+    """Remove the changes Learning drafted that were never used (and their rejection memory): all of them
+    ("Delete learning data"), or those drafted from ``attempt_ids`` (their source chat was deleted or
+    switched off). Text derived from the person's chats never outlives them. Returns how many went."""
+
+    store = _load_store()
+    gone: set[str] = set()
+    kept = []
+    for proposal in store.get("proposals", []):
+        learning = _safe_payload(proposal.get("payload")).get("learning")
+        if (isinstance(learning, dict) and proposal.get("status") not in ("applied", "verified")
+                and (attempt_ids is None or learning.get("attempt_id") in attempt_ids)):
+            gone.add(str(proposal.get("id")))
+            continue
+        kept.append(proposal)
+    if not gone:
+        return 0
+    store["proposals"] = kept
+    store["rejected_proposals"] = [item for item in store.get("rejected_proposals", [])
+                                   if str(item.get("proposal_id")) not in gone]
+    store["outcomes"] = [item for item in store.get("outcomes", []) if str(item.get("proposal_id")) not in gone]
+    _save_store(store)
+    return len(gone)
+
+
 def redact_secrets(text: str) -> str:
     """Replace secret-shaped text (API keys, tokens, bearer credentials, ``key=value``
     secrets) with ``[redacted-secret]``; everything else is kept."""
