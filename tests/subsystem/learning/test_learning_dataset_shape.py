@@ -328,6 +328,26 @@ def test_an_imported_chat_without_tools_trains_as_a_direct_answer(work, learning
     assert messages[-1] == {"role": "assistant", "content": "Paris is the capital of France.", "weight": 1}
 
 
+def test_imported_rows_get_only_the_static_part_of_the_live_prompt(work, learning_on, clock, chats, recipe):
+    # The newest live turn ran under an Agent Profile and (were recall ever in the system prompt) one turn's
+    # recalled memories: an imported chat had neither, so it keeps only what another conversation's live
+    # prompt shares.
+    recall = "RELEVANT MEMORIES (this turn):\n- The dentist is on Friday at 10."
+    profile = "AGENT PROFILE: Research\nSlug: research\n\nProfile instructions:\nCite every source."
+    work.turn("chat-a", "Read my notes", [("workspace_read_file", {"path": "a.txt"}, "a")], "A.")
+    work.turn("chat-b", "Read my plan", [("workspace_read_file", {"path": "b.txt"}, "b")], "B.",
+              system=[*CLOUD_SYSTEM, profile, recall])
+    _import(learning_on, clock, chats, ("chat-past", [], "Paris.", "Capital of France?"))
+
+    [example] = _past(_compile(learning_on, chats, recipe))
+    system = example.row["messages"][0]["content"]
+
+    assert "RELEVANT MEMORIES" not in system and "AGENT PROFILE" not in system and "Cite every source" not in system
+    assert system.startswith(SMALL_ROOT) and PLATFORM in system  # the static parts stay, rendered as served
+    live = next(item for item in _compile(learning_on, chats, recipe).train if item.thread_id == "chat-b")
+    assert "AGENT PROFILE: Research" in live.row["messages"][0]["content"]  # its own conversation keeps it
+
+
 def test_imported_rows_wait_for_a_first_live_turn_with_tools(learning_on, clock, chats, recipe):
     # Nothing live yet: no prompt or tools to frame them with, so they wait (and say so); the captured shape
     # (the paper's ablation) keeps them as imported.
