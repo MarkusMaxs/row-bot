@@ -84,6 +84,38 @@ def test_a_refused_request_says_why(name: str, way: str, monkeypatch: pytest.Mon
     assert REASON in str(raised.value)
 
 
+UNSUPPORTED = "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."
+
+
+@pytest.mark.parametrize("refusal", [
+    (400, UNSUPPORTED),
+    (404, "The model `gpt-5.5` does not exist or you do not have access to it."),
+], ids=["not-supported", "does-not-exist"])
+def test_a_model_chatgpt_no_longer_offers_is_named_plainly(refusal: tuple, monkeypatch: pytest.MonkeyPatch) -> None:
+    import row_bot.agent as agent
+    from row_bot.providers.transports.reasoning_fallback import should_retry_reasoning_error
+
+    status, detail = refusal
+    with fake_provider_http([Reply(body=json.dumps({"detail": detail}).encode(), status=status)]) as server:
+        with pytest.raises(RuntimeError) as raised:
+            _codex(server.url, monkeypatch, model="gpt-5.5").invoke(PROMPT)
+
+    message = str(raised.value)
+    assert message == f"gpt-5.5 isn't available with your ChatGPT plan. Choose another model. ChatGPT said: {detail}"
+    # A chat or a workflow run shows it as it is, and it isn't taken for a reasoning setting to drop.
+    assert agent._friendly_api_error(message, "gpt-5.5") == f"⚠️ {message}"
+    assert should_retry_reasoning_error(raised.value) is False
+
+
+def test_a_refused_setting_is_not_taken_for_a_missing_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    detail = "The model does not support reasoning summaries; 'summary' is not supported."
+    with fake_provider_http([Reply(body=json.dumps({"detail": detail}).encode(), status=400)]) as server:
+        with pytest.raises(RuntimeError) as raised:
+            _codex(server.url, monkeypatch, model="gpt-5.5").invoke(PROMPT)
+
+    assert str(raised.value) == f"Codex Responses request failed with HTTP 400: {detail}"
+
+
 REPLAYED_ITEM = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAA-ciphertext"}
 TOOL = {"type": "function", "function": {
     "name": "lookup", "description": "Look something up.",

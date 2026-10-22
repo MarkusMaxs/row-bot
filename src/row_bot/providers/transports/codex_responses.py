@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from contextlib import nullcontext
@@ -255,7 +256,7 @@ class ChatCodexResponses(BaseChatModel):
                 response = self._post_once(body)
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code < 200 or status_code >= 300:
-            raise RuntimeError(f"Codex Responses request failed with HTTP {status_code}: {_safe_response_text(response)}")
+            raise _request_failed(status_code, response, self.model_name)
         return response
 
     def _iter_response_events(self, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -318,7 +319,7 @@ class ChatCodexResponses(BaseChatModel):
     def _raise_for_status(self, response: Any) -> None:
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code < 200 or status_code >= 300:
-            raise RuntimeError(f"Codex Responses request failed with HTTP {status_code}: {_safe_response_text(response)}")
+            raise _request_failed(status_code, response, self.model_name)
 
     def _post_once(self, body: dict[str, Any]) -> Any:
         client = self.http_client or _new_http_client(self.timeout)
@@ -365,6 +366,23 @@ def _new_http_client(timeout: float) -> Any:
 
 def _responses_url(base_url: str) -> str:
     return f"{str(base_url or CODEX_RESPONSES_BASE_URL).rstrip('/')}/responses"
+
+
+# "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.", "Model not found", "The model
+# `x` does not exist": the words follow "model" or its name at once, so a refusal of a setting isn't taken for one.
+_UNAVAILABLE_MODEL = re.compile(
+    r"\bmodel\b\s*(?:['\"`][^'\"`]*['\"`]\s*)?(?:is\s+)?(?:not supported|unsupported|not available|does not exist|not found)",
+    re.IGNORECASE,
+)
+
+
+def _request_failed(status_code: int, response: Any, model: str) -> RuntimeError:
+    detail = _safe_response_text(response)
+    if status_code in {400, 404} and _UNAVAILABLE_MODEL.search(detail):
+        # ChatGPT stops serving a model to plans; a workflow chosen with it says so plainly (B394).
+        return RuntimeError(f"{model} isn't available with your ChatGPT plan. Choose another model. "
+                            f"ChatGPT said: {detail}")
+    return RuntimeError(f"Codex Responses request failed with HTTP {status_code}: {detail}")
 
 
 def _safe_response_text(response: Any) -> str:
