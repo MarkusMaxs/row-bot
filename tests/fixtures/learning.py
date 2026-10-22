@@ -322,8 +322,10 @@ class CapturedWork:
 
     def turn(self, thread_id: str, question: str, answer: str, *, model_ref: str = "gpt-5.6-sol",
              provider_id: str = "openai", end: str = "completed", tool_status: str = "ok",
-             args: dict | None = None, tool: bool = True, raw_answer: str | None = None) -> list[str]:
-        """One turn; returns its model calls' decision ids (the tool step's, then the answer's)."""
+             args: dict | None = None, tool: bool = True, raw_answer: str | None = None,
+             person_message: bool = False) -> list[str]:
+        """One turn; returns its model calls' decision ids (the tool step's, then the answer's).
+        ``person_message``: the person sent it (capture marks the reply it followed)."""
 
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -331,7 +333,7 @@ class CapturedWork:
             self.chats.chat(thread_id)
         self.count += 1
         number = self.count
-        turn = self.writer.begin_turn(thread_id=thread_id, surface="normal_chat")
+        turn = self.writer.begin_turn(thread_id=thread_id, surface="normal_chat", person_message=person_message)
         asked = HumanMessage(content=question, id=f"h{number}")
         sent = [SystemMessage(content=self.SYSTEM, id="sys"), *self.history[thread_id], asked]
         ids: list[str] = []

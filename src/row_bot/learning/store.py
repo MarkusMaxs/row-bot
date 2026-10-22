@@ -238,6 +238,11 @@ class LearningStore:
         self._clock = clock
         self._migrations = tuple(migrations) if migrations is not None else MIGRATIONS
 
+    def now(self) -> float:
+        """The store's clock (epoch seconds): what Learning's passes over it call now."""
+
+        return float(self._clock())
+
     # ── Paths ────────────────────────────────────────────────────────────
 
     @property

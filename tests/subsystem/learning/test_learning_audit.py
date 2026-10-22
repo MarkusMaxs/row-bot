@@ -51,17 +51,17 @@ def test_the_vault_is_its_own_file_made_only_while_learning_is_on(data_dir, monk
 
     save_learning_settings(data_dir, enabled=True)
     report = evaluation.refresh_audit(asked_by="test")
-    assert report == {"considered": 0, "added": 0, "retired": 0, "held": 0}
+    assert report == {"considered": 0, "added": 0, "retired": 0, "held": 0, "corrections_added": 0, "corrections_held": 0, "corrections_waiting": 0}
     assert _vault_file(data_dir).is_file() and not (Path(data_dir) / "learning.db").exists()
     summary = evaluation.audit_summary(asked_by="test")
-    assert summary == {"pack_tasks": 32, "replay_tasks": 0, "retired_replay_tasks": 0}
+    assert summary == {"pack_tasks": 32, "replay_tasks": 0, "correction_tasks": 0, "retired_replay_tasks": 0}
 
 
 def test_new_work_moves_into_the_vault_by_time_and_out_of_everything_else(writer, chats, clock):
     made = _work(writer, chats, clock, 12)
     report = evaluation.refresh_audit(asked_by="nightly")
     # Every fourth eligible decision, in the order they were made.
-    assert report == {"considered": 12, "added": 3, "retired": 0, "held": 3}
+    assert report == {"considered": 12, "added": 3, "retired": 0, "held": 3, "corrections_added": 0, "corrections_held": 0, "corrections_waiting": 0}
     store = LearningStore(clock=clock)
     assert store.held_out_ids() == {made[3], made[7], made[11]}
     offered = {case.decision_id for case in collect_replay(store).cases}
@@ -71,14 +71,17 @@ def test_new_work_moves_into_the_vault_by_time_and_out_of_everything_else(writer
     assert evaluation.refresh_audit(asked_by="nightly")["added"] == 1
     assert store.held_out_ids() == {made[3], made[7], made[11], later[3]}
     # Nothing already considered is looked at again.
-    assert evaluation.refresh_audit(asked_by="nightly") == {"considered": 0, "added": 0, "retired": 0, "held": 4}
+    assert evaluation.refresh_audit(asked_by="nightly") == {"considered": 0, "added": 0, "retired": 0, "held": 4,
+                                                             "corrections_added": 0, "corrections_held": 0, "corrections_waiting": 0}
 
 
 def test_the_oldest_held_tasks_retire_and_stay_held_out(writer, chats, clock, monkeypatch):
     monkeypatch.setattr(audit, "MAX_REPLAY_TASKS", 2)
     made = _work(writer, chats, clock, 16)
-    assert evaluation.refresh_audit(asked_by="nightly") == {"considered": 16, "added": 4, "retired": 2, "held": 2}
-    assert evaluation.audit_summary(asked_by="t") == {"pack_tasks": 32, "replay_tasks": 2, "retired_replay_tasks": 2}
+    assert evaluation.refresh_audit(asked_by="nightly") == {"considered": 16, "added": 4, "retired": 2, "held": 2,
+                                                             "corrections_added": 0, "corrections_held": 0, "corrections_waiting": 0}
+    assert evaluation.audit_summary(asked_by="t") == {"pack_tasks": 32, "replay_tasks": 2, "correction_tasks": 0,
+                                                       "retired_replay_tasks": 2}
     # A retired task never comes back as a visible test or as training data.
     store = LearningStore(clock=clock)
     assert store.held_out_ids() == {made[3], made[7], made[11], made[15]}

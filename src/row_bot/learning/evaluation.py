@@ -794,8 +794,15 @@ def _last_person_text(messages: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _signalled(store: Any) -> set[str]:
-    return {str(item.decision_id) for item in store.find("signal", limit=100_000)
-            if getattr(item, "decision_id", None) and getattr(item, "withdrawn_at", None) is None}
+    """Decisions the person pushed back on, and every decision of a turn they did (a corrected, stopped
+    or retried turn's steps aren't uncorrected work: none is a captured reference)."""
+
+    signals = [item for item in store.find("signal", limit=100_000) if getattr(item, "withdrawn_at", None) is None]
+    found = {str(item.decision_id) for item in signals if getattr(item, "decision_id", None)}
+    episodes = {str(item.episode_id) for item in signals if getattr(item, "episode_id", None)}
+    if episodes:
+        found |= {item.id for item in store.find("decision", limit=100_000) if item.episode_id in episodes}
+    return found
 
 
 def collect_replay(store: Any | None = None, *, corrections: Mapping[str, CorrectedAction] | None = None,
@@ -807,9 +814,6 @@ def collect_replay(store: Any | None = None, *, corrections: Mapping[str, Correc
     its share of new decisions first, so a decision is never tested here and then hidden.
     """
 
-    from langchain_core.messages import messages_from_dict
-
-    from row_bot.learning import capture
     from row_bot.learning.store import LearningStore
 
     saved = store if store is not None else LearningStore()
@@ -828,59 +832,65 @@ def collect_replay(store: Any | None = None, *, corrections: Mapping[str, Correc
             break
         if not isinstance(decision, Decision) or decision.kind != "model_call":
             continue
-        if decision.status != "ok":
-            skipped["not_ok"] += 1
-            continue
-        if decision.id in held:
+        if decision.id in held and decision.status == "ok":
             skipped["held_out"] += 1
             continue
-        if decision.untrusted and not include_untrusted:
-            skipped["untrusted"] += 1
-            continue
-        correction = corrections.get(decision.id)
-        check: Check = "exact_action"
-        if decision.fidelity == "partial":
-            if correction is None:
-                skipped["partial_without_correction"] += 1
-                continue
-            if not correction.tool_calls:
-                skipped["partial_needs_exact_prefix"] += 1
-                continue
-            check = "tool_choice"
-        if correction is not None:
-            reference, source = correction.action(), "corrected"
+        found = _case_for(saved, decision, corrections.get(decision.id), include_untrusted=include_untrusted,
+                          bad=bad, episodes=episodes)
+        if isinstance(found, str):
+            skipped[found] += 1
         else:
-            if decision.id in bad:
-                skipped["known_bad"] += 1
-                continue
-            raw = saved.read_blob(decision.model_generated_blob or "")
-            if raw is None:
-                skipped["no_reference"] += 1
-                continue
-            try:
-                reference = Action.from_message(messages_from_dict([json.loads(raw.decode("utf-8"))])[0])
-            except Exception:  # noqa: BLE001 - an unreadable output is not a reference
-                skipped["no_reference"] += 1
-                continue
-            source = "captured"
-        request = capture.read_request(saved, decision)
-        if request is None:
-            skipped["purged"] += 1
-            continue
-        if request.get("reconstructed") and check == "exact_action":
-            skipped["partial_needs_exact_prefix"] += 1
-            continue
-        if decision.episode_id not in episodes:
-            episode = saved.get("episode", decision.episode_id)
-            episodes[decision.episode_id] = str(getattr(episode, "kind_of_work", None) or "Your work")
-        messages = tuple(request["messages"])
-        cases.append(ReplayCase(
-            decision.id, decision.thread_id, decision.conversation_id, decision.created_at,
-            episodes[decision.episode_id], decision.fidelity, decision.untrusted, messages,
-            None if request.get("tools") is None else tuple(request["tools"]), request.get("model_ref"),
-            reference, source, check, _last_person_text(messages)[:4_000],
-        ))
+            cases.append(found)
     return ReplaySet(cases, skipped)
+
+
+def _case_for(saved: Any, decision: Decision, correction: CorrectedAction | None, *, include_untrusted: bool,
+              bad: set[str], episodes: dict[str, str], case_id: str | None = None) -> ReplayCase | str:
+    """One decision as a replay case, or why it can't be one (a skip reason)."""
+
+    from langchain_core.messages import messages_from_dict
+
+    from row_bot.learning import capture
+
+    if decision.status != "ok":
+        return "not_ok"
+    if decision.untrusted and not include_untrusted:
+        return "untrusted"
+    check: Check = "exact_action"
+    if decision.fidelity == "partial":
+        if correction is None:
+            return "partial_without_correction"
+        if not correction.tool_calls:
+            return "partial_needs_exact_prefix"
+        check = "tool_choice"
+    if correction is not None:
+        reference, source = correction.action(), "corrected"
+    else:
+        if decision.id in bad:
+            return "known_bad"
+        raw = saved.read_blob(decision.model_generated_blob or "")
+        if raw is None:
+            return "no_reference"
+        try:
+            reference = Action.from_message(messages_from_dict([json.loads(raw.decode("utf-8"))])[0])
+        except Exception:  # noqa: BLE001 - an unreadable output is not a reference
+            return "no_reference"
+        source = "captured"
+    request = capture.read_request(saved, decision)
+    if request is None:
+        return "purged"
+    if request.get("reconstructed") and check == "exact_action":
+        return "partial_needs_exact_prefix"
+    if decision.episode_id not in episodes:
+        episode = saved.get("episode", decision.episode_id)
+        episodes[decision.episode_id] = str(getattr(episode, "kind_of_work", None) or "Your work")
+    messages = tuple(request["messages"])
+    return ReplayCase(
+        case_id or decision.id, decision.thread_id, decision.conversation_id, decision.created_at,
+        episodes[decision.episode_id], decision.fidelity, decision.untrusted, messages,
+        None if request.get("tools") is None else tuple(request["tools"]), request.get("model_ref"),
+        reference, source, check, _last_person_text(messages)[:4_000],
+    )
 
 
 def _with_guidance(messages: list[Any], arm: Arm) -> list[Any]:
@@ -1597,14 +1607,72 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
 
     holdout.mark_corrections(saved)
     vault = _vault(saved)
-    report = vault.refresh(_eligible_for_audit(saved, vault.horizon()), asked_by=f"{_caller()}: {asked_by}".strip(": "))
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    report = vault.refresh(_eligible_for_audit(saved, vault.horizon()), asked_by=who)
     if report.added:
         by_id = {decision.id: decision for decision in saved.find("decision", subkind="model_call", limit=100_000)
                  if decision.id in set(report.added)}
         saved.add_marks([("decision", item, by_id[item].conversation_id if item in by_id else "")
                          for item in report.added], MARK_HELD_OUT)
-    return {"considered": report.considered, "added": len(report.added), "retired": report.retired,
-            "held": report.held}
+    waiting = holdout.waiting_for_vault(saved)
+    # A task held as uncorrected that the person corrected, stopped or retried later has no reference
+    # any more (O19: no signal); one held out as a correction becomes a correction task below.
+    retired = vault.retire_corrected(_signalled(saved) - waiting, asked_by=who)
+    stored = vault.correction_ids()
+    candidates, missing = _correction_candidates(saved, waiting - stored)
+    added = vault.hold_corrections(candidates, asked_by=who) if candidates else ()
+    return {"considered": report.considered, "added": len(report.added), "retired": report.retired + retired,
+            "held": report.held, "corrections_added": len(added),
+            "corrections_held": len(stored) + len(added), "corrections_waiting": missing}
+
+
+def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.ReplayCandidate], int]:
+    """Held-out corrections (O87) ready for the vault, each with its corrected action: the first move of
+    the redo the person accepted (``corrections.accepted_redo``). Returns them and how many wait for one."""
+
+    if not waiting:
+        return [], 0
+    from row_bot.learning import corrections
+
+    book = corrections.Book(saved)
+    bad = _signalled(saved)
+    episodes: dict[str, str] = {}
+    found: list[audit.ReplayCandidate] = []
+    missing = 0
+    for decision_id in sorted(waiting):
+        decision = book.decisions.get(decision_id)
+        problem = corrections.problem_call(book, decision) if decision is not None else None
+        redo = corrections.accepted_redo(saved, decision, book=book) if decision is not None else None
+        first = corrections.first_call(book, redo) if redo is not None else None
+        action = _action_of(saved, first) if first is not None else None
+        if problem is None or action is None:
+            missing += 1
+            continue
+        case = _case_for(saved, problem, CorrectedAction(action.tool_calls, action.text), include_untrusted=False,
+                         bad=bad, episodes=episodes, case_id=decision_id)
+        if isinstance(case, str) or case.check != "exact_action":
+            missing += 1
+            continue
+        found.append(audit.ReplayCandidate(decision_id, case.created_at, case.thread_id,
+                                           case.conversation_id or case.thread_id, case.kind_of_work,
+                                           case.to_content()))
+    return found, missing
+
+
+def _action_of(saved: Any, decision: Decision) -> Action | None:
+    """What a model call did (its own output), the bridge's calls written as the calls they carry."""
+
+    from langchain_core.messages import messages_from_dict
+
+    raw = saved.read_blob(decision.model_generated_blob or "")
+    if raw is None:
+        return None
+    try:
+        action = Action.from_message(messages_from_dict([json.loads(raw.decode("utf-8"))])[0])
+    except Exception:  # noqa: BLE001 - an unreadable output is no action
+        return None
+    found = _unbridged(action)
+    return found if found.tool_calls or found.text else None
 
 
 def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | None = None,
@@ -1615,9 +1683,13 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 verifiers: Iterable[str] | None = None,
                 on_progress: Callable[[int, int], None] | None = None, repeats: int = 3,
                 seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
-                kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
+                kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = (),
+                corrected: bool | None = None) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
     work and tokens per arm, and the paired analysis; no task, id or text (E10).
+
+    ``corrected``: True runs only the held-out corrections (O87, H2's hidden corrected problems),
+    False only the uncorrected decisions, None both.
 
     Every hidden problem runs ``repeats`` times per arm (3, O84/O88). ``combine_with`` (a visible
     comparison of the same arms) adds the analysis of visible and hidden problems together, and
@@ -1635,7 +1707,8 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
     allowed = None if verifiers is None else set(verifiers)
     tasks = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
              if allowed is None or task.verifier.kind in allowed]
-    replay = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)] if include_replay else []
+    replay = ([ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who, origin=_origin(corrected))]
+              if include_replay else [])
     total = (len(tasks) + len(replay)) * len(arms) * max(1, int(repeats))
     done = [0]
 
@@ -1651,7 +1724,8 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
 
 
 def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,
-               verifiers: Iterable[str] | None = None, include_replay: bool = True) -> int:
+               verifiers: Iterable[str] | None = None, include_replay: bool = True,
+               corrected: bool | None = None) -> int:
     """How many hidden problems an :func:`audit_check` with the same choices would run (a count only)."""
 
     allowed = None if verifiers is None else set(verifiers)
@@ -1659,7 +1733,11 @@ def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] 
     who = f"{_caller()}: {asked_by}".strip(": ")
     count = sum(1 for task in vault.hidden_tasks(asked_by=who, packs=packs)
                 if allowed is None or task.verifier.kind in allowed)
-    return count + (len(vault.replay_tasks(asked_by=who)) if include_replay else 0)
+    return count + (len(vault.replay_tasks(asked_by=who, origin=_origin(corrected))) if include_replay else 0)
+
+
+def _origin(corrected: bool | None) -> str | None:
+    return None if corrected is None else ("correction" if corrected else "replay")
 
 
 def is_novel(candidate: PackTask | str, *, asked_by: str, store: Any | None = None) -> bool:
