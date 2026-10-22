@@ -1,88 +1,186 @@
+"""Row-Bot's HTTP clients end a request at once on Stop: over TLS, from async code, before it is sent.
+
+Each request registers with the run's cancellation scope as it starts, and Stop shuts its socket down (closing it
+doesn't wake a read blocked in another thread on Linux). These send requests to a provider on loopback that holds
+them open and read what reached it.
+"""
+
 import asyncio
+import contextvars
 import threading
 
 import httpx
+import pytest
 
 from row_bot.cancellation import CancellationScope, use_cancellation_scope
-from row_bot.providers.transports.cancellable_http import cancellable_async_http_client, cancellable_http_client
+from row_bot.providers.transports.cancellable_http import (
+    RequestStopped,
+    cancellable_async_http_client,
+    cancellable_http_client,
+)
+from tests.helpers.fake_provider_http import HOLD, Hold, Reply, fake_provider_http
+
+# How a blocked read is ended differs by OS (closing a socket doesn't wake it on Linux), so these run everywhere.
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
+
+# Stop ends the request at once; the bound only keeps a broken test from hanging.
+PROMPTLY = 2.0
 
 
-class _BlockingByteStream(httpx.SyncByteStream):
-    """A response body that blocks on read until told to close.
+def _under_scope(call, scope: CancellationScope) -> tuple[threading.Thread, dict]:
+    outcome: dict = {}
 
-    Mirrors a stalled network read from a real provider SDK: the reader is
-    parked past the point where it can observe cancellation until something
-    closes the underlying connection out from under it.
-    """
-
-    def __init__(self) -> None:
-        self.reading = threading.Event()
-        self.closed = threading.Event()
-        self.close_calls = 0
-
-    def __iter__(self):
-        self.reading.set()
-        assert self.closed.wait(timeout=1), "stream was never closed"
-        return iter(())
-
-    def close(self) -> None:
-        self.close_calls += 1
-        self.closed.set()
-
-
-class _CloseCountingAsyncStream(httpx.AsyncByteStream):
-    def __init__(self) -> None:
-        self.close_calls = 0
-
-    async def __aiter__(self):
-        if False:
-            yield b""
-
-    async def aclose(self) -> None:
-        self.close_calls += 1
-
-
-def test_cancellable_http_client_closes_response_when_scope_is_cancelled():
-    stream = _BlockingByteStream()
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, stream=stream)
-
-    client = cancellable_http_client(transport=httpx.MockTransport(handler))
-    scope = CancellationScope()
-    result: dict[str, object] = {}
-
-    def consume() -> None:
+    def run() -> None:
         with use_cancellation_scope(scope):
-            with client.stream("GET", "http://example.test/stream") as response:
-                result["status_code"] = response.status_code
-                list(response.iter_bytes())
+            try:
+                outcome["result"] = call()
+            except BaseException as error:  # noqa: BLE001 - the test reads it
+                outcome["error"] = error
 
-    worker = threading.Thread(target=consume)
+    worker = threading.Thread(target=contextvars.copy_context().run, args=(run,), daemon=True)
     worker.start()
-    assert stream.reading.wait(timeout=1)
-
-    scope.cancel("test")
-    worker.join(timeout=1)
-
-    assert not worker.is_alive()
-    assert stream.close_calls == 1
-    assert result["status_code"] == 200
+    return worker, outcome
 
 
-def test_cancellable_http_client_no_active_scope_is_a_no_op():
-    stream = _BlockingByteStream()
-    stream.closed.set()
+def _read_stream(client: httpx.Client, url: str, first: threading.Event) -> list[bytes]:
+    received = []
+    with client.stream("POST", url, json={"stream": True}) as response:
+        for chunk in response.iter_raw():
+            received.append(chunk)
+            first.set()
+    return received
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, stream=stream)
 
-    client = cancellable_http_client(transport=httpx.MockTransport(handler))
+@pytest.mark.parametrize("mid_stream", [False, True], ids=["waiting for headers", "mid-stream"])
+def test_stop_ends_a_request_over_tls(mid_stream: bool) -> None:
+    reply = Hold(chunks=(b"data: first\n\n",)) if mid_stream else HOLD
+    with fake_provider_http([reply], tls=True) as server:
+        client = cancellable_http_client(verify=server.client_tls)
+        first = threading.Event()
+        scope = CancellationScope()
+        worker, outcome = _under_scope(lambda: _read_stream(client, f"{server.url}/v1/chat", first), scope)
+        held = server.held(0)
+        if mid_stream:
+            assert first.wait(PROMPTLY)
 
-    with client.stream("GET", "http://example.test/stream") as response:
-        list(response.iter_bytes())
+        scope.cancel("user")
+        worker.join(PROMPTLY)
 
-    assert stream.close_calls == 1
+        assert not worker.is_alive()
+        assert held.hung_up.wait(PROMPTLY)
+        assert isinstance(outcome.get("error"), RequestStopped if not mid_stream else httpx.TransportError)
+
+
+@pytest.mark.parametrize("mid_stream", [False, True], ids=["waiting for headers", "mid-stream"])
+def test_stop_ends_an_async_request(mid_stream: bool) -> None:
+    reply = Hold(chunks=(b"data: first\n\n",)) if mid_stream else HOLD
+    with fake_provider_http([reply]) as server:
+        first = threading.Event()
+
+        async def send() -> list[bytes]:
+            async with cancellable_async_http_client() as client:
+                received = []
+                async with client.stream("POST", f"{server.url}/v1/chat", json={}) as response:
+                    async for chunk in response.aiter_raw():
+                        received.append(chunk)
+                        first.set()
+                return received
+
+        scope = CancellationScope()
+        worker, outcome = _under_scope(lambda: asyncio.run(send()), scope)
+        held = server.held(0)
+        if mid_stream:
+            assert first.wait(PROMPTLY)
+
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert not worker.is_alive()
+        assert held.hung_up.wait(PROMPTLY)
+        assert isinstance(outcome.get("error"), RequestStopped if not mid_stream else httpx.TransportError)
+
+
+def test_a_request_stopped_before_it_is_sent_raises_the_clients_own_error() -> None:
+    class SdkStopped(RequestStopped):
+        pass
+
+    with fake_provider_http([HOLD]) as server:
+        client = cancellable_http_client(stopped=SdkStopped)
+        scope = CancellationScope()
+        scope.cancel("user")
+        with use_cancellation_scope(scope), pytest.raises(SdkStopped):
+            client.post(f"{server.url}/v1/chat", json={})
+
+        assert server.seen == []
+
+
+def test_a_request_that_failed_after_stop_raises_the_clients_own_error() -> None:
+    class SdkStopped(RequestStopped):
+        pass
+
+    with fake_provider_http([HOLD]) as server:
+        client = cancellable_http_client(stopped=SdkStopped)
+        scope = CancellationScope()
+        worker, outcome = _under_scope(lambda: client.post(f"{server.url}/v1/chat", json={}), scope)
+        server.held(0)
+
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert isinstance(outcome.get("error"), SdkStopped)
+        assert isinstance(outcome["error"].__cause__, httpx.TransportError)
+
+
+def test_requests_without_a_scope_and_after_a_stop_work_as_usual() -> None:
+    with fake_provider_http([HOLD, Reply(body=b'{"ok": true}')]) as server:
+        client = cancellable_http_client()
+        scope = CancellationScope()
+        worker, _ = _under_scope(lambda: client.post(f"{server.url}/v1/chat", json={}), scope)
+        server.held(0)
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert client.post(f"{server.url}/v1/chat", json={}).json() == {"ok": True}
+
+
+def test_stop_ends_a_request_after_an_earlier_one_finished() -> None:
+    # The provider would keep the first connection; each request goes out on its own, so Stop finds its socket
+    # even before the provider answers.
+    with fake_provider_http([Reply(body=b'{"ok": true}', keep_alive=True), HOLD]) as server:
+        client = cancellable_http_client()
+        assert client.post(f"{server.url}/v1/chat", json={}).json() == {"ok": True}
+        scope = CancellationScope()
+        worker, outcome = _under_scope(lambda: client.post(f"{server.url}/v1/chat", json={}), scope)
+        held = server.held(1)
+
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert held.connection != server.seen[0].connection
+        assert not worker.is_alive()
+        assert isinstance(outcome.get("error"), RequestStopped)
+        assert held.hung_up.wait(PROMPTLY)
+
+
+def test_a_client_that_keeps_connections_and_borrows_the_hooks_stops_a_stream_on_a_kept_one() -> None:
+    # Another library's client given these clients' hooks (documents with a local model): its second request
+    # goes out on the first one's connection, whose socket the stop learns when the response arrives.
+    first_answer = Reply(body=b'{"ok": true}', keep_alive=True)
+    with fake_provider_http([first_answer, Hold(chunks=(b"data: first\n\n",))]) as server:
+        client = httpx.Client(event_hooks=cancellable_http_client().event_hooks)
+        assert client.post(f"{server.url}/api/chat", json={}).json() == {"ok": True}
+        first = threading.Event()
+        scope = CancellationScope()
+        worker, _ = _under_scope(lambda: _read_stream(client, f"{server.url}/api/chat", first), scope)
+        held = server.held(1)
+        assert first.wait(PROMPTLY)
+
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert held.connection == server.seen[0].connection  # it went out on the kept connection
+        assert not worker.is_alive()
+        assert held.hung_up.wait(PROMPTLY)
 
 
 def test_cancellable_http_client_preserves_caller_event_hooks():
@@ -102,26 +200,3 @@ def test_cancellable_http_client_preserves_caller_event_hooks():
     client.get("http://example.test/ping")
 
     assert seen == ["custom"]
-
-
-def test_cancellable_async_http_client_closes_response_when_scope_is_cancelled():
-    async def run_case() -> None:
-        client = cancellable_async_http_client()
-        stream = _CloseCountingAsyncStream()
-        response = httpx.Response(200, request=httpx.Request("GET", "http://example.test/stream"), stream=stream)
-        scope = CancellationScope()
-
-        try:
-            with use_cancellation_scope(scope):
-                for hook in client.event_hooks["response"]:
-                    await hook(response)
-
-            assert stream.close_calls == 0
-            scope.cancel("test")
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            assert stream.close_calls == 1
-        finally:
-            await client.aclose()
-
-    asyncio.run(run_case())
