@@ -4513,6 +4513,12 @@ _current_person_rules_var: _contextvars.ContextVar[dict | None] = _contextvars.C
 )
 
 
+def current_person_rules() -> dict | None:
+    """The running workflow's "Always ask me" rules (N9), for an agent it starts: they go with it."""
+    rules = _current_person_rules_var.get(None)
+    return dict(rules) if rules else None
+
+
 def current_app_scope() -> dict | None:
     """What the running turn leaves out (see integrations.scope), for work it starts: an agent it
     delegates to never gains the apps this turn left out."""

@@ -4986,6 +4986,10 @@ def run_task_background(
                                 orchestration_id=str(orchestration.get("id") or ""),
                                 orchestration_required=wait_for_result,
                                 wait=False,
+                                # "Always ask me" goes with the agent this step starts (N9).
+                                person_rules={"step": bool(step.get("always_ask")),
+                                              "items": [str(item) for item in task.get("always_ask") or []]}
+                                if step.get("always_ask") or task.get("always_ask") else {},
                             )
                             child_run_id = str((child_run or {}).get("id") or "")
                             if wait_for_result:

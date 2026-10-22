@@ -9,6 +9,7 @@ request lane.
 from __future__ import annotations
 
 import operator
+import threading
 from typing import Annotated, TypedDict
 
 import pytest
@@ -209,3 +210,55 @@ def test_the_card_names_media_by_name_size_and_fingerprint(tmp_path):
     [media] = card["media"]
     assert (media["name"], media["size"], media["kind"]) == ("launch.png", len(content), "image")
     assert len(media["fingerprint"]) == 12
+
+
+def test_an_agent_the_workflow_starts_keeps_its_rules_and_only_the_person_answers(
+    tmp_path, monkeypatch, reload_for_data_dir,
+):
+    """A helper started from a workflow carries "Always ask me": its card is person-only, expires in a day,
+    and the person's approval resumes it bound to what the card showed."""
+    import importlib
+    import json
+
+    from tests.subsystem.agents.test_agent_runner import _fresh_agent_runner_modules
+
+    agent_runner, _runs, _profiles, _context, threads = _fresh_agent_runner_modules(
+        tmp_path, monkeypatch, reload_for_data_dir)
+    tasks = importlib.import_module("row_bot.tasks")
+    parent = threads.create_thread("Launch workflow run", approval_mode="full")
+    binding = approval_gate.call_binding("x_post", {"text": "Launch day!"})
+    seen: dict[str, object] = {}
+    resumed = threading.Event()
+
+    def fake_interrupt(prompt, enabled_tool_names, config, *, stop_event):
+        seen["rules"] = config["configurable"].get("person_rules")
+        return {"type": "interrupt", "interrupts": [{
+            "tool": "x_post", "label": "Post on X", "description": "Post on X: Launch day!",
+            "person_only": True, "binding": binding, "card": {"action": "Post on X", "text": "Launch day!"}}]}
+
+    def fake_resume(enabled_tool_names, config, approved, *, interrupt_ids=None, stop_event):
+        seen["answer"] = approved
+        resumed.set()
+        return "Posted."
+
+    monkeypatch.setattr(agent_runner, "_invoke_agent", fake_interrupt)
+    monkeypatch.setattr(agent_runner, "_resume_invoke_agent", fake_resume)
+    from row_bot import agent
+
+    agent._current_person_rules_var.set({"step": False, "items": ["builtin:account:x"]})
+    try:
+        run = agent_runner.spawn_agent_run("Post the launch on X.", parent_thread_id=parent,
+                                           enabled_tool_names=["x"], wait=True)
+    finally:
+        agent._current_person_rules_var.set(None)
+
+    assert seen["rules"] == {"step": False, "items": ["builtin:account:x"]}
+    assert run["status"] == "waiting_approval"
+    [approval] = tasks.get_pending_approvals(agent_run_id=run["id"])
+    payload = json.loads(approval["approval_payload_json"])
+    assert (payload["person_only"], payload["binding"]) == (True, binding)
+    assert approval["timeout_at"]  # It expires at the default timeout (a day).
+
+    assert tasks.respond_to_approval(approval["resume_token"], True) is True
+    assert resumed.wait(5)
+    assert seen["answer"] == approval_gate.bound_answer(True, binding)
