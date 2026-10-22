@@ -216,6 +216,7 @@ class PersonRun:
         self.apps: Any = None
         self._runner: Any = None
         self._comparing = False
+        self.build = _build()
 
     # ── Shared ──────────────────────────────────────────────────────────
 
@@ -284,6 +285,11 @@ class PersonRun:
         self.main_ref = f"model:codex:{model}"
         models.adopt_saved_default(self.main_ref)
         self._tools()
+        # Which build of Row-Bot ran which days (a run that goes on after an update says so).
+        builds = self.state.data.setdefault("builds", [])
+        if not builds or builds[-1].get("build") != self.build:
+            builds.append({"build": self.build, "from_day": self.clock.day, "at": time.strftime("%Y-%m-%d %H:%M")})
+            self.save()
 
     def _tools(self) -> None:
         """The person's tools (and the fake apps behind their calendar, mail and tracker). Tools that
@@ -455,7 +461,7 @@ class PersonRun:
         record: dict[str, Any] = {
             "id": request.id, "day": request.day, "label": label, "template": request.template,
             "intended": request.intended, "kind": kinds.classify(kinds.Request(text=request.prompt)).kind,
-            "thread": thread_id, "attempts": [], "reaction": [],
+            "thread": thread_id, "attempts": [], "reaction": [], "build": self.build,
         }
         text = request.prompt
         for attempt in range(1, 4):
@@ -640,6 +646,7 @@ class PersonRun:
             self.clock.advance(minutes=5)
             self.save()
         saved["done"] = True
+        saved["build"] = self.build
         self.gpu.release()
         self.save()
 
@@ -1318,12 +1325,24 @@ class PersonRun:
             "survival": data["survival"], "gpu": data["gpu"], "benchmark": data.get("benchmark"),
             "tokens": {"ledger": self.ledger_tokens(), "sim_person": self.sim.tokens.to_dict(),
                        "cloud_total": self.cloud_tokens()},
-            "refused_tool_calls": data.get("refused_tool_calls", 0),
+            "refused_tool_calls": data.get("refused_tool_calls", 0), "builds": data.get("builds", []),
             "write_backs": list(self.sign_in.write_backs) if self.sign_in else [],
         }
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _build() -> str:
+    """The checkout's commit this process runs (short), or "" when git can't say."""
+
+    import subprocess
+
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parents[4],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def _thread_id(person: str, key: str) -> str:

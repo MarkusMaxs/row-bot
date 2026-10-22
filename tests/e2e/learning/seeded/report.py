@@ -204,6 +204,7 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
         "days": result.get("days"), "history": result.get("history"), "model": result.get("model"),
         "stages": result.get("stages"), "past": result.get("past"), "live": live_work(result.get("requests") or ()),
         "container": (result.get("profile") or {}).get("container"),
+        "builds": list(result.get("builds") or []),
         "versions": [{key: item.get(key) for key in ("version", "trained_after_day", "state", "steps", "loss",
                                                      "training_seconds", "phase", "failure", "gguf_bytes",
                                                      "compared_on_day")}
@@ -383,6 +384,9 @@ def markdown(report: Mapping[str, Any]) -> str:
                      f"{live['approvals']['approved']}/{live['approvals']['asked']} approved; routed turns "
                      f"{live['routed']['turns']} ({live['routed']['answered_by_personal_model']} answered by the personal "
                      f"model); the product's kind of work agreed with the request's {_pct(live['kinds_agree'])}.")
+        if person.get("builds"):
+            lines.append("- Builds: " + "; ".join(f"`{item.get('build') or '?'}` from day {item.get('from_day')}"
+                                                  for item in person["builds"]) + ".")
         past = person.get("past") or {}
         lines.append(f"- Past: {past.get('conversations', '–')} conversations, {past.get('turns', '–')} turns imported "
                      f"as partial ({(past.get('import') or {}).get('state', '–')}).")
