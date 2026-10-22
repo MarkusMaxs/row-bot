@@ -23,6 +23,8 @@ Stages:
 - ``checks``: the survival checks that need the whole run (a negative result, a source deletion,
   app/engine version skew) and, when the product never offered a version, a trial asked for by the
   person, then Undo.
+- ``benchmark``: the run's own numbers, last (O116: the release check runs every person's work first and
+  the benchmarks after): Compare now on the newest version, on every held-out problem gathered.
 - ``tidy``: the models it made in Ollama go; every result stays.
 
 ``result.json`` holds counts, rates, times and tokens only: no request, reply or file text.
@@ -55,7 +57,7 @@ logger = logging.getLogger("row_bot.seeded")
 
 EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
-STAGES = ("profile", "past", "days", "checks", "tidy")
+STAGES = ("profile", "past", "days", "checks", "benchmark", "tidy")
 #: Extra simulated days generated beyond the run, for requests asked outside the stream (a night
 #: request while training, the asked-for trial).
 EXTRA_DAYS = 6
@@ -496,7 +498,7 @@ class PersonRun:
         """One message as the app sends it: routed to a personal model when one is used for its kind,
         under the generation registry (so the person's Stop is the app's Stop, and use is use)."""
 
-        from row_bot import agent, threads
+        from row_bot import agent
         from row_bot.learning import routing
         from row_bot.runtime.executions import generation_registry
 
@@ -548,6 +550,22 @@ class PersonRun:
                 watching.set()
                 agent._set_active_runtime_context()  # noqa: SLF001
             return interrupts
+
+        # A turn on a personal model uses the graphics card: it is booked like the rest (O105/O116).
+        booked_here = route is not None and self.gpu.held is None
+        if booked_here:
+            self.gpu.acquire(f"turns on personal model v{route.version}", expect="5 min, 4 GB")
+            started = time.monotonic()  # the turn's time (and the person's patience) start once it runs
+        try:
+            return self._turn(route, run, result, text, config, request, stop, thread_id, started)
+        finally:
+            if booked_here:
+                self.gpu.release()
+
+    def _turn(self, route: Any, run: Any, result: TurnResult, text: str, config: dict[str, Any], request: Any,
+              stop: threading.Event, thread_id: str, started: float) -> TurnResult:
+        from row_bot import agent, threads
+        from row_bot.learning import routing
 
         if route is not None:
             result.routed = {"kind": route.kind, "version": route.version, "state": route.state, "fallback": None}
@@ -1038,9 +1056,6 @@ class PersonRun:
     # ── Stage: checks ───────────────────────────────────────────────────
 
     def stage_checks(self) -> None:
-        if "benchmark" not in self.state.data and self.args.gpu:
-            self.state.data["benchmark"] = self._benchmark()
-            self.save()
         survival = self.state.data["survival"]
         for name, check in (("source_deletion", self._source_deletion), ("version_skew", self._version_skew),
                             ("trial_use_undo", self._trial_use_undo)):
@@ -1060,6 +1075,13 @@ class PersonRun:
                              "passed" if not any(item.get("used_by_itself") for item in observed) else "failed")
         for name in ("crash_mid_training", "pause_on_use"):
             survival.setdefault(name, {"state": "not_run", "why": "no training ran in this run"})
+        self.save()
+
+    def stage_benchmark(self) -> None:
+        if (self.state.data.get("benchmark") or {}).get("state") in ("done", "not_run"):
+            return
+        self.state.data["benchmark"] = (self._benchmark() if self.args.gpu else
+                                        {"state": "not_run", "why": "a run without the graphics card (--no-gpu)"})
         self.save()
 
     def _benchmark(self) -> dict[str, Any]:

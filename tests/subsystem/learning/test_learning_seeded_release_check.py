@@ -210,7 +210,8 @@ def test_each_person_runs_in_their_own_scratch_profile_and_nothing_is_written_el
     fake = FakePerson()
     check = release_check.ReleaseCheck(_args(tmp_path), runner=fake, say=lambda _text: None)
     built = check.execute()
-    assert [person for person, _env in fake.calls] == generator.people()
+    # Every person's work first, then every person's benchmark (O116).
+    assert [person for person, _env in fake.calls] == generator.people() * 2
     for person, env in fake.calls:
         data = Path(env["ROW_BOT_DATA_DIR"])
         assert data == (tmp_path / "scratch" / "8gb" / person / "data").resolve()
@@ -250,7 +251,7 @@ def test_the_same_command_again_continues_and_one_person_or_stage_can_run_alone(
     command_stages = check.stages
     assert command_stages == ["days"]
     state = json.loads((tmp_path / "out" / "8gb" / "wren" / "state.json").read_text(encoding="utf-8"))
-    assert state["starts"] == 2
+    assert state["starts"] == 3  # its work and its benchmark, then the days again
     assert json.loads((tmp_path / "out" / "run.json").read_text(encoding="utf-8"))["started_at"]
 
 

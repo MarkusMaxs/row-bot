@@ -41,7 +41,9 @@ ROOT = Path(__file__).resolve().parents[4]
 EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
 MAX_RESTARTS = 3
-STAGES = ("profile", "past", "days", "checks", "tidy")
+STAGES = ("profile", "past", "days", "checks", "benchmark", "tidy")
+#: Run after every person's work (O116): the benchmarks hold the card longest, and tidy follows them.
+LAST = ("benchmark", "tidy")
 #: Rough cloud tokens for --plan, from the pilots: a live request (a turn or two on GPT-6.1 Sol with the
 #: person's tools, a correction now and then: about 50K), the main model on the packs once a run (64 visible
 #: + 32 hidden x 3, kept 30 days and shared between the people), and its replay of a person's held-out work
@@ -156,13 +158,14 @@ class ReleaseCheck:
                     "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
         return env
 
-    def run_person(self, tier: str, person: str, spent_before: int) -> dict[str, Any]:
+    def run_person(self, tier: str, person: str, spent_before: int, stages: Sequence[str] = ()) -> dict[str, Any]:
         data = self.data_dir(tier, person)
         data.mkdir(parents=True, exist_ok=True)
         run_dir = self.person_dir(tier, person)
         command = [sys.executable, "-m", "tests.e2e.learning.seeded.live", "--person", person, "--data", str(data),
                    "--run-dir", str(run_dir), "--days", str(self.args.days), "--seed", str(self.args.seed),
-                   "--tier", tier, "--stages", ",".join(self.stages), "--eval-profile", str(self.args.eval_profile),
+                   "--tier", tier, "--stages", ",".join(stages or self.stages),
+                   "--eval-profile", str(self.args.eval_profile),
                    "--cap-tokens", str(self.args.cap_tokens), "--spent-before", str(spent_before),
                    "--lane", self.args.lane]
         if self.args.runtimes_from:
@@ -196,26 +199,33 @@ class ReleaseCheck:
         self.run.setdefault("people_runs", {})
         self.save_run()
         capped = False
-        for tier in self.tiers:
-            status = self.tier_status(tier)
-            self.run["tiers"][tier] = status
-            self.save_run()
-            if status != "ran":
-                self.say(f"tier {tier}: {status}; skipped")
+        work = [stage for stage in self.stages if stage not in LAST]
+        last = [stage for stage in self.stages if stage in LAST]
+        for stages, suffix in ((work, ""), (last, " (benchmark)")):  # every person's work, then the benchmarks
+            if not stages:
                 continue
-            for person in self.people:
-                spent = self.spent()
-                if capped or spent >= self.args.cap_tokens:
-                    self.say(f"token cap reached ({spent:,}); {tier}/{person} not run")
-                    self.run["people_runs"][f"{tier}/{person}"] = {"state": "token_cap"}
-                    self.save_run()
-                    continue
-                self.say(f"── {tier}/{person} (cloud tokens so far {spent:,})")
-                outcome = self.run_person(tier, person, spent)
-                self.run["people_runs"][f"{tier}/{person}"] = outcome
+            for tier in self.tiers:
+                status = self.tier_status(tier)
+                self.run["tiers"][tier] = status
                 self.save_run()
-                self.say(f"{tier}/{person}: {outcome['state']}")
-                capped = capped or outcome["state"] == "token_cap"  # the cap is the whole run's
+                if status != "ran":
+                    if not suffix:
+                        self.say(f"tier {tier}: {status}; skipped")
+                    continue
+                for person in self.people:
+                    key = f"{tier}/{person}{suffix}"
+                    spent = self.spent()
+                    if capped or spent >= self.args.cap_tokens:
+                        self.say(f"token cap reached ({spent:,}); {key} not run")
+                        self.run["people_runs"][key] = {"state": "token_cap"}
+                        self.save_run()
+                        continue
+                    self.say(f"── {key} (cloud tokens so far {spent:,})")
+                    outcome = self.run_person(tier, person, spent, stages)
+                    self.run["people_runs"][key] = outcome
+                    self.save_run()
+                    self.say(f"{key}: {outcome['state']}")
+                    capped = capped or outcome["state"] == "token_cap"  # the cap is the whole run's
         return self.write_report()
 
     def results(self) -> list[dict[str, Any]]:
