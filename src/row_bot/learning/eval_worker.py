@@ -321,9 +321,14 @@ def gather(arms: Sequence[WorkerArm]) -> tuple[list[Credential], dict[str, Any],
             if not endpoint or (endpoint.get("managed") and live is None):
                 unsupported.append(arm.name)
                 continue
-            endpoints[provider] = {key: endpoint[key] for key in (
+            handed = endpoints.setdefault(provider, {})
+            handed.update({key: endpoint[key] for key in (
                 "id", "name", "base_url", "profile", "execution_location", "auth_required", "reasoning_mode",
-                "manual_capabilities", "enabled") if key in endpoint}
+                "manual_capabilities", "enabled") if key in endpoint})
+            # The probe Row-Bot's readiness asks for, for this arm's model (several arms can share an endpoint).
+            probe = custom.custom_probe_for_model(endpoint, model_id)
+            if probe:
+                handed.setdefault("model_probes", {})[model_id] = probe
             if live is not None:
                 # Row-Bot's own model server (O75), held running by the comparison: handed over as the
                 # plain local endpoint it is while it runs, with the key it was given at this start.
@@ -867,15 +872,21 @@ def _forget_task(thread_id: str) -> None:
 
 
 def _seed_credentials(credentials: Sequence[Mapping[str, Any]], emit: Callable[[dict[str, Any]], None],
-                      secrets: list[str]) -> None:
+                      secrets: list[str]) -> dict[str, str]:
+    """Put the handed-over credentials in this process's store; a custom endpoint's key is returned
+    instead (by provider), to be saved with its endpoint, which scopes the key to it."""
+
     from row_bot.providers import auth_store
 
+    endpoint_keys: dict[str, str] = {}
     for raw in credentials:
         provider, kind = str(raw.get("provider") or ""), str(raw.get("kind") or "")
         values = {str(key): str(value) for key, value in dict(raw.get("values") or {}).items()}
         secrets.extend(value for key, value in values.items()
                        if value and key in ("api_key", "access_token", "refresh_token", "id_token"))
-        if kind == "api_key" and values.get("api_key"):
+        if kind == "api_key" and values.get("api_key") and provider.startswith("custom_openai_"):
+            endpoint_keys[provider] = values["api_key"]
+        elif kind == "api_key" and values.get("api_key"):
             auth_store.set_provider_secret(provider, "api_key", values["api_key"])
         elif kind == "codex_oauth" and values.get("access_token"):
             from row_bot.providers import codex
@@ -896,16 +907,21 @@ def _seed_credentials(credentials: Sequence[Mapping[str, Any]], emit: Callable[[
                 return saved
 
             codex.save_codex_oauth_tokens = save_and_report
+    return endpoint_keys
 
 
-def _setup_providers(spec: Mapping[str, Any], notes: list[str]) -> None:
+def _setup_providers(spec: Mapping[str, Any], notes: list[str], endpoint_keys: Mapping[str, str] | None = None) -> None:
     from row_bot import models
     from row_bot.providers import custom
 
     providers = dict(spec.get("providers") or {})
     for endpoint in providers.get("custom_endpoints") or ():
         try:
-            custom.save_custom_endpoint(dict(endpoint))
+            entry = dict(endpoint)
+            key = (endpoint_keys or {}).get(custom.custom_provider_id(str(entry.get("id") or "")))
+            if key:
+                entry["api_key"] = key  # saved with the endpoint, so it is the endpoint's own key
+            custom.save_custom_endpoint(entry)
             custom.refresh_custom_endpoint_models(str(endpoint.get("id") or ""))
         except Exception as error:  # noqa: BLE001 - the arm's first task reports it
             notes.append(f"endpoint {str(endpoint.get('id') or '')[:40]}: {type(error).__name__}")
@@ -1240,11 +1256,11 @@ def worker_main() -> int:
     logging.getLogger("row_bot").setLevel(logging.INFO)
     notes: list[str] = []
     try:
-        _seed_credentials(spec.get("credentials") or (), emit, secrets)
+        endpoint_keys = _seed_credentials(spec.get("credentials") or (), emit, secrets)
         spec.pop("credentials", None)
         import row_bot.agent  # noqa: F401 - binds the runtime before the gate patches the ledger
 
-        _setup_providers(spec, notes)
+        _setup_providers(spec, notes, endpoint_keys)
         _empty_libraries()
         fake = _register_fake_apps()
         tools = [name for name in safe_tools(spec.get("tools") or ()) if name not in fake]

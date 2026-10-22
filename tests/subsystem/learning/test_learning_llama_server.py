@@ -273,6 +273,7 @@ def test_a_model_name_or_file_cant_write_into_the_presets_file():
         llama_server.presets_text([ModelEntry("v1", "x.gguf\ntools = all", 32_768)])
     text = llama_server.presets_text([ModelEntry("row-bot-personal-v1", "C:/v1/v1.gguf", 32_768)])
     assert "reasoning = off" in text and "ctx-size = 32768" in text and "tools" not in text
+    assert "cache-ram = 2048" in text  # not llama.cpp's 8 GB of the computer's memory per model
 
 
 def test_two_models_stay_loaded_only_where_the_card_holds_both():

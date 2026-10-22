@@ -412,3 +412,52 @@ def test_row_bots_own_server_is_handed_over_while_it_runs_with_its_current_key(m
     _credentials, _providers, unsupported = eval_worker.gather([
         eval_worker.WorkerArm("new", "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v2")])
     assert unsupported == ["new"]
+
+
+def test_each_arm_on_row_bots_server_hands_its_own_probe_to_the_worker(tmp_path, monkeypatch):
+    import row_bot.providers.config as provider_config
+    from row_bot.providers import custom
+
+    probes = {model: {"ok": True, "model_id": model, "tool_calling": True, "tool_round_trip": True}
+              for model in ("row-bot-personal-base", "row-bot-personal-v2")}
+    endpoint = {"id": "row-bot-personal-row-bot", "provider_id": "custom_openai_row-bot-personal-row-bot",
+                "base_url": "http://127.0.0.1:8123/v1", "profile": "llama_cpp", "auth_required": False,
+                "managed": "learning", "model_probes": probes,
+                "last_probe": probes["row-bot-personal-v2"]}
+    stored = custom.get_custom_endpoint
+    monkeypatch.setattr(custom, "get_custom_endpoint", lambda provider: dict(endpoint))
+    monkeypatch.setattr(custom, "managed_connection", lambda found, start=True: ("http://127.0.0.1:8124/v1", "key-1"))
+
+    _credentials, providers, unsupported = eval_worker.gather([
+        eval_worker.WorkerArm("base", "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-base"),
+        eval_worker.WorkerArm("new", "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v2")])
+
+    assert unsupported == []
+    (handed,) = providers["custom_endpoints"]
+    # In the worker (a fresh provider config), Row-Bot's readiness finds each arm's own probe.
+    monkeypatch.setattr(custom, "get_custom_endpoint", stored)
+    monkeypatch.setattr(provider_config, "CONFIG_PATH", tmp_path / "providers.json")
+    custom.save_custom_endpoint(dict(handed), manage_secret=False)
+    there = custom.get_custom_endpoint("custom_openai_row-bot-personal-row-bot")
+    for model in probes:
+        assert custom.custom_probe_for_model(there, model)["model_id"] == model
+
+
+def test_a_local_endpoints_key_is_saved_with_its_endpoint_so_the_worker_can_use_it(memory_keyring, tmp_path,
+                                                                                   monkeypatch):
+    import row_bot.providers.config as provider_config
+    from row_bot.providers import auth_store, custom, runtime
+
+    monkeypatch.setattr(provider_config, "CONFIG_PATH", tmp_path / "providers.json")
+    monkeypatch.setattr(custom, "refresh_custom_endpoint_models", lambda *args, **kwargs: [])
+    provider = "custom_openai_row-bot-personal-row-bot"
+    secrets: list[str] = []
+
+    keys = eval_worker._seed_credentials([{"provider": provider, "kind": "api_key",  # noqa: SLF001
+                                           "values": {"api_key": "key-1"}}], lambda frame: None, secrets)
+    eval_worker._setup_providers({"providers": {"custom_endpoints": [{  # noqa: SLF001
+        "id": "row-bot-personal-row-bot", "base_url": "http://127.0.0.1:8124/v1", "profile": "llama_cpp",
+        "auth_required": True}]}}, [], keys)
+
+    assert runtime.provider_status(provider)["configured"] is True  # Row-Bot's readiness asks this first
+    assert auth_store.get_provider_secret(provider, "api_key") == "key-1" and "key-1" in secrets

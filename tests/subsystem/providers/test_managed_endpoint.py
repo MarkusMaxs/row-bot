@@ -92,3 +92,37 @@ def test_a_managed_endpoints_probe_carries_the_running_servers_key(monkeypatch):
         {"id": "row-bot-personal-row-bot", "base_url": "http://127.0.0.1:8125/v1", "managed": "learning"}))
 
     assert headers["Authorization"] == "Bearer k"
+
+
+def test_each_model_on_row_bots_server_keeps_its_own_probe_when_it_starts_on_another_port(tmp_path, monkeypatch):
+    import row_bot.providers.config as provider_config
+
+    monkeypatch.setattr(provider_config, "CONFIG_PATH", tmp_path / "providers.json")
+    endpoint = {"id": "row-bot-personal-row-bot", "base_url": "http://127.0.0.1:8121/v1", "profile": "llama_cpp",
+                "auth_required": False, "managed": "learning"}
+    custom.save_custom_endpoint(endpoint)
+    for model in ("row-bot-personal-base", "row-bot-personal-v2"):  # a version, then the starting model it's compared with
+        custom._store_custom_endpoint_probe(  # noqa: SLF001 - what a probe stores
+            "row-bot-personal-row-bot", {"ok": True, "model_id": model, "tool_calling": True, "tool_round_trip": True})
+    custom.save_custom_endpoint({**endpoint, "base_url": "http://127.0.0.1:8125/v1"})  # its old port was taken
+
+    saved = custom.get_custom_endpoint("custom_openai_row-bot-personal-row-bot")
+    assert custom.custom_probe_for_model(saved, "row-bot-personal-base")["model_id"] == "row-bot-personal-base"
+    assert custom.custom_probe_for_model(saved, "row-bot-personal-v2")["model_id"] == "row-bot-personal-v2"
+    assert custom.custom_probe_for_model(saved, "row-bot-personal-v3") == {}  # never probed
+
+
+def test_any_other_endpoint_still_keeps_only_its_last_probe_and_drops_it_for_a_new_address(tmp_path, monkeypatch):
+    import row_bot.providers.config as provider_config
+
+    monkeypatch.setattr(provider_config, "CONFIG_PATH", tmp_path / "providers.json")
+    endpoint = {"id": "lab", "base_url": "http://127.0.0.1:8000/v1", "auth_required": False}
+    custom.save_custom_endpoint(endpoint)
+    for model in ("a", "b"):
+        custom._store_custom_endpoint_probe(  # noqa: SLF001
+            "lab", {"ok": True, "model_id": model, "tool_calling": True, "tool_round_trip": True})
+
+    saved = custom.get_custom_endpoint("custom_openai_lab")
+    assert custom.custom_probe_for_model(saved, "a") == {} and custom.custom_probe_for_model(saved, "b")["ok"]
+    custom.save_custom_endpoint({**endpoint, "base_url": "http://127.0.0.1:9000/v1"})
+    assert custom.custom_probe_for_model(custom.get_custom_endpoint("custom_openai_lab"), "b") == {}

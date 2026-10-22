@@ -72,6 +72,7 @@ START_SECONDS = 60.0
 LOAD_SECONDS = 600.0
 # A server that doesn't answer its health check this many times in a row is ended.
 MISSED_HEALTH = 3
+PROMPT_CACHE_MIB = 2048  # per loaded model, in the computer's memory
 STOP_SECONDS = 10.0
 # Graphics memory a loaded model needs besides its file (its context, compute buffers, CUDA itself).
 MODEL_OVERHEAD_BYTES = 1_200_000_000
@@ -154,9 +155,11 @@ def _ini_value(value: str) -> str:
 def presets_text(models: Sequence[ModelEntry]) -> str:
     """The presets file: settings every model shares, then one section per model (its name, file and
     context). Reasoning is off (personal models are non-thinking, O24); Jinja templates parse the
-    model's own tool calls; one request at a time per model."""
+    model's own tool calls; one request at a time per model; the prompt cache each model keeps in the
+    computer's memory is capped at ``PROMPT_CACHE_MIB`` (llama.cpp's default is 8 GB per model)."""
 
-    lines = ["version = 1", "", "[*]", "jinja = true", "reasoning = off", "parallel = 1", ""]
+    lines = ["version = 1", "", "[*]", "jinja = true", "reasoning = off", "parallel = 1",
+             f"cache-ram = {PROMPT_CACHE_MIB}", ""]
     for entry in sorted(models, key=lambda item: item.name):
         lines += [f"[{_ini_value(entry.name)}]", f"model = {_ini_value(entry.gguf)}",
                   f"ctx-size = {int(entry.context)}", ""]
