@@ -61,6 +61,8 @@ STAGES = ("profile", "past", "days", "checks", "tidy")
 EXTRA_DAYS = 6
 #: The person's monthly Learning limit in these runs (the user's own choice on their preview, PLAN.md).
 MONTHLY_LIMIT = 10_000_000
+#: How long the pause-on-use check waits for a run to pause after the person's request (it pauses at a step).
+PAUSE_PATIENCE_SECONDS = 600
 #: A training job's states once its training finished (a version is made of it, or was).
 TRAINED = ("evaluating", "ready", "trial", "in_use", "not_used")
 
@@ -816,6 +818,9 @@ class PersonRun:
         entry.setdefault("trained_after_day", day)
         entry.setdefault("job", job.id)
         waited_for_use = 0
+        # The step this worker started from (a resumed run starts at its checkpoint): the pause-on-use check
+        # waits until this run has taken a step of its own, so it isn't still loading the model.
+        first_step = int(job.steps_done or 0)
         while True:
             current = supervisor.jobs.get(job.id)
             if current is None:
@@ -841,7 +846,7 @@ class PersonRun:
                 os._exit(EXIT_PLANNED_CRASH)  # no clean-up: the job object ends the training worker
             pause = survival.get("pause_on_use")
             if (pause is None and (crash is not None or not self.args.crash) and current.state == "running"
-                    and current.steps_done >= 2):
+                    and current.steps_done >= max(2, first_step + 1)):
                 self._pause_on_use(current, day)
             time.sleep(2.0)
         supervisor.wait_idle(120)
@@ -895,11 +900,13 @@ class PersonRun:
         self.note(f"pause on use: asking while v{job.version} trains (step {job.steps_done})")
         record = self.ask(request, label="night")
         self.state.data["requests"].append(record)
-        deadline = time.monotonic() + 180
+        asked = time.monotonic()
+        deadline = asked + PAUSE_PATIENCE_SECONDS
         paused = supervisor.jobs.get(job.id)
         while paused is not None and paused.state in ("running", "pausing") and time.monotonic() < deadline:
             time.sleep(1.0)
             paused = supervisor.jobs.get(job.id)
+        check["seconds_to_pause"] = round(time.monotonic() - asked, 1)  # after the request's turn ended
         check.update({"state_after_use": paused.state if paused else None,
                       "pause_reason": paused.pause_reason if paused else None,
                       "paused_at_step": paused.steps_done if paused else None})
