@@ -333,22 +333,6 @@ it('leaves a finished run to its version’s card', () => {
   expect(screen.queryByRole('region', { name: 'Training' })).toBeNull();
 });
 
-it('says the steps a finished run trained, fewer than planned when a pass did no better', () => {
-  show(
-    trainingRun({
-      state: 'evaluating',
-      job_id: 'job_1',
-      version: 1,
-      step: 106,
-      steps_total: 159,
-      runner: { state: 'trained', reason: null },
-    }),
-  );
-  expect(
-    screen.getByText('Trained v1 · 106 steps.', SHOWN),
-  ).toBeInTheDocument();
-});
-
 it('shows nothing while there is no training engine', () => {
   show(trainingRun());
   expect(screen.queryByRole('region', { name: 'Training' })).toBeNull();

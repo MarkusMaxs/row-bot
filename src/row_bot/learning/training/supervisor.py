@@ -468,14 +468,15 @@ class TrainingSupervisor:
                                    message["step"])
                 self._notify(wake=False)
                 return
-            elif kind == "kept":
-                # Which pass the run kept and each pass's validation loss (O117): its model card says so.
+            elif kind == "passes":
+                # Each pass's validation loss and saved adapter (O119): a version that can't finish a
+                # short task falls back to the pass before.
                 try:
-                    (jobs_module.run_dir(job.id, self.jobs.root) / jobs_module.KEPT_FILE).write_text(
-                        json.dumps({key: message[key] for key in ("pass", "losses", "most", "reason")},
-                                   sort_keys=True), encoding="utf-8")
+                    (jobs_module.run_dir(job.id, self.jobs.root) / jobs_module.PASSES_FILE).write_text(
+                        json.dumps({"losses": message["losses"], "files": message["files"]}, sort_keys=True),
+                        encoding="utf-8")
                 except OSError:
-                    logger.warning("Learning couldn't record which pass a training run kept")
+                    logger.warning("Learning couldn't record a training run's passes")
                 return
             elif kind == "artifacts":
                 # What the finished run produced (names, sizes, SHA-256): the version's adapter is checked

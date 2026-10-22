@@ -10,6 +10,7 @@ driven step by step (no sleeps); every process here ends before its test does.""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -132,36 +133,38 @@ def test_train_now_runs_a_worker_that_reports_progress_and_keeps_the_newest_two_
     assert training.dataset.prepared == [job.id]
 
 
-# O117: up to three passes of 4 steps; the pass with the lowest validation loss is kept.
-BEST_PASS = {"name": "8gb-v1", "settings": {"report_to": "none", "passes": 3, "best_pass": 1}}
+# O119: three passes of 4 steps; each pass's adapter is saved and reported.
+PASSES = {"name": "8gb-v1", "settings": {"report_to": "none", "passes": 3}}
 
 
-@pytest.mark.parametrize("losses, validation, kept, stopped_at, reason", [
-    ([0.9, 0.5, 0.7], 2, 2, 12, "lowest_validation_loss"),  # three passes: the second did best
-    ([0.5, 0.6, 0.4], 2, 1, 8, "lowest_validation_loss"),  # the second did no better: training stops there
-    ([], 0, 1, 4, "no_validation_rows"),  # nothing held back to compare on: one pass, and it says so
+@pytest.mark.parametrize("losses, validation, reported", [
+    ([0.9, 0.5, 0.7], 2, [0.9, 0.5, 0.7]),  # the loss on the rows held back, for the model card
+    ([], 0, [None, None, None]),  # no rows held back: none measured
 ])
-def test_a_run_keeps_the_pass_with_the_lowest_validation_loss_and_stops_when_one_does_no_better(
-        learning_on, clock, losses, validation, kept, stopped_at, reason):
-    training = _training(learning_on, clock, steps_total=12, recipe=BEST_PASS, validation=validation,
-                         pace="free", validation_losses=losses)
+def test_a_run_of_several_passes_saves_and_reports_each_passs_adapter(learning_on, clock, losses, validation,
+                                                                       reported):
+    training = _training(learning_on, clock, steps_total=12, recipe=PASSES, validation=validation, pace="free",
+                         validation_losses=losses)
     try:
         training.supervisor.train_now(training.job.id)
         job = training.until(lambda job: job.state == "evaluating")
-        assert (job.steps_done, job.steps_total) == (stopped_at, 12)
+        assert (job.steps_done, job.steps_total) == (12, 12)  # every pass trains
         run = training_jobs.run_dir(job.id, training.root)
-        record = json.loads((run / training_jobs.KEPT_FILE).read_text(encoding="utf-8"))
-        assert record == {"pass": kept, "losses": losses[:stopped_at // 4] or [None], "most": 3, "reason": reason}
-        # What it hands over is the kept pass's adapter, as saved at that pass's end.
+        record = json.loads((run / training_jobs.PASSES_FILE).read_text(encoding="utf-8"))
+        assert record["losses"] == reported
         checkpoints = run / "checkpoints"
-        assert (checkpoints / "adapter.bin").read_bytes() == (checkpoints / f"pass-{kept}" / "adapter.bin").read_bytes()
+        saved = [(checkpoints / f"pass-{number}" / "adapter.bin").read_bytes() for number in (1, 2, 3)]
+        assert len(set(saved)) == 3  # each pass's own adapter, as it was at that pass's end
+        assert [[item["sha256"] for item in files] for files in record["files"]] == [
+            [hashlib.sha256(item).hexdigest()] for item in saved]
+        assert (checkpoints / "adapter.bin").read_bytes() == saved[2]  # the run's adapter is the last pass's
         assert training.supervisor.wait_idle(10)
     finally:
         training.stop()
 
 
 def test_a_resumed_run_remembers_the_passes_before_it(learning_on, clock):
-    training = _training(learning_on, clock, steps_total=12, recipe=BEST_PASS, validation=2,
+    training = _training(learning_on, clock, steps_total=12, recipe=PASSES, validation=2,
                          validation_losses=[0.5, 0.6, 0.4])
     try:
         training.start()
@@ -169,12 +172,11 @@ def test_a_resumed_run_remembers_the_passes_before_it(learning_on, clock):
         training.supervisor.stop(training.job.id)  # continues from step 5's checkpoint
         training.supervisor.train_now(training.job.id)
         training.until(lambda job: job.state == "running")
-        training.supervisor.live_worker().advance(3)  # pass 2 at step 8 did no better than pass 1
+        training.supervisor.live_worker().advance(7)
         job = training.until(lambda job: job.state == "evaluating")
-        assert job.steps_done == 8
-        record = json.loads((training_jobs.run_dir(job.id, training.root) / training_jobs.KEPT_FILE).read_text(
+        record = json.loads((training_jobs.run_dir(job.id, training.root) / training_jobs.PASSES_FILE).read_text(
             encoding="utf-8"))
-        assert (record["pass"], record["losses"]) == (1, [0.5, 0.6])
+        assert record["losses"] == [0.5, 0.6, 0.4] and len(record["files"]) == 3
         assert training.supervisor.wait_idle(10)
     finally:
         training.stop()
