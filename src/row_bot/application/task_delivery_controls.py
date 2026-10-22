@@ -17,6 +17,10 @@ def _snapshot() -> dict:
     selected = tasks.get_workflow_default_channels()
     channels = []
     for channel in registry.configured_channels()[:32]:
+        # Only channels set up to deliver: WhatsApp's bridge alone isn't, until a phone is linked (B345).
+        set_up = getattr(channel, "is_set_up", None)
+        if callable(set_up) and set_up() is not True:
+            continue
         identifier = getattr(channel, "name", "")
         if not isinstance(identifier, str) or not re.fullmatch(
             r"[A-Za-z0-9:_-]{1,128}", identifier

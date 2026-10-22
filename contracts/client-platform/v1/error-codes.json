@@ -505,6 +505,7 @@
     "resource_state_invalid": 503,
     "resource_too_large": 413,
     "resource_unavailable": 404,
+    "restore_expired": 409,
     "revision_conflict": 409,
     "runtime_installation_command_unavailable": 404,
     "runtime_installation_owner_unavailable": 409,

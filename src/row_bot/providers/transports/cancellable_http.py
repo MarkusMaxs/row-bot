@@ -1,69 +1,206 @@
-"""httpx clients that let an active CancellationScope abort in-flight requests.
+"""httpx clients whose requests Stop ends at once, on every OS.
 
-Row-Bot's own transports (``openai_compatible.py``, ``codex_responses.py``,
-etc.) stream raw HTTP themselves and register the in-flight response with
-``current_cancellation_scope()`` so Stop can close a stalled connection.
-Chat models built directly from provider SDK wrappers delegate all networking
-to those SDKs, which gives Row-Bot no such hook by default -- a stalled stream
-on those models cannot be aborted by Stop and leaves the thread stuck
-"Thinking" until the app is restarted. Passing clients built here into SDKs
-that support caller-owned HTTP clients closes that gap without needing a full
-custom transport.
+Stop cancels the run's ``CancellationScope``. Each request sent through these clients registers with the scope
+active where it is sent, as it starts, and Stop shuts the request's socket down: a read blocked on it ends at
+once, whether the provider has sent headers yet or is mid-stream, and the provider sees the client go, so it
+stops working on the answer. Closing the response or the client isn't enough: on Linux a close doesn't wake a
+read blocked in another thread and the server never sees the client leave, so a turn stayed "stopping" until
+the provider answered (and before headers nothing was registered at all, on any OS).
+
+- httpcore's ``trace`` extension hands over the request's socket as it connects (with TLS, the TLS socket); a
+  request Stop came before is shut down as it connects, and one Stop came before it was sent isn't sent.
+- One connection per request (no keep-alive), so a request's socket is its own: Stop for one run never touches
+  another run's request on a shared client. A request on a connection opened earlier (a client that keeps
+  connections and borrows these hooks) learns its socket when the response arrives.
+- Stop during a TLS handshake ends the request once the handshake is over (TLS takes the socket over while it
+  runs), within the connect timeout at the latest.
+- A request Stop ended raises ``RequestStopped``. Provider SDKs retry a request that failed to connect or read;
+  given their own subclass (``stopped=``), which the SDK passes on as one of its own errors, they don't send it
+  again.
+
+Row-Bot's own transports (``openai_compatible.py``, ``codex_responses.py``, ...) send through these clients, and
+SDK chat models get them as their caller-owned HTTP clients.
 """
 
 from __future__ import annotations
 
-import asyncio
+import socket
+import threading
+from collections.abc import Callable, Mapping
+from typing import Any
 
 import httpx
 
 from row_bot.cancellation import current_cancellation_scope
 
+# One connection per request: a request's socket is its own.
+ONE_REQUEST_PER_CONNECTION = httpx.Limits(max_keepalive_connections=0)
+_CONNECTED = (".connect_tcp.complete", ".start_tls.complete")
+_ENDED = (".response_closed.started", ".connect_tcp.failed", ".start_tls.failed")
 
-def _register_response_with_active_scope(response: httpx.Response) -> None:
+
+class RequestStopped(InterruptedError):
+    """Stop ended this request, or came before it was sent."""
+
+
+def _shut(sock: Any) -> None:
+    # A shutdown, not a close: only a shutdown wakes a read blocked in another thread on Linux, and it tells the
+    # provider the client has gone. The plain socket's shutdown also takes a TLS socket's, with no TLS goodbye;
+    # an async client's socket is asyncio's wrapper, which has its own.
+    try:
+        if isinstance(sock, socket.socket):
+            socket.socket.shutdown(sock, socket.SHUT_RDWR)
+        else:
+            sock.shutdown(socket.SHUT_RDWR)
+    except (AttributeError, OSError):
+        pass  # already closed
+
+
+class _Request:
+    """One request, which Stop ends by shutting its socket down, connected yet or not."""
+
+    def __init__(self, earlier: Callable[..., Any] | None) -> None:
+        self._lock = threading.Lock()
+        self._socket: Any = None
+        self._stopped = False
+        self._ended = False
+        self._earlier = earlier
+        self.unregister: Callable[[], None] = lambda: None
+
+    def stop(self) -> None:
+        # Under the lock: once the request is over its connection closes, and its socket is never shut after that.
+        with self._lock:
+            self._stopped = True
+            if self._socket is not None:
+                _shut(self._socket)
+
+    def learn(self, sock: Any) -> None:
+        with self._lock:
+            if self._ended or sock is None:
+                return
+            self._socket = sock
+            if self._stopped:
+                _shut(sock)
+
+    def _see(self, event: str, info: Mapping[str, Any]) -> None:
+        if event.endswith(_CONNECTED):
+            self.learn(info["return_value"].get_extra_info("socket"))
+        elif event.endswith(".start_tls.started"):
+            # TLS takes the connected socket over; its own socket is learned once TLS is up.
+            with self._lock:
+                self._socket = None
+        elif event.endswith(_ENDED):
+            with self._lock:
+                self._socket, self._ended = None, True
+            self.unregister()
+
+    def trace(self, event: str, info: Mapping[str, Any]) -> None:
+        """httpcore's ``trace`` extension (sync clients)."""
+        self._see(event, info)
+        if self._earlier is not None:
+            self._earlier(event, info)
+
+    async def atrace(self, event: str, info: Mapping[str, Any]) -> None:
+        """httpcore's ``trace`` extension (async clients)."""
+        self._see(event, info)
+        if self._earlier is not None:
+            await self._earlier(event, info)
+
+
+def _start(request: httpx.Request, stopped: type[RequestStopped], *, asynchronous: bool) -> None:
     scope = current_cancellation_scope()
     if scope is None:
         return
-    close = getattr(response, "close", None)
-    if callable(close):
-        scope.register(close, "cancellable_http_client.response.close")
+    if scope.is_cancelled():
+        raise stopped("execution_cancelled")
+    stop = _Request(request.extensions.get("trace"))
+    request.extensions["trace"] = stop.atrace if asynchronous else stop.trace
+    stop.unregister = scope.register(stop.stop, "cancellable_http.request.stop")
 
 
-async def _register_async_response_with_active_scope(response: httpx.Response) -> None:
+def _learn_from_response(response: httpx.Response) -> None:
+    stop = getattr(response.request.extensions.get("trace"), "__self__", None)
+    stream = response.extensions.get("network_stream")
+    if isinstance(stop, _Request) and stream is not None:
+        stop.learn(stream.get_extra_info("socket"))
+
+
+async def _alearn_from_response(response: httpx.Response) -> None:
+    _learn_from_response(response)
+
+
+def _raise_if_stopped(stopped: type[RequestStopped], error: Exception) -> None:
     scope = current_cancellation_scope()
-    if scope is None:
-        return
-    aclose = getattr(response, "aclose", None)
-    if not callable(aclose):
-        return
-    loop = asyncio.get_running_loop()
+    if scope is not None and scope.is_cancelled() and not isinstance(error, RequestStopped):
+        raise stopped("execution_cancelled") from error
 
-    def close_response() -> None:
+
+class _StoppableClient(httpx.Client):
+    def __init__(self, *, stopped: type[RequestStopped], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._stopped = stopped
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
         try:
-            loop.call_soon_threadsafe(lambda: loop.create_task(aclose()))
-        except RuntimeError:
-            pass
+            return super().send(request, **kwargs)
+        except Exception as error:
+            _raise_if_stopped(self._stopped, error)
+            raise
 
-    scope.register(close_response, "cancellable_async_http_client.response.aclose")
+
+class _StoppableAsyncClient(httpx.AsyncClient):
+    def __init__(self, *, stopped: type[RequestStopped], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._stopped = stopped
+
+    async def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        try:
+            return await super().send(request, **kwargs)
+        except Exception as error:
+            _raise_if_stopped(self._stopped, error)
+            raise
 
 
-def cancellable_http_client(**kwargs: object) -> httpx.Client:
-    """Build an ``httpx.Client`` whose responses can be closed by Stop.
+def request_stop_hooks(
+    *, asynchronous: bool = False, stopped: type[RequestStopped] = RequestStopped
+) -> dict[str, list[Callable[..., Any]]]:
+    """The event hooks that make a client's requests stoppable: each registers with Stop as it starts.
 
-    Each response made through the returned client registers its ``close``
-    with whatever ``CancellationScope`` is active on the calling thread, so a
-    stalled read is aborted the same way Row-Bot's own streaming transports
-    already behave.
+    These module's clients carry them; a client another library builds can take them too, with
+    ``limits=ONE_REQUEST_PER_CONNECTION`` (only these module's clients also turn a failure after Stop into
+    ``stopped``).
     """
+    if asynchronous:
+        async def astart(request: httpx.Request) -> None:
+            _start(request, stopped, asynchronous=True)
 
-    event_hooks = dict(kwargs.pop("event_hooks", None) or {})
-    event_hooks["response"] = [*event_hooks.get("response", []), _register_response_with_active_scope]
-    return httpx.Client(event_hooks=event_hooks, **kwargs)
+        return {"request": [astart], "response": [_alearn_from_response]}
+
+    def start(request: httpx.Request) -> None:
+        _start(request, stopped, asynchronous=False)
+
+    return {"request": [start], "response": [_learn_from_response]}
 
 
-def cancellable_async_http_client(**kwargs: object) -> httpx.AsyncClient:
-    """Build an ``httpx.AsyncClient`` whose responses can be closed by Stop."""
+def _client_kwargs(kwargs: dict[str, Any], *, asynchronous: bool, stopped: type[RequestStopped]) -> dict[str, Any]:
+    hooks = dict(kwargs.pop("event_hooks", None) or {})
+    for event, ours in request_stop_hooks(asynchronous=asynchronous, stopped=stopped).items():
+        hooks[event] = [*hooks.get(event, []), *ours]
+    kwargs.setdefault("limits", ONE_REQUEST_PER_CONNECTION)
+    return {**kwargs, "event_hooks": hooks}
 
-    event_hooks = dict(kwargs.pop("event_hooks", None) or {})
-    event_hooks["response"] = [*event_hooks.get("response", []), _register_async_response_with_active_scope]
-    return httpx.AsyncClient(event_hooks=event_hooks, **kwargs)
+
+def cancellable_http_client(*, stopped: type[RequestStopped] = RequestStopped, **kwargs: Any) -> httpx.Client:
+    """An ``httpx.Client`` whose requests Stop ends at once (see the module docstring).
+
+    ``stopped`` is the error a stopped request raises: an SDK's own subclass of ``RequestStopped``, so the SDK
+    doesn't retry it. A caller's event hooks run first.
+    """
+    return _StoppableClient(stopped=stopped, **_client_kwargs(kwargs, asynchronous=False, stopped=stopped))
+
+
+def cancellable_async_http_client(
+    *, stopped: type[RequestStopped] = RequestStopped, **kwargs: Any
+) -> httpx.AsyncClient:
+    """An ``httpx.AsyncClient`` whose requests Stop ends at once (see ``cancellable_http_client``)."""
+    return _StoppableAsyncClient(stopped=stopped, **_client_kwargs(kwargs, asynchronous=True, stopped=stopped))
