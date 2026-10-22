@@ -54,6 +54,7 @@ import {
   VersionsSection,
 } from './PersonalModelUse';
 import { CardRoomNotice } from './CardRoomNotice';
+import { StrongerModelNotice } from './StrongerModelNotice';
 import { TrainingProgress } from './TrainingProgress';
 import {
   CHANGE_NAMES,
@@ -563,6 +564,9 @@ function PersonalModel({
     <div className="learning-section-list">
       {model.room && (
         <CardRoomNotice io={io} room={model.room} model={starting.name} />
+      )}
+      {model.stronger_model && !model.room && (
+        <StrongerModelNotice io={io} model={model.stronger_model} />
       )}
       {download && <DownloadProgress io={io} snapshot={snapshot} />}
       {preparing && (

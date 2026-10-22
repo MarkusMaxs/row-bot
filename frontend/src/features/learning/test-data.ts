@@ -191,6 +191,32 @@ export const GPU_8GB: LearningHardware = {
   free_bytes: 512_000_000_000,
 };
 
+/** A 32 GB card certified for the 9B (O124): setup recommends it; the 2B fits too. */
+export const GPU_32GB: LearningHardware = {
+  ...GPU_8GB,
+  gpu: {
+    name: 'NVIDIA GeForce RTX 5090',
+    memory_gb: 32,
+    label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+  },
+  tier: {
+    id: '32gb',
+    label: '32 GB',
+    certified: true,
+    summary: 'Can train medium models (about 9B) on your tasks.',
+  },
+  starting_models: [
+    {
+      id: 'qwen3.5-9b',
+      name: 'Qwen3.5 9B',
+      licence: 'Apache 2.0',
+      download_bytes: 19_300_000_000,
+    },
+    ...GPU_8GB.starting_models,
+  ],
+  free_bytes: 700_000_000_000,
+};
+
 export const NO_GPU: LearningHardware = {
   state: 'no_gpu',
   gpu: null,
@@ -392,7 +418,6 @@ export function advancedState(
   overrides: Partial<LearningAdvanced> = {},
 ): LearningAdvanced {
   const values = {
-    starting_model: 'qwen3.5-2b',
     rank: 16,
     learning_rate: 0.0002,
     epochs: 1,
@@ -404,7 +429,6 @@ export function advancedState(
     recommended: values,
     changed: false,
     choices: {
-      starting_model: [{ id: 'qwen3.5-2b', name: 'Qwen3.5 2B' }],
       rank: [8, 16, 32, 64],
       learning_rate: [0.00005, 0.0001, 0.0002, 0.0003, 0.0005],
       epochs: [1, 2, 3],

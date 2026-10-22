@@ -407,8 +407,7 @@ def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, mo
               "conversation_id": "chat-b", "message_id": "run-msg-3", "signal_id": "sig_unknown",
               "category": "wrong_answer"}
     extra = {"turn_on": {"setup": SETUP},
-             "save_advanced": {"advanced": {"starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002,
-                                            "epochs": 3, "context": 16384}}}
+             "save_advanced": {"advanced": {"rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384}}}
 
     reached = 0
     for action in actions:

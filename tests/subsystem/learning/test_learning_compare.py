@@ -381,3 +381,30 @@ def test_a_version_running_in_row_bot_is_compared_there_with_its_starting_model_
     assert asked_runtimes == ["row_bot"] and held == ["enter row_bot", "exit"]
     arms = {arm["key"]: arm["model_ref"] for arm in result["arms"]}
     assert arms["v1"] == personal and arms["base"].endswith(":row-bot-personal-base")
+
+
+def test_a_version_is_compared_with_its_own_starting_model_after_the_person_changed_it(learning_on, monkeypatch):
+    """O124: the person moved from the 2B to the 9B after v1 trained; v1 is still compared with the 2B."""
+
+    from pathlib import Path
+
+    from row_bot.learning.training import base_model, weights
+
+    LearningStore(learning_on).create()
+    save_learning_settings(learning_on, enabled=True, starting_model="qwen3.5-9b")
+    folder = releases.version_dir(1, learning_on)
+    releases.write_state(folder, releases.VersionState(version=1, phase=releases.READY, job_id="job_1",
+                                                       model_ref=PERSONAL, runtime="ollama"))
+    (folder / releases.MANIFEST_FILE).write_text(json.dumps({"identity": {"base": {"name": "Qwen/Qwen3.5-2B"}}}),
+                                                 encoding="utf-8")
+    monkeypatch.setattr(weights, "status", lambda model, root=None: weights.WeightsStatus("downloaded", 1, Path(".")))
+    served: list[str] = []
+    monkeypatch.setattr(base_model, "ensure",
+                        lambda **kwargs: served.append(kwargs["model"].id) or (BASE, None))
+    comparer = _comparer(learning_on)
+    comparer._baseline_model = None  # noqa: SLF001 - the product's own starting model this time
+
+    result = comparer.run(1)
+
+    assert served == ["qwen3.5-2b"]
+    assert next(arm for arm in result["arms"] if arm["key"] == "base")["model_ref"] == BASE

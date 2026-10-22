@@ -4567,8 +4567,10 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
                         attribute, original)
         _l2x.clear()
         from row_bot.learning import runner as runner_module
+        from row_bot.learning import versions as learning_versions
 
         runner_module.forget_card_room()
+        learning_versions._needs_path(None).unlink(missing_ok=True)  # O124's dismissed offer, among others
         return {"action": action}
     for module, attribute, owner in (("hardware", "check", hardware), ("hardware", "peek", hardware),
                                      ("lockfile", "tools_platform", lockfile),
@@ -4590,6 +4592,10 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found
         lockfile.tools_platform = lambda platforms=None: "windows-x64"  # a build for this computer
+    elif action == "starting-model":  # O124: a setup made on another starting model (name: its id)
+        from row_bot.application.settings_commands import write_learning_settings
+
+        write_learning_settings({"starting_model": name})
     elif action == "room":  # O112: two quiet-hours nights without room on the card for the 9B
         import json as _json
 

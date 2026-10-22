@@ -238,8 +238,7 @@ def test_experiment_details_have_counts_and_file_names_never_a_hidden_task(on):
 
 def test_advanced_saves_clamped_values_and_resets(on):
     client, headers, data = on
-    values = {"starting_model": "qwen3.5-2b", "rank": 64, "learning_rate": 0.0001, "epochs": 2, "context": 131072,
-              "method": "standard"}
+    values = {"rank": 64, "learning_rate": 0.0001, "epochs": 2, "context": 131072, "method": "standard"}
 
     saved = _ok(_command(client, headers, "save_advanced", advanced=values))
 

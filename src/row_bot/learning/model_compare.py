@@ -306,20 +306,23 @@ class Comparer:
         except Exception:  # noqa: BLE001
             return False
 
-    def _starting_model(self, runtime: str = "ollama") -> tuple[str | None, str | None]:
-        """The untouched starting model, served in ``runtime`` (where the new version runs)."""
+    def _starting_model(self, runtime: str = "ollama", version: int | None = None) -> tuple[str | None, str | None]:
+        """The version's own untouched starting model (O124: the person may have changed the starting model
+        since it was trained), served in ``runtime`` (where the new version runs)."""
 
         if self._baseline_model is not None:
             return self._baseline_model(runtime)
-        from row_bot.learning.training import base_model, engine, recipes, weights
+        from row_bot.learning.training import base_model, engine, hardware, recipes, weights
 
-        model = weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
+        model = _trained_from(version, self._root) or weights.MODELS.get(
+            gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
         found = weights.status(model, self._root)
         if found.state != "downloaded":
             return None, "engine_missing"
+        recipe = recipes.for_model(model.id, hardware.peek()) or recipes.current(self._root)
         return base_model.ensure(root=self._root, engine_status=engine.status(self._root), model=model,
                                  weights_folder=found.folder, weights_bytes=model.weights_bytes or model.download_bytes,
-                                 recipe=recipes.current(self._root), runtime=runtime)
+                                 recipe=recipe, runtime=runtime)
 
     def _baseline(self, version: int, runtime: str = "ollama") -> tuple[str, str, str | None, str | None, str | None]:
         """(key, label, model_ref, release id, why it couldn't run) of the arm the new version is
@@ -335,7 +338,7 @@ class Comparer:
             state = releases.read_state(releases.version_dir(other, self._root))
             if state is not None and state.phase == releases.READY and state.model_ref:
                 return f"v{other}", f"v{other} (in use)", state.model_ref, state.release_id or None, None
-        ref, reason = self._starting_model(runtime)
+        ref, reason = self._starting_model(runtime, version)
         return "base", "the starting model", ref, None, reason
 
     # ── The run ─────────────────────────────────────────────────────────
@@ -641,6 +644,22 @@ class Comparer:
                     card.write_text(text, encoding="utf-8", newline="\n")
             except OSError:
                 logger.debug("Learning couldn't update the version's files", exc_info=True)
+
+
+def _trained_from(version: int | None, root: Path | None) -> Any:
+    """The pinned starting model ``version`` was trained from (its release's identity), else None."""
+
+    from row_bot.learning.training import releases, weights
+
+    if version is None:
+        return None
+    try:
+        manifest = json.loads((releases.version_dir(int(version), root) / releases.MANIFEST_FILE)
+                              .read_text(encoding="utf-8"))
+        repo = str(((manifest.get("identity") or {}).get("base") or {}).get("name") or "")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return next((model for model in weights.MODELS.values() if model.repo == repo), None)
 
 
 def family_key(label: str) -> str:

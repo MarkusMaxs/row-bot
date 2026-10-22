@@ -224,8 +224,8 @@ def test_advanced_starts_at_the_recommended_values(data_dir):
     found = advanced.view(recipe, data_dir)
 
     assert found["values"] == found["recommended"] == {
-        "starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384,
-        "method": "standard"}
+        "rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384, "method": "standard"}
+    assert "starting_model" not in found["choices"]  # Settings › Starting model › Change… sets it (O124)
     assert found["changed"] is False and found["choices"]["context"] == [16384]  # 32K didn't fit 8 GB
     assert [item["available"] for item in found["data_mix"]] == [True, False, False, False]
 
@@ -239,7 +239,7 @@ def test_advanced_values_are_clamped_to_the_engines_limits_and_the_recipes_bound
 
     assert chosen.rank == max(advanced.RANKS) <= high and chosen.learning_rate == max(advanced.LEARNING_RATES)
     assert chosen.epochs == max(advanced.EPOCHS) and chosen.context == 16384  # never past what the tier measured
-    assert chosen.method == "standard" and chosen.starting_model == "qwen3.5-2b"
+    assert chosen.method == "standard" and recipe.starting_model == advanced.apply(recipe, data_dir).starting_model
     assert advanced.clamp({"rank": -5, "learning_rate": 0}, recipe).rank == min(advanced.RANKS) >= low
 
 

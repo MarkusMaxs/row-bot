@@ -4106,7 +4106,7 @@ class LearningUse(WireModel):
 
 
 class LearningAdvancedValues(WireModel):
-    starting_model: str = Field(max_length=64)
+    # The starting model isn't an Advanced choice (O124): Settings › Starting model › Change… sets it.
     rank: int = Field(ge=1, le=512)
     learning_rate: float = Field(gt=0, le=1)
     epochs: int = Field(ge=1, le=100)
@@ -4114,13 +4114,7 @@ class LearningAdvancedValues(WireModel):
     method: Literal["standard"] = "standard"
 
 
-class LearningAdvancedModelChoice(WireModel):
-    id: str = Field(max_length=64)
-    name: str = Field(max_length=128)
-
-
 class LearningAdvancedChoices(WireModel):
-    starting_model: list[LearningAdvancedModelChoice] = Field(max_length=8)
     rank: list[int] = Field(max_length=8)
     learning_rate: list[float] = Field(max_length=8)
     epochs: list[int] = Field(max_length=8)
@@ -4186,6 +4180,9 @@ class LearningPersonalModel(WireModel):
     export_folder: str = Field(default="", max_length=1024)
     # O112: two or more quiet-hours nights without room on the card (else None).
     room: LearningCardRoom | None = None
+    # O124: a stronger starting model this card trains than the one in use (what setup would recommend
+    # now), offered once in the Personal model view until the person switches or dismisses it (else None).
+    stronger_model: LearningStartingModel | None = None
 
 
 class LearningNeedsYou(WireModel):
@@ -4478,10 +4475,11 @@ class LearningCommand(WireModel):
         "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
         "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
         "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-        "review_version", "use_smaller_model",
+        "review_version", "use_smaller_model", "change_starting_model",
     ]
     setup: LearningSetupChoices | None = None
-    # use_smaller_model (O112): the smaller starting model the Personal model view offered.
+    # use_smaller_model (O112): the smaller starting model the Personal model view offered;
+    # change_starting_model (O124): the certified starting model the person chose in Settings.
     model: Literal["", "qwen3.5-2b", "qwen3.5-9b"] = ""
     # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
     # Needs you line to dismiss.
