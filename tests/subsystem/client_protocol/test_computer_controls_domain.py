@@ -276,6 +276,23 @@ def test_stopping_a_conversation_stops_only_its_own_computer_use(platform, compu
     assert computer.status_snapshot()["active"] is False
 
 
+def test_a_setup_problem_shows_with_the_turn_that_hit_it_and_a_later_turn_starts_clean(platform, computer,
+                                                                                         monkeypatch):
+    from row_bot.application.client_computer_controls import read_computer_controls
+
+    monkeypatch.setattr("row_bot.computer_use.readiness.readiness",
+                        lambda **_kw: CuaReadiness(ReadinessCode.NOT_INSTALLED, "x"))
+    _submit(platform, ComputerTurns([_call("computer", "apps", action="list_apps")]), "not-set-up")
+
+    step = read_computer_controls(platform, CONVERSATION, validate=lambda: None)
+    assert (step["active"], step["problem"]) == (False, {
+        "message": "Computer use isn't set up yet: Cua Driver isn't installed.",
+        "fix": "Open Settings › System › Browser and computer use › Set up… › Install."})
+
+    _submit(platform, ComputerTurns([]), "later-turn")  # A later turn that doesn't use the computer.
+    assert read_computer_controls(platform, CONVERSATION, validate=lambda: None)["problem"] is None
+
+
 def test_reading_the_step_needs_no_computer_use_module(monkeypatch):
     import sys
 

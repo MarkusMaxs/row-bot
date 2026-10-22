@@ -143,7 +143,7 @@ class ComputerUseService:
         # Per chat: the apps it may use ({app key: "person" | "reviewer"}), what went wrong last,
         # and the turns the person stopped from the "Carry on?" card.
         self._allowed: dict[str, dict[str, str]] = {}
-        self._problems: dict[str, ComputerError] = {}
+        self._problems: dict[str, tuple[ComputerError, str]] = {}
         self._stopped_turns: set[tuple[str, str]] = set()
 
     # ── The session ──────────────────────────────────────────────────────────
@@ -334,6 +334,7 @@ class ComputerUseService:
             with self._driver:
                 response = session.client.call(tool, arguments)
         except ConnectionError as exc:
+            self._check_cancelled()  # Stopped on purpose (Esc, Stop): not a driver failure.
             self.stop()
             raise ComputerError("Cua Driver stopped while Row-Bot was using the computer.", code="driver",
                                 fix=f"Try again. If it keeps happening, run Check setup in {SETUP_FIX[5:]}") from exc
@@ -839,15 +840,19 @@ class ComputerUseService:
             live = session.live
             return (live[0], "image/jpeg", self._revision) if live and self._session is session else None
 
-    def note_problem(self, thread_id: str, error: ComputerError | None) -> None:
+    def note_problem(self, thread_id: str, error: ComputerError | None, generation_id: str = "") -> None:
+        """What kept computer use from starting in a chat's turn (None: it worked), for its step to show."""
+
         with self._lock:
             if error is None:
                 self._problems.pop(thread_id, None)
             else:
-                self._problems[thread_id] = error
+                self._problems[thread_id] = (error, generation_id)
             self._revision += 1
 
-    def problem(self, thread_id: str) -> ComputerError | None:
+    def problem(self, thread_id: str) -> tuple[ComputerError, str] | None:
+        """The chat's last problem and the turn that hit it."""
+
         with self._lock:
             return self._problems.get(thread_id)
 

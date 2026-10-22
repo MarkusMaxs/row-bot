@@ -159,7 +159,7 @@ def computer(
 
     action = str(action or "").strip().casefold()
     service = get_computer_use_service()
-    thread_id = ""
+    thread_id = generation_id = ""
     try:
         if action not in ACTIONS:
             raise ComputerError(f'"{action}" isn\'t an action.', code="input", fix=f"Use one of: {', '.join(ACTIONS)}.")
@@ -185,7 +185,7 @@ def computer(
         return result
     except ComputerError as error:
         if thread_id and error.code.startswith(("setup", "permission")):
-            service.note_problem(thread_id, error)
+            service.note_problem(thread_id, error, generation_id)
         return error.text()
     except concurrent.futures.CancelledError:
         raise

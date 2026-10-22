@@ -161,8 +161,18 @@ def _picture(service: Any | None) -> tuple[bytes, str, int] | None:
     return picture
 
 
+def _current_turn(platform: Any, conversation_id: str) -> str | None:
+    """The conversation's latest turn (None when there's no platform to ask)."""
+
+    projection = getattr(platform, "projection", None)
+    if projection is None:
+        return None
+    generation = projection.snapshot(conversation_id).get("generation") or {}
+    return str(generation.get("generation_id") or "")
+
+
 def _snapshot(
-    conversation_id: str, service: Any | None, *, with_picture: bool = False
+    platform: Any, conversation_id: str, service: Any | None, *, with_picture: bool = False
 ) -> tuple[dict[str, Any], tuple[bytes, str, int] | None]:
     raw = _status(service)
     belongs = _belongs(raw, conversation_id)
@@ -172,8 +182,10 @@ def _snapshot(
     problem = None
     if not belongs and service is not None:
         found = getattr(service, "problem", lambda _thread: None)(conversation_id)
-        if found is not None:
-            problem = {"message": _plain(found.message, 240), "fix": _plain(found.fix, 240)}
+        turn = _current_turn(platform, conversation_id) if found is not None else None
+        # Shown with the turn that hit it: a later turn in the chat starts clean.
+        if found is not None and (turn is None or found[1] == turn):
+            problem = {"message": _plain(found[0].message, 240), "fix": _plain(found[0].fix, 240)}
     public: dict[str, Any] = {
         "schema_version": 1,
         "conversation_id": conversation_id,
@@ -207,9 +219,8 @@ def read_computer_controls(
 ) -> dict[str, Any]:
     """Read the card's state without starting, capturing or changing anything."""
 
-    del platform
     validate()
-    result = _snapshot(_identifier(conversation_id), _service(computer))[0]
+    result = _snapshot(platform, _identifier(conversation_id), _service(computer))[0]
     validate()
     return result
 
@@ -227,12 +238,11 @@ def read_computer_preview(
     Reading it may take a new picture when the last one is a second or two old (the live view).
     """
 
-    del platform
     if type(expected_revision) is not str or not _REVISION.fullmatch(expected_revision):
         raise _error("invalid_computer_use_command")
     validate()
     conversation_id = _identifier(conversation_id)
-    public, picture = _snapshot(conversation_id, _service(computer), with_picture=True)
+    public, picture = _snapshot(platform, conversation_id, _service(computer), with_picture=True)
     state = (
         "inactive" if not public["active"]
         else "hidden" if public["state"] == "paused"
@@ -315,7 +325,7 @@ def execute_computer_command(
         # Only the type: messages can carry app or window details.
         _LOG.warning("Computer-use %s did not finish cleanly (%s)", action, type(exc).__name__)
     try:
-        receipt["computer_use"] = _snapshot(conversation_id, _service(computer))[0]
+        receipt["computer_use"] = _snapshot(platform, conversation_id, _service(computer))[0]
     except Exception:
         _LOG.debug("Computer-use state after %s is unavailable", action, exc_info=True)
     admissions.complete_command(owner_id, key, receipt)
