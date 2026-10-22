@@ -389,11 +389,6 @@ _STATUS.update(
     {
         "invalid_computer_use_command": 422,
         "computer_use_local_only": 403,
-        "computer_use_revision_conflict": 409,
-        "computer_use_inactive": 409,
-        "computer_use_busy": 409,
-        "computer_use_not_paused": 409,
-        "computer_use_resume_failed": 409,
         "computer_use_outcome_uncertain": 409,
     }
 )

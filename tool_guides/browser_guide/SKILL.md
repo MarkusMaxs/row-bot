@@ -51,6 +51,6 @@ BROWSER AUTOMATION (Row-Bot's browser):
   browser, call browser_record(action="start") first (it asks them), do
   the steps, then browser_record(action="stop"); the video is saved to the
   chat. It records only Row-Bot's browser and stops by itself after
-  max_minutes. To record the whole screen use computer_use start_recording;
+  max_minutes. To record the whole screen use computer_record;
   if Computer use isn't available, tell them recording the screen needs it
   (Settings > System > Browser and computer use).

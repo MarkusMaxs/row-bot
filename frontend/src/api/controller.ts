@@ -3233,7 +3233,7 @@ export class ClientController {
     this.query(() =>
       this.transport.clearBrowserSites?.(site ? { site } : {}, signal),
     );
-  /** The conversation's computer-use card: this computer's own screen, so the desktop app here only. */
+  /** The conversation's computer use step: this computer's own screen, so the desktop app here only. */
   computerUse = (conversation: string, signal?: AbortSignal) =>
     this.query(() => this.transport.computerUse?.(conversation, signal));
   computerUsePreview = (
@@ -3244,8 +3244,7 @@ export class ClientController {
     this.query(() =>
       this.transport.computerUsePreview?.(conversation, revision, signal),
     );
-  /** Stop, Pause or Resume. Sending the same command id again only reads
-   * what the first one did. */
+  /** Stop. Sending the same command id again only reads what the first one did. */
   computerUseCommand = async (
     conversation: string,
     type: import('./types').ComputerUseCommand['type'],

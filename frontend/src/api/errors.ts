@@ -2026,36 +2026,14 @@ const CATALOG: Record<string, Entry> = {
     'review',
   ],
 
-  // Computer use (the card in the conversation)
-  computer_use_busy: [
-    'Computer use is changing over right now. Wait a moment, then try again.',
-    'retry',
-    RETRY,
-  ],
-  computer_use_inactive: [
-    "Row-Bot isn't using your computer in this conversation.",
-    'none',
-  ],
+  // Computer use (the step in the conversation)
   computer_use_local_only: [
     'Computer use can only be watched and controlled on the computer it runs on.',
     'none',
   ],
-  computer_use_not_paused: [
-    "Computer use isn't paused, so there's nothing to resume.",
-    'none',
-  ],
   computer_use_outcome_uncertain: [
-    "Row-Bot couldn't confirm that finished. Check the card before trying again.",
+    "Row-Bot couldn't confirm it stopped. Check the conversation before trying again.",
     'review',
-    RETRY,
-  ],
-  computer_use_resume_failed: [
-    "Row-Bot couldn't pick up where it left off. Stop, then ask again in the conversation.",
-    'review',
-  ],
-  computer_use_revision_conflict: [
-    'The picture changed. Try again to see the latest one.',
-    'retry',
     RETRY,
   ],
   invalid_computer_use_command: [

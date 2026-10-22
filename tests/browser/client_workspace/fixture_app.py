@@ -308,6 +308,345 @@ def _n12_resume(enabled_tools: list[str], config: dict, approved: bool, *, inter
         call["quiesced"] = True
 
 
+# ── N12-B: computer use, rebuilt ──
+# The real computer tool, service, routes and approval cards run against a fake desktop behind a fake Cua
+# Driver (tests.fixtures.fake_desktop): nothing touches this computer's own screen, and the Stop bar is a
+# fake one. A turn's computer calls run the real tool; its approval and question cards are LangGraph's
+# interrupts, captured here and given back when the person answers.
+import contextlib as _contextlib  # noqa: E402
+import io as _io  # noqa: E402
+from langgraph.errors import GraphBubbleUp as _GraphBubbleUp  # noqa: E402
+
+from row_bot.computer_use import readiness as _cu_readiness  # noqa: E402
+from tests.fixtures.fake_desktop import (  # noqa: E402
+    FakeBar as _FakeBar,
+    FakeControl as _FakeControl,
+    FakeDesktop as _FakeDesktop,
+    FakeWindow as _FakeWindow,
+)
+
+_N12B: dict = {"ready": None, "desktop": None, "before": None}
+_N12B_PENDING: dict[str, dict] = {}
+_N12B_RELEASE: dict[str, threading.Event] = {}
+_original_cu_readiness = _cu_readiness.readiness
+
+
+def _n12b_readiness(*, enabled=None):
+    """Computer use's readiness: as set by the spec while it holds one, else the real one."""
+    code = _N12B["ready"]
+    if code is None:
+        return _original_cu_readiness(enabled=enabled)
+    messages = {"ready": "Cua Driver is ready.", "not_installed": "Cua Driver is not installed."}
+    return _cu_readiness.CuaReadiness(_cu_readiness.ReadinessCode(code), messages.get(code, code),
+                                      version="0.20.0", executable="cua-driver")
+
+
+_cu_readiness.readiness = _n12b_readiness
+
+
+def _n12b_font(size: int):
+    from PIL import ImageFont
+
+    for name in ("segoeui.ttf", "DejaVuSans.ttf", "Arial.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)
+
+
+class _N12bDesktop(_FakeDesktop):
+    """The fake desktop, its windows pictured as a person sees them: a browser window on a claim form."""
+
+    def picture(self, window):
+        from PIL import Image, ImageDraw
+
+        width, height = window.bitmap_size()
+        image = Image.new("RGB", (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, width, 84), fill=(240, 242, 245))
+        draw.rounded_rectangle((12, 8, 360, 40), radius=8, fill=(255, 255, 255))
+        draw.text((28, 14), window.title.split(" - ")[0][:34], fill=(30, 34, 40), font=_n12b_font(16))
+        draw.rounded_rectangle((12, 48, width - 12, 76), radius=14, fill=(255, 255, 255), outline=(220, 224, 230))
+        draw.text((32, 52), "homecover.example/claim", fill=(70, 76, 86), font=_n12b_font(16))
+        draw.rectangle((0, 84, width, 140), fill=(16, 52, 92))
+        draw.text((48, 98), "HomeCover", fill=(255, 255, 255), font=_n12b_font(24))
+        draw.text((48, 170), window.title.split(" - ")[0].split("– ")[-1], fill=(20, 24, 30), font=_n12b_font(34))
+        for control in window.controls:
+            x, y, w, h = control.box
+            if control.role == "RadioButton":
+                draw.ellipse((x, y + h // 2 - 11, x + 22, y + h // 2 + 11), outline=(60, 66, 76), width=2)
+                draw.text((x + 34, y + h // 2 - 12), control.label, fill=(20, 24, 30), font=_n12b_font(20))
+            elif control.role == "Hyperlink":
+                draw.text((x, y + h // 2 - 12), control.label, fill=(25, 90, 180), font=_n12b_font(20))
+                draw.line((x, y + h // 2 + 13, x + 9 * len(control.label), y + h // 2 + 13), fill=(25, 90, 180),
+                          width=2)
+            elif control.role == "ListItem":
+                draw.rounded_rectangle((x, y, x + w, y + h), radius=10, outline=(200, 206, 214), width=2)
+                draw.text((x + 18, y + h // 2 - 12), control.label, fill=(20, 24, 30), font=_n12b_font(20))
+            else:
+                draw.rounded_rectangle((x, y, x + w, y + h), radius=10, fill=(16, 52, 92))
+                draw.text((x + 22, y + h // 2 - 12), control.label, fill=(255, 255, 255), font=_n12b_font(20))
+        out = _io.BytesIO()
+        image.save(out, "PNG")
+        return out.getvalue()
+
+
+def _n12b_page(title: str, controls: list) -> callable:
+    def go(_desktop, window):
+        window.title, window.controls = f"HomeCover – {title} - Microsoft Edge", controls
+
+    return go
+
+
+def _n12b_edge():
+    pay = [
+        _FakeControl("ListItem", "Tuesday 8am to 12pm", (48, 250, 520, 64)),
+        _FakeControl("ListItem", "Tuesday 12pm to 4pm", (48, 330, 520, 64)),
+        _FakeControl("Button", "Confirm and pay £60", (48, 450, 300, 60)),
+    ]
+    claim = [
+        _FakeControl("RadioButton", "Leak", (48, 260, 300, 44)),
+        _FakeControl("RadioButton", "Blocked drain", (48, 320, 300, 44)),
+        _FakeControl("RadioButton", "No hot water", (48, 380, 300, 44)),
+        _FakeControl("Button", "Next", (48, 470, 160, 60), on_click=_n12b_page("Book an engineer", pay)),
+    ]
+    cover = [
+        _FakeControl("Hyperlink", "What am I covered for?", (48, 260, 260, 40)),
+        _FakeControl("Button", "Make a claim", (48, 330, 220, 60), on_click=_n12b_page("Make a claim", claim)),
+    ]
+    return _FakeWindow(pid=2501, window_id=501, process="msedge.exe", title="HomeCover – Your cover - Microsoft Edge",
+                       bounds=(0, 0, 1282, 802), controls=cover)
+
+
+def _n12b_reset() -> None:
+    from row_bot.application.client_platform import client_platform_service
+    from row_bot.computer_use import service as module
+    from row_bot.computer_use.client import CuaClient
+
+    desktop = _N12bDesktop(windows=[_n12b_edge()], apps={2501: "Microsoft Edge"})
+    if _N12B["before"] is None:  # What other specs see, put back by restore.
+        _N12B["before"] = (_cu_readiness.disclosure_acknowledged(), _original_tool_enabled("computer_use"))
+    _cu_readiness.acknowledge_disclosure()  # Computer use is set up on this (fake) desktop.
+    if module._SERVICE is not None:
+        module._SERVICE.stop()
+    service = module.ComputerUseService(
+        client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
+        bar_factory=_FakeBar,
+        stop_turn=client_platform_service.stop_conversation,
+        window_display=desktop.window_display,
+        cursor_position=desktop.cursor_position,
+    )
+    service.SETTLE_SECONDS = 0
+    module._SERVICE = service
+    _N12B.update(desktop=desktop, ready=None)
+    _N12B_PENDING.clear()
+
+
+@app.post("/__n12b_fixture/reset")
+def n12b_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """A fresh fake desktop (Edge on HomeCover's site) and computer use session."""
+    predecessor._authorize(x_fixture_token)
+    _n12b_reset()
+    return {"ready": True}
+
+
+@app.post("/__n12b_fixture/restore")
+def n12b_restore(x_fixture_token: str = Header(default="")) -> dict:
+    """Computer use as it was before the N12-B spec: its notice, its switch and no session."""
+    from row_bot.computer_use import service as module
+
+    predecessor._authorize(x_fixture_token)
+    if module._SERVICE is not None:
+        module._SERVICE.stop()
+        module._SERVICE = None
+    if _N12B["before"] is not None:
+        acknowledged, enabled = _N12B["before"]
+        if not acknowledged:
+            _cu_readiness.cancel_disclosure()
+        _tool_registry.set_enabled("computer_use", enabled)
+    _N12B.update(desktop=None, ready=None, before=None)
+    _N12B_PENDING.clear()
+    return {"restored": True}
+
+
+@app.post("/__n12b_fixture/settings")
+def n12b_settings(x_fixture_token: str = Header(default="")) -> dict:
+    """Computer use set up and on, as Settings › Browser and computer use shows it."""
+    predecessor._authorize(x_fixture_token)
+    _cu_readiness.acknowledge_disclosure()
+    _tool_registry.set_enabled("computer_use", True)
+    _N12B["ready"] = "ready"
+    return {"ready": True}
+
+
+@app.post("/__n12b_fixture/release")
+def n12b_release(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """Let a held computer turn go on."""
+    predecessor._authorize(x_fixture_token)
+    _N12B_RELEASE.setdefault(str(body["conversation_id"]), threading.Event()).set()
+    return {"released": True}
+
+
+class _N12bAsked(_GraphBubbleUp):
+    """The turn pauses on a card, as LangGraph's interrupt pauses it."""
+
+    def __init__(self, payload) -> None:
+        super().__init__("asked")
+        self.payload = payload
+
+
+@_contextlib.contextmanager
+def _n12b_turn(thread: str, generation: str, resumes: list):
+    """The tool runs as in a chat turn here: its chat, the Ask level, and LangGraph's pauses."""
+    from unittest import mock
+
+    import langgraph.types
+
+    from row_bot import agent
+    from row_bot.browser import model_view
+    from row_bot.tools import approval_gate
+
+    counter = [0]
+
+    def interrupt(payload):
+        index = counter[0]
+        counter[0] += 1
+        if index < len(resumes):
+            return resumes[index]
+        raise _N12bAsked(payload)
+
+    held = _N12B["ready"]
+    _N12B["ready"] = held or "ready"
+    try:
+        with mock.patch.object(agent, "get_active_runtime_context", lambda: {
+                "thread_id": thread, "generation_id": generation, "runtime_surface": "normal_chat"}), \
+                mock.patch.object(approval_gate, "current_approval_mode", lambda: "approve"), \
+                mock.patch.object(langgraph.types, "interrupt", interrupt), \
+                mock.patch.object(model_view, "model_sees_images", lambda model=None: True):
+            yield
+    finally:
+        _N12B["ready"] = held
+
+
+def _n12b_at(label: str):
+    """Click the control a result lists, at the position it gives (as the model aims)."""
+    import re
+
+    def args(previous: str) -> dict:
+        line = next(line for line in previous.splitlines() if line.startswith("Controls: "))
+        x, y = re.search(r'"' + re.escape(label) + r'" (\d+),(\d+)', line).groups()
+        return {"action": "click", "x": int(x), "y": int(y)}
+
+    return args
+
+
+def _n12b_run(call: dict, thread: str, state: dict):
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools.computer_use_tool import computer
+
+    steps, identity = state["steps"], state["identity"]
+    while state["index"] < len(steps):
+        step = steps[state["index"]]
+        if step == "hold":
+            release = _N12B_RELEASE.setdefault(thread, threading.Event())
+            while not release.wait(0.1):
+                pass
+            release.clear()
+            state["index"] += 1
+            continue
+        if callable(step) and getattr(step, "side_effect", False):
+            step(thread)
+            state["index"] += 1
+            continue
+        args = step(state["previous"]) if callable(step) else dict(step)
+        tool_id = fixture_id(f"{identity}:{state['index']}")
+        result_id = fixture_id(f"{identity}:{state['index']}:result")
+        if not state["resumes"]:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(f"{identity}:{state['index']}:call"),
+                content="", tool_calls=[{"id": tool_id, "name": "computer", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "computer", "args": args}
+        try:
+            with _n12b_turn(thread, call["generation_id"], state["resumes"]):
+                content = computer(**args)
+        except _N12bAsked as asked:
+            _N12B_PENDING[thread] = state
+            yield "interrupt", [{"__interrupt_id": fixture_id(f"{identity}:{state['index']}:{len(state['resumes'])}"),
+                                 **asked.payload}]
+            return
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="computer",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "computer", "args": args,
+                            "content": content}
+        state.update(previous=content, resumes=[], index=state["index"] + 1)
+    yield from _natural_final(call, thread, state["final"], "n12b")
+
+
+def _n12b_person_moves_the_mouse(_thread: str) -> None:
+    _FakeBar.instances[-1].person_moves_the_mouse()
+
+
+_n12b_person_moves_the_mouse.side_effect = True
+
+
+def _n12b_allowed(thread: str) -> None:
+    from row_bot.computer_use.service import get_computer_use_service
+
+    get_computer_use_service().allow(thread, "Microsoft Edge")
+
+
+_n12b_allowed.side_effect = True
+
+
+def _n12b_stream(text: str, config: dict):
+    """A turn that uses Edge on this computer (the fake desktop) through the real computer tool."""
+    call = predecessor._record("submit", config, "n12b-computer")
+    thread = call["conversation_id"]
+    shot = {"action": "screenshot", "app": "Microsoft Edge"}
+    if "carry on" in text:
+        steps = [_n12b_allowed, shot, _n12b_person_moves_the_mouse, _n12b_at("Make a claim"),
+                 _n12b_at("Make a claim")]
+        final = "Your claim form is open: I picked Leak and I'm at the engineer slots."
+    elif "not set up" in text:
+        _N12B["ready"] = "not_installed"
+        steps = [{"action": "list_apps"}]
+        final = ("I can't use your computer yet: Cua Driver isn't installed. Open Settings › System › Browser and "
+                 "computer use › Set up… and install it, then ask me again.")
+    else:
+        steps = [{"action": "list_apps"}, shot, _n12b_at("Make a claim"), _n12b_at("Leak"), "hold",
+                 _n12b_at("Next"), _n12b_at("Tuesday 8am to 12pm"), _n12b_at("Confirm and pay £60")]
+        final = "Booked: a plumber comes on Tuesday between 8am and 12pm (claim HC-1042). The £60 excess is paid."
+    state = {"steps": steps, "index": 0, "resumes": [], "previous": "", "final": final,
+             "identity": f"n12b:{call['generation_id']}"}
+    try:
+        yield from _n12b_run(call, thread, state)
+    finally:
+        if "not set up" in text:
+            _N12B["ready"] = None
+        call["quiesced"] = True
+
+
+def _n12b_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                 stop_event=None):
+    """The person answered a computer card: the same call runs again with the answer, and the turn goes on."""
+    thread = str(config["configurable"]["thread_id"])
+    state = _N12B_PENDING.pop(thread, None)
+    if state is None:
+        yield from _n12_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                               resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n12b-answer")
+    answer = next(iter(resume_values.values())) if resume_values else bool(approved)
+    state["resumes"] = [*state["resumes"], answer]
+    try:
+        yield from _n12b_run(call, thread, state)
+    finally:
+        call["quiesced"] = True
+
+
+_n12b_reset()
+
+
 @app.post("/__p4_fixture/capability-settings")
 def p4_setup_capability_settings(x_fixture_token: str = Header(default="")) -> dict:
     """Seed local-only Channel, Plugin, and Skill settings fixtures."""
@@ -867,7 +1206,7 @@ def _s3_stream(text: str, config: dict):
         elif "screen recording" in text:
             problem = setup_problem()
             assert problem.startswith("Recording your screen needs Computer use set up."), problem
-            steps = [("computer_use", {"action": "start_recording"}, lambda: (problem, []))]
+            steps = [("computer_record", {"action": "start"}, lambda: (problem, []))]
             final = ("I can't record your screen yet: that needs Computer use set up. Open **Settings › System › "
                      "Browser and computer use**, turn on Computer use and finish its setup, then ask me again. "
                      "I can record Row-Bot's own browser without it.")
@@ -1682,6 +2021,10 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("n12b ") and text.rstrip().endswith("fixture"):
+        # Computer use, rebuilt (N12-B): the real computer tool on a fake desktop.
+        yield from _n12b_stream(text, config)
+        return
     if text.startswith("n12 ") and text.rstrip().endswith("fixture"):
         # Row-Bot's browser in the app (N12-A): a turn that uses the browser, then asks to pay.
         yield from _n12_stream(text, config)
@@ -3721,7 +4064,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _n12_resume
+    agent.resume_stream_agent = _n12b_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -3732,7 +4075,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _n12_resume
+    client_platform_service.resume_factory = _n12b_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier

@@ -42,7 +42,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('sends Stop, Pause and Resume as one exact command from this session', async () => {
+it('sends Stop as one exact command from this session', async () => {
   const transport = new ComputerTransport();
   const client = new ClientController(transport);
   clients.push(client);
@@ -65,7 +65,7 @@ it('sends Stop, Pause and Resume as one exact command from this session', async 
   // Checking an earlier command again reuses its id.
   await client.computerUseCommand(
     'conversation-a',
-    'computer_use.pause',
+    'computer_use.stop',
     command.command_id,
   );
   expect(transport.sent[1].command.command_id).toBe(command.command_id);
@@ -73,11 +73,11 @@ it('sends Stop, Pause and Resume as one exact command from this session', async 
   // An answer about some other command is never taken as this one's.
   transport.answer = () => ({ command_id: crypto.randomUUID() });
   await expect(
-    client.computerUseCommand('conversation-a', 'computer_use.resume'),
+    client.computerUseCommand('conversation-a', 'computer_use.stop'),
   ).rejects.toMatchObject({ code: 'protocol_incompatible' });
 });
 
-it('reads the card and its picture, and posts commands, on the computer routes', async () => {
+it('reads the step and its picture, and posts Stop, on the computer routes', async () => {
   const proof: SessionProof = {
     client_session_id: crypto.randomUUID(),
     csrf_token: 'synthetic'.repeat(8),
@@ -90,10 +90,10 @@ it('reads the card and its picture, and posts commands, on the computer routes',
       active: false,
       state: 'stopped',
       app: '',
+      window: '',
+      doing: '',
       has_picture: false,
-      approval_id: null,
-      can_pause: false,
-      can_resume: false,
+      problem: null,
       can_stop: false,
     },
     {
