@@ -56,7 +56,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 FORMAT = "row_bot.learning.paper_report"
 SCHEMA_VERSION = 1
-MODES = ("health", "freeze", "thinking")
 COPY_PREFIX = "row-bot-paper-copy-"
 #: The pre-registered confirmatory family of paper v1 (§7) and the decision rules.
 FAMILY = ("H1", "H2")
@@ -354,7 +353,6 @@ class Maybe:
 
 BOOL = "bool"
 COUNT = Num(integer=True, low=0)
-INT = Num(integer=True)
 SHARE = Num(low=0, high=1)
 SIGNED = Num(low=-1, high=1)
 HOURS = Num(low=0)
@@ -532,7 +530,7 @@ THINKING = Obj({
     "training": Map(THINKING_MODELS, Obj({"trained": BOOL, "examples": COUNT, "steps": Maybe(COUNT),
                                           "gpu_hours": Maybe(HOURS)})),
     "arms": Map(Text(pattern=re.compile(r"^(start|B|A|A32)-(on|off)$")),
-                Obj({"seconds_per_task": Maybe(HOURS), "tokens": COUNT})),
+                Obj({"seconds_per_task": Map(enum("visible", "hidden"), HOURS), "tokens": COUNT})),
     "thinking_on_vs_off": Map(THINKING_MODELS, Map(enum("visible", "hidden", "combined"), THINKING_PART)),
 })
 SCHEMAS = {"health": HEALTH, "freeze": FREEZE, "thinking": THINKING}
@@ -1023,9 +1021,10 @@ def thinking_report(results: Mapping[str, Any]) -> dict[str, Any]:
     for name, row in (compare.get("per_arm") or {}).items():
         if not isinstance(row, dict) or not _text_ok(str(name), THINKING.fields["arms"].keys):
             continue
-        seconds = [part.get("seconds_per_run") for part in row.values() if isinstance(part, dict)]
-        seconds = [value for value in seconds if isinstance(value, (int, float))]
-        arms[name] = {"seconds_per_task": round(sum(seconds) / len(seconds), 2) if seconds else None,
+        # Time per task as served: pack tasks (visible) apart from the hidden part, where replays take a second.
+        seconds = {part: float(row[part]["seconds_per_run"]) for part in ("visible", "hidden")
+                   if isinstance(row.get(part), dict) and isinstance(row[part].get("seconds_per_run"), (int, float))}
+        arms[name] = {"seconds_per_task": seconds,
                       "tokens": sum(int(part.get("tokens") or 0) for part in row.values() if isinstance(part, dict))}
     contrasts: dict[str, Any] = {}
     analysis = compare.get("analysis") or {}
