@@ -292,7 +292,10 @@ def classify(gpus: Sequence[Gpu], memory: SystemMemory | None = None) -> Hardwar
     if not held:
         return HardwareCheck("low_memory", gpu, certified[0], memory=memory)
     best = held[-1]
-    short = tuple(tier for tier in certified if tier not in held and tier.min_memory_mib > best.min_memory_mib)
+    # Tiers the memory can't hold, when they'd offer a model the held ones don't (the 9B trains on several tiers).
+    offered = {model.id for tier in held for model in tier.models}
+    short = tuple(tier for tier in certified if tier not in held and tier.min_memory_mib > best.min_memory_mib
+                  and any(model.id not in offered for model in tier.models))
     larger = tuple(tier for tier in fits if not tier.certified and tier.min_memory_mib > best.min_memory_mib)
     # O112: recommend the largest held tier whose card need fits what the card has free (else the smallest:
     # it waits for room, and after two nights without it the Personal model view offers the next smaller).

@@ -157,9 +157,11 @@ def test_the_check_is_kept_for_the_process_until_asked_again():
 def _tiers(monkeypatch, needs: dict[str, int]) -> None:
     """The tier table with these tiers certified, each needing this much of the computer's memory."""
 
+    models = {"8gb": hardware.QWEN35_2B, "16gb": hardware.QWEN35_9B, "24gb": hardware.QWEN38_27B,
+              "32gb": hardware.QWEN38_27B}  # a larger model per tier, so a tier held back offers something
     table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id in needs,
                                 tier.summary if tier.id in needs else f"Larger models for {tier.label} cards: measured soon.",
-                                (hardware.QWEN35_2B,) if tier.id in needs else (), needs.get(tier.id))
+                                (models[tier.id],) if tier.id in needs else (), needs.get(tier.id))
                   for tier in hardware.TIERS)
     monkeypatch.setattr(hardware, "TIERS", table)
 

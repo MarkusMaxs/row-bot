@@ -128,8 +128,10 @@ def test_an_old_driver_is_reported_by_the_hardware_check(world):
 def test_the_hardware_check_says_what_training_needs_of_the_computers_memory(world, monkeypatch):
     # O105: each tier's measured need, the computer's memory, and the tiers it can't hold.
     client, headers, found = world
+    models = {"8gb": hardware.QWEN35_2B, "16gb": hardware.QWEN35_9B, "24gb": hardware.QWEN38_27B,
+              "32gb": hardware.QWEN38_27B}
     table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id != "32gb", tier.summary,
-                                (hardware.QWEN35_2B,), {"8gb": 15_360, "16gb": 30_720, "24gb": 41_984}.get(tier.id))
+                                (models[tier.id],), {"8gb": 15_360, "16gb": 30_720, "24gb": 41_984}.get(tier.id))
                   for tier in hardware.TIERS)
     monkeypatch.setattr(hardware, "TIERS", table)
     small = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")],

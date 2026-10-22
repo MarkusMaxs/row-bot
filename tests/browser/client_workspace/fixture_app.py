@@ -4110,6 +4110,7 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
 
     if "check" not in _l1a_saved:
         _l1a_saved["check"] = hardware.check
+        _l1a_saved["peek"] = hardware.peek
         _l1a_saved["used"] = spending.used_this_month
     if action == "preview":
         learning._PREVIEW = True  # the start-up flag, as if launched with ROW_BOT_LEARNING_PREVIEW=1
@@ -4121,6 +4122,7 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8151, "596.08")])
                  if action == "gpu" else hardware.HardwareCheck("no_gpu"))
         hardware.check = lambda *, refresh=False, detector=None: found
+        hardware.peek = lambda: found  # what reads that mustn't wait see (Runs in, the recipe's need)
     elif action == "paused":
         from row_bot.application.settings_commands import write_learning_settings
         write_learning_settings({"paused": True})
@@ -4138,6 +4140,7 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
     elif action == "restore":
         from row_bot.learning.store import LearningStore
         hardware.check = _l1a_saved["check"]
+        hardware.peek = _l1a_saved["peek"]
         spending.used_this_month = _l1a_saved["used"]
         past = sys.modules.get("row_bot.learning.past_chats")
         if past is not None:
@@ -4301,6 +4304,9 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
                 setattr({"hardware": hardware, "lockfile": lockfile, "server_files": server_files}[module],
                         attribute, original)
         _l2x.clear()
+        from row_bot.learning import runner as runner_module
+
+        runner_module.forget_card_room()
         return {"action": action}
     for module, attribute, owner in (("hardware", "check", hardware), ("hardware", "peek", hardware),
                                      ("lockfile", "tools_platform", lockfile),
@@ -4309,16 +4315,34 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
     if action == "card":
         # name: 5090 (the 32 GB tier, with 128 GB of RAM and virtual memory), 5090-short (memory that can't
         # hold its largest certified tier, O105), 4060-low (an 8 GB card on a computer whose memory can't
-        # hold even the 8 GB tier) or none (no NVIDIA card: not on this computer)
+        # hold even the 8 GB tier), 4080-busy (a 16 GB card whose display and apps hold 6.5 GB: Row-Bot
+        # recommends the 2B, O112) or none (no NVIDIA card: not on this computer)
         needs = sorted(tier.system_memory_mib for tier in hardware.TIERS if tier.certified and tier.system_memory_mib)
-        limit = {"5090-short": needs[-1] - 1024, "4060-low": needs[0] - 3072}.get(name, 131_072)
+        # 5090-short: room for the smallest tier only (the next one would offer a larger model).
+        limit = {"5090-short": needs[1] - 1024, "4060-low": needs[0] - 3072}.get(name, 131_072)
         memory = hardware.SystemMemory(limit_mib=limit, free_mib=min(limit, 90_000) // 2)
-        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08")] if name == "4060-low"
-                else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")])
+        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08", 300)]
+                if name == "4060-low" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 6_600)]
+                if name == "4080-busy" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", 2_400)])
         found = hardware.classify(gpus, memory)
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found
         lockfile.tools_platform = lambda platforms=None: "windows-x64"  # a build for this computer
+    elif action == "room":  # O112: two quiet-hours nights without room on the card for the 9B
+        import json as _json
+
+        from row_bot.application.settings_commands import write_learning_settings
+        from row_bot.learning import runner as runner_module
+        from row_bot.learning.training import jobs as jobs_module
+        from row_bot.learning.training import recipes as recipe_files
+
+        write_learning_settings({"starting_model": "qwen3.5-9b"})
+        nine = recipe_files.for_model("qwen3.5-9b", hardware.peek())
+        path = jobs_module.models_dir() / runner_module.ROOM_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({"nights": ["2026-10-21", "2026-10-22"], "free_mib": 9_830,
+                                     "need_mib": nine.memory_mib if nine else 15_616, "model": "qwen3.5-9b"}),
+                        encoding="utf-8")
     elif action == "server":  # name: installed or missing
         state = "installed" if name == "installed" else "not_installed"
         found_files = server_files.ServerFiles(state, "cu130", bytes=747_386_477 if state == "installed" else 0)

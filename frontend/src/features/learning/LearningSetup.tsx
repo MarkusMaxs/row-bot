@@ -119,6 +119,8 @@ function HardwareRows({
     const models = hardware.starting_models;
     // O105: larger tiers the card fits but the computer's memory can't hold (the smallest one's need).
     const short = hardware.memory_short?.[0];
+    // What the recommended model's training needs of the computer's memory (O105, O112).
+    const needs = (hardware.recommended ?? hardware.tier).system_memory_gb;
     return (
       <div className="learning-stack-tight">
         <p>
@@ -126,14 +128,10 @@ function HardwareRows({
           {hardware.gpu?.label}
         </p>
         <p>{hardware.tier.summary}</p>
-        {hardware.tier.system_memory_gb && (
-          <p className="learning-muted">
-            {memoryNeedWords(hardware.tier.system_memory_gb)}
-          </p>
-        )}
         {roomNote(hardware) && (
           <p className="learning-muted">{roomNote(hardware)}</p>
         )}
+        {needs && <p className="learning-muted">{memoryNeedWords(needs)}</p>}
         {short && hardware.memory && (
           <div className="learning-stack-tight">
             <p className="learning-muted">
@@ -143,7 +141,7 @@ function HardwareRows({
               {memoryAdvice(hardware.memory.system)}
             </p>
             <div className="learning-actions-inline">
-              <Button className="small" variant="ghost" onClick={onCheckAgain}>
+              <Button className="small" onClick={onCheckAgain}>
                 Check again
               </Button>
             </div>

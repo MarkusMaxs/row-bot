@@ -183,6 +183,68 @@ test('a computer whose memory can’t hold training says so up front (O105)', as
   await shoot(page, info, 'setup-low-memory');
 });
 
+test('setup recommends a smaller model when the graphics card has little free (O112)', async ({
+  page,
+}, info) => {
+  const sheet = await setupSheet(page, '4080-busy');
+  await expect(
+    sheet.getByText('NVIDIA GeForce RTX 4080 (16 GB)'),
+  ).toBeVisible();
+  await expect(
+    sheet.getByText(
+      /^Your graphics card has about \d+ GB free now \(your display and other apps use the rest\), so Row-Bot recommends Qwen3\.5 2B\./,
+    ),
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole('combobox', { name: 'Starting model' }),
+  ).toHaveValue('qwen3.5-2b');
+  await shoot(page, info, 'setup-recommends-smaller');
+});
+
+test('after two nights without room on the graphics card, the Personal model view offers a smaller model (O112)', async ({
+  page,
+}, info) => {
+  await turnOn(page, info);
+  // v1 is planned and waits for the card (a local model holds it), two nights running.
+  await l2c(page, 'setup');
+  await l2c(page, 'gpu-busy');
+  await l2x(page, 'room');
+  await openModel(page);
+  const notice = page.getByRole('status', {
+    name: 'No room on the graphics card',
+  });
+  await expect(notice).toContainText(
+    'No room on the graphics card for 2 nights.',
+  );
+  await expect(notice).toContainText('Training Qwen3.5 9B needs about');
+  await shoot(page, info, 'model-no-room');
+  await notice.getByRole('button', { name: 'Use Qwen3.5 2B instead…' }).click();
+  const ask = page.getByRole('alertdialog', {
+    name: 'Use Qwen3.5 2B instead?',
+  });
+  await expect(ask).toContainText('Row-Bot downloads Qwen3.5 2B');
+  await shoot(page, info, 'model-no-room-ask');
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+});
+
+test('the Personal model view says when this computer’s memory can’t hold training (O105)', async ({
+  page,
+}, info) => {
+  const sheet = await setupSheet(page, '4060-low');
+  await sheet.getByRole('button', { name: 'Turn on Learning' }).click();
+  await expect(notice(page, 'Learning is on.')).toBeVisible();
+  await openModel(page);
+  await expect(
+    page.getByText('This computer’s memory can’t hold training yet'),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      /^Training needs about \d+ GB of RAM and virtual memory, and this computer has \d+ GB\./,
+    ),
+  ).toBeVisible();
+  await shoot(page, info, 'model-low-memory');
+});
+
 test('Row-Bot runs v1 itself: starting, ready, Runs in, and each way out when it can’t start', async ({
   page,
 }, info) => {
