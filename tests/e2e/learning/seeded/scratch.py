@@ -252,7 +252,10 @@ class GpuGate:
         while True:
             text = self._read()
             others = {lane: item for lane, item in open_bookings(text).items() if lane != self.lane}
-            waiting = {lane: words for lane, words in waiting_lanes(text).items() if lane != self.lane}
+            waiting_now = waiting_lanes(text)
+            # A lane that wrote it waits books first, unless we wrote it first (then it yielded to us).
+            waiting = {} if self.lane in waiting_now else {lane: words for lane, words in waiting_now.items()
+                                                           if lane != self.lane}
             if self.training():
                 why = f"GPU: the person's own Row-Bot is training; waiting ({self.label})"
             elif others:
