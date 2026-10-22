@@ -86,8 +86,12 @@ class FakeProviderServer:
         self._threads: list[threading.Thread] = []
         self._closed = False
 
-    def held(self, index: int = 0, timeout: float = 2.0) -> SeenRequest:
-        """The ``index``-th request, once the server holds it (it fails if that doesn't happen in ``timeout``)."""
+    def held(self, index: int = 0, timeout: float = 10.0) -> SeenRequest:
+        """The ``index``-th request, once the server holds it (it fails if that doesn't happen in ``timeout``).
+
+        Getting the request here is set-up, not what a test measures: a busy CI runner can take over 2 s to
+        connect, more over TLS (B395), so the bound only keeps a broken test from hanging.
+        """
         with self._arrived:
             if not self._arrived.wait_for(lambda: len(self.seen) > index, timeout):
                 raise AssertionError(f"request {index} never arrived")
