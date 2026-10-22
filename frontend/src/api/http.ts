@@ -417,11 +417,11 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  accountAuth(account: 'google' | 'x', signal?: AbortSignal) {
+  accountAuth(account: 'google' | 'x' | 'microsoft', signal?: AbortSignal) {
     return wire.getAccountAuth(this.base, this.session(), account, signal);
   }
   accountAuthCommand(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     command: wire.AccountAuthCommand,
     signal?: AbortSignal,
   ) {
@@ -434,7 +434,7 @@ export class HttpTransport implements ClientTransport {
     );
   }
   accountAuthReceipt(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) {
@@ -447,7 +447,7 @@ export class HttpTransport implements ClientTransport {
     );
   }
   cancelAccountAuth(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) {

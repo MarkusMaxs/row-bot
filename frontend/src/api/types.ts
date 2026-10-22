@@ -941,21 +941,21 @@ export interface ClientTransport {
     signal?: AbortSignal,
   ): Promise<Wire.GitHubAccessReceipt>;
   accountAuth?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthSnapshot>;
   accountAuthCommand?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     command: Wire.AccountAuthCommand,
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthReceipt>;
   accountAuthReceipt?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthReceipt>;
   cancelAccountAuth?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthReceipt>;

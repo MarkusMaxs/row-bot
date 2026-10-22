@@ -68,7 +68,7 @@ import ConnectedGitHubAccess, {
 } from './GitHubAccessControls';
 import ConnectedAccountAuth, { type AccountAuth } from './AccountAuthControls';
 import { ConnectSheet, type ConnectStep } from './ConnectSheet';
-import { ACCOUNT_LINKS } from './connect-guides';
+import { ACCOUNT_LINKS, OUTLOOK_PERMISSIONS } from './connect-guides';
 import type {
   DocumentRuntimeStatus,
   SettingsMutationReceipt,
@@ -82,6 +82,7 @@ import { favouritesFirst } from '../shell/model-choices';
 import {
   Button,
   Disclosure,
+  Field,
   IconButton,
   Input,
   Segmented,
@@ -3751,6 +3752,7 @@ function AccountActions({
   locked,
   onCheck,
   onReconnect,
+  reconnectLabel = 'Reconnect',
   onDisconnect,
 }: {
   name: string;
@@ -3758,6 +3760,7 @@ function AccountActions({
   locked: boolean;
   onCheck: () => void;
   onReconnect?: () => void;
+  reconnectLabel?: string;
   onDisconnect?: () => void;
 }) {
   if (state === 'not_connected') return null;
@@ -3765,12 +3768,12 @@ function AccountActions({
     <>
       {state === 'reconnect' && onReconnect ? (
         <Button
-          aria-label={`Reconnect ${name}`}
+          aria-label={`${reconnectLabel}${reconnectLabel === 'Reconnect' ? '' : ' to'} ${name}`}
           disabled={locked}
           onClick={onReconnect}
         >
           <RotateCw size={14} aria-hidden />
-          Reconnect
+          {reconnectLabel}
         </Button>
       ) : (
         <Button
@@ -4440,6 +4443,197 @@ function XAccount({
 }
 
 /**
+ * Outlook through the person's own Microsoft app (N10): the one-time app
+ * registration in steps, the app's client ID, and a sign-in here (this
+ * computer's browser) or with a code from any other device. Mail and
+ * Calendar share the sign-in and each have a switch.
+ */
+function OutlookAccount({
+  mail,
+  calendar,
+  mutation,
+  auth,
+}: {
+  mail: AccountItem;
+  calendar: AccountItem;
+  mutation: SettingsMutationIO;
+  auth: AccountAuth | null;
+}) {
+  const state = accountState([
+    mail.authentication_state,
+    calendar.authentication_state,
+  ]);
+  const configured = mail.configured;
+  const usable = auth && auth.snapshot;
+  const address = auth?.snapshot?.address ?? mail.address ?? '';
+  const byCode = auth?.snapshot?.sign_in === 'device';
+  const [clientId, setClientId] = useState('');
+  const [tenant, setTenant] = useState('');
+  return (
+    <AccountRow
+      anchor="outlook"
+      name="Outlook"
+      icon={<Mail size={16} aria-hidden />}
+      tone="4"
+      state={state}
+      meta={
+        state === 'reconnect'
+          ? `${address || 'Outlook'} · sign in again to keep using it`
+          : state === 'unchecked'
+            ? `${address || 'Signed in'} · Check confirms it works`
+            : signedIn(state)
+              ? address || 'Mail and calendar'
+              : 'Mail and calendar through your own Microsoft app. Sending and invitations always ask first.'
+      }
+      actions={
+        usable && (
+          <AccountActions
+            name="Outlook"
+            state={state}
+            locked={auth.locked}
+            onCheck={auth.check}
+            onReconnect={configured && auth.canSignIn ? auth.start : undefined}
+            reconnectLabel="Sign in again"
+            onDisconnect={auth.disconnect}
+          />
+        )
+      }
+      feedback={auth?.feedback}
+      guideOpen={state === 'reconnect' && !configured}
+      guide={[
+        {
+          id: 'register',
+          text: 'In Microsoft Entra, open App registrations and choose New registration. Name it Row-Bot.',
+          link: {
+            href: ACCOUNT_LINKS.microsoftRegistrations,
+            label: 'Open App registrations',
+          },
+          done: configured,
+        },
+        {
+          id: 'accounts',
+          text: 'Under Supported account types, choose accounts in any organizational directory and personal Microsoft accounts. That covers a work mailbox (GoDaddy’s Microsoft 365, say) and outlook.com.',
+          done: configured,
+        },
+        {
+          id: 'platform',
+          text: 'Under Redirect URI, choose Public client/native (mobile & desktop) and enter this address. Then, in Authentication, turn on Allow public client flows, so you can sign in with a code from a phone. No client secret is needed.',
+          copy: { value: 'http://localhost', label: 'Redirect URI' },
+          done: configured,
+        },
+        {
+          id: 'permissions',
+          text: 'In API permissions, add these Microsoft Graph delegated permissions.',
+          copy: {
+            value: OUTLOOK_PERMISSIONS,
+            label: 'Microsoft Graph permissions',
+          },
+          done: configured,
+        },
+        {
+          id: 'client',
+          text: 'Paste the Application (client) ID from the app’s Overview. Add the Directory (tenant) ID only to keep sign-in to your own organization.',
+          done: configured,
+          children: usable && (
+            <form
+              className="stack"
+              onSubmit={(event) => {
+                event.preventDefault();
+                auth.saveApp(clientId, tenant);
+              }}
+            >
+              <Field label="Application (client) ID">
+                <Input
+                  value={clientId}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={
+                    configured
+                      ? 'Saved; paste another to replace it'
+                      : '1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f'
+                  }
+                  onChange={(event) => setClientId(event.target.value)}
+                />
+              </Field>
+              <Field label="Directory (tenant) ID (optional)">
+                <Input
+                  value={tenant}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Any organization or personal account"
+                  onChange={(event) => setTenant(event.target.value)}
+                />
+              </Field>
+              <div className="action-cluster">
+                <Button
+                  type="submit"
+                  className="small"
+                  disabled={auth.locked || !clientId.trim()}
+                >
+                  Save
+                </Button>
+              </div>
+            </form>
+          ),
+        },
+        {
+          id: 'authenticate',
+          text: byCode
+            ? 'Sign in to Microsoft with a code: Row-Bot shows it here, and you enter it on Microsoft’s page on this device or any other.'
+            : 'Sign in to Microsoft in your browser.',
+          done: signedIn(state),
+          children: usable && (
+            <>
+              {auth.canSignIn ? (
+                <div className="action-cluster">
+                  <Button
+                    variant="primary"
+                    className="small"
+                    disabled={auth.locked || !configured}
+                    onClick={auth.start}
+                  >
+                    {byCode ? 'Sign in with a code' : 'Sign in with Microsoft'}
+                  </Button>
+                </div>
+              ) : (
+                <p className="muted">{auth.blocked}</p>
+              )}
+              <p className="settings-help">
+                On a work mailbox your provider manages (GoDaddy, say),
+                Microsoft may show “Need admin approval”: only an admin can
+                approve new apps there. Ask your Microsoft 365 admin, or
+                GoDaddy, to approve your Row-Bot app.
+              </p>
+            </>
+          ),
+        },
+      ]}
+    >
+      {mail.enabled !== null && (
+        <SwitchSetting
+          mutation={mutation}
+          field="outlook_mail.enabled"
+          label="Outlook mail access"
+          hint="Search, read, draft and file email. Sending, replying, forwarding and deleting ask first."
+          value={mail.enabled}
+          row={{ sub: true }}
+        />
+      )}
+      {calendar.enabled !== null && (
+        <SwitchSetting
+          mutation={mutation}
+          field="outlook_calendar.enabled"
+          label="Outlook calendar access"
+          hint="See events and free times, and add your own. Invitations, cancelling and answers ask first."
+          value={calendar.enabled}
+          row={{ sub: true }}
+        />
+      )}
+    </AccountRow>
+  );
+}
+
+/**
  * Settings › Accounts (B263): GitHub, Google and X, each one row with one
  * status and labelled actions. Opening the page reads the saved state only;
  * no token is refreshed and no account is contacted until an action is
@@ -4455,7 +4649,7 @@ export function AccountsSnapshotPanel({
   mutation: SettingsMutationIO;
   showActions?: boolean;
   /** One account only, as its app's settings (Apps › Google › Settings). */
-  only?: 'github' | 'google' | 'x';
+  only?: 'github' | 'google' | 'x' | 'microsoft';
 }) {
   if (snapshot.availability !== 'available')
     return (
@@ -4471,11 +4665,15 @@ export function AccountsSnapshotPanel({
       snapshot.calendar.authentication_state,
     ]),
     accountState([snapshot.x.authentication_state]),
+    accountState([
+      snapshot.outlook_mail.authentication_state,
+      snapshot.outlook_calendar.authentication_state,
+    ]),
   ];
   const count = (state: AccountState) =>
     states.filter((item) => item === state).length;
   const changed = () => reloadAccounts(mutation);
-  const shown = (account: 'github' | 'google' | 'x') =>
+  const shown = (account: 'github' | 'google' | 'x' | 'microsoft') =>
     !only || only === account;
   return (
     <div className="stack settings-snapshot-page settings-accounts-page">
@@ -4540,6 +4738,25 @@ export function AccountsSnapshotPanel({
           </ConnectedAccountAuth>
         ) : (
           <XAccount account={snapshot.x} mutation={mutation} auth={null} />
+        )}
+        {!shown('microsoft') ? null : showActions ? (
+          <ConnectedAccountAuth account="microsoft" onChanged={changed}>
+            {(auth) => (
+              <OutlookAccount
+                mail={snapshot.outlook_mail}
+                calendar={snapshot.outlook_calendar}
+                mutation={mutation}
+                auth={auth}
+              />
+            )}
+          </ConnectedAccountAuth>
+        ) : (
+          <OutlookAccount
+            mail={snapshot.outlook_mail}
+            calendar={snapshot.outlook_calendar}
+            mutation={mutation}
+            auth={null}
+          />
         )}
       </SettingsGroup>
     </div>

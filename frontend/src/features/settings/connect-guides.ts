@@ -99,7 +99,7 @@ export const START_NOTES: Record<string, string> = {
     'Start WhatsApp. The first start installs its bridge (about 30 seconds), then shows a code to scan.',
 };
 
-/** Where Google, X and GitHub are set up (parity row 45). */
+/** Where Google, X, GitHub and Microsoft are set up (parity row 45). */
 export const ACCOUNT_LINKS = {
   githubToken: 'https://github.com/settings/personal-access-tokens/new',
   githubCli: 'https://cli.github.com/',
@@ -111,4 +111,11 @@ export const ACCOUNT_LINKS = {
   googleAudience: 'https://console.cloud.google.com/auth/audience',
   googleClient: 'https://console.cloud.google.com/auth/clients/create',
   xPortal: 'https://developer.x.com/en/portal/dashboard',
+  // Microsoft Entra's app registrations, where Outlook's own app is made (checked 2026-10-22).
+  microsoftRegistrations:
+    'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade',
 };
+
+/** The Microsoft Graph delegated permissions Outlook's own app asks for. */
+export const OUTLOOK_PERMISSIONS =
+  'User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite offline_access';
