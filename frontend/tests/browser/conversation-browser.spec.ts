@@ -105,10 +105,17 @@ test('a local address asks once for this chat, then opens and shows a screenshot
   await expect(transcript.getByText('Opened page')).toBeVisible();
   await expect(transcript.getByText('Took a screenshot')).toBeVisible();
 
-  // The browser panel lists the grant, who allowed it and when it ends, with Remove.
+  // The Browser pane's menu lists the grant, who allowed it and when it ends, with Remove.
   const context = await revealContext(page);
   await context.getByRole('button', { name: 'Conversation actions' }).click();
-  await page.getByRole('menuitem', { name: 'Manage browser' }).click();
+  await page.getByRole('menuitem', { name: 'Open browser' }).click();
+  await page
+    .getByRole('region', { name: 'Browser' })
+    .getByRole('button', { name: 'More browser actions' })
+    .click();
+  await page
+    .getByRole('menuitem', { name: 'Addresses on this computer…' })
+    .click();
   const grants = page.getByRole('region', { name: 'Local addresses' });
   const list = grants.getByRole('list', {
     name: 'Local addresses allowed in this chat',

@@ -30,7 +30,8 @@ MODELS = {name: getattr(schemas, name) for name in (
     "PreviewContract", "CommandReceipt", "AttachmentView", "SessionProof",
     "ConversationView", "ConversationPage", "ConversationActionSnapshot", "ConversationActionReviewRequest",
     "ConversationActionReview", "ConversationActionCommand", "ConversationActionReceipt",
-    "BrowserControlSnapshot", "BrowserPreview", "BrowserReviewRequest", "BrowserReview", "BrowserReceipt",
+    "BrowserTab", "BrowserPaneState", "BrowserFrame", "BrowserInputEvent", "BrowserInput", "BrowserInputResult",
+    "BrowserPaneAction", "BrowserSite", "BrowserSitePage", "BrowserSitesClear", "BrowserSitesCleared",
     "ComputerUseSnapshot", "ComputerUsePreview", "ComputerUseCommand", "ComputerUseReceipt",
     "Snapshot", "TranscriptPage", "SubscriptionView",
     "EventPage", "Choices", "HandshakeView", "ApprovalView", "ResourceView", "Acknowledgement",
@@ -142,11 +143,12 @@ OPERATIONS = (
     ("post", "/conversations/{conversation_id}/actions/review", "ConversationActionReviewRequest", "ConversationActionReview"),
     ("get", "/conversations/{conversation_id}/actions/commands/{command_id}", None, "ConversationActionReceipt"),
     ("post", "/conversations/{conversation_id}/actions/commands", "ConversationActionCommand", "ConversationActionReceipt"),
-    ("get", "/conversations/{conversation_id}/browser", None, "BrowserControlSnapshot"),
-    ("get", "/conversations/{conversation_id}/browser/preview", None, "BrowserPreview"),
-    ("post", "/conversations/{conversation_id}/browser/review", "BrowserReviewRequest", "BrowserReview"),
-    ("get", "/conversations/{conversation_id}/browser/commands/{command_id}", None, "BrowserReceipt"),
-    ("post", "/conversations/{conversation_id}/browser/commands", "Command", "BrowserReceipt"),
+    ("get", "/conversations/{conversation_id}/browser", None, "BrowserPaneState"),
+    ("get", "/conversations/{conversation_id}/browser/live", None, "BrowserPaneState"),
+    ("post", "/conversations/{conversation_id}/browser/input", "BrowserInput", "BrowserInputResult"),
+    ("post", "/conversations/{conversation_id}/browser/actions", "BrowserPaneAction", "BrowserPaneState"),
+    ("get", "/browser/sites", None, "BrowserSitePage"),
+    ("post", "/browser/sites/clear", "BrowserSitesClear", "BrowserSitesCleared"),
     ("get", "/conversations/{conversation_id}/browser/local-addresses", None, "LocalAddressPage"),
     ("post", "/conversations/{conversation_id}/browser/local-addresses/{grant_id}/remove", None, "LocalAddressPage"),
     ("get", "/conversations/{conversation_id}/computer", None, "ComputerUseSnapshot"),
@@ -1111,16 +1113,57 @@ export const getConversationActionReceipt = (base: string, proof: SessionProof, 
   jsonRequest(base, `/conversations/${id(conversation)}/actions/commands/${id(command)}`, 'ConversationActionReceipt', proof, 'GET', undefined, undefined, signal);
 export const sendConversationAction = (base: string, proof: SessionProof, conversation: string, command: ConversationActionCommand, signal?: AbortSignal): Promise<ConversationActionReceipt> =>
   jsonRequest(base, `/conversations/${id(conversation)}/actions/commands`, 'ConversationActionReceipt', proof, 'POST', validateWire('ConversationActionCommand', command), command.command_id, signal);
-export const getBrowserControls = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<BrowserControlSnapshot> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser`, 'BrowserControlSnapshot', proof, 'GET', undefined, undefined, signal);
-export const getBrowserPreview = (base: string, proof: SessionProof, conversation: string, revision: string, signal?: AbortSignal): Promise<BrowserPreview> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/preview` + query({revision}), 'BrowserPreview', proof, 'GET', undefined, undefined, signal);
-export const reviewBrowserControl = (base: string, proof: SessionProof, conversation: string, body: BrowserReviewRequest, signal?: AbortSignal): Promise<BrowserReview> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/review`, 'BrowserReview', proof, 'POST', validateWire('BrowserReviewRequest', body), undefined, signal);
-export const getBrowserControlReceipt = (base: string, proof: SessionProof, conversation: string, command: string, signal?: AbortSignal): Promise<BrowserReceipt> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/commands/${id(command)}`, 'BrowserReceipt', proof, 'GET', undefined, undefined, signal);
-export const sendBrowserControl = (base: string, proof: SessionProof, conversation: string, command: Command, signal?: AbortSignal): Promise<BrowserReceipt> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/commands`, 'BrowserReceipt', proof, 'POST', validateWire('Command', command), command.command_id, signal);
+/** What the Browser pane shows for a conversation (never starts the browser). */
+export const getBrowserPane = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<BrowserPaneState> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser`, 'BrowserPaneState', proof, 'GET', undefined, undefined, signal);
+/** The person's mouse, wheel and keys in the pane, played on the page. */
+export const sendBrowserInput = (base: string, proof: SessionProof, conversation: string, body: BrowserInput, signal?: AbortSignal): Promise<BrowserInputResult> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser/input`, 'BrowserInputResult', proof, 'POST', validateWire('BrowserInput', body), undefined, signal);
+/** The pane's controls: address bar, Back, Forward, Reload, tabs, Take control / Give back, Restart. */
+export const sendBrowserAction = (base: string, proof: SessionProof, conversation: string, body: BrowserPaneAction, signal?: AbortSignal): Promise<BrowserPaneState> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser/actions`, 'BrowserPaneState', proof, 'POST', validateWire('BrowserPaneAction', body), undefined, signal);
+/** Sites with saved sign-ins in Row-Bot's browser. */
+export const getBrowserSites = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<BrowserSitePage> =>
+  jsonRequest(base, '/browser/sites', 'BrowserSitePage', proof, 'GET', undefined, undefined, signal);
+/** Sign out of one site, or every site. */
+export const clearBrowserSites = (base: string, proof: SessionProof, body: BrowserSitesClear, signal?: AbortSignal): Promise<BrowserSitesCleared> =>
+  jsonRequest(base, '/browser/sites/clear', 'BrowserSitesCleared', proof, 'POST', validateWire('BrowserSitesClear', body), undefined, signal);
+/** The pane's state and live picture while it watches: state frames and JPEG frames, latest only. */
+export async function* observeBrowserLive(base: string, proof: SessionProof, conversation: string,
+  view: 'pane' | 'thumb', size: {width: number; height?: number; scale?: number}, signal?: AbortSignal): AsyncGenerator<{state: BrowserPaneState} | {frame: BrowserFrame}> {
+  signal?.throwIfAborted();
+  const fit = view === 'pane' && size.height ? {height:Math.round(size.height), scale:Math.min(4, Math.max(1, Math.round((size.scale ?? 1) * 100) / 100))} : {};
+  const response = await fetch(`${base}/api/v1/conversations/${id(conversation)}/browser/live` + query({view,width:Math.round(size.width),...fit}), {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  if (!response.body) throw new Error('protocol_incompatible');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', {fatal: true});
+  let buffer = '';
+  try {
+    while (true) {
+      const part = await reader.read();
+      buffer += decoder.decode(part.value, {stream: !part.done});
+      let cut: number;
+      while ((cut = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0,cut); buffer = buffer.slice(cut+2);
+        if (frame.length > 12000000) throw new Error('protocol_incompatible');
+        const fields = Object.fromEntries(frame.split('\n').filter(l => l && !l.startsWith(':')).map(l => {
+          const at = l.indexOf(':'); return [l.slice(0,at),l.slice(at+1).trimStart()];
+        }));
+        if (fields.event === 'state') yield {state: validateWire<BrowserPaneState>('BrowserPaneState', JSON.parse(fields.data))};
+        else if (fields.event === 'frame') yield {frame: validateWire<BrowserFrame>('BrowserFrame', JSON.parse(fields.data))};
+        else if (fields.event) throw new Error('protocol_incompatible');
+      }
+      if (buffer.length > 12000000) throw new Error('protocol_incompatible');
+      if (part.done) return;
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* The stream is already retired. */ }
+    finally { reader.releaseLock(); }
+  }
+}
 /** The addresses on this computer a conversation's browser may open now (F4). */
 export const getBrowserLocalAddresses = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<LocalAddressPage> =>
   jsonRequest(base, `/conversations/${id(conversation)}/browser/local-addresses`, 'LocalAddressPage', proof, 'GET', undefined, undefined, signal);
@@ -1864,7 +1907,7 @@ def outputs() -> dict[Path, str]:
                             8388608 if suffix.endswith(SPEECH_OUTPUTS) else
                             1048576 if suffix.endswith("/voice/realtime/{lease_id}/exchange") else 26214400} if response == "bytes"
                            else {"$ref": f"./{response}.schema.json"})
-        mime = "text/event-stream" if suffix == "/events" else "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "audio/wav" if suffix.endswith(SPEECH_OUTPUTS) else "application/octet-stream" if response == "bytes" else "application/json"
+        mime = "text/event-stream" if suffix in {"/events", "/conversations/{conversation_id}/browser/live"} else "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "audio/wav" if suffix.endswith(SPEECH_OUTPUTS) else "application/octet-stream" if response == "bytes" else "application/json"
         operation = {"parameters": parameters, "responses": {
             "200": {"description": "Authenticated result", "content": {mime: {"schema": response_schema}}},
             "default": {"description": "Safe problem", "content": {"application/problem+json": {
@@ -1878,6 +1921,9 @@ def outputs() -> dict[Path, str]:
                               if request == "bytes" else {"$ref": f"./{request}.schema.json"})
             operation["requestBody"] = {"required": True, "content": {
                 "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "application/octet-stream" if request == "bytes" else "application/json": {"schema": request_schema}}}
+        if suffix == "/conversations/{conversation_id}/browser/live":
+            operation["description"] = ("SSE state data validates BrowserPaneState; frame data validates BrowserFrame "
+                                        "(the latest JPEG only; frames are dropped, never queued).")
         if suffix == "/events":
             operation["description"] = "SSE domain data validates Event; snapshot_required data validates StreamReset; notice data validates NoticeFrame. IDs are signed cursors; notice frames carry none."
         if suffix == "/documents/uploads/commands":

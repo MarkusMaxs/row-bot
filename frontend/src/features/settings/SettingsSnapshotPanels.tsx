@@ -1,3 +1,4 @@
+import { BrowserSites } from '../browser/BrowserSites';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -2633,6 +2634,14 @@ function BrowserComputerSetup({
                     />
                   }
                 />
+                <SettingsItem
+                  label="Signed-in sites"
+                  help="Row-Bot's browser keeps you signed in to sites, as your own browser does. Sign out of one here, or all of them."
+                  bind={false}
+                  layout="stacked"
+                >
+                  <BrowserSites />
+                </SettingsItem>
               </>
             ) : (
               <SettingsItem

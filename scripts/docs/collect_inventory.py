@@ -642,7 +642,6 @@ def collect_environment() -> list[dict[str, Any]]:
         "ROW_BOT_WORKERS": "Set the server worker count; Row-Bot requires exactly one.",
         "ROW_BOT_EPHEMERAL_DATA": "Tell access diagnostics that server data is intentionally ephemeral.",
         "ROW_BOT_SECRETS_DIR": "Read allowlisted externally managed secrets from individual files.",
-        "ROW_BOT_BROWSER_HEADLESS": "Run bundled browser automation without an interactive display.",
         "ROW_BOT_NATIVE": "Select native-window behaviour for advanced launch scenarios.",
         "ROW_BOT_AUTO_START_OLLAMA": "Allow or suppress launcher attempts to start Ollama automatically.",
         "ROW_BOT_STARTUP_TIMEOUT": "Set the launcher startup timeout in seconds.",

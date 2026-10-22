@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "description": "One of a conversation's tabs in Row-Bot's browser.",
+  "properties": {
+    "active": {
+      "title": "Active",
+      "type": "boolean"
+    },
+    "id": {
+      "pattern": "^t[0-9]{1,6}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "title": {
+      "maxLength": 160,
+      "title": "Title",
+      "type": "string"
+    },
+    "url": {
+      "maxLength": 2048,
+      "title": "Url",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "title",
+    "url",
+    "active"
+  ],
+  "title": "BrowserTab",
+  "type": "object"
+}
