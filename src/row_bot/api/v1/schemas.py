@@ -175,6 +175,11 @@ class EmptyPayload(WireModel):
     pass
 
 
+class DeletePayload(WireModel):
+    # Keep it restorable while the client offers Undo (B343).
+    undo: bool = False
+
+
 ConversationAction = Literal[
     "conversation.rename", "conversation.pin", "conversation.export"
 ]
@@ -6448,6 +6453,7 @@ class Command(WireModel):
         "conversation.rename",
         "conversation.pin",
         "conversation.delete",
+        "conversation.restore",
         "conversation.submit",
         "conversation.stop",
         "conversation.steer",
@@ -6634,7 +6640,8 @@ COMMAND_PAYLOADS = {
     "conversation.create": CreatePayload,
     "conversation.rename": RenamePayload,
     "conversation.pin": PinPayload,
-    "conversation.delete": EmptyPayload,
+    "conversation.delete": DeletePayload,
+    "conversation.restore": EmptyPayload,
     "conversation.submit": SubmitPayload,
     "conversation.stop": StopPayload,
     "conversation.steer": SteerPayload,

@@ -38,6 +38,7 @@ describe('parseSchedule', () => {
       frequency: 'daily',
       time: '09:00',
       days: ['mon'],
+      date: 1,
       every: 2,
       cron: '',
       at: '',
@@ -83,7 +84,8 @@ describe('parseSchedule', () => {
     ['interval:1.5', { frequency: 'minutes', every: 90 }],
     ['interval_minutes:45', { frequency: 'minutes', every: 45 }],
     ['cron:*/15 * * * *', { frequency: 'cron', cron: '*/15 * * * *' }],
-    ['cron:0 9 1 * *', { frequency: 'cron', cron: '0 9 1 * *' }],
+    ['cron:0 9 1 * *', { frequency: 'monthly', date: 1, time: '09:00' }],
+    ['cron:0 9 1 * mon', { frequency: 'cron', cron: '0 9 1 * mon' }],
   ])('reads %s into builder fields', (saved, fields) => {
     expect(parseSchedule(saved, null)).toEqual(repeat(fields));
   });
@@ -467,6 +469,7 @@ describe('ScheduleBuilder', () => {
       'Every day',
       'Weekdays',
       'On chosen days',
+      'Monthly',
       'Every few hours',
       'Every few minutes',
       'Custom (cron)',
@@ -509,6 +512,51 @@ describe('ScheduleBuilder', () => {
       `next ${absoluteTime(new Date(2026, 8, 28, 7, 30))}`,
     );
     expect(preview()).not.toHaveTextContent('once enabled');
+  });
+
+  it('reads 0 8 1 * * as Monthly on the 1st at 08:00 and writes it back unchanged (B345)', () => {
+    const onChange = renderBuilder({ schedule: 'cron:0 8 1 * *' });
+    expect(screen.getByLabelText('Repeats')).toHaveValue('monthly');
+    expect(screen.getByLabelText('Day of the month')).toHaveValue('1');
+    expect(screen.getByLabelText('Time')).toHaveValue('08:00');
+    expect(screen.queryByLabelText('Cron expression')).toBeNull();
+    expect(preview()).toHaveTextContent(
+      `Monthly on the 1st at ${clockTime(8, 0)}`,
+    );
+    expect(preview()).toHaveTextContent(
+      `next ${absoluteTime(new Date(2026, 9, 1, 8, 0))}`,
+    );
+    fireEvent.change(screen.getByLabelText('Day of the month'), {
+      target: { value: '22' },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: 'cron:0 8 22 * *',
+      at: null,
+    });
+    expect(preview()).toHaveTextContent(
+      `Monthly on the 22nd at ${clockTime(8, 0)}`,
+    );
+  });
+
+  it('offers Monthly from Repeats and says when a month lacks the day', () => {
+    const onChange = renderBuilder({ schedule: 'daily:07:30' });
+    fireEvent.change(screen.getByLabelText('Repeats'), {
+      target: { value: 'monthly' },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: 'cron:30 7 1 * *',
+      at: null,
+    });
+    fireEvent.change(screen.getByLabelText('Day of the month'), {
+      target: { value: '31' },
+    });
+    expect(
+      screen.getByText('Months without this day are skipped.'),
+    ).toBeVisible();
+    // September has 30 days: the next 31st is in October.
+    expect(preview()).toHaveTextContent(
+      `next ${absoluteTime(new Date(2026, 9, 31, 7, 30))}`,
+    );
   });
 
   it('toggles chosen days, never leaving none chosen', () => {

@@ -965,6 +965,23 @@ export class ClientController {
     );
     if (signal?.aborted || view.id !== id)
       throw Error('activity_refresh_stale');
+    // The open conversation still shows a reply being written that the server
+    // says has ended (its end never reached this page): read it again (B396).
+    const open = this.state.projection;
+    const writing = (state: { status: string; quiesced: boolean } | null) =>
+      Boolean(
+        state &&
+        !state.quiesced &&
+        (state.status === 'running' || state.status === 'stopping'),
+      );
+    if (
+      id === this.state.selectedConversationId &&
+      open?.conversation_id === id &&
+      writing(open.generation) &&
+      !(view.generation_state ?? []).some(writing) &&
+      this.visible
+    )
+      this.beginObservation(id, this.selectionNumber);
     const current = listed();
     if (
       listTicket !== this.conversationListNumber ||

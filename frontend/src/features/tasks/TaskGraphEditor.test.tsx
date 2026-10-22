@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event';
 import type { TaskGraphFields, TaskGraphSnapshot } from '../../api/types';
 import TaskGraphEditor, { type TaskGraphEditorProps } from './TaskGraphEditor';
 import { TaskEditSession } from './task-edit-sessions';
+import { RuntimeContext } from '../../runtime';
 
 afterEach(cleanup);
 // The list/flowchart choice is remembered on this device; each test starts fresh.
@@ -788,4 +789,59 @@ it('never offers to continue after a denial, which stops the run', async () => {
   expect(Array.from(denied.options, (option) => option.text)).not.toContain(
     'Continue to the next step',
   );
+});
+
+it('shows the apps a prompt step names as chips on its row and icons on its card (B345)', async () => {
+  const apps = [
+    { id: 'mcp:stripe', name: 'Stripe', icon: 'letter:S' },
+    { id: 'mcp:notion', name: 'Notion', icon: 'letter:N' },
+    { id: 'mcp:linear', name: 'Linear', icon: 'letter:L' },
+  ];
+  const callbacks = props({
+    load: vi.fn().mockResolvedValue(
+      snapshot({
+        steps: [
+          {
+            ...snapshot().steps[0],
+            fields: {
+              ...fields,
+              prompt: 'Total the Stripe payouts and log them in Notion',
+              apps: ['mcp:stripe', 'mcp:notion'],
+            },
+          },
+          snapshot().steps[1],
+        ],
+      }),
+    ),
+    loadApps: vi.fn().mockResolvedValue(apps),
+  });
+  render(
+    <RuntimeContext.Provider
+      value={{ controller: {} as never, platform: {} as never }}
+    >
+      <TaskGraphEditor {...callbacks} />
+    </RuntimeContext.Provider>,
+  );
+  await screen.findByLabelText('Prompt');
+  // The card says which apps the step uses.
+  await vi.waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Step 1 · Prompt' }),
+    ).toHaveAccessibleDescription(/Uses Stripe, Notion\./),
+  );
+  showList();
+  const rows = within(
+    screen.getByRole('list', { name: 'Workflow step order' }),
+  ).getAllByRole('listitem');
+  const chips = within(rows[0]).getByRole('list', {
+    name: 'Apps this step uses',
+  });
+  expect(
+    within(chips)
+      .getAllByRole('listitem')
+      .map((chip) => chip.textContent),
+  ).toEqual(['SStripe', 'NNotion']);
+  expect(
+    within(rows[1]).queryByRole('list', { name: 'Apps this step uses' }),
+  ).toBeNull();
 });

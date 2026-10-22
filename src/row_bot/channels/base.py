@@ -191,6 +191,10 @@ class Channel(ABC):
         """Return ``True`` if the adapter is actively listening."""
         ...
 
+    def is_set_up(self) -> bool:
+        """Set up to deliver to: configured, and for a channel that links a device, linked (B345)."""
+        return self.is_configured() is True
+
     # ── Outbound messaging ───────────────────────────────────────────
 
     @abstractmethod
