@@ -297,6 +297,9 @@ def update_mail(message_id: str, move_to: Optional[str] = None, flag: Optional[L
                 read: Optional[bool] = None) -> str:
     if move_to is None and flag is None and read is None:
         return "Nothing to change: give move_to, flag or read."
+    if move_to is not None and _folder(move_to) == "deleteditems":
+        # Deleting asks first: never a move that skips it.
+        return "To delete it, use outlook_delete_mail, which asks the person first. Nothing was changed."
     original = _get_message(message_id, "id,subject")
     done, changes = [], {}
     if read is not None:

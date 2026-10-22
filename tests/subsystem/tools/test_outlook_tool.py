@@ -121,6 +121,9 @@ def test_reply_forward_file_and_delete_send_graphs_own_requests(outlook):
     filed = outlook_tool.update_mail(message_id=MESSAGE["id"], move_to="archive", flag="flagged", read=True)
     assert filed == "“Q3 numbers”: marked read, flagged, moved to Archive.\nIts new id: AAMk-moved-archive"
     assert outlook.seen("PATCH", f"/v1.0{path}")[0].body == {"isRead": True, "flag": {"flagStatus": "flagged"}}
+    # Deleting asks first, so a move to Deleted Items never stands in for it.
+    refused = outlook_tool.update_mail(message_id=MESSAGE["id"], move_to="deleteditems")
+    assert refused.startswith("To delete it, use outlook_delete_mail") and len(outlook.seen("POST", f"/v1.0{path}/move")) == 1
     deleted = outlook_tool.delete_mail(message_id=MESSAGE["id"])
     assert deleted.startswith("Moved “Q3 numbers” to Deleted Items.")
     assert [seen.body["destinationId"] for seen in outlook.seen("POST", f"/v1.0{path}/move")] == ["archive", "deleteditems"]

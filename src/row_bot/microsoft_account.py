@@ -337,7 +337,7 @@ def _graph_error(response: Any) -> GraphError:
 
 def _graph_with(token: str, method: str, path: str, *, params: dict | None = None, body: Any = None,
                 headers: dict | None = None, http: Any = None) -> dict:
-    if not path.startswith("/") or "://" in path or ".." in path:
+    if not path.startswith("/") or "://" in path or any(part in {".", ".."} for part in path.split("/")):
         raise ValueError("graph_path")  # Graph's own paths only; never an address a person or page wrote.
     sent = {"Authorization": f"Bearer {token}", "Accept": "application/json", **(headers or {})}
     own = http is None
@@ -366,6 +366,6 @@ def graph(method: str, path: str, *, params: dict | None = None, body: Any = Non
 
 def segment(value: str) -> str:
     """A Graph id as one path segment (message and event ids carry ``/``, ``+`` and ``=``)."""
-    if not value or len(value) > 1024 or any(ord(char) < 33 for char in value):
+    if not value or len(value) > 1024 or value in {".", ".."} or any(ord(char) < 33 for char in value):
         raise ValueError("graph_id")
     return quote(value, safe="")
