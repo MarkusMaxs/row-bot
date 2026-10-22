@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Power, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react';
+import {
+  HatGlasses,
+  Power,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+} from 'lucide-react';
 import type {
   ApprovalAnswer,
   ApprovalQuestion,
@@ -56,6 +62,7 @@ type Hint_ = {
   reviewer_reason?: string;
   question?: string;
   questions?: ApprovalQuestion[];
+  memory_text?: string;
 };
 
 /** Under Auto: why the reviewer asked the person rather than approving it (quiet, one line). */
@@ -215,6 +222,10 @@ function editableTarget(target: EventTarget | null) {
  *
  * Row-Bot's question with options (N4) is a question card instead: answered
  * or skipped, never approved.
+ *
+ * A memory write in an incognito chat (N11) asks "Save to memory? This chat
+ * is incognito." with the exact text, and Save / Don't save: only the person
+ * answers it, so it offers neither Auto nor the rest of the turn.
  */
 export default function ApprovalCard({
   id,
@@ -384,6 +395,61 @@ export default function ApprovalCard({
         error={error}
         onDecide={(decision) => resolve(decision)}
       />
+    );
+  const memoryText = view?.memory_text || hint?.memory_text || '';
+  if (memoryText)
+    return (
+      <aside
+        className="approval-card"
+        data-kind="memory"
+        aria-label={`Approval required: ${question}`}
+      >
+        <span className="approval-card-icon" aria-hidden>
+          <HatGlasses />
+        </span>
+        <div className="approval-card-context">
+          <strong>{question}</strong>
+          <blockquote className="approval-card-memory">{memoryText}</blockquote>
+          {view?.requested_at && (
+            <small className="approval-card-meta">
+              <WaitingSince value={view.requested_at} />
+            </small>
+          )}
+        </div>
+        <div className="approval-card-actions">
+          <Button
+            disabled={!view || busy || Boolean(resolution)}
+            onClick={() => void resolve('reject')}
+          >
+            Don’t save
+          </Button>
+          <Button
+            variant="primary"
+            aria-keyshortcuts={notice ? undefined : 'Control+Enter Meta+Enter'}
+            disabled={!view || busy || Boolean(resolution)}
+            onClick={() => void resolve('approve')}
+          >
+            Save
+            {!notice && keyboard && (
+              <span aria-hidden className="approval-card-kbd">
+                <Kbd keys="Mod+Enter" />
+              </span>
+            )}
+          </Button>
+        </div>
+        {resolution && (
+          <p role="status" className="approval-card-status">
+            {resolution === 'Approval submitted.'
+              ? 'Saving to memory…'
+              : 'Not saved to memory.'}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="approval-card-status">
+            {error}
+          </p>
+        )}
+      </aside>
     );
   if (setup)
     return (

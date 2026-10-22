@@ -66,11 +66,15 @@ export default function useNewChat() {
   /**
    * Starts a chat. `firstMessage` is sent once the chat is ready unless
    * `send` is false, when it only waits in the composer as a draft.
+   * `incognito` starts one that nothing is read from for memory (N11).
    */
   async function newChat(
     firstMessage = '',
     profile?: { id: string; display_name: string },
-    { send = true }: { send?: boolean } = {},
+    {
+      send = true,
+      incognito = false,
+    }: { send?: boolean; incognito?: boolean } = {},
   ) {
     if (
       operation.current ||
@@ -120,12 +124,16 @@ export default function useNewChat() {
       const shown = snapshot.projection?.rows.length
         ? snapshot.selectedConversationId
         : null;
+      // An unused chat is never reused as an incognito one, nor the other way round.
       const unused =
-        saved || profile
+        saved || profile || incognito
           ? null
           : unusedChat(
               snapshot.conversations.filter(
-                (row) => started.current.has(row.id) && row.id !== shown,
+                (row) =>
+                  started.current.has(row.id) &&
+                  row.id !== shown &&
+                  !row.incognito,
               ),
               (id) => controller.getDraft(id),
             );
@@ -148,7 +156,9 @@ export default function useNewChat() {
                   title: `${profile.display_name} chat`,
                   agent_profile_id: profile.id,
                 }
-              : {},
+              : incognito
+                ? { incognito: true }
+                : {},
             '0',
             identity,
           );
@@ -161,7 +171,16 @@ export default function useNewChat() {
         commandReceipts.clear(key, identity);
         setPending(null);
         setMissing(null);
-        if (!profile) started.current.add(result.conversation_id);
+        if (saved && incognito)
+          // The new chat confirmed here was started as an everyday one: it is unused, so it turns incognito
+          // before it opens, never the other way round.
+          await controller.intent(
+            result.conversation_id,
+            'conversation.incognito',
+            { incognito: true },
+            result.revision ?? '0',
+          );
+        if (!profile && !incognito) started.current.add(result.conversation_id);
         opened(result.conversation_id);
       } else if (current()) {
         if (result.status === 'rejected')

@@ -1671,6 +1671,9 @@ export default function Workspace() {
         ) : undefined
       }
       onNewChat={() => void creation.newChat()}
+      onNewIncognitoChat={() =>
+        void creation.newChat('', undefined, { incognito: true })
+      }
       onStartProfileChat={(profile) => void creation.newChat('', profile)}
       creatingChat={creation.creatingChat}
       onPanel={(panel, options) =>

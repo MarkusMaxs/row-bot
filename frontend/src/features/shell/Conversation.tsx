@@ -127,6 +127,11 @@ import { ComputerStep, useComputerUse } from './ComputerStep';
 import { BrowserStep } from '../browser/BrowserThumbnail';
 import { registerPromptSender } from './composer-bridge';
 import ConversationHeader from './ConversationHeader';
+import {
+  INCOGNITO_PLACEHOLDER,
+  incognitoAction,
+  useIncognitoSwitch,
+} from './incognito';
 import ErrorFix from './ErrorFix';
 import { TranscriptMessage } from './TranscriptMessage';
 import { publicBlockText } from './TranscriptBlocks';
@@ -288,6 +293,11 @@ export default function Conversation({
   const id = state.selectedConversationId;
   const historyReady =
     Boolean(id) && !state.loadingConversation && state.conversation?.id === id;
+  // Incognito (N11): its mark in the header, its words in the composer, its switch in the ⋯ menu.
+  const incognito = Boolean(
+    id && state.conversation?.id === id && state.conversation.incognito,
+  );
+  const turnIncognito = useIncognitoSwitch();
   const draft = controller.getDraft(id ?? 'new');
   const voiceScope = controller.dictationScope();
   const [talkBusy, setTalkBusy] = useState(false);
@@ -3133,7 +3143,17 @@ export default function Conversation({
             contextDisabled={!contextReady}
             actions={headerActions}
             leading={headerLeading}
-            menuActions={headerMenu}
+            incognito={incognito}
+            menuActions={
+              headerMenu && id && state.conversation?.id === id
+                ? [
+                    ...headerMenu,
+                    incognitoAction(state.conversation, turnIncognito, {
+                      separatorBefore: headerMenu.length > 0,
+                    }),
+                  ]
+                : headerMenu
+            }
             breadcrumb={breadcrumb}
           >
             {missingReceipt &&
@@ -3734,9 +3754,13 @@ export default function Conversation({
                     ? singleLine
                       ? 'Follow-up…'
                       : 'Queue a follow-up…'
-                    : singleLine
-                      ? 'Message'
-                      : 'Message Row-Bot…'
+                    : incognito
+                      ? singleLine
+                        ? 'Message (incognito)'
+                        : INCOGNITO_PLACEHOLDER
+                      : singleLine
+                        ? 'Message'
+                        : 'Message Row-Bot…'
                 }
                 aria-describedby={
                   composerStateReason ? 'message-composer-state' : undefined
