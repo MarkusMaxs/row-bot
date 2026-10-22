@@ -20,7 +20,6 @@ from fastapi import Header, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from row_bot.server import app
 
-from row_bot.application import client_browser_controls as _browser_controls
 from row_bot.tools import registry as _tool_registry
 from tests.browser.client_platform import fixture_app as predecessor
 from tests.helpers.client_platform_fakes import fixture_id
@@ -35,7 +34,6 @@ _expiry_starts: dict[str, threading.Event] = {}
 _voice_fixture = {"transcriptions": 0, "bytes": 0, "syntheses": 0, "credentials": 0, "exchanges": 0}
 _sharing_fixture: list[dict] = []
 _wiki_fixture: dict[str, str] = {}
-_browser_control_fixture: dict[str, dict] = {}
 
 
 def _mount_static() -> None:
@@ -118,69 +116,187 @@ def s9_claude_plan(state: str, set_up_again: bool = False, x_fixture_token: str 
     return {"ready": True}
 
 
-class _SyntheticBrowserControlBackend:
-    """Local in-memory managed browser; it never launches or contacts a site."""
-
-    def status(self, conversation_id: str) -> dict:
-        return dict(
-            _browser_control_fixture.get(
-                conversation_id,
-                {
-                    "engine": "browser",
-                    "surface": "browser",
-                    "active": False,
-                    "paused": False,
-                    "thread_id": conversation_id,
-                    "state": "idle",
-                    "url": "",
-                    "last_action": "",
-                    "revision": 0,
-                },
-            )
-        )
-
-    def execute(self, action: str, payload: dict, conversation_id: str) -> None:
-        current = self.status(conversation_id)
-        current["revision"] = int(current.get("revision", 0)) + 1
-        if action == "browser.navigate":
-            current.update(
-                active=True,
-                paused=False,
-                state="observing",
-                url=payload["url"],
-                last_action="Opened reviewed address",
-            )
-        elif action == "browser.take_over":
-            current.update(paused=True, state="waiting_user")
-        elif action == "browser.check":
-            current.update(last_action="Checked current page")
-        elif action == "browser.back":
-            current.update(
-                url="https://example.test/previous",
-                last_action="Went back",
-            )
-        elif action == "browser.end":
-            current.update(
-                active=False,
-                paused=False,
-                state="idle",
-                url="",
-                last_action="",
-            )
-        else:
-            raise AssertionError("Unsupported synthetic browser action")
-        _browser_control_fixture[conversation_id] = current
+# ── N12-A: Row-Bot's browser in the app ──
+# The real Browser pane routes, live stream, input and controls run against a synthetic engine:
+# no Chromium starts. A spec sets what the pane shows (/__n12_fixture/browser) and the picture,
+# which it renders itself from the task suite's fixture pages (/__n12_fixture/site/{page}).
+from row_bot.browser.service import BrowserEngine as _BrowserEngine, BrowserSessionManager as _Manager  # noqa: E402
+from row_bot.browser.service import Frame as _Frame, _Live  # noqa: E402
+from row_bot.tools import browser_tool as _browser_tool  # noqa: E402
 
 
-_browser_controls.CanonicalBrowserControlBackend = (
-    lambda: _SyntheticBrowserControlBackend()
-)
+class _N12Browser(_BrowserEngine):
+    """The engine's own grants, control, viewers and pane state; the page itself is a picture."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.shown: dict[str, dict] = {}
+        self.signed_in = [{"site": "homecover.example", "cookies": 14}, {"site": "github.com", "cookies": 6},
+                          {"site": "google.com", "cookies": 21}]
+
+    def pane_state(self, chat_id: str) -> dict:
+        state = super().pane_state(chat_id)
+        chat = self._chats.get(str(chat_id))
+        if chat is not None:
+            state.update(control=chat.control)
+        state.update(self.shown.get(str(chat_id), {}))
+        return state
+
+    def ensure_started(self) -> None:
+        self._status = "running"
+
+    def restart(self) -> None:
+        self._status = "running"
+        for state in self.shown.values():
+            state["status"] = "running"
+        for chat in list(self.shown):
+            self._publish(chat)
+
+    def person_action(self, chat_id, action, *, url="", tab=""):
+        state = self.shown.setdefault(str(chat_id), {})
+        if action == "navigate":
+            state.update(url=url, site=url.split("//", 1)[-1].split("/", 1)[0], loading=True)
+        if action == "restart":
+            self.restart()
+        self._publish(str(chat_id))
+
+    def person_input(self, chat_id, events):
+        self.take_control(chat_id)
+        return "ok"
+
+    def sites(self):
+        return list(self.signed_in)
+
+    def clear_sites(self, site):
+        before = len(self.signed_in)
+        self.signed_in = [item for item in self.signed_in if site is not None and item["site"] != site]
+        return before - len(self.signed_in)
+
+    def show(self, chat_id: str, state: dict, frame: str | None, width: float, height: float) -> None:
+        self._status = "running" if state.get("status", "running") == "running" else self._status
+        self.shown[chat_id] = dict(state)
+        if frame:
+            live = self._live.setdefault(chat_id, _Live())
+            live.seq += 1
+            live.frame = _Frame(live.seq, frame, width, height)
+        self._publish(chat_id)
+
+
+class _N12Manager(_Manager):
+    def __init__(self) -> None:
+        super().__init__()
+        self._engine = _N12Browser()
+
+    def get_session(self, thread_id: str = "") -> _BrowserEngine:
+        return self._engine
+
+    def kill_all(self) -> None:
+        self._engine = _N12Browser()
+
+
+_browser_tool._session_manager = _N12Manager()
 _original_tool_enabled = _tool_registry.is_enabled
-_tool_registry.is_enabled = lambda name: (
-    True
-    if name in {"browser_navigate", "browser_snapshot", "browser_back"}
-    else _original_tool_enabled(name)
-)
+_tool_registry.is_enabled = lambda name: True if name == "browser" else _original_tool_enabled(name)
+_N12_RELEASE: dict[str, threading.Event] = {}
+# The payment step each held turn asked about: its tool call id and arguments.
+_N12_PENDING: dict[str, tuple[str, dict]] = {}
+
+
+@app.post("/__n12_fixture/browser")
+def n12_browser(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """What the conversation's Browser pane shows: its state and, optionally, a new picture."""
+    predecessor._authorize(x_fixture_token)
+    engine = _browser_tool.get_session_manager().get_session()
+    chat = str(body["conversation_id"])
+    state = dict(body.get("state") or {})
+    record = engine._chat(chat)
+    # Who drives is the engine's own (Take control and Give back in the pane change it).
+    record.control = str(state.pop("control", record.control) or "agent")
+    engine.show(chat, state, body.get("frame"), float(body.get("width") or 1280), float(body.get("height") or 800))
+    return {"ready": True}
+
+
+@app.get("/__n12_fixture/site/{page}")
+def n12_site(page: str):
+    """A still page of the task suite's fixture service, for the spec to picture."""
+    from fastapi.responses import HTMLResponse
+
+    from tests.fixtures.browser_sites import still_page
+
+    return HTMLResponse(still_page(page).decode("utf-8"))
+
+
+@app.post("/__n12_fixture/release")
+def n12_release(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """Let a held browser turn go on to its payment step."""
+    predecessor._authorize(x_fixture_token)
+    _N12_RELEASE.setdefault(str(body["conversation_id"]), threading.Event()).set()
+    return {"released": True}
+
+
+def _n12_stream(text: str, config: dict):
+    """A turn that uses the browser: it opens the site and waits (the spec pictures the pane), then asks to pay."""
+    from row_bot.browser.policy import Consequence, approval_request
+    from row_bot.threads import append_checkpoint_messages
+
+    call = predecessor._record("submit", config, "n12-browser")
+    thread = call["conversation_id"]
+    identity = f"n12:{call['generation_id']}"
+    release = _N12_RELEASE.setdefault(thread, threading.Event())
+    try:
+        args = {"url": "https://homecover.example/account"}
+        tool_id = fixture_id(identity + ":open")
+        result_id = fixture_id(identity + ":open-result")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":open-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "browser_navigate", "args": args}])])
+        yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "browser_navigate", "args": args}
+        while not release.wait(0.1):
+            pass
+        content = "Opened https://homecover.example/account.\nPage: Your cover (https://homecover.example/account)"
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="browser_navigate",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "browser_navigate",
+                            "args": args, "content": content}
+        pay = {"ref": "e31"}
+        pay_id = fixture_id(identity + ":pay")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":pay-call"), content="",
+            tool_calls=[{"id": pay_id, "name": "browser_click", "args": pay}])])
+        yield "tool_call", {"tool_call_id": pay_id, "name": "browser_click", "args": pay}
+        _N12_PENDING[thread] = (pay_id, pay)
+        card = approval_request("browser_click", Consequence("pay", "homecover.example", "Confirm and pay £60"),
+                                url="https://homecover.example/claim/5")
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **card}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n12_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                stop_event=None):
+    """After the payment card: the claim is booked, or the payment didn't happen."""
+    from row_bot.threads import append_checkpoint_messages
+
+    thread = str(config["configurable"]["thread_id"])
+    pending = _N12_PENDING.pop(thread, None)
+    if pending is None:
+        yield from _n4_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                              resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n12-pay")
+    identity = f"n12-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        result_id = fixture_id(identity + ":pay")
+        content = ('Approval: asked; approved by you\nClicked button "Confirm and pay £60".\nPage: Claim booked'
+                   if approved else "The person said no; Row-Bot didn't click it.")
+        call_id, args = pending
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=call_id, name="browser_click",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": call_id, "message_id": result_id, "name": "browser_click",
+                            "args": args, "content": content}
+        final = ("Booked: a plumber comes tomorrow between 8am and 12pm (claim HC-1042). The £60 excess is paid."
+                 if approved else "I didn't pay. The claim is ready at the payment step whenever you want to finish it.")
+        yield from _natural_final(call, thread, final, "n12")
+    finally:
+        call["quiesced"] = True
 
 
 @app.post("/__p4_fixture/capability-settings")
@@ -1557,6 +1673,10 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("n12 ") and text.rstrip().endswith("fixture"):
+        # Row-Bot's browser in the app (N12-A): a turn that uses the browser, then asks to pay.
+        yield from _n12_stream(text, config)
+        return
     if text.startswith("n4 ") and text.rstrip().endswith("fixture"):
         # Row-Bot asks questions with options (N4): one question, or two as steps.
         yield from _n4_stream(text, config)
@@ -3592,7 +3712,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _n4_resume
+    agent.resume_stream_agent = _n12_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -3603,7 +3723,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _n4_resume
+    client_platform_service.resume_factory = _n12_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier

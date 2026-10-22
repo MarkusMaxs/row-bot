@@ -317,3 +317,25 @@ class _Handler(BaseHTTPRequestHandler):
                 name = head.split(b'filename="', 1)[1].split(b'"', 1)[0].decode()
                 return name, len(content.rstrip(b"\r\n-"))
         return "", 0
+
+
+def still_page(name: str) -> bytes:
+    """One page of the service as a still view, for pictures of the Browser pane (no server needed)."""
+
+    pages = {
+        "account": ("Your cover", f"<h1>Your cover</h1><p>Signed in as {EMAIL}.</p><p class=muted>Plumbing and "
+                    "drainage cover. Renews 4 March.</p><a class=button href='#'>Make a claim</a>"),
+        "claim": ("Make a claim · 1 of 5", "<form><h1>What's the problem?</h1>"
+                  "<label><input type=radio name=p checked> Leak</label>"
+                  "<label><input type=radio name=p> Boiler not working</label>"
+                  "<label><input type=radio name=p> Blocked drain</label><button type=button>Next</button></form>"),
+        "sign-in": ("Sign in", "<form><h1>Sign in</h1><label>Email</label>"
+                    f"<input type=email value='{EMAIL}'><label>Password</label><input type=password>"
+                    "<button type=button>Sign in</button></form>"),
+        "checkout": ("Make a claim · 5 of 5", "<form><h1>Pay your excess</h1><p>Leak in the Kitchen, "
+                     "Tomorrow 8am to 12pm.</p><p><strong>Excess to pay: £60.00</strong></p>"
+                     "<label>Card number</label><input value='•••• •••• •••• 4242'><label>Expiry</label>"
+                     "<input value='12/30'><button type=button>Confirm and pay £60</button></form>"),
+    }
+    title, body = pages[name]
+    return _page(title, body)

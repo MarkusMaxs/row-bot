@@ -132,6 +132,8 @@ export default function BrowserPane({
       : undefined,
   );
   const running = Boolean(generation && !generation.quiesced);
+  // A turn parked on an approval is still this conversation's turn.
+  const turn = running || generation?.status === 'waiting_approval';
   const [busy, setBusy] = useState(false);
   const [address, setAddress] = useState('');
   const [editing, setEditing] = useState(false);
@@ -342,8 +344,7 @@ export default function BrowserPane({
 
   const driving = control === 'agent' && Boolean(acting);
   // The toolbar offers Take control only while the status line has no control of its own.
-  const quiet =
-    control === 'agent' && !signIn && !acting && !(running && waiting);
+  const quiet = control === 'agent' && !signIn && !acting && !(turn && waiting);
   return (
     <section
       className="browser-pane"
@@ -439,7 +440,12 @@ export default function BrowserPane({
             </IconButton>
           )}
           {mode === 'docked' && (
-            <IconButton label="Pop out" size="sm" onClick={() => void popOut()}>
+            <IconButton
+              label="Pop out"
+              size="sm"
+              className="browser-pop-out"
+              onClick={() => void popOut()}
+            >
               <PictureInPicture2 aria-hidden />
             </IconButton>
           )}
@@ -482,7 +488,7 @@ export default function BrowserPane({
         status={status}
         control={control}
         acting={acting}
-        waiting={running ? waiting : ''}
+        waiting={turn ? waiting : ''}
         signIn={signIn}
         running={running && Boolean(generation?.can_stop)}
         onTakeControl={() => {

@@ -2634,6 +2634,14 @@ function BrowserComputerSetup({
                     />
                   }
                 />
+                <SettingsItem
+                  label="Signed-in sites"
+                  help="Row-Bot's browser keeps you signed in to sites, as your own browser does. Sign out of one here, or all of them."
+                  bind={false}
+                  layout="stacked"
+                >
+                  <BrowserSites />
+                </SettingsItem>
               </>
             ) : (
               <SettingsItem
@@ -2644,15 +2652,6 @@ function BrowserComputerSetup({
               />
             )}
           </SettingsGroup>
-          {browserAvailable && (
-            <SettingsGroup title="Signed-in sites">
-              <p className="settings-help">
-                Row-Bot&apos;s browser keeps you signed in to sites, as your own
-                browser does. Sign out of one here, or all of them.
-              </p>
-              <BrowserSites />
-            </SettingsGroup>
-          )}
           <SettingsGroup title="Desktop apps">
             {computerAvailable ? (
               <SettingsItem

@@ -287,8 +287,9 @@
 }
 .browser-step-title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
   min-width: 0;
   color: var(--text-primary);
   font-size: var(--text-14);
@@ -296,8 +297,12 @@
   line-height: 20px;
 }
 .browser-step-site {
+  overflow: hidden;
+  max-width: 100%;
   color: var(--text-secondary);
   font-weight: var(--weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .browser-step-doing {
   overflow: hidden;
@@ -386,6 +391,10 @@
 }
 
 @media (max-width: 640px) {
+  /* A phone shows the pane full screen already. */
+  .browser-pop-out {
+    display: none;
+  }
   .browser-chrome {
     flex-wrap: wrap;
   }

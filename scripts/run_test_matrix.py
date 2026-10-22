@@ -73,6 +73,7 @@ BROWSER_SMOKE_SPECS = (
     "conversation-approvals",
     "conversation-processes",
     "conversation-browser",
+    "browser-pane",
     "conversation-media",
     "conversation-delivery",
     "workspace-folders",
