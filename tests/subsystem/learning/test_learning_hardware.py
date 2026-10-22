@@ -196,9 +196,17 @@ def test_a_computer_whose_memory_cant_hold_even_the_smallest_tier_says_so_up_fro
 
 
 def test_training_waits_until_the_computer_has_the_memory_it_needs(monkeypatch):
+    from row_bot.learning.training import recipes
+
+    # The recipes' measured figures are Windows' (the commit limit); a system without one isn't checked.
+    monkeypatch.setattr(recipes, "this_system", lambda platform=None: "linux")
     hardware.check(refresh=True, detector=lambda: hardware.classify([hardware.Gpu("NVIDIA RTX 5070", 8_151, "596")],
                                                                     ROOMY))
     try:
+        assert hardware.training_system_need_mib() is None
+        assert hardware.memory_free_for_training(
+            reader=lambda: hardware.SystemMemory(limit_mib=131_072, free_mib=0)) is True
+        monkeypatch.setattr(recipes, "this_system", lambda platform=None: "windows")
         need = hardware.training_system_need_mib()
         assert need is not None and need >= 8 * 1024  # the 8 GB recipe's measured figure for this system
         free = lambda mib: lambda: hardware.SystemMemory(limit_mib=131_072, free_mib=mib)  # noqa: E731
