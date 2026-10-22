@@ -242,6 +242,13 @@ _CREATE_TABLE_SQL = {
             PRIMARY KEY (channel, conversation_key)
         )
     """,
+    # When the scheduler last ran, so a start can tell which runs fell while Row-Bot was closed.
+    "scheduler_state": """
+        CREATE TABLE IF NOT EXISTS scheduler_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """,
 }
 
 _COLUMN_MIGRATIONS = {
@@ -367,6 +374,7 @@ _REQUIRED_COLUMNS = {
         "status", "attempts", "last_error", "created_at", "updated_at", "delivered_at",
     },
     "channel_conversations": {"channel", "conversation_key", "thread_id", "updated_at"},
+    "scheduler_state": {"key", "value"},
 }
 
 
@@ -2184,7 +2192,8 @@ def update_task_settings(
 ) -> None:
     """Publish reviewed settings in their existing task row; never execute."""
     allowed = {"concurrency_group", "trigger", "model_override", "agent_profile_id",
-               "safety_mode", "persistent_thread_id"}
+               "safety_mode", "persistent_thread_id", "workspace_id", "workspace_name",
+               "missed_runs", "always_ask"}
     if set(values) - allowed:
         raise TaskMutationError("invalid_task_settings", task_id)
     conn = _get_conn()
@@ -2821,14 +2830,21 @@ def claim_reviewed_task_run(
         conn.close()
 
 
+# A run's bounded status, as run lists and headers show it: never prompts, traces or delivery payloads.
+_RUN_SUMMARY_COLUMNS = (
+    "id,task_id,thread_id,substr(status,1,80) AS status,"
+    "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done,"
+    "substr(COALESCE(workspace_id,''),1,128) AS workspace_id,substr(COALESCE(workspace_name,''),1,256) AS workspace_name,"
+    "substr(COALESCE(late_for,''),1,80) AS late_for,substr(COALESCE(notice,''),1,512) AS notice"
+)
+
+
 def read_task_run(run_id: str) -> dict | None:
     """Read bounded status without exposing prompt, trace or delivery payloads."""
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT id,task_id,thread_id,substr(status,1,80) AS status,"
-            "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done "
-            "FROM task_runs WHERE id=?", (run_id,),
+            f"SELECT {_RUN_SUMMARY_COLUMNS} FROM task_runs WHERE id=?", (run_id,),
         ).fetchone()
         return dict(row) if row is not None else None
     finally:
@@ -2873,9 +2889,8 @@ def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
     try:
         conn.execute("BEGIN")
         rows = conn.execute(
-            "SELECT id,task_id,thread_id,substr(status,1,80) AS status,"
-            "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done "
-            "FROM task_runs WHERE task_id=? ORDER BY started_at DESC,id DESC", (task_id,),
+            f"SELECT {_RUN_SUMMARY_COLUMNS} FROM task_runs WHERE task_id=? ORDER BY started_at DESC,id DESC",
+            (task_id,),
         )
         while batch := rows.fetchmany(128):
             for row in batch:
@@ -2988,15 +3003,15 @@ def _mirror_workflow_agent_run_finish(
 
 @_schema_retry
 def _record_run_start(task_id: str, thread_id: str, steps_total: int,
-                      task_name: str = "", task_icon: str = "") -> str:
+                      task_name: str = "", task_icon: str = "", late_for: str = "") -> str:
     run_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
     conn = _get_conn()
     conn.execute(
         "INSERT INTO task_runs (id, task_id, thread_id, started_at, "
-        "status, steps_total, steps_done, task_name, task_icon) "
-        "VALUES (?, ?, ?, ?, 'running', ?, 0, ?, ?)",
-        (run_id, task_id, thread_id, now, steps_total, task_name, task_icon),
+        "status, steps_total, steps_done, task_name, task_icon, late_for) "
+        "VALUES (?, ?, ?, ?, 'running', ?, 0, ?, ?, ?)",
+        (run_id, task_id, thread_id, now, steps_total, task_name, task_icon, late_for),
     )
     conn.commit()
     conn.close()
@@ -3071,7 +3086,7 @@ def _record_run_recall_notices(run_id: str, generation_id: str) -> None:
 
 @_schema_retry
 def _finish_run(run_id: str, status: str = "completed",
-                status_message: str = "", terminal_reason: str = "") -> None:
+                status_message: str = "", terminal_reason: str = "", notice: str = "") -> None:
     conn = _get_conn()
     row = conn.execute(
         "SELECT status, status_message FROM task_runs WHERE id = ?",
@@ -3096,6 +3111,8 @@ def _finish_run(run_id: str, status: str = "completed",
         "WHERE id = ?",
         (status, status_message, datetime.now().isoformat(), run_id),
     )
+    if notice:
+        conn.execute("UPDATE task_runs SET notice = ? WHERE id = ?", (notice, run_id))
     if status in ("completed", "completed_delivery_failed"):
         # A finished run is done, however it got there: a last notify step, "next": "end", a condition that
         # ended early or a resumed approval all used to leave it at "2 of 3 steps" (B313).
@@ -4062,6 +4079,55 @@ def _resolve_approval_on_channels(approval_id: str, status: str,
             )
 
 
+def code_folder_state(workspace_id: str) -> tuple[str, bool]:
+    """A code folder's name and whether a workflow can run in it (N9): saved, not removed from
+    Row-Bot's code folders, and still on disk. ("", False) when it isn't saved at all."""
+    from row_bot.developer.storage import get_workspace
+
+    workspace = get_workspace(str(workspace_id or ""))
+    if workspace is None:
+        return "", False
+    try:
+        on_disk = pathlib.Path(workspace.path).is_dir()
+    except OSError:
+        on_disk = False
+    return workspace.name, bool(on_disk and not workspace.hidden)
+
+
+def _open_workflow_folder(task: Mapping[str, Any], thread_id: str) -> tuple[str, str, str]:
+    """(folder id, its name, why the run can't use it) for a run of *task* in its own code folder.
+
+    The folder is bound to the run's conversation as its one code folder, replacing another a
+    kept conversation had, so every step (and a child agent that doesn't pick its own) works in it.
+    """
+    workspace_id = str(task.get("workspace_id") or "")
+    name, available = code_folder_state(workspace_id)
+    name = name or str(task.get("workspace_name") or "") or "The workflow's code folder"
+    if not available:
+        return workspace_id, name, f"{name} isn't a code folder any more. Choose another in this workflow's settings."
+    from row_bot import conversation_resources as resources
+
+    snapshot = resources.list_bindings(thread_id)
+    current = [binding for binding in snapshot.bindings if binding.kind == "workspace"]
+    if [binding.resource_id for binding in current] == [workspace_id]:
+        return workspace_id, name, ""
+    for binding in current:
+        snapshot = resources.unbind(thread_id, binding.binding_id, expected_revision=snapshot.revision)
+    resources.bind(thread_id, "workspace", workspace_id, expected_revision=snapshot.revision, role="primary")
+    return workspace_id, name, ""
+
+
+@_schema_retry
+def _note_run_folder(run_id: str, workspace_id: str, workspace_name: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE task_runs SET workspace_id = ?, workspace_name = ? WHERE id = ?",
+                     (workspace_id, workspace_name, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def run_task_background(
     task_id: str,
     thread_id: str,
@@ -4071,8 +4137,12 @@ def run_task_background(
     resume_step_outputs: dict[str, str] | None = None,
     resume_run_id: str | None = None,
     *, reviewed_capture: dict | None = None, validate: Callable[[], None] | None = None,
+    late_for: str = "",
 ) -> None:
     """Execute a task in a background thread.
+
+    *late_for* is the scheduled time a run missed while Row-Bot was closed, when
+    it runs once on start instead (N9).
 
     If *resume_run_id* is provided the existing run record is reused
     instead of creating a new one (avoids duplicate Activity entries
@@ -4122,7 +4192,7 @@ def run_task_background(
                 _reviewed_run_enter(run_id, task_id, thread_id, reviewed_capture, validate)
             else:
                 run_id = _record_run_start(task_id, thread_id, 0,
-                                          task_name=task["name"], task_icon=task["icon"])
+                                          task_name=task["name"], task_icon=task["icon"], late_for=late_for)
             label = task.get("notify_label") or task["name"]
             from row_bot.notifications import notify
             _validate_effect()
@@ -4209,7 +4279,25 @@ def run_task_background(
         _update_run_progress(run_id, start_step)
     else:
         run_id = _record_run_start(task_id, thread_id, total,
-                                   task_name=task["name"], task_icon=task["icon"])
+                                   task_name=task["name"], task_icon=task["icon"], late_for=late_for)
+
+    if not resume_run_id and start_step == 0 and task.get("workspace_id"):
+        # The workflow's own code folder (N9): bound to the run's conversation before the run's
+        # resources are captured, so every step works in it. A removed folder stops the run here.
+        try:
+            folder_id, folder_name, refusal = _open_workflow_folder(task, thread_id)
+        except Exception:
+            logger.warning("Could not open the code folder of workflow %s", task_id, exc_info=True)
+            folder_id, folder_name = str(task["workspace_id"]), str(task.get("workspace_name") or "")
+            refusal = f"Row-Bot couldn't open {folder_name or 'the code folder'} for this run. Try again."
+        _note_run_folder(run_id, folder_id, folder_name)
+        if refusal:
+            _update_pipeline_status(run_id, "blocked")
+            _finish_run(run_id, "blocked", status_message=refusal, terminal_reason="code_folder_unavailable",
+                        notice=refusal)
+            _emit_buddy_workflow_event("error", task_id=task_id, thread_id=thread_id,
+                                       label="Workflow needs attention", error=refusal)
+            return
 
     def _run():
         if reviewed_capture:
@@ -5653,11 +5741,12 @@ def _skip_scheduled_run(task: dict, waiting: dict) -> None:
     notify(title=task["name"], message=message, sound="none", toast_type="warning", source="workflow")
 
 
-def _on_task_fire(task_id: str) -> None:
+def _on_task_fire(task_id: str, late_for: str = "") -> None:
     """Callback invoked by APScheduler when a task's trigger fires.
 
     A recurring run never starts while the workflow's last run still waits
     for an approval: it is recorded as skipped instead, so runs don't pile up.
+    *late_for*: the scheduled time this run missed while Row-Bot was closed (N9).
     """
     from row_bot.tools import registry as tool_registry
 
@@ -5677,7 +5766,7 @@ def _on_task_fire(task_id: str) -> None:
     thread_id = _prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
 
-    run_task_background(task_id, thread_id, enabled, notification=True)
+    run_task_background(task_id, thread_id, enabled, notification=True, late_for=late_for)
 
     # Auto-remove one-shot `at` tasks after firing
     if task.get("at") and task.get("delete_after_run"):
@@ -5736,6 +5825,101 @@ def sync_all_jobs() -> None:
     logger.info("Synced %d task(s) to APScheduler", len(tasks))
 
 
+# ── Runs missed while Row-Bot was closed (N9) ─────────────────────────────────
+# The scheduler notes the time every minute while it runs. On start, a time a schedule had
+# between that note and now fell while Row-Bot was closed: a workflow set to "Run once when
+# Row-Bot starts" runs once for the latest such time; the others are skipped, as before.
+
+_SCHEDULER_SEEN_KEY = "seen_at"
+
+
+@_schema_retry
+def scheduler_seen_at() -> datetime | None:
+    """When the scheduler last noted it was running, or None (never, before 5.3)."""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT value FROM scheduler_state WHERE key = ?", (_SCHEDULER_SEEN_KEY,)).fetchone()
+    finally:
+        conn.close()
+    return _saved_instant(row["value"]) if row else None
+
+
+@_schema_retry
+def note_scheduler_alive(now: datetime | None = None) -> None:
+    """Note that the scheduler is running now."""
+    stamp = (now or datetime.now()).astimezone().isoformat(timespec="seconds")
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO scheduler_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_SCHEDULER_SEEN_KEY, stamp),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def missed_run_time(task: Mapping[str, Any], since: datetime, now: datetime) -> datetime | None:
+    """The latest time *task*'s repeating schedule had in (since, now] that it hasn't run for."""
+    sched = _parse_schedule(task.get("schedule"))
+    if not sched or task.get("at"):
+        return None
+    last = _saved_instant(task.get("last_run"))
+    after = max(since, last) if last else since
+    kind = sched["kind"]
+    if kind in ("interval", "interval_minutes"):
+        delta = timedelta(hours=sched["hours"]) if kind == "interval" else timedelta(minutes=int(sched["minutes"]))
+        if last is None or delta <= timedelta(0) or now - last < delta:
+            return None
+        due = last + delta * int((now - last) / delta)
+        return due if due > after else None
+    from row_bot import schedule_zones
+
+    trigger = _schedule_trigger(sched, schedule_zones.zone(task.get("timezone")))
+    return schedule_zones.latest_fire_time(trigger, after, now) if trigger else None
+
+
+def _fire_late(task_id: str, late_for: str) -> None:
+    """Start a missed run shortly after start-up, off the start-up path."""
+    from apscheduler.triggers.date import DateTrigger
+
+    _get_scheduler().add_job(
+        _on_task_fire, trigger=DateTrigger(run_date=datetime.now().astimezone() + timedelta(seconds=2)),
+        args=[task_id], kwargs={"late_for": late_for}, id=f"late_{task_id}", replace_existing=True,
+    )
+
+
+def run_missed_runs(
+    since: datetime | None, now: datetime | None = None, *,
+    fire: Callable[[str, str], None] | None = None,
+) -> list[tuple[str, str]]:
+    """Run once, for its latest missed time, each workflow set to "Run once when Row-Bot starts".
+
+    *since*: when the scheduler last noted it was running; None runs nothing (it can't be told
+    what was missed). Returns (task id, missed time) for each run started.
+    """
+    if since is None:
+        return []
+    now = (now or datetime.now()).astimezone()
+    started: list[tuple[str, str]] = []
+    for task in list_tasks():
+        if not task.get("enabled") or task.get("missed_runs") != "run_once":
+            continue
+        try:
+            missed = missed_run_time(task, since, now)
+        except Exception:
+            logger.warning("Could not tell what workflow %s missed", task.get("id"), exc_info=True)
+            continue
+        if missed is None:
+            continue
+        late_for = missed.isoformat(timespec="seconds")
+        logger.info("Workflow '%s' missed %s while Row-Bot was closed: running it once", task["name"], late_for)
+        (fire or _fire_late)(task["id"], late_for)
+        started.append((task["id"], late_for))
+    return started
+
+
 _PROCESS_STARTED_AT = datetime.now()
 _interrupted_runs_settled = False
 _INTERRUPTED_RUN_STATUSES = ("starting", "running", "resuming", "stopping")
@@ -5777,7 +5961,9 @@ def settle_interrupted_runs(before: datetime | None = None) -> list[str]:
 def start_task_scheduler() -> None:
     """Start the APScheduler and sync all task jobs (idempotent)."""
     global _interrupted_runs_settled
-    if not _interrupted_runs_settled:
+    first_start = not _interrupted_runs_settled
+    closed_since = None
+    if first_start:
         _interrupted_runs_settled = True
         try:
             settle_interrupted_runs()
@@ -5788,8 +5974,18 @@ def start_task_scheduler() -> None:
             settle_interrupted_goals()
         except Exception:
             logger.warning("Could not pause goals left working", exc_info=True)
+        try:
+            closed_since = scheduler_seen_at()
+            note_scheduler_alive()
+        except Exception:
+            logger.warning("Could not read when the scheduler last ran", exc_info=True)
     _get_scheduler()
     sync_all_jobs()
+    if first_start:
+        try:
+            run_missed_runs(closed_since)
+        except Exception:
+            logger.warning("Could not run workflows missed while Row-Bot was closed", exc_info=True)
     start_approval_monitor()
 
 
@@ -7386,6 +7582,10 @@ def start_approval_monitor() -> None:
                 _check_approval_timeouts()
             except Exception as exc:
                 logger.error("Approval monitor error: %s", exc)
+            try:
+                note_scheduler_alive()  # So a later start can tell which runs fell while closed (N9).
+            except Exception:
+                logger.debug("Could not note the scheduler running", exc_info=True)
             time.sleep(60)  # check every 60 seconds
 
     t = threading.Thread(target=_monitor, daemon=True, name="approval-monitor")

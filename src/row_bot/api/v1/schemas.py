@@ -5229,6 +5229,13 @@ class TaskRunSummary(WireModel):
     finished_at: str | None = Field(max_length=80)
     steps_total: int = Field(ge=0)
     steps_done: int = Field(ge=0)
+    # The code folder the run worked in, by id and by name as it was then.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    workspace_name: str | None = Field(default=None, max_length=256)
+    # The scheduled time it missed while Row-Bot was closed, when it ran once on start instead.
+    late_for: str | None = Field(default=None, max_length=80)
+    # A plain sentence about how it ended, e.g. "Not approved in time".
+    notice: str | None = Field(default=None, max_length=512)
 
 
 class TaskRunPage(WireModel):
@@ -5596,6 +5603,14 @@ class TaskSettingsFields(WireModel):
     agent_profile_id: str = Field(min_length=1, max_length=128)
     approval_mode: ApprovalLevel
     persistent_enabled: bool
+    # The workflow's own code folder: every step runs in it. None: the conversation's.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    # A scheduled time while Row-Bot was closed: skip it, or run once when Row-Bot starts.
+    missed_runs: Literal["skip", "run_once"] = "skip"
+    # Apps and tools whose actions always wait for the person ("Always ask me").
+    always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -5609,6 +5624,9 @@ class TaskSettingsSnapshot(WireModel):
     conversation_id: OpaqueId | None
     # The person turned Hands-off on once on this install: choosing it needs no dialog again.
     full_autonomy_confirmed: bool = False
+    # The saved folder's name (kept when it is removed) and whether it is still a code folder.
+    workspace_name: str | None = Field(default=None, max_length=256)
+    workspace_available: bool = True
 
 
 class TaskSettingsUpdatePayload(WireModel):

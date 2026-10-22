@@ -25,6 +25,32 @@
       "title": "Id",
       "type": "string"
     },
+    "late_for": {
+      "anyOf": [
+        {
+          "maxLength": 80,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Late For"
+    },
+    "notice": {
+      "anyOf": [
+        {
+          "maxLength": 512,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notice"
+    },
     "started_at": {
       "maxLength": 80,
       "title": "Started At",
@@ -51,6 +77,32 @@
       "pattern": "^[A-Za-z0-9:_-]+$",
       "title": "Task Id",
       "type": "string"
+    },
+    "workspace_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Id"
+    },
+    "workspace_name": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Name"
     }
   },
   "required": [

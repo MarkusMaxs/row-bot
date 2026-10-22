@@ -505,6 +505,7 @@ _STATUS.update(
         "invalid_task_settings": 422,
         "task_settings_profile_conflict": 409,
         "task_settings_profile_unavailable": 409,
+        "task_settings_folder_unavailable": 409,
         "task_settings_model_unavailable": 409,
         "task_settings_unavailable": 409,
         "task_settings_too_large": 413,

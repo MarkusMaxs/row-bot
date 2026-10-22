@@ -41,6 +41,13 @@ class TaskRunSummary:
     finished_at: str | None
     steps_total: int
     steps_done: int
+    # The code folder the run worked in (N9), by id and by name as it was then.
+    workspace_id: str | None = None
+    workspace_name: str | None = None
+    # The scheduled time it missed while Row-Bot was closed, when it ran once on start instead.
+    late_for: str | None = None
+    # A plain sentence about how it ended, e.g. "Not approved in time".
+    notice: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,7 +138,9 @@ def _summary(row: dict) -> TaskRunSummary:
     if any(type(row[key]) is not int or row[key] < 0 for key in ("steps_total", "steps_done")):
         raise TaskExecutionError("task_run_metadata_unavailable")
     return TaskRunSummary(row["id"], row["task_id"], row["thread_id"], row["status"] or "unknown",
-                          row["started_at"] or "", row["finished_at"], row["steps_total"], row["steps_done"])
+                          row["started_at"] or "", row["finished_at"], row["steps_total"], row["steps_done"],
+                          row.get("workspace_id") or None, row.get("workspace_name") or None,
+                          row.get("late_for") or None, row.get("notice") or None)
 
 
 def get_task_run(task_id: str, run_id: str) -> TaskRunSummary:

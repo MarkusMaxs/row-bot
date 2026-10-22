@@ -1314,6 +1314,10 @@ const CATALOG: Record<string, Entry> = {
     'The agent profile changed. Check it before saving; your edits are kept.',
     'review',
   ],
+  task_settings_folder_unavailable: [
+    "That folder isn't a code folder any more. Choose another.",
+    'review',
+  ],
   task_settings_profile_unavailable: [
     "The chosen agent profile isn't available. Choose another.",
     'review',
