@@ -2055,7 +2055,7 @@ class ProblemFix(WireModel):
     """The one fix offered with a problem (Phase 18). The client words it and
     runs it through the owner that does it in Settings: a channel restart or
     an account sign-in reviewed as there, or opening the exact setting."""
-    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again"]
+    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again", "choose_folder"]
     # Where it is fixed by hand, an in-app path ("/settings/access#tunnel").
     href: str | None = Field(max_length=160, pattern=r"^/[A-Za-z0-9/?=&#._:-]{0,159}$")
     # restart_channel: the channel's id; reconnect_account: "google" or "x".
@@ -5180,6 +5180,8 @@ class TaskEditableFields(WireModel):
     notify_only: bool
     notify_label: str = Field(max_length=4096)
     channels: list[OpaqueId] | None = Field(max_length=32)
+    # The IANA zone the schedule keeps its times in; None means the computer's.
+    timezone: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def prompt_budget(self) -> TaskEditableFields:
@@ -5228,6 +5230,15 @@ class TaskRunSummary(WireModel):
     finished_at: str | None = Field(max_length=80)
     steps_total: int = Field(ge=0)
     steps_done: int = Field(ge=0)
+    # The code folder the run worked in, by id and by name as it was then.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    workspace_name: str | None = Field(default=None, max_length=256)
+    # The scheduled time it missed while Row-Bot was closed, when it ran once on start instead.
+    late_for: str | None = Field(default=None, max_length=80)
+    # A plain sentence about how it ended, e.g. "Not approved in time".
+    notice: str | None = Field(default=None, max_length=512)
+    # The one thing the person can do about it: choose another code folder (it was removed).
+    fix: Literal["choose_folder"] | None = None
 
 
 class TaskRunPage(WireModel):
@@ -5241,6 +5252,24 @@ class TaskRunPage(WireModel):
 class TaskRunResult(WireModel):
     run: TaskRunSummary
     replayed: bool
+
+
+class TaskApprovalMedia(WireModel):
+    name: str = Field(max_length=256)
+    size: int = Field(ge=0)
+    # The first hex digits of the SHA-256 of its contents.
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{6,64}$")
+    kind: Literal["image", "video", "audio", "file"]
+
+
+class TaskApprovalCard(WireModel):
+    """Exactly what a person-only ("Always ask me") approval lets happen."""
+
+    action: str = Field(max_length=1024)
+    destination: str | None = Field(default=None, max_length=1024)
+    account: str | None = Field(default=None, max_length=256)
+    text: str | None = Field(default=None, max_length=16384)
+    media: list[TaskApprovalMedia] = Field(default_factory=list, max_length=16)
 
 
 class TaskApprovalReview(WireModel):
@@ -5257,6 +5286,9 @@ class TaskApprovalReview(WireModel):
     nonce: str | None = Field(default=None, max_length=128)
     # "question": Row-Bot's question (N4), answered on its own card (/approvals/{id}), never approved here.
     kind: Literal["approval", "question"] = "approval"
+    # The person's own "Always ask me" approval: no approval level answers it for them.
+    person_only: bool = False
+    card: TaskApprovalCard | None = None
 
 
 class TaskApprovalPage(WireModel):
@@ -5563,6 +5595,8 @@ class TaskGraphFields(WireModel):
     apps: list[Annotated[str, StringConstraints(min_length=3, max_length=512)]] | None = Field(
         default=None, max_length=8
     )
+    # "Always ask me": what the step does waits for the person's own approval under every level.
+    always_ask: bool | None = None
 
 
 class TaskGraphStepEdit(WireModel):
@@ -5597,6 +5631,14 @@ class TaskSettingsFields(WireModel):
     agent_profile_id: str = Field(min_length=1, max_length=128)
     approval_mode: ApprovalLevel
     persistent_enabled: bool
+    # The workflow's own code folder: every step runs in it. None: the conversation's.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    # A scheduled time while Row-Bot was closed: skip it, or run once when Row-Bot starts.
+    missed_runs: Literal["skip", "run_once"] = "skip"
+    # Apps and tools whose actions always wait for the person ("Always ask me").
+    always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -5610,6 +5652,9 @@ class TaskSettingsSnapshot(WireModel):
     conversation_id: OpaqueId | None
     # The person turned Hands-off on once on this install: choosing it needs no dialog again.
     full_autonomy_confirmed: bool = False
+    # The saved folder's name (kept when it is removed) and whether it is still a code folder.
+    workspace_name: str | None = Field(default=None, max_length=256)
+    workspace_available: bool = True
 
 
 class TaskSettingsUpdatePayload(WireModel):
@@ -7568,6 +7613,8 @@ class HandshakeView(Choices):
     session_ttl_seconds: int = Field(ge=0, le=43200)
     # The server's current UTC offset: times it sends without an offset are its wall clock (B341).
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
+    # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
+    server_timezone: str | None = Field(default=None, max_length=64)
     native_adapter: NativeAdapter
     limits: Limits
 

@@ -482,6 +482,14 @@ def _workflow_problems() -> list[dict[str, Any]]:
             continue
         task_id, name = str(row["id"]), str(row.get("name") or "A workflow")
         href = f"/?tab=workflows&workflow={task_id}" if _TASK_ID.fullmatch(task_id) else "/?tab=workflows"
+        blocked = str(row.get("last_status") or "").lower() == "blocked"
+        if blocked and _TASK_ID.fullmatch(task_id) and tasks.newest_run_fix(task_id) == "choose_folder":
+            # Its code folder was removed (N9): the fix is choosing another, in its settings.
+            problems.append(_problem(
+                f"workflow:{task_id}", f"{name} needs a code folder",
+                "Its code folder isn't a code folder any more, so it didn't run. Choose another.", "workflows",
+                {"kind": "choose_folder", "href": f"{href}&fix=folder", "target": None, "name": _bounded(name, 128)}))
+            continue
         problems.append(_problem(f"workflow:{task_id}", words.format(name),
                                  "Run it again, or open it to see why.", "workflows", _open(href, name)))
     return problems

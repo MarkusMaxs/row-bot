@@ -19,7 +19,7 @@ import { PwaStatus } from './pwa';
 import { ThemeProvider } from './ui/theme';
 import { OverlayProvider } from './ui/overlays';
 import { installInputModality } from './ui/input-modality';
-import { setServerUtcOffset } from './ui/format';
+import { setServerTimezone, setServerUtcOffset } from './ui/format';
 import { EmptyState, ErrorState, Skeleton } from './ui/primitives';
 import Workspace, { panelMetrics } from './features/shell/Workspace';
 import { EditMenu } from './features/shell/EditMenu';
@@ -173,10 +173,11 @@ async function start() {
   const unpublishBuddyTarget = publishBuddyTarget(controller, platform);
   const unbindDraftSync = bindDraftSync(controller);
   // Times saved without an offset are the server's clock; read them with its offset (B341).
-  const followServerClock = () =>
-    setServerUtcOffset(
-      controller.getSnapshot().handshake?.server_utc_offset_minutes,
-    );
+  const followServerClock = () => {
+    const handshake = controller.getSnapshot().handshake;
+    setServerUtcOffset(handshake?.server_utc_offset_minutes);
+    setServerTimezone(handshake?.server_timezone);
+  };
   followServerClock();
   const unfollowServerClock = controller.subscribe(followServerClock);
   const releaseNativeLease = keepNativeLease(controller, platform);

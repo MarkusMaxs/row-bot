@@ -830,6 +830,7 @@ export class ClientController {
         policy_revision: result.policy_revision,
         session_ttl_seconds: result.session_ttl_seconds,
         server_utc_offset_minutes: result.server_utc_offset_minutes ?? null,
+        server_timezone: result.server_timezone ?? null,
         native_adapter: result.native_adapter,
         limits: result.limits,
       };

@@ -845,3 +845,24 @@ it('shows the apps a prompt step names as chips on its row and icons on its card
     within(rows[1]).queryByRole('list', { name: 'Apps this step uses' }),
   ).toBeNull();
 });
+
+it('a step can always ask you, and the list says so (N9)', async () => {
+  const callbacks = props();
+  render(<TaskGraphEditor {...callbacks} />);
+  await screen.findByLabelText('Prompt');
+  const ask = screen.getByRole('switch', { name: 'Always ask me' });
+  expect(ask).not.toBeChecked();
+  expect(
+    screen.getByText(
+      /waits for your own approval, even under Auto or Hands-off/,
+    ),
+  ).toBeInTheDocument();
+  fireEvent.click(ask);
+  expect(screen.getByText('Asks you')).toBeInTheDocument();
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Save graph' })),
+  );
+  const saved = vi.mocked(callbacks.save).mock.calls[0][2];
+  expect(saved[0].fields.always_ask).toBe(true);
+  expect(saved[1].fields.always_ask ?? null).toBeNull();
+});
