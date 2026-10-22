@@ -396,7 +396,26 @@ export function overnightLines(night: LearningOvernight): OvernightLine[] {
     lines.push({
       text: `Left out ${plural(night.left_out, 'idea')}: Learning needs your feedback first, and never adds addresses, links, passwords or permissions`,
     });
-  if (night.state === 'stopped')
+  if (night.tested)
+    lines.push({
+      text: `Tested ${plural(night.tested, 'idea')}: ${
+        [
+          night.ready ? `${night.ready.toLocaleString()} ready` : '',
+          night.not_better
+            ? `${night.not_better.toLocaleString()} not better`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(', ') || 'none ready'
+      }`,
+    });
+  if (night.tests_state === 'limit')
+    lines.push({
+      text: 'Testing stopped at this month’s limit; the rest wait for next month.',
+    });
+  else if (night.tests_state === 'failed')
+    lines.push({ text: 'Couldn’t finish testing. Trying again tonight.' });
+  if (night.state === 'stopped' || night.tests_state === 'stopped')
     lines.push({
       text: 'Stopped when you came back to Row-Bot; it carries on when you’re away.',
     });
@@ -442,4 +461,93 @@ export function whyWords(change: LearningChangeView): string {
 export const KIND_STATE_WORDS: Record<LearningKindState['state'], string> = {
   testing_change: 'A change waits to be tested',
   needs_examples: 'Needs more examples',
+  change_ready: 'A change is ready to review',
+  change_in_use: 'Improved · a change in use',
 };
+
+/** Where a change stands, on its row (designs §7). */
+export const CHANGE_STATE_WORDS: Record<
+  'waiting_to_test' | 'testing' | 'edited' | 'ready' | 'in_use' | 'not_used',
+  string
+> = {
+  waiting_to_test: 'Waiting to be tested',
+  testing: 'Testing',
+  edited: 'Edited: test again',
+  ready: 'Ready',
+  in_use: 'In use',
+  not_used: 'Not used',
+};
+
+/** A lesson's state on its row (designs §7). */
+export const LESSON_STATUS: Record<
+  | 'not_tested'
+  | 'testing'
+  | 'tested_better'
+  | 'tested_not_better'
+  | 'in_use'
+  | 'off',
+  { tone: 'neutral' | 'success' | 'info'; label: string }
+> = {
+  not_tested: { tone: 'neutral', label: 'Not tested' },
+  testing: { tone: 'neutral', label: 'Testing' },
+  tested_better: { tone: 'info', label: 'Tested: helps' },
+  tested_not_better: { tone: 'neutral', label: 'Tested: no help' },
+  in_use: { tone: 'success', label: 'In use' },
+  off: { tone: 'neutral', label: 'Off' },
+};
+
+/** Why a change isn't used. */
+export const NOT_USED_WORDS: Record<
+  NonNullable<LearningChangeView['not_used']>,
+  string
+> = {
+  not_better: 'Not better',
+  turned_down: 'Turned down',
+  undone: 'Undone',
+};
+
+/** What a test found, when the change isn't better (designs §9). */
+export const VERDICT_LINES: Record<
+  NonNullable<LearningChangeView['test']>['verdict'],
+  string
+> = {
+  better: 'Better on work it hadn’t seen.',
+  no_difference: 'No clear difference. Not used.',
+  worse: 'Worse on its own kind of work. Not used.',
+  worse_elsewhere:
+    'Better on its own kind of work but worse on other tasks. Not used.',
+};
+
+/** "Lesson for document lookups", "Way of working for tool workflows · How Row-Bot uses its tools". */
+export function changeKindWords(change: LearningChangeView): string {
+  const kind = change.kind === 'other' ? 'your work' : kindPhrase(change.kind);
+  const name =
+    change.change === 'skill'
+      ? change.diff
+        ? 'Skill edit'
+        : 'New skill'
+      : CHANGE_NAMES[change.change];
+  return `${name} for ${kind}${change.setting ? ` · ${change.setting}` : ''}`;
+}
+
+/** Experiment details: the paired difference on its own kind of work, with its interval. */
+export function testDetailWords(
+  test: NonNullable<LearningChangeView['test']>,
+): string {
+  const parts = [VERDICT_LINES[test.verdict]];
+  if (test.difference !== null && test.difference !== undefined) {
+    const sign = test.difference > 0 ? '+' : '';
+    const interval =
+      test.low !== null &&
+      test.low !== undefined &&
+      test.high !== null &&
+      test.high !== undefined
+        ? ` (95% interval ${test.low} to ${test.high})`
+        : '';
+    parts.push(
+      `On its own kind of work: ${sign}${test.difference} points${interval}, with and without it at the same budget, each problem run 3 times.`,
+    );
+  }
+  if (test.note) parts.push(test.note);
+  return parts.join(' ');
+}

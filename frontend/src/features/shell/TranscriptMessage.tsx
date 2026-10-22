@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  BookOpen,
   CornerDownRight,
   Cpu,
   GraduationCap,
@@ -373,6 +374,13 @@ export const TranscriptMessage = memo(function TranscriptMessage({
           >
             <Cpu aria-hidden />
             Answered by your personal model
+          </span>
+        )}
+        {row.used_lesson && hasText && !failure && (
+          // Learning (preview): its turn recalled a lesson in use; quiet, never a badge.
+          <span className="turn-chip" data-tone="neutral" data-kind="lesson">
+            <BookOpen aria-hidden />
+            Used a lesson
           </span>
         )}
         {row.cut_short && (

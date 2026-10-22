@@ -146,6 +146,12 @@ it('Teach saves what went wrong, thanks you, and Undo removes it', async () => {
     }),
     'Use the approved budget',
   );
+  await user.type(
+    within(sheet).getByRole('textbox', {
+      name: 'What should it have done? (optional)',
+    }),
+    '52,500 EUR',
+  );
   await user.click(send);
 
   expect(
@@ -159,6 +165,7 @@ it('Teach saves what went wrong, thanks you, and Undo removes it', async () => {
     tool_call_id: '',
     category: 'wrong_answer',
     note: 'Use the approved budget',
+    answer: '52,500 EUR',
   });
   // A notice's own button (Radix's toast wants pointer capture jsdom lacks).
   await act(async () =>

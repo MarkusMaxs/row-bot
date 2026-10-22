@@ -114,6 +114,18 @@ it('says when the output limit cut a reply short', () => {
   expect(screen.queryByText('Cut short by the output limit')).toBeNull();
 });
 
+it('says quietly when a reply used a lesson in use (Learning)', () => {
+  const { rerender } = render(
+    <TranscriptMessage
+      row={{ ...reply, used_lesson: true }}
+      conversationId="conversation-a"
+    />,
+  );
+  expect(screen.getByText('Used a lesson')).toBeVisible();
+  rerender(<TranscriptMessage row={reply} conversationId="conversation-a" />);
+  expect(screen.queryByText('Used a lesson')).toBeNull();
+});
+
 it('says quietly which replies the personal model gave, and when the main model finished one (Learning)', () => {
   const { rerender } = render(
     <TranscriptMessage

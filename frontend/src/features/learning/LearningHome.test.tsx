@@ -290,23 +290,29 @@ it('Changes lists drafts as Waiting to be tested, with why in counts, never as R
 
   const filters = screen.getByRole('radiogroup', { name: 'Show changes' });
   expect(within(filters).getByRole('radio', { name: 'Testing' })).toBeChecked();
-  const list = screen.getByRole('list', {
-    name: 'Changes waiting to be tested',
-  });
+  const list = screen.getByRole('list', { name: 'Changes being tested' });
   expect(within(list).getAllByText('Waiting to be tested')).toHaveLength(2);
   expect(within(list).getByText(/^Lesson · Document lookups/)).toBeVisible();
-  expect(
-    screen.getByText(
-      /In 3 chats about document lookups, you corrected Row-Bot twice and you stopped it once\./,
-    ),
-  ).toBeInTheDocument();
-  expect(
-    screen.getByText(
-      /you stopped it twice \(1 from past chats Learning read\)\./,
-    ),
-  ).toBeInTheDocument();
-  expect(screen.getByText(/never used by itself/)).toBeInTheDocument();
   expect(within(list).queryByText('Ready')).toBeNull();
+  fireEvent.click(
+    within(list).getByRole('button', {
+      name: 'Review Check the calendar first',
+    }),
+  );
+  const sheet = screen.getByRole('dialog', {
+    name: 'Check the calendar first',
+  });
+  expect(
+    within(sheet).getByText(
+      /you stopped it twice \(1 from past chats Learning read\)\. It rests only on what tools or web pages said, so it’s never used by itself\./,
+    ),
+  ).toBeVisible();
+  expect(within(sheet).getByText(/^Not tested yet\./)).toBeVisible();
+  expect(within(sheet).getByRole('button', { name: 'Test now' })).toBeVisible();
+  expect(
+    within(sheet).queryByRole('button', { name: 'Use this change' }),
+  ).toBeNull();
+  fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
   fireEvent.click(within(filters).getByRole('radio', { name: 'Ready' }));
   expect(screen.getByText(/No changes are ready to review\./)).toBeVisible();
 });
@@ -352,7 +358,7 @@ it('Lessons lists what Row-Bot saved for itself as Not tested, with search', asy
 it('Lessons with none says what will appear there', async () => {
   show(fakeIO(on()), 'lessons');
   expect(
-    await screen.findByText(/^No lessons yet\. Lessons Row-Bot saves/),
+    await screen.findByText(/^No lessons yet\. Lessons Row-Bot learns/),
   ).toBeVisible();
 });
 

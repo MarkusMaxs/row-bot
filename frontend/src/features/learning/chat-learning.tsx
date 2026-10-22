@@ -73,6 +73,7 @@ export function useChatTeach(conversationId: string | null): {
       tool_call_id: target.toolCallId ?? '',
       category: answer.category,
       note: answer.note,
+      answer: answer.answer,
     });
     setTarget(null);
     const signal = receipt.signal_id;

@@ -541,6 +541,36 @@ export function draftedChange(
   };
 }
 
+/** A change that passed its test (L3b): Ready, with its table. */
+export function testedChange(
+  overrides: Partial<LearningChangeView> = {},
+): LearningChangeView {
+  return draftedChange({
+    id: 'proposal_ready',
+    title: 'Pick documents by ID, not title',
+    state: 'ready',
+    test: {
+      verdict: 'better',
+      rows: [
+        {
+          label: 'Document lookups it hadn’t seen',
+          total: 12,
+          without: 7,
+          with_change: 10,
+        },
+        { label: 'Other tasks', total: 10, without: 10, with_change: 10 },
+      ],
+      note: 'Testing used 850K tokens · Small test, so expect some variation.',
+      small: true,
+      tested_at: new Date(Date.now() - 7_200_000).toISOString(),
+      difference: 25,
+      low: 8.3,
+      high: 41.7,
+    },
+    ...overrides,
+  });
+}
+
 /** Last night's look (L3a): found 3, drafted 2 by default. */
 export function overnight(
   overrides: Partial<LearningOvernight> = {},
