@@ -1601,6 +1601,23 @@ def _launcher_helper_tail(log_path: Path, max_lines: int = 20) -> str:
     return _read_log_tail(log_path, max_lines=max_lines).replace("\n", " | ")[:1000]
 
 
+#: Set by the macOS host to its own program, which runs Python as Row-Bot (``--run-python``).
+_HOST_EXECUTABLE_ENV = "ROW_BOT_HOST_EXECUTABLE"
+
+
+def _gui_python() -> list[str]:
+    """The command that runs Python for a process that opens windows (the app window, the splash).
+
+    Under the macOS host it is the host itself, so the Dock, Cmd-Tab and Force Quit show Row-Bot
+    with its icon, not the bundled Python (B385); anywhere else, and under a host older than 5.3,
+    this Python."""
+    if sys.platform == "darwin":
+        host = os.environ.get(_HOST_EXECUTABLE_ENV, "")
+        if host and os.path.isfile(host) and os.access(host, os.X_OK):
+            return [host, "--run-python", sys.base_prefix]
+    return [sys.executable]
+
+
 def _start_launcher_helper(
     *,
     name: str,
@@ -1614,7 +1631,7 @@ def _start_launcher_helper(
     """Start a launcher UI helper and require an explicit ready marker."""
     _delete_if_exists(ready_marker)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [sys.executable, "-c", source, *args, str(ready_marker)]
+    command = [*_gui_python(), "-c", source, *args, str(ready_marker)]
     _launch_event(
         "helper_spawn",
         status=name,
@@ -1898,6 +1915,18 @@ if sys.platform == "darwin":
         NSApplication.sharedApplication()
         NSApp.setActivationPolicy_(0)           # Regular (Dock) app
         NSApp.activateIgnoringOtherApps_(True)  # Bring to front
+    except Exception:
+        pass
+    # Run by a macOS host older than 5.3 this is the bundled Python, not the Row-Bot
+    # app, so at least the Dock shows Row-Bot's icon (B385).
+    try:
+        from AppKit import NSImage
+        from Foundation import NSBundle
+
+        if NSBundle.mainBundle().bundleIdentifier() is None and len(sys.argv) > 5 and os.path.isfile(sys.argv[5]):
+            _ICON = NSImage.alloc().initWithContentsOfFile_(sys.argv[5])
+            if _ICON is not None:
+                NSApp.setApplicationIconImage_(_ICON)
     except Exception:
         pass
     # Quitting Row-Bot here (the app menu, the Dock, System Settings' "Quit & Reopen")
@@ -2750,7 +2779,7 @@ def _open_window(
     proc = None
     try:
         args = [
-            sys.executable,
+            *_gui_python(),
             "-",
             _client_url_for_port(port),
             APP_DISPLAY_NAME,
