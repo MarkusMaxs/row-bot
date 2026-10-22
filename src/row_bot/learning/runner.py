@@ -176,7 +176,6 @@ class NightLook:
         self.client = client
         self.check_model = check_model
         self.clock = clock
-        self.running = False
 
     def _store(self) -> Any:
         from row_bot.learning.store import LearningStore
@@ -231,7 +230,6 @@ class NightLook:
             from row_bot.learning.calls import LedgerModelClient
 
             client = LedgerModelClient()
-        self.running = True
         try:
             return diagnosis.run(
                 store, client=client, night=night,
@@ -241,8 +239,6 @@ class NightLook:
             logger.exception("Learning's look for things to improve failed")
             diagnosis.note_night(store, night, "failed")
             return None
-        finally:
-            self.running = False
 
 
 class LearningRunner:
