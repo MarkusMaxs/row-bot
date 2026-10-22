@@ -7,6 +7,7 @@ import type {
   PendingApproval,
   PendingApprovalPage,
 } from '../../api/types';
+import { OverlayProvider } from '../../ui/overlays';
 import AttentionIndicator, { remindLaterAbout } from './AttentionIndicator';
 
 const approval = vi.fn();
@@ -257,4 +258,38 @@ it('says only approvals are waiting when nothing else needs you', async () => {
       name: '1 approval is waiting. Review',
     }),
   ).toBeVisible();
+});
+
+it('says Row-Bot has a question and counts it as one thing that needs you (N4)', async () => {
+  render(
+    <OverlayProvider>
+      <MemoryRouter>
+        <AttentionIndicator
+          load={async () => ({ schema_version: 1, problems: [], update: null })}
+          loadApprovals={async () => ({
+            schema_version: 1,
+            items: [{ ...waiting('beta', 'Plan the beta'), kind: 'question' }],
+            total: 1,
+          })}
+        />
+      </MemoryRouter>
+    </OverlayProvider>,
+  );
+  const indicator = await screen.findByRole('button', {
+    name: 'Row-Bot has a question. Review',
+  });
+  fireEvent.click(indicator);
+  const list = await screen.findByRole('list', {
+    name: 'Waiting for you',
+  });
+  // Answered on its card, never with Approve or Deny.
+  expect(
+    within(list).getByRole('listitem', {
+      name: 'Plan the beta has a question',
+    }),
+  ).toBeVisible();
+  expect(
+    within(list).getByRole('button', { name: 'Answer: Plan the beta' }),
+  ).toBeVisible();
+  expect(within(list).queryByRole('button', { name: 'Approve' })).toBeNull();
 });

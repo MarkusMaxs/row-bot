@@ -2,6 +2,7 @@ import type {
   EventRecord,
   TranscriptRow,
   TranscriptTraceGroup,
+  TranscriptTraceItem,
 } from '../../api/types';
 import { publicBlockText } from './TranscriptBlocks';
 import type { GeneratedMedia } from './TranscriptMessage';
@@ -118,6 +119,89 @@ export function tracedMedia(groups: TranscriptTraceGroup[]): GeneratedMedia[] {
         });
       }
   return media;
+}
+
+/** A step that finished in the live turn, as its latest `tool.activity` says. */
+export type FinishedStep = Pick<
+  TranscriptTraceItem,
+  'status' | 'safe_summary' | 'summary_truncated' | 'content_ref'
+> & { specialization?: TranscriptTraceItem['specialization'] };
+
+/** Steps the live turn finished: Row-Bot's question answered after its turn paused (N4), an approved action. */
+export function finishedLiveSteps(
+  activity: readonly EventRecord[],
+): Map<string, FinishedStep> {
+  const finished = new Map<string, FinishedStep>();
+  for (const record of activity) {
+    if (record.event.type !== 'tool.activity') continue;
+    const value = record.event.payload;
+    if (
+      value.state !== 'tool_done' ||
+      !value.tool_call_id ||
+      !value.status ||
+      value.status === 'pending'
+    )
+      continue;
+    finished.set(value.tool_call_id, {
+      status: value.status,
+      safe_summary: value.safe_summary ?? '',
+      summary_truncated: value.summary_truncated ?? false,
+      content_ref: value.content_ref ?? '',
+      ...(value.specialization ? { specialization: value.specialization } : {}),
+    });
+  }
+  return finished;
+}
+
+const GROUP_ORDER = [
+  'uncertain',
+  'blocked',
+  'failed',
+  'cancelled',
+  'pending',
+] as const;
+
+/**
+ * Saved rows read as the live turn left them: a step still pending in its
+ * saved row but finished live reads as finished in its own place, with its
+ * card (so an answered question shows "You chose: …" where it was asked,
+ * before the reply that follows), until the saved row catches up.
+ */
+export function settleFinishedSteps(
+  rows: readonly TranscriptRow[],
+  finished: ReadonlyMap<string, FinishedStep>,
+): readonly TranscriptRow[] {
+  if (!finished.size) return rows;
+  let changed = false;
+  const settled = rows.map((row) => {
+    const traces = row.traces ?? [];
+    if (
+      !traces.some((group) =>
+        group.items.some(
+          (item) => item.status === 'pending' && finished.has(item.call_id),
+        ),
+      )
+    )
+      return row;
+    changed = true;
+    return {
+      ...row,
+      traces: traces.map((group) => {
+        const items = group.items.map((item) =>
+          item.status === 'pending' && finished.has(item.call_id)
+            ? { ...item, ...finished.get(item.call_id)! }
+            : item,
+        );
+        const counts: TranscriptTraceGroup['counts'] = {};
+        for (const item of items)
+          counts[item.status] = (counts[item.status] ?? 0) + 1;
+        const status: TranscriptTraceItem['status'] =
+          GROUP_ORDER.find((value) => counts[value]) ?? 'succeeded';
+        return { ...group, items, counts, status };
+      }),
+    };
+  });
+  return changed ? settled : rows;
 }
 
 /**
