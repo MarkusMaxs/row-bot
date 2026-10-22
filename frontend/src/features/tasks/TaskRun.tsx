@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type {
+  TaskApprovalCard,
   TaskApprovalPage,
   TaskApprovalResult,
   TaskApprovalReview,
@@ -10,12 +11,23 @@ import type {
   TaskStopResult,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { Play, RefreshCw } from 'lucide-react';
+import {
+  File,
+  Film,
+  Folder,
+  Image,
+  Music,
+  Play,
+  RefreshCw,
+  UserCheck,
+} from 'lucide-react';
 import { Button, IconButton, InlineEmpty, Skeleton } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import { When, runStatus } from '../home/home-format';
 import { WaitingSince } from '../shell/InPlaceApproval';
 import { approvalTag } from '../shell/approval-levels';
+import { formatBytes } from '../shell/MediaPreview';
+import { wallTimeOf } from './schedule-zones';
 
 export interface TaskRunProps {
   taskId: string;
@@ -388,7 +400,22 @@ export default function TaskRun({
                     fallback="at an unknown time"
                   />
                 </span>
+                {selected.workspace_name && (
+                  <span className="task-run-folder">
+                    <Folder size={12} aria-hidden />
+                    In {selected.workspace_name}
+                  </span>
+                )}
               </header>
+              {selected.late_for && (
+                <p className="home-caption">
+                  Ran late: Row-Bot was closed at{' '}
+                  {wallTimeOf(selected.late_for)}.
+                </p>
+              )}
+              {selected.notice && terminal.has(selected.status) && (
+                <p className="task-run-notice">{selected.notice}</p>
+              )}
               {progress !== null && (
                 <div className="task-run-progress">
                   <progress
@@ -460,9 +487,27 @@ export default function TaskRun({
                   className="task-run-approval"
                   key={approval.id}
                   aria-label="Pending task approval"
+                  data-person-only={approval.person_only || undefined}
                 >
-                  <h3>Approval needed</h3>
-                  <p className="task-approval-message">{approval.message}</p>
+                  {approval.person_only ? (
+                    <>
+                      <h3>
+                        <UserCheck size={14} aria-hidden />
+                        Only you can approve this
+                      </h3>
+                      <p className="home-caption">
+                        You asked to approve this yourself, so Auto and
+                        Hands-off never answer it for you.
+                      </p>
+                    </>
+                  ) : (
+                    <h3>Approval needed</h3>
+                  )}
+                  {approval.card ? (
+                    <ActionCard card={approval.card} />
+                  ) : (
+                    <p className="task-approval-message">{approval.message}</p>
+                  )}
                   <p className="home-caption">
                     <WaitingSince value={approval.requested_at} />
                   </p>
@@ -613,6 +658,59 @@ export default function TaskRun({
         </>
       )}
     </section>
+  );
+}
+
+const MEDIA_ICONS = { image: Image, video: Film, audio: Music, file: File };
+
+/** Exactly what a person-only approval lets happen (N9). */
+function ActionCard({ card }: { card: TaskApprovalCard }) {
+  const media = card.media ?? [];
+  return (
+    <dl className="task-action-card">
+      <dt>Action</dt>
+      <dd>{card.action}</dd>
+      {card.destination && (
+        <>
+          <dt>To</dt>
+          <dd>{card.destination}</dd>
+        </>
+      )}
+      {card.account && (
+        <>
+          <dt>As</dt>
+          <dd>{card.account}</dd>
+        </>
+      )}
+      {card.text && (
+        <>
+          <dt>Text</dt>
+          <dd className="task-action-text">{card.text}</dd>
+        </>
+      )}
+      {media.length > 0 && (
+        <>
+          <dt>{media.length === 1 ? 'File' : 'Files'}</dt>
+          <dd>
+            <ul className="task-action-media">
+              {media.map((item) => {
+                const Icon = MEDIA_ICONS[item.kind];
+                return (
+                  <li key={`${item.name}-${item.fingerprint}`}>
+                    <Icon size={14} aria-hidden />
+                    <span className="task-action-media-name">{item.name}</span>
+                    <span>{formatBytes(item.size)}</span>
+                    <code title="Fingerprint of its contents">
+                      {item.fingerprint}
+                    </code>
+                  </li>
+                );
+              })}
+            </ul>
+          </dd>
+        </>
+      )}
+    </dl>
   );
 }
 

@@ -12,6 +12,9 @@ import TaskSettingsEditor, {
   type TaskSettingsEditorProps,
 } from './TaskSettingsEditor';
 import { TaskEditSession } from './task-edit-sessions';
+import type { ClientController } from '../../api/controller';
+import type { ClientPlatform } from '../../platform';
+import { RuntimeContext } from '../../runtime';
 
 afterEach(cleanup);
 
@@ -629,4 +632,98 @@ it('never asks again once Hands-off was turned on on this install', async () => 
   });
   expect(screen.queryByRole('alertdialog')).toBeNull();
   expect(screen.getByLabelText('Approval policy')).toHaveValue('full');
+});
+
+const folders = [
+  { id: 'dev_landing', name: 'row-bot-landing' },
+  { id: 'dev_docs', name: 'docs-site' },
+];
+const apps = [
+  { id: 'builtin:account:x', name: 'X', icon: 'X' },
+  { id: 'mcp:notion', name: 'Notion', icon: 'N' },
+];
+/** App icons read through the runtime's controller. */
+function withRuntime(ui: React.ReactNode) {
+  const controller = {
+    integrationIcons: vi.fn(async () => ({ schema_version: 1, items: [] })),
+  } as unknown as ClientController;
+  return (
+    <RuntimeContext.Provider
+      value={{ controller, platform: {} as ClientPlatform }}
+    >
+      {ui}
+    </RuntimeContext.Provider>
+  );
+}
+
+it('saves the workflow code folder, its missed-run rule and the apps that always ask (N9)', async () => {
+  const callbacks = props({
+    loadFolders: vi.fn().mockResolvedValue(folders),
+    loadApps: vi.fn().mockResolvedValue(apps),
+  });
+  render(withRuntime(<TaskSettingsEditor {...callbacks} />));
+  const folder = await screen.findByRole('combobox', { name: 'Code folder' });
+  await screen.findByRole('option', { name: 'row-bot-landing' });
+  expect(folder).toHaveValue('');
+  expect(
+    screen.getByRole('option', { name: "None: the conversation's folder" }),
+  ).toBeInTheDocument();
+  fireEvent.change(folder, { target: { value: 'dev_landing' } });
+  const missed = screen.getByRole('combobox', {
+    name: 'If Row-Bot is closed at a scheduled time',
+  });
+  expect(missed).toHaveValue('skip');
+  fireEvent.change(missed, { target: { value: 'run_once' } });
+  expect(
+    screen.getByText(
+      'Only the latest missed time runs, once, and says it ran late.',
+    ),
+  ).toBeInTheDocument();
+  const always = screen.getByRole('group', { name: 'Always ask me' });
+  fireEvent.click(
+    within(always).getByRole('switch', {
+      name: 'Always ask me before X acts',
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(callbacks.review).toHaveBeenCalledWith(
+    'task-a',
+    expect.objectContaining({
+      workspace_id: 'dev_landing',
+      missed_runs: 'run_once',
+      always_ask: ['builtin:account:x'],
+    }),
+    expect.anything(),
+  );
+});
+
+it('says in plain words when the saved folder is no longer a code folder (N9)', async () => {
+  render(
+    <TaskSettingsEditor
+      {...props({
+        load: vi.fn().mockResolvedValue(
+          snapshot({
+            fields: { ...fields, workspace_id: 'dev_gone' },
+            workspace_name: 'row-bot-landing',
+            workspace_available: false,
+          }),
+        ),
+        loadFolders: vi.fn().mockResolvedValue(folders.slice(1)),
+      })}
+    />,
+  );
+  const folder = await screen.findByRole('combobox', { name: 'Code folder' });
+  expect(folder).toHaveValue('dev_gone');
+  expect(
+    screen.getByRole('option', { name: 'row-bot-landing (removed)' }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "row-bot-landing isn't a code folder any more. Choose another, or None.",
+    ),
+  ).toBeInTheDocument();
 });

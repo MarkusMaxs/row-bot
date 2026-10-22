@@ -1104,6 +1104,24 @@ export default function TaskLibrary() {
     },
     [controller],
   );
+  // Your code folders, for a workflow's own folder (N9).
+  const loadFolders = useCallback(
+    async (signal?: AbortSignal) => {
+      const found: { id: string; name: string }[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await controller.library('workspace', cursor, signal);
+        found.push(
+          ...page.items
+            .filter((item) => item.available)
+            .map((item) => ({ id: item.resource_id, name: item.name })),
+        );
+        cursor = page.next_cursor ?? undefined;
+      } while (cursor && found.length < 500);
+      return found;
+    },
+    [controller],
+  );
   const quickEdits = useMemo(() => taskEdits(controller), [controller]);
   const deleteOwner = useRef<TaskCommandOwner<void>>({ pending: null });
   const duplicateOwner = useRef<TaskCommandOwner<string>>({ pending: null });
@@ -1291,6 +1309,8 @@ export default function TaskLibrary() {
           onCancel={close}
           profileOptions={profileOptions}
           modelOptions={modelOptions}
+          loadFolders={loadFolders}
+          loadApps={loadApps}
           webhook={{
             localBase: window.location.origin,
             readAddress: reach.readAddress,

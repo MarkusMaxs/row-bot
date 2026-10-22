@@ -1942,6 +1942,71 @@
   margin: 0;
   font-size: var(--text-13);
 }
+.task-run-approval h3 svg {
+  margin-inline-end: 6px;
+  vertical-align: -2px;
+}
+.task-run-folder,
+.task-graph-step-ask,
+.workflow-chart-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  white-space: nowrap;
+}
+.task-run-notice {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-13);
+}
+.task-action-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 0;
+  font-size: var(--text-13);
+}
+.task-action-card dt {
+  color: var(--text-secondary);
+}
+.task-action-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.task-action-text {
+  max-height: 16rem;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+}
+.task-action-media {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.task-action-media li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--text-secondary);
+}
+.task-action-media-name {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.task-action-media code {
+  font-size: var(--text-12);
+}
 .task-run-history-title {
   margin: 4px 0 0;
   color: var(--text-secondary);

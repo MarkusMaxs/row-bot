@@ -501,3 +501,105 @@ it('rejects changed history revisions instead of mixing stale pages', async () =
   ).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Load more runs' })).toBeDisabled();
 });
+
+it('says which code folder a run used and that it ran late (N9)', async () => {
+  render(
+    <TaskRun
+      {...props({
+        loadHistory: vi.fn().mockResolvedValue(
+          history([
+            {
+              ...runSummary(),
+              workspace_id: 'dev_landing',
+              workspace_name: 'row-bot-landing',
+              late_for: '2026-10-22T09:00:00+01:00',
+            },
+          ]),
+        ),
+      })}
+    />,
+  );
+  const run = await screen.findByRole('region', { name: 'Selected run' });
+  expect(within(run).getByText('In row-bot-landing')).toBeInTheDocument();
+  expect(
+    within(run).getByText('Ran late: Row-Bot was closed at 09:00.'),
+  ).toBeInTheDocument();
+});
+
+it.each([
+  ['stopped', 'Not approved in time'],
+  [
+    'blocked',
+    "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings.",
+  ],
+])('says how a %s run ended in plain words (N9)', async (status, notice) => {
+  render(
+    <TaskRun
+      {...props({
+        loadHistory: vi
+          .fn()
+          .mockResolvedValue(
+            history([{ ...runSummary('run-a', status), notice }]),
+          ),
+      })}
+    />,
+  );
+  const run = await screen.findByRole('region', { name: 'Selected run' });
+  expect(within(run).getByText(notice)).toBeInTheDocument();
+});
+
+it('shows a person-only card with exactly what will happen (N9)', async () => {
+  render(
+    <TaskRun
+      {...props({
+        loadHistory: vi
+          .fn()
+          .mockResolvedValue(history([runSummary('run-a', 'paused')])),
+        loadApprovals: vi.fn().mockResolvedValue(
+          approvalPage([
+            approval({
+              approval_mode: 'auto',
+              person_only: true,
+              card: {
+                action: 'Post on X',
+                destination: '@rowbot',
+                account: 'X account',
+                text: 'Launch day!\nRow-Bot 5.3 is out.',
+                media: [
+                  {
+                    name: 'launch.png',
+                    size: 2048,
+                    fingerprint: '0a1b2c3d4e5f',
+                    kind: 'image',
+                  },
+                ],
+              },
+            }),
+          ]),
+        ),
+      })}
+    />,
+  );
+  const card = await screen.findByRole('article', {
+    name: 'Pending task approval',
+  });
+  expect(
+    within(card).getByRole('heading', { name: 'Only you can approve this' }),
+  ).toBeInTheDocument();
+  expect(
+    within(card).getByText(/Auto and Hands-off never answer it for you/),
+  ).toBeInTheDocument();
+  for (const [term, value] of [
+    ['Action', 'Post on X'],
+    ['To', '@rowbot'],
+    ['As', 'X account'],
+  ])
+    expect(within(card).getByText(term).nextElementSibling).toHaveTextContent(
+      value,
+    );
+  expect(within(card).getByText(/Row-Bot 5.3 is out./)).toBeInTheDocument();
+  expect(within(card).getByText('launch.png')).toBeInTheDocument();
+  expect(within(card).getByText('2 KB')).toBeInTheDocument();
+  expect(within(card).getByText('0a1b2c3d4e5f')).toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: 'Approve' })).toBeEnabled();
+});
