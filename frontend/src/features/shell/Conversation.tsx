@@ -132,7 +132,9 @@ import { publicBlockText } from './TranscriptBlocks';
 import {
   answerStreaming,
   buildTranscript,
+  finishedLiveSteps,
   liveMedia,
+  settleFinishedSteps,
   turnStarts,
 } from './transcript-model';
 import {
@@ -762,9 +764,15 @@ export default function Conversation({
   }, [earlierRows, rows]);
   // Tool results fold into their parent; charts and generated media hoist
   // onto it and render once (B4, B22).
+  // A step the live turn finished (a question just answered) reads as finished in its saved row, with its
+  // card in place, before the reply that follows it (N4).
+  const finishedSteps = finishedLiveSteps(state.activity);
+  const finishedKey = [...finishedSteps.keys()].join();
   const items = useMemo(
-    () => buildTranscript(transcriptRows),
-    [transcriptRows],
+    () => buildTranscript(settleFinishedSteps(transcriptRows, finishedSteps)),
+    // finishedKey stands for finishedSteps: they change together.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [transcriptRows, finishedKey],
   );
   const earlierIds = useMemo(
     () => new Set(earlierRows.map((row) => row.id)),
