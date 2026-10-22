@@ -331,6 +331,23 @@ def _diff(entry: Mapping[str, Any] | None) -> str:
             f"{100 * entry['difference']:+.1f} pt, n {entry.get('problems')}")
 
 
+def _survival_note(check: Mapping[str, Any]) -> str:
+    """What a survival check measured, in a few words (empty when nothing to add)."""
+
+    notes = []
+    if check.get("resumes_from") is not None:
+        notes.append(f"continued from checkpoint {check['resumes_from']}")
+    if check.get("seconds_from_message_to_pause") is not None:
+        notes.append(f"paused {check['seconds_from_message_to_pause']:g} s after the message")
+    elif check.get("seconds_to_pause") is not None:
+        notes.append(f"paused {check['seconds_to_pause']:g} s after the turn ended")
+    if check.get("kind") and check.get("routed") is not None:
+        notes.append(f"{check['kind'].replace('_', ' ')}: {check['routed']} routed, {check.get('passed', 0)} passed")
+    if check.get("why"):
+        notes.append(str(check["why"]))
+    return f" ({'; '.join(notes)})" if notes else ""
+
+
 def markdown(report: Mapping[str, Any]) -> str:
     """The report as Markdown: headline tables first, details after."""
 
@@ -415,7 +432,7 @@ def markdown(report: Mapping[str, Any]) -> str:
             lines.append(f"| Seconds per task | {person['time_per_task'].get('baseline')} | "
                          f"{person['time_per_task'].get('new')} | {person['time_per_task'].get('main')} |")
         lines.append("")
-        lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}"
+        lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}{_survival_note(check)}"
                                                for name, check in person["survival"].items()))
         lines.append("- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
                                                person["tokens"].items()) + f"; GPU {person['gpu_hours']} h "
