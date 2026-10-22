@@ -436,14 +436,22 @@ export default function Navigation({
       : visible;
   const pinnedRows = rows.filter((row) => row.pinned);
   const recentRows = rows.filter((row) => !row.pinned);
+  // The open conversation's row shows its own live generation; every other
+  // row shows what the list last read.
+  const observedActivity = (conversation: ConversationView) =>
+    activityLabel(
+      conversation.id === state.selectedConversationId && state.projection
+        ? state.projection.generation
+          ? [state.projection.generation]
+          : []
+        : (conversation.generation_state ?? []),
+      conversation.activity_state,
+      conversation.activity_phase,
+    );
+  // Rows are rechecked while they show activity, the open one included: a
+  // reply whose end never reached it settles from the recheck (B396).
   const activeRowKey = rows
-    .filter((row) =>
-      activityLabel(
-        row.generation_state ?? [],
-        row.activity_state,
-        row.activity_phase,
-      ),
-    )
+    .filter((row) => observedActivity(row))
     .map((row) => row.id)
     .join('|');
   useEffect(() => {
@@ -577,19 +585,11 @@ export default function Navigation({
   const now = new Date();
   function conversationRow(conversation: ConversationView, heading?: string) {
     const title = conversation.title || 'Untitled conversation';
-    const observedActivity = activityLabel(
-      conversation.id === state.selectedConversationId && state.projection
-        ? state.projection.generation
-          ? [state.projection.generation]
-          : []
-        : (conversation.generation_state ?? []),
-      conversation.activity_state,
-      conversation.activity_phase,
-    );
+    const observed = observedActivity(conversation);
     const activity =
-      observedActivity && staleActivityIds.has(conversation.id)
+      observed && staleActivityIds.has(conversation.id)
         ? { label: 'Activity status unavailable', spin: false, attention: true }
-        : observedActivity;
+        : observed;
     const timestamp = shortTime(conversation.updated_at, now);
     return (
       <li
