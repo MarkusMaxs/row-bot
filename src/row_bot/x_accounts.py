@@ -254,7 +254,10 @@ def migrate() -> XAccount | None:
         except account_tokens.AccountTokenError:
             raise XAccountError("the keychain couldn't keep the X sign-in") from None
         _keep(account, first=True)
-        account_tokens.delete(LEGACY_SLOT)  # Only now: the account's own slot holds it, read back.
+        try:
+            account_tokens.delete(LEGACY_SLOT)  # Only now: the account's own slot holds it, read back.
+        except account_tokens.AccountTokenError:
+            logger.warning("The old X sign-in couldn't be removed yet; it is removed at the next check")
         logger.info("The X sign-in from before 5.3 is now the account %s", account.handle)
         return account
 

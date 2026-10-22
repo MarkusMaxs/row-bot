@@ -490,3 +490,24 @@ def test_an_unconfirmed_delete_is_checked_on_x_and_never_sent_twice(x, person):
     assert "Not sure it went through: X didn't confirm it. Row-Bot looked on X and the post is gone." in result
     assert f"Deleted as @rowbot_ai: post {post['id']}" in result
     assert fake.posts == [] and fake.requests.count(("DELETE", f"/2/tweets/{post['id']}")) == 1
+
+
+def test_an_old_slot_the_keychain_cannot_delete_yet_leaves_the_account_usable(x, monkeypatch):
+    from row_bot import secret_store
+
+    fake, tool = x
+    account_tokens.write("x", fake.sign_in(*ROWBOT, access="legacy-access"))
+    keyring = secret_store._backend_override
+    real_delete = keyring.delete_password
+
+    def refuse(service, name):
+        if name == "accounts:x":
+            raise RuntimeError("keyring unavailable")
+        real_delete(service, name)
+    monkeypatch.setattr(keyring, "delete_password", refuse)
+
+    assert x_accounts.migrate().handle == "@rowbot_ai"
+    assert account_tokens.read("x:111")["access_token"] == "legacy-access" and account_tokens.read("x") is not None
+    monkeypatch.setattr(keyring, "delete_password", real_delete)
+    assert x_accounts.migrate().handle == "@rowbot_ai"  # The next check removes it.
+    assert account_tokens.read("x") is None and [a.handle for a in x_accounts.listed()] == ["@rowbot_ai"]
