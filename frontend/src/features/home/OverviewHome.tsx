@@ -225,6 +225,7 @@ function ApprovalRow({
         <ApprovalDecision
           approvalId={item.id}
           subject={item.title}
+          kind={item.kind}
           onResolved={onChanged}
         />
       </div>
@@ -480,16 +481,27 @@ export default function OverviewHome({
     },
   );
   const problemNeeds = problems.map((problem: AttentionProblem): Item => {
+    // A workflow its removed code folder stopped (N9): running it again can't help;
+    // its fix is choosing a folder, as on the run itself.
+    const folder =
+      problem.fix?.kind === 'choose_folder' && problem.fix.href
+        ? problem.fix
+        : null;
     const taskId =
-      problem.place === 'workflows' ? problem.id.replace(/^workflow:/, '') : '';
-    const open = taskId
-      ? () => onOpenWorkflows(taskId)
-      : problem.place === 'health' || !problem.fix?.href
-        ? () => onOpenTab('monitor')
-        : () => navigate(problem.fix!.href!);
+      problem.place === 'workflows' && !folder
+        ? problem.id.replace(/^workflow:/, '')
+        : '';
+    const open = folder
+      ? () => navigate(folder.href!)
+      : taskId
+        ? () => onOpenWorkflows(taskId)
+        : problem.place === 'health' || !problem.fix?.href
+          ? () => onOpenTab('monitor')
+          : () => navigate(problem.fix!.href!);
     return {
       key: `problem:${problem.id}`,
-      icon: taskId ? <Workflow size={16} /> : <AlertTriangle size={16} />,
+      icon:
+        taskId || folder ? <Workflow size={16} /> : <AlertTriangle size={16} />,
       tone: taskId || problem.place === 'health' ? 'danger' : 'warning',
       title: problem.title,
       meta: problem.detail,

@@ -183,7 +183,9 @@ def test_each_attention_problem_offers_its_one_fix(tmp_path, monkeypatch):
                                is_running=lambda: False, link_status=lambda: {"state": "scan"})
     tunnel = SimpleNamespace(tunnel_manager=SimpleNamespace(status=lambda: ("error", "agent failed")))
     mcp = SimpleNamespace(get_status_summary=lambda: {
-        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1})
+        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1,
+        "servers": {"files": {"enabled": True, "status": "connected"},
+                    "notes": {"enabled": True, "status": "failed"}}})
     monkeypatch.setattr(client_monitor, "_MODULE", {
         "row_bot.channels.registry": SimpleNamespace(all_channels=lambda: [telegram, whatsapp]),
         "row_bot.channels.config": SimpleNamespace(get=lambda _name, _key, _default=None: True),
@@ -201,6 +203,30 @@ def test_each_attention_problem_offers_its_one_fix(tmp_path, monkeypatch):
         ("tunnel", {"kind": "open", "href": "/settings/access#tunnel", "target": None, "name": "Public link"}),
         ("mcp", {"kind": "open", "href": "/settings/apps", "target": None, "name": "Apps"}),
     ]
+
+
+def test_apps_still_starting_or_connecting_are_not_a_problem(tmp_path, monkeypatch):
+    """B400: just after Row-Bot starts, every app is still starting or connecting. That isn't "An app isn't
+    connected": only an app that tried and failed is."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    statuses = {"files": "not_started", "notes": "connecting", "issues": "connected"}
+
+    def summary():
+        return {"enabled": True, "enabled_server_count": 3,
+                "connected_server_count": list(statuses.values()).count("connected"),
+                "servers": {name: {"enabled": True, "status": state} for name, state in statuses.items()}}
+
+    monkeypatch.setattr(client_monitor, "_MODULE", {"row_bot.mcp_client.runtime": SimpleNamespace(
+        get_status_summary=summary)})
+
+    assert client_monitor.read_attention(include_update=False)["problems"] == []
+
+    statuses.update(files="failed", notes="dependency_missing")
+    problems = client_monitor.read_attention(include_update=False)["problems"]
+    assert [(p["id"], p["title"], p["detail"]) for p in problems] == [
+        ("mcp", "2 apps aren't connected", "2 of 3 apps that are on couldn't connect.")]
 
 
 def test_failed_workflows_and_apps_that_need_you_are_in_the_one_attention_list(tmp_path, monkeypatch):
@@ -234,7 +260,9 @@ def test_failed_workflows_and_apps_that_need_you_are_in_the_one_attention_list(t
         app("builtin:whatsapp", "WhatsApp", "attention", owner_ref="channel:whatsapp"),
     ])
     mcp = SimpleNamespace(get_status_summary=lambda: {
-        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1})
+        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1,
+        "servers": {"files": {"enabled": True, "status": "connected"},
+                    "notes": {"enabled": True, "status": "failed"}}})
     monkeypatch.setattr(client_monitor, "_MODULE", {
         "row_bot.tasks": tasks, "row_bot.integrations.facts": facts,
         "row_bot.integrations.builtin": builtin, "row_bot.mcp_client.runtime": mcp,

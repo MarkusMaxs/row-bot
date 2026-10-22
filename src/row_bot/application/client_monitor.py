@@ -414,12 +414,18 @@ def _mcp_problems() -> list[dict[str, str]]:
     except Exception:
         return []
     enabled = int(status.get("enabled_server_count") or 0)
-    connected = int(status.get("connected_server_count") or 0)
-    if not status.get("enabled") or not enabled or connected >= enabled:
+    # Only an app that tried and failed: one still starting or connecting (every app, just after Row-Bot
+    # starts) isn't a problem yet (B400).
+    failed = sum(1 for server in (status.get("servers") or {}).values()
+                 if server.get("enabled") and server.get("status") in _MCP_FAILED)
+    if not status.get("enabled") or not enabled or not failed:
         return []
-    return [_problem("mcp", "An app isn't connected",
-                     f"{connected} of {enabled} apps that are on are connected.", "mcp",
+    return [_problem("mcp", "An app isn't connected" if failed == 1 else f"{failed} apps aren't connected",
+                     f"{failed} of {enabled} apps that are on couldn't connect.", "mcp",
                      _open("/settings/apps", "Apps"))]
+
+
+_MCP_FAILED = {"failed", "error", "sdk_missing", "dependency_missing", "cleanup_incomplete"}
 
 
 # An app that is on but can't be used until the person acts, in words.
@@ -476,6 +482,14 @@ def _workflow_problems() -> list[dict[str, Any]]:
             continue
         task_id, name = str(row["id"]), str(row.get("name") or "A workflow")
         href = f"/?tab=workflows&workflow={task_id}" if _TASK_ID.fullmatch(task_id) else "/?tab=workflows"
+        blocked = str(row.get("last_status") or "").lower() == "blocked"
+        if blocked and _TASK_ID.fullmatch(task_id) and tasks.newest_run_fix(task_id) == "choose_folder":
+            # Its code folder was removed (N9): the fix is choosing another, in its settings.
+            problems.append(_problem(
+                f"workflow:{task_id}", f"{name} needs a code folder",
+                "Its code folder isn't a code folder any more, so it didn't run. Choose another.", "workflows",
+                {"kind": "choose_folder", "href": f"{href}&fix=folder", "target": None, "name": _bounded(name, 128)}))
+            continue
         problems.append(_problem(f"workflow:{task_id}", words.format(name),
                                  "Run it again, or open it to see why.", "workflows", _open(href, name)))
     return problems
@@ -583,9 +597,12 @@ def read_pending_approvals() -> dict[str, Any]:
         else:
             source, title = "workflow", str(row.get("task_name") or "") or "Workflow"
             conversation_id, task_id = None, str(row.get("task_id") or "") or None
+        from row_bot.questions import stored_question
         items.append({
             "id": str(row["id"]),
             "source": source,
+            # Row-Bot's question (N4) is answered on its card, not approved.
+            "kind": "question" if stored_question(row.get("approval_payload_json")) is not None else "approval",
             "title": _bounded(title, 160),
             "what": _bounded(str(row.get("message") or "").strip(), 512),
             "requested_at": _bounded(row.get("requested_at"), 80),

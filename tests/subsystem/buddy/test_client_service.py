@@ -44,6 +44,20 @@ def test_passive_snapshot_sanitizes_other_conversation_details_without_saving(ow
     assert not config._BUDDY_CONFIG_PATH.exists()
 
 
+@pytest.mark.parametrize(("details", "label"), [
+    ({"event_type": "approval.needed", "question": True, "label": "When does the beta ship?"}, "Row-Bot has a question"),
+    ({"event_type": "approval.needed", "label": "Delete notes.txt"}, "Needs approval"),
+])
+def test_buddy_says_row_bot_has_a_question_in_its_own_words(owner, monkeypatch, details, label):
+    import row_bot.buddy.brain as brain
+    state = SimpleNamespace(mood="concerned", energy=84, focus=90, alert=86, event_id=4, details=details,
+                            message=details["label"])
+    monkeypatch.setattr(brain, "get_buddy_brain", lambda: SimpleNamespace(tick=lambda: state))
+    snapshot = service.read_buddy(validate=lambda: None)
+    assert snapshot.status.label == label
+    assert details["label"] not in json.dumps(asdict(snapshot))
+
+
 def test_save_preserves_unknown_properties_native_placement_and_single_link(owner):
     config.save_buddy_config({"private_legacy_property": "retained", "placement": "desktop", "visible": True})
     _, revision = config.read_buddy_config_revision()

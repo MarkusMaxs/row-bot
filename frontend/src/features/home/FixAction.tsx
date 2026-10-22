@@ -1,6 +1,14 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Cpu, LogIn, Play, RefreshCw, RotateCw, Wrench } from 'lucide-react';
+import {
+  Cpu,
+  FolderOpen,
+  LogIn,
+  Play,
+  RefreshCw,
+  RotateCw,
+  Wrench,
+} from 'lucide-react';
 import type { ClientController } from '../../api/controller';
 import type { ProblemFix } from '../../api/types';
 import { clientError } from '../../api/errors';
@@ -18,6 +26,8 @@ export function fixLabel(fix: ProblemFix): string {
       return `Reconnect ${fix.name}`;
     case 'choose_model':
       return 'Choose a model';
+    case 'choose_folder':
+      return 'Choose a folder';
     case 'check_again':
       return `Check ${fix.name} again`;
     default:
@@ -31,6 +41,7 @@ const ICONS = {
   restart_channel: RotateCw,
   reconnect_account: LogIn,
   choose_model: Cpu,
+  choose_folder: FolderOpen,
   check_again: RefreshCw,
   open: Wrench,
 } as const;

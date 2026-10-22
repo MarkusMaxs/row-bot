@@ -48,6 +48,11 @@ def default_tools(tmp_path, monkeypatch):
             tools[tool.name] = tool
     reader = build_reader_tool()
     tools[reader.name] = reader
+    # Row-Bot's questions with options (N4) are bound with every tool set, like the reader.
+    from row_bot.questions import build_tool as build_question_tool
+
+    asker = build_question_tool()
+    tools[asker.name] = asker
     return tools
 
 
