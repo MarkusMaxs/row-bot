@@ -109,29 +109,6 @@ QWEN35_2B = PinnedModel(
 # The larger tiers' starting models (L2x, O90), each file checked against the Hub's own fingerprints at
 # the pinned revision (large files by their LFS SHA-256, small ones by their git blob id) by
 # ``scripts/learning_gpu_check.py`` on the RTX 5090, then hashed for these pins.
-QWEN35_4B = PinnedModel(
-    id="qwen3.5-4b",
-    name="Qwen3.5 4B",
-    repo="Qwen/Qwen3.5-4B",
-    revision="851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
-    licence="Apache 2.0",
-    licence_id="apache-2.0",
-    files=(
-        WeightFile("LICENSE", 11_544, "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"),
-        WeightFile("README.md", 77_661, "1406be1b6b8fd8a6545870da516912804756593628a1d0fb0a7965211e82a7bb"),
-        WeightFile("chat_template.jinja", 7_756, "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"),
-        WeightFile("config.json", 3_161, "ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670"),
-        WeightFile("merges.txt", 3_353_259, "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d"),
-        WeightFile("model.safetensors-00001-of-00002.safetensors", 5_329_398_688, "26a93f066e1916adb13453dae5a0c707c0fbc71299ed98779571a907b8e74c61"),
-        WeightFile("model.safetensors-00002-of-00002.safetensors", 3_990_429_408, "cb544bd9bfae93dc59b0f22b292f5933573854a7f9b97835c67060d7d910e188"),
-        WeightFile("model.safetensors.index.json", 76_196, "cf3f798ee02ba45f9622aa8892a47369ab667d0afbf154ee7c2212de42e6302d"),
-        WeightFile("preprocessor_config.json", 390, "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"),
-        WeightFile("tokenizer.json", 12_807_982, "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"),
-        WeightFile("tokenizer_config.json", 16_710, "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"),
-        WeightFile("video_preprocessor_config.json", 385, "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"),
-        WeightFile("vocab.json", 6_722_759, "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"),
-    ),
-)
 QWEN35_9B = PinnedModel(
     id="qwen3.5-9b",
     name="Qwen3.5 9B",
@@ -227,7 +204,7 @@ QWEN38_27B = PinnedModel(
         ),
     ),
 )
-MODELS: dict[str, PinnedModel] = {model.id: model for model in (QWEN35_2B, QWEN35_4B, QWEN35_9B, QWEN38_27B)}
+MODELS: dict[str, PinnedModel] = {model.id: model for model in (QWEN35_2B, QWEN35_9B, QWEN38_27B)}
 
 WeightsState = Literal["not_downloaded", "partial", "downloaded", "damaged"]
 
@@ -397,7 +374,6 @@ __all__ = [
     "MODELS",
     "PinnedModel",
     "QWEN35_2B",
-    "QWEN35_4B",
     "QWEN35_9B",
     "QWEN38_27B",
     "WeightFile",

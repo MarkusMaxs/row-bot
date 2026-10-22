@@ -52,14 +52,13 @@ def _starting(pinned: _weights.PinnedModel) -> StartingModel:
 # Qwen/Qwen3.5-2B at the revision L0d measured: 4.57 GB of weights (D5, D13), and the larger tiers'
 # starting models (L2x, O90); every file pinned in ``weights.py``.
 QWEN35_2B = _starting(_weights.QWEN35_2B)
-QWEN35_4B = _starting(_weights.QWEN35_4B)
 QWEN35_9B = _starting(_weights.QWEN35_9B)
 QWEN38_27B = _starting(_weights.QWEN38_27B)
 # The training engine's download when its lock can't be read (CUDA PyTorch, Unsloth, TRL, PEFT,
 # and llama.cpp's tools for the export): 2.3 GB on Windows (L0d, L2c). The real figure comes from
 # the lock and the pinned tools (``engine_download_bytes``).
 ENGINE_DOWNLOAD_BYTES = 2_280_000_000
-STARTING_MODELS = {model.id: model for model in (QWEN35_2B, QWEN35_4B, QWEN35_9B, QWEN38_27B)}
+STARTING_MODELS = {model.id: model for model in (QWEN35_2B, QWEN35_9B, QWEN38_27B)}
 # Drivers (O25): CUDA 13.0 needs 580, CUDA 12.8 needs 570.
 CUDA13_DRIVER = 580
 MIN_DRIVER = 570
@@ -99,9 +98,12 @@ def _tier(tier_id: str, label: str, min_memory_mib: int, summary: str, model: St
 
 TIERS: tuple[Tier, ...] = (
     _tier("8gb", "8 GB", 7_600, "Can train small models (up to about 2B) on your tasks.", QWEN35_2B),
-    _tier("16gb", "16 GB", 15_000, "Can train models up to about 4B on your tasks.", QWEN35_4B),
+    # O111: Qwen3.5 4B left 5.4 (its training diverged in this engine); the 9B is the 16 GB candidate, as
+    # QLoRA there and on 24 GB cards, and 16-bit on 32 GB cards (O107: the 27B needs a card with nothing
+    # else on it).
+    _tier("16gb", "16 GB", 15_000, "Can train models up to about 9B on your tasks.", QWEN35_9B),
     _tier("24gb", "24 GB", 23_000, "Can train models up to about 9B on your tasks.", QWEN35_9B),
-    _tier("32gb", "32 GB", 30_000, "Can train large models (up to about 27B) on your tasks.", QWEN38_27B),
+    _tier("32gb", "32 GB", 30_000, "Can train models up to about 9B on your tasks, at full precision.", QWEN35_9B),
 )
 
 
@@ -196,7 +198,10 @@ class HardwareCheck:
         if self.tier is None or self.state == "low_memory":
             return ()  # O105: nothing is offered that this computer's memory can't hold
         fits = [tier for tier in TIERS if tier.certified and tier.min_memory_mib <= self.tier.min_memory_mib]
-        return tuple(model for tier in reversed(fits) for model in tier.models)
+        found: dict[str, StartingModel] = {}
+        for model in (model for tier in reversed(fits) for model in tier.models):
+            found.setdefault(model.id, model)  # one entry per model: larger tiers train the 9B too
+        return tuple(found.values())
 
 
 def engine_download_bytes(variant: str | None) -> int:

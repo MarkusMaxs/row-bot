@@ -471,7 +471,7 @@ it('the setup sheet says what training needs of the computer’s memory, and wha
       id: '16gb',
       label: '16 GB',
       certified: true,
-      summary: 'Can train models up to about 4B on your tasks.',
+      summary: 'Can train models up to about 9B on your tasks.',
       system_memory_gb: 30,
     },
     memory_short: [

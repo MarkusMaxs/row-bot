@@ -4393,7 +4393,7 @@ class LearningSetupChoices(WireModel):
     monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
-    starting_model: Literal["qwen3.5-2b", "qwen3.5-4b", "qwen3.5-9b", "qwen3.8-27b"] = "qwen3.5-2b"
+    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b"] = "qwen3.5-2b"
 
 
 class LearningCommand(WireModel):
