@@ -1250,40 +1250,40 @@ async function confirmDelete(
   );
 }
 
-it('deletes one conversation after confirmation with Undo, and sends the delete only when its notice ends', async () => {
+it('deletes one conversation at once after confirmation, and Undo restores it (B343)', async () => {
   const user = userEvent.setup();
   const { transport } = await setup(3);
   const command = vi.spyOn(transport, 'command');
   const listed = () => transport.conversations.map((row) => row.id);
+  const sent = () =>
+    command.mock.calls.map(([target, request]) => [target, request.type]);
   await confirmDelete(user, 'Sample conversation 2');
-  // It leaves the list at once; nothing is deleted while Undo is offered.
+  // It leaves the list and is deleted at once, with Undo on offer.
   await waitFor(() =>
     expect(
       screen.queryByRole('button', { name: 'Sample conversation 2' }),
     ).toBeNull(),
   );
   const offered = await noticeWith("Deleted 'Sample conversation 2'.");
-  expect(command).not.toHaveBeenCalled();
+  expect(sent()).toEqual([['conversation-2', 'conversation.delete']]);
+  expect(listed()).not.toContain('conversation-2');
   // Radix toasts handle pointer capture, which jsdom lacks: plain clicks.
   fireEvent.click(offered.getByRole('button', { name: 'Undo' }));
   expect(
     await screen.findByRole('button', { name: 'Sample conversation 2' }),
   ).toBeVisible();
-  expect(command).not.toHaveBeenCalled();
+  expect(sent()).toEqual([
+    ['conversation-2', 'conversation.delete'],
+    ['conversation-2', 'conversation.restore'],
+  ]);
   expect(listed()).toContain('conversation-2');
 
-  // Deleted again, and its notice dismissed: now it goes for good.
+  // Deleted again, and its notice dismissed: it stays gone.
   await confirmDelete(user, 'Sample conversation 2');
   const ended = await noticeWith("Deleted 'Sample conversation 2'.");
   fireEvent.click(ended.getByRole('button', { name: 'Dismiss notification' }));
   await waitFor(() => expect(listed()).not.toContain('conversation-2'));
-  expect(command).toHaveBeenCalledTimes(1);
-  expect(command).toHaveBeenCalledWith(
-    'conversation-2',
-    expect.objectContaining({ type: 'conversation.delete' }),
-    expect.any(String),
-    expect.anything(),
-  );
+  expect(sent()).toHaveLength(3);
   expect(
     screen.queryByRole('button', { name: 'Sample conversation 2' }),
   ).toBeNull();

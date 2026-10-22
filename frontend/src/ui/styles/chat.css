@@ -583,6 +583,28 @@
   border-inline-start: 3px solid var(--border-subtle);
   color: var(--text-secondary);
 }
+/* Maths (KaTeX): formulas take the text's colour in light and dark; a wide
+   display formula scrolls inside its own box, never the page. */
+.message-text .math-block {
+  max-width: 100%;
+  margin: 0 0 12px;
+}
+.math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 4px;
+}
+.math-display .katex-display {
+  margin: 0;
+}
+.math .katex {
+  color: inherit;
+}
+.math[data-pending] code {
+  color: var(--text-secondary);
+}
 .message-text hr {
   margin: 16px 0;
   border: 0;

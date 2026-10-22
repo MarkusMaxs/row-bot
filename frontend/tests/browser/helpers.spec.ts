@@ -74,11 +74,15 @@ async function agentsList(page: Page) {
     name: 'Conversation details',
   });
   const sheet = page.getByRole('dialog', { name: 'Conversation details' });
-  if (!(await details.isVisible()) && !(await sheet.isVisible()))
-    await headerAction(page, 'Conversation details');
   const panel = details.or(sheet).first();
   const agents = panel.locator('summary', { hasText: /^Agents/ });
-  await expect(agents).toBeVisible();
+  // The rail can still be opening (or its Agents section loading) just after a
+  // reload, when a check sees nothing and the toggle would close it: try again.
+  await expect(async () => {
+    if (!(await details.isVisible()) && !(await sheet.isVisible()))
+      await headerAction(page, 'Conversation details');
+    await expect(agents).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   const section = agents.locator('xpath=..');
   if ((await section.getAttribute('open')) === null) await agents.click();
   return panel.getByRole('region', { name: 'Delegated tasks' });

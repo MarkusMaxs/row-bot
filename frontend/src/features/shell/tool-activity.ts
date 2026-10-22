@@ -320,7 +320,9 @@ export function stepVerb(
     return tool;
   }
   const known = describe(name);
-  const fallback = humanizeToken(bareName(name)) || 'Tool';
+  // An app's tool with no app named reads as its words, never "MCP …" (B391).
+  const fallback =
+    (!known && unnamedAppTool(name)) || humanizeToken(bareName(name)) || 'Tool';
   if (status === 'pending')
     return known?.running ?? `Running ${midSentence(fallback)}`;
   // A step that failed or never ran must not read as done ("Deleted a file").
@@ -599,22 +601,62 @@ const TOOL_VERBS = new Set(
   ).split(' '),
 );
 
-/** "Send an email?" for a canonical tool name awaiting approval; "Allow Granola to delete page?" for an app's. */
+// Nouns that take no "a" ("get data", not "get a data").
+const UNCOUNTED = new Set(
+  (
+    'access analytics code content data feedback health help history info information mail media ' +
+    'metadata money music news software status text usage weather work'
+  ).split(' '),
+);
+
+/** "create product" → "create a product": a verb and one thing reads as a sentence (B388). */
+function withArticle(phrase: string): string {
+  const [verb, noun, ...rest] = phrase.split(' ');
+  if (rest.length || !noun || !TOOL_VERBS.has(verb.toLowerCase()))
+    return phrase;
+  if (!/^[a-z]+$/.test(noun) || /s$/.test(noun) || UNCOUNTED.has(noun))
+    return phrase;
+  return `${verb} ${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
+}
+
+/** "Allow Stripe to create a product?" for an app's tool, or "Allow Stripe to use “Balance”?". */
+function appQuestion(app: string, tool: string): string {
+  const phrase = midSentence(tool);
+  return TOOL_VERBS.has(phrase.split(' ')[0].toLowerCase())
+    ? `Allow ${app} to ${withArticle(phrase)}?`
+    : `Allow ${app} to use “${tool}”?`;
+}
+
+/** An app tool's runtime name the server named no app for ("mcp_stripe_create_product"): its words, without
+ * claiming an app (two connections can make one name), so never "MCP"; the name itself stays under Details. */
+function unnamedAppTool(name: string): string {
+  const found = /^mcp_([a-z0-9_]+)$/.exec(bareName(name));
+  const words = found ? found[1].replaceAll('_', ' ').trim() : '';
+  return words ? words[0].toUpperCase() + words.slice(1) : '';
+}
+
+/** "Send an email?" for a canonical tool name awaiting approval; "Allow Granola to delete a page?" for an app's. */
 export function approvalQuestion(name: string, app?: ToolApp): string {
-  if (app?.tool) {
-    const phrase = midSentence(app.tool);
-    return TOOL_VERBS.has(phrase.split(' ')[0].toLowerCase())
-      ? `Allow ${app.name} to ${phrase}?`
-      : `Allow ${app.name} to use “${app.tool}”?`;
-  }
-  if (!describe(name))
+  if (app?.tool) return appQuestion(app.name, app.tool);
+  if (!describe(name)) {
+    const words = unnamedAppTool(name);
+    if (words) return `Allow “${words}”?`;
     return `Allow ${humanizeToken(bareName(name)) || 'this action'}?`;
+  }
   return `${imperative(stepVerb(name, 'pending'))}?`;
+}
+
+/** The runtime name of an app's tool, shown under Details only ("mcp_stripe_create_product"). */
+export function rawToolName(name: string): string {
+  const bare = bareName(name);
+  return /^mcp_[a-z0-9_]+$/.test(bare) ? bare : '';
 }
 
 /** The action itself, for a label: "Delete a file", "Fixture action", or "Granola · Delete page". */
 export function approvalAction(name: string, app?: ToolApp): string {
   if (app?.tool) return `${app.name} · ${app.tool}`;
+  const words = !describe(name) && unnamedAppTool(name);
+  if (words) return words;
   if (!describe(name)) return humanizeToken(bareName(name)) || 'This action';
   return imperative(stepVerb(name, 'pending'));
 }

@@ -89,7 +89,8 @@ class _TaskCreateInput(BaseModel):
             "Pipeline steps instead of prompts, for branching, approvals or notifications. Each step has a "
             "'type' (prompt|condition|approval|subtask|notify); ids are assigned as {type}_{counter} "
             "(prompt_1, condition_1). "
-            "prompt: {'prompt': str, 'on_error': 'stop'|'skip', 'max_retries': int}. "
+            "prompt: {'prompt': str, 'on_error': 'stop'|'skip', 'max_retries': int, 'apps': ['Notion']}; "
+            "'apps' names the set-up apps a prompt uses (the step uses only those). "
             "condition: {'condition': str, 'if_true': step_id, 'if_false': step_id}; it checks the previous "
             "step's output and is one of: " + tasks_db.CONDITION_SYNTAX + " (use llm:<question> for a judgement "
             "in words, e.g. 'is any item below its reorder level?'). "
@@ -177,6 +178,18 @@ def _local_run_at(value: str) -> str:
     return moment.isoformat(timespec="minutes")
 
 
+def _named_step_apps(steps: list[dict] | None) -> list[dict] | None:
+    """Prompt steps keep the apps they name as the apps' ids, so the step shows and uses them (B345)."""
+    if not steps:
+        return steps
+    from row_bot.integrations.scope import apps_named
+    for step in steps:
+        if isinstance(step, dict) and str(step.get("type") or "prompt") == "prompt" and step.get("apps"):
+            names = step["apps"] if isinstance(step["apps"], list) else [step["apps"]]
+            step["apps"] = apps_named([str(name) for name in names])
+    return steps
+
+
 def _task_create(
     name: str,
     prompts: list[str] | None = None,
@@ -211,6 +224,7 @@ def _task_create(
         if effective_approval_mode == "full":
             return _FULL_AUTONOMY_REFUSAL
 
+        steps = _named_step_apps(steps)
         task_id = tasks_db.create_task(
             name=name,
             prompts=prompts or [],
@@ -363,7 +377,10 @@ def _task_update(
     if prompts is not None:
         updates["prompts"] = prompts
     if steps is not None:
-        updates["steps"] = steps
+        try:
+            updates["steps"] = _named_step_apps(steps)
+        except ValueError as exc:
+            return f"Error updating task: {exc}"
     if approval_mode is not None or safety_mode is not None:
         updates["safety_mode"] = legacy_safety_mode_to_approval_mode(approval_mode or safety_mode or "block")
         if updates["safety_mode"] == "full":
