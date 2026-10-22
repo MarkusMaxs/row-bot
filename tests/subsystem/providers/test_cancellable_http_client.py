@@ -143,6 +143,27 @@ def test_requests_without_a_scope_and_after_a_stop_work_as_usual() -> None:
         assert client.post(f"{server.url}/v1/chat", json={}).json() == {"ok": True}
 
 
+def test_a_client_that_keeps_connections_and_borrows_the_hooks_stops_a_stream_on_a_kept_one() -> None:
+    # Another library's client given these clients' hooks (documents with a local model): its second request
+    # goes out on the first one's connection, whose socket the stop learns when the response arrives.
+    first_answer = Reply(body=b'{"ok": true}', keep_alive=True)
+    with fake_provider_http([first_answer, Hold(chunks=(b"data: first\n\n",))]) as server:
+        client = httpx.Client(event_hooks=cancellable_http_client().event_hooks)
+        assert client.post(f"{server.url}/api/chat", json={}).json() == {"ok": True}
+        first = threading.Event()
+        scope = CancellationScope()
+        worker, _ = _under_scope(lambda: _read_stream(client, f"{server.url}/api/chat", first), scope)
+        held = server.held(1)
+        assert first.wait(PROMPTLY)
+
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert held.connection == server.seen[0].connection  # it went out on the kept connection
+        assert not worker.is_alive()
+        assert held.hung_up.wait(PROMPTLY)
+
+
 def test_cancellable_http_client_preserves_caller_event_hooks():
     seen: list[str] = []
 

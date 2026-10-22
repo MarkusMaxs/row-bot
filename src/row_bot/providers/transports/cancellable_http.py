@@ -12,6 +12,8 @@ the provider answered (and before headers nothing was registered at all, on any 
 - One connection per request (no keep-alive), so a request's socket is its own: Stop for one run never touches
   another run's request on a shared client. A request on a connection opened earlier (a client that keeps
   connections and borrows these hooks) learns its socket when the response arrives.
+- Stop during a TLS handshake ends the request once the handshake is over (TLS takes the socket over while it
+  runs), within the connect timeout at the latest.
 - A request Stop ended raises ``RequestStopped``. Provider SDKs retry a request that failed to connect or read;
   given their own subclass (``stopped=``), which the SDK passes on as one of its own errors, they don't send it
   again.

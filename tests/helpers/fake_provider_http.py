@@ -11,7 +11,8 @@ Each request is read in full and answered by the next reply in the script (the l
 - ``Hold()`` sends nothing, not even headers, and holds the connection open, as a provider still working on
   its answer does;
 - ``Hold(chunks=(...))`` sends a streamed response's headers and these chunks, then holds the connection open;
-- ``Reply(body=...)`` answers in full and closes the connection.
+- ``Reply(body=...)`` answers in full and closes the connection (``keep_alive=True``: keeps it for the next
+  request).
 
 A held request's ``hung_up`` is set once its client has gone: it shut its connection down or closed it. A client
 that only drops a read it is blocked in never gets there, and neither does the provider: it goes on answering.
@@ -44,6 +45,7 @@ class Reply:
     body: bytes
     content_type: str = "application/json"
     status: int = 200
+    keep_alive: bool = False
 
 
 HOLD = Hold()
@@ -55,6 +57,7 @@ class SeenRequest:
     path: str
     headers: dict[str, str]
     body: bytes
+    connection: int = 0  # which of the server's connections it came on (counted from 1)
     held: threading.Event = field(default_factory=threading.Event)
     hung_up: threading.Event = field(default_factory=threading.Event)
     _connection: socket.socket | None = None
@@ -123,9 +126,9 @@ class FakeProviderServer:
             except OSError:
                 return
             self._connections.append(connection)
-            self._spawn(self._serve, connection)
+            self._spawn(self._serve, connection, len(self._connections))
 
-    def _serve(self, connection: socket.socket) -> None:
+    def _serve(self, connection: socket.socket, number: int) -> None:
         if self._server_tls is not None:
             try:
                 connection = self._server_tls.wrap_socket(connection, server_side=True)
@@ -138,6 +141,7 @@ class FakeProviderServer:
                 request = _read_request(reader)
                 if request is None:
                     return
+                request.connection = number
                 with self._arrived:
                     reply = self._replies[min(len(self.seen), len(self._replies) - 1)]
                     self.seen.append(request)
@@ -145,6 +149,8 @@ class FakeProviderServer:
                 try:
                     if isinstance(reply, Reply):
                         connection.sendall(_complete(reply))
+                        if reply.keep_alive:
+                            continue
                         return
                     request._connection, request._content_type = connection, reply.content_type
                     if reply.chunks:
@@ -201,8 +207,9 @@ def _streamed_head(content_type: str) -> bytes:
 
 
 def _complete(reply: Reply) -> bytes:
+    connection = "keep-alive" if reply.keep_alive else "close"
     return (f"HTTP/1.1 {reply.status} OK\r\nContent-Type: {reply.content_type}\r\n"
-            f"Content-Length: {len(reply.body)}\r\nConnection: close\r\n\r\n").encode() + reply.body
+            f"Content-Length: {len(reply.body)}\r\nConnection: {connection}\r\n\r\n").encode() + reply.body
 
 
 def _tls_contexts() -> tuple[ssl.SSLContext, ssl.SSLContext]:
