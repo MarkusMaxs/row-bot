@@ -144,6 +144,15 @@
 .browser-status .button {
   flex: none;
 }
+/* The composer's Stop at the status line's size (touch keeps its larger target). */
+@media (pointer: fine) {
+  .browser-status .browser-stop.button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+  }
+}
 
 .browser-viewport {
   position: relative;

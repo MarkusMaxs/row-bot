@@ -675,8 +675,15 @@ function PaneStatus({
         </span>
         <Button onClick={onTakeControl}>Take control</Button>
         {running && (
-          <IconButton label="Stop" size="sm" variant="ghost" onClick={onStop}>
-            <Square aria-hidden />
+          // The composer's Stop: a round ink button with a filled square.
+          <IconButton
+            label="Stop"
+            size="sm"
+            variant="secondary"
+            className="composer-stop browser-stop"
+            onClick={onStop}
+          >
+            <Square className="composer-primary-stop" size={12} aria-hidden />
           </IconButton>
         )}
       </div>
