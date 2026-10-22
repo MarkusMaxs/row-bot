@@ -428,9 +428,11 @@ def verify_dmg(dmg: Path, version: str, *, notarized: bool, run: Runner = subpro
     with tempfile.TemporaryDirectory(prefix="row-bot-dmg-") as folder:
         mount = Path(folder) / "volume"
         mount.mkdir()
-        if _call(run, ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", str(mount),
-                       str(dmg)], "hdiutil", capture_output=True, text=True).returncode != 0:
-            return problems + [f"{dmg.name} does not mount"]
+        attached = _call(run, ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", str(mount),
+                               str(dmg)], "hdiutil", capture_output=True, text=True)
+        if attached.returncode != 0:
+            reason = " ".join(((attached.stderr or "") + " " + (attached.stdout or "")).split())[:300]
+            return problems + [f"{dmg.name} does not mount" + (f": {reason}" if reason else "")]
         try:
             app = mount / "Row-Bot.app"
             if team_of(app) != TEAM_ID:

@@ -2,15 +2,18 @@ import { useId, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
 import { Input, Segmented, Select } from '../../ui/primitives';
 import { absoluteTime, parseTimestamp } from '../../ui/format';
-import { cronDays, scheduleWords } from '../home/home-format';
+import { cronDays, ordinal, scheduleWords } from '../home/home-format';
 
 type Mode = 'manual' | 'once' | 'repeat';
-type Frequency = 'daily' | 'weekdays' | 'days' | 'hours' | 'minutes' | 'cron';
+type Frequency =
+  'daily' | 'weekdays' | 'days' | 'monthly' | 'hours' | 'minutes' | 'cron';
 export type ScheduleDraft = {
   mode: Mode;
   frequency: Frequency;
   time: string;
   days: string[];
+  /** Day of the month, 1–31, for Monthly. */
+  date: number;
   every: number;
   cron: string;
   at: string;
@@ -42,6 +45,7 @@ export function parseSchedule(
     frequency: 'daily',
     time: '09:00',
     days: ['mon'],
+    date: 1,
     every: 2,
     cron: '',
     at: '',
@@ -77,14 +81,28 @@ export function parseSchedule(
   if (cron) {
     const fields = cron[1].trim().split(/\s+/);
     const [minute, hour, dom, month, dow] = fields;
-    const simple =
+    const timed =
       fields.length === 5 &&
       /^\d{1,2}$/.test(minute) &&
       /^\d{1,2}$/.test(hour) &&
-      dom === '*' &&
       month === '*' &&
       Number(minute) < 60 &&
       Number(hour) < 24;
+    // One day of every month (B345): "0 8 1 * *" is Monthly on the 1st.
+    if (
+      timed &&
+      dow === '*' &&
+      /^\d{1,2}$/.test(dom) &&
+      Number(dom) >= 1 &&
+      Number(dom) <= 31
+    )
+      return {
+        ...repeat,
+        frequency: 'monthly',
+        date: Number(dom),
+        time: clock(Number(hour), Number(minute)),
+      };
+    const simple = timed && dom === '*';
     const days = simple && dow !== '*' ? cronDays(dow) : null;
     // Numbered weekdays are left as written: the scheduler counts Monday as 0.
     if (simple && !/\d/.test(dow)) {
@@ -125,6 +143,11 @@ export function buildSchedule(draft: ScheduleDraft): {
         at: null,
       };
     }
+    case 'monthly':
+      return {
+        schedule: `cron:${minute || 0} ${hour || 0} ${draft.date} * *`,
+        at: null,
+      };
     case 'hours':
       return { schedule: `interval:${Math.max(1, draft.every)}`, at: null };
     case 'minutes':
@@ -149,10 +172,25 @@ export function nextFire(draft: ScheduleDraft, now: Date): Date | null {
   if (draft.mode === 'once') return parseTimestamp(draft.at);
   if (
     draft.mode !== 'repeat' ||
-    !['daily', 'weekdays', 'days'].includes(draft.frequency)
+    !['daily', 'weekdays', 'days', 'monthly'].includes(draft.frequency)
   )
     return null;
   const [hour, minute] = draft.time.split(':').map(Number);
+  if (draft.frequency === 'monthly') {
+    // A month without that day (the 31st in April) is skipped.
+    for (let offset = 0; offset < 13; offset += 1) {
+      const candidate = new Date(
+        now.getFullYear(),
+        now.getMonth() + offset,
+        draft.date,
+        hour || 0,
+        minute || 0,
+      );
+      if (candidate.getDate() === draft.date && candidate > now)
+        return candidate;
+    }
+    return null;
+  }
   const allowed =
     draft.frequency === 'daily'
       ? DAY_ORDER
@@ -252,6 +290,7 @@ export default function ScheduleBuilder({
               <option value="daily">Every day</option>
               <option value="weekdays">Weekdays</option>
               <option value="days">On chosen days</option>
+              <option value="monthly">Monthly</option>
               <option value="hours">Every few hours</option>
               <option value="minutes">Every few minutes</option>
               <option value="cron">Custom (cron)</option>
@@ -286,7 +325,30 @@ export default function ScheduleBuilder({
               })}
             </div>
           )}
-          {['daily', 'weekdays', 'days'].includes(draft.frequency) && (
+          {draft.frequency === 'monthly' && (
+            <label className="schedule-field" htmlFor={`${id}-date`}>
+              <span>Day of the month</span>
+              <Select
+                id={`${id}-date`}
+                value={String(draft.date)}
+                onChange={(event) =>
+                  update({ date: Number(event.target.value) })
+                }
+              >
+                {Array.from({ length: 31 }, (_, index) => (
+                  <option key={index + 1} value={index + 1}>
+                    {ordinal(index + 1)}
+                  </option>
+                ))}
+              </Select>
+              {draft.date > 28 && (
+                <small>Months without this day are skipped.</small>
+              )}
+            </label>
+          )}
+          {['daily', 'weekdays', 'days', 'monthly'].includes(
+            draft.frequency,
+          ) && (
             <label className="schedule-field" htmlFor={`${id}-time`}>
               <span>Time</span>
               <Input

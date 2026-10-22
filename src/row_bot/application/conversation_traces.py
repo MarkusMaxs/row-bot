@@ -747,9 +747,12 @@ def build_trace_item(
     )
 
 
-def app_of_tool(name: Any, args: Any = None, known: dict[str, dict | None] | None = None) -> dict | None:
+def app_of_tool(name: Any, args: Any = None, known: dict[str, dict | None] | None = None, *,
+                words: bool = False) -> dict | None:
     """The app behind a tool call, by its runtime name (a discovered tool's own name); never fails a read.
-    ``known`` remembers answers across one read, so a transcript looks each tool up once."""
+    ``known`` remembers answers across one read, so a transcript looks each tool up once. ``words``: for
+    what a person reads only (a step row, an approval card), a name this runtime didn't issue may name the
+    one set-up app it can come from (B388, B391); never for the reviewer or for scoping."""
     runtime = str(name or "")
     if runtime == "tool_invoke" and isinstance(args, dict):
         runtime = str(args.get("name") or "")
@@ -758,8 +761,10 @@ def app_of_tool(name: Any, args: Any = None, known: dict[str, dict | None] | Non
     if known is not None and runtime in known:
         return known[runtime]
     try:
-        from row_bot.integrations.scope import app_for_tool
+        from row_bot.integrations.scope import app_for_tool, app_named_by_tool
         found = app_for_tool(runtime)
+        if found is None and words:
+            found = app_named_by_tool(runtime)
     except Exception:
         found = None
     if known is not None:
@@ -987,7 +992,7 @@ def project_assistant_row_traces(
                 "call_order": call_order,
                 "group_order": grouped_orders[group_key],
                 "tool_name": name,
-                "app": app_of_tool(raw_call.get("name"), raw_call.get("args"), known_apps),
+                "app": app_of_tool(raw_call.get("name"), raw_call.get("args"), known_apps, words=True),
                 "safe_input": safe_tool_input(raw_call.get("args")),
                 "parent_id": parent_id,
                 "parent_output_index": len(output) - 1,

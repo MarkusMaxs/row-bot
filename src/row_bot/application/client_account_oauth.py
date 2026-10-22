@@ -293,6 +293,26 @@ def _expire() -> None:
                 _ACTIVE.discard(job["account"])
 
 
+# What an account's setup reviews (Google's: "Gmail and Calendar. Sending and changes always ask
+# first."): its first sign-in turns that access on, so the account reads Connected, not Off (F29).
+# A sign-in that replaces one keeps the switches as the person left them.
+_REVIEWED_ACCESS = {"google": ("gmail", "calendar")}
+
+
+def _save_sign_in(account: str, token: dict) -> None:
+    first = account_tokens.read(account) is None
+    account_tokens.write(account, token)  # Keychain only; a failure keeps the old sign-in.
+    account_tokens.record_check(account, "valid")  # The provider has just issued it.
+    if not first:
+        return
+    from row_bot.tools import registry
+    for tool in _REVIEWED_ACCESS.get(account, ()):
+        try:
+            registry.set_enabled(tool, True)
+        except Exception:
+            logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
+
+
 def _finish_auth(job_key: str) -> None:
     with _LOCK:
         job = _JOBS.get(job_key)
@@ -306,8 +326,7 @@ def _finish_auth(job_key: str) -> None:
             cancelled = job["cancelled"]
             if not cancelled:
                 job["validate"]()
-                account_tokens.write(account, json.loads(content))  # Keychain only; a failure keeps the old sign-in.
-                account_tokens.record_check(account, "valid")  # The provider has just issued it.
+                _save_sign_in(account, json.loads(content))
         phase = "cancelled" if cancelled else "completed"
         message = "Authentication cancelled." if cancelled else "Account authorization saved."
     except Exception:
@@ -447,8 +466,7 @@ def accept_callback(*, account: str, state: str, code: str = "", error: str = ""
             if _client(account) != link["client"]:
                 raise ValueError("the client changed during the sign-in")
             job["validate"]()
-            account_tokens.write(account, token)  # Keychain only; a failure keeps the old sign-in.
-            account_tokens.record_check(account, "valid")  # The provider has just issued it.
+            _save_sign_in(account, token)
         phase, message = "completed", "Account authorization saved."
     except Exception as exc:
         logger.info("A %s sign-in through Row-Bot's public address did not finish (%s)", name, type(exc).__name__)
