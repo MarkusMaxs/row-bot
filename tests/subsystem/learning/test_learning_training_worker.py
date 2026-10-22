@@ -169,9 +169,42 @@ def test_pause_on_use_saves_at_the_next_step_and_the_worker_exits(training):
     assert [item.state for item in job.transitions][-2:] == ["pausing", "paused"]
 
 
+def test_a_pause_before_the_first_step_ends_the_worker_at_once_and_it_continues_from_the_same_checkpoint(training):
+    # A worker loads the model before its first step (minutes on a real card): using Row-Bot then doesn't wait
+    # for that step. Nothing is lost: it continues from the checkpoint it started from.
+    training.start()
+    training.lease.set(chat_cloud=True)
+    assert training.supervisor.watch() is False  # nothing left to watch: it ended now
+    job = training.current()
+    assert (job.state, job.pause_reason, job.steps_done, job.checkpoint_step) == ("paused", "in_use", 0, None)
+    assert training.supervisor.wait_idle(5)
+
+    training.lease.set()
+    training.supervisor.train_now(job.id)
+    training.until(lambda job: job.state == "running")
+    training.advance(7)
+    training.supervisor.stop(training.job.id)  # paused by the person at step 5's checkpoint
+    training.supervisor.train_now(training.job.id)
+    job = training.until(lambda job: job.state == "running")
+    assert job.steps_done == 5  # resumed, still loading the model
+
+    training.lease.set(chat_cloud=True)
+    assert training.supervisor.watch() is False
+    job = training.current()
+    assert (job.state, job.pause_reason, job.steps_done, job.checkpoint_step) == ("paused", "in_use", 5, 5)
+    assert [item.state for item in job.transitions][-2:] == ["running", "paused"]  # never "Pausing after this step"
+    assert training.supervisor.wait_idle(5)
+
+    training.lease.set()
+    training.supervisor.train_now(job.id)
+    assert training.until(lambda job: job.state == "running").steps_done == 5
+    assert training.advance(2).steps_done == 7
+
+
 def test_the_person_using_row_bot_after_training_started_counts_but_earlier_use_does_not(training):
     training.lease.set(since_activity=30.0)  # they pressed Train now half a minute after chatting
     training.start()
+    training.advance(1)
     assert training.supervisor.watch() is True
     assert training.current().state == "running"
     training.ticks.advance(60)  # a minute later they send a message
