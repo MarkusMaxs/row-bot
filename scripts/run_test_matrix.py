@@ -57,6 +57,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # files sent to the person's devices (the download on another device, its notice) or a chat app,
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
 # favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
+# Row-Bot's questions with options (asked, answered, collapsed; a helper's and a workflow's),
+# a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
 # and Learning (preview): turning it on, its tab, Teach and Undo, and a chat switched off.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
@@ -81,6 +83,8 @@ BROWSER_SMOKE_SPECS = (
     "workflow-flowchart",
     "apps-sign-in-elsewhere",
     "model-visibility",
+    "question-cards",
+    "workflow-review",
     "learning",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).

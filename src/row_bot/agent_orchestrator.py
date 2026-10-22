@@ -2805,8 +2805,12 @@ def resume_parent_orchestration(
     *,
     resume_token: str,
     approved: bool,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Resume a background interrupt in the original parent checkpoint."""
+    """Resume a background interrupt in the original parent checkpoint.
+
+    ``answer``: the parent asked a question (N4); only that question's interrupt goes on with it.
+    """
 
     orchestration = get_orchestration(orchestration_id)
     if not _is_unified_parent(orchestration):
@@ -2922,11 +2926,17 @@ def resume_parent_orchestration(
         else:
             from row_bot.agent import resume_invoke_agent
 
+            answered = {}
+            if answer is not None:
+                from row_bot.questions import resume_values
+
+                answered = {"resume_values": resume_values(current_interrupts, answer)}
             result = resume_invoke_agent(
                 enabled_tools,
                 config,
                 approved,
                 interrupt_ids=interrupt_ids,
+                **answered,
             )
         pass_result = complete_parent_pass(
             orchestration_id,
