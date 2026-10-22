@@ -1219,3 +1219,39 @@ it('advances its own clock every minute when no time is supplied', () => {
     vi.useRealTimers();
   }
 });
+
+it('offers choosing a folder for a workflow its removed code folder stopped (N9)', async () => {
+  render(
+    <MemoryRouter>
+      <OverviewHome
+        conversations={[]}
+        setup={setupSnapshot()}
+        monitor={null}
+        loadApprovals={vi.fn().mockResolvedValue(approvals())}
+        loadAttention={attention(
+          problem({
+            id: 'workflow:wf-landing',
+            title: 'Landing checks needs a code folder',
+            detail:
+              "Its code folder isn't a code folder any more, so it didn't run. Choose another.",
+            place: 'workflows',
+            fix: fix({
+              kind: 'choose_folder',
+              href: '/?tab=workflows&workflow=wf-landing&fix=folder',
+              name: 'Landing checks',
+            }),
+          }),
+        )}
+        now={now}
+        {...handlers}
+      />
+    </MemoryRouter>,
+  );
+  expect(
+    await screen.findByText('Landing checks needs a code folder'),
+  ).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Choose a folder' })).toHaveAttribute(
+    'href',
+    '/?tab=workflows&workflow=wf-landing&fix=folder',
+  );
+});

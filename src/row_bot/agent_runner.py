@@ -557,6 +557,7 @@ def _resume_invoke_agent(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict[str, Any] | None = None,
     stop_event: threading.Event,
 ) -> str | dict:
     from row_bot.agent import resume_invoke_agent
@@ -567,6 +568,7 @@ def _resume_invoke_agent(
         approved,
         interrupt_ids=interrupt_ids,
         stop_event=stop_event,
+        **({"resume_values": resume_values} if resume_values else {}),
     )
 
 
@@ -679,6 +681,7 @@ def _build_child_config(
     profile_snapshot: Mapping[str, Any],
     tool_allowlist: Sequence[str] | None = None,
     app_scope: Mapping[str, Any] | None = None,
+    person_rules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     configurable = {
         "thread_id": child_thread_id,
@@ -705,7 +708,17 @@ def _build_child_config(
         configurable["designer_project_id"] = designer_project_id
     if app_scope:  # The apps the delegating turn left out stay out for its agent too.
         configurable["app_scope"] = dict(app_scope)
+    if person_rules:  # A workflow's "Always ask me" goes with every agent it starts (N9).
+        configurable["person_rules"] = dict(person_rules)
     return {"configurable": configurable}
+
+
+def _delegating_person_rules(given: Mapping[str, Any] | None) -> dict | None:
+    """The "Always ask me" rules an agent starts with: those given, else the running turn's."""
+    if given is not None:
+        return dict(given) if given else None
+    reader = getattr(sys.modules.get("row_bot.agent"), "current_person_rules", None)
+    return reader() if callable(reader) else None
 
 
 def spawn_agent_run(
@@ -734,6 +747,7 @@ def spawn_agent_run(
     reasoning: str = "",
     wait: bool = False,
     timeout: float | None = None,
+    person_rules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create and start a single child Agent run. ``app_scope``: what an earlier run of this work left out
     of the apps (a retry or resume), kept as well as anything the chat leaves out now."""
@@ -947,6 +961,7 @@ def spawn_agent_run(
         profile_snapshot=profile_snapshot,
         tool_allowlist=tool_allowlist,
         app_scope=app_scope,
+        person_rules=_delegating_person_rules(person_rules),
     )
     if tool_allowlist:
         try:
@@ -1135,6 +1150,14 @@ def _pause_agent_for_approval(
             if isinstance(item, dict)
         ),
     }
+    from row_bot.tasks import PERSON_APPROVAL_TIMEOUT_MINUTES, _person_only_interrupt
+
+    held = _person_only_interrupt(interrupts)
+    if held:
+        # The workflow's own "Always ask me" card (N9): only the person answers it, bound to its details.
+        resume_state["person_binding"] = str(held["binding"])
+        approval_payload = {**approval_payload, "person_only": True, "binding": str(held["binding"]),
+                            "card": held.get("card") or {}}
     resume_token, approval_id = create_approval_request(
         run_id=run_id,
         task_id="",
@@ -1146,6 +1169,7 @@ def _pause_agent_for_approval(
         source_thread_id=str(configurable.get("thread_id") or run.get("thread_id") or ""),
         parent_thread_id=parent_thread_id,
         approval_payload_json=approval_payload,
+        timeout_minutes=PERSON_APPROVAL_TIMEOUT_MINUTES if held else 0,
     )
     resume_state["resume_token"] = resume_token
     resume_state["approval_id"] = approval_id
@@ -1425,8 +1449,14 @@ def resume_agent_run(
     *,
     resume_token: str = "",
     approved: bool = True,
+    resume_values: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Resume or stop an interrupted child Agent after approval response."""
+    """Resume or stop an interrupted child Agent after approval response.
+
+    ``resume_values``: the helper asked a question (N4) and this is the answer (or a skip) for that question's
+    own interrupt. The helper always goes on: skipping a question never stops it, and an action asked beside
+    the question asks again for itself.
+    """
     from row_bot.agent_runs import append_agent_event, finish_agent_run, get_agent_run
 
     run = get_agent_run(run_id)
@@ -1455,6 +1485,7 @@ def resume_agent_run(
                 str(orchestration["id"]),
                 kind="child_approval_resolved",
                 content=(
+                    f"Child {run_id}'s question was answered." if resume_values else
                     f"Approval for child {run_id} was "
                     f"{'approved' if approved else 'denied'}."
                 ),
@@ -1471,7 +1502,7 @@ def resume_agent_run(
             )
     except Exception:
         logger.debug("Could not publish child approval resolution", exc_info=True)
-    if not approved:
+    if not approved and not resume_values:
         append_agent_event(
             run_id,
             "approval.resolved",
@@ -1519,9 +1550,15 @@ def resume_agent_run(
         {"approved": True, "resume_token": resume_token},
     )
     stop_event = threading.Event()
+    answer: Any = True
+    if resume_state.get("person_binding"):
+        # The person's approval of exactly what their card showed (N9).
+        from row_bot.tools.approval_gate import bound_answer
+
+        answer = bound_answer(True, str(resume_state["person_binding"]))
     thread = generation_registry.thread(
         target=_resume_agent_thread,
-        args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event),
+        args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event, resume_values, answer),
         conversation_id=str(config["configurable"]["thread_id"]),
         stop_event=stop_event,
         domain="agent",
@@ -1546,6 +1583,8 @@ def _resume_agent_thread(
     config: dict[str, Any],
     interrupt_ids: list[str],
     stop_event: threading.Event,
+    resume_values: dict[str, Any] | None = None,
+    answer: Any = True,
 ) -> None:
     from row_bot.agent_runs import (
         append_agent_event,
@@ -1575,9 +1614,10 @@ def _resume_agent_thread(
         result = _resume_invoke_agent(
             enabled_tool_names,
             config,
-            True,
+            answer,
             interrupt_ids=interrupt_ids or None,
             stop_event=stop_event,
+            **({"resume_values": resume_values} if resume_values else {}),
         )
         if not stop_event.is_set() and not (
             isinstance(result, dict)

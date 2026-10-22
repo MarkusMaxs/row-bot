@@ -399,21 +399,27 @@ class BuddyBrain:
                 approval_owners.pop(owner_id, None)
             elif _is_durable_approval_activity(active) and not _approval_activity_is_pending(active, pending):
                 approval_owners.pop(owner_id, None)
+        from row_bot.questions import stored_question
+
         for approval in pending:
             owner_id = str(approval.get("id") or approval.get("resume_token") or "approval")
+            # Row-Bot's question (N4) says so, wherever it was asked.
+            asking = stored_question(approval.get("approval_payload_json")) is not None
+            label = "Row-Bot has a question" if asking else str(approval.get("task_name") or "Needs approval")
             approval_owners[owner_id] = _Activity(
                 kind="approval",
                 event_type=BuddyEventType.APPROVAL_NEEDED,
                 owner_id=owner_id,
                 source="tasks.reconcile",
-                label=str(approval.get("task_name") or "Needs approval"),
+                label=label,
                 payload={
                     "approval_id": owner_id,
                     "resume_token": str(approval.get("resume_token") or ""),
                     "run_id": str(approval.get("run_id") or ""),
                     "task_id": str(approval.get("task_id") or ""),
                     "step_id": str(approval.get("step_id") or ""),
-                    "label": str(approval.get("task_name") or "Needs approval"),
+                    "label": label,
+                    **({"question": True} if asking else {}),
                 },
                 updated_at=now,
                 reconciled=True,

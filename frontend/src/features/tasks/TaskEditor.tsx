@@ -28,7 +28,8 @@ import {
 } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import PromptTextarea from './PromptTextarea';
-import ScheduleBuilder from './ScheduleBuilder';
+import ScheduleBuilder, { onceAt } from './ScheduleBuilder';
+import { defaultZone } from './schedule-zones';
 import { approvalLevel } from '../shell/approval-levels';
 
 export interface TaskEditorProps {
@@ -202,7 +203,8 @@ export default function TaskEditor({
     if (
       fields.enabled &&
       fields.at &&
-      new Date(fields.at).getTime() <= Date.now() &&
+      (onceAt(fields.at, fields.timezone || defaultZone())?.getTime() ??
+        Date.now()) <= Date.now() &&
       (!snapshot?.fields.enabled || snapshot.fields.at !== fields.at)
     ) {
       setError(
@@ -450,6 +452,7 @@ export default function TaskEditor({
               key={`${snapshot?.revision ?? 'new'}:${reload}`}
               schedule={fields.schedule}
               at={fields.at}
+              timezone={fields.timezone ?? null}
               enabled={fields.enabled}
               onChange={(next) =>
                 setFields((current) => ({ ...current, ...next }))
