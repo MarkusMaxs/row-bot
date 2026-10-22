@@ -223,6 +223,12 @@
       "title": "Id",
       "type": "string"
     },
+    "memory_text": {
+      "default": "",
+      "maxLength": 4096,
+      "title": "Memory Text",
+      "type": "string"
+    },
     "nonce": {
       "maxLength": 256,
       "minLength": 32,

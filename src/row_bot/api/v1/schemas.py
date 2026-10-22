@@ -6728,6 +6728,8 @@ class ApprovalRequired(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered rather than approved.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
 
 
 class GenerationError(WireModel):
@@ -7646,6 +7648,8 @@ class ApprovalView(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
     policy_revision: Revision
     nonce: str = Field(min_length=32, max_length=256)
 

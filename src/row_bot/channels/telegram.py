@@ -955,6 +955,12 @@ def _format_interrupt(data) -> str:
         if not isinstance(item, dict):
             parts.append(_escape_html(str(item)))
             continue
+        memory = item.get("memory_save")
+        if isinstance(memory, dict) and memory.get("text"):
+            # A memory write in an incognito chat (N11): the exact text, the person's alone to save.
+            parts.append(f"<b>{_escape_html(item.get('question') or 'Save to memory?')}</b>")
+            parts.append(f"<i>{_escape_html(str(memory['text']))}</i>")
+            continue
         tool_name = item.get("tool", item.get("name", "Unknown tool"))
         desc = item.get("description", "")
         args = item.get("args", {})

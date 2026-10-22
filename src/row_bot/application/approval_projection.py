@@ -70,6 +70,13 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
     question = _text(item.get("question"), 240) if len(items) == 1 else ""
     if question:  # Written by the tool (never the model), e.g. naming the local address it opens.
         projected["question"] = question
+    memory = item.get("memory_save") if len(items) == 1 else None
+    memory_text = _text(memory.get("text"), 4096) if isinstance(memory, Mapping) else ""
+    if memory_text:
+        # A memory write in an incognito chat (N11): the exact text, Save or Don't save, the person's alone.
+        # No reviewer was asked: the card says why in its own question.
+        projected["memory_text"] = memory_text
+        projected.pop("reviewer_reason", None)
     # Turning on a tool the work needs reads as a setup card ("Turn on …"),
     # and a code folder to use or a repository to clone as a folder card
     # where the person picks the folder (B277).

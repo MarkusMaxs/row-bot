@@ -84,6 +84,12 @@ def format_interrupt_text(data: Any) -> str:
         if not isinstance(item, dict):
             parts.append(str(item))
             continue
+        memory = item.get("memory_save")
+        if isinstance(memory, dict) and memory.get("text"):
+            # A memory write in an incognito chat (N11): the exact text, the person's alone to save.
+            parts.append(str(item.get("question") or "Save to memory?"))
+            parts.append(f"  {memory['text']}")
+            continue
         tool_name = item.get("tool", item.get("name", "Unknown tool"))
         desc = item.get("description", "")
         args = item.get("args", {})

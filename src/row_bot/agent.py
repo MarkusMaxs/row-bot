@@ -7657,6 +7657,29 @@ def _resume_value(approved: bool, interrupt_ids: list[str] | None,
     return approved
 
 
+def _person_answers(state: Any, resume_val: Any) -> Any:
+    """The person's own approval, from a conversation (the app, Buddy, a channel), of a card only they answer.
+
+    A person-only card (``person_approval``) counts only an answer bound to what it showed, never a plain
+    True. A conversation's approval is always the person's (no level answers for them there), so their
+    approval of such a card is bound to the details its waiting interrupt holds; anything else is kept.
+    """
+    waiting = _waiting_interrupts(state)
+    held = {str(item["__interrupt_id"]): str(item["binding"]) for item in waiting
+            if item.get("person_only") and item.get("binding") and item.get("__interrupt_id")}
+    if not held:
+        return resume_val
+    from row_bot.tools.approval_gate import bound_answer
+
+    if isinstance(resume_val, Mapping):
+        return {key: bound_answer(True, held[key]) if value is True and key in held else value
+                for key, value in resume_val.items()}
+    if resume_val is True and len(waiting) == 1:
+        [(key, binding)] = held.items()
+        return {key: bound_answer(True, binding)}
+    return resume_val
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
                         resume_values: Mapping[str, Any] | None = None,
@@ -7711,7 +7734,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    resume_val = _resume_value(approved, interrupt_ids, resume_values)
+    resume_val = _person_answers(agent.get_state(config), _resume_value(approved, interrupt_ids, resume_values))
     try:
         for event in _stream_graph(
             agent,
