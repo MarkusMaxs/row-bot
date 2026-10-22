@@ -125,7 +125,7 @@ export function tracedMedia(groups: TranscriptTraceGroup[]): GeneratedMedia[] {
 export type FinishedStep = Pick<
   TranscriptTraceItem,
   'status' | 'safe_summary' | 'summary_truncated' | 'content_ref'
->;
+> & { specialization?: TranscriptTraceItem['specialization'] };
 
 /** Steps the live turn finished: Row-Bot's question answered after its turn paused (N4), an approved action. */
 export function finishedLiveSteps(
@@ -147,6 +147,7 @@ export function finishedLiveSteps(
       safe_summary: value.safe_summary ?? '',
       summary_truncated: value.summary_truncated ?? false,
       content_ref: value.content_ref ?? '',
+      ...(value.specialization ? { specialization: value.specialization } : {}),
     });
   }
   return finished;
@@ -162,8 +163,9 @@ const GROUP_ORDER = [
 
 /**
  * Saved rows read as the live turn left them: a step still pending in its
- * saved row but finished live reads as finished in its own place (a question
- * just answered no longer waits), until the saved row catches up.
+ * saved row but finished live reads as finished in its own place, with its
+ * card (so an answered question shows "You chose: …" where it was asked,
+ * before the reply that follows), until the saved row catches up.
  */
 export function settleFinishedSteps(
   rows: readonly TranscriptRow[],

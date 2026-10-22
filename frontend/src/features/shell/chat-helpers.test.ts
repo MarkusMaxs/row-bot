@@ -35,6 +35,7 @@ import {
   liveMedia,
   settleFinishedSteps,
 } from './transcript-model';
+import { cardKey, liveCards } from './TranscriptCards';
 import { stoppedMarker } from './TranscriptMessage';
 import { turnError } from './turn-errors';
 
@@ -357,7 +358,7 @@ describe('transcript model', () => {
     ).toEqual([{ reference: 'b', mime: 'image/png' }]);
   });
 
-  it('settles a question answered in the live turn in its own row (N4)', () => {
+  it('settles a question answered in the live turn in its own row, before the reply (N4)', () => {
     const answered = {
       kind: 'question_answered',
       outcome: 'answered',
@@ -389,6 +390,9 @@ describe('transcript model', () => {
     expect(activityLabel(summarizeActivity(items[1].traces))).toBe(
       'Asked you a question',
     );
+    expect(items[1].cards.map(cardKey)).toEqual(['answer:call-ask_person']);
+    // The live copy after the reply gives way to the one in place.
+    expect(liveCards([done], new Set(items[1].cards.map(cardKey)))).toEqual([]);
     // Nothing finished live: the saved rows are used as they are.
     expect(settleFinishedSteps(rows, new Map())).toBe(rows);
   });
