@@ -859,6 +859,7 @@ def _create_chat_model(
                 cancellable_async_http_client,
                 cancellable_http_client,
             )
+            from row_bot.providers.transports.openai_direct import OpenAIRequestStopped
 
             kwargs = _reasoning_constructor_kwargs(reasoning_plan, provider=provider, responses=True)
             return ChatOpenAI(
@@ -869,9 +870,11 @@ def _create_chat_model(
                 output_version="responses/v1",
                 # A custom http_client silently turns stream usage off.
                 stream_usage=True,
-                http_client=cancellable_http_client(event_hooks={"request": [add_opencode_request_headers]}),
+                http_client=cancellable_http_client(
+                    stopped=OpenAIRequestStopped, event_hooks={"request": [add_opencode_request_headers]},
+                ),
                 http_async_client=cancellable_async_http_client(
-                    event_hooks={"request": [add_opencode_request_headers_async]},
+                    stopped=OpenAIRequestStopped, event_hooks={"request": [add_opencode_request_headers_async]},
                 ),
                 **kwargs,
             )
@@ -909,12 +912,13 @@ def _create_chat_model(
         if endpoint.get("transport") == "openai_responses":
             from langchain_openai import ChatOpenAI
             from row_bot.providers.transports.cancellable_http import cancellable_http_client
+            from row_bot.providers.transports.openai_direct import OpenAIRequestStopped
 
             kwargs = {
                 "model": model_name,
                 "api_key": api_key,
                 "base_url": endpoint["base_url"],
-                "http_client": cancellable_http_client(),
+                "http_client": cancellable_http_client(stopped=OpenAIRequestStopped),
                 # A custom http_client silently turns stream usage off.
                 "stream_usage": True,
             }
@@ -964,7 +968,11 @@ def _create_chat_model(
         return ChatXAIOAuthResponses(model_name=model_name, reasoning_plan=reasoning_plan)
     if provider == "openai":
         from row_bot.providers.transports.cancellable_http import cancellable_http_client
-        from row_bot.providers.transports.openai_direct import DirectChatOpenAI, stateless_responses_kwargs
+        from row_bot.providers.transports.openai_direct import (
+            DirectChatOpenAI,
+            OpenAIRequestStopped,
+            stateless_responses_kwargs,
+        )
         api_key = get_provider_secret("openai")
         if not api_key:
             raise ValueError("OpenAI API key not configured. Set it in Settings → Providers.")
@@ -972,7 +980,7 @@ def _create_chat_model(
         kwargs = {
             "model": model_name,
             "api_key": api_key,
-            "http_client": cancellable_http_client(),
+            "http_client": cancellable_http_client(stopped=OpenAIRequestStopped),
             "stream_usage": True,
         }
         if openai_model_uses_responses_api(model_name):
@@ -1016,6 +1024,7 @@ def _create_chat_model(
         from langchain_xai import ChatXAI
         from row_bot.providers.cache_affinity import conversation_header_hook
         from row_bot.providers.transports.cancellable_http import cancellable_http_client
+        from row_bot.providers.transports.openai_direct import OpenAIRequestStopped
         api_key = get_provider_secret("xai")
         if not api_key:
             raise ValueError("xAI API key not configured. Set it in Settings → Providers.")
@@ -1024,6 +1033,7 @@ def _create_chat_model(
             api_key=api_key,
             # Chat Completions takes the conversation key as a header: one server, and its cache, per conversation.
             http_client=cancellable_http_client(
+                stopped=OpenAIRequestStopped,
                 event_hooks={"request": [conversation_header_hook(XAI_CONVERSATION_HEADER, "xai")]},
             ),
             **_reasoning_constructor_kwargs(reasoning_plan, provider="xai"),

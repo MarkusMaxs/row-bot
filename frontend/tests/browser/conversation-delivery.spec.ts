@@ -32,7 +32,7 @@ async function views(
       'data-theme',
       appearance,
     );
-    await settle();
+    await expect(settle).toPass();
     await assertNoOverflow(page);
     await screenshot(page, info, `${name}-${appearance}`);
   }
@@ -46,10 +46,10 @@ async function everywhere(
   name: string,
   settle: () => Promise<void> = async () => {},
 ) {
-  await settle();
+  await expect(settle).toPass();
   await views(page, info, name);
   await page.setViewportSize(PHONE);
-  await settle();
+  await expect(settle).toPass();
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
 }
