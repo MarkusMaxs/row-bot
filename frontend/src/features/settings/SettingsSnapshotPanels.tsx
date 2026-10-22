@@ -4609,7 +4609,8 @@ function OutlookAccount({
         },
       ]}
     >
-      {mail.enabled !== null && (
+      {/* Its switches once signed in: until then the guide is the one next step. */}
+      {signedIn(state) && mail.enabled !== null && (
         <SwitchSetting
           mutation={mutation}
           field="outlook_mail.enabled"
@@ -4619,7 +4620,7 @@ function OutlookAccount({
           row={{ sub: true }}
         />
       )}
-      {calendar.enabled !== null && (
+      {signedIn(state) && calendar.enabled !== null && (
         <SwitchSetting
           mutation={mutation}
           field="outlook_calendar.enabled"

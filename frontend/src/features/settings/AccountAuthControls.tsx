@@ -67,6 +67,18 @@ function signInCode(receipt: AccountAuthReceipt): PlanSignIn | null {
 }
 
 /**
+ * Microsoft's code, brought into view as it appears: it shows with the
+ * account's row, and the person may have started it from the guide below.
+ */
+function CodeWait({ children }: { children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
+  return <div ref={box}>{children}</div>;
+}
+
+/**
  * Why this device can't start the account's sign-in, in plain words ('' when
  * it can). The desktop app on the computer Row-Bot runs on signs in through
  * that computer's browser; another device signs in through Row-Bot's one
@@ -318,17 +330,19 @@ export function useAccountAuth(
         </div>
       )}
       {pending && code && (
-        <SignInWait
-          name={name}
-          signIn={code}
-          busy={busy}
-          stop={
-            <Button disabled={busy} onClick={() => void cancel()}>
-              Stop
-            </Button>
-          }
-          onFinish={async () => undefined}
-        />
+        <CodeWait>
+          <SignInWait
+            name={name}
+            signIn={code}
+            busy={busy}
+            stop={
+              <Button disabled={busy} onClick={() => void cancel()}>
+                Stop
+              </Button>
+            }
+            onFinish={async () => undefined}
+          />
+        </CodeWait>
       )}
       {pending && !code && (
         <div role="status" className="action-cluster">

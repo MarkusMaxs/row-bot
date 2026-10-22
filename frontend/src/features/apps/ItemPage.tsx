@@ -595,21 +595,20 @@ function Detail({
         <div className="app-section">
           <p>{(asApp(entry) && app?.summary) || entry.description}</p>
           {asApp(entry) && app?.note && (
-            <StatusLine
-              tone="info"
-              action={
-                seeAlso && (
+            <p className="settings-help">
+              {app.note}
+              {seeAlso && (
+                <>
+                  {' '}
                   <Link
                     className="settings-link"
                     to={`/settings/apps/${seeAlso.id}`}
                   >
                     Open {seeAlso.name}
                   </Link>
-                )
-              }
-            >
-              {app.note}
-            </StatusLine>
+                </>
+              )}
+            </p>
           )}
           {entry.kind === 'skill' ? (
             <p>
