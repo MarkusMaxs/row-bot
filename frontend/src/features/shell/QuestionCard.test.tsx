@@ -229,3 +229,14 @@ it('collapses an answered question to what was chosen, plain and quiet', () => {
     }),
   ).toBeVisible();
 });
+
+it('leaves Enter on a focused Skip to Skip', async () => {
+  const card = await ready();
+  fireEvent.click(within(card).getByRole('radio', { name: /Beta\.1 now/ }));
+  const skip = within(card).getByRole('button', { name: 'Skip' });
+  skip.focus();
+  await act(async () => {
+    fireEvent.keyDown(skip, { key: 'Enter' });
+  });
+  expect(intent).not.toHaveBeenCalled();
+});

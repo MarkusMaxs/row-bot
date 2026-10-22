@@ -135,7 +135,11 @@ export default function QuestionCard({
       pick(index);
       return true;
     }
-    if (event.key === 'Enter' && canGo) {
+    // Enter on a focused button (Skip, Back) is that button's own.
+    const onButton =
+      event.target instanceof Element &&
+      Boolean(event.target.closest('button, a[href]'));
+    if (event.key === 'Enter' && canGo && !onButton) {
       event.preventDefault();
       go();
       return true;
