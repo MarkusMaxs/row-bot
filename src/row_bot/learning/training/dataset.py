@@ -457,13 +457,111 @@ def _scope_reason(conversation: str, *, historical: bool, goal: bool, store: Any
     return reason
 
 
+@dataclass(frozen=True)
+class PastFrame:
+    """O113 (C3): what an imported past-chat row is framed with to train in the serving shape: the newest
+    live Agent request's system prompt and tools (the import keeps each step's calls and results, never the
+    prompt or the tools it was sent)."""
+
+    system: tuple[str, ...]
+    tools: tuple[Mapping[str, Any], ...]
+
+    @property
+    def schemas(self) -> dict[str, Mapping[str, Any]]:
+        return {str((tool.get("function") or {}).get("name") or ""): (tool.get("function") or {}).get("parameters")
+                or {} for tool in self.tools}
+
+
+def past_frame(episodes: Sequence[Episode], book: _Book) -> PastFrame | None:
+    """The newest finished live turn's Agent request with a system prompt and tools, or None (nothing live
+    yet: imported rows wait for it)."""
+
+    from row_bot.learning import capture
+
+    for episode in reversed(list(episodes)):
+        if episode.historical or episode.fidelity == "partial" or episode.status != "completed":
+            continue
+        calls = [item for item in book.decisions.get(episode.id, []) if item.kind == "model_call"]
+        for call in reversed(calls):
+            request = capture.read_request(book.store, call)
+            if not request or request.get("purpose") != "agent" or not request.get("tools"):
+                continue
+            system: list[str] = []
+            for message in request.get("messages") or ():
+                try:
+                    converted = openai_message(message) if isinstance(message, Mapping) else None
+                except (_Unsupported, ValueError, TypeError, KeyError):
+                    converted = None
+                if converted is not None and converted["role"] == "system":
+                    system.append(str(converted["content"]))
+            tools = tuple(dict(item) for item in request["tools"] if isinstance(item, Mapping))
+            if system and tools:
+                return PastFrame(tuple(system), tools)
+    return None
+
+
+_JSON_TYPES: dict[str, Any] = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list,
+                               "object": dict}
+
+
+def _arguments_fit(arguments: Any, schema: Mapping[str, Any]) -> bool:
+    """Whether a past call's arguments fit the tool's schema as offered now: an object with every required
+    key, no key the schema doesn't name (unless it allows more), and each named key of its declared type."""
+
+    if not isinstance(arguments, dict):
+        return False
+    properties = schema.get("properties") or {}
+    if any(key not in arguments for key in schema.get("required") or ()):
+        return False
+    if properties and not schema.get("additionalProperties") and any(key not in properties for key in arguments):
+        return False
+    for key, value in arguments.items():
+        expected = (properties.get(key) or {}).get("type") if isinstance(properties.get(key), Mapping) else None
+        if isinstance(expected, str) and expected in _JSON_TYPES and value is not None:
+            if not isinstance(value, _JSON_TYPES[expected]) or (expected in ("integer", "number")
+                                                                and isinstance(value, bool)):
+                return False
+    return True
+
+
+def _past_steps(messages: list[dict[str, Any]], frame: PastFrame, counts: Counter[str] | None) -> None:
+    """An imported step stays a target only when its tool is offered now and its arguments fit; else it is
+    context only (counted)."""
+
+    schemas = frame.schemas
+    for message in messages:
+        if message.get("role") != "assistant" or not message.get("weight") or not message.get("tool_calls"):
+            continue
+        why = None
+        for call in message["tool_calls"]:
+            function = call.get("function") or {}
+            name = str(function.get("name") or "")
+            if name not in schemas:
+                why = "tool_not_offered"
+                break
+            raw = function.get("arguments")
+            try:
+                arguments = json.loads(raw or "{}") if isinstance(raw, str) else raw
+            except ValueError:
+                arguments = None
+            if not _arguments_fit(arguments, schemas[name]):
+                why = "arguments_invalid"
+                break
+        if why:
+            message["weight"] = 0
+        if counts is not None:
+            counts[why or "kept"] += 1
+
+
 def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
              envelope: shape_module.Envelope | None = None,
-             stats: shape_module.Stats | None = None) -> tuple[Example | None, str, int]:
+             stats: shape_module.Stats | None = None, frame: PastFrame | None = None,
+             past_steps: Counter[str] | None = None) -> tuple[Example | None, str, int]:
     """One episode as an example, or why it is left out. Returns (example, reason, paths changed).
 
     With an ``envelope`` the row is rendered in the serving shape (O71); ``stats`` adds up what that
-    changed."""
+    changed. With a ``frame`` an imported past-chat row is framed and rendered like a live one (O113),
+    its tool steps after the person's message kept as targets; ``past_steps`` counts what became of them."""
 
     from row_bot.learning import capture
 
@@ -523,7 +621,7 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
                 system.append(str(converted["content"]))
                 continue
             if converted["role"] == "assistant":
-                converted["weight"] = 1 if index > person and not episode.historical else 0
+                converted["weight"] = 1 if index > person and (not episode.historical or frame is not None) else 0
             elif _is_person(message):
                 starts.append(len(messages))
             messages.append(converted)
@@ -548,7 +646,7 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
             return None, "unreadable", 0
         if not answer.get("content") and not answer.get("tool_calls"):
             return None, "empty_reply", 0
-        if episode.historical and answer.get("tool_calls"):
+        if episode.historical and answer.get("tool_calls") and frame is None:
             return None, "past_chat_tool_step", 0
         answer["weight"] = 1
         messages.append(answer)
@@ -557,12 +655,17 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
             messages.pop()
     tools: list[dict[str, Any]] | None = [dict(item) for item in request.get("tools") or ()
                                           if isinstance(item, Mapping)] or None
+    agent = request.get("purpose") == "agent"
+    if episode.historical and frame is not None:
+        # O113: framed as the newest live Agent request was (its prompt and tools), then rendered like it.
+        system, tools, agent = list(frame.system), [dict(item) for item in frame.tools], True
+        _past_steps(messages, frame, past_steps)
     derived = False
-    if envelope is not None and not episode.historical:
+    if envelope is not None and (not episode.historical or frame is not None):
         # O71: the row as the personal model will be served (its prompt, its tool exposure, its calls).
         try:
             system, messages, tools, rendered = shape_module.render(
-                system, messages, tools, envelope, agent=request.get("purpose") == "agent")
+                system, messages, tools, envelope, agent=agent)
         except shape_module.RenderError:
             return None, "unrenderable", 0
         derived = rendered.changed
@@ -660,6 +763,11 @@ def compile_dataset(
     episodes = [item for item in store.find("episode", limit=100_000) if isinstance(item, Episode)]
     episodes.sort(key=lambda item: (item.started_at, item.id))
     book = _Book(store, episodes)
+    # O113: imported rows train in the serving shape, framed like the newest live Agent request; until there is
+    # one they wait (left out as "past_chat_waiting"). The captured shape (the paper's ablation) keeps them as
+    # they were imported.
+    frame = past_frame(episodes, book) if envelope is not None else None
+    past_steps: Counter[str] = Counter()
     left_out: Counter[str] = Counter()
     scope_cache: dict[tuple[str, bool, bool], str | None] = {}
     candidates: list[Example] = []
@@ -669,10 +777,12 @@ def compile_dataset(
         reason = _scope_reason(episode.conversation_id, historical=episode.historical,
                                goal=episode.source == "goal", store=store, lookup=lookup, settings=settings,
                                cache=scope_cache)
+        if reason is None and episode.historical and envelope is not None and frame is None:
+            reason = "past_chat_waiting"
         if reason is None:
             stats = shape_module.Stats()
             example, reason, changed = _example(episode, book, roots=workspace_roots, envelope=envelope,
-                                                stats=stats)
+                                                stats=stats, frame=frame, past_steps=past_steps)
             if example is not None:
                 candidates.append(example)
                 changes[example.id] = stats
@@ -712,6 +822,8 @@ def compile_dataset(
             "searches_added": sum(item.searches_added for item in rendered),
             "system_rewritten": sum(item.system_changed for item in rendered),
             "state_removed": sum(item.state_removed for item in rendered),
+            # O113: imported tool steps kept as targets, and those that became context only (and why).
+            "past_steps": {key: past_steps[key] for key in ("kept", "tool_not_offered", "arguments_invalid")},
         })
     body = {
         "compiler": COMPILER_VERSION, "recipe": recipe.name, "max_seq_length": max_seq,

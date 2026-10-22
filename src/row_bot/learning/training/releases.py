@@ -201,6 +201,7 @@ _REASONS = {
     "repeated web or tool content", "unsupported_content": "with images or files", "partial": "incomplete records",
     "incomplete": "incomplete records", "no_target": "nothing to learn from", "past_chat_tool_step":
     "past-chat tool steps", "unrenderable": "the model's chat format couldn't hold them",
+    "past_chat_waiting": "past chats waiting for a first chat here that uses tools",
 }
 
 

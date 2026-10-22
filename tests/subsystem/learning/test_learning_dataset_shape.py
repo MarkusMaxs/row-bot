@@ -235,7 +235,7 @@ def test_the_manifest_and_the_release_name_the_rendering_and_count_derived_rows(
     assert manifest["rendering"] == {
         "name": "serving-v1@32768", "version": shape.RENDERING_VERSION, "serve_context": 32_768, "profile": "small",
         "rows": 1, "tools_deferred": 2, "calls_bridged": 1, "searches_added": 1, "system_rewritten": 1,
-        "state_removed": 1}
+        "state_removed": 1, "past_steps": {"kept": 0, "tool_not_offered": 0, "arguments_invalid": 0}}
     assert manifest["derived"] == 1 and manifest["derived_ids"] == [served.train[0].id]
     assert served.data_spec().rendering == "serving-v1@32768"
     # Kept as captured: nothing derived, and the data says so.
@@ -243,6 +243,104 @@ def test_the_manifest_and_the_release_name_the_rendering_and_count_derived_rows(
     assert not captured.train[0].derived and captured.data_spec().rendering == "captured"
     assert captured.id != served.id
     assert captured.train[0].row["tools"] == CLOUD_TOOLS
+
+
+# ── Imported past chats in the serving shape (O113, C3) ─────────────────────
+
+
+def _import(learning_on, clock, chats, *conversations: tuple) -> None:
+    """Past conversations the import reads (the last 30 days), each (thread, tool steps, reply[, question]):
+    the person's message, its steps (a call and its result each) and the reply."""
+
+    import uuid
+
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from row_bot.learning import past_chats
+    from tests.subsystem.learning.test_learning_past_chats import DAY, FakeChats
+
+    source = FakeChats()
+    for thread_id, steps, answer, *question in conversations:
+        saved: list = [HumanMessage(content=(question or ["Add the dentist on Friday at 10"])[0],
+                                    id=f"h-{uuid.uuid4().hex[:6]}")]
+        for index, (name, args, result) in enumerate(steps):
+            call = {"id": f"past_{thread_id}_{index}", "name": name, "args": args}
+            saved += [AIMessage(content="", id=f"a-{uuid.uuid4().hex[:6]}", tool_calls=[call]),
+                      ToolMessage(content=result, tool_call_id=call["id"], name=name, id=f"t-{uuid.uuid4().hex[:6]}")]
+        saved.append(AIMessage(content=answer, id=f"r-{uuid.uuid4().hex[:6]}"))
+        chats.chat(thread_id)
+        source.add(thread_id, clock() - 2 * DAY, saved)
+    past_chats.run_import(store=LearningStore(learning_on, clock=clock), source=source, lookup=chats, clock=clock,
+                          busy=lambda: False, wait=lambda seconds: None)
+
+
+def _past(compiled) -> list:
+    return [item for item in compiled.train if item.historical]
+
+
+def test_an_imported_tool_step_trains_rendered_like_a_live_one(work, learning_on, clock, chats, recipe):
+    # O113: the import keeps each step's call and result but not the prompt or tools; framed with the newest
+    # live Agent request and rendered, a past calendar call becomes the bridge call the served model makes.
+    work.turn("chat-live", "Read my notes", [("workspace_read_file", {"path": "notes.txt"}, "plants")], "Plants.")
+    event = {"title": "Dentist", "date": "2026-10-23", "start": "10:00"}
+    _import(learning_on, clock, chats, ("chat-past", [("calendar_create_event", event, '{"created": "evt_9"}')],
+                                        "Done: the dentist is on Friday at 10."))
+
+    compiled = _compile(learning_on, chats, recipe)
+    [example] = _past(compiled)
+    messages = example.row["messages"]
+
+    assert example.derived and [tool["function"]["name"] for tool in example.row["tools"]] == [
+        "workspace_read_file", "save_memory", "tool_search", "tool_invoke"]
+    assert messages[0]["role"] == "system" and messages[0]["content"].startswith(SMALL_ROOT)
+    targets = [message for message in messages if message["role"] == "assistant" and message["weight"]]
+    assert [_calls(message) for message in targets if message.get("tool_calls")] == [
+        [("tool_search", {"query": "calendar create event"})],
+        [("tool_invoke", {"name": "calendar_create_event", "arguments": event})]]
+    assert targets[-1]["content"] == "Done: the dentist is on Friday at 10."
+    assert compiled.rendering["past_steps"] == {"kept": 1, "tool_not_offered": 0, "arguments_invalid": 0}
+
+
+def test_an_imported_step_whose_tool_isnt_offered_or_whose_arguments_dont_fit_is_context_only(
+        work, learning_on, clock, chats, recipe):
+    work.turn("chat-live", "Read my notes", [("workspace_read_file", {"path": "notes.txt"}, "plants")], "Plants.")
+    _import(learning_on, clock, chats, ("chat-gone", [("old_notes_tool", {"path": "a.txt"}, "a")], "It says a."),
+            ("chat-bad", [("calendar_create_event", {"title": "Dentist", "when": 10}, "{}")], "Added."))
+
+    compiled = _compile(learning_on, chats, recipe)
+
+    assert compiled.rendering["past_steps"] == {"kept": 0, "tool_not_offered": 1, "arguments_invalid": 1}
+    for example in _past(compiled):  # each still teaches its reply, after the step it no longer teaches
+        targets = [message for message in example.row["messages"]
+                   if message["role"] == "assistant" and message["weight"]]
+        assert [message.get("tool_calls") for message in targets] == [None]
+
+
+def test_an_imported_chat_without_tools_trains_as_a_direct_answer(work, learning_on, clock, chats, recipe):
+    work.turn("chat-live", "Read my notes", [("workspace_read_file", {"path": "notes.txt"}, "plants")], "Plants.")
+    _import(learning_on, clock, chats, ("chat-past", [], "Paris is the capital of France.",
+                                        "What's the capital of France?"))
+
+    [example] = _past(_compile(learning_on, chats, recipe))
+    messages = example.row["messages"]
+
+    assert messages[0]["role"] == "system" and [message["role"] for message in messages[1:]] == ["user", "assistant"]
+    assert messages[-1] == {"role": "assistant", "content": "Paris is the capital of France.", "weight": 1}
+
+
+def test_imported_rows_wait_for_a_first_live_turn_with_tools(learning_on, clock, chats, recipe):
+    # Nothing live yet: no prompt or tools to frame them with, so they wait (and say so); the captured shape
+    # (the paper's ablation) keeps them as imported.
+    _import(learning_on, clock, chats, ("chat-past", [("calendar_create_event", {"title": "x"}, "{}")], "Added."),
+            ("chat-chat", [], "Paris.", "Capital of France?"))
+
+    served = _compile(learning_on, chats, recipe)
+    captured = _compile(learning_on, chats, recipe, shape="captured")
+
+    assert served.examples == 0 and served.left_out == {"past_chat_waiting": 2}
+    assert len(captured.train) == 2 and all(item.historical and not item.derived for item in captured.train)
+    for example in captured.train:  # as imported: only the reply trains, its steps are context
+        assert not any(message.get("tool_calls") and message.get("weight") for message in example.row["messages"])
 
 
 def test_a_row_already_in_the_serving_shape_is_left_as_it_is():
