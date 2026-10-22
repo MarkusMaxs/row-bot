@@ -61,6 +61,8 @@ STAGES = ("profile", "past", "days", "checks", "tidy")
 EXTRA_DAYS = 6
 #: The person's monthly Learning limit in these runs (the user's own choice on their preview, PLAN.md).
 MONTHLY_LIMIT = 10_000_000
+#: A training job's states once its training finished (a version is made of it, or was).
+TRAINED = ("evaluating", "ready", "trial", "in_use", "not_used")
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -802,7 +804,9 @@ class PersonRun:
         return {"runner": events[-6:], "checks": len(events)}
 
     def _watch_training(self, job: Any, day: int) -> None:
-        """Wait for a training run; on the first, crash at a checkpoint and pause it by use."""
+        """Wait for a training run to finish; on the first, crash at a checkpoint and pause it by use. A run
+        paused because the person used Row-Bot continues once nobody has used it for a few (simulated)
+        minutes, by the runner's own check."""
 
         supervisor = self.runner().supervisor
         survival = self.state.data["survival"]
@@ -811,10 +815,15 @@ class PersonRun:
         entry = self.state.data["versions"].setdefault(str(version), {"version": version})
         entry.setdefault("trained_after_day", day)
         entry.setdefault("job", job.id)
+        waited_for_use = 0
         while True:
             current = supervisor.jobs.get(job.id)
             if current is None:
                 break
+            if current.state == "paused" and current.pause_reason == "in_use" and waited_for_use < 10:
+                waited_for_use += 1
+                self._continue_after_use()
+                continue
             if current.state not in ("preparing", "running", "pausing", "waiting"):
                 break
             crash = survival.get("crash_mid_training")
@@ -869,7 +878,10 @@ class PersonRun:
             finished = supervisor.jobs.get(job.id)
             crash["final_state"] = finished.state if finished else None
             crash["steps_done"] = finished.steps_done if finished else None
-        crash["state"] = "passed" if crash.get("final_state") == "evaluating" and crash.get("resumes_from") else "failed"
+            crash["steps_total"] = finished.steps_total if finished else None
+        # Passed: it continued from its checkpoint and trained to the end (a version is being made of it).
+        crash["state"] = ("passed" if crash.get("resumes_from") and crash.get("final_state") in TRAINED
+                          and crash.get("steps_done") == crash.get("steps_total") else "failed")
         self.save()
 
     def _pause_on_use(self, job: Any, day: int) -> None:
@@ -891,13 +903,30 @@ class PersonRun:
         check.update({"state_after_use": paused.state if paused else None,
                       "pause_reason": paused.pause_reason if paused else None,
                       "paused_at_step": paused.steps_done if paused else None})
-        self.clock.advance(minutes=6)  # nobody uses Row-Bot for a while
-        status = self.runner().check()
+        status = self._continue_after_use()
         resumed = supervisor.jobs.get(job.id)
-        check.update({"runner_after": f"{status.state}/{status.reason}", "resumed": resumed.state if resumed else None})
+        check.update({"runner_after": f"{status.state}/{status.reason}" if status else None,
+                      "resumed": resumed.state if resumed else None,
+                      "resumed_from_step": resumed.steps_done if resumed else None})
         check["state"] = ("passed" if check["state_after_use"] == "paused" and check["pause_reason"] == "in_use"
-                          and check["resumed"] in ("preparing", "running", "evaluating") else "failed")
+                          and check["resumed"] in ("preparing", "running", *TRAINED) else "failed")
         self.save()
+
+    def _continue_after_use(self) -> Any:
+        """Nobody uses Row-Bot for a while (simulated): once the paused run's worker has ended, the runner's
+        own check continues it. Returns the runner's last status."""
+
+        supervisor = self.runner().supervisor
+        supervisor.wait_idle(120)  # the paused run's worker exits after its checkpoint
+        self.clock.advance(minutes=6)
+        status = None
+        for _ in range(10):
+            status = self.runner().check()
+            job = supervisor.jobs.current() if supervisor.jobs.store.exists() else None
+            if job is None or job.state != "paused" or job.pause_reason != "in_use":
+                break
+            time.sleep(3.0)
+        return status
 
     def _extra_request(self, purpose: str, kind: str | None = None) -> Any:
         """A request from the days after the run (the person's work goes on), not yet asked."""
@@ -925,7 +954,8 @@ class PersonRun:
             entry = self.state.data["versions"].setdefault(str(version), {"version": version})
             state = releases.read_state(version_dir)
             if state is not None:
-                entry.update({"phase": state.phase, "gguf_bytes": state.gguf_bytes, "model_ref": state.model_ref})
+                entry.update({"phase": state.phase, "gguf_bytes": state.gguf_bytes, "model_ref": state.model_ref,
+                              "failure": state.failure})
             result = model_compare.read_comparison(version, self.data)
             if result is None or entry.get("reviewed"):
                 continue

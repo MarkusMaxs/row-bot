@@ -230,6 +230,12 @@ def _number(value: float, decimals: int) -> str:
     return f"{value:.{decimals}f}"
 
 
+def _calculated(value: float) -> str:
+    """A result as Row-Bot's calculator prints it (no trailing ``.0`` on a whole number)."""
+
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
 def _pick_range(rng: random.Random, spec: list[float]) -> float:
     low, high, step = (float(item) for item in spec)
     count = int(round((high - low) / step)) + 1
@@ -718,12 +724,16 @@ class Builder:
         if answer == decoy:
             return None
         shown = {name: _say(values[name]) for name in names}
+        # The main model works sums out with the calculator (as it does live), so the past does too.
+        expression = re.sub(r"\b[a-c]\b", lambda found: shown[found.group()], spec["answer"]).replace("*", " * ")
         return {
             "prompt": spec["phrasing"].format(**shown),
             "intent": f"The number {answer}" + (f" (rounded to {decimals} decimals)." if decimals > 0 else "."),
             "verifier": Verifier("answer", float(answer), "number", tolerance=0.5 * 10 ** -max(decimals, 0)),
             "reference": Solution(answer=answer), "decoy": Solution(answer=decoy),
             "inputs": {}, "tools": ("files",), "answer": f"That comes to {answer}.",
+            "steps": (ToolStep("calculate", {"expression": expression},
+                               f"{expression} = {_calculated(evaluate(spec['answer'], values))}"),),
         }
 
     def _t_move_file(self, day: int) -> dict[str, Any] | None:

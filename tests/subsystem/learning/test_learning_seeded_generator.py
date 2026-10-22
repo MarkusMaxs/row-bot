@@ -127,7 +127,7 @@ def test_the_past_is_thirty_days_of_well_formed_conversations(histories):
         person = generator.load_person(history.person["id"])
         tool_names = {"workspace_read_file", "workspace_write_file", "workspace_move_file",
                       "calendar_create_event", "mail_send", "mail_archive", "mail_list", "issues_update",
-                      "issues_comment"}
+                      "issues_comment", "calculate"}
         mistakes = 0
         for conversation in history.past:
             assert 1 <= len(conversation.requests) <= 3

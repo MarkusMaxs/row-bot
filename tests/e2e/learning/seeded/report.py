@@ -194,7 +194,8 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
         "days": result.get("days"), "history": result.get("history"), "model": result.get("model"),
         "stages": result.get("stages"), "past": result.get("past"), "live": live_work(result.get("requests") or ()),
         "versions": [{key: item.get(key) for key in ("version", "trained_after_day", "state", "steps", "loss",
-                                                     "training_seconds", "phase", "gguf_bytes", "compared_on_day")}
+                                                     "training_seconds", "phase", "failure", "gguf_bytes",
+                                                     "compared_on_day")}
                      | {"verdict": ((item.get("comparison") or {}).get("overall") or {}).get("verdict"),
                         "line": ((item.get("comparison") or {}).get("overall") or {}).get("line")}
                      for item in versions],
@@ -355,7 +356,9 @@ def markdown(report: Mapping[str, Any]) -> str:
                      f"as partial ({(past.get('import') or {}).get('state', '–')}).")
         for version in person["versions"]:
             lines.append(f"- v{version['version']}: trained after day {version.get('trained_after_day')}, "
-                         f"{version.get('steps')} steps, {version.get('phase')}; comparison: {version.get('line') or '–'}")
+                         f"{version.get('steps')} steps, {version.get('phase')}"
+                         + (f" ({version['failure']})" if version.get("failure") else "")
+                         + f"; comparison: {version.get('line') or '–'}")
         models = person.get("models") or {}
         if models:
             lines += ["", "| | Starting model | Personal model | Main model |", "|---|---|---|---|"]
