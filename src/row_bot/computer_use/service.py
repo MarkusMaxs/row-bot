@@ -51,7 +51,8 @@ _SHELL_PROCESSES = frozenset({
     "textinputhost", "shellexperiencehost", "startmenuexperiencehost", "searchhost", "searchapp", "lockapp",
     "dwm", "systemsettingsbroker", "widgets", "gamebar",
 })
-_FRAME_HOSTS = frozenset({"applicationframehost"})
+# Processes that host other apps' windows (Store apps, Python apps): their windows go by their titles.
+_FRAME_HOSTS = frozenset({"applicationframehost", "python", "pythonw"})
 _DONE = {"click": "Clicked", "double_click": "Double-clicked", "right_click": "Right-clicked"}
 
 
@@ -290,7 +291,7 @@ class ComputerUseService:
         with self._lock:
             session.asking = True
         app = session.window.app if session.window else "the app"
-        self._set_state(session, "paused", "Row-Bot paused · Carry on in Row-Bot, or Stop")
+        self._set_state(session, "paused", "Row-Bot paused · Carry on in the chat")
         return app
 
     def carry_on(self) -> Shot:
@@ -304,7 +305,7 @@ class ComputerUseService:
         self._set_state(session, "working")
         window = self._require_window(session)
         with self._acting:
-            self._front(session, window)
+            self._front(session, window, strict=False)
             shot = self._capture(session)
         self._arm(session)
         return shot
@@ -404,7 +405,7 @@ class ComputerUseService:
                 continue
             app = self._names.get(pid) or re.sub(r"\.(?:exe|app)$", "", process, flags=re.IGNORECASE) or title
             if _key(app) in _FRAME_HOSTS or _key(process) in _FRAME_HOSTS:
-                app = title  # A Store app's window (Calculator, Settings) is named by its title.
+                app = title  # A Store or Python app's window (Calculator, Settings) goes by its title.
             if policy.own_window(app, title) or policy.own_window(process, title):
                 continue
             found.append(Window(pid, window_id, app[:80], title, box, minimized, front))
@@ -516,7 +517,7 @@ class ComputerUseService:
         with self._lock:
             session.mark = mark
         if waits:
-            self._set_state(session, "waiting_approval", "Row-Bot is waiting for your OK in Row-Bot")
+            self._set_state(session, "waiting_approval", "Row-Bot is waiting for your OK in the chat")
         try:
             refusal, line = approval_check(payload, risks=risks, blocked_message=blocked_message,
                                            cancelled_message=cancelled_message)
@@ -601,13 +602,20 @@ class ComputerUseService:
             self._revision += 1
         self._bar(session).show(f"Row-Bot is using {window.app}", window.bounds)
         with self._acting:
-            self._front(session, window)
+            self._front(session, window, strict=False)
             shot = self._capture(session)
         self._arm(session)
         return shot
 
-    def _front(self, session: _Session, window: Window) -> None:
+    def _front(self, session: _Session, window: Window, *, strict: bool = True) -> None:
+        """Bring the window to the front. Not *strict* (a picture): Windows keeping another window in front
+        is fine, the picture is of the window itself; input needs it in front."""
+
         response = self._call(session, "bring_to_front", {"pid": window.pid, "window_id": window.window_id})
+        if response.is_error and _refused_foreground(response):
+            if strict:
+                raise _no_foreground(window)
+            return
         if response.is_error:
             self._window_gone(session, window)
 
@@ -757,6 +765,8 @@ class ComputerUseService:
                 response = self._call(session, tool, arguments)
             finally:
                 bar.busy(False)
+            if response.is_error and _refused_foreground(response):
+                raise _no_foreground(window)
             if response.is_error:
                 raise ComputerError(f"That didn't go through: {response.text[:200] or 'Cua Driver refused it'}.",
                                     code="driver", fix="Take a screenshot and try again.")
@@ -834,6 +844,19 @@ class ComputerUseService:
     def problem(self, thread_id: str) -> ComputerError | None:
         with self._lock:
             return self._problems.get(thread_id)
+
+
+def _refused_foreground(response: CuaResponse) -> bool:
+    """Windows kept another window in front (a locked screen, or the focus held elsewhere)."""
+
+    return response.error_code == "foreground_unavailable" or "foreground_unavailable" in response.text
+
+
+def _no_foreground(window: Window) -> ComputerError:
+    return ComputerError(f"Windows didn't let Row-Bot bring {window.app} to the front, so nothing was done.",
+                         code="foreground",
+                         fix=f"If the screen is locked, unlock it. Otherwise click {window.app}'s window once, "
+                             "then try again.")
 
 
 def _scroll(value: str) -> tuple[str, int]:

@@ -290,9 +290,9 @@ def _watch_macos(watch: InputWatch, stop: threading.Event) -> None:  # pragma: n
 
 
 def _monitor_area(near: list[float] | None) -> tuple[int, int, int, int, float] | None:
-    """The work area (left, top, right, bottom) and scale of the monitor holding *near* (Windows)."""
+    """The work area (left, top, right, bottom) and scale of the monitor holding *near*, or the main one (Windows)."""
 
-    if sys.platform != "win32" or not near:
+    if sys.platform != "win32":
         return None
     import ctypes
     from ctypes import wintypes
@@ -304,8 +304,8 @@ def _monitor_area(near: list[float] | None) -> tuple[int, int, int, int, float] 
     user32 = ctypes.windll.user32
     user32.MonitorFromPoint.restype = wintypes.HMONITOR
     user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
-    centre = wintypes.POINT(int(near[0] + near[2] / 2), int(near[1] + near[3] / 2))
-    monitor = user32.MonitorFromPoint(centre, 2)  # MONITOR_DEFAULTTONEAREST
+    centre = wintypes.POINT(int(near[0] + near[2] / 2), int(near[1] + near[3] / 2)) if near else wintypes.POINT(0, 0)
+    monitor = user32.MonitorFromPoint(centre, 2 if near else 1)  # nearest, or the main monitor
     info = MonitorInfo()
     info.cbSize = ctypes.sizeof(MonitorInfo)
     if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
@@ -359,22 +359,24 @@ def main() -> None:  # pragma: no cover - the helper process; exercised by the p
         except Exception:
             pass
     family = "Segoe UI" if sys.platform == "win32" else "Helvetica"
-    body = tk.Frame(root, background=_BACKGROUND, padx=14, pady=7)
+    point = root.winfo_fpixels("1p")  # Sizes in points, so the bar is the same size at any display scale.
+    body = tk.Frame(root, background=_BACKGROUND, padx=round(10 * point), pady=round(5 * point))
     body.pack(fill="both", expand=True, padx=1, pady=1)
-    dot = tk.Canvas(body, width=10, height=10, background=_BACKGROUND, highlightthickness=0)
-    dot.create_oval(1, 1, 9, 9, fill=_ACCENT, outline="")
-    dot.pack(side="left", padx=(0, 10))
+    size = round(7 * point)
+    dot = tk.Canvas(body, width=size, height=size, background=_BACKGROUND, highlightthickness=0)
+    dot.create_oval(1, 1, size - 1, size - 1, fill=_ACCENT, outline="")
+    dot.pack(side="left", padx=(0, round(8 * point)))
     words = tk.Label(body, text="Row-Bot is using your computer", background=_BACKGROUND, foreground=_TEXT,
                      font=(family, 10))
     words.pack(side="left")
     tk.Label(body, text="Esc to stop", background=_BACKGROUND, foreground=_MUTED,
-             font=(family, 9)).pack(side="left", padx=(12, 12))
+             font=(family, 9)).pack(side="left", padx=round(10 * point))
 
     def press_stop(_event: Any = None) -> None:
         output({"event": "stop", "by": "button"})
 
     stop = tk.Label(body, text="Stop", background=_STOP_BACKGROUND, foreground=_STOP_TEXT, cursor="hand2",
-                    font=(family, 10, "bold"), padx=14, pady=3)
+                    font=(family, 10, "bold"), padx=round(10 * point), pady=round(2 * point))
     stop.pack(side="left")
     stop.bind("<Button-1>", press_stop)
     stop.bind("<Enter>", lambda _e: stop.configure(background=_STOP_HOVER))
@@ -428,8 +430,11 @@ def main() -> None:  # pragma: no cover - the helper process; exercised by the p
                 if not state["shown"]:
                     style_window()
                     root.deiconify()
+                    root.update_idletasks()
+                    style_window()  # Tk makes the window's frame when it first shows.
+                    place()
                     state["shown"] = True
-                    output({"event": "ready", "pid": os.getpid()})
+                    output({"event": "ready", "pid": os.getpid(), "rect": list(state["rect"])})
             if "busy" in command:
                 watch.busy = bool(command["busy"])
             if command.get("avoid"):

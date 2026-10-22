@@ -68,6 +68,8 @@ class FakeDesktop:
     apps: dict[int, str] = field(default_factory=dict)  # pid → the name list_apps gives it
     launchable: dict[str, Callable[["FakeDesktop"], FakeWindow]] = field(default_factory=dict)
     permission_denied: bool = False
+    # Windows keeps another window in front (a locked screen): no window comes forward, no input is sent.
+    foreground_refused: bool = False
 
     def __post_init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -99,6 +101,9 @@ class FakeDesktop:
         self.calls.append((name, recorded))
         if self.permission_denied and name not in {"start_session", "end_session"}:
             return self._error("permission_denied", "Accessibility permission is missing")
+        if self.foreground_refused and name in {"bring_to_front", "click", "double_click", "right_click", "drag",
+                                                "type_text", "press_key", "hotkey", "scroll"}:
+            return self._error("foreground_unavailable", f"{name}: Windows kept foreground on another window")
         handler = getattr(self, f"_{name}", None)
         if handler is None:
             return self._error("unsupported", f"unknown tool {name}")

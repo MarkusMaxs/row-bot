@@ -240,7 +240,7 @@ def test_the_persons_input_pauses_and_asks_carry_on_and_nothing_is_replayed(turn
     question = card["questions"][0]
     assert question["question"] == "You used the computer while Row-Bot was working in Microsoft Edge. Carry on?"
     assert [option["label"] for option in question["options"]] == ["Carry on", "Stop"]
-    assert bar.shown[-2] == "Row-Bot paused · Carry on in Row-Bot, or Stop"
+    assert bar.shown[-2] == "Row-Bot paused · Carry on in the chat"
     assert len(desktop.inputs) == clicks  # The click it was about to make wasn't made.
     assert answered.startswith("The person used the computer, then said to carry on. Nothing was done")
     # The next action goes on as usual.
@@ -539,6 +539,17 @@ def test_a_closed_window_a_point_off_the_picture_and_another_chat_say_what_to_do
     assert turn.call("click", x=20, y=100) == (
         'Error: The Notepad window ("notes.txt - Notepad") closed.\n'
         "Fix: Call list_apps and choose a window, or open_app.")
+
+
+def test_when_windows_keeps_another_window_in_front_nothing_is_typed_or_clicked_and_it_says_why(turn, desktop):
+    turn.mode = "full"
+    desktop.foreground_refused = True
+
+    assert turn.call("screenshot", app="Notepad").startswith("Took a screenshot.")  # The window's own picture.
+    assert turn.call("click", x=20, y=100) == (
+        "Error: Windows didn't let Row-Bot bring Notepad to the front, so nothing was done.\n"
+        "Fix: If the screen is locked, unlock it. Otherwise click Notepad's window once, then try again.")
+    assert desktop.inputs == [] and desktop.typed == []
 
 
 @pytest.mark.parametrize("surface", ["channel", "workflow", "agent"])
