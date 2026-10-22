@@ -41,7 +41,7 @@ _ACTIONS = frozenset({
 # Advanced and Retrain without it. Every one of them is the person's own choice (D24).
 _USE_ACTIONS = frozenset({"compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now",
                           "undo_use", "export_version", "delete_version", "save_advanced", "reset_advanced",
-                          "retrain_without", "dismiss", "review_version"})
+                          "retrain_without", "dismiss", "review_version", "use_smaller_model"})
 _KIND_ACTIONS = frozenset({"use_version", "keep_version", "keep_not_now", "undo_use"})
 _VERSION_NUMBER_ACTIONS = frozenset({"compare_version", "use_version", "export_version", "delete_version",
                                      "retrain_without", "review_version"})
@@ -1582,7 +1582,7 @@ def _perform(
         summary = _version_action(action, wire["runtime"])
     elif action in _USE_ACTIONS:
         summary = _use_action(action, wire)
-    else:
+    elif action == "delete_data":
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs
 
@@ -1600,6 +1600,9 @@ def _perform(
         except LearningStoreError:
             raise ClientPlatformError("learning_data_busy") from None
         summary = f"Learning data deleted ({_size_words(report.bytes_freed + runs_bytes)})."
+    else:
+        # An action no branch handles is refused: it never falls through to deleting learning data.
+        raise ClientPlatformError("invalid_learning_command")
     return summary, signal
 
 

@@ -52,17 +52,19 @@ def test_an_8_gb_card_trains_with_the_certified_small_model_recipe():
         assert kwargs["creationflags"] == subprocess.CREATE_NO_WINDOW
 
 
-def test_a_larger_card_uses_the_certified_recipe_and_lists_its_own_tiers_as_measured_soon():
+def test_a_larger_card_uses_the_largest_certified_recipe_and_lists_larger_tiers_as_measured_soon():
     check = hardware.detect(
         run=_run("NVIDIA GeForce RTX 3060, 12288, 580.1\nNVIDIA GeForce RTX 5090, 32607, 580.1\n"),
         which=_which(), memory=lambda: ROOMY,
     )
 
+    certified = [tier for tier in hardware.TIERS if tier.certified]
     assert check.state == "gpu"
     assert check.gpu and check.gpu.name == "NVIDIA GeForce RTX 5090" and check.gpu.memory_gb == 32
-    assert check.tier and check.tier.id == "8gb"
-    assert [tier.id for tier in check.larger_tiers] == ["16gb", "24gb", "32gb"]
+    assert check.tier == certified[-1]  # the largest certified tier the card fits
     assert all(not tier.certified and tier.summary.endswith("measured soon.") for tier in check.larger_tiers)
+    assert [tier.id for tier in check.larger_tiers] == [tier.id for tier in hardware.TIERS
+                                                         if not tier.certified and tier.min_memory_mib > check.tier.min_memory_mib]
 
 
 @pytest.mark.parametrize(
@@ -146,7 +148,7 @@ def test_the_check_is_kept_for_the_process_until_asked_again():
         hardware.forget()
 
     assert first.state == again.state == "no_gpu" and len(asked) == 2
-    assert fresh.state == "gpu" and [tier.id for tier in fresh.larger_tiers] == ["16gb"]
+    assert fresh.state == "gpu" and fresh.tier.id == "16gb"  # a 16 GB card's own (certified) tier
 
 
 # ── The computer's memory (O105) ─────────────────────────────────────────────

@@ -3,11 +3,11 @@
   "version": 1,
   "id": "24gb",
   "tier": "24gb",
-  "certified": false,
+  "certified": true,
   "title": "24 GB graphics cards",
   "starting_model": "qwen3.5-9b",
   "method": "lora_sft",
-  "evidence": "Not certified (L2x, RTX 5090 under a 22 GB cap): Qwen3.5 9B as QLoRA at 32K loaded and trained (95% of the card busy) but every run was ended before its result: on Windows each byte a run holds on the card is also charged to the computer's commit (RAM + page file), and the shared computer it ran on had 19-33 GB of commit free. Measure again on a computer with nothing else running or a larger page file.",
+  "evidence": "L2x, measured on an RTX 5090 under a 22,117 MiB cap (90% of 24 GB): Qwen3.5 9B, 4-bit QLoRA at 16K. A real run on 90 rows (23 steps, paused at step 4 and continued): 8.1 s/step, 528 s, 20,018 MiB on the card at its peak (with room PyTorch keeps more than the 16 GB run needed), 29.5 GB of the computer's commit (Windows), gradient norms 0.36-0.73, loss 0.34, no spill (the card had 8.8 GB free). Need: 20,480 MiB free on the card (its peak plus 256 MiB) and 30.5 GB of commit; a card with less free trains the same model with the 16 GB recipe. Exported Q8_0 (9.8 GB) and ready in Row-Bot's own server (probe and a tool turn) in 214 s. 16-bit LoRA also fits at 16K (21,890 MiB in a fit, 12.6 s/step on full 16K rows) but needs about 32 GB of commit.",
   "settings": {
     "max_seq_length": 16384,
     "bits": 4,
@@ -27,8 +27,10 @@
   "min_new_examples": 50,
   "validation_share": 0.1,
   "serve_context": 32768,
-  "quantization": "Q4_K_M",
+  "quantization": "Q8_0",
   "reasoning": "off",
-  "memory_mib": 24576,
-  "system_memory_mib": {}
+  "memory_mib": 20480,
+  "system_memory_mib": {
+    "windows": 31232
+  }
 }

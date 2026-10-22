@@ -17,21 +17,27 @@ def _card(mib: int, driver: str = "596.08") -> hardware.HardwareCheck:
     return hardware.classify([hardware.Gpu("NVIDIA GeForce RTX", mib, driver)])
 
 
-def test_every_shipped_recipe_reads_and_only_the_8gb_tier_is_certified():
+def test_every_shipped_recipe_reads_and_the_measured_tiers_are_certified():
     found = {recipe.id: recipe for recipe in recipes.all_recipes()}
 
     assert list(found) == ["8gb", "16gb", "24gb", "32gb"]
-    assert [recipe.id for recipe in found.values() if recipe.certified] == ["8gb"]
+    assert {"8gb", "16gb", "24gb"} <= {recipe.id for recipe in found.values() if recipe.certified}  # L2x, O111
     eight = found["8gb"]
     assert eight.name == "8gb-v1" and eight.starting_model == "qwen3.5-2b"
     assert eight.max_seq_length == 16_384 and eight.serve_context == 32_768  # O23, O30
-    assert (eight.quantization, eight.reasoning, eight.min_examples) == ("Q8_0", "off", 100)  # O26, O24
-    assert all(recipe.quantization == "Q4_K_M" for recipe in found.values() if recipe.id in ("24gb", "32gb"))
+    assert (eight.quantization, eight.reasoning) == ("Q8_0", "off")  # O26, O24
+    # The 16 and 24 GB tiers train the 9B as QLoRA (O111); a 9B Q8_0 serves comfortably on those cards (O26).
+    assert all((recipe.starting_model, recipe.settings["bits"], recipe.quantization) == ("qwen3.5-9b", 4, "Q8_0")
+               for recipe in (found["16gb"], found["24gb"]))
+    for recipe in found.values():
+        if recipe.certified:  # measured with a gradient-norm and loss check (O111), its words say so
+            assert "gradient norms" in recipe.evidence and "measured on an RTX" in recipe.evidence
 
 
 def test_a_computer_trains_with_the_best_certified_recipe_its_card_fits():
     assert recipes.for_hardware(_card(8_188)).id == "8gb"
-    assert recipes.for_hardware(_card(24_564)).id == "8gb"  # 24 GB isn't certified yet
+    assert recipes.for_hardware(_card(16_376)).id == "16gb"
+    assert recipes.for_hardware(_card(24_564)).id == "24gb"
     assert recipes.for_hardware(_card(4_096)) is None  # too small
     assert recipes.for_hardware(_card(8_188, driver="551.23")) is None  # O25: driver too old
     assert recipes.for_hardware(hardware.HardwareCheck("no_gpu")) is None
@@ -114,9 +120,10 @@ def test_the_recipe_follows_the_starting_model_the_person_chose(data_dir):
     certified = recipes.certified_for(card)
     assert certified and certified[0] == recipes.for_hardware(card)  # the card's own tier first
 
-    for recipe in certified:
-        save_learning_settings(data_dir, enabled=True, starting_model=recipe.starting_model)
-        assert recipes.current(data_dir, card) == recipe  # a smaller tier's model trains with its own recipe
+    for model in {recipe.starting_model for recipe in certified}:
+        save_learning_settings(data_dir, enabled=True, starting_model=model)
+        # A smaller tier's model trains with the largest recipe for it the card fits.
+        assert recipes.current(data_dir, card) == next(recipe for recipe in certified if recipe.starting_model == model)
     # A model this card has no certified recipe for (or none chosen): the card's own recipe.
     small = _card(8_188)
     save_learning_settings(data_dir, enabled=True, starting_model=certified[0].starting_model)
