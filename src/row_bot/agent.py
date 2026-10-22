@@ -1089,6 +1089,9 @@ def _friendly_api_error(exc_str: str, model_name: str | None = None) -> str:
     s = exc_str.lower()
     if _is_transient_stream_disconnect(exc_str):
         return PROVIDER_CUT_MESSAGE
+    if "isn't available with your chatgpt plan" in s:
+        # The ChatGPT transport already says it in plain words (B394).
+        return f"⚠️ {exc_str}"
     if "recursion" in s or "recursion limit" in s:
         return "⚠️ I got stuck in a tool loop and had to stop. Try rephrasing your request or starting a new conversation."
     if "insufficient_quota" in s or "exceeded your current quota" in s:
