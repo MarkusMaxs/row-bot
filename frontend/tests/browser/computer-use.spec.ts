@@ -67,7 +67,8 @@ function activity(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => post(page, '/__n12b_fixture/reset'));
-test.afterEach(async ({ page }) => post(page, '/__n12b_fixture/reset'));
+// Other specs see computer use as it was: not set up (S3's screen recording reply needs that).
+test.afterEach(async ({ page }) => post(page, '/__n12b_fixture/restore'));
 
 test('a turn using Edge asks once, works live in the chat, then asks before paying', async ({
   page,

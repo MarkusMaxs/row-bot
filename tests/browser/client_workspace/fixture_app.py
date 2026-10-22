@@ -325,7 +325,7 @@ from tests.fixtures.fake_desktop import (  # noqa: E402
     FakeWindow as _FakeWindow,
 )
 
-_N12B: dict = {"ready": None, "desktop": None}
+_N12B: dict = {"ready": None, "desktop": None, "before": None}
 _N12B_PENDING: dict[str, dict] = {}
 _N12B_RELEASE: dict[str, threading.Event] = {}
 _original_cu_readiness = _cu_readiness.readiness
@@ -425,6 +425,8 @@ def _n12b_reset() -> None:
     from row_bot.computer_use.client import CuaClient
 
     desktop = _N12bDesktop(windows=[_n12b_edge()], apps={2501: "Microsoft Edge"})
+    if _N12B["before"] is None:  # What other specs see, put back by restore.
+        _N12B["before"] = (_cu_readiness.disclosure_acknowledged(), _original_tool_enabled("computer_use"))
     _cu_readiness.acknowledge_disclosure()  # Computer use is set up on this (fake) desktop.
     if module._SERVICE is not None:
         module._SERVICE.stop()
@@ -447,6 +449,25 @@ def n12b_reset(x_fixture_token: str = Header(default="")) -> dict:
     predecessor._authorize(x_fixture_token)
     _n12b_reset()
     return {"ready": True}
+
+
+@app.post("/__n12b_fixture/restore")
+def n12b_restore(x_fixture_token: str = Header(default="")) -> dict:
+    """Computer use as it was before the N12-B spec: its notice, its switch and no session."""
+    from row_bot.computer_use import service as module
+
+    predecessor._authorize(x_fixture_token)
+    if module._SERVICE is not None:
+        module._SERVICE.stop()
+        module._SERVICE = None
+    if _N12B["before"] is not None:
+        acknowledged, enabled = _N12B["before"]
+        if not acknowledged:
+            _cu_readiness.cancel_disclosure()
+        _tool_registry.set_enabled("computer_use", enabled)
+    _N12B.update(desktop=None, ready=None, before=None)
+    _N12B_PENDING.clear()
+    return {"restored": True}
 
 
 @app.post("/__n12b_fixture/settings")
