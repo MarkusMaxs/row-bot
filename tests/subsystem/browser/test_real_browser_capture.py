@@ -1,5 +1,5 @@
 """Row-Bot's real browser on a local page (F4, F2, N12-A): the conversation's grant opens it and
-another conversation's page can't load it; the pane's live picture streams; phone size,
+another conversation's page can't load it; the pane's live picture streams at the pane's size; phone size,
 screenshots and a recording work end to end. Loopback only; skipped where no browser runtime is
 installed.
 """
@@ -74,6 +74,10 @@ def _open(session, chat: str, url: str) -> str:
     return session.act(chat, "Open", step).text
 
 
+def _inner_width(session, chat: str) -> int:
+    return session._run(lambda: session._chats[chat].active.page.evaluate("innerWidth"))
+
+
 def test_a_granted_local_page_opens_streams_is_captured_at_phone_size_and_recorded(browser, tmp_path):
     from PIL import Image
     import av
@@ -87,15 +91,21 @@ def test_a_granted_local_page_opens_streams_is_captured_at_phone_size_and_record
     # Another conversation's page still can't load it.
     assert _open(session, "other", origin + "/").startswith("BLOCKED:")
 
-    # The pane's live picture: a JPEG stream of the page at the page's CSS size.
+    # The pane's live picture: the page takes the pane's size (420×700 CSS pixels on a 2× screen),
+    # so the site lays out for the pane and each JPEG is the pane's own pixels, shown 1:1.
     frames: list = []
     got = threading.Event()
-    watch = session.watch("chat", kind="pane", width=1280,
+    watch = session.watch("chat", kind="pane", width=420, height=700, scale=2.0,
                           on_frame=lambda frame: (frames.append(frame), len(frames) >= 3 and got.set()))
     assert got.wait(15)
+    picture = Image.open(io.BytesIO(base64.b64decode(frames[-1].data)))
+    assert picture.format == "JPEG" and (frames[-1].css_width, frames[-1].css_height) == (420, 700)
+    assert picture.size == (840, 1400)
+    assert _inner_width(session, "chat") == 420
+    # With no pane showing, the page is a desktop window again.
     watch.close()
-    first = Image.open(io.BytesIO(base64.b64decode(frames[0].data)))
-    assert first.format == "JPEG" and (frames[0].css_width, frames[0].css_height) == (1280, 800)
+    session._run(lambda: session._follow_live("chat"))
+    assert _inner_width(session, "chat") == 1280
 
     assert session.set_viewport("phone", None, "chat").startswith("The page now shows at phone size")
     image, words = session.capture_page("chat")

@@ -27,6 +27,12 @@ class _Engine(BrowserEngine):
         self.played: list[list[dict]] = []
         self.cleared: list[str | None] = []
         self.quit_after_picture = False
+        self.sizes: list[tuple[int, int, float]] = []
+
+    def watch(self, chat_id, **options):
+        watch = super().watch(chat_id, **options)
+        self.sizes.append(self.page_metrics(chat_id))  # The page's size while this pane watches.
+        return watch
 
     def person_action(self, chat_id, action, *, url="", tab=""):
         self.actions.append((chat_id, action, url))
@@ -86,7 +92,7 @@ def test_reading_the_pane_never_starts_the_browser(service, browser):  # noqa: F
     assert not browser.has_active_session()
 
 
-def test_the_live_stream_sends_the_pane_state_and_the_latest_picture(service, browser):  # noqa: F811
+def test_the_live_stream_sends_the_pane_state_and_the_latest_picture_at_the_panes_size(service, browser):  # noqa: F811
     chat = _chat(service)
     engine = _Engine()
     browser._engine = engine
@@ -102,8 +108,12 @@ def test_the_live_stream_sends_the_pane_state_and_the_latest_picture(service, br
     engine.quit_after_picture = True
     with _client(service) as client:
         _, headers = bootstrap(client)
-        response = client.get(f"/api/v1/conversations/{chat}/browser/live", params={"width": 960},
-                              headers=headers)
+        response = client.get(f"/api/v1/conversations/{chat}/browser/live",
+                              params={"width": 420, "height": 700, "scale": 2}, headers=headers)
+        refused = client.get(f"/api/v1/conversations/{chat}/browser/live",
+                             params={"width": 420, "height": 99999}, headers=headers)
+    assert refused.status_code == 422
+    assert engine.sizes == [(420, 700, 2.0)]  # The page lays out at the pane's size.
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     for block in response.text.split("\n\n"):

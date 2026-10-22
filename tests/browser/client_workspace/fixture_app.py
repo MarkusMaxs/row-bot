@@ -216,6 +216,15 @@ def n12_browser(body: dict, x_fixture_token: str = Header(default="")) -> dict:
     return {"ready": True}
 
 
+@app.get("/__n12_fixture/browser/size")
+def n12_browser_size(conversation_id: str, x_fixture_token: str = Header(default="")) -> dict:
+    """The page's size in the engine (the pane's while one shows it), for the spec to picture the page at."""
+    predecessor._authorize(x_fixture_token)
+    engine = _browser_tool.get_session_manager().get_session()
+    width, height, scale = engine.page_metrics(conversation_id)
+    return {"width": width, "height": height, "scale": scale}
+
+
 @app.get("/__n12_fixture/site/{page}")
 def n12_site(page: str):
     """A still page of the task suite's fixture service, for the spec to picture."""

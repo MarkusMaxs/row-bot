@@ -11,6 +11,7 @@ import type { ClientController } from '../../api/controller';
 import type {
   BrowserFrame,
   BrowserInputEvent,
+  BrowserLiveSize,
   BrowserPaneState,
 } from '../../api/types';
 import type { ClientPlatform } from '../../platform';
@@ -51,6 +52,7 @@ const FRAME: BrowserFrame = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function setup(
@@ -74,7 +76,7 @@ function setup(
     browserLive: vi.fn(async function* (
       _conversation: string,
       _view: string,
-      _width: number,
+      _size: BrowserLiveSize,
       signal: AbortSignal,
     ) {
       if (state) yield { state: { ...PAGE, ...state } };
@@ -93,6 +95,7 @@ function setup(
     browserAction: ReturnType<typeof vi.fn>;
     browserInput: ReturnType<typeof vi.fn>;
     intent: ReturnType<typeof vi.fn>;
+    browserLive: ReturnType<typeof vi.fn>;
   };
   const platform = {
     managedWindow: vi.fn(async () => ({ status: 'ok' })),
@@ -130,6 +133,52 @@ it('shows the live page with the address, and plain words for what Row-Bot is do
   expect(controller.browserAction).toHaveBeenCalledWith('conversation-a', {
     action: 'take_control',
   });
+});
+
+it('gives the page the pane’s size, and the new size once a resize settles', async () => {
+  let resized: ResizeObserverCallback = () => {};
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        resized = callback;
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
+  let area = { width: 420, height: 700 };
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+    function (this: HTMLElement) {
+      return (
+        this.classList.contains('browser-viewport')
+          ? { ...area, top: 0, left: 0, right: area.width, bottom: area.height }
+          : { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }
+      ) as DOMRect;
+    },
+  );
+  vi.stubGlobal('devicePixelRatio', 2);
+  const { controller } = setup({});
+  await screen.findByRole('img', { name: 'Live page: Make a claim' });
+  // Measured before it first connects: one connection, at the pane's size.
+  expect(controller.browserLive).toHaveBeenCalledTimes(1);
+  expect(controller.browserLive.mock.calls[0][2]).toEqual({
+    width: 420,
+    height: 700,
+    scale: 2,
+  });
+  // Docked → phone (or a drag): the page follows once the size settles.
+  area = { width: 390, height: 780 };
+  act(() => resized([], {} as ResizeObserver));
+  await waitFor(() =>
+    expect(controller.browserLive).toHaveBeenLastCalledWith(
+      'conversation-a',
+      'pane',
+      { width: 390, height: 780, scale: 2 },
+      expect.any(AbortSignal),
+    ),
+  );
+  expect(controller.browserLive).toHaveBeenCalledTimes(2);
 });
 
 it('says plainly that the person signs in, with one primary action', async () => {
@@ -287,7 +336,7 @@ it('the chat’s live step names the site and opens the pane', async () => {
     browserLive: async function* (
       _c: string,
       _v: string,
-      _w: number,
+      _s: BrowserLiveSize,
       signal: AbortSignal,
     ) {
       yield { state: { ...PAGE, acting: 'Typing into textbox "Details"' } };

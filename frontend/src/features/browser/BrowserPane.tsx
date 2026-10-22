@@ -38,10 +38,10 @@ import { BrowserSites } from './BrowserSites';
 import {
   BUTTONS,
   createInputQueue,
-  liveWidth,
   pageKey,
   pagePoint,
   useBrowserLive,
+  usePaneSize,
   type LiveFrame,
 } from './live';
 
@@ -101,25 +101,15 @@ export default function BrowserPane({
   const picture = useRef<HTMLImageElement>(null);
   const keys = useRef<HTMLTextAreaElement>(null);
   const takeControlButton = useRef<HTMLButtonElement>(null);
-  const [width, setWidth] = useState(1280);
-  useEffect(() => {
-    const element = viewport.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(([entry]) => {
-      const next = liveWidth(
-        entry?.contentRect.width ?? 0,
-        window.devicePixelRatio,
-      );
-      setWidth((current) => (current === next ? current : next));
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+  // The page lays out at the pane's size, so the site is legible and the picture is 1:1.
+  const size = usePaneSize(viewport);
   const { state, frame, connection } = useBrowserLive({
     conversationId,
     view: 'pane',
-    width,
-    enabled: visible,
+    width: size?.width ?? 1280,
+    height: size?.height,
+    scale: size?.scale,
+    enabled: visible && size !== null,
   });
   const generation = useClientSelector((value) =>
     value.conversation?.id === conversationId

@@ -17,7 +17,7 @@ const open = vi.fn();
 const browserLive = vi.fn(async function* (
   _conversation: string,
   _view: string,
-  _width: number,
+  _size: unknown,
   signal: AbortSignal,
 ) {
   yield {

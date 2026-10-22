@@ -1,5 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
-import type { BrowserInputEvent, BrowserPaneState } from '../../api/types';
+import {
+  type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import type {
+  BrowserInputEvent,
+  BrowserLiveSize,
+  BrowserPaneState,
+} from '../../api/types';
 import { useRuntime } from '../../runtime';
 
 /**
@@ -21,21 +31,75 @@ function pageVisible() {
   );
 }
 
-/** Pictures come at the pane's width (in device pixels), in steps so a resize doesn't reconnect. */
-export function liveWidth(cssWidth: number, ratio = 1) {
-  const pixels = Math.max(160, Math.round(cssWidth * Math.min(2, ratio || 1)));
-  return Math.min(1600, Math.ceil(pixels / 320) * 320);
+/**
+ * The page follows the pane: its page area in whole CSS pixels and the
+ * screen's pixel ratio (up to 2×). A pane that isn't laid out (hidden, or
+ * no layout at all) has no size to give, so the page stays a desktop window.
+ */
+export function paneSize(
+  rect: { width: number; height: number },
+  ratio = 1,
+): BrowserLiveSize {
+  const width = Math.round(rect.width);
+  const height = Math.round(rect.height);
+  if (width < 1 || height < 1) return { width: 1280 };
+  const scale = Math.min(2, Math.max(1, Math.round((ratio || 1) * 100) / 100));
+  return { width, height, scale };
+}
+
+const sameSize = (a: BrowserLiveSize | null, b: BrowserLiveSize) =>
+  a?.width === b.width && a.height === b.height && a.scale === b.scale;
+
+/**
+ * The pane's size, measured before it first connects and again after each
+ * resize settles (docked, phone or its own window), so the page re-lays out
+ * once per resize rather than on every frame of a drag.
+ */
+export function usePaneSize(
+  element: RefObject<HTMLElement | null>,
+  settle = 250,
+) {
+  const [size, setSize] = useState<BrowserLiveSize | null>(null);
+  useLayoutEffect(() => {
+    const node = element.current;
+    if (!node) return;
+    const measure = () => {
+      const next = paneSize(
+        node.getBoundingClientRect(),
+        window.devicePixelRatio,
+      );
+      setSize((current) => (sameSize(current, next) ? current : next));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(measure, settle);
+    });
+    observer.observe(node);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [element, settle]);
+  return size;
 }
 
 export function useBrowserLive({
   conversationId,
   view,
   width,
+  height,
+  scale,
   enabled,
 }: {
   conversationId: string;
   view: 'pane' | 'thumb';
+  /** A thumbnail's width; a pane's page area in CSS pixels, with its height and pixel ratio. */
   width: number;
+  height?: number;
+  scale?: number;
   enabled: boolean;
 }) {
   const { controller } = useRuntime();
@@ -60,7 +124,7 @@ export function useBrowserLive({
           for await (const item of controller.browserLive(
             conversationId,
             view,
-            width,
+            { width, height, scale },
             abort.signal,
           )) {
             attempt = 0;
@@ -94,7 +158,7 @@ export function useBrowserLive({
       }
     })();
     return () => abort.abort();
-  }, [controller, conversationId, view, width, watching]);
+  }, [controller, conversationId, view, width, height, scale, watching]);
   // A different conversation never shows the last one's page.
   const shown = useRef(conversationId);
   useEffect(() => {

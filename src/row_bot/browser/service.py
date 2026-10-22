@@ -75,6 +75,13 @@ MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024
 # The live picture: the pane's size is honoured up to this, a thumbnail is small.
 MAX_PANE_WIDTH = 1600
 THUMB_WIDTH = 480
+# The page follows the Browser pane's size (CSS pixels and device scale), so sites lay out
+# for it and the picture shows 1:1. Narrower than this, the page keeps this width and the
+# picture scales down; with no pane showing, the page is an ordinary desktop window.
+MIN_PANE_CSS_WIDTH = 360
+DESKTOP_METRICS = (1280, 800, 1.0)
+# A pane that reconnects at a new size (a resize) doesn't flash the desktop layout in between.
+PANE_GONE_GRACE_SECONDS = 1.0
 ACTION_TIMEOUT_MS = 8_000
 NAVIGATION_TIMEOUT_MS = 30_000
 MAX_EXTRACT_CHARS = 20_000
@@ -236,7 +243,8 @@ class _Tab:
     page: Any
     refs: RefMap = field(default_factory=RefMap)
     session: Any = None  # Row-Bot's own CDP session: the guard, history and pictures.
-    viewport: tuple[str, float] | None = None
+    viewport: tuple[str, float] | None = None  # A size the agent chose (browser_viewport) wins over the pane.
+    fitted: tuple[int, int, float] | None = None  # The size (CSS width, height, scale) the page has now.
     crashed: bool = False
 
 
@@ -264,6 +272,8 @@ class _Viewer:
     loop: asyncio.AbstractEventLoop | None = None
     event: asyncio.Event | None = None
     on_frame: Callable[[Frame], None] | None = None
+    # The pane's own size (CSS width, height, device pixel ratio): the page follows it.
+    fit: tuple[int, int, float] | None = None
 
 
 @dataclass
@@ -271,7 +281,7 @@ class _Live:
     viewers: set[int] = field(default_factory=set)
     page: Any = None
     session: Any = None
-    params: tuple[int, int] = (0, 0)
+    params: tuple[int, int, int] = (0, 0, 0)
     frame: Frame | None = None
     seq: int = 0
 
@@ -338,6 +348,7 @@ class BrowserEngine:
         self._chats: dict[str, _Chat] = {}
         self._owners: dict[Any, str] = {}
         self._live: dict[str, _Live] = {}
+        self._follow_locks: dict[str, asyncio.Lock] = {}  # One size-and-screencast change at a time per chat.
         self._viewers: dict[int, _Viewer] = {}
         self._viewer_seq = 0
         self._revision = 0
@@ -363,6 +374,7 @@ class BrowserEngine:
                 asyncio.set_event_loop(loop)
                 self._loop = loop
                 self._start_lock = asyncio.Lock()
+                self._follow_locks = {}
                 ready.set()
                 try:
                     loop.run_forever()
@@ -498,6 +510,9 @@ class BrowserEngine:
             "ignore_default_args": ["--enable-automation"],
             "args": [
                 "--disable-blink-features=AutomationControlled",
+                # Room for a sharp picture on a high-density screen: each page still renders at the
+                # scale Row-Bot gives it (the pane's, or 1× with no pane), up to 2×.
+                "--force-device-scale-factor=2",
                 "--disable-domain-reliability",
                 "--disable-sync",
                 "--no-pings",
@@ -581,7 +596,7 @@ class BrowserEngine:
         for live in self._live.values():
             live.page = None
             live.session = None
-            live.params = (0, 0)
+            live.params = (0, 0, 0)
 
     async def _shutdown_context(self) -> None:
         self._closing = True
@@ -989,12 +1004,20 @@ class BrowserEngine:
     # ---- The live picture -----------------------------------------------------------
 
     def watch(self, chat_id: str, *, kind: str, width: int, loop: asyncio.AbstractEventLoop | None = None,
-              on_frame: Callable[[Frame], None] | None = None) -> Watch:
-        """Follow a conversation's live page. Passive: it never starts the browser."""
+              on_frame: Callable[[Frame], None] | None = None, height: int = 0, scale: float = 1.0) -> Watch:
+        """Follow a conversation's live page. Passive: it never starts the browser.
+
+        A pane gives its own size (*width* × *height* CSS pixels at *scale*): while it
+        shows, the page lays out at that size and the picture is 1:1.
+        """
 
         event = asyncio.Event() if loop is not None else None
-        viewer = _Viewer(str(chat_id), kind, max(160, min(int(width or THUMB_WIDTH), MAX_PANE_WIDTH)), loop, event,
-                         on_frame)
+        fit = None
+        if kind == "pane" and height:
+            fit = (max(160, min(int(width), 4000)), max(160, min(int(height), 4000)),
+                   max(1.0, min(float(scale or 1.0), 3.0)))
+        pixels = round(fit[0] * fit[2]) if fit else int(width or THUMB_WIDTH)
+        viewer = _Viewer(str(chat_id), kind, max(160, min(pixels, MAX_PANE_WIDTH)), loop, event, on_frame, fit)
         with self._lock:
             self._viewer_seq += 1
             key = self._viewer_seq
@@ -1015,27 +1038,88 @@ class BrowserEngine:
             if live is not None:
                 live.viewers.discard(watch.key)
         if self.running:
-            self._soon(self._follow_live(viewer.chat))
+            self._soon(self._follow_live(viewer.chat, after=PANE_GONE_GRACE_SECONDS if viewer.fit else 0.0))
 
     def latest_frame(self, chat_id: str) -> Frame | None:
         live = self._live.get(str(chat_id))
         return live.frame if live else None
 
-    async def _follow_live(self, chat_id: str) -> None:
-        """Run the screencast on the conversation's active tab while someone watches; stop it otherwise."""
+    def _pane_fit(self, chat_id: str) -> tuple[int, int, float] | None:
+        """The newest pane's size for a conversation (None: no pane shows it)."""
 
+        with self._lock:
+            panes = [(key, viewer.fit) for key, viewer in self._viewers.items()
+                     if viewer.chat == chat_id and viewer.fit is not None]
+        return max(panes)[1] if panes else None
+
+    def page_metrics(self, chat_id: str) -> tuple[int, int, float]:
+        """The page size for a conversation: its pane's (CSS width, height, scale), else a desktop window."""
+
+        fit = self._pane_fit(chat_id)
+        if fit is None:
+            return DESKTOP_METRICS
+        width, height, scale = fit
+        if width < MIN_PANE_CSS_WIDTH:
+            # Too narrow to lay out a site: keep a phone's width and let the picture scale down.
+            height = round(height * MIN_PANE_CSS_WIDTH / width)
+            width = MIN_PANE_CSS_WIDTH
+        height = max(240, min(height, 2400))
+        scale = max(1.0, min(scale, 2.0, MAX_PANE_WIDTH / width))
+        return width, height, round(scale, 2)
+
+    async def _fit(self, chat: _Chat) -> None:
+        """Give the active tab the size the person sees it at (or a desktop window when nobody does)."""
+
+        tab = chat.active
+        if tab is None or tab.viewport is not None or self._context is None:
+            return
+        wanted = self.page_metrics(chat.id)
+        if tab.fitted == wanted:
+            return
+        try:
+            tab.session = tab.session or await self._context.new_cdp_session(tab.page)
+            width, height, scale = wanted
+            await tab.session.send("Emulation.setDeviceMetricsOverride", {
+                "width": width, "height": height, "deviceScaleFactor": scale, "mobile": False})
+        except Exception:
+            logger.debug("The page could not take the pane's size", exc_info=True)
+            return
+        if tab.fitted is not None and tab.fitted[0] != wanted[0]:
+            where = "the Browser pane's size" if wanted != DESKTOP_METRICS else "a desktop window's size"
+            chat.notes.append(f"The page is now {wanted[0]}×{wanted[1]}, {where}; its layout may have changed.")
+        tab.fitted = wanted
+
+    async def _follow_live(self, chat_id: str, after: float = 0.0) -> None:
+        """Size the active tab for whoever watches, and run its screencast while someone does."""
+
+        if after:
+            await asyncio.sleep(after)
+        # Calls overlap (a pane reconnecting while a tab opens): one at a time, so one screencast runs.
+        async with self._follow_locks.setdefault(chat_id, asyncio.Lock()):
+            await self._follow(chat_id)
+
+    async def _follow(self, chat_id: str) -> None:
+        chat = self._chats.get(chat_id)
+        if chat is not None and self._context is not None:
+            await self._fit(chat)
         live = self._live.get(chat_id)
         if live is None:
             return
-        chat = self._chats.get(chat_id)
         viewers = [self._viewers[key] for key in list(live.viewers) if key in self._viewers]
         page = chat.active.page if chat and chat.active and self._context is not None else None
         if not viewers or page is None:
             await self._stop_screencast(live)
             return
-        width = max(viewer.width for viewer in viewers)
         quality = 70 if any(v.kind != "thumb" for v in viewers) else 55
-        params = (width, quality)
+        if any(viewer.fit is not None for viewer in viewers) and chat.active.fitted is not None:
+            # 1:1 with the pane: the page's own pixels, at most the cap.
+            css_width, css_height, scale = chat.active.fitted
+            width = min(MAX_PANE_WIDTH, round(css_width * scale))
+            height = round(css_height * width / css_width)
+        else:
+            width = max(viewer.width for viewer in viewers)
+            height = max(160, width * 3 // 4)
+        params = (width, height, quality)
         if live.page is page and live.params == params and live.session is not None:
             return
         await self._stop_screencast(live)
@@ -1043,7 +1127,7 @@ class BrowserEngine:
             session = await self._context.new_cdp_session(page)
             session.on("Page.screencastFrame", lambda event: self._on_frame(chat_id, live, session, event))
             await session.send("Page.startScreencast", {
-                "format": "jpeg", "quality": quality, "maxWidth": width, "maxHeight": max(160, width * 3 // 4),
+                "format": "jpeg", "quality": quality, "maxWidth": width, "maxHeight": height,
                 "everyNthFrame": 1,
             })
         except Exception:
@@ -1052,7 +1136,7 @@ class BrowserEngine:
         live.page, live.session, live.params = page, session, params
 
     async def _stop_screencast(self, live: _Live) -> None:
-        session, live.session, live.page, live.params = live.session, None, None, (0, 0)
+        session, live.session, live.page, live.params = live.session, None, None, (0, 0, 0)
         if session is None:
             return
         try:
@@ -1573,9 +1657,22 @@ class BrowserEngine:
             return None
         tab = chat.active
         try:
-            return self._run(lambda: self._picture(tab, jpeg=True, quality=70), timeout=15.0)
+            picture = self._run(lambda: self._picture(tab, jpeg=True, quality=70), timeout=15.0)
         except Exception:
             return None
+        if picture and tab.fitted and tab.fitted[2] > 1:
+            import io
+
+            from PIL import Image
+
+            image = Image.open(io.BytesIO(picture))
+            css_width = tab.fitted[0]
+            if image.width > css_width:
+                image = image.convert("RGB").resize((css_width, round(image.height * css_width / image.width)))
+                output = io.BytesIO()
+                image.save(output, format="JPEG", quality=75)
+                picture = output.getvalue()
+        return picture
 
     def capture_page(self, chat_id: str = "default", *, full_page: bool = False) -> tuple[bytes | None, str]:
         """A PNG (JPEG when very large) of this conversation's page, and what it shows in words."""
@@ -1640,15 +1737,20 @@ class BrowserEngine:
             session = tab.session or await self._context.new_cdp_session(tab.page)
             tab.session = session
             if preset == "desktop" and device_scale is None:
-                await session.send("Emulation.clearDeviceMetricsOverride")
+                # Back to the size the person sees it at (or a desktop window).
                 await session.send("Emulation.setTouchEmulationEnabled", {"enabled": False})
-                tab.viewport = None
+                tab.viewport, tab.fitted = None, None
+                await self._fit(self._chat(thread_id))
+                tab.refs.reset()
+                size = tab.fitted or DESKTOP_METRICS
+                where = "desktop size" if size == DESKTOP_METRICS else "the Browser pane's size"
+                return f"The page now shows at {where}: {size[0]}×{size[1]} at {size[2]:g}× scale."
             else:
                 await session.send("Emulation.setDeviceMetricsOverride", {
                     "width": width, "height": height, "deviceScaleFactor": scale, "mobile": touch})
                 await session.send("Emulation.setTouchEmulationEnabled", {"enabled": touch,
                                                                          "maxTouchPoints": 5 if touch else 0})
-                tab.viewport = (preset, scale)
+                tab.viewport, tab.fitted = (preset, scale), None
             tab.refs.reset()
             return (f"The page now shows at {preset} size: {width}×{height} at {scale:g}× scale"
                     + (", as a touch screen." if touch else "."))

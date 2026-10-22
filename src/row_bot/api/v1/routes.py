@@ -2599,10 +2599,17 @@ def create_router(
 
     @router.get("/conversations/{conversation_id}/browser/live")
     async def browser_live(
-        conversation_id: str, request: Request, view: str = "pane", width: int = 1280
+        conversation_id: str,
+        request: Request,
+        view: str = "pane",
+        width: int = 1280,
+        height: int = 0,
+        scale: float = 1.0,
     ) -> StreamingResponse:
         """The pane's state and live picture as server-sent events, while the client watches.
 
+        A pane sends its own size (``width`` × ``height`` CSS pixels at ``scale``): the
+        page lays out at that size while it shows, so the picture fills it 1:1.
         Pictures come at most ``fps`` a second and only the latest is sent, so a
         slow connection gets fewer pictures rather than a growing queue; a slow
         connection also gets them smaller and lighter. A hidden pane closes the
@@ -2610,7 +2617,7 @@ def create_router(
         """
 
         current = await session(request, lane="observation")
-        if view not in {"pane", "thumb"}:
+        if view not in {"pane", "thumb"} or not 0 <= height <= 4000 or not 1.0 <= scale <= 4.0:
             raise ProtocolError("invalid_browser_command", 422)
         validate = await browser_authority(conversation_id, request, current)
         await call(validate)
@@ -2618,7 +2625,12 @@ def create_router(
 
         engine = _manager().get_session()
         watch = engine.watch(
-            conversation_id, kind=view, width=max(160, min(int(width), 1600)), loop=asyncio.get_running_loop()
+            conversation_id,
+            kind=view,
+            width=max(160, min(int(width), 1600)),
+            loop=asyncio.get_running_loop(),
+            height=height if view == "pane" else 0,
+            scale=scale,
         )
         fps = 12.0 if view == "pane" else 2.0
 

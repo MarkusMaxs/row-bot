@@ -321,3 +321,84 @@ def test_signed_in_sites_are_read_from_a_stopped_profile_without_starting_it(chr
 
     assert engine.sites() == [{"site": "homeserve.co.uk", "cookies": 2}, {"site": "github.com", "cookies": 1}]
     assert chromium.launches == []
+
+
+def test_the_page_takes_the_panes_size_so_the_picture_fills_it_1_to_1(chromium, monkeypatch):
+    """Pane size → page viewport → picture size; no pane → a desktop window; too narrow → a phone's width."""
+
+    monkeypatch.setattr(service_module, "PANE_GONE_GRACE_SECONDS", 0.0)
+    engine = chromium.engine()
+    engine.ensure_started()
+    context = chromium.contexts[-1]
+
+    async def open_tab(tab):
+        return tab.id
+
+    engine.act("chat-a", "Open", open_tab, settle=False)
+    tab = engine._chats["chat-a"].active
+
+    def page_size():
+        sent = [params for method, params in tab.session.sent if method == "Emulation.setDeviceMetricsOverride"]
+        return sent[-1] if sent else None
+
+    def picture_size():
+        sent = [params for session in context.sessions for method, params in session.sent
+                if method == "Page.startScreencast"]
+        return (sent[-1]["maxWidth"], sent[-1]["maxHeight"]) if sent else None
+
+    def settle():
+        engine._run(lambda: engine._follow_live("chat-a"))
+
+    desktop = {"width": 1280, "height": 800, "deviceScaleFactor": 1.0, "mobile": False}
+    assert page_size() == desktop  # Nobody watches: an ordinary desktop window.
+
+    pane = engine.watch("chat-a", kind="pane", width=420, height=700, scale=2.0)
+    settle()
+    assert page_size() == {"width": 420, "height": 700, "deviceScaleFactor": 2.0, "mobile": False}
+    assert picture_size() == (840, 1400)  # The pane's own pixels: shown 1:1.
+    assert engine.pane_state("chat-a")["tabs"][0]["id"] == tab.id
+
+    # Resized (a new connection at the new size): the page follows and the agent is told the width changed.
+    wider = engine.watch("chat-a", kind="pane", width=900, height=640, scale=1.0)
+    pane.close()
+    settle()
+    assert page_size() == {"width": 900, "height": 640, "deviceScaleFactor": 1.0, "mobile": False}
+    assert picture_size() == (900, 640)
+    assert any("900×640" in note for note in engine._chats["chat-a"].notes)
+
+    # Narrower than a phone: the page keeps a phone's width and the picture scales down to the pane.
+    narrow = engine.watch("chat-a", kind="pane", width=300, height=500, scale=1.0)
+    wider.close()
+    settle()
+    assert page_size() == {"width": 360, "height": 600, "deviceScaleFactor": 1.0, "mobile": False}
+
+    # A thumbnail doesn't size the page; with the pane gone the page is a desktop window again.
+    thumb = engine.watch("chat-a", kind="thumb", width=480)
+    narrow.close()
+    settle()
+    assert page_size() == desktop
+    thumb.close()
+
+
+def test_a_size_the_agent_chose_wins_over_the_pane_until_it_goes_back_to_desktop(chromium):
+    engine = chromium.engine()
+    engine.ensure_started()
+
+    async def open_tab(tab):
+        return tab.id
+
+    engine.act("chat-a", "Open", open_tab, settle=False)
+    tab = engine._chats["chat-a"].active
+    pane = engine.watch("chat-a", kind="pane", width=500, height=700, scale=1.0)
+    engine._run(lambda: engine._follow_live("chat-a"))
+
+    engine.set_viewport("phone", None, "chat-a")
+    engine._run(lambda: engine._follow_live("chat-a"))
+    sizes = [params for method, params in tab.session.sent if method == "Emulation.setDeviceMetricsOverride"]
+    assert sizes[-1]["width"] == 390  # The pane doesn't undo the agent's phone size.
+
+    words = engine.set_viewport("desktop", None, "chat-a")
+    sizes = [params for method, params in tab.session.sent if method == "Emulation.setDeviceMetricsOverride"]
+    assert sizes[-1] == {"width": 500, "height": 700, "deviceScaleFactor": 1.0, "mobile": False}
+    assert words.startswith("The page now shows at the Browser pane's size: 500×700 at 1× scale.")
+    pane.close()

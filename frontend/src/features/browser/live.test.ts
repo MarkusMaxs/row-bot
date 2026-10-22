@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { BrowserInputEvent } from '../../api/types';
-import { createInputQueue, liveWidth, pageKey, pagePoint } from './live';
+import { createInputQueue, pageKey, pagePoint, paneSize } from './live';
 
 it('maps a point on the shown picture to the page’s CSS pixels, whatever its size', () => {
   const rect = { left: 10, top: 20, width: 320, height: 200 };
@@ -10,11 +10,24 @@ it('maps a point on the shown picture to the page’s CSS pixels, whatever its s
   expect(pagePoint(999, 999, rect, page)).toEqual({ x: 1280, y: 800 });
 });
 
-it('asks for pictures as wide as the pane in device pixels, in steps, within bounds', () => {
-  expect(liveWidth(390, 3)).toBe(960); // A phone: 2× at most, in 320 px steps.
-  expect(liveWidth(600, 1)).toBe(640);
-  expect(liveWidth(1400, 2)).toBe(1600);
-  expect(liveWidth(10, 1)).toBe(320);
+it('gives the page the pane’s area in CSS pixels and the screen’s pixel ratio, up to 2×', () => {
+  expect(paneSize({ width: 419.6, height: 700.2 }, 2)).toEqual({
+    width: 420,
+    height: 700,
+    scale: 2,
+  });
+  expect(paneSize({ width: 390, height: 700 }, 3)).toEqual({
+    width: 390,
+    height: 700,
+    scale: 2,
+  });
+  expect(paneSize({ width: 900, height: 640 }, 1.25)).toEqual({
+    width: 900,
+    height: 640,
+    scale: 1.25,
+  });
+  // Not laid out (hidden): no size to give, so the page stays a desktop window.
+  expect(paneSize({ width: 0, height: 0 }, 2)).toEqual({ width: 1280 });
 });
 
 it('sends only keys a page understands', () => {

@@ -555,8 +555,9 @@ def browser_scroll(direction: str = "down", amount: int = 3, ref: str | None = N
                 locator = await session.locate(tab, ref)
                 await locator.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
                 return f"Scrolled ref {ref} into view."
-            size = tab.page.viewport_size or {"width": 1280, "height": 800}
-            await tab.page.mouse.move(size["width"] / 2, size["height"] / 2)
+            # The page's own size: it follows the Browser pane, so ask the page.
+            width, height = await tab.page.evaluate("() => [innerWidth, innerHeight]")
+            await tab.page.mouse.move(width / 2, height / 2)
             steps = max(1, min(int(amount), 20))
             await tab.page.mouse.wheel(0, (-1 if direction == "up" else 1) * steps * 400)
         except Exception as exc:

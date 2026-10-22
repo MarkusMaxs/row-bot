@@ -12,6 +12,17 @@ export function isCommandReceipt(value: unknown): value is Wire.CommandReceipt {
 
 export type * from '../../../contracts/client-platform/v1/typescript/client';
 
+/**
+ * What a live picture is for: a pane gives its page area in CSS pixels and
+ * the screen's pixel ratio (the page lays out at that size); a thumbnail
+ * gives only the width it shows at.
+ */
+export type BrowserLiveSize = {
+  width: number;
+  height?: number;
+  scale?: number;
+};
+
 /** The one thing a person can do about an error (see `api/errors.ts`). */
 export type ErrorAction =
   | { kind: 'retry' }
@@ -261,11 +272,11 @@ export interface ClientTransport {
     conversation: string,
     signal?: AbortSignal,
   ): Promise<Wire.BrowserPaneState>;
-  /** The pane's state and live picture while it watches. */
+  /** The pane's state and live picture while it watches; a pane's size is the page's size. */
   browserLive?(
     conversation: string,
     view: 'pane' | 'thumb',
-    width: number,
+    size: BrowserLiveSize,
     signal: AbortSignal,
   ): AsyncGenerator<
     { state: Wire.BrowserPaneState } | { frame: Wire.BrowserFrame }

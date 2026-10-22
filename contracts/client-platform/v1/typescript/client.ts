@@ -1601,9 +1601,10 @@ export const clearBrowserSites = (base: string, proof: SessionProof, body: Brows
   jsonRequest(base, '/browser/sites/clear', 'BrowserSitesCleared', proof, 'POST', validateWire('BrowserSitesClear', body), undefined, signal);
 /** The pane's state and live picture while it watches: state frames and JPEG frames, latest only. */
 export async function* observeBrowserLive(base: string, proof: SessionProof, conversation: string,
-  view: 'pane' | 'thumb', width: number, signal?: AbortSignal): AsyncGenerator<{state: BrowserPaneState} | {frame: BrowserFrame}> {
+  view: 'pane' | 'thumb', size: {width: number; height?: number; scale?: number}, signal?: AbortSignal): AsyncGenerator<{state: BrowserPaneState} | {frame: BrowserFrame}> {
   signal?.throwIfAborted();
-  const response = await fetch(`${base}/api/v1/conversations/${id(conversation)}/browser/live` + query({view,width:Math.round(width)}), {
+  const fit = view === 'pane' && size.height ? {height:Math.round(size.height), scale:Math.min(4, Math.max(1, Math.round((size.scale ?? 1) * 100) / 100))} : {};
+  const response = await fetch(`${base}/api/v1/conversations/${id(conversation)}/browser/live` + query({view,width:Math.round(size.width),...fit}), {
     credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
   });
   if (!response.ok) throw validateWire<Problem>('Problem', await response.json());

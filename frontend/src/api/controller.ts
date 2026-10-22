@@ -3195,7 +3195,7 @@ export class ClientController {
   browserLive = (
     conversation: string,
     view: 'pane' | 'thumb',
-    width: number,
+    size: import('./types').BrowserLiveSize,
     signal: AbortSignal,
   ) => {
     if (!this.state.handshake || !this.online || this.disposed)
@@ -3203,7 +3203,7 @@ export class ClientController {
     const stream = this.transport.browserLive?.(
       conversation,
       view,
-      width,
+      size,
       signal,
     );
     if (!stream) throw clientError({ code: 'capability_unavailable' });

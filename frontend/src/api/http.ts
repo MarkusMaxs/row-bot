@@ -105,7 +105,7 @@ export class HttpTransport implements ClientTransport {
   browserLive(
     conversation: string,
     view: 'pane' | 'thumb',
-    width: number,
+    size: { width: number; height?: number; scale?: number },
     signal: AbortSignal,
   ) {
     return wire.observeBrowserLive(
@@ -113,7 +113,7 @@ export class HttpTransport implements ClientTransport {
       this.session(),
       conversation,
       view,
-      width,
+      size,
       signal,
     );
   }

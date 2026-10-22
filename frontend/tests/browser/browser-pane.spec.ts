@@ -7,8 +7,9 @@ import { composer, newConversation, revealContext } from './unified-helpers';
  * N12-A · Row-Bot's browser in the app. The Browser pane, its live stream,
  * the person's controls, the chat's live step, the payment approval and
  * Settings › Browser are real; the page is a picture the spec renders from
- * the task suite's fixture pages and hands the synthetic engine (no Chromium
- * starts in the fixture). Every state at desktop and phone, light and dark.
+ * the task suite's fixture pages, at the size the engine gives the page (the
+ * pane's), and hands the synthetic engine (no Chromium starts in the
+ * fixture). Every state at desktop and phone, light and dark.
  */
 
 const PHONE = { width: 390, height: 844 };
@@ -34,13 +35,22 @@ const RUNNING = {
   ],
 };
 
-/** The fixture page as Row-Bot's browser would show it (a JPEG at its 1280×800 page). */
-async function still(page: Page, name: Still): Promise<string> {
-  const tab = await page.context().newPage();
-  await tab.setViewportSize({ width: 1280, height: 800 });
-  await tab.goto(`/__n12_fixture/site/${name}`);
+type Fit = { width: number; height: number; scale: number };
+const DESKTOP_PAGE: Fit = { width: 1280, height: 800, scale: 1 };
+
+/** The fixture page as Row-Bot's browser shows it: a JPEG of the page at its size and pixel ratio. */
+async function still(page: Page, name: Still, fit: Fit): Promise<string> {
+  const browser = page.context().browser();
+  if (!browser)
+    throw new Error('The spec needs its own browser to picture pages');
+  const context = await browser.newContext({
+    viewport: { width: fit.width, height: fit.height },
+    deviceScaleFactor: fit.scale,
+  });
+  const tab = await context.newPage();
+  await tab.goto(new URL(`/__n12_fixture/site/${name}`, page.url()).href);
   const jpeg = await tab.screenshot({ type: 'jpeg', quality: 75 });
-  await tab.close();
+  await context.close();
   return jpeg.toString('base64');
 }
 
@@ -48,17 +58,88 @@ async function show(
   page: Page,
   conversation: string,
   state: Record<string, unknown>,
-  frame?: string,
+  frame?: { image: string; fit: Fit },
 ) {
   const response = await page.request.post('/__n12_fixture/browser', {
     headers: fixtureHeaders(),
-    data: { conversation_id: conversation, state, frame },
+    data: {
+      conversation_id: conversation,
+      state,
+      frame: frame?.image,
+      width: frame?.fit.width,
+      height: frame?.fit.height,
+    },
   });
   expect(response.ok()).toBe(true);
 }
 
 function pane(page: Page) {
   return page.getByRole('region', { name: 'Browser' });
+}
+
+/** The page's size in the engine: the pane's while a pane shows it. */
+async function pageFit(page: Page, conversation: string): Promise<Fit> {
+  const response = await page.request.get(
+    `/__n12_fixture/browser/size?conversation_id=${encodeURIComponent(conversation)}`,
+    { headers: fixtureHeaders() },
+  );
+  expect(response.ok()).toBe(true);
+  return (await response.json()) as Fit;
+}
+
+/**
+ * Once a resize settles the page has the pane's size (a phone's width at
+ * least: narrower, the picture scales down), and a desktop window's when no
+ * pane shows it.
+ */
+async function settledFit(page: Page, conversation: string): Promise<Fit> {
+  let fit = DESKTOP_PAGE;
+  await expect(async () => {
+    fit = await pageFit(page, conversation);
+    const area = pane(page).locator('.browser-viewport');
+    if (!(await area.isVisible())) {
+      expect(fit).toEqual(DESKTOP_PAGE);
+      return;
+    }
+    const box = await area.boundingBox();
+    const width = Math.round(box?.width ?? 0);
+    const height = Math.round(box?.height ?? 0);
+    expect(fit.width).toBe(Math.max(360, width));
+    expect(fit.height).toBe(
+      width < 360 ? Math.round((height * 360) / width) : height,
+    );
+  }).toPass();
+  return fit;
+}
+
+/** Show the page: the fixture page pictured at the size the engine gives it now. */
+async function paint(
+  page: Page,
+  conversation: string,
+  state: Record<string, unknown>,
+  name: Still,
+) {
+  const fit = await settledFit(page, conversation);
+  await show(page, conversation, state, {
+    image: await still(page, name, fit),
+    fit,
+  });
+}
+
+/** Pane size → page size → picture: the live page fills the pane 1:1. */
+async function expectOneToOne(page: Page, conversation: string) {
+  const fit = await settledFit(page, conversation);
+  const area = await pane(page).locator('.browser-viewport').boundingBox();
+  await expect(async () => {
+    const [natural, shown] = await pane(page)
+      .locator('.browser-picture')
+      .evaluate((img: HTMLImageElement) => [
+        img.naturalWidth,
+        img.getBoundingClientRect().width,
+      ]);
+    expect(natural).toBe(Math.round(fit.width * fit.scale));
+    expect(Math.abs(shown - (area?.width ?? 0))).toBeLessThan(1);
+  }).toPass();
 }
 
 async function openPane(page: Page) {
@@ -109,11 +190,14 @@ async function everywhere(
   info: TestInfo,
   name: string,
   settle: () => Promise<void> = async () => {},
+  repaint: () => Promise<void> = async () => {},
 ) {
   await expect(settle).toPass();
+  await repaint();
   await views(page, info, name);
   await page.setViewportSize(PHONE);
   await expect(settle).toPass();
+  await repaint();
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
 }
@@ -135,8 +219,8 @@ test('the Browser pane in every state, from nothing open to a crash', async ({
   await expect(pane(page)).toContainText("Starting Row-Bot's browser");
   await everywhere(page, info, 'pane-starting', () => paneInView(page));
 
-  const claim = await still(page, 'claim');
-  await show(page, conversation, { ...RUNNING, loading: true }, claim);
+  const loading = { ...RUNNING, loading: true };
+  await paint(page, conversation, loading, 'claim');
   await expect(
     pane(page).getByRole('img', { name: 'Live page: Make a claim · 1 of 5' }),
   ).toBeVisible();
@@ -146,34 +230,49 @@ test('the Browser pane in every state, from nothing open to a crash', async ({
   await expect(
     pane(page).getByRole('button', { name: 'Stop loading' }),
   ).toBeVisible();
-  await everywhere(page, info, 'pane-loading', () => paneInView(page));
-
-  await show(
+  // The page lays out at the docked pane's size and fills it 1:1; so on a phone.
+  await expectOneToOne(page, conversation);
+  await everywhere(
     page,
-    conversation,
-    {
-      ...RUNNING,
-      url: 'https://homecover.example/login',
-      title: 'Sign in',
-      sign_in: 'password',
+    info,
+    'pane-loading',
+    () => paneInView(page),
+    async () => {
+      await paint(page, conversation, loading, 'claim');
+      await expectOneToOne(page, conversation);
     },
-    await still(page, 'sign-in'),
   );
+
+  const signIn = {
+    ...RUNNING,
+    url: 'https://homecover.example/login',
+    title: 'Sign in',
+    sign_in: 'password',
+  };
+  await paint(page, conversation, signIn, 'sign-in');
   await expect(pane(page)).toContainText(
     "Sign in here Row-Bot doesn't type passwords.",
   );
-  await everywhere(page, info, 'pane-sign-in', () => paneInView(page));
+  await everywhere(
+    page,
+    info,
+    'pane-sign-in',
+    () => paneInView(page),
+    () => paint(page, conversation, signIn, 'sign-in'),
+  );
 
   // Signing in: the person takes control, and gives it back when done.
   await pane(page).getByRole('button', { name: 'Sign in' }).click();
   await expect(pane(page)).toContainText('You have control.');
-  await show(
+  const signedIn = { ...RUNNING, sign_in: '' };
+  await paint(page, conversation, signedIn, 'account');
+  await everywhere(
     page,
-    conversation,
-    { ...RUNNING, sign_in: '' },
-    await still(page, 'account'),
+    info,
+    'pane-person-control',
+    () => paneInView(page),
+    () => paint(page, conversation, signedIn, 'account'),
   );
-  await everywhere(page, info, 'pane-person-control', () => paneInView(page));
   await pane(page).getByRole('button', { name: 'Give back' }).click();
   await expect(pane(page)).not.toContainText('You have control.');
 
@@ -194,17 +293,13 @@ test('a turn using the browser shows live in the chat, then asks before paying',
   await composer(page).fill('n12 claim fixture');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 
-  await show(
-    page,
-    conversation,
-    {
-      ...RUNNING,
-      url: 'https://homecover.example/account',
-      title: 'Your cover',
-      acting: 'Clicking link "Make a claim"',
-    },
-    await still(page, 'account'),
-  );
+  const working = {
+    ...RUNNING,
+    url: 'https://homecover.example/account',
+    title: 'Your cover',
+    acting: 'Clicking link "Make a claim"',
+  };
+  await paint(page, conversation, working, 'account');
   const transcript = page.getByRole('log', { name: 'Conversation' });
   const step = transcript.locator('.browser-step');
   await expect(step).toContainText('Using the browser · homecover.example');
@@ -213,13 +308,26 @@ test('a turn using the browser shows live in the chat, then asks before paying',
   await expect(
     pane(page).getByRole('button', { name: 'Take control' }),
   ).toBeVisible();
-  await everywhere(page, info, 'agent-working', async () => {
-    await chatInView(page);
-    await step.scrollIntoViewIfNeeded();
-  });
-  await everywhere(page, info, 'agent-working-pane', () => paneInView(page));
+  // With the pane hidden on a phone the page is a desktop window again: the step shows it so.
+  await everywhere(
+    page,
+    info,
+    'agent-working',
+    async () => {
+      await chatInView(page);
+      await step.scrollIntoViewIfNeeded();
+    },
+    () => paint(page, conversation, working, 'account'),
+  );
+  await everywhere(
+    page,
+    info,
+    'agent-working-pane',
+    () => paneInView(page),
+    () => paint(page, conversation, working, 'account'),
+  );
 
-  await show(
+  await paint(
     page,
     conversation,
     {
@@ -228,7 +336,7 @@ test('a turn using the browser shows live in the chat, then asks before paying',
       title: 'Make a claim · 5 of 5',
       waiting: 'Waiting for your OK in the chat',
     },
-    await still(page, 'checkout'),
+    'checkout',
   );
   const released = await page.request.post('/__n12_fixture/release', {
     headers: fixtureHeaders(),
@@ -277,11 +385,14 @@ test('popped out: only this conversation’s browser, full size', async ({
 }, info) => {
   await page.setViewportSize(DESKTOP);
   const conversation = await newConversation(page);
-  await show(page, conversation, RUNNING, await still(page, 'claim'));
+  await paint(page, conversation, RUNNING, 'claim');
   await page.goto(`/app-v2/browser/${encodeURIComponent(conversation)}`);
   await expect(
     pane(page).getByRole('img', { name: 'Live page: Make a claim · 1 of 5' }),
   ).toBeVisible();
+  // Its own window: the page takes the window's size.
+  await paint(page, conversation, RUNNING, 'claim');
+  await expectOneToOne(page, conversation);
   await expect(pane(page).getByRole('button', { name: 'Pop out' })).toHaveCount(
     0,
   );
