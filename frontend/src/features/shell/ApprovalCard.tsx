@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'react';
 import { Power, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react';
-import type { ApprovalSetup, ApprovalView } from '../../api/types';
+import type {
+  ApprovalAnswer,
+  ApprovalQuestion,
+  ApprovalSetup,
+  ApprovalView,
+} from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
 import { useOverlay } from '../../ui/overlays';
 import { Button, Hint, Kbd, Skeleton } from '../../ui/primitives';
 import { absoluteTime, humanizeToken, relativeTime } from '../../ui/format';
 import FolderSetupCard from './FolderSetupCard';
+import QuestionCard from './QuestionCard';
 import { AppIcon } from '../apps/parts';
-import { WaitingSince } from './InPlaceApproval';
+import { WaitingSince } from './waiting-since';
 import { readPendingApprovalsNow } from './pending-approvals';
 import {
   approvalAction,
@@ -46,6 +52,7 @@ type Hint_ = {
   setup?: ApprovalSetup | null;
   reviewer_reason?: string;
   question?: string;
+  questions?: ApprovalQuestion[];
 };
 
 /** Under Auto: why the reviewer asked the person rather than approving it (quiet, one line). */
@@ -197,6 +204,9 @@ function editableTarget(target: EventTarget | null) {
  * "Turn on Web search?" with Turn on (⌘↵) / Not now, in place of sending
  * the person to Settings. A code folder the work needs is a folder card
  * (B277), answered only once the person has picked the folder.
+ *
+ * Row-Bot's question with options (N4) is a question card instead: answered
+ * or skipped, never approved.
  */
 export default function ApprovalCard({
   id,
@@ -267,10 +277,45 @@ export default function ApprovalCard({
       setBusy(false);
     }
   }
+  /** A question's answers (one per question), or null to skip it. */
+  async function answer(answers: ApprovalAnswer[] | null) {
+    if (!view || busy || resolution) return;
+    setBusy(true);
+    try {
+      await controller.intent(
+        id,
+        'approval.resolve',
+        answers
+          ? { decision: 'approve', nonce: view.nonce, answers }
+          : { decision: 'reject', nonce: view.nonce },
+        view.revision,
+      );
+      setResolution(
+        answers
+          ? 'Answered. Row-Bot goes on with your answer.'
+          : 'Skipped. Row-Bot goes on with its recommendation.',
+      );
+      readPendingApprovalsNow(controller.pendingApprovals);
+      onResolved?.();
+    } catch (cause) {
+      setError(clientError(cause).message);
+      setBusy(false);
+    }
+  }
   const setup = view?.setup ?? hint?.setup ?? null;
-  // A folder card never answers without a picked folder, so no shortcut.
+  const questions = view?.questions?.length
+    ? view.questions
+    : (hint?.questions ?? []);
+  // A folder card never answers without a picked folder, and a question is
+  // never approved, so neither takes the shortcut.
   const folderCard = setup?.kind === 'folder' || setup?.kind === 'clone';
-  const ready = Boolean(view) && !busy && !resolution && !notice && !folderCard;
+  const ready =
+    Boolean(view) &&
+    !busy &&
+    !resolution &&
+    !notice &&
+    !folderCard &&
+    !questions.length;
   useEffect(() => {
     if (!ready) return;
     const key = (event: KeyboardEvent) => {
@@ -308,6 +353,17 @@ export default function ApprovalCard({
         <ShieldCheck aria-hidden />
         This request was answered.
       </p>
+    );
+  if (questions.length)
+    return (
+      <QuestionCard
+        questions={questions}
+        ready={Boolean(view) && !busy && !resolution}
+        resolution={resolution}
+        error={error}
+        notice={notice}
+        onSubmit={answer}
+      />
     );
   if (setup && (setup.kind === 'folder' || setup.kind === 'clone'))
     return (

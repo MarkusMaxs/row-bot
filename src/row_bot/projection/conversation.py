@@ -53,6 +53,9 @@ class _Conversation:
     checkpoint_revision: str = ""
     generation: dict | None = None
     live_rows: dict[str, dict] = field(default_factory=dict)
+    # Live rows dropped to stay within the content bound while their turn still runs: reads recreate these
+    # from their live text (``ClientPlatformService.snapshot``), and only these.
+    evicted_live: set[str] = field(default_factory=set)
     events: deque = field(default_factory=deque)
     event_bytes: int = 0
     content_bytes: int = 0
@@ -125,6 +128,7 @@ class ConversationProjection:
                     continue
                 content_size -= state.content_bytes
                 state.rows.clear()
+                state.evicted_live.update(state.live_rows)
                 state.live_rows.clear()
                 state.content_bytes = 0
                 state.checkpoint_revision = ""
@@ -270,6 +274,12 @@ class ConversationProjection:
                                   "checkpoint_revision": state.checkpoint_revision,
                                   "rows": [*state.rows, *state.live_rows.values()], "generation": state.generation})
 
+    def evicted_live_rows(self, conversation_id: str) -> set[str]:
+        """The live rows dropped to stay within the content bound that a read should recreate."""
+        with self._lock:
+            state = self._states.get(conversation_id)
+            return set(state.evicted_live) if state else set()
+
     def settle_live(self, conversation_id: str, row_id: str, *, adopted: bool) -> None:
         with self._lock:
             state = self._states.setdefault(conversation_id, _Conversation())
@@ -304,6 +314,7 @@ class ConversationProjection:
 
     def _settle_live_locked(self, state: _Conversation, conversation_id: str, row_id: str,
                             adopted: bool) -> dict | None:
+        state.evicted_live.discard(row_id)
         if state.live_rows.pop(row_id, None) is None:
             return None
         state.content_bytes = self._content_size(state.rows, state.live_rows)

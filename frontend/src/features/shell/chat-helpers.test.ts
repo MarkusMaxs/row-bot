@@ -29,7 +29,13 @@ import {
   stepVerb,
   summarizeActivity,
 } from './tool-activity';
-import { buildTranscript, liveMedia } from './transcript-model';
+import {
+  buildTranscript,
+  finishedLiveSteps,
+  liveMedia,
+  settleFinishedSteps,
+} from './transcript-model';
+import { cardKey, liveCards } from './TranscriptCards';
 import { stoppedMarker } from './TranscriptMessage';
 import { turnError } from './turn-errors';
 
@@ -350,6 +356,45 @@ describe('transcript model', () => {
     expect(
       liveMedia([record('a'), record('b'), record('b')], new Set(['a'])),
     ).toEqual([{ reference: 'b', mime: 'image/png' }]);
+  });
+
+  it('settles a question answered in the live turn in its own row, before the reply (N4)', () => {
+    const answered = {
+      kind: 'question_answered',
+      outcome: 'answered',
+      answers: [{ header: 'Beta timing', answer: 'Beta.1 now' }],
+    } as const;
+    const done = {
+      cursor: '2',
+      event: {
+        type: 'tool.activity',
+        event_id: 'done',
+        payload: {
+          state: 'tool_done',
+          tool_call_id: 'call-ask_person',
+          tool_name: 'ask_person',
+          status: 'succeeded',
+          safe_summary: 'You chose: Beta.1 now',
+          specialization: answered,
+        },
+      },
+    } as unknown as EventRecord;
+    const rows = [
+      user('u1'),
+      assistant('a1', '', [trace('ask_person', 'pending')]),
+    ];
+    const finished = finishedLiveSteps([done]);
+    const items = buildTranscript(settleFinishedSteps(rows, finished));
+    const step = items[1].traces[0].items[0];
+    expect(step.status).toBe('succeeded');
+    expect(activityLabel(summarizeActivity(items[1].traces))).toBe(
+      'Asked you a question',
+    );
+    expect(items[1].cards.map(cardKey)).toEqual(['answer:call-ask_person']);
+    // The live copy after the reply gives way to the one in place.
+    expect(liveCards([done], new Set(items[1].cards.map(cardKey)))).toEqual([]);
+    // Nothing finished live: the saved rows are used as they are.
+    expect(settleFinishedSteps(rows, new Map())).toBe(rows);
   });
 
   it('turns the runtime stop marker into a chip label', () => {
