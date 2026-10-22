@@ -248,8 +248,10 @@ def _pool(people: Sequence[Mapping[str, Any]], role: str, part: str) -> dict[str
 
 
 def build(results: Sequence[Mapping[str, Any]], *, run: Mapping[str, Any] | None = None,
-          tiers: Mapping[str, str] | None = None, cap_tokens: int | None = None) -> dict[str, Any]:
-    """The whole report from every person's result (any order)."""
+          tiers: Mapping[str, str] | None = None, cap_tokens: int | None = None,
+          archived: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """The whole report from every person's result (any order). ``archived``: earlier runs of a person kept
+    under another name (``kept_as``): listed apart, never pooled; their tokens count in the spend."""
 
     people = [person_report(result) for result in sorted(results, key=lambda item: str(item.get("person")))]
     by_tier: dict[str, list[dict[str, Any]]] = {}
@@ -281,10 +283,11 @@ def build(results: Sequence[Mapping[str, Any]], *, run: Mapping[str, Any] | None
             "kinds_by_intent": _pool_live(members, "kinds_by_intent"),
             "container": sorted({str(person.get("container")) for person in members}),
         }
-    total_tokens = sum(person["tokens"]["total_cloud"] for person in people)
+    earlier = [person_report(result) | {"kept_as": result.get("kept_as")} for result in archived]
+    total_tokens = sum(person["tokens"]["total_cloud"] for person in (*people, *earlier))
     return {
         "format": FORMAT, "version": VERSION, "run": dict(run or {}), "tiers": dict(tiers or {}),
-        "people": people, "overall": overall,
+        "people": people, "overall": overall, "earlier": earlier,
         "tokens": {"total_cloud": total_tokens, "cap": cap_tokens,
                    "within_cap": None if cap_tokens is None else total_tokens <= cap_tokens},
         "not_built": list(NOT_BUILT),
@@ -419,6 +422,20 @@ def markdown(report: Mapping[str, Any]) -> str:
                      f"({', '.join(f'{name} {hours}' for name, hours in person['gpu_hours_by_phase'].items())}).")
         lines.append("")
     tokens = report.get("tokens") or {}
+    earlier = report.get("earlier") or []
+    if earlier:
+        lines += ["## Earlier runs, kept for the record", "",
+                  "Not pooled above: each was run again fresh (its name says why).", ""]
+        for person in earlier:
+            live = person["live"]
+            versions = "; ".join(f"v{item['version']} {item.get('phase')}"
+                                 + (f" ({item['failure']})" if item.get("failure") else "") for item in person["versions"])
+            lines.append(f"- **{person['kept_as']}** ({person['name']}, tier {person['tier']}): {live['requests']} requests, "
+                         f"first try {_pct(live['first_try'].get('overall'))}; versions: {versions or 'none'}; survival: "
+                         + ", ".join(f"{name.replace('_', ' ')} {check.get('state')}"
+                                     for name, check in person["survival"].items())
+                         + f"; cloud tokens {person['tokens']['total_cloud']:,}.")
+        lines.append("")
     lines += ["## Spend", "", f"Cloud tokens on the ChatGPT lane: {tokens.get('total_cloud', 0):,}"
                               + (f" of a {tokens['cap']:,} cap." if tokens.get("cap") else ".")]
     lines += ["", "## Not built yet", ""]

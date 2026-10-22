@@ -18,6 +18,9 @@ survival checks, and the stages not built yet.
 - **Tokens:** ``--cap-tokens`` (default 25M) counts everything on the ChatGPT lane, the simulated
   person included; a person's process stops cleanly at the cap (exit 75) and the run says so.
 - ``--plan`` prints what would run (people, requests, the token estimate) and runs nothing.
+- ``--archive mara@before-O106`` keeps a person's run under that name (their results and scratch profile)
+  so the person can run again fresh; the report lists kept runs apart, and their tokens count in the spend.
+  Stop the run first.
 - It writes only under ``--out`` and ``--scratch`` and refuses the everyday profile, its backups, the
   eval profile and a Row-Bot checkout.
 """
@@ -44,6 +47,8 @@ MAX_RESTARTS = 3
 STAGES = ("profile", "past", "days", "checks", "benchmark", "tidy")
 #: Run after every person's work (O116): the benchmarks hold the card longest, and tidy follows them.
 LAST = ("benchmark", "tidy")
+#: A person's run kept under another name: ``<person>@<label>`` (``--archive``).
+ARCHIVE_MARK = "@"
 #: Rough cloud tokens for --plan, from the pilots: a live request (a turn or two on GPT-6.1 Sol with the
 #: person's tools, a correction now and then: about 50K), the main model on the packs once a run (64 visible
 #: + 32 hidden x 3, kept 30 days and shared between the people), and its replay of a person's held-out work
@@ -140,8 +145,9 @@ class ReleaseCheck:
 
         total = 0
         for tier in self.tiers:
-            for person in generator.people():
-                path = self.person_dir(tier, person) / "result.json"
+            paths = [self.person_dir(tier, person) / "result.json" for person in generator.people()]
+            paths += sorted((self.out / tier).glob(f"*{ARCHIVE_MARK}*/result.json"))
+            for path in paths:
                 try:
                     total += int(json.loads(path.read_text(encoding="utf-8"))["tokens"]["cloud_total"])
                 except (OSError, ValueError, KeyError, TypeError):
@@ -239,12 +245,43 @@ class ReleaseCheck:
                     continue
         return found
 
+    def archived(self) -> list[dict[str, Any]]:
+        """Runs kept under another name (``--archive``), each with the name it was kept as."""
+
+        found = []
+        for tier in self.tiers:
+            for path in sorted((self.out / tier).glob(f"*{ARCHIVE_MARK}*/result.json")):
+                try:
+                    result = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                result["kept_as"] = path.parent.name
+                found.append(result)
+        return found
+
+    def archive(self, name: str) -> list[Path]:
+        """Keep ``person@label``'s results and scratch profile under that name, so the person runs again fresh."""
+
+        person, mark, label = name.partition(ARCHIVE_MARK)
+        if person not in generator.people() or not mark or not label.strip() or "/" in label or "\\" in label:
+            raise ScratchError(f"--archive takes <person>{ARCHIVE_MARK}<label>, e.g. mara{ARCHIVE_MARK}before-O106")
+        moved = []
+        for tier in self.tiers:
+            for parent in (self.out / tier, self.scratch / tier):
+                source, target = parent / person, parent / f"{person}{ARCHIVE_MARK}{label}"
+                if source.exists():
+                    if target.exists():
+                        raise ScratchError(f"{target} exists already")
+                    source.rename(target)
+                    moved.append(target)
+        return moved
+
     def write_report(self) -> dict[str, Any]:
         results = self.results()
         if results:
             self.run.setdefault("model", results[0].get("model"))
         built = report_module.build(results, run=self.run, tiers=self.run.get("tiers"),
-                                    cap_tokens=self.args.cap_tokens)
+                                    cap_tokens=self.args.cap_tokens, archived=self.archived())
         (self.out / "report.json").write_text(json.dumps(built, indent=1, sort_keys=True), encoding="utf-8")
         (self.out / "report.md").write_text(report_module.markdown(built), encoding="utf-8", newline="\n")
         self.say(f"Report: {self.out / 'report.md'}")
@@ -281,6 +318,7 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="a pilot: comparisons run one visible task a pack and no hidden problems")
     parser.add_argument("--plan", action="store_true", help="print the plan and run nothing")
     parser.add_argument("--report-only", action="store_true", help="write the report from the results so far")
+    parser.add_argument("--archive", default="", help="keep a person's run as <person>@<label> and stop")
     return parser.parse_args(argv)
 
 
@@ -297,6 +335,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.report_only:
             check.write_report()
+            return 0
+        if args.archive:
+            for path in check.archive(args.archive):
+                print(f"kept: {path}")
             return 0
         if not args.eval_profile:
             raise ScratchError("--eval-profile (or ROW_BOT_LIVE_EVAL_CODEX_PROFILE) names the ChatGPT lane's eval profile")

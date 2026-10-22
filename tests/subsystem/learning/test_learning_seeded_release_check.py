@@ -266,6 +266,24 @@ def test_the_same_command_again_continues_and_one_person_or_stage_can_run_alone(
     assert json.loads((tmp_path / "out" / "run.json").read_text(encoding="utf-8"))["started_at"]
 
 
+def test_a_person_kept_under_another_name_runs_again_fresh_and_is_reported_apart(tmp_path, home):
+    (tmp_path / "eval-profile").mkdir()
+    release_check.ReleaseCheck(_args(tmp_path), runner=FakePerson(tokens=700), say=lambda _text: None).execute()
+    check = release_check.ReleaseCheck(_args(tmp_path), runner=FakePerson(tokens=300), say=lambda _text: None)
+    kept = check.archive("mara@before-O106")
+    assert {path.parent.parent.name for path in kept} == {"out", "scratch"}
+    assert not (tmp_path / "out" / "8gb" / "mara").exists()
+    with pytest.raises(scratch.ScratchError):
+        check.archive("mara/../idris@x")
+    built = check.execute()  # Mara again, fresh: her new state starts at nothing
+    state = json.loads((tmp_path / "out" / "8gb" / "mara" / "state.json").read_text(encoding="utf-8"))
+    assert state["starts"] == 2  # her work and her benchmark, in the fresh run
+    assert [person["kept_as"] for person in built["earlier"]] == ["mara@before-O106"]
+    assert [person["person"] for person in built["people"]] == generator.people()
+    assert built["tokens"]["total_cloud"] == 3 * 300 + 700  # the kept run's tokens count in the spend
+    assert "## Earlier runs, kept for the record" in (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
+
+
 def test_the_state_file_remembers_what_is_done(tmp_path):
     state = State(tmp_path / "run" / "state.json")
     state.data["requests"].append({"id": "mara-d01-0"})
