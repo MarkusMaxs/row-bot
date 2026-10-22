@@ -320,7 +320,8 @@ def markdown(report: Mapping[str, Any]) -> str:
         if status != "ran":
             lines.append(f"- Tier **{tier}**: {status}.")
     for tier, overall in (report.get("overall") or {}).items():
-        lines += ["", f"## Headline: tier {tier} ({overall['people']} people)", ""]
+        people = f"{overall['people']} {'person' if overall['people'] == 1 else 'people'}"
+        lines += ["", f"## Headline: tier {tier} ({people})", ""]
         lines.append("| | Starting model | Personal model (newest) | Main model |")
         lines.append("|---|---|---|---|")
         models = overall["models"]
@@ -374,7 +375,7 @@ def markdown(report: Mapping[str, Any]) -> str:
         lines.append("")
         lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}"
                                                for name, check in person["survival"].items()))
-        lines.append(f"- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
+        lines.append("- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
                                                person["tokens"].items()) + f"; GPU {person['gpu_hours']} h "
                      f"({', '.join(f'{name} {hours}' for name, hours in person['gpu_hours_by_phase'].items())}).")
         lines.append("")

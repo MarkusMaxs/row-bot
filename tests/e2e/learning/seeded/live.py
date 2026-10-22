@@ -643,7 +643,7 @@ class PersonRun:
         from row_bot.learning import model_compare
         from row_bot.learning.lease import ResourceLease
         from row_bot.learning.runner import LearningRunner
-        from row_bot.learning.training import engine, planner as planner_module, recipes, releases
+        from row_bot.learning.training import engine, planner as planner_module, releases
         from row_bot.learning.training.supervisor import TrainingSupervisor
 
         lease = ResourceLease(since_activity=self.clock.idle_seconds)
@@ -653,7 +653,10 @@ class PersonRun:
                                          clock=self.clock.time, recipe_for=lambda: recipe)
         supervisor.dataset = planner_module.LearningDataset(planner)
         maker = releases.ReleaseMaker(self.data, jobs=supervisor.jobs, recipe_for=lambda: recipe, start_threads=False)
-        comparer = model_compare.Comparer(self.data, main_ref=lambda: self.main_ref)
+        # The product's comparison as it is; a pilot (--pilot-compare) only runs one visible task a pack.
+        plan = (model_compare.Plan(visible_per_pack=1, hidden=False, replay=False) if self.args.pilot_compare
+                else model_compare.Plan())
+        comparer = model_compare.Comparer(self.data, main_ref=lambda: self.main_ref, plan=plan)
         comparisons = model_compare.Comparisons(self.data, comparer=comparer, lease=lease,
                                                 training=supervisor.training, start_threads=False)
         for owner, name, phase in ((supervisor, "start", "training"), (supervisor, "train_now", "training"),
@@ -1073,16 +1076,17 @@ class PersonRun:
         if asks:
             runner = self.runner()
             try:
-                planned_job = versions.retrain_without(version, planner=runner.planner, root=self.data)
-                planned = getattr(planned_job, "state", None) or str(planned_job)[:40]
-                job = runner.supervisor.jobs.current()
-                if job is not None and job.state in ("planned", "waiting"):
-                    runner.supervisor.discard(job.id)  # the check stops here: no second training
+                outcome = versions.retrain_without(version, planner=runner.planner, root=self.data,
+                                                   clock=self.clock.time)
+                planned = f"v{outcome.job.version} planned" if outcome.job is not None else f"not planned ({outcome.reason})"
+                if outcome.job is not None:
+                    runner.supervisor.discard(outcome.job.id)  # the check stops here: no second training
             except Exception as error:  # noqa: BLE001
                 planned = f"error: {type(error).__name__}"
-        return {"state": "passed" if deleted and after == 0 and asks else "failed", "version": version,
+        gone = bool(getattr(deleted, "deleted", deleted))
+        return {"state": "passed" if gone and before and after == 0 and asks else "failed", "version": version,
                 "decisions_before": before, "decisions_after": after, "asks_to_retrain": asks,
-                "retrain_planned": planned, "deleted": bool(getattr(deleted, "deleted", deleted))}
+                "retrain_planned": planned, "deleted": gone}
 
     def _version_skew(self) -> dict[str, Any]:
         """The engine was built from another lock than this app's (an app update): it reads as outdated,
@@ -1289,6 +1293,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", default="lane-B")
     parser.add_argument("--crash", action="store_true", help="crash the first training at a checkpoint")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false", help="nights skip Learning's runner (a pilot)")
+    parser.add_argument("--pilot-compare", action="store_true", help="a pilot's comparison: one visible task a pack")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     check_scratch(Path(args.data), Path(args.eval_profile))

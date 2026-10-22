@@ -42,10 +42,16 @@ def _inside(path: Path, parent: Path) -> bool:
         return False
 
 
+#: More folders a seeded run must never write in (the everyday profile's backups, say), separated by
+#: ``os.pathsep``.
+PROTECT_ENV = "ROW_BOT_SEEDED_PROTECT"
+
+
 def forbidden_roots(eval_profile: Path | None = None, extra: Iterable[Path] = ()) -> list[Path]:
     """Folders a seeded run never writes in."""
 
-    roots = [everyday_profile(), Path(os.environ.get("ROW_BOT_BACKUPS", "D:/RowBot-backups"))]
+    roots = [everyday_profile()]
+    roots.extend(Path(item) for item in os.environ.get(PROTECT_ENV, "").split(os.pathsep) if item.strip())
     if eval_profile is not None:
         roots.append(Path(eval_profile))
     roots.extend(extra)
@@ -170,5 +176,5 @@ class GpuGate:
         self.held = None
 
 
-__all__ = ["GpuGate", "ScratchError", "check_scratch", "everyday_profile", "forbidden_roots", "open_bookings",
+__all__ = ["GpuGate", "PROTECT_ENV", "ScratchError", "check_scratch", "everyday_profile", "forbidden_roots", "open_bookings",
            "person_is_training"]

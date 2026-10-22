@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from tests.e2e.learning.seeded import generator, report as report_module
-from tests.e2e.learning.seeded.scratch import ScratchError, check_scratch
+from tests.e2e.learning.seeded.scratch import PROTECT_ENV, ScratchError, check_scratch
 
 ROOT = Path(__file__).resolve().parents[4]
 EXIT_PLANNED_CRASH = 86
@@ -142,7 +142,10 @@ class ReleaseCheck:
         return total
 
     def child_env(self, data: Path) -> dict[str, str]:
+        protect = os.environ.get(PROTECT_ENV, "")
         env = {key: value for key, value in os.environ.items() if not key.startswith("ROW_BOT_")}
+        if protect:
+            env[PROTECT_ENV] = protect
         env.update({"ROW_BOT_DATA_DIR": str(data), "ROW_BOT_LEARNING_PREVIEW": "1",
                     "ROW_BOT_DESKTOP_NOTIFICATIONS": "off", "ROW_BOT_AUTO_START_OLLAMA": "0",
                     "PYTHONUNBUFFERED": "1"})
@@ -165,6 +168,8 @@ class ReleaseCheck:
             command.append("--crash")
         if not self.args.gpu:
             command.append("--no-gpu")
+        if self.args.pilot_compare:
+            command.append("--pilot-compare")
         record: dict[str, Any] = {"exits": []}
         for attempt in range(MAX_RESTARTS + 1):
             started = time.monotonic()
@@ -257,6 +262,8 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-crash", dest="crash", action="store_false", help="don't crash the first training")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false",
                         help="a pilot: nights run Dream and the vault but not Learning's runner (no training)")
+    parser.add_argument("--pilot-compare", action="store_true",
+                        help="a pilot: comparisons run one visible task a pack and no hidden problems")
     parser.add_argument("--plan", action="store_true", help="print the plan and run nothing")
     parser.add_argument("--report-only", action="store_true", help="write the report from the results so far")
     return parser.parse_args(argv)

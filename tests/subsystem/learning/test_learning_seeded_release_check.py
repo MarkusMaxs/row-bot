@@ -21,7 +21,7 @@ def home(tmp_path, monkeypatch):
     folder = tmp_path / "home"
     (folder / ".row-bot").mkdir(parents=True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: folder))
-    monkeypatch.setenv("ROW_BOT_BACKUPS", str(tmp_path / "backups"))
+    monkeypatch.setenv(scratch.PROTECT_ENV, str(tmp_path / "backups"))
     return folder
 
 

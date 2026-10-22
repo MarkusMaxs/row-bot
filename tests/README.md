@@ -109,3 +109,19 @@ Two lanes besides the API-key providers:
 ```bash
 ROW_BOT_LIVE_EVAL_CODEX_PROFILE=<eval profile> uv run python scripts/live_eval.py plan --tier learning --providers codex
 ```
+
+**Learning release check** (`tests/e2e/learning/seeded/`, PLAN O92): made-up people
+with plain-file data (`people/`) and a deterministic generator (a 30-day past for the
+past-chat import, then a live stream of requests with a hidden intent and a checkable
+right outcome), run one at a time through the real runtime in scratch profiles, with a
+simulated person on the ChatGPT lane (the eval profile above) and simulated days and
+nights. One command runs the whole Learning loop and writes `report.md`/`report.json`
+(rates with denominators and 95% intervals, tokens, GPU-hours, survival checks, and the
+stages not built yet); it resumes where it stopped. Its deterministic parts are in
+`tests/subsystem/learning/test_learning_seeded_*.py`.
+
+```bash
+uv run python scripts/learning_release_check.py --plan --out <folder> --scratch <folder>
+uv run python scripts/learning_release_check.py --people all --days 30 --tiers 8gb --out <folder> \
+  --scratch <folder> --eval-profile <eval profile> --runtimes-from <data folder with the engine>
+```
