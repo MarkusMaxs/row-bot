@@ -253,9 +253,10 @@ class GpuGate:
             text = self._read()
             others = {lane: item for lane, item in open_bookings(text).items() if lane != self.lane}
             waiting_now = waiting_lanes(text)
-            # A lane that wrote it waits books first, unless we wrote it first (then it yielded to us).
-            waiting = {} if self.lane in waiting_now else {lane: words for lane, words in waiting_now.items()
-                                                           if lane != self.lane}
+            # A lane that wrote it waits books first, unless we wrote it first (then it yielded to us) or
+            # still hold our booking (a person's process started again after a crash takes it over).
+            ours = self.lane in waiting_now or self.lane in open_bookings(text)
+            waiting = {} if ours else {lane: words for lane, words in waiting_now.items() if lane != self.lane}
             if self.training():
                 why = f"GPU: the person's own Row-Bot is training; waiting ({self.label})"
             elif others:

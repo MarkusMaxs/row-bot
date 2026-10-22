@@ -71,11 +71,14 @@ def test_the_gpu_is_booked_after_other_lanes_and_the_persons_own_training(tmp_pa
 
 def test_after_a_crash_the_lanes_own_open_booking_is_taken_over_not_doubled(tmp_path):
     booking = tmp_path / "gpu-booking.txt"
-    booking.write_text("01:00 lane-B START S1: training (yields to the person's Learning engine)\n", encoding="utf-8")
-    gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "01:10", sleep=lambda _s: None, training=lambda: False,
+    booking.write_text("01:00 lane-B START S1: training (yields to the person's Learning engine)\n"
+                       "01:05 lane-A note: L2x waits for the card\n", encoding="utf-8")
+    waits: list[float] = []
+    gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "01:10", sleep=waits.append, training=lambda: False,
                            say=lambda _text: None, **QUIET)
     gate.acquire("training")
-    assert len(booking.read_text(encoding="utf-8").splitlines()) == 1
+    assert len(booking.read_text(encoding="utf-8").splitlines()) == 2
+    assert waits == []  # nor does it yield: the booking is still ours
     gate.release()
     assert scratch.open_bookings(booking.read_text(encoding="utf-8")) == {}
 
