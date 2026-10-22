@@ -223,8 +223,9 @@ def test_settings_change_the_starting_model_to_a_larger_certified_one_and_downlo
     assert view["starting_model"]["id"] == "qwen3.5-2b" and view["stronger_model"]["id"] == "qwen3.5-9b"
     jobs = runner_module.get().supervisor.jobs
     planned = jobs.plan(steps_total=50, checkpoint_every=10)
-    _error(_command(client, headers, "change_starting_model", model="qwen3.8-27b"), "learning_training_changed")
-    _error(_command(client, headers, "change_starting_model", model="llama-70b"), "invalid_command", 422)
+    # The 27B is no starting model any more (O122): refused like any unknown model.
+    for unknown in ("qwen3.8-27b", "llama-70b"):
+        _error(_command(client, headers, "change_starting_model", model=unknown), "invalid_command", 422)
 
     receipt = _ok(_command(client, headers, "change_starting_model", model="qwen3.5-9b"))
 
