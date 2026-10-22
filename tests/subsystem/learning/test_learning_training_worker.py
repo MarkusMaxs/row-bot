@@ -219,6 +219,16 @@ def test_pause_on_use_saves_at_the_next_step_and_the_worker_exits(training):
     assert [item.state for item in job.transitions][-2:] == ["pausing", "paused"]
 
 
+def test_only_a_run_that_hasnt_trained_a_step_takes_the_recipe_as_it_is_now(training):
+    training.start()
+    assert training.dataset.started == [training.job.id]
+    training.advance(7)
+    training.supervisor.stop(training.job.id)
+    training.supervisor.train_now(training.job.id)
+    training.until(lambda job: job.state == "running")
+    assert training.dataset.started == [training.job.id]  # it trained steps: it keeps its own spec
+
+
 def test_the_person_using_row_bot_after_training_started_counts_but_earlier_use_does_not(training):
     training.lease.set(since_activity=30.0)  # they pressed Train now half a minute after chatting
     training.start()

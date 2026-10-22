@@ -152,6 +152,31 @@ def test_a_job_planned_without_rows_gets_them_when_it_starts(work, setup, tmp_pa
     assert len((tmp_path / "data" / "examples.jsonl").read_text(encoding="utf-8").splitlines()) == 2
 
 
+def test_a_run_planned_under_an_older_recipe_starts_with_the_current_one_and_the_persons_choices(
+        work, setup, monkeypatch):
+    # The preview's v2 was planned under three fixed passes; the recipe now keeps the best pass (O117).
+    from row_bot.learning import evaluation
+    from row_bot.learning.training import advanced
+
+    monkeypatch.setattr(evaluation, "refresh_audit", lambda **_kwargs: {"added": 0})
+    planner, jobs, engine, recipe, _measured, _trained = setup
+    older = replace(recipe, best_pass=False, epochs=2)
+    _turns(work, 4)
+    job = planner_module.Planner(planner.root, jobs=jobs, engine=engine, clock=planner.clock,
+                                 recipe_for=lambda: older, measure=lambda rows, limit: [(100, 10) for _ in rows],
+                                 lookup=planner._lookup, roots=lambda: ()).plan(force=True).job
+    assert (job.steps_total, jobs.plan_of(job)["recipe"]["settings"]["best_pass"]) == (2, 0)
+    advanced.save({"rank": 32}, recipe, planner.root)  # the person's own choice in Advanced
+
+    started = planner_module.LearningDataset(planner).starting(job)
+
+    settings = jobs.plan_of(started)["recipe"]["settings"]
+    assert (settings["best_pass"], settings["passes"], started.steps_total) == (1, 3, 3)  # one step a pass
+    assert (settings["rank"], settings["alpha"]) == (32, 32)  # their choice stays
+    assert jobs.plan_of(started)["dataset"] == jobs.plan_of(job)["dataset"]  # the same rows
+    assert jobs.get(job.id).steps_total == 3
+
+
 def test_a_version_that_couldnt_start_doesnt_hold_up_the_next_one(work, setup, monkeypatch):
     # The preview's first pilot: v1 trained in another shape, then failed its ready check. Its run stays
     # "evaluating" (Try again, Change where it runs, Delete), but the next version is planned, and what v1
