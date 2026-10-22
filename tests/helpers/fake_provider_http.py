@@ -85,6 +85,8 @@ class FakeProviderServer:
         self._connections: list[socket.socket] = []
         self._threads: list[threading.Thread] = []
         self._closed = False
+        self._accepted = 0
+        self._handshake_errors: list[str] = []
 
     def held(self, index: int = 0, timeout: float = 10.0) -> SeenRequest:
         """The ``index``-th request, once the server holds it (it fails if that doesn't happen in ``timeout``).
@@ -94,7 +96,10 @@ class FakeProviderServer:
         """
         with self._arrived:
             if not self._arrived.wait_for(lambda: len(self.seen) > index, timeout):
-                raise AssertionError(f"request {index} never arrived")
+                raise AssertionError(
+                    f"request {index} never arrived: {self._accepted} connection(s) accepted, "
+                    f"TLS handshake errors: {self._handshake_errors or 'none'}"
+                )
             request = self.seen[index]
         if not request.held.wait(timeout):
             raise AssertionError(f"request {index} was never held")
@@ -130,13 +135,15 @@ class FakeProviderServer:
             except OSError:
                 return
             self._connections.append(connection)
+            self._accepted += 1
             self._spawn(self._serve, connection, len(self._connections))
 
     def _serve(self, connection: socket.socket, number: int) -> None:
         if self._server_tls is not None:
             try:
                 connection = self._server_tls.wrap_socket(connection, server_side=True)
-            except OSError:
+            except OSError as error:
+                self._handshake_errors.append(repr(error))
                 return
             self._connections.append(connection)
         with connection:

@@ -59,7 +59,11 @@ def test_stop_ends_a_request_over_tls(mid_stream: bool) -> None:
         first = threading.Event()
         scope = CancellationScope()
         worker, outcome = _under_scope(lambda: _read_stream(client, f"{server.url}/v1/chat", first), scope)
-        held = server.held(0)
+        try:
+            held = server.held(0)
+        except AssertionError as error:
+            # B395: say what the client got, too.
+            raise AssertionError(f"{error}; the client: {outcome or 'still sending'}") from None
         if mid_stream:
             assert first.wait(PROMPTLY)
 
