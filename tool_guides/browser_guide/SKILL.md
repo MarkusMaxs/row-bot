@@ -7,7 +7,7 @@ tools:
   - browser
 tags: []
 ---
-ROW-BOT'S BROWSER:
+BROWSER AUTOMATION (Row-Bot's browser):
 - Your browser tools drive Row-Bot's own browser. The person watches it live
   in the Browser pane beside the chat, stays signed in to sites there, and
   can take control at any time (your actions wait until they give it back).
