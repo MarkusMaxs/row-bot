@@ -258,6 +258,16 @@ def test_a_pause_before_the_first_step_ends_the_worker_at_once_and_it_continues_
     assert training.advance(2).steps_done == 7
 
 
+def test_only_a_run_that_hasnt_trained_a_step_takes_the_recipe_as_it_is_now(training):
+    training.start()
+    assert training.dataset.started == [training.job.id]
+    training.advance(7)
+    training.supervisor.stop(training.job.id)
+    training.supervisor.train_now(training.job.id)
+    training.until(lambda job: job.state == "running")
+    assert training.dataset.started == [training.job.id]  # it trained steps: it keeps its own spec
+
+
 def test_the_person_using_row_bot_after_training_started_counts_but_earlier_use_does_not(training):
     training.lease.set(since_activity=30.0)  # they pressed Train now half a minute after chatting
     training.start()

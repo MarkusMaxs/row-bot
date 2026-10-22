@@ -139,6 +139,25 @@ class Planner:
 
         return advanced.apply(recipes.current(self._root), self._root)
 
+    def refresh(self, job: Any) -> Any:
+        """A run that hasn't trained a step starts with the recipe as it is now (O117): this computer's
+        recipe with the person's own Advanced choices, not the one current when it was planned (a recipe
+        update would otherwise wait a run). Its steps follow the recipe's passes; its rows stay."""
+
+        plan = self.jobs.plan_of(job)
+        examples = int((plan.get("dataset") or {}).get("examples") or 0)
+        if examples <= 0:
+            return job
+        recipe = self.recipe()
+        steps = recipe.steps_for(examples)
+        spec = recipe.spec(_card_mib())
+        if spec == plan["recipe"] and steps == job.steps_total:
+            return job
+        logger.info("Learning starts personal model v%s with the recipe as it is now (%s, %d steps)", job.version,
+                    recipe.name, steps)
+        return self.jobs.replan(job, steps_total=steps, checkpoint_every=recipe.checkpoint_interval(steps),
+                                recipe=spec)
+
     def trained_ids(self) -> set[str]:
         if self._trained_ids is not None:
             return self._trained_ids()
@@ -256,10 +275,14 @@ def lease(job: Any, compiled: dataset_module.CompiledDataset, root: Path | None 
 
 class LearningDataset:
     """The supervisor's dataset (L2a's ``Dataset``): a job planned without its rows (after "Use
-    recommended settings", say) gets them compiled now; a planned one already has them."""
+    recommended settings", say) gets them compiled now; a planned one already has them. A run that
+    hasn't trained a step takes the recipe as it is now (:meth:`Planner.refresh`)."""
 
     def __init__(self, planner: Planner) -> None:
         self.planner = planner
+
+    def starting(self, job: Any) -> Any:
+        return self.planner.refresh(job)
 
     def prepare(self, job: Any, folder: Path) -> int:
         from row_bot.learning.training.supervisor import TrainingError

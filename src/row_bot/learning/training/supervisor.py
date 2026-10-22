@@ -74,9 +74,12 @@ def _memory_free() -> bool:
 
 
 class Dataset(Protocol):
-    """Prepares a job's own data folder (its lease) and says how many examples it holds (L2c)."""
+    """Prepares a job's own data folder (its lease) and says how many examples it holds (L2c);
+    ``starting`` gives a job that hasn't trained a step the recipe as it is now (O117)."""
 
     def prepare(self, job: Job, folder: Path) -> int: ...
+
+    def starting(self, job: Job) -> Job: ...
 
 
 class NoDataset:
@@ -84,6 +87,9 @@ class NoDataset:
 
     def prepare(self, job: Job, folder: Path) -> int:
         raise TrainingError("nothing_to_train")
+
+    def starting(self, job: Job) -> Job:
+        return job
 
 
 @dataclass
@@ -308,6 +314,11 @@ class TrainingSupervisor:
 
     def _launch(self, job: Job, trigger: str, *, at_most: int | None = None) -> Job:
         run = jobs_module.run_dir(job.id, self.jobs.root)
+        if at_most is None and not job.steps_done and job.checkpoint_step is None:
+            try:  # nothing trained yet: it takes the recipe as it is now (a run with steps keeps its own)
+                job = self.dataset.starting(job)
+            except Exception:
+                logger.warning("Learning couldn't bring a planned run up to date; it starts as planned", exc_info=True)
         try:
             data, examples = self._lease_folder(job)
         except TrainingError:
