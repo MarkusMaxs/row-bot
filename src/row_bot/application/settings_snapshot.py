@@ -1402,6 +1402,7 @@ def _account(
     post_operations: list[str] | None = None,
     engage_operations: list[str] | None = None,
     callback_url: str | None = None,
+    address: str | None = None,
 ) -> dict[str, Any]:
     return {
         "account_id": account_id,
@@ -1414,6 +1415,7 @@ def _account(
         "post_operations": post_operations or [],
         "engage_operations": engage_operations or [],
         "callback_url": callback_url,
+        "address": address,
     }
 
 
@@ -1472,6 +1474,12 @@ def _accounts(
     engage_ops = _strings(x_config.get("engage_operations")) or list(
         _X_ENGAGE_OPERATIONS
     )
+    # Outlook's mail and calendar share one Microsoft sign-in through the person's own app, in the keychain.
+    from row_bot import microsoft_account
+
+    microsoft_configured = microsoft_account.client() is not None
+    microsoft_state = microsoft_account.state()
+    microsoft_address = microsoft_account.address() or None
     return {
         "availability": "available",
         "github": _account(
@@ -1519,6 +1527,16 @@ def _accounts(
             engage_operations=engage_ops,
             callback_url=X_OAUTH_CALLBACK_URL,
         ),
+        **{
+            tool: _account(
+                account_id=tool,
+                enabled=_enabled(tool, tools, registered),
+                configured=microsoft_configured,
+                authentication_state=microsoft_state,
+                address=microsoft_address,
+            )
+            for tool in ("outlook_mail", "outlook_calendar")
+        },
     }
 
 

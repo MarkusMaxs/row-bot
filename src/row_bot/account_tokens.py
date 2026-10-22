@@ -1,8 +1,8 @@
-"""Google and X sign-ins, kept only in the system keychain.
+"""Google, X and Microsoft sign-ins, kept only in the system keychain.
 
 Each account's saved sign-in is one keychain entry (namespace ``accounts``): ``google`` (Google's
 authorised-user token, shared by Gmail and Calendar), ``google_client`` (the person's own Desktop
-client) and ``x``. Earlier versions kept them as files in the data folder. ``migrate`` copies each
+client), ``x``, and ``microsoft`` and ``microsoft_client`` (Outlook's, in ``microsoft_account``). Earlier versions kept them as files in the data folder. ``migrate`` copies each
 into the keychain, reads it back and compares, and only then deletes the files holding that grant;
 until that copy is verified (the keychain unavailable, say) the old file is still read, so a sign-in
 keeps working, but nothing writes a token file again. Gmail's and Calendar's files may hold two
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 NAMESPACE = "accounts"
 # Account sign-in -> the files earlier versions kept it in (inside the data folder).
 LEGACY = {"google": ("gmail/token.json", "calendar/token.json"), "google_client": ("gmail/credentials.json",),
-          "x": ("x/token.json",)}
+          "x": ("x/token.json",), "microsoft": (), "microsoft_client": ()}  # Microsoft's were never files.
 MAX_BYTES = 64 * 1024
 # What Row-Bot's one Google sign-in asks for: Gmail's and Calendar's scopes (their tools' own constants).
 GOOGLE_SCOPES = ("https://mail.google.com/", "https://www.googleapis.com/auth/calendar")
@@ -204,7 +204,8 @@ def _text(name: str) -> str | None:
 
 
 def read(name: str) -> dict | None:
-    """One account's saved sign-in (``google``, ``google_client`` or ``x``), or None."""
+    """One account's saved sign-in (``google``, ``google_client``, ``x``, ``microsoft`` or ``microsoft_client``),
+    or None."""
     with _LOCK:
         return _parse(_text(name))
 
