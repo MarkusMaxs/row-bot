@@ -4,7 +4,7 @@
 # Export command: uv export --locked --all-extras --no-dev --no-hashes --no-emit-project --output-file requirements.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
 aiohappyeyeballs==2.6.2
-aiohttp==3.14.3
+aiohttp==3.14.5
 aiohttp-retry==2.9.1
 aiosignal==1.4.0
 aiosqlite==0.22.1
@@ -26,7 +26,7 @@ beautifulsoup4==4.15.0
 bottle==0.13.4
 brotli==1.2.0 ; platform_python_implementation == 'CPython'
 brotlicffi==1.2.0.1 ; platform_python_implementation != 'CPython'
-certifi==2026.6.17
+certifi==2026.10.19
 cffi==2.0.0
 charset-normalizer==3.4.7
 choreographer==1.3.0
@@ -136,7 +136,7 @@ lxml==6.1.1
 markdown-it-py==4.2.0
 markdown2==2.5.5
 markupsafe==3.0.3
-mcp==1.29.0
+mcp==1.30.0
 mdurl==0.1.2
 modelscope==1.38.1 ; platform_machine != 'x86_64' or sys_platform != 'darwin'
 modelscope-hub==0.1.7 ; platform_machine != 'x86_64' or sys_platform != 'darwin'
@@ -163,7 +163,7 @@ oss2==2.19.1 ; platform_machine != 'x86_64' or sys_platform != 'darwin'
 packaging==26.2
 pandas==2.3.3
 phonemizer-fork==3.3.2
-pillow==12.3.0
+pillow==13.0.0
 platformdirs==4.10.0
 playwright==1.62.0
 plotly==6.8.0
@@ -193,7 +193,7 @@ pyobjc-framework-quartz==12.2.1 ; sys_platform == 'darwin'
 pyobjc-framework-security==12.2.1 ; sys_platform == 'darwin'
 pyobjc-framework-webkit==12.2.1 ; sys_platform == 'darwin'
 pyparsing==3.3.2
-pypdf==6.19.0
+pypdf==6.21.2
 pystray==0.19.5
 python-dateutil==2.9.0.post0
 python-docx==1.2.0
@@ -282,7 +282,7 @@ xlrd==2.0.2
 xlsxwriter==3.2.9
 xmltodict==1.0.4
 xxhash==3.7.0
-yarl==1.24.2
+yarl==1.25.1
 youtube-search==2.2.0
 youtube-transcript-api==1.2.4
 zstandard==0.25.0
