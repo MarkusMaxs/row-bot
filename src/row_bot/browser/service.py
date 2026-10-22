@@ -562,6 +562,9 @@ class BrowserEngine:
             return
         logger.warning("Row-Bot's browser stopped unexpectedly")
         self._context = None
+        for chat in self._chats.values():
+            if chat.tabs:
+                chat.notes.append("Row-Bot's browser had stopped and started again: open the page again.")
         self._forget_pages()
         self._set_status("crashed")
 
