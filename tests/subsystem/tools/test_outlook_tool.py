@@ -148,6 +148,7 @@ def test_the_agents_gate_asks_before_sending_with_outlooks_own_card(outlook):
     outlook.graph[("POST", "/me/sendMail")] = 202
     tools = {tool.name: tool for tool in OutlookMailTool().as_langchain_tools()}
     assert set(tools) == set(outlook_tool.MAIL_OPERATIONS)
+    assert f"for “email me”, is {ADDRESS}" in tools["outlook_send_mail"].description  # "Email me the result".
     assert OutlookMailTool().destructive_tool_names == {"outlook_send_mail", "outlook_reply_mail",
                                                         "outlook_forward_mail", "outlook_delete_mail"}
     asked = []

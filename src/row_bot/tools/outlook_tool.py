@@ -777,7 +777,10 @@ _CALENDAR = {
 
 
 def _tools(table: dict) -> list:
-    return [StructuredTool.from_function(func=work, name=name, description=description, args_schema=schema)
+    me = microsoft_account.address()
+    own = f" The person's own address, for “email me”, is {me}." if me else ""
+    return [StructuredTool.from_function(func=work, name=name, args_schema=schema,
+                                         description=description + (own if name == "outlook_send_mail" else ""))
             for name, (work, schema, description) in table.items()]
 
 
