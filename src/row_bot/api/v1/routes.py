@@ -1062,6 +1062,8 @@ _STATUS.update({"mcp_auth_address_invalid": 422, "mcp_auth_address_other": 409, 
 _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 'unsupported_upload', 'unsafe_upload',
                               'bundle_signature_invalid', 'bundle_unsupported'), 422))
 _STATUS['upload_too_large'] = 413
+# An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
+_STATUS['question_answer_invalid'] = 422
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # App views in chat: each reaches the client as itself (unlisted, every one read "Part of Row-Bot isn't responding").
 _STATUS.update({"views_off": 403, "view_tool_refused": 403, "view_tool_denied": 403, "view_rate_limited": 429,
