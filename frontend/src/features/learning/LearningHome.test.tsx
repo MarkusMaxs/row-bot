@@ -7,10 +7,12 @@ import LearningHome, { type LearningView } from './LearningHome';
 import type { LearningIO } from './learning-state';
 import {
   downloadState,
+  draftedChange,
   fakeIO,
   installedModel,
   learningSnapshot,
   NO_GPU,
+  overnight,
   personalModel,
   runningRun,
 } from './test-data';
@@ -161,6 +163,152 @@ it('Changes has its four filters, each with a real empty state', () => {
   expect(screen.getByText(/No changes are ready to review\./)).toBeVisible();
   fireEvent.click(within(filters).getByRole('radio', { name: 'In use' }));
   expect(screen.getByText(/No changes are in use\./)).toBeVisible();
+});
+
+it('the header says when Learning next looks for things to improve', () => {
+  const tonight = new Date(Date.now() + 3 * 3_600_000);
+  tonight.setMinutes(0, 0, 0);
+  show(
+    fakeIO(
+      on({
+        quiet_hours: {
+          window_start: 1,
+          window_end: 5,
+          next_look_at: tonight.toISOString(),
+        },
+      }),
+    ),
+  );
+
+  expect(
+    screen.getByText(/^Next look tonight at .+ · 0 of 2M tokens this month$/),
+  ).toBeVisible();
+});
+
+it('Overnight says what last night found and drafted, in counts', () => {
+  show(
+    fakeIO(
+      on({
+        overnight: overnight({
+          needs_examples: 1,
+          left_out: 1,
+          looks_like_bug: 1,
+        }),
+        kinds_learning: [
+          { kind: 'document_lookups', state: 'testing_change' },
+          { kind: 'tool_workflows', state: 'needs_examples' },
+        ],
+      }),
+    ),
+  );
+
+  const night = screen.getByRole('region', { name: 'Overnight' });
+  expect(
+    within(night).getByText('Found 3 things to improve · drafted 2'),
+  ).toBeVisible();
+  expect(
+    within(night).getByText('1 kind of work needs more examples'),
+  ).toBeVisible();
+  expect(
+    within(night).getByText('One looks like a bug in Row-Bot itself'),
+  ).toBeVisible();
+  expect(
+    within(night).getByText(
+      /^Left out 1 idea: Learning needs your feedback first/,
+    ),
+  ).toBeVisible();
+  const kinds = screen.getByRole('table', {
+    name: 'Kinds of work and where they stand',
+  });
+  expect(
+    within(kinds).getByRole('rowheader', { name: 'Document lookups' }),
+  ).toBeVisible();
+  expect(within(kinds).getByText('A change waits to be tested')).toBeVisible();
+  expect(within(kinds).getByText('Needs more examples')).toBeVisible();
+  expect(screen.queryByText('Nothing learned yet.')).toBeNull();
+});
+
+it('Overnight on the Claude plan says Learning needs another model and makes no promise', () => {
+  show(
+    fakeIO(
+      on({
+        overnight: overnight({ state: 'claude_plan', found: 2, drafted: 0 }),
+      }),
+    ),
+  );
+
+  expect(
+    screen.getByText(
+      /^Learning’s improvement work needs a model other than your Claude plan\./,
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText(/Found 2 things/)).toBeNull();
+});
+
+it('Overnight when the person came back says it carries on later', () => {
+  show(
+    fakeIO(
+      on({ overnight: overnight({ state: 'stopped', found: 2, drafted: 1 }) }),
+    ),
+  );
+
+  expect(
+    screen.getByText('Found 2 things to improve · drafted 1'),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/^Stopped when you came back to Row-Bot/),
+  ).toBeVisible();
+});
+
+it('Changes lists drafts as Waiting to be tested, with why in counts, never as Ready', () => {
+  show(
+    fakeIO(
+      on({
+        changes: [
+          draftedChange(),
+          draftedChange({
+            id: 'proposal_2',
+            change: 'way_of_working',
+            title: 'Check the calendar first',
+            kind: 'tool_workflows',
+            never_automatic: true,
+            why: {
+              chats: 1,
+              corrections: 0,
+              stops: 2,
+              retries: 0,
+              denials: 0,
+              failures: 0,
+              imported: 1,
+            },
+          }),
+        ],
+      }),
+    ),
+    'changes',
+  );
+
+  const filters = screen.getByRole('radiogroup', { name: 'Show changes' });
+  expect(within(filters).getByRole('radio', { name: 'Testing' })).toBeChecked();
+  const list = screen.getByRole('list', {
+    name: 'Changes waiting to be tested',
+  });
+  expect(within(list).getAllByText('Waiting to be tested')).toHaveLength(2);
+  expect(within(list).getByText(/^Lesson · Document lookups/)).toBeVisible();
+  expect(
+    screen.getByText(
+      /In 3 chats about document lookups, you corrected Row-Bot twice and you stopped it once\./,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      /you stopped it twice \(1 from past chats Learning read\)\./,
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByText(/never used by itself/)).toBeInTheDocument();
+  expect(within(list).queryByText('Ready')).toBeNull();
+  fireEvent.click(within(filters).getByRole('radio', { name: 'Ready' }));
+  expect(screen.getByText(/No changes are ready to review\./)).toBeVisible();
 });
 
 it('Lessons lists what Row-Bot saved for itself as Not tested, with search', async () => {

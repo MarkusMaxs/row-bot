@@ -2,7 +2,12 @@
  * Learning's words and numbers, one name per thing (designs/learning-ux.md, "Words").
  * Never shown: self-improvement, RSI, candidate, adapter, LoRA, eval, audit, cron.
  */
-import type { LearningCommand } from '../../api/types';
+import type {
+  LearningChangeView,
+  LearningCommand,
+  LearningKindState,
+  LearningOvernight,
+} from '../../api/types';
 
 export type TeachCategory = NonNullable<LearningCommand['category']>;
 
@@ -291,3 +296,147 @@ export function memoryAdvice(system: string | null | undefined): string {
   if (system === 'linux') return 'Add swap space or RAM, then check again.';
   return 'Add RAM, then check again.';
 }
+
+/** "once", "twice", "3 times". */
+export function timesWords(count: number): string {
+  if (count === 1) return 'once';
+  if (count === 2) return 'twice';
+  return `${count.toLocaleString()} times`;
+}
+
+/**
+ * "Next look tonight at 1:00 AM" within the next day, else "Next look Fri 1:00 AM"
+ * (designs/learning-ux.md §3). Never a time already past: then it looks once Row-Bot is free.
+ */
+export function nextLookWords(iso: string, now: Date = new Date()): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return '';
+  if (when.getTime() <= now.getTime() + 60_000)
+    return 'Looks for things to improve once Row-Bot is free';
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(when);
+  if (when.getTime() - now.getTime() <= 24 * 3_600_000)
+    return `Next look tonight at ${time}`;
+  const day = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(
+    when,
+  );
+  return `Next look ${day} ${time}`;
+}
+
+export type OvernightLine = { text: string; tone?: 'warning' };
+
+/** Last night's look for things to improve, as Overnight lines (designs §3, §9). */
+export function overnightLines(night: LearningOvernight): OvernightLine[] {
+  switch (night.state) {
+    case 'claude_plan':
+      return [
+        {
+          text: 'Learning’s improvement work needs a model other than your Claude plan. Choose another default model in Settings › Models.',
+          tone: 'warning',
+        },
+      ];
+    case 'no_model':
+      return [
+        {
+          text: 'Choose a default model in Settings › Models so Learning can look for things to improve.',
+          tone: 'warning',
+        },
+      ];
+    case 'limit':
+      return [
+        {
+          text: 'Didn’t look for things to improve: this month’s limit was reached.',
+        },
+      ];
+    case 'unavailable':
+      return [
+        {
+          text: 'Couldn’t look for things to improve: the model wasn’t available. Trying again tonight.',
+        },
+      ];
+    case 'failed':
+      return [
+        {
+          text: 'Couldn’t look for things to improve. Trying again tonight.',
+        },
+      ];
+    case 'nothing':
+      return [{ text: 'Looked for things to improve: nothing new.' }];
+    default:
+      break;
+  }
+  const lines: OvernightLine[] = [];
+  if (night.found === 0) {
+    lines.push({ text: 'Looked for things to improve: nothing new.' });
+  } else {
+    lines.push({
+      text: `Found ${plural(night.found, 'thing')} to improve · ${
+        night.drafted
+          ? `drafted ${night.drafted.toLocaleString()}`
+          : 'nothing drafted'
+      }`,
+    });
+  }
+  if (night.needs_examples)
+    lines.push({
+      text: `${plural(night.needs_examples, 'kind of work')} ${
+        night.needs_examples === 1 ? 'needs' : 'need'
+      } more examples`,
+    });
+  if (night.looks_like_bug)
+    lines.push({
+      text: `${night.looks_like_bug === 1 ? 'One looks' : `${night.looks_like_bug} look`} like a bug in Row-Bot itself`,
+    });
+  if (night.left_out)
+    lines.push({
+      text: `Left out ${plural(night.left_out, 'idea')}: Learning needs your feedback first, and never adds addresses, links, passwords or permissions`,
+    });
+  if (night.state === 'stopped')
+    lines.push({
+      text: 'Stopped when you came back to Row-Bot; it carries on when you’re away.',
+    });
+  return lines;
+}
+
+export const CHANGE_NAMES: Record<LearningChangeView['change'], string> = {
+  lesson: 'Lesson',
+  way_of_working: 'Way of working',
+  skill: 'Skill',
+};
+
+/** The issue's "Why" in plain words, counts only (designs §4): never anyone's words. */
+export function whyWords(change: LearningChangeView): string {
+  const { why } = change;
+  const parts: string[] = [];
+  if (why.corrections)
+    parts.push(`you corrected Row-Bot ${timesWords(why.corrections)}`);
+  if (why.stops) parts.push(`you stopped it ${timesWords(why.stops)}`);
+  if (why.retries)
+    parts.push(`you asked it to try again ${timesWords(why.retries)}`);
+  if (why.denials)
+    parts.push(
+      `you turned down an action it asked to take ${timesWords(why.denials)}`,
+    );
+  if (why.failures) parts.push(`a step failed ${timesWords(why.failures)}`);
+  const what = parts.length
+    ? parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+    : 'something went wrong';
+  const where =
+    change.kind === 'other'
+      ? `In ${plural(why.chats, 'chat')}`
+      : `In ${plural(why.chats, 'chat')} about ${kindPhrase(change.kind)}`;
+  const past = why.imported
+    ? ` (${why.imported.toLocaleString()} from past chats Learning read)`
+    : '';
+  return `${where}, ${what}${past}.`;
+}
+
+/** "What Row-Bot is learning" beside the personal model's rows (designs §3). */
+export const KIND_STATE_WORDS: Record<LearningKindState['state'], string> = {
+  testing_change: 'A change waits to be tested',
+  needs_examples: 'Needs more examples',
+};
