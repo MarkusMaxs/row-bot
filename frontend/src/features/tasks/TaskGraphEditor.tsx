@@ -13,6 +13,7 @@ import {
   List,
   Plus,
   Trash2,
+  UserCheck,
   Workflow,
 } from 'lucide-react';
 import {
@@ -35,6 +36,7 @@ import {
   Segmented,
   Select,
   Skeleton,
+  Toggle,
 } from '../../ui/primitives';
 import StepApps, { StepAppChips, type StepApp } from './StepApps';
 import WorkflowFlowchart from './WorkflowFlowchart';
@@ -94,6 +96,7 @@ const emptyFields = (): TaskGraphFields => ({
   pass_output: null,
   run_ids: null,
   apps: null,
+  always_ask: null,
 });
 
 function initialFields(kind: string): TaskGraphFields {
@@ -362,6 +365,27 @@ export default function TaskGraphEditor({
         token: `step.${item.id}.output`,
         label: `Result of step ${steps.indexOf(item) + 1} · ${kindLabel(item.type)}`,
       }));
+  /** "Always ask me" (N9): the person's own approval for what this step does. */
+  function alwaysAsk(hint: string) {
+    const step = steps.find((item) => item.id === selected);
+    if (!step) return null;
+    return (
+      <div className="task-rail-switch task-step-ask">
+        <div>
+          <span>Always ask me</span>
+          <small>{hint}</small>
+        </div>
+        <Toggle
+          label="Always ask me"
+          checked={!!step.fields.always_ask}
+          onChange={(event) =>
+            change('always_ask', event.target.checked || null)
+          }
+        />
+      </div>
+    );
+  }
+
   function text(
     field: keyof TaskGraphFields,
     label: string,
@@ -661,6 +685,12 @@ export default function TaskGraphEditor({
                       {stepSummary(item)}
                     </span>
                     <StepAppChips apps={stepApps(item)} />
+                    {item.fields.always_ask && (
+                      <span className="task-graph-step-ask">
+                        <UserCheck size={12} aria-hidden />
+                        Asks you
+                      </span>
+                    )}
                     {issues.has(position) && (
                       <span className="task-graph-step-issue">
                         {issues.get(position)?.message}
@@ -806,6 +836,9 @@ export default function TaskGraphEditor({
                             onChange={(next) => change('apps', next)}
                           />
                         )}
+                        {alwaysAsk(
+                          "Anything this step changes waits for your own approval, even under Auto or Hands-off. If you don't answer within a day, the run stops.",
+                        )}
                         <div className="field-row">
                           {number('max_retries', 'Maximum retries', 1, 10, 2)}
                           {number(
@@ -870,6 +903,9 @@ export default function TaskGraphEditor({
                           'channel',
                           'Notification channel',
                           'Use an existing channel ID, or desktop for an app notification.',
+                        )}
+                        {alwaysAsk(
+                          "The message waits for your own approval before it is sent, even under Auto or Hands-off. If you don't answer within a day, the run stops.",
                         )}
                       </>
                     )}
