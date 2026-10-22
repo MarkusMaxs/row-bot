@@ -196,8 +196,11 @@ class Planner:
         self._planned_at = float(self.clock())
         if not self.engine.ready():
             return PlanOutcome(reason="no_engine")
-        if self.jobs.store.exists() and self.jobs.current() is not None:
-            return PlanOutcome(reason="current")
+        if self.jobs.store.exists():
+            from row_bot.learning.training import releases
+
+            if releases.holds_back(self.jobs.current(), self._root):
+                return PlanOutcome(reason="current")
         summary = self.summary(compute=True)
         if summary is None:
             return PlanOutcome(reason="no_data")
