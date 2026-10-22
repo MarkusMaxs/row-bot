@@ -807,7 +807,8 @@ def undo(change_id: str, *, store: Any = None, clock: Callable[[], float] = time
     if kind == "lesson":
         memory_id = str(meta.get("memory_id") or "")
         _lesson_record(saved, proposal, memory_id, now, status="off")
-        if memory_id:
+        # A lesson Row-Bot saved for itself was a memory before it was tested: Undo keeps it, untested.
+        if memory_id and meta.get("origin") != "agent_saved":
             from row_bot import knowledge_graph
 
             knowledge_graph.delete_entity(memory_id)
@@ -921,6 +922,71 @@ def test_again(change_id: str) -> dict[str, Any]:
     if view_state(proposal) not in ("edited", "waiting_to_test"):
         raise ChangeError("not_ready")
     return _evolution().update_learning(change_id, {"state": WAITING, "queued_at": time.time()}) or proposal
+
+
+def draft_saved_lesson(memory_id: str, *, clock: Callable[[], float] = time.time) -> dict[str, Any]:
+    """Test it: a lesson Row-Bot saved for itself during a chat (a ``self_knowledge`` memory nothing tested)
+    becomes a lesson change waiting to be tested. It rests on no feedback from the person, so it is never
+    used automatically (E9); its words are checked like any change's."""
+
+    from row_bot import knowledge_graph
+
+    entity = knowledge_graph.get_entity(str(memory_id or ""))
+    if entity is None or str(entity.get("entity_type") or "") != "self_knowledge":
+        raise ChangeError("not_found")
+    for proposal in learning_changes():
+        meta = block(proposal)
+        if meta.get("origin") == "agent_saved" and meta.get("memory_id") == entity["id"]:
+            if view_state(proposal) in ("waiting_to_test", "testing"):
+                return proposal
+            if view_state(proposal) == "in_use":
+                raise ChangeError("not_ready")
+            _evolution().update_learning(str(proposal["id"]), {"state": WAITING, "queued_at": float(clock())},
+                                         status="draft")
+            return get(str(proposal["id"]))
+    title = str(entity.get("subject") or "Lesson")[:200]
+    text = str(entity.get("description") or "")[:1200] or title
+    if _evolution().injection_problems(title + "\n" + text):
+        raise ChangeError("e9")
+    kind = kinds.classify(kinds.Request(f"{title}. {text}")).kind
+    learning = {"origin": "agent_saved", "memory_id": entity["id"], "kind_of_work": kind, "state": WAITING,
+                "never_automatic": True, "why": {}, "queued_at": float(clock()), "issue": f"saved:{entity['id']}"}
+    return _evolution().create_proposal(insight_ids=[], proposal_type="lesson", title=title,
+                                        rationale="Row-Bot saved this lesson for itself during a chat.",
+                                        payload={"text": text, "kind_of_work": kind, "learning": learning},
+                                        verification_plan="Learning tests it on work it hasn't seen (L3b).",
+                                        status="draft", dedupe=True)
+
+
+def delete_lesson(lesson_id: str) -> None:
+    """Delete a lesson (Lessons › Delete): a lesson Learning put into use is taken out of use and forgotten;
+    a lesson Row-Bot saved for itself is a memory, deleted (with any test of it)."""
+
+    proposal = _evolution().get_proposal(str(lesson_id or ""))
+    if proposal is not None and _evolution().learning_draft(proposal) and proposal.get("proposal_type") == "lesson":
+        meta = block(proposal)
+        if view_state(proposal) == "in_use":
+            undo(str(proposal["id"]))
+        _evolution().update_learning(str(proposal["id"]), {"state": "deleted"})
+        if meta.get("origin") == "agent_saved" and meta.get("memory_id"):
+            from row_bot import knowledge_graph
+
+            knowledge_graph.delete_entity(str(meta["memory_id"]))
+        return
+    from row_bot import knowledge_graph
+
+    entity = knowledge_graph.get_entity(str(lesson_id or ""))
+    if entity is None or str(entity.get("entity_type") or "") != "self_knowledge":
+        raise ChangeError("not_found")
+    for item in learning_changes():
+        meta = block(item)
+        if meta.get("memory_id") == entity["id"]:
+            if view_state(item) == "in_use" and meta.get("origin") != "agent_saved":
+                undo(str(item["id"]))
+            _evolution().update_learning(str(item["id"]), {"state": "deleted"})
+            if item.get("status") != "rejected":
+                _evolution().reject_proposal(str(item["id"]), "deleted")
+    knowledge_graph.delete_entity(entity["id"])
 
 
 def relink_lesson(old_memory_id: str, new_memory_id: str) -> int:

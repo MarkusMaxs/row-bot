@@ -160,7 +160,15 @@
         "dismiss",
         "review_version",
         "use_smaller_model",
-        "change_starting_model"
+        "change_starting_model",
+        "test_change",
+        "use_change",
+        "undo_change",
+        "not_now_change",
+        "dont_suggest_change",
+        "edit_change",
+        "test_lesson",
+        "delete_lesson"
       ],
       "title": "Action",
       "type": "string"
@@ -175,6 +183,12 @@
         }
       ],
       "default": null
+    },
+    "answer": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Answer",
+      "type": "string"
     },
     "category": {
       "anyOf": [
@@ -193,6 +207,12 @@
       ],
       "default": null,
       "title": "Category"
+    },
+    "change_id": {
+      "default": "",
+      "maxLength": 128,
+      "title": "Change Id",
+      "type": "string"
     },
     "client_session_id": {
       "format": "uuid",
@@ -317,6 +337,12 @@
       "default": "",
       "maxLength": 128,
       "title": "Signal Id",
+      "type": "string"
+    },
+    "text": {
+      "default": "",
+      "maxLength": 4000,
+      "title": "Text",
       "type": "string"
     },
     "tool_call_id": {

@@ -405,7 +405,7 @@ def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, mo
     fields = {"version": 1, "kind": "document_lookups", "job_id": "job_unknown", "runtime": "ollama",
               "folder": "C:/nowhere", "item_id": "item_unknown", "model": "qwen3.5-2b", "download": "not_now",
               "conversation_id": "chat-b", "message_id": "run-msg-3", "signal_id": "sig_unknown",
-              "category": "wrong_answer"}
+              "category": "wrong_answer", "change_id": "proposal_unknown", "text": "Use the ID"}
     extra = {"turn_on": {"setup": SETUP},
              "save_advanced": {"advanced": {"rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384}}}
 
@@ -502,7 +502,8 @@ def test_the_snapshot_says_when_learning_looks_next_and_what_last_night_drafted(
     snapshot = _snapshot(client, headers)
 
     assert snapshot["overnight"] == {"night": night, "state": "done", "found": 3, "drafted": 1, "left_out": 1,
-                                     "needs_examples": 1, "looks_like_bug": 0}
+                                     "needs_examples": 1, "looks_like_bug": 0, "tested": 0, "ready": 0,
+                                     "not_better": 0, "used": 0, "tests_state": None}
     [change] = snapshot["changes"]
     assert (change["change"], change["kind"], change["state"]) == ("lesson", "document_lookups", "waiting_to_test")
     assert change["why"]["corrections"] == 2 and change["why"]["chats"] == 2

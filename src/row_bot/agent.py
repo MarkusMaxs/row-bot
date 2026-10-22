@@ -2094,6 +2094,12 @@ def _turn_recall(messages: list, max_tokens: int) -> tuple[list[dict], Any]:
         recall_model_ref,
         decision.trace,
     )
+    if block_chars and selected:
+        # Learning's lessons in use ride this recall (E5): "used N times this month". One path check
+        # while no lesson is in use.
+        from row_bot import learning
+
+        learning.note_lessons_recalled([str(memory.get("id") or "") for memory in selected])
     return (selected, recall_block) if block_chars else ([], None)
 
 

@@ -175,10 +175,105 @@
       "title": "LearningCardRoom",
       "type": "object"
     },
+    "LearningChangeTest": {
+      "additionalProperties": false,
+      "description": "A change's test result, in counts (aggregates only, E10).",
+      "properties": {
+        "difference": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difference"
+        },
+        "high": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "High"
+        },
+        "low": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Low"
+        },
+        "note": {
+          "maxLength": 300,
+          "title": "Note",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/LearningTestRow"
+          },
+          "maxItems": 4,
+          "title": "Rows",
+          "type": "array"
+        },
+        "small": {
+          "title": "Small",
+          "type": "boolean"
+        },
+        "tested_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tested At"
+        },
+        "verdict": {
+          "enum": [
+            "better",
+            "no_difference",
+            "worse",
+            "worse_elsewhere"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "rows",
+        "note",
+        "small"
+      ],
+      "title": "LearningChangeTest",
+      "type": "object"
+    },
     "LearningChangeView": {
       "additionalProperties": false,
-      "description": "A change Learning drafted (UX \u00a77 Changes). Until L3b tests it, it only waits to be tested.",
+      "description": "A change Learning drafted (UX \u00a74, \u00a77): waiting to be tested, testing, ready, edited (test again before\nusing), in use (with Undo) or not used.",
       "properties": {
+        "agent_saved": {
+          "default": false,
+          "title": "Agent Saved",
+          "type": "boolean"
+        },
         "change": {
           "enum": [
             "lesson",
@@ -191,6 +286,12 @@
         "created_at": {
           "maxLength": 64,
           "title": "Created At",
+          "type": "string"
+        },
+        "diff": {
+          "default": "",
+          "maxLength": 6000,
+          "title": "Diff",
           "type": "string"
         },
         "id": {
@@ -213,10 +314,56 @@
           "title": "Never Automatic",
           "type": "boolean"
         },
+        "not_used": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_better",
+                "turned_down",
+                "undone"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Not Used"
+        },
+        "setting": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Setting",
+          "type": "string"
+        },
+        "snoozed": {
+          "default": false,
+          "title": "Snoozed",
+          "type": "boolean"
+        },
         "state": {
-          "const": "waiting_to_test",
+          "enum": [
+            "waiting_to_test",
+            "testing",
+            "ready",
+            "edited",
+            "in_use",
+            "not_used"
+          ],
           "title": "State",
           "type": "string"
+        },
+        "test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningChangeTest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "text": {
           "maxLength": 1200,
@@ -227,6 +374,35 @@
           "maxLength": 200,
           "title": "Title",
           "type": "string"
+        },
+        "used_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Used At"
+        },
+        "used_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "person",
+                "automatic"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Used By"
         },
         "why": {
           "$ref": "#/$defs/LearningChangeWhy"
@@ -837,7 +1013,9 @@
         "state": {
           "enum": [
             "testing_change",
-            "needs_examples"
+            "needs_examples",
+            "change_ready",
+            "change_in_use"
           ],
           "title": "State",
           "type": "string"
@@ -940,6 +1118,18 @@
           "title": "Night",
           "type": "string"
         },
+        "not_better": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Not Better",
+          "type": "integer"
+        },
+        "ready": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Ready",
+          "type": "integer"
+        },
         "state": {
           "enum": [
             "done",
@@ -953,6 +1143,36 @@
           ],
           "title": "State",
           "type": "string"
+        },
+        "tested": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tested",
+          "type": "integer"
+        },
+        "tests_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "stopped",
+                "limit",
+                "claude_plan",
+                "failed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tests State"
+        },
+        "used": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Used",
+          "type": "integer"
         }
       },
       "required": [
@@ -1437,6 +1657,74 @@
         "download_bytes"
       ],
       "title": "LearningStartingModel",
+      "type": "object"
+    },
+    "LearningTestRow": {
+      "additionalProperties": false,
+      "description": "One row of a change's test (UX \u00a74): tasks of a kind, passed without and with the change.",
+      "properties": {
+        "label": {
+          "maxLength": 120,
+          "title": "Label",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "with_change": {
+          "minimum": 0,
+          "title": "With Change",
+          "type": "integer"
+        },
+        "without": {
+          "minimum": 0,
+          "title": "Without",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "total",
+        "without",
+        "with_change"
+      ],
+      "title": "LearningTestRow",
+      "type": "object"
+    },
+    "LearningTestingNow": {
+      "additionalProperties": false,
+      "description": "The change being tested now (\"Testing 'Pick documents by ID' on 24 tasks \u00b7 9 done\").",
+      "properties": {
+        "change_id": {
+          "maxLength": 128,
+          "title": "Change Id",
+          "type": "string"
+        },
+        "done": {
+          "minimum": 0,
+          "title": "Done",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "change_id",
+        "title",
+        "done",
+        "total"
+      ],
+      "title": "LearningTestingNow",
       "type": "object"
     },
     "LearningTraining": {
@@ -2120,6 +2408,17 @@
       ],
       "title": "State",
       "type": "string"
+    },
+    "testing_now": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningTestingNow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "training": {
       "$ref": "#/$defs/LearningTraining"

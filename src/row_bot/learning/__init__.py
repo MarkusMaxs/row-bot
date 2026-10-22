@@ -364,6 +364,41 @@ def ways_of_working_text() -> str:
         return ""
 
 
+LESSONS_FILE = "learning_lessons.json"
+
+
+def lesson_memory_ids() -> set[str]:
+    """The memories that are lessons in use (E5), for the chat's quiet "Used a lesson" line. While none was
+    ever used this is one path check; without the preview flag there are none (O34)."""
+
+    if not _PREVIEW:
+        return set()
+    try:
+        path = data_dir() / LESSONS_FILE
+        if not path.is_file():
+            return set()
+        found = json.loads(path.read_text(encoding="utf-8")).get("lessons")
+        return {str(key) for key in found} if isinstance(found, dict) else set()
+    except Exception as exc:
+        logger.debug("Learning couldn't read its lessons in use (%s)", type(exc).__name__)
+        return set()
+
+
+def note_lessons_recalled(memory_ids: Iterable[str]) -> None:
+    """A turn's recall showed these memories: counts the lessons in use among them ("used 3 times this
+    month"). Nothing while no lesson is in use."""
+
+    ids = [str(item) for item in memory_ids if item]
+    if not ids or not lesson_memory_ids().intersection(ids):
+        return
+    try:
+        from row_bot.learning import changes
+
+        changes.note_recalled(ids)
+    except Exception as exc:
+        logger.debug("Learning couldn't count a recalled lesson (%s)", type(exc).__name__)
+
+
 def lesson_memory_deleted_soon(old_id: str, new_id: str) -> None:
     """A Dream merge is about to delete a ``self_knowledge`` memory that a lesson in use may be (O7):
     the lesson moves to the surviving memory instead of being marked deleted. Nothing without a store."""
@@ -456,4 +491,7 @@ __all__ = [
     "store_path",
     "ways_of_working_text",
     "lesson_memory_deleted_soon",
+    "lesson_memory_ids",
+    "note_lessons_recalled",
+    "LESSONS_FILE",
 ]

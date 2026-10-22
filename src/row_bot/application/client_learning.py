@@ -36,7 +36,21 @@ _ACTIONS = frozenset({
     "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
     "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
     "review_version", "use_smaller_model", "change_starting_model",
+    "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
+    "test_lesson", "delete_lesson",
 })
+# Changes Learning drafted (L3b): test, use, undo, not now, don't suggest again, edit; a lesson Row-Bot saved
+# for itself tested, or deleted. Every one is the person's own choice (D24).
+_CHANGE_ACTIONS = frozenset({"test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change",
+                             "edit_change", "test_lesson", "delete_lesson"})
+_CHANGE_ERRORS = {
+    "not_found": "learning_change_changed", "not_ready": "learning_change_changed",
+    "edited": "learning_change_changed", "not_in_use": "learning_change_changed",
+    "e9": "learning_change_refused", "never_automatic": "learning_change_refused",
+    "empty": "invalid_learning_command", "too_long": "invalid_learning_command",
+    "unknown_slot": "invalid_learning_command", "slot_full": "learning_change_refused",
+    "apply_failed": "learning_change_changed", "running": "learning_change_busy",
+}
 # Using the personal model (L2c2): its comparison, trial, keep and undo, Export…, Delete version,
 # Advanced and Retrain without it. Every one of them is the person's own choice (D24).
 _USE_ACTIONS = frozenset({"compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now",
@@ -225,8 +239,21 @@ def _night() -> dict[str, Any] | None:
         return None
 
 
-def _overnight(night: dict[str, Any] | None, today: date | None = None) -> dict[str, Any] | None:
-    """Last night's look (UX §3 Overnight): only a recent one, in counts."""
+def _tests() -> dict[str, Any] | None:
+    if not learning.store_exists():
+        return None
+    try:
+        from row_bot.learning import changes
+
+        return changes.last_tests(_store())
+    except Exception:
+        logger.debug("Learning could not read last night's tests", exc_info=True)
+        return None
+
+
+def _overnight(night: dict[str, Any] | None, today: date | None = None,
+               tests: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Last night's look and its tests (UX §3 Overnight): only a recent one, in counts."""
 
     if not night or night.get("state") not in _OVERNIGHT_STATES:
         return None
@@ -236,49 +263,129 @@ def _overnight(night: dict[str, Any] | None, today: date | None = None) -> dict[
         return None
     if ((today or date.today()) - when).days > 1:
         return None
+    same = tests if tests and tests.get("night") == night.get("night") else {}
+
+    def count(name: str) -> int:
+        return max(0, int(same.get(name) or 0))
+
     return {"night": when.isoformat(), "state": night["state"], "found": max(0, int(night.get("found") or 0)),
             "drafted": max(0, int(night.get("drafted") or 0)), "left_out": max(0, int(night.get("refused") or 0)),
             "needs_examples": max(0, int(night.get("needs_examples") or 0)),
-            "looks_like_bug": max(0, int(night.get("bugs") or 0))}
+            "looks_like_bug": max(0, int(night.get("bugs") or 0)),
+            "tested": count("tested"), "ready": count("ready"), "not_better": count("not_better"),
+            "used": count("used"),
+            "tests_state": same.get("state") if same.get("state") in ("stopped", "limit", "claude_plan", "failed")
+            else None}
+
+
+def _testing_now() -> dict[str, Any] | None:
+    """The change being tested now ("Testing 'Pick documents by ID' on 24 tasks · 9 done"), else None."""
+
+    if not learning.store_exists():
+        return None
+    try:
+        from row_bot.learning import changes
+
+        found = changes.progress()
+    except Exception:
+        logger.debug("Learning could not read its test's progress", exc_info=True)
+        return None
+    if not found:
+        return None
+    return {"change_id": _text(found.get("change_id"), 128), "title": _text(found.get("title"), 200),
+            "done": max(0, int(found.get("done") or 0)), "total": max(0, int(found.get("total") or 0))}
 
 
 _CHANGE_OF = {"lesson": "lesson", "behaviour": "way_of_working", "create_skill": "skill", "patch_skill": "skill"}
+_VERDICTS = frozenset({"better", "no_difference", "worse", "worse_elsewhere"})
 _KINDS = ("document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other")
 _WHY = ("chats", "corrections", "stops", "retries", "denials", "failures", "imported")
 
 
-def _changes() -> list[dict[str, Any]]:
-    """Learning's drafted changes waiting to be tested (UX §7), newest first."""
+def _test_view(meta: dict[str, Any]) -> dict[str, Any] | None:
+    test = meta.get("test")
+    if not isinstance(test, dict) or test.get("verdict") not in _VERDICTS:
+        return None
+    rows = [{"label": _text(row.get("label"), 120), "total": max(0, int(row.get("total") or 0)),
+             "without": max(0, int(row.get("without") or 0)), "with_change": max(0, int(row.get("with") or 0))}
+            for row in (test.get("rows") or ())[:4] if isinstance(row, dict)]
+    own = test.get("own") if isinstance(test.get("own"), dict) else {}
 
-    if not learning.store_exists():
-        return []
+    def points(value: Any) -> float | None:
+        return None if value is None else round(float(value) * 100, 1)
+
+    return {"verdict": test["verdict"], "rows": rows, "note": _text(test.get("note"), 300),
+            "small": bool(test.get("small")), "tested_at": _iso(test.get("tested_at")),
+            "difference": points(own.get("difference")), "low": points(own.get("low")),
+            "high": points(own.get("high"))}
+
+
+def _diff_of(proposal: dict[str, Any]) -> str:
+    """A skill edit's before/after (``patch_skill``), read when the change is shown."""
+
+    if proposal.get("proposal_type") != "patch_skill":
+        return ""
+    payload = proposal.get("payload") or {}
     try:
-        from row_bot.learning import diagnosis
+        from row_bot import evolution
 
-        proposals = diagnosis.drafts(_store())
+        found = evolution.build_skill_diff_preview(str(payload.get("target_skill") or ""),
+                                                   str(payload.get("updated_instructions") or ""))
     except Exception:
-        logger.debug("Learning could not read its drafted changes", exc_info=True)
+        logger.debug("Learning couldn't show a skill edit's diff", exc_info=True)
+        return ""
+    return _text(found.get("diff"), 6000)
+
+
+def _changes() -> list[dict[str, Any]]:
+    """Learning's changes (UX §7): waiting to be tested, testing, ready, edited, in use and not used,
+    newest first. Not-used changes older than 30 days drop off the list."""
+
+    try:
+        from row_bot.learning import behaviour, changes, diagnosis
+
+        store = _store() if learning.store_exists() else None
+        gone = diagnosis._gone_attempts(store) if store is not None else set()  # noqa: SLF001 - its own module's rule
+        proposals = [item for item in changes.learning_changes()
+                     if changes.block(item).get("attempt_id") not in gone or changes.view_state(item) == "in_use"]
+    except Exception:
+        logger.debug("Learning could not read its changes", exc_info=True)
         return []
     found = []
+    month_ago = (datetime.now() - timedelta(days=30)).isoformat()
     for proposal in proposals:
-        payload = proposal.get("payload") or {}
-        meta = payload.get("learning") or {}
         change = _CHANGE_OF.get(str(proposal.get("proposal_type")))
-        if change is None or proposal.get("status") != "draft" or meta.get("state") != "waiting_to_test":
+        if change is None:
             continue
+        state = changes.view_state(proposal)
+        if state == "not_used" and str(proposal.get("updated_at") or "") < month_ago:
+            continue
+        payload = proposal.get("payload") or {}
+        meta = changes.block(proposal)
         why = meta.get("why") if isinstance(meta.get("why"), dict) else {}
         text = payload.get("text") or payload.get("description") or payload.get("updated_instructions") or ""
         kind = str(meta.get("kind_of_work") or "other")
+        reason = str(meta.get("state") or "")
         found.append({
             "id": _text(proposal.get("id"), 128),
             "change": change,
             "title": _text(proposal.get("title"), 200),
             "kind": kind if kind in _KINDS else "other",
-            "state": "waiting_to_test",
+            "state": state,
             "created_at": _text(proposal.get("created_at"), 64),
             "text": _text(text, 1200),
             "why": {key: max(0, int(why.get(key) or 0)) for key in _WHY},
             "never_automatic": bool(meta.get("never_automatic")),
+            "setting": behaviour.describe(str(payload.get("slot") or "")) if change == "way_of_working" else "",
+            "diff": _diff_of(proposal),
+            "test": _test_view(meta),
+            "used_by": meta.get("used_by") if state == "in_use" and meta.get("used_by") in ("person", "automatic")
+            else None,
+            "used_at": _iso(meta.get("used_at")) if state == "in_use" else None,
+            "not_used": ({"turned_down": "turned_down", "undone": "undone"}.get(reason, "not_better")
+                         if state == "not_used" else None),
+            "snoozed": bool(meta.get("snoozed_at")) and state == "ready",
+            "agent_saved": meta.get("origin") == "agent_saved",
         })
     return found[:50]
 
@@ -286,7 +393,13 @@ def _changes() -> list[dict[str, Any]]:
 def _kinds_learning(changes: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Kinds of work with a change waiting to be tested, or that need more examples (UX §3)."""
 
-    states: dict[str, str] = {item["kind"]: "testing_change" for item in changes}
+    states: dict[str, str] = {}
+    rank = ("change_in_use", "change_ready", "testing_change")
+    for item in changes:
+        state = {"in_use": "change_in_use", "ready": "change_ready", "waiting_to_test": "testing_change",
+                 "testing": "testing_change", "edited": "testing_change"}.get(item["state"])
+        if state and (item["kind"] not in states or rank.index(state) < rank.index(states[item["kind"]])):
+            states[item["kind"]] = state
     if learning.store_exists():
         try:
             from row_bot.learning.contracts import Attempt
@@ -958,8 +1071,9 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         "opted_out_conversations": [_text(item, 256) for item in opted_out[:2000]],
         "owner_unset_channels": _owner_unset_channels(),
         "needs_you": _needs_you(settings),
-        "overnight": _overnight(night),
+        "overnight": _overnight(night, tests=_tests() if settings.enabled else None),
         "changes": changes,
+        "testing_now": _testing_now() if settings.enabled else None,
         "kinds_learning": _kinds_learning(changes) if settings.enabled else [],
     }
     data["revision"] = sha256(
@@ -1070,12 +1184,42 @@ def read_learning_conversation(conversation_id: str, *, validate: Callable[[], N
 
 
 def read_learning_lessons(*, validate: Callable[[], None]) -> dict[str, Any]:
-    """Lessons: so far only the ones Row-Bot saved for itself during chats (its troubleshooting
-    memories), which nothing has tested yet. Read-only."""
+    """Lessons (UX §7): those Learning put into use (In use, or Off after Undo), with their kind of work and
+    how often recall used them this month, and those Row-Bot saved for itself during chats (its
+    troubleshooting memories), marked Not tested with Test it."""
 
     _require_preview()
     validate()
     items: list[dict[str, Any]] = []
+    linked: set[str] = set()
+    try:
+        from row_bot.learning import changes
+
+        for proposal in changes.learning_changes():
+            if proposal.get("proposal_type") != "lesson":
+                continue
+            meta = changes.block(proposal)
+            state = changes.view_state(proposal)
+            memory_id = str(meta.get("memory_id") or "")
+            if memory_id:
+                linked.add(memory_id)
+            if meta.get("origin") == "agent_saved":
+                continue  # shown below, as the memory it tests
+            if state == "in_use" or (state == "not_used" and meta.get("state") == "undone"):
+                kind = str(meta.get("kind_of_work") or "other")
+                items.append({
+                    "id": _text(proposal.get("id"), 128), "title": _text(proposal.get("title"), 200),
+                    "text": _text((proposal.get("payload") or {}).get("text"), 600), "origin": "learning",
+                    "status": "in_use" if state == "in_use" else "off", "kind": kind if kind in _KINDS else "other",
+                    "used": changes.used_this_month(memory_id) if state == "in_use" else 0,
+                    "change_id": _text(proposal.get("id"), 128),
+                    "updated_at": _text(proposal.get("updated_at"), 64),
+                })
+        tested = {str(changes.block(item).get("memory_id") or ""): item for item in changes.learning_changes()
+                  if changes.block(item).get("origin") == "agent_saved"}
+    except Exception:
+        logger.debug("Learning could not read its lessons", exc_info=True)
+        tested = {}
     try:
         from row_bot import knowledge_graph
 
@@ -1085,18 +1229,32 @@ def read_learning_lessons(*, validate: Callable[[], None]) -> dict[str, Any]:
         rows = []
     for row in rows:
         subject = _text(row.get("subject"), 200).strip()
-        if not subject:
+        memory_id = _text(row.get("id"), 128)
+        if not subject or (memory_id in linked and memory_id not in tested):
             continue
+        status = "not_tested"
+        change_id = ""
+        if memory_id in tested:
+            from row_bot.learning import changes
+
+            proposal = tested[memory_id]
+            change_id = _text(proposal.get("id"), 128)
+            status = {"testing": "testing", "waiting_to_test": "testing", "ready": "tested_better",
+                      "in_use": "tested_better", "not_used": "tested_not_better"}.get(changes.view_state(proposal),
+                                                                                       "not_tested")
         items.append({
-            "id": _text(row.get("id"), 128),
+            "id": memory_id,
             "title": subject,
             "text": _text(row.get("description"), 600),
             "origin": "agent_saved",
-            "status": "not_tested",
+            "status": status,
+            "kind": None,
+            "used": 0,
+            "change_id": change_id,
             "updated_at": _text(row.get("updated_at"), 64),
         })
     validate()
-    return {"items": items, "total": len(items)}
+    return {"items": items[:_LESSON_LIMIT], "total": len(items)}
 
 
 def read_learning_version(version: int, *, validate: Callable[[], None]) -> dict[str, Any]:
@@ -1306,6 +1464,8 @@ def _target(action: str, command: dict[str, Any]) -> str:
         return "learning:version"
     if action in _USE_ACTIONS:
         return "learning:use"
+    if action in _CHANGE_ACTIONS:
+        return f"learning:change:{command.get('change_id', '')}"
     return "learning:settings"
 
 
@@ -1658,6 +1818,12 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     model_id = _text(command.get("model"), 32)
     if action in ("use_smaller_model", "change_starting_model") and model_id not in learning.STARTING_MODELS:
         raise ClientPlatformError("invalid_learning_command")
+    change_id = _text(command.get("change_id"), 128)
+    if action in _CHANGE_ACTIONS and not change_id:
+        raise ClientPlatformError("invalid_learning_command")
+    text = str(command.get("text") or "")
+    if action == "edit_change" and not (text.strip() and len(text) <= 4000):
+        raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
         "command_id": command["command_id"],
@@ -1680,6 +1846,9 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "advanced": dict(advanced_values) if isinstance(advanced_values, dict) else None,
         "item_id": item_id,
         "model": model_id,
+        "change_id": change_id,
+        "text": text[:4000],
+        "answer": _text(command.get("answer"), 2000),
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -1774,6 +1943,7 @@ def _perform(
                 tool_call_id=wire["tool_call_id"],
                 category=wire["category"],
                 note=wire["note"],
+                answer=wire["answer"],
             )
         except teach.TeachError as error:
             raise ClientPlatformError(error.code) from None
@@ -1790,6 +1960,8 @@ def _perform(
         summary = _version_action(action, wire["runtime"])
     elif action in _USE_ACTIONS:
         summary = _use_action(action, wire)
+    elif action in _CHANGE_ACTIONS:
+        summary = _change_action(action, wire)
     elif action == "delete_data":
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs
@@ -1815,6 +1987,46 @@ def _perform(
         # An action no branch handles is refused: it never falls through to deleting learning data.
         raise ClientPlatformError("invalid_learning_command")
     return summary, signal
+
+
+def _change_action(action: str, wire: dict[str, Any]) -> str:
+    """One of the person's choices about a change Learning drafted (L3b; designs/learning-ux.md §4, §7)."""
+
+    from row_bot.learning import changes
+
+    change_id = wire["change_id"]
+    try:
+        if action == "use_change":
+            changes.use(change_id)
+            return "Now in use."
+        if action == "undo_change":
+            changes.undo(change_id)
+            return "Undone. Row-Bot works as it did before."
+        if action == "not_now_change":
+            changes.not_now(change_id)
+            return "It stays in Changes › Ready."
+        if action == "dont_suggest_change":
+            changes.dont_suggest(change_id)
+            return "Row-Bot won’t suggest this again unless something new comes up."
+        if action == "edit_change":
+            changes.edit(change_id, wire["text"])
+            return "Edited: test again before using."
+        if action == "test_change":
+            if changes.testing().running():
+                raise changes.ChangeError("running")
+            changes.test_again(change_id)
+            changes.testing().start(change_id)
+            return "Testing it now. It stops while you use Row-Bot and carries on later."
+        if action == "test_lesson":
+            if changes.testing().running():
+                raise changes.ChangeError("running")
+            found = changes.draft_saved_lesson(change_id)
+            changes.testing().start(str(found["id"]))
+            return "Testing it now. It stops while you use Row-Bot and carries on later."
+        changes.delete_lesson(change_id)
+        return "Lesson deleted."
+    except changes.ChangeError as error:
+        raise ClientPlatformError(_CHANGE_ERRORS.get(error.code, "learning_change_changed")) from None
 
 
 def read_learning_receipt(command_id: str, *, owner_id: str, validate: Callable[[], None]) -> dict:
