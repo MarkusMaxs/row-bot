@@ -153,14 +153,18 @@ class GpuGate:
 
         if self.held is not None:
             return
+        said = ""
         while True:
             others = {lane: item for lane, item in open_bookings(self._read()).items() if lane != self.lane}
             if self.training():
-                self.say(f"GPU: the person's own Row-Bot is training; waiting ({self.label})")
+                why = f"GPU: the person's own Row-Bot is training; waiting ({self.label})"
             elif others:
-                self.say(f"GPU: {', '.join(sorted(others))} booked it ({'; '.join(others.values())[:120]}); waiting")
+                why = f"GPU: {', '.join(sorted(others))} booked it ({'; '.join(others.values())[:120]}); waiting"
             else:
                 break
+            if why != said:  # said once per reason, not once a minute
+                self.say(why)
+                said = why
             self.sleep(WAIT_SECONDS)
             self.waited += WAIT_SECONDS
         mine = open_bookings(self._read()).get(self.lane)

@@ -144,14 +144,59 @@ def test_the_past_is_thirty_days_of_well_formed_conversations(histories):
         assert 0 < share < 0.3, (person["id"], share)
 
 
-def test_the_seeded_requests_are_novel_against_the_hidden_packs(learning_on):
+@pytest.mark.slow
+def test_the_seeded_requests_are_novel_against_the_hidden_packs(learning_on, histories):
     # Nothing the seeded people ask is close to a hidden pack task (the vault answers yes or no only).
     from row_bot.learning import evaluation
     from row_bot.learning.store import LearningStore
 
     LearningStore(learning_on).create()
-    texts = set()
-    for person in generator.people():
-        history = generator.generate(person, seed=SEED, days=30)
-        texts.update(request.task.text() for request in history.stream)
+    texts = {request.task.text() for history in histories.values() for request in history.stream}
+    texts |= {request.task.text() for history in histories.values() for conversation in history.past[:20]
+              for request in conversation.requests}
     assert all(evaluation.is_novel(text, asked_by="tests: seeded people novelty") for text in texts)
+
+
+@pytest.mark.slow
+def test_the_past_goes_through_the_past_chat_import_as_partial_history(learning_on, clock, chats):
+    # The release check writes each past conversation as these messages; Row-Bot's own import reads them.
+    from row_bot.learning import past_chats
+    from row_bot.learning.contracts import Decision, Episode
+    from row_bot.learning.store import LearningStore
+    from tests.e2e.learning.seeded.live import _past_messages, _thread_id
+
+    history = generator.generate("wren", seed=SEED, days=1)
+    past = [item for item in history.past if item.day >= -4]  # a few days of it: the same shapes as all 30
+    assert any(request.mistake for item in history.past for request in item.requests)
+    now = float(clock())
+
+    class Past:
+        def __init__(self) -> None:
+            self.saved = {_thread_id("wren", item.id): (item, _past_messages(item)) for item in past}
+
+        def conversations(self, since):
+            return [(thread, now + item.day * 86_400 + 9 * 3_600) for thread, (item, _) in self.saved.items()]
+
+        def messages(self, thread_id):
+            return list(self.saved[thread_id][1])
+
+        def window_start(self, thread_id, since, created_at):
+            return 0, created_at
+
+    source = Past()
+    for thread in source.saved:
+        chats.chat(thread)
+    store = LearningStore(learning_on)
+    store.create()
+    progress = past_chats.run_import(store=store, source=source, lookup=chats, clock=clock, busy=lambda: False)
+    assert progress == past_chats.ImportProgress(total=len(past), done=len(past), state="ready")
+    episodes = [item for item in store.find("episode", limit=10_000) if isinstance(item, Episode)]
+    turns = sum(len(item.requests) + sum(1 for request in item.requests if request.mistake) for item in past)
+    assert len(episodes) == turns
+    assert all(item.historical and item.fidelity == "partial" for item in episodes)
+    decisions = [item for item in store.find("decision", limit=100_000) if isinstance(item, Decision)]
+    steps = sum(len(request.steps) + (len(request.mistake[0]) if request.mistake else 0)
+                for item in past for request in item.requests)
+    assert sum(1 for item in decisions if item.kind == "tool_call") == steps
+    assert all(item.executed == "repaired" and item.raw_output_blob is None
+               for item in decisions if item.kind == "model_call")
