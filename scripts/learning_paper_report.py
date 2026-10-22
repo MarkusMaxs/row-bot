@@ -71,6 +71,8 @@ CODE_FILES = ("scripts/learning_shape_ablation.py",)
 HEALTH_FILES = re.compile(r"^(learning\.db(-wal|-shm)?|usage\.db(-wal|-shm)?|learning_config\.json|providers\.json"
                           r"|learning/.*|learning_models/.*\.json)$")
 INSTALL_DIR = ("Programs", "Row-Bot")
+#: A checkout's own ignored scratch folders (where test runs keep their temporary folders).
+IGNORED_IN_CHECKOUT = (".tmp", ".testtmp")
 
 
 class Refused(SystemExit):
@@ -184,7 +186,7 @@ def check_folders(profile: Path, scratch: Path, out: Path) -> None:
     for name, folder in (("--scratch", scratch), ("--out", out)):
         if _inside(folder, profile) or _inside(profile, folder):
             raise Refused(f"The {name} folder must be outside the profile (and not contain it).")
-    if _inside(scratch, ROOT):
+    if _inside(scratch, ROOT) and not any(_inside(scratch, ROOT / name) for name in IGNORED_IN_CHECKOUT):
         raise Refused("The --scratch folder must be outside the Row-Bot checkout (a copy there could be committed).")
 
 
@@ -264,6 +266,19 @@ class CopyMismatch(Exception):
                      f"The copy doesn't match the profile: {files} files, {size} bytes copied of {want_files} "
                      f"and {want_size}")
         super().__init__(self.text)
+
+
+def release_handles(target: Path) -> None:
+    """Close what Row-Bot keeps open in the copy for the whole process (the conversations database that
+    importing the Agent opens), so the copy can be deleted on Windows before the process ends."""
+
+    import gc
+
+    threads = sys.modules.get("row_bot.threads")
+    if threads is not None and _inside(Path(str(getattr(threads, "DB_PATH", "") or ".")), target):
+        with contextlib.suppress(Exception):
+            threads.conn.close()
+    gc.collect()
 
 
 def remove_copy(target: Path) -> bool:
@@ -1188,6 +1203,7 @@ def main(argv: Sequence[str] | None = None, *, hooks: Hooks | None = None) -> in
         if args.keep_copy:
             say("The scratch copy was kept (--keep-copy); delete it from the --scratch folder when done.")
         elif target.exists():
+            release_handles(target)
             if remove_copy(target):
                 say("The scratch copy was deleted.")
             else:
