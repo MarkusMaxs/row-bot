@@ -26,9 +26,14 @@ of range, NaN or infinity.
 - ``progress`` ``{step, steps_total, loss, seconds_per_step}``: after each step.
 - ``checkpoint`` ``{step, name}``: a checkpoint folder ``checkpoint-<step>`` was written
   with its manifest (:func:`write_checkpoint_manifest`) last.
+- ``kept`` ``{pass, losses, most, reason}``: a recipe that trains up to ``most`` passes and
+  keeps the one with the lowest validation loss (O117) says which pass it kept and each pass's
+  validation loss (``null`` with no validation rows), before ``artifacts``. Training may end
+  before the last planned step once it has.
 - ``artifacts`` ``{files}``: what the finished run produced (names, sizes, hashes).
 - ``paused`` ``{step}`` (only after ``pause``), ``finished`` ``{step}`` (at the last
-  step) or ``error`` ``{reason, step}``: the last message; the worker then exits.
+  step, or where ``kept`` ended it) or ``error`` ``{reason, step}``: the last message; the
+  worker then exits.
 
 ``error.reason`` is a plain reason class (:data:`ERROR_REASONS`), never text from the
 engine: the person sees words chosen by the app.
@@ -65,6 +70,13 @@ ERROR_REASONS = frozenset({
     "data_unreadable",  # the job's prepared data can't be read
     "engine_error",  # anything else inside the engine
 })
+
+# Why a run kept the pass it kept (O117).
+KEPT_REASONS = frozenset({
+    "lowest_validation_loss",  # the pass that did best on the dataset's validation rows
+    "no_validation_rows",  # nothing to compare passes on: one pass, kept
+})
+MAX_PASSES = 100
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
@@ -165,7 +177,8 @@ def encode(message: dict[str, Any]) -> bytes:
 # ── Messages ────────────────────────────────────────────────────────────────
 
 HOST_TYPES = frozenset({"start", "pause", "advance"})
-WORKER_TYPES = frozenset({"hello", "started", "progress", "checkpoint", "artifacts", "paused", "finished", "error"})
+WORKER_TYPES = frozenset({"hello", "started", "progress", "checkpoint", "kept", "artifacts", "paused", "finished",
+                          "error"})
 
 
 def check_message(message: Any) -> dict[str, Any]:
@@ -202,6 +215,17 @@ def check_message(message: Any) -> dict[str, Any]:
         _int(message["step"], "step", low=1)
         if checkpoint_step(message["name"]) != message["step"]:
             raise ProtocolError("invalid_message", "checkpoint name")
+    elif kind == "kept":
+        _keys(message, {"v", "type", "pass", "losses", "most", "reason"}, kind)
+        losses = message["losses"]
+        if type(losses) is not list or not 1 <= len(losses) <= MAX_PASSES:
+            raise ProtocolError("invalid_message", "losses")
+        for value in losses:
+            _number(value, "loss", optional=True)
+        _int(message["most"], "most", low=len(losses), high=MAX_PASSES)
+        _int(message["pass"], "pass", low=1, high=len(losses))
+        if message["reason"] not in KEPT_REASONS:
+            raise ProtocolError("invalid_message", "reason")
     elif kind == "artifacts":
         _keys(message, {"v", "type", "files"}, kind)
         files = message["files"]
@@ -407,8 +431,8 @@ class Session:
 
     ``hello`` first; ``started`` once, at the resumed step; then steps that only move
     forward (never past the plan); checkpoints at or behind the current step and
-    after the previous one; ``paused`` only after the host asked, ``finished`` only at
-    the last step; and nothing after the last message.
+    after the previous one; ``kept`` at most once; ``paused`` only after the host asked,
+    ``finished`` only at the last step or after ``kept``; and nothing after the last message.
     """
 
     def __init__(self, spec: dict[str, Any]) -> None:
@@ -418,6 +442,7 @@ class Session:
         self.step = 0
         self.checkpoint = 0
         self.pause_requested = False
+        self.kept = False
         self.worker = ""
 
     @property
@@ -463,15 +488,19 @@ class Session:
             if not self.checkpoint < message["step"] <= self.step:
                 raise ProtocolError("out_of_order", "a checkpoint out of order")
             self.checkpoint = message["step"]
+        elif kind == "kept":
+            if self.kept or self.step == 0:
+                raise ProtocolError("out_of_order", "kept twice or before a step")
+            self.kept = True
         elif kind == "artifacts":
-            if self.step != self.steps_total:
+            if self.step != self.steps_total and not self.kept:
                 raise ProtocolError("out_of_order", "artifacts before the last step")
         elif kind == "paused":
             if not self.pause_requested or message["step"] != self.step or self.checkpoint != self.step:
                 raise ProtocolError("out_of_order", "paused without a pause or a checkpoint")
             self.phase = "ended"
         elif kind == "finished":
-            if message["step"] != self.steps_total or self.step != self.steps_total:
+            if message["step"] != self.step or (self.step != self.steps_total and not self.kept):
                 raise ProtocolError("out_of_order", "finished before the last step")
             self.phase = "ended"
         return message
@@ -480,6 +509,7 @@ class Session:
 __all__ = [
     "CHECKPOINT_MANIFEST",
     "ERROR_REASONS",
+    "KEPT_REASONS",
     "MAX_FRAME",
     "PROTOCOL_VERSION",
     "ProtocolError",

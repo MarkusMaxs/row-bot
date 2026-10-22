@@ -19,6 +19,9 @@ Options (all optional):
   and writes its pid to ``child.pid`` in its working folder, so tests can see that
   stopping the worker ends it too.
 - ``checkpoint_bytes`` (2048): the size of each checkpoint's fake weights.
+- ``validation_losses``: what each pass "measures" on the lease's validation rows when the
+  recipe keeps the best pass (O117). The choosing is the real engine's own (``Passes`` in
+  ``learning_engine/trainer.py``); with no ``validation.jsonl`` in the lease it trains one pass.
 """
 
 from __future__ import annotations
@@ -38,6 +41,16 @@ from pathlib import Path
 
 def _load_protocol(path: str):
     spec = importlib.util.spec_from_file_location("_row_bot_training_protocol", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_passes(protocol_path: str):
+    """The real engine's pass rule (``learning_engine/trainer.py`` beside ``learning/training``)."""
+
+    path = Path(protocol_path).resolve().parents[2] / "learning_engine" / "trainer.py"
+    spec = importlib.util.spec_from_file_location("_row_bot_engine_trainer", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -134,6 +147,9 @@ def main() -> None:
     seconds_per_step = float(options.get("seconds_per_step", 3.6))
     loss_start = float(options.get("loss_start", 2.0))
     size = int(options.get("checkpoint_bytes", 2048))
+    engine = _load_passes(sys.argv[1])
+    passes = engine.Passes(spec, engine.settings_from(spec["recipe"]["settings"]), resumed=step)
+    measured = engine.validation_rows(dataset) if passes.on else []
 
     while step < total:
         if driven:
@@ -161,12 +177,25 @@ def main() -> None:
             (folder / "weights.bin").write_bytes(_weights(step, size))
             protocol.write_checkpoint_manifest(folder, step)
             send("checkpoint", step=step, name=folder.name)
+        number = passes.ends(step)
+        if number is not None:
+            folder = passes.folder(number)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "adapter.bin").write_bytes(_weights(-1000 - number, size))
+            losses = options.get("validation_losses") or []
+            if not passes.record(number, float(losses[number - 1]) if measured else None):
+                break
         if pause_now and step < total:
             send("paused", step=step)
             os._exit(0)
 
     adapter = output / "adapter.bin"
-    adapter.write_bytes(_weights(-1, size))
+    kept = passes.kept()
+    if kept is not None:
+        send("kept", **kept)
+        adapter.write_bytes((passes.folder(kept["pass"]) / "adapter.bin").read_bytes())
+    else:
+        adapter.write_bytes(_weights(-1, size))
     send("artifacts", files=[{"name": adapter.name, "bytes": adapter.stat().st_size,
                               "sha256": hashlib.sha256(adapter.read_bytes()).hexdigest()}])
     send("finished", step=step)
