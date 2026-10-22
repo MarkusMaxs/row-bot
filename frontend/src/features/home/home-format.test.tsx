@@ -104,6 +104,9 @@ describe('scheduleWords', () => {
     ['cron:0 9 * * mon,wed', `Every Monday, Wednesday at ${nine}`],
     ['cron:5 * * * *', 'Every hour at :05'],
     ['  cron:30 18 * * fri  ', `Every Friday at ${clockTime(18, 30)}`],
+    ['cron:0 8 1 * *', `Monthly on the 1st at ${clockTime(8, 0)}`],
+    ['cron:15 6 23 * *', `Monthly on the 23rd at ${clockTime(6, 15)}`],
+    ['cron:0 9 12 * *', `Monthly on the 12th at ${clockTime(9, 0)}`],
   ])('describes %j in words', (schedule, expected) => {
     expect(scheduleWords(schedule, null)).toBe(expected);
   });
@@ -117,7 +120,8 @@ describe('scheduleWords', () => {
     'interval:0',
     'interval:-1',
     'interval:abc',
-    'cron:0 9 1 * *',
+    'cron:0 9 32 * *',
+    'cron:0 9 1 * mon',
     'cron:0 9 * 1 *',
     'cron:0 25 * * *',
     'cron:60 9 * * *',

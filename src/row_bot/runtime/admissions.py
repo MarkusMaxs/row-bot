@@ -468,6 +468,13 @@ def close_admission(conversation_id: str) -> None:
         conn.execute("UPDATE generation_passes SET state='cancelled',queue_state='cancelled',queue_revision=queue_revision+1 WHERE conversation_id=? AND state IN ('queue_preparing','queued')", (conversation_id,))
 
 
+def reopen_admission(conversation_id: str) -> None:
+    """Admit turns again after a delete that was undone before any cleanup began."""
+    with transaction() as conn:
+        conn.execute("UPDATE conversation_lifecycle SET state='active' WHERE conversation_id=? AND state='admission_closed'",
+                     (conversation_id,))
+
+
 def advance_deletion(conversation_id: str, phase: str) -> None:
     phases = ("active", "admission_closed", "stop_requested", "producer_released", "children_cleaned", "resources_cleaned", "physical_delete_ready")
     if phase not in phases:

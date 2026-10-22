@@ -851,7 +851,7 @@ def test_direct_native_mode_writes_window_state(tmp_path, monkeypatch):
 
     def fake_open_window(port, control_port=None, *, client_v2=True):
         opened.append((port, control_port, client_v2))
-        return SimpleNamespace(pid=2222)
+        return SimpleNamespace(pid=2222, wait=lambda: 0)
 
     monkeypatch.setattr(launcher, "_open_window", fake_open_window)
     args = SimpleNamespace(
@@ -928,7 +928,7 @@ def test_direct_mode_honours_saved_native_preference(tmp_path, monkeypatch):
 
     def fake_open_window(port, control_port=None, *, client_v2=True):
         opened.append((port, control_port, client_v2))
-        return SimpleNamespace(pid=2223)
+        return SimpleNamespace(pid=2223, wait=lambda: 0)
 
     monkeypatch.setattr(launcher, "_open_window", fake_open_window)
     args = SimpleNamespace(
