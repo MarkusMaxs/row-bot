@@ -83,6 +83,22 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
         projected_setup = _setup_card(setup)
         if projected_setup:
             projected["setup"] = projected_setup
+    # Row-Bot's question with options (N4): its card asks it, answered by the person alone. An action asked
+    # beside it in the same step is never answered with it; it asks again for itself once this is answered.
+    from row_bot.questions import question_item
+
+    asked = question_item(value)
+    if asked is not None:
+        projected.update({
+            "action_label": "Row-Bot has a question",
+            "reason": _text(asked["questions"][0]["question"], 1024),
+            "scope": "Only this question.",
+            "safe_argument_summary": "",
+            "requesting_trace_id": _text(asked.get("__interrupt_id"), 256),
+            "questions": asked["questions"],
+        })
+        projected.pop("app", None)
+        projected.pop("reviewer_reason", None)
     return projected
 
 

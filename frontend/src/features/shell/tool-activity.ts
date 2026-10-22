@@ -19,6 +19,7 @@ import {
   Globe,
   Image,
   Mail,
+  MessageCircleQuestion,
   MessagesSquare,
   Monitor,
   MousePointerClick,
@@ -147,6 +148,11 @@ const EXACT: Record<string, Verb> = {
   ),
   request_connection: verb('Asked to connect', 'Asking to connect', Plug),
   suggest_apps: verb('Suggested apps', 'Looking for apps', Plug),
+  ask_person: verb(
+    'Asked you a question',
+    'Waiting for your answer',
+    MessageCircleQuestion,
+  ),
   export_to_pdf: verb('Exported a PDF', 'Exporting a PDF', FileText),
   save_memory: verb('Saved a memory', 'Saving a memory', Brain),
   search_memory: verb('Searched memory', 'Searching memory', Brain),
@@ -471,6 +477,8 @@ export type ActivitySummary = {
   icons: LucideIcon[];
   /** The step that is running now, if any. */
   current: TranscriptTraceItem | null;
+  /** Row-Bot's questions to the person among the steps (N4). */
+  questions?: number;
 };
 
 export function orderedSteps(groups: TranscriptTraceGroup[]) {
@@ -515,6 +523,8 @@ export function summarizeActivity(
     icons,
     current:
       [...steps].reverse().find((step) => step.status === 'pending') ?? null,
+    questions: steps.filter((step) => step.canonical_name === 'ask_person')
+      .length,
   };
 }
 
@@ -524,6 +534,15 @@ export function activityLabel(summary: ActivitySummary): string {
   // Nothing ran: every step was denied, blocked or cancelled.
   if (summary.total && summary.skipped === summary.total)
     return `${summary.total} ${noun} skipped`;
+  // A turn that only asked the person reads as what it did (N4).
+  if (
+    summary.total &&
+    summary.questions === summary.total &&
+    !summary.failed &&
+    !summary.skipped &&
+    !summary.pending
+  )
+    return summary.total === 1 ? 'Asked you a question' : 'Asked you questions';
   return [
     `Used ${summary.total} ${noun}`,
     summary.failed ? `${summary.failed} failed` : '',
