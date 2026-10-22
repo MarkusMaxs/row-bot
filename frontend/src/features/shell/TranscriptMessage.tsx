@@ -86,6 +86,7 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   agents = NO_AGENTS,
   turnStart = false,
   latest = false,
+  computer,
   streaming = false,
   onRetry,
   onEdit,
@@ -110,6 +111,8 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   turnStart?: boolean;
   /** The newest assistant turn keeps its actions visible. */
   latest?: boolean;
+  /** What computer use is doing now, for a computer step in progress. */
+  computer?: string;
   /** Text is still arriving for this row. */
   streaming?: boolean;
   onRetry?: () => void;
@@ -309,7 +312,11 @@ export const TranscriptMessage = memo(function TranscriptMessage({
           </div>
         )}
         {hasActivity && (
-          <TranscriptTrace conversation={conversationId!} groups={traces!} />
+          <TranscriptTrace
+            conversation={conversationId!}
+            groups={traces!}
+            computer={computer}
+          />
         )}
         <AgentStubs agents={agents} />
         {!!embeds.length && (

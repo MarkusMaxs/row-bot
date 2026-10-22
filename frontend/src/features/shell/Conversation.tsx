@@ -887,6 +887,16 @@ export default function Conversation({
   // The person used the computer: Row-Bot asks "Carry on?" on the question card below.
   const computerPause =
     Boolean(computer.snapshot?.active) && computer.snapshot?.state === 'paused';
+  // A computer step's row says what is happening, as the browser's step does.
+  const computerLine = !computer.snapshot?.active
+    ? ''
+    : computer.snapshot.state === 'waiting_approval'
+      ? 'Waiting for your OK'
+      : computer.snapshot.state === 'paused'
+        ? 'Paused while you use the computer'
+        : computer.snapshot.app
+          ? `Using ${computer.snapshot.app}`
+          : '';
   const lastActivity = state.activity.at(-1)?.event;
   const thinkingActive =
     Boolean(running) && lastActivity?.type === 'generation.activity';
@@ -3250,6 +3260,7 @@ export default function Conversation({
                         agents={item.agents}
                         turnStart={turns.starts[index]}
                         latest={index === lastAssistant && !turnInFlight}
+                        computer={computerLine}
                         toolbar={turns.ends[index]}
                         copyText={turns.texts[index]}
                         onRecover={recoverTurn}
@@ -3339,6 +3350,7 @@ export default function Conversation({
                       <TranscriptTrace
                         conversation={id}
                         groups={liveTraceGroups}
+                        computer={computerLine}
                         live={{
                           running: isRunning,
                           thinking: thinkingActive,

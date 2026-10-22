@@ -100,6 +100,8 @@ const EXACT: Record<string, Verb> = {
   ),
   browser_record: verb('Recorded the browser', 'Recording the browser', Video),
   computer: verb('Used the computer', 'Using the computer', Monitor),
+  // A turn's computer steps, grouped ("Computer activity").
+  computer_activity: verb('Used the computer', 'Using the computer', Monitor),
   computer_record: verb('Recorded the screen', 'Recording the screen', Video),
   // Conversations from before 5.3.
   computer_use: verb('Used the computer', 'Using the computer', Monitor),

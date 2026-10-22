@@ -57,6 +57,15 @@ function transcript(page: Page) {
   return page.getByRole('log', { name: 'Conversation' });
 }
 
+/** The turn's activity row, which says what the computer step is doing. */
+function activity(page: Page) {
+  return transcript(page)
+    .getByRole('group', { name: 'Tool activity' })
+    .last()
+    .locator('.activity-summary-text')
+    .first();
+}
+
 test.beforeEach(async ({ page }) => post(page, '/__n12b_fixture/reset'));
 test.afterEach(async ({ page }) => post(page, '/__n12b_fixture/reset'));
 
@@ -73,6 +82,7 @@ test('a turn using Edge asks once, works live in the chat, then asks before payi
   await expect(firstUse).toContainText(
     'Row-Bot will use Microsoft Edge with your mouse and keyboard while you watch.',
   );
+  await expect(activity(page)).toHaveText('Waiting for your OK');
   await everywhere(page, info, 'computer-first-use', async () => {
     await firstUse.scrollIntoViewIfNeeded();
     await expect(
@@ -87,6 +97,7 @@ test('a turn using Edge asks once, works live in the chat, then asks before payi
   await expect(step).toContainText('Using Microsoft Edge');
   await expect(step).toContainText('HomeCover – Make a claim');
   await expect(step.getByRole('status')).toContainText('Clicked "Leak"');
+  await expect(activity(page)).toHaveText('Using Microsoft Edge');
   await expect(
     step.getByRole('img', {
       name: 'The Microsoft Edge window Row-Bot is using',
@@ -114,6 +125,7 @@ test('a turn using Edge asks once, works live in the chat, then asks before payi
     }),
   ).toBeVisible();
   await expect(step.getByRole('status')).toContainText('Waiting for your OK');
+  await expect(activity(page)).toHaveText('Waiting for your OK');
   await everywhere(page, info, 'computer-pay-approval', () =>
     pay.scrollIntoViewIfNeeded(),
   );
@@ -142,6 +154,7 @@ test('using the computer yourself pauses Row-Bot, which asks to carry on', async
   await expect(step.getByRole('status')).toContainText(
     'Paused while you use it',
   );
+  await expect(activity(page)).toHaveText('Paused while you use the computer');
   await everywhere(page, info, 'computer-carry-on', () =>
     card.scrollIntoViewIfNeeded(),
   );
