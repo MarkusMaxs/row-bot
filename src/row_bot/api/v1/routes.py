@@ -10366,6 +10366,7 @@ def create_router(
                 "repeatable",
                 "reviewer_reason",
                 "question",
+                "questions",
                 "policy_revision",
             )
             if k in view
