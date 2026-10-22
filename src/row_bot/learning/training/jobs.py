@@ -49,6 +49,18 @@ KIND = "training"
 MODELS_FOLDER = "learning_models"
 RUNS_FOLDER = "runs"
 KEEP_CHECKPOINTS = 2
+
+
+def _check_plan(spec: dict[str, Any], steps_total: int) -> None:
+    checkpoint_every = int(spec["checkpoint_every"])
+    if not 1 <= checkpoint_every <= int(steps_total) <= protocol.MAX_STEPS:
+        raise ValueError("A training plan needs 1 ≤ checkpoint interval ≤ steps.")
+    somewhere = str(Path(__file__).resolve().parent)  # the shape check needs absolute paths
+    protocol.check_spec_shape({
+        "job_id": "job_check", "version": 1, "steps_total": int(steps_total), "checkpoint_every": checkpoint_every,
+        "resume_from": None, "lease": {"dataset": somewhere, "examples": 0}, "output": somewhere,
+        "recipe": spec["recipe"],
+    })
 KEPT_FILE = "kept_pass.json"
 MAX_TRANSITIONS = 200
 
@@ -300,14 +312,7 @@ class TrainingJobs:
         }
         if dataset:
             spec["dataset"] = {"id": str(dataset.get("id") or "")[:128], "examples": int(dataset.get("examples") or 0)}
-        if not 1 <= int(checkpoint_every) <= int(steps_total) <= protocol.MAX_STEPS:
-            raise ValueError("A training plan needs 1 ≤ checkpoint interval ≤ steps.")
-        somewhere = str(Path(__file__).resolve().parent)  # the shape check needs absolute paths
-        protocol.check_spec_shape({
-            "job_id": "job_check", "version": 1, "steps_total": int(steps_total),
-            "checkpoint_every": int(checkpoint_every), "resume_from": None,
-            "lease": {"dataset": somewhere, "examples": 0}, "output": somewhere, "recipe": spec["recipe"],
-        })
+        _check_plan(spec, steps_total)
         with _LOCK:
             newest = self.all()
             # Newer than every job before it, even on a clock that stood still.
@@ -321,6 +326,22 @@ class TrainingJobs:
             )
             self.store.put(job)
         return job
+
+    def replan(self, job: Job, *, steps_total: int, checkpoint_every: int, recipe: dict[str, Any]) -> Job:
+        """A job that hasn't trained a step takes another recipe and step plan; its rows stay (O117)."""
+
+        spec: dict[str, Any] = {"checkpoint_every": int(checkpoint_every), "recipe": recipe}
+        dataset = self.plan_of(job).get("dataset")
+        if dataset:
+            spec["dataset"] = dataset
+        _check_plan(spec, steps_total)
+        with _LOCK:
+            current = self.get(job.id) or job
+            sha = self.store.put_blob(json.dumps(spec, sort_keys=True).encode("utf-8"))
+            updated = replace(current, spec_blob=sha, steps_total=int(steps_total),
+                              updated_at=max(float(self.clock()), current.updated_at))
+            self.store.put(updated)
+        return updated
 
     def plan_of(self, job: Job) -> dict[str, Any]:
         """The job's planned checkpoint interval and recipe (from its spec blob)."""

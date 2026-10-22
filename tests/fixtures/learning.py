@@ -397,6 +397,11 @@ class FakeDataset:
         self.examples = examples
         self.validation = validation
         self.prepared: list[str] = []
+        self.started: list[str] = []  # the jobs that started without a step trained
+
+    def starting(self, job: Any) -> Any:
+        self.started.append(job.id)
+        return job
 
     def prepare(self, job: Any, folder: Path) -> int:
         lines = [json.dumps({"messages": [{"role": "user", "content": f"Synthetic task {index}"},
