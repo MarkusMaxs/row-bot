@@ -106,6 +106,7 @@ _STATUS.update(
     {
         "approval_required": 409,
         "conversation_deleting": 409,
+        "restore_expired": 409,
         "reasoning_model_mismatch": 422,
         "invalid_reasoning_selection": 422,
         "reasoning_capabilities_changed": 409,

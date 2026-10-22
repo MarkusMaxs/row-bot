@@ -792,7 +792,7 @@ it('publishes how far the composer reaches up from the bottom, so notices float 
   expect(clearance()).toBe('');
 });
 
-it('deletes from the details menu after confirmation: the chat closes at once and the delete waits for its Undo notice', async () => {
+it('deletes from the details menu after confirmation: the chat closes and is deleted at once, with Undo (B343)', async () => {
   activeConversation();
   const handshake = mock.state.handshake as { client_session_id?: string };
   handshake.client_session_id = 'session-a';
@@ -814,24 +814,23 @@ it('deletes from the details menu after confirmation: the chat closes at once an
       confirmLabel: 'Delete conversation',
     });
     expect(mock.navigate).not.toHaveBeenCalledWith('/');
-    act(() => confirmation.onConfirm());
+    await act(async () => confirmation.onConfirm());
     expect(mock.navigate).toHaveBeenCalledWith('/');
     expect(mock.forgetConversation).toHaveBeenCalledWith('conversation-a');
-    const [message, , undo] = mock.notify.mock.lastCall!;
-    expect(message).toBe("Deleted 'conversation-a'.");
-    expect(undo).toMatchObject({ label: 'Undo' });
-    // Nothing is deleted while Undo is on offer.
-    expect(mock.command).not.toHaveBeenCalled();
-    expect(mock.intent).not.toHaveBeenCalled();
-    await act(async () => undo.onEnd());
+    // Sent at once, so closing the page while Undo shows can't undo it.
     expect(mock.command).toHaveBeenCalledWith(
       'conversation-a',
       expect.objectContaining({
         type: 'conversation.delete',
         expected_revision: '1',
+        payload: { undo: true },
       }),
       expect.any(String),
     );
+    expect(mock.intent).not.toHaveBeenCalled();
+    const [message, , undo] = mock.notify.mock.lastCall!;
+    expect(message).toBe("Deleted 'conversation-a'.");
+    expect(undo).toMatchObject({ label: 'Undo' });
   } finally {
     delete handshake.client_session_id;
   }
