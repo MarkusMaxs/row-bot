@@ -1355,6 +1355,11 @@
   .question-card-options {
     grid-column: 1 / -1;
   }
+  /* Under the full-width options, the actions keep the card's right edge, as on a desktop. */
+  .question-card .approval-card-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
 }
 /* Answered: one plain, quiet line ("You chose: Beta.1 now"). */
 .transcript-card.question-answered {
