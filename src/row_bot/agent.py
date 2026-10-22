@@ -1943,6 +1943,31 @@ def _turn_id_from_budget(budget: Any) -> str:
     return str(budget.get("budget_id") or "") if isinstance(budget, dict) else ""
 
 
+# Learning's ways of working (E7), read once per turn: a version used mid-turn applies from the next turn.
+_WAYS_OF_WORKING: dict[tuple[str, str], str] = {}
+
+
+def _ways_of_working_text(budget: Any) -> str:
+    """The ways of working in use, as read at this turn's first model call (``learning`` is one path
+    check while none was ever used)."""
+    from row_bot import learning
+
+    turn_id = _turn_id_from_budget(budget)
+    if not turn_id:
+        return learning.ways_of_working_text()
+    key = (_current_thread_id_var.get() or "", turn_id)
+    with _TURN_CONTEXT_VALUES_LOCK:
+        cached = _WAYS_OF_WORKING.get(key)
+    if cached is not None:
+        return cached
+    text = learning.ways_of_working_text()
+    with _TURN_CONTEXT_VALUES_LOCK:
+        _WAYS_OF_WORKING[key] = text
+        while len(_WAYS_OF_WORKING) > _TURN_CONTEXT_VALUES_MAX:
+            _WAYS_OF_WORKING.pop(next(iter(_WAYS_OF_WORKING)))
+    return text
+
+
 def _agent_summary_state(messages: list) -> dict | None:
     """The validated compaction summary in force for this Agent thread, or None."""
     thread_id = _current_thread_id_var.get() or ""
@@ -2875,6 +2900,12 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
             _stable_injection_sections.append(_section)
     except Exception as exc:
         logger.debug("Skill injection skipped (non-fatal): %s", exc)
+
+    # Learning's ways of working in use (E7, D18): read at the turn's start, last of the stable
+    # sections, so a new version costs one cache miss on its first turn and nothing changes mid-turn.
+    _section = stable_section("learning.ways_of_working", _ways_of_working_text(budget), source="learning")
+    if _section is not None:
+        _stable_injection_sections.append(_section)
 
     # Batch-insert all injections at insert_idx
     _injection_sections = _stable_injection_sections

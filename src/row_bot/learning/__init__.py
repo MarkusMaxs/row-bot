@@ -342,6 +342,42 @@ def route_turn(**request: Any) -> Any | None:
         return None
 
 
+WAYS_OF_WORKING_FILE = "learning_ways_of_working.json"
+
+
+def ways_of_working_text() -> str:
+    """The ways of working in use (E7, D18), as the agent's stable system section, or "". The agent
+    reads it once per turn. While none was ever used this is one path check and imports nothing; ways
+    of working in use stay in use while Learning is off or paused (UX §8); without the preview flag
+    nothing is added (O34)."""
+
+    if not _PREVIEW:
+        return ""
+    try:
+        if not (data_dir() / WAYS_OF_WORKING_FILE).is_file():
+            return ""
+        from row_bot.learning import behaviour
+
+        return behaviour.section_text()
+    except Exception as exc:
+        logger.warning("Learning couldn't read its ways of working; Row-Bot's own apply (%s)", type(exc).__name__)
+        return ""
+
+
+def lesson_memory_deleted_soon(old_id: str, new_id: str) -> None:
+    """A Dream merge is about to delete a ``self_knowledge`` memory that a lesson in use may be (O7):
+    the lesson moves to the surviving memory instead of being marked deleted. Nothing without a store."""
+
+    try:
+        if not store_exists():
+            return
+        from row_bot.learning import changes
+
+        changes.relink_lesson(str(old_id or ""), str(new_id or ""))
+    except Exception as exc:
+        logger.warning("Learning couldn't move a lesson to its merged memory (%s)", type(exc).__name__)
+
+
 def offered_personal_models() -> dict[str, str]:
     """``{model reference: "Personal model v1"}`` of the personal-model versions model lists offer
     (D11: every ready version), or ``{}``. While there is none this is one path check."""
@@ -401,6 +437,7 @@ __all__ = [
     "STARTING_MODELS",
     "STORE_FILE",
     "TRAIN_PLACES",
+    "WAYS_OF_WORKING_FILE",
     "data_dir",
     "folder_path",
     "invalidate",
@@ -417,4 +454,6 @@ __all__ = [
     "start_runner",
     "store_exists",
     "store_path",
+    "ways_of_working_text",
+    "lesson_memory_deleted_soon",
 ]
