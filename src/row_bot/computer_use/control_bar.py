@@ -322,6 +322,9 @@ def _monitor_area(near: list[float] | None) -> tuple[int, int, int, int, float] 
 
 
 def main() -> None:  # pragma: no cover - the helper process; exercised by the platform smoke
+    # The window in front (the app Row-Bot is about to use): Tk makes its own window the foreground one,
+    # hidden, as it creates it, and the bar hands the foreground straight back before it shows.
+    in_front = 0
     if sys.platform == "win32":
         import ctypes
 
@@ -329,6 +332,7 @@ def main() -> None:  # pragma: no cover - the helper process; exercised by the p
             ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # per-monitor v2
         except Exception:
             pass
+        in_front = ctypes.windll.user32.GetForegroundWindow()
     import tkinter as tk
 
     output = _Output()
@@ -428,10 +432,8 @@ def main() -> None:  # pragma: no cover - the helper process; exercised by the p
                 state["near"] = command.get("near") or state["near"]
                 place()
                 if not state["shown"]:
-                    style_window()
                     root.deiconify()
                     root.update_idletasks()
-                    style_window()  # Tk makes the window's frame when it first shows.
                     place()
                     state["shown"] = True
                     output({"event": "ready", "pid": os.getpid(), "rect": list(state["rect"])})
@@ -445,6 +447,15 @@ def main() -> None:  # pragma: no cover - the helper process; exercised by the p
                     place()
         root.after(40, poll)
 
+    # Tk makes the bar's frame window now; it is styled never to activate and gives the foreground back.
+    root.update_idletasks()
+    style_window()
+    if sys.platform == "win32" and in_front:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        if user32.GetForegroundWindow() == (user32.GetParent(root.winfo_id()) or root.winfo_id()):
+            user32.SetForegroundWindow(in_front)
     threading.Thread(target=read, daemon=True).start()
     if sys.platform == "win32":
         threading.Thread(target=_watch_windows, args=(watch,), daemon=True).start()
