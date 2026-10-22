@@ -222,7 +222,7 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
         "builds_by_day": builds_by_day(result.get("requests") or ()),
         "versions": [{key: item.get(key) for key in ("version", "trained_after_day", "state", "steps", "loss",
                                                      "training_seconds", "phase", "failure", "gguf_bytes",
-                                                     "compared_on_day")}
+                                                     "compared_on_day", "kept_pass")}
                      | {"verdict": ((item.get("comparison") or {}).get("overall") or {}).get("verdict"),
                         "line": ((item.get("comparison") or {}).get("overall") or {}).get("line")}
                      for item in versions],
@@ -346,6 +346,18 @@ def _diff(entry: Mapping[str, Any] | None) -> str:
             f"{100 * entry['difference']:+.1f} pt, n {entry.get('problems')}")
 
 
+def _kept_words(kept: Mapping[str, Any] | None) -> str:
+    """Which pass a version of several passes kept (O119), in a few words."""
+
+    if not kept or int(kept.get("of") or 0) < 2:
+        return ""
+    failed = [int(item.get("pass") or 0) for item in kept.get("failed") or () if isinstance(item, Mapping)]
+    words = f", kept pass {kept.get('pass')} of {kept.get('of')}"
+    if failed:
+        words += " (pass " + ", ".join(str(item) for item in failed) + " couldn't finish a short task)"
+    return words
+
+
 def _survival_note(check: Mapping[str, Any]) -> str:
     """What a survival check measured, in a few words (empty when nothing to add)."""
 
@@ -433,6 +445,7 @@ def markdown(report: Mapping[str, Any]) -> str:
             lines.append(f"- v{version['version']}: trained after day {version.get('trained_after_day')}, "
                          f"{version.get('steps')} steps, {version.get('phase')}"
                          + (f" ({version['failure']})" if version.get("failure") else "")
+                         + _kept_words(version.get("kept_pass"))
                          + f"; comparison: {version.get('line') or '–'}")
         models = person.get("models") or {}
         if models:

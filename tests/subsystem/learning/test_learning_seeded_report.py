@@ -124,6 +124,8 @@ def test_the_markdown_shows_rates_with_intervals_and_names_what_isnt_built():
     result = _result("mara", first=8, final=9)
     result["versions"]["2"] = {"version": 2, "trained_after_day": 12, "state": "evaluating", "steps": 60,
                                "phase": "runtime_failed", "failure": "tool_turn_failed"}
+    result["versions"]["3"] = {"version": 3, "trained_after_day": 20, "state": "evaluating", "steps": 90,
+                               "phase": "ready", "kept_pass": {"pass": 2, "of": 3, "failed": [{"pass": 3}]}}
     result["profile"] = {"container": True}
     for index, request in enumerate(result["requests"]):  # days 1-10; a build recorded from day 6
         request["day"] = index + 1
@@ -134,6 +136,7 @@ def test_the_markdown_shows_rates_with_intervals_and_names_what_isnt_built():
                          cap_tokens=25_000_000)
     text = report.markdown(built)
     assert "- v2: trained after day 12, 60 steps, runtime_failed (tool_turn_failed); comparison: –" in text
+    assert "- v3: trained after day 20, 90 steps, ready, kept pass 2 of 3 (pass 3 couldn't finish a short task)" in text
     # Row-Bot routed every request as "other": half were meant as document lookups.
     assert "document lookups 0/5 = 0.0% [0.0, 43.5]; other 5/5 = 100.0% [56.5, 100.0]" in text
     assert "Coding pack: ran with a container engine (Docker)." in text

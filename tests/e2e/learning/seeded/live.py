@@ -1013,7 +1013,9 @@ class PersonRun:
             state = releases.read_state(version_dir)
             if state is not None:
                 entry.update({"phase": state.phase, "gguf_bytes": state.gguf_bytes, "model_ref": state.model_ref,
-                              "failure": state.failure})
+                              "failure": state.failure,
+                              # O119: with several passes, which pass the version kept and which couldn't start.
+                              "kept_pass": dict(getattr(state, "kept_pass", None) or {}) or None})
             result = model_compare.read_comparison(version, self.data)
             if result is None or entry.get("reviewed"):
                 continue
