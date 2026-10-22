@@ -20,11 +20,12 @@ Stages:
   runner (training, a version made ready, the comparison), on the simulated clock. The first
   training is crashed at a checkpoint (this process exits at once; the release check starts it
   again and the person presses Continue) and paused by use (a request sent while it trains).
-- ``checks``: the survival checks that need the whole run (a negative result, a source deletion,
-  app/engine version skew) and, when the product never offered a version, a trial asked for by the
-  person, then Undo.
-- ``benchmark``: the run's own numbers, last (O116: the release check runs every person's work first and
-  the benchmarks after): Compare now on the newest version, on every held-out problem gathered.
+- ``checks``: the survival checks that need the whole run and not the card (a negative result, a source
+  deletion, app/engine version skew).
+- ``benchmark``: the card's work that needs the whole run, last (O116: the release check runs every person's
+  work first and these after): trial, use and Undo of the newest version (when the product never offered
+  it, a trial asked for by the person), then the run's own numbers: Compare now on the newest version, on
+  every held-out problem gathered.
 - ``tidy``: the models it made in Ollama go; every result stays.
 
 ``result.json`` holds counts, rates, times and tokens only: no request, reply or file text.
@@ -1057,8 +1058,7 @@ class PersonRun:
 
     def stage_checks(self) -> None:
         survival = self.state.data["survival"]
-        for name, check in (("source_deletion", self._source_deletion), ("version_skew", self._version_skew),
-                            ("trial_use_undo", self._trial_use_undo)):
+        for name, check in (("source_deletion", self._source_deletion), ("version_skew", self._version_skew)):
             if survival.get(name, {}).get("state") in ("passed", "failed", "not_run"):
                 continue
             try:
@@ -1078,6 +1078,19 @@ class PersonRun:
         self.save()
 
     def stage_benchmark(self) -> None:
+        """The work on the card that needs the whole run, after every person's work (O116): trial, use and
+        Undo of the newest version, then the benchmark comparison."""
+
+        survival = self.state.data["survival"]
+        if survival.get("trial_use_undo", {}).get("state") not in ("passed", "failed", "not_run"):
+            try:
+                survival["trial_use_undo"] = self._trial_use_undo()
+            except SystemExit:
+                raise
+            except Exception as error:  # noqa: BLE001 - a check that couldn't run says so
+                logger.exception("check trial_use_undo failed to run")
+                survival["trial_use_undo"] = {"state": "failed", "error": f"{type(error).__name__}: {str(error)[:200]}"}
+            self.save()
         if (self.state.data.get("benchmark") or {}).get("state") in ("done", "not_run"):
             return
         self.state.data["benchmark"] = (self._benchmark() if self.args.gpu else
