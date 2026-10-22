@@ -23,7 +23,9 @@ from pathlib import Path
 WAIT_SECONDS = 60.0
 #: A checkout's own ignored scratch folders, where test runs keep their temporary folders.
 SCRATCH_IN_CHECKOUT = (".tmp", ".testtmp")
-_LINE = re.compile(r"^\s*(\d{1,2}:\d{2})\s+(\S+)\s+(START|END)\b\s*(.*)$")
+_LINE = re.compile(r"^\s*(\d{1,2}:\d{2})\s+(\S+)\s+(EXCLUSIVE\s+)?(START|END)\b\s*(.*)$")
+#: A lane's exclusive window (O105): nobody else starts GPU work or heavy test lanes in it.
+EXCLUSIVE = "EXCLUSIVE"
 
 
 class ScratchError(RuntimeError):
@@ -76,19 +78,31 @@ def check_scratch(folder: Path, eval_profile: Path | None = None, *, extra: Iter
 
 
 def open_bookings(text: str) -> dict[str, str]:
-    """Each lane's open booking (a START with no END after it): lane -> what."""
+    """Each lane's open booking (a START with no END after it): lane -> what. A lane's exclusive
+    window (``<time> <lane> EXCLUSIVE START``, closed by an ``EXCLUSIVE END``) is its own entry,
+    ``<lane> EXCLUSIVE``, that the lane's ordinary bookings inside it don't close."""
 
     found: dict[str, str] = {}
     for line in text.splitlines():
         match = _LINE.match(line)
         if not match:
             continue
-        _, lane, word, what = match.groups()
+        _, lane, exclusive, word, what = match.groups()
+        what = what.strip()
+        exclusive_line = bool(exclusive) or (word == "END" and what.upper().startswith(EXCLUSIVE))
+        key = f"{lane} {EXCLUSIVE}" if exclusive_line else lane
         if word == "START":
-            found[lane] = what.strip()
+            found[key] = what
         else:
-            found.pop(lane, None)
+            found.pop(key, None)
     return found
+
+
+def exclusive_open(text: str) -> list[str]:
+    """The lanes whose exclusive window is open now (O105: no GPU job, no ``pr``/``platform`` lane and
+    no pytest with more than 2 workers meanwhile)."""
+
+    return sorted(key.split(" ", 1)[0] for key in open_bookings(text) if key.endswith(f" {EXCLUSIVE}"))
 
 
 def person_is_training(processes: Callable[[], Iterable[str]] | None = None,
@@ -183,5 +197,6 @@ class GpuGate:
         self.held = None
 
 
-__all__ = ["GpuGate", "PROTECT_ENV", "ScratchError", "check_scratch", "everyday_profile", "forbidden_roots", "open_bookings",
+__all__ = ["EXCLUSIVE", "GpuGate", "PROTECT_ENV", "ScratchError", "check_scratch", "everyday_profile",
+           "exclusive_open", "forbidden_roots", "open_bookings",
            "person_is_training"]

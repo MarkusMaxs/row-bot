@@ -74,6 +74,27 @@ def test_after_a_crash_the_lanes_own_open_booking_is_taken_over_not_doubled(tmp_
     assert scratch.open_bookings(booking.read_text(encoding="utf-8")) == {}
 
 
+def test_another_lanes_exclusive_window_holds_the_card_until_its_exclusive_end(tmp_path):
+    booking = tmp_path / "gpu-booking.txt"
+    booking.write_text("14:00 lane-A EXCLUSIVE START tier certification (expect 120 min, 30 GB)\n"
+                       "14:01 lane-A START 32 GB tier timed run\n14:40 lane-A END 32 GB tier timed run\n",
+                       encoding="utf-8")
+    assert scratch.exclusive_open(booking.read_text(encoding="utf-8")) == ["lane-A"]
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        if len(waits) == 2:
+            booking.write_text(booking.read_text(encoding="utf-8") + "15:30 lane-A EXCLUSIVE END\n", encoding="utf-8")
+
+    gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "15:31", sleep=sleep, training=lambda: False,
+                           say=lambda _text: None)
+    gate.acquire("training", expect="30 min, 9 GB")
+    assert len(waits) == 2  # lane A's ordinary END inside the window didn't open it
+    assert scratch.exclusive_open(booking.read_text(encoding="utf-8")) == []
+    gate.release()
+
+
 def test_the_persons_own_training_is_seen_from_its_engine_process(tmp_path):
     profile = tmp_path / ".row-bot"
     engine = str(profile / "runtimes" / "learning" / "engine" / "abc" / "py" / "python.exe")
