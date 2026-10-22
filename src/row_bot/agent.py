@@ -4842,6 +4842,12 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "delete_calendar_event": "Delete calendar event",
     "move_calendar_event": "Move calendar event",
     "send_gmail_message": "Send email",
+    "outlook_send_mail": "Send email",
+    "outlook_reply_mail": "Reply to email",
+    "outlook_forward_mail": "Forward email",
+    "outlook_delete_mail": "Delete email",
+    "outlook_cancel_event": "Cancel event",
+    "outlook_respond_event": "Answer invitation",
     "delete_memory": "Delete memory",
     "tracker_delete": "Delete tracker / entry",
     "task_delete": "Delete task",
@@ -4912,6 +4918,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                     "and move on."), ""
         # What the person reads names what was given: an option left unset (None) is not part of the action.
         given = {key: value for key, value in kwargs.items() if value is not None}
+        question = ""
         if tool.name.startswith("mcp_"):
             # An app's tool: its card names the app and the tool's own title, so this says only what is sent,
             # as labelled fields with their own line breaks; never its internal name or an escaped dump (B332).
@@ -4929,6 +4936,14 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 if given:
                     args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
             description = _enrich_description(tool.name, label, args_str, kwargs)
+        if tool.name.startswith("outlook_"):
+            # Outlook's card names who it goes to and what it says, or the event's time, attendees and place.
+            try:
+                from row_bot.tools.outlook_tool import approval_card
+
+                question, description = approval_card(tool.name, given)
+            except Exception:
+                logger.warning("Outlook's approval card couldn't be written; it asks with the call itself", exc_info=True)
         try:
             from row_bot.tools.discovery import is_external_discovery_invocation
             external_discovery_active = is_external_discovery_invocation()
@@ -4939,6 +4954,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 "tool": tool.name, "label": label, "description": description,
                 "args": kwargs or (args[0] if args else {}),
                 "external_discovery_active": external_discovery_active,
+                **({"question": question} if question else {}),
             },
             approval_mode=mode,
             risks=risks,
