@@ -21,7 +21,7 @@
     "vram_cap": 0.95,
     "seed": 3407
   },
-  "epochs": 1,
+  "epochs": 3,
   "checkpoint_every": 10,
   "min_examples": 100,
   "min_new_examples": 50,
