@@ -356,6 +356,22 @@ def finish(pass_id: str, status: str, *, boundary: dict | None = None) -> str:
     return status
 
 
+def settle_leftovers(conversation_id: str, epoch: str) -> int:
+    """This process's turns in a conversation that nothing runs any more: one whose end couldn't be
+    recorded, or one admitted that never started. Called only while no producer runs for it; without this
+    the conversation refused every message as ``generation_active`` until Row-Bot restarted (B399)."""
+    with transaction() as conn:
+        passes = [row["pass_id"] for row in conn.execute(
+            "SELECT pass_id FROM generation_passes WHERE conversation_id=? "
+            "AND (state IN ('admitting','admitted') OR (state='started' AND lease_epoch=?))", (conversation_id, epoch))]
+        for pass_id in passes:
+            conn.execute("UPDATE generation_passes SET state='interrupted',terminal_status='interrupted' WHERE pass_id=?",
+                         (pass_id,))
+            conn.execute("UPDATE generation_segments SET state='interrupted' WHERE pass_id=? AND state='started'",
+                         (pass_id,))
+    return len(passes)
+
+
 def recover(epoch: str) -> None:
     """Record process loss without calling providers or replaying accepted work."""
     from row_bot import threads

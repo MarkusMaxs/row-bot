@@ -41,6 +41,15 @@ class TaskRunSummary:
     finished_at: str | None
     steps_total: int
     steps_done: int
+    # The code folder the run worked in (N9), by id and by name as it was then.
+    workspace_id: str | None = None
+    workspace_name: str | None = None
+    # The scheduled time it missed while Row-Bot was closed, when it ran once on start instead.
+    late_for: str | None = None
+    # A plain sentence about how it ended, e.g. "Not approved in time".
+    notice: str | None = None
+    # The one thing the person can do about it: "choose_folder" when its code folder was removed.
+    fix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +79,12 @@ class TaskApprovalReview:
     approval_mode: str
     message_truncated: bool
     response_available: bool
+    # "question": Row-Bot's question (N4), answered on its own card rather than approved here.
+    kind: str = "approval"
+    # The person's own "Always ask me" approval (N9): no level answers it for them, and its card
+    # says exactly what will happen (action, destination, account, full text, media).
+    person_only: bool = False
+    card: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -131,7 +146,10 @@ def _summary(row: dict) -> TaskRunSummary:
     if any(type(row[key]) is not int or row[key] < 0 for key in ("steps_total", "steps_done")):
         raise TaskExecutionError("task_run_metadata_unavailable")
     return TaskRunSummary(row["id"], row["task_id"], row["thread_id"], row["status"] or "unknown",
-                          row["started_at"] or "", row["finished_at"], row["steps_total"], row["steps_done"])
+                          row["started_at"] or "", row["finished_at"], row["steps_total"], row["steps_done"],
+                          row.get("workspace_id") or None, row.get("workspace_name") or None,
+                          row.get("late_for") or None, row.get("notice") or None,
+                          row.get("fix") if row.get("fix") == "choose_folder" else None)
 
 
 def get_task_run(task_id: str, run_id: str) -> TaskRunSummary:
@@ -221,6 +239,37 @@ def list_task_runs(task_id: str, *, cursor: str | None = None, limit: int = 50) 
     return TaskRunPage(task_id, revision, tuple(items), next_cursor, total)
 
 
+def _text(value: object, limit: int) -> str:
+    text = value if isinstance(value, str) else ""
+    return "".join(c for c in text if c in "\n\t" or ord(c) >= 32).strip()[:limit]
+
+
+def _approval_card(approval: dict) -> dict | None:
+    """The bounded card of a person-only approval, from the terms it was made with."""
+    try:
+        payload = json.loads(approval.get("approval_payload_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    card = payload.get("card") if isinstance(payload, dict) and payload.get("person_only") else None
+    if not isinstance(card, dict):
+        return None
+    media = []
+    for item in card.get("media") if isinstance(card.get("media"), list) else []:
+        if len(media) == 16 or not isinstance(item, dict):
+            continue
+        size, fingerprint = item.get("size"), str(item.get("fingerprint") or "")
+        if type(size) is not int or size < 0 or not re.fullmatch(r"[0-9a-f]{6,64}", fingerprint):
+            continue
+        kind = item.get("kind") if item.get("kind") in {"image", "video", "audio", "file"} else "file"
+        media.append({"name": _text(item.get("name"), 256) or "file", "size": size,
+                      "fingerprint": fingerprint, "kind": kind})
+    return {"action": _text(card.get("action"), 1024) or "Run a tool",
+            "destination": _text(card.get("destination"), 1024) or None,
+            "account": _text(card.get("account"), 256) or None,
+            "text": _text(card.get("text"), 16384) or None,
+            "media": media}
+
+
 def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None, limit: int = 8) -> TaskApprovalPage:
     _identity(task_id)
     _identity(run_id)
@@ -252,9 +301,12 @@ def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None,
                 capture = state["config"].get("_reviewed_task_run")
                 message = approval.get("message") or ""
                 truncated = len(message) > 16384
+                card = _approval_card(approval)
                 draining = any(h.domain == "workflow" and h.domain_id == run_id
                                for h in generation_registry.active(state["thread_id"]))
                 expired = bool(approval.get("timeout_at") and approval["timeout_at"] <= tasks.datetime.now().isoformat())
+                from row_bot.questions import stored_question
+                question = stored_question(approval.get("approval_payload_json")) is not None
                 item = TaskApprovalReview(
                     approval["id"], task_id, run_id, revision, message[:16384],
                     str(approval.get("requested_at") or "")[:80],
@@ -262,7 +314,9 @@ def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None,
                     str(capture["policy"]["approval_mode"]) if capture else "unknown",
                     truncated, bool(capture and not truncated and not draining and not expired and state["status"] == "paused"
                                     and state.get("resume_token") == approval.get("resume_token")
-                                    and approval.get("resume_kind") in {None, "", "workflow"}),
+                                    and approval.get("resume_kind") in {None, "", "workflow"} and not question),
+                    "question" if question else "approval",
+                    card is not None, card,
                 )
                 item_size = len(json.dumps(asdict(item), ensure_ascii=True).encode()) + 2
                 if len(items) == limit or size + item_size > 240 * 1024:

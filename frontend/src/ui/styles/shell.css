@@ -851,7 +851,9 @@
   white-space: nowrap;
 }
 .navigation .buddy-companion p,
+/* Up to two lines, so a longer status ("Row-Bot has a question") reads whole. */
 .navigation .buddy-companion-text p {
+  display: -webkit-box;
   max-width: 100%;
   margin: 0;
   overflow: hidden;
@@ -859,8 +861,9 @@
   font-size: var(--text-13);
   line-height: var(--leading-13);
   text-align: start;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 /* A longer status ("Learning: training your personal model") takes a second line, not an ellipsis. */
 .navigation .buddy-companion-text p[role='status'] {

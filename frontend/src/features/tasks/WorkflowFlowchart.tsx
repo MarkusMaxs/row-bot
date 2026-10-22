@@ -166,6 +166,7 @@ export default function WorkflowFlowchart({
     const named = apps(steps[index]);
     if (named.length)
       parts.push(`Uses ${named.map((app) => app.name).join(', ')}`);
+    if (steps[index].fields.always_ask) parts.push('Always asks you first');
     for (const link of links.filter((item) => item.from === index))
       parts.push(
         link.branch
@@ -300,6 +301,12 @@ export default function WorkflowFlowchart({
                       app.icon && (
                         <AppIcon key={app.id} icon={app.icon} size={14} />
                       ),
+                  )}
+                  {step.fields.always_ask && (
+                    <span className="workflow-chart-ask">
+                      <UserCheck size={12} aria-hidden="true" />
+                      Asks you
+                    </span>
                   )}
                 </span>
                 <span

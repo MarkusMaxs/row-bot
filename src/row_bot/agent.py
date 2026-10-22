@@ -9,6 +9,7 @@ import threading
 import time
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Any, Iterator
 
 from row_bot.models import get_llm, get_llm_for, get_context_policy, get_context_size, get_current_model, is_model_local, is_cloud_model, get_cloud_provider, set_active_model_override, _active_model_override
@@ -4557,6 +4558,17 @@ _current_external_discovery_active_var: _contextvars.ContextVar[bool] = _context
 _current_app_scope_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
     "current_app_scope", default=None
 )
+# A workflow run's "Always ask me" rules (N9): {"step": bool, "items": [app or tool ids]}. An
+# action they cover waits for the person under every approval level (see _person_rule_refusal).
+_current_person_rules_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
+    "current_person_rules", default=None
+)
+
+
+def current_person_rules() -> dict | None:
+    """The running workflow's "Always ask me" rules (N9), for an agent it starts: they go with it."""
+    rules = _current_person_rules_var.get(None)
+    return dict(rules) if rules else None
 
 
 # ── Learning (preview) seams ────────────────────────────────────────────────────────────────────
@@ -4815,6 +4827,7 @@ def _set_active_runtime_context(
     agent_run_id: str = "",
     external_discovery_active: bool = False,
     app_scope: dict | None = None,
+    person_rules: dict | None = None,
 ) -> None:
     _current_thread_id_var.set(thread_id or "")
     _current_runtime_surface_var.set(runtime_surface or "")
@@ -4838,6 +4851,7 @@ def _set_active_runtime_context(
     _current_agent_run_id_var.set(agent_run_id or "")
     _current_external_discovery_active_var.set(bool(external_discovery_active))
     _current_app_scope_var.set(dict(app_scope) if isinstance(app_scope, dict) else None)
+    _current_person_rules_var.set(dict(person_rules) if isinstance(person_rules, dict) else None)
     _current_authorized_skill_records_var.set(None)
     _current_effective_tool_parent_names_var.set(())
     _current_bound_tool_schema_tokens_var.set(0)
@@ -5681,7 +5695,13 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
         except Exception:
             return 'BLOCKED: The selected Agent Profile policy is unavailable.'
 
-    from row_bot.tools.approval_gate import collect_decisions, with_decisions
+    from contextlib import nullcontext
+
+    from row_bot.tools.approval_gate import approved_by_person, collect_decisions, with_decisions
+
+    def person_rule(function, args, kwargs) -> tuple[str | None, str]:
+        arguments = call_arguments(argument_function or function, args, kwargs)
+        return _person_rule_refusal(tool.name, arguments, source=source, parent=parent)
 
     def sync(function):
         @wraps(function)
@@ -5691,7 +5711,11 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
                 return blocked
             # Every approval decided while it runs is recorded on its result (the activity shows it).
             with collect_decisions() as decisions:
-                result = function(*args, **kwargs)
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = function(*args, **kwargs)
             return with_decisions(decisions, result)
         return guarded
 
@@ -5702,7 +5726,11 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
             if blocked is not None:
                 return blocked
             with collect_decisions() as decisions:
-                result = await function(*args, **kwargs)
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = await function(*args, **kwargs)
             return with_decisions(decisions, result)
         return guarded
 
@@ -5716,6 +5744,62 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
     else:
         updates['_arun'] = asynchronous(tool._arun)
     return tool.model_copy(update=updates)
+
+
+PERSON_RULE_REFUSAL = (
+    "The person didn't approve this action, so it did not run. Don't try to do it another way; "
+    "say what you would have done."
+)
+
+
+def _person_rule_covers(rules: dict, name: str, *, source: str, parent: str) -> bool:
+    """Whether a workflow's "Always ask me" rules name this tool: its step's rule, the tool or
+    tool group, or the app it belongs to."""
+    if rules.get("step"):
+        return True
+    items = {str(item) for item in rules.get("items") or []}
+    if not items:
+        return False
+    if name in items or parent in items:
+        return True
+    try:
+        from row_bot.integrations.scope import app_for_tool
+
+        app = app_for_tool(name)
+    except Exception:
+        logger.debug("The app of %s can't be told", name, exc_info=True)
+        app = None
+    return bool(app and app.get("item_id") in items)
+
+
+def _person_rule_refusal(name: str, arguments: dict | None, *, source: str, parent: str) -> tuple[str | None, str]:
+    """(refusal, binding) for one call under a workflow's "Always ask me" rules (N9).
+
+    An action the rules cover (anything but a read) waits for the person under every level, on a
+    card that says exactly what will happen; it runs only with the arguments they approved. The
+    binding is returned when they approved, so what the tool asks inside counts as approved.
+    """
+    rules = _current_person_rules_var.get(None)
+    if not rules:
+        return None, ""
+    from row_bot.tools.profile_policy import action_effect
+
+    if action_effect(name, arguments, source=source, parent=parent) == "read_only":
+        return None, ""
+    if not _person_rule_covers(rules, name, source=source, parent=parent):
+        return None, ""
+    from row_bot.approval_messages import plain_tool_call
+    from row_bot.tools.action_card import describe_action
+    from row_bot.tools.approval_gate import call_binding, person_approval, with_approval
+
+    card = describe_action(name, arguments, source=source, parent=parent)
+    binding = call_binding(name, arguments, (item["fingerprint"] for item in card["media"]))
+    payload = {"tool": name, "label": card["action"][:120], "description": plain_tool_call(name, arguments or {}),
+               "args": arguments or {}, "card": card}
+    approved, line = person_approval(payload, binding=binding)
+    if approved:
+        return None, binding
+    return with_approval(line, PERSON_RULE_REFUSAL), ""
 
 
 def _tool_left_out(name: str, source: str, parent: str, servers: set[str], parents: set[str]) -> bool:
@@ -6158,6 +6242,16 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     )
                     _install_custom_tool_validation_repair(reader, readiness.provider_id)
                     lc_tools.extend(reader)
+                # Asking the person a question with options (N4): every agent can, under every approval level;
+                # a question is never an action to approve, so no level or profile takes it away.
+                from row_bot.questions import QUESTION_TOOL, build_tool as build_question_tool
+
+                if QUESTION_TOOL not in {str(getattr(tool, "name", "") or "") for tool in lc_tools}:
+                    asker = _apply_provider_tool_schema_compatibility(
+                        [build_question_tool()], readiness, has_explicit_allowlist=False
+                    )
+                    _install_custom_tool_validation_repair(asker, readiness.provider_id)
+                    lc_tools.extend(asker)
 
             from row_bot.tools.discovery import estimate_bound_tool_schema_tokens
 
@@ -6226,13 +6320,18 @@ def _paused_at_a_question(state: Any) -> bool:
     return any(getattr(task, "interrupts", None) for task in getattr(state, "tasks", ()) or ())
 
 
-def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
-    """Return normalized interrupt data from a paused LangGraph state."""
+def _waiting_interrupts(state: Any) -> list[dict[str, Any]]:
+    """The questions a paused state waits on, each with its ``__interrupt_id``.
 
-    if not _paused_at_a_question(state):
-        return None
-    all_interrupts: list[dict[str, Any]] = []
+    A tool call that went on with its own answer while a call beside it still
+    waits (Row-Bot's question, N4) keeps its old question in the saved writes:
+    a call with a result is finished, so it waits on nothing.
+    """
+
+    waiting: list[dict[str, Any]] = []
     for task in getattr(state, "tasks", ()) or ():
+        if getattr(task, "result", None):
+            continue
         for intr in getattr(task, "interrupts", ()) or ():
             value = getattr(intr, "value", None)
             item = (
@@ -6241,7 +6340,16 @@ def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
                 else {"description": str(value)}
             )
             item["__interrupt_id"] = str(getattr(intr, "id", "") or "")
-            all_interrupts.append(item)
+            waiting.append(item)
+    return waiting
+
+
+def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
+    """Return normalized interrupt data from a paused LangGraph state."""
+
+    if not _paused_at_a_question(state):
+        return None
+    all_interrupts = _waiting_interrupts(state)
     if not all_interrupts:
         return None
     return {"type": "interrupt", "interrupts": all_interrupts}
@@ -6356,6 +6464,7 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _log_runtime_decision(
@@ -7168,6 +7277,7 @@ def _stream_chat_only_events(
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(model_label)
     _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for(configurable))
@@ -7607,6 +7717,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     # A chat on another of the owner's devices runs like one on this computer.
     auto_allowed = runtime_mode == "auto" and runtime_surface in {"normal_chat", "remote_client", "channel"}
@@ -7709,6 +7820,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _graph_build_started = time.perf_counter()
@@ -7834,10 +7946,24 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None,
         return None
 
 
+def _resume_value(approved: bool, interrupt_ids: list[str] | None,
+                  resume_values: Mapping[str, Any] | None) -> Any:
+    """What ``Command(resume=...)`` carries: an approval for each waiting id, or a question's answer by its id."""
+    if resume_values:
+        return dict(resume_values)
+    if interrupt_ids:
+        return {iid: approved for iid in interrupt_ids}
+    return approved
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None):
     """Resume an interrupted agent graph after user approval/denial.
+
+    ``resume_values`` (a question's answer, by its interrupt id) resumes only
+    those interrupts, in place of ``approved``: anything else waiting asks again.
 
     Yields the same ``(event_type, payload)`` tuples as ``stream_agent``.
     """
@@ -7865,6 +7991,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7883,10 +8010,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _resume_value(approved, interrupt_ids, resume_values)
     _learning_begin_turn(config.get("configurable"), resumed=True)
     learning_status = "cancelled"
     try:
@@ -7925,6 +8049,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
 
 def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, approved: bool,
                                *, interrupt_ids: list[str] | None = None,
+                               resume_values: Mapping[str, Any] | None = None,
                                stop_event: threading.Event | None = None) -> str | dict:
     """Resume an interrupted agent graph (non-streaming, for tasks).
 
@@ -7961,6 +8086,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7980,10 +8106,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
             f"This paused agent run cannot be resumed safely: {exc}"
         ) from exc
 
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _resume_value(approved, interrupt_ids, resume_values)
 
     _learning_begin_turn(config.get("configurable"), resumed=True)  # closed by resume_invoke_agent
     try:
@@ -8016,13 +8139,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
     # Check for another interrupt (agent may call a second dangerous tool)
     state = agent.get_state(config)
     if _paused_at_a_question(state):
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             return {"type": "interrupt", "interrupts": all_interrupts}
 
@@ -8038,6 +8155,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
 
 def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None) -> str | dict:
     """Resume the shared graph and apply the durable orchestration guard."""
 
@@ -8048,6 +8166,7 @@ def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: b
             config,
             approved,
             interrupt_ids=interrupt_ids,
+            resume_values=resume_values,
             stop_event=stop_event,
         )
         learning_status = _learning_invoke_status(result)
@@ -9013,13 +9132,7 @@ def _stream_graph(agent, input_data, config: dict,
             latest_ai_message=_latest_ai_message_from_state(agent, config),
             phase_timings=phase_timings,
         )
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             yield ("interrupt", all_interrupts)
             return
