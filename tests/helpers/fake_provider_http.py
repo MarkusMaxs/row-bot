@@ -98,6 +98,9 @@ class FakeProviderServer:
 
     def close(self) -> None:
         self._closed = True
+        # Shut down first: on Linux closing a socket doesn't wake an accept (or a read) blocked on it.
+        with suppress(OSError):
+            self._listener.shutdown(socket.SHUT_RDWR)
         with suppress(OSError):
             self._listener.close()
         for connection in list(self._connections):
