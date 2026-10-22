@@ -5,6 +5,7 @@ person's fixed choices. The people's real runs are opt-in (``tests/e2e``); here 
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,9 @@ def test_scratch_folders_never_reach_the_everyday_profile_its_backups_the_eval_p
     assert scratch.check_scratch(tmp_path / "scratch" / "s1", eval_profile) == (tmp_path / "scratch" / "s1").resolve()
 
 
+QUIET = {"quiet": lambda: None, "after_quiet": lambda: False, "card": lambda: None}
+
+
 def test_the_gpu_is_booked_after_other_lanes_and_the_persons_own_training(tmp_path):
     booking = tmp_path / "gpu-booking.txt"
     booking.write_text("19:10 lane-A START L2w serve (expect 15 min, 6 GB)\n", encoding="utf-8")
@@ -51,11 +55,13 @@ def test_the_gpu_is_booked_after_other_lanes_and_the_persons_own_training(tmp_pa
             booking.write_text(booking.read_text(encoding="utf-8") + "19:30 lane-A END L2w serve\n", encoding="utf-8")
 
     gate = scratch.GpuGate(booking, "lane-B", label="S1 test", clock=lambda: "20:00", sleep=sleep,
-                           training=lambda: training.pop(0) if training else False, say=lambda _text: None)
+                           training=lambda: training.pop(0) if training else False, say=lambda _text: None, **QUIET)
     gate.acquire("training v1", expect="30 min, 9 GB")
     assert len(waits) == 2  # lane A's open booking, then the person's own training
     gate.acquire("comparison")  # already holding: no second line
     lines = booking.read_text(encoding="utf-8").splitlines()
+    # While lane A held it, a note said once that lane B waits (O116: the lanes yield between steps).
+    assert lines[1] == "20:00 lane-B note: S1 test waits for the card (next: training v1; expect 30 min, 9 GB)"
     assert lines[-1] == "20:00 lane-B START S1 test: training v1 (expect 30 min, 9 GB; yields to the person's Learning engine)"
     assert scratch.open_bookings(booking.read_text(encoding="utf-8")) == {"lane-B": lines[-1].split("START ", 1)[1]}
     gate.release()
@@ -67,7 +73,7 @@ def test_after_a_crash_the_lanes_own_open_booking_is_taken_over_not_doubled(tmp_
     booking = tmp_path / "gpu-booking.txt"
     booking.write_text("01:00 lane-B START S1: training (yields to the person's Learning engine)\n", encoding="utf-8")
     gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "01:10", sleep=lambda _s: None, training=lambda: False,
-                           say=lambda _text: None)
+                           say=lambda _text: None, **QUIET)
     gate.acquire("training")
     assert len(booking.read_text(encoding="utf-8").splitlines()) == 1
     gate.release()
@@ -88,10 +94,65 @@ def test_another_lanes_exclusive_window_holds_the_card_until_its_exclusive_end(t
             booking.write_text(booking.read_text(encoding="utf-8") + "15:30 lane-A EXCLUSIVE END\n", encoding="utf-8")
 
     gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "15:31", sleep=sleep, training=lambda: False,
-                           say=lambda _text: None)
+                           say=lambda _text: None, **QUIET)
     gate.acquire("training", expect="30 min, 9 GB")
     assert len(waits) == 2  # lane A's ordinary END inside the window didn't open it
     assert scratch.exclusive_open(booking.read_text(encoding="utf-8")) == []
+    gate.release()
+
+
+def test_a_lane_that_wrote_it_waits_books_first_and_a_late_one_doesnt_hold_the_card(tmp_path):
+    booking = tmp_path / "gpu-booking.txt"
+    booking.write_text("13:00 lane-A START L2x ablation\n13:40 lane-A END L2x ablation\n"
+                       "13:41 lane-A note: L2x waits for the card (next: 9B training; expect 35 min, 27 GB)\n",
+                       encoding="utf-8")
+    assert scratch.waiting_lanes(booking.read_text(encoding="utf-8")) == {
+        "lane-A": "L2x waits for the card (next: 9B training; expect 35 min, 27 GB)"}
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        if len(waits) == 1:  # lane A takes its turn, then ends it
+            booking.write_text(booking.read_text(encoding="utf-8") + "13:42 lane-A START L2x 9B training\n",
+                               encoding="utf-8")
+        if len(waits) == 3:
+            booking.write_text(booking.read_text(encoding="utf-8") + "14:20 lane-A END L2x 9B training\n",
+                               encoding="utf-8")
+
+    gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "14:21", sleep=sleep, training=lambda: False,
+                           say=lambda _text: None, **QUIET)
+    gate.acquire("comparison")
+    assert len(waits) == 3 and scratch.open_bookings(booking.read_text(encoding="utf-8")) == {
+        "lane-B": "S1: comparison (yields to the person's Learning engine)"}
+    gate.release()
+    # A waiting note with nobody booking after it gets a few minutes, not the card for ever.
+    booking.write_text(booking.read_text(encoding="utf-8") + "14:30 lane-A note: L2x waits for the card\n",
+                       encoding="utf-8")
+    waits.clear()
+    gate.acquire("comparison")
+    assert len(waits) == int(scratch.YIELD_SECONDS / scratch.WAIT_SECONDS)
+    gate.release()
+
+
+def test_no_card_in_the_persons_quiet_hours_and_after_them_not_while_something_else_holds_it(tmp_path):
+    assert not scratch.in_quiet_hours(datetime(2026, 10, 22, 0, 39))
+    assert scratch.in_quiet_hours(datetime(2026, 10, 22, 0, 40)) and scratch.in_quiet_hours(datetime(2026, 10, 22, 4, 59))
+    assert not scratch.in_quiet_hours(datetime(2026, 10, 22, 5, 0))
+    assert scratch.quiet_reason(datetime(2026, 10, 23, 2, 0)) and scratch.quiet_reason(datetime(2026, 10, 23, 13, 0)) is None
+    assert scratch.after_quiet_hours(datetime(2026, 10, 23, 5, 0)) and not scratch.after_quiet_hours(datetime(2026, 10, 23, 8, 0))
+    booking = tmp_path / "gpu-booking.txt"
+    booking.write_text("", encoding="utf-8")
+    quiet = ["quiet hours", "quiet hours", None, None, None, None]
+    card = [9_000, 7_000, 3_000]
+    said: list[str] = []
+    gate = scratch.GpuGate(booking, "lane-B", clock=lambda: "05:03", sleep=lambda _s: None, training=lambda: False,
+                           quiet=lambda: quiet.pop(0), after_quiet=lambda: True, card=lambda: card.pop(0),
+                           say=said.append)
+    gate.acquire("comparison")
+    assert said == ["GPU: quiet hours; waiting",
+                    "GPU: the card holds 9,000 MiB that no lane booked (after the quiet hours); waiting",
+                    "GPU: the card holds 7,000 MiB that no lane booked (after the quiet hours); waiting"]
+    assert gate.waited == 4 * scratch.WAIT_SECONDS and not card
     gate.release()
 
 

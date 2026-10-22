@@ -675,7 +675,7 @@ class PersonRun:
         training); a comparison also shares the main model's kept pack results between the seeded people."""
 
         def booked(*args: Any, **kwargs: Any) -> Any:
-            self.gpu.acquire(f"{phase}, simulated day {self.clock.day}", expect=self._gpu_expect())
+            self.gpu.acquire(f"{phase}, simulated day {self.clock.day}", expect=self._gpu_expect(phase))
             started = time.monotonic()
             if phase == "comparison":
                 self._share_cache(into_profile=True)
@@ -688,15 +688,22 @@ class PersonRun:
                     self._share_cache(into_profile=False)
                 if phase != "training":
                     self._gpu_time(phase, time.monotonic() - started)
+                    # O116: the card goes back between a night's training (and its version) and the
+                    # comparison, and after it; each books again.
+                    self.gpu.release()
 
         return booked
 
-    def _gpu_expect(self) -> str:
-        """The booking's honest size: a night holds the card for its training, the version and its
-        comparison (the tier's graphics-memory cap plus the engine's own)."""
+    def _gpu_expect(self, phase: str) -> str:
+        """The booking's honest size (the tier's graphics-memory cap plus the engine's own): a training holds
+        the card through its version; a comparison books it again (O116)."""
 
         cap = {"8gb": 9, "16gb": 17, "24gb": 25, "32gb": 33}.get(self.args.tier, 9)
-        return f"{30 if self.args.pilot_compare else 90} min, {cap} GB"
+        if phase == "comparison":
+            return f"{10 if self.args.pilot_compare else 70} min, {cap} GB"
+        if phase == "export and serve":
+            return f"5 min, {cap} GB"
+        return f"25 min, {cap} GB"
 
     def _share_cache(self, *, into_profile: bool) -> None:
         """The main model's kept pack results (O31's 30-day cache: model, task, metric version, budget and
@@ -726,16 +733,17 @@ class PersonRun:
             target.write_text(json.dumps({"version": 1, "entries": merged}, sort_keys=True), encoding="utf-8")
 
     def _yield_watch(self) -> threading.Event:
-        """While the night's work runs: when the person's own Row-Bot starts training, ours yields at once
-        (training pauses at its checkpoint, a comparison stops; both continue once theirs has finished)."""
+        """While the night's work runs: when the person's own Row-Bot starts training, or their quiet hours
+        come (O116: running work stops at 00:43), ours yields at once (training pauses at its checkpoint, a
+        comparison stops, the booking ends; both continue once the card is free again)."""
 
-        from tests.e2e.learning.seeded.scratch import person_is_training
+        from tests.e2e.learning.seeded.scratch import QUIET_STOP, in_quiet_hours, person_is_training
 
         done = threading.Event()
 
         def loop() -> None:
             while not done.wait(10.0):
-                if not person_is_training():
+                if not (person_is_training() or in_quiet_hours(start=QUIET_STOP)):
                     continue
                 runner = self._runner
                 if runner is not None and runner.supervisor.training():
@@ -744,15 +752,26 @@ class PersonRun:
                 if runner is not None and self._comparing:
                     runner.comparisons.stop()
                     self.state.data["notes"].append({"yielded": "comparison", "at": time.strftime("%H:%M:%S")})
+                if runner is not None and not runner.supervisor.training() and not self._comparing:
+                    self.gpu.release()
 
         threading.Thread(target=loop, name="s1-yield", daemon=True).start()
         return done
 
     def _wait_for_person(self) -> None:
-        from tests.e2e.learning.seeded.scratch import person_is_training
+        """Nothing starts while the person's own Row-Bot trains or in their quiet hours (O116)."""
 
-        while person_is_training():
-            self.note("the person's own Row-Bot is training: waiting")
+        from tests.e2e.learning.seeded.scratch import person_is_training, quiet_reason
+
+        said = ""
+        while True:
+            why = ("the person's own Row-Bot is training" if person_is_training() else quiet_reason())
+            if not why:
+                return
+            if why != said:
+                self.note(f"{why}: waiting")
+                said = why
+            self.gpu.release()
             time.sleep(60.0)
 
     def recipe(self) -> Any:
