@@ -7824,7 +7824,7 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
         _update_pipeline_status(state["run_id"], "stopped")
         _finish_run(state["run_id"], "stopped",
                     status_message="Approval timed out" if timed_out else "Approval denied by user",
-                    notice=NOT_APPROVED_IN_TIME if timed_out else "")
+                    **({"notice": NOT_APPROVED_IN_TIME} if timed_out else {}))
         _emit_buddy_workflow_event(
             "cancelled",
             task_id=state["task_id"],
