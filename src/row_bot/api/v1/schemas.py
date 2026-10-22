@@ -450,28 +450,31 @@ class BrowserSitesCleared(WireModel):
 # A 64-hex revision (computer use's card state).
 BrowserRevision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
-ComputerUseAction = Literal[
-    "computer_use.stop",
-    "computer_use.pause",
-    "computer_use.resume",
-]
+ComputerUseAction = Literal["computer_use.stop"]
+
+
+class ComputerUseProblem(WireModel):
+    """Why computer use couldn't start in this conversation, and how to fix it."""
+
+    message: str = Field(max_length=240)
+    fix: str = Field(max_length=240)
 
 
 class ComputerUseSnapshot(WireModel):
-    """The conversation's computer-use card: plain state and what it can do."""
+    """The conversation's computer use step: the app, what Row-Bot is doing, Stop."""
 
     schema_version: Literal[1]
     conversation_id: OpaqueId
     revision: BrowserRevision
-    # A session belongs to this conversation (it may be paused).
+    # A session belongs to this conversation.
     active: bool
-    state: Literal["working", "paused", "waiting_approval", "needs_attention", "stopped"]
+    # Paused: the person used the computer, and Row-Bot asks "Carry on?" in the chat.
+    state: Literal["working", "paused", "waiting_approval", "stopped"]
     app: str = Field(max_length=120)
+    window: str = Field(max_length=200)
+    doing: str = Field(max_length=200)
     has_picture: bool
-    # The approval the paused turn waits on; Resume answers it.
-    approval_id: OpaqueId | None
-    can_pause: bool
-    can_resume: bool
+    problem: ComputerUseProblem | None
     can_stop: bool
 
 

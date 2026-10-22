@@ -376,6 +376,11 @@
   width: min(240px, 100%);
   margin: var(--space-1) 0;
 }
+/* A window's picture is shown whole: Row-Bot's ring may be anywhere in it. */
+.computer-thumb img {
+  object-fit: contain;
+  object-position: center;
+}
 
 /* Signed-in sites (Settings › Browser and the pane's menu). */
 .browser-sites {

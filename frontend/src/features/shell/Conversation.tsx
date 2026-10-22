@@ -123,7 +123,7 @@ import { DeliveryIoContext, type DeliveryIo } from './deliveries';
 import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
-import { ComputerUseCard, useComputerUse } from './ComputerUseCard';
+import { ComputerStep, useComputerUse } from './ComputerStep';
 import { BrowserStep } from '../browser/BrowserThumbnail';
 import { registerPromptSender } from './composer-bridge';
 import ConversationHeader from './ConversationHeader';
@@ -884,11 +884,19 @@ export default function Conversation({
     turnKey: `${generation?.generation_id ?? ''}:${generation?.status ?? ''}`,
     load: controller.computerUse,
   });
-  // A paused computer waits on an approval; the card's Resume answers it,
-  // so the approval card stays away (never both).
+  // The person used the computer: Row-Bot asks "Carry on?" on the question card below.
   const computerPause =
-    Boolean(computer.snapshot?.approval_id) &&
-    computer.snapshot?.approval_id === generation?.approval_id;
+    Boolean(computer.snapshot?.active) && computer.snapshot?.state === 'paused';
+  // A computer step's row says what is happening, as the browser's step does.
+  const computerLine = !computer.snapshot?.active
+    ? ''
+    : computer.snapshot.state === 'waiting_approval'
+      ? 'Waiting for your OK'
+      : computer.snapshot.state === 'paused'
+        ? 'Paused while you use the computer'
+        : computer.snapshot.app
+          ? `Using ${computer.snapshot.app}`
+          : '';
   const lastActivity = state.activity.at(-1)?.event;
   const thinkingActive =
     Boolean(running) && lastActivity?.type === 'generation.activity';
@@ -3252,6 +3260,7 @@ export default function Conversation({
                         agents={item.agents}
                         turnStart={turns.starts[index]}
                         latest={index === lastAssistant && !turnInFlight}
+                        computer={computerLine}
                         toolbar={turns.ends[index]}
                         copyText={turns.texts[index]}
                         onRecover={recoverTurn}
@@ -3341,6 +3350,7 @@ export default function Conversation({
                       <TranscriptTrace
                         conversation={id}
                         groups={liveTraceGroups}
+                        computer={computerLine}
                         live={{
                           running: isRunning,
                           thinking: thinkingActive,
@@ -3361,7 +3371,7 @@ export default function Conversation({
                           />
                         )}
                         {computer.visible && (
-                          <ComputerUseCard
+                          <ComputerStep
                             conversationId={id}
                             snapshot={computer.snapshot}
                             stopped={computer.stopped}
@@ -3373,7 +3383,6 @@ export default function Conversation({
                         )}
                         {generation?.approval_id &&
                           generation.status === 'waiting_approval' &&
-                          !computerPause &&
                           computer.checked && (
                             <ApprovalCard
                               id={generation.approval_id}
