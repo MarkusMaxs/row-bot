@@ -35,13 +35,14 @@ _ACTIONS = frozenset({
     "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
     "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
     "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-    "review_version", "use_smaller_model",
+    "review_version", "use_smaller_model", "change_starting_model",
 })
 # Using the personal model (L2c2): its comparison, trial, keep and undo, Export…, Delete version,
 # Advanced and Retrain without it. Every one of them is the person's own choice (D24).
 _USE_ACTIONS = frozenset({"compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now",
                           "undo_use", "export_version", "delete_version", "save_advanced", "reset_advanced",
-                          "retrain_without", "dismiss", "review_version", "use_smaller_model"})
+                          "retrain_without", "dismiss", "review_version", "use_smaller_model",
+                          "change_starting_model"})
 _KIND_ACTIONS = frozenset({"use_version", "keep_version", "keep_not_now", "undo_use"})
 _VERSION_NUMBER_ACTIONS = frozenset({"compare_version", "use_version", "export_version", "delete_version",
                                      "retrain_without", "review_version"})
@@ -275,6 +276,7 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
         "room": _room_view(settings),
+        "stronger_model": _stronger_view(settings),
         **_use_parts(),
     }
 
@@ -327,6 +329,90 @@ def _use_smaller_model(model_id: str) -> str:
     name = hardware.STARTING_MODELS[model_id].name
     words = _answer_download("download")
     return f"Switched to {name}. {words}"
+
+
+#: The order of the starting models, smallest first (a later one is stronger).
+_STRENGTH = {model_id: index for index, model_id in enumerate(learning.STARTING_MODELS)}
+STRONGER_ITEM = "stronger_model:"
+
+
+def _stronger_view(settings: learning.LearningSettings) -> dict[str, Any] | None:
+    """O124: a build that certifies a stronger starting model this card trains (what setup would recommend
+    now) offers it once in the Personal model view, until the person switches or dismisses it."""
+
+    from row_bot.learning import versions
+    from row_bot.learning.training import hardware
+
+    try:
+        check = hardware.peek()
+        offered = check.starting_models if check is not None and check.can_train else ()
+        if not offered or settings.train_where != "this_computer":
+            return None
+        best = offered[0]
+        if _STRENGTH.get(best.id, -1) <= _STRENGTH.get(settings.starting_model, -1):
+            return None
+        if STRONGER_ITEM + best.id in versions.dismissed():
+            return None
+        return _model_view(best)
+    except Exception:
+        logger.debug("Learning could not tell whether a stronger starting model fits", exc_info=True)
+        return None
+
+
+def _change_busy() -> bool:
+    """Something is in flight for the starting model in use: training (or a run with steps that may go on),
+    a version being made from it, or its download."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import releases
+
+    if _training_runs():
+        return True
+    view = _downloads_view()
+    if view is not None and view.state == "downloading":
+        return True
+    if not learning.store_exists():
+        return False
+    job = runner_module.get().supervisor.jobs.current()
+    if job is None or job.state == "failed":
+        return False
+    if job.state in ("planned", "waiting"):
+        return bool(job.steps_done)
+    if job.state != "evaluating" or not job.version:
+        return True
+    state = releases.read_state(releases.version_dir(int(job.version)))
+    return state is None or state.phase in (releases.EXPORTING, releases.MAKING_READY)
+
+
+def _change_starting_model(model_id: str) -> str:
+    """O124: the person chose another certified starting model in Settings (after the client's ask, with
+    its download size and the free space): it becomes the starting model, a run planned for the old one that
+    never trained a step is set aside, and its download starts. Versions already made stay as they are (each
+    is compared with its own starting model); the old model's files stay until the person deletes them."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning import versions
+    from row_bot.learning.training import hardware
+
+    settings = learning.read_settings()
+    check = hardware.peek()
+    offered = {model.id for model in check.starting_models} if check is not None and check.can_train else set()
+    if model_id not in offered:
+        raise ClientPlatformError("learning_training_changed")
+    name = hardware.STARTING_MODELS[model_id].name
+    if model_id == settings.starting_model:
+        return f"{name} is already the starting model."
+    if _change_busy():
+        raise ClientPlatformError("learning_download_busy")
+    if learning.store_exists():
+        jobs = runner_module.get().supervisor.jobs
+        job = jobs.current()
+        if job is not None and job.state in ("planned", "waiting") and not job.steps_done:
+            jobs.move(job.id, "stopped", reason="model_changed")
+    _save({"starting_model": model_id})
+    runner_module.forget_card_room()
+    versions.dismiss(STRONGER_ITEM + model_id)  # the offer is answered
+    return f"Switched to {name}. {_answer_download('download')}"
 
 
 def _use_parts() -> dict[str, Any]:
@@ -1195,6 +1281,8 @@ def _use_action(action: str, wire: dict[str, Any]) -> str:
 
     if action == "use_smaller_model":
         return _use_smaller_model(str(wire.get("model") or ""))
+    if action == "change_starting_model":
+        return _change_starting_model(str(wire.get("model") or ""))
     settings = learning.read_settings()
     version = wire.get("version")
     kind = wire.get("kind") or ""
@@ -1448,7 +1536,7 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     if action == "dismiss" and not item_id:
         raise ClientPlatformError("invalid_learning_command")
     model_id = _text(command.get("model"), 32)
-    if action == "use_smaller_model" and model_id not in learning.STARTING_MODELS:
+    if action in ("use_smaller_model", "change_starting_model") and model_id not in learning.STARTING_MODELS:
         raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {

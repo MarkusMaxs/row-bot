@@ -32,15 +32,9 @@
           "minimum": 1,
           "title": "Rank",
           "type": "integer"
-        },
-        "starting_model": {
-          "maxLength": 64,
-          "title": "Starting Model",
-          "type": "string"
         }
       },
       "required": [
-        "starting_model",
         "rank",
         "learning_rate",
         "epochs",
@@ -166,7 +160,8 @@
         "retrain_without",
         "dismiss",
         "review_version",
-        "use_smaller_model"
+        "use_smaller_model",
+        "change_starting_model"
       ],
       "title": "Action",
       "type": "string"

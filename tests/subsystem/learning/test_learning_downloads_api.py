@@ -191,6 +191,73 @@ def test_after_two_nights_without_room_on_the_card_the_view_offers_a_smaller_mod
     assert runner_module.card_room(root) is None
 
 
+def _larger_card_and_a_nine_b(found, monkeypatch):
+    """A 32 GB card with room for the 9B, and the 9B's (fake) files on the download world's index."""
+
+    from row_bot.learning.training import weights
+
+    card = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "596.08", 3_000)],
+                             hardware.SystemMemory(limit_mib=131_072, free_mib=90_000))
+    hardware.check(refresh=True, detector=lambda: card)
+    found.gpu = card
+    nine = weights.PinnedModel("qwen3.5-9b", "Qwen3.5 9B", "Qwen/Qwen3.5-9B", "b" * 40, "Apache 2.0", "apache-2.0",
+                               found.model.files)
+    for item in nine.files:
+        found.index.redirects[f"/{nine.repo}/resolve/{nine.revision}/{item.name}"] = f"/cdn/{item.sha256}"
+    monkeypatch.setattr(weights, "MODELS", {**weights.MODELS, nine.id: nine})
+    return card
+
+
+def test_settings_change_the_starting_model_to_a_larger_certified_one_and_download_it(world, monkeypatch):
+    # O124: a setup made on the 2B moves to the 9B its card is certified for. The view offers it (setup's
+    # recommendation now); Change… sets it, sets aside a run planned for the 2B that never trained a step,
+    # and downloads the 9B. A model the card isn't certified for is refused.
+    from row_bot.learning import runner as runner_module
+
+    client, headers, found = world
+    _larger_card_and_a_nine_b(found, monkeypatch)
+    view = _snapshot(client, headers)["personal_model"]
+    assert view["starting_model"]["id"] == "qwen3.5-2b" and view["stronger_model"]["id"] == "qwen3.5-9b"
+    jobs = runner_module.get().supervisor.jobs
+    planned = jobs.plan(steps_total=50, checkpoint_every=10)
+    _error(_command(client, headers, "change_starting_model", model="qwen3.8-27b"), "learning_training_changed")
+    _error(_command(client, headers, "change_starting_model", model="llama-70b"), "invalid_command", 422)
+
+    receipt = _ok(_command(client, headers, "change_starting_model", model="qwen3.5-9b"))
+
+    assert receipt["summary"].startswith("Switched to Qwen3.5 9B. ")
+    model = receipt["snapshot"]["personal_model"]
+    assert model["starting_model"]["id"] == "qwen3.5-9b" and model["stronger_model"] is None
+    assert model["starting_model_state"] == "downloaded"  # the download ran (the fake world's is quick)
+    assert jobs.get(planned.id).state == "stopped"
+    again = _ok(_command(client, headers, "change_starting_model", model="qwen3.5-9b"))
+    assert again["summary"] == "Qwen3.5 9B is already the starting model."
+
+
+def test_the_starting_model_doesnt_change_under_a_run_that_trained(world, monkeypatch):
+    from row_bot.learning import runner as runner_module
+
+    client, headers, found = world
+    _larger_card_and_a_nine_b(found, monkeypatch)
+    jobs = runner_module.get().supervisor.jobs
+    job = jobs.plan(steps_total=50, checkpoint_every=10)
+    jobs.update(job.id, steps_done=20, checkpoint_step=20)
+
+    _error(_command(client, headers, "change_starting_model", model="qwen3.5-9b"), "learning_download_busy")
+
+    assert _snapshot(client, headers)["personal_model"]["starting_model"]["id"] == "qwen3.5-2b"
+    assert jobs.get(job.id).state == "planned"  # left as it was
+
+
+def test_the_stronger_model_offer_is_dismissed_for_good(world, monkeypatch):
+    client, headers, found = world
+    _larger_card_and_a_nine_b(found, monkeypatch)
+
+    _ok(_command(client, headers, "dismiss", item_id="stronger_model:qwen3.5-9b"))
+
+    assert _snapshot(client, headers)["personal_model"]["stronger_model"] is None
+
+
 def test_without_the_preview_flag_there_is_no_download(api, monkeypatch):
     client, headers, _data, _ = api
     set_learning_preview(monkeypatch, False)

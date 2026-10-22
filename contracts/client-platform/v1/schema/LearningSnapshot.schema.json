@@ -79,18 +79,9 @@
           "maxItems": 8,
           "title": "Rank",
           "type": "array"
-        },
-        "starting_model": {
-          "items": {
-            "$ref": "#/$defs/LearningAdvancedModelChoice"
-          },
-          "maxItems": 8,
-          "title": "Starting Model",
-          "type": "array"
         }
       },
       "required": [
-        "starting_model",
         "rank",
         "learning_rate",
         "epochs",
@@ -98,27 +89,6 @@
         "method"
       ],
       "title": "LearningAdvancedChoices",
-      "type": "object"
-    },
-    "LearningAdvancedModelChoice": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "maxLength": 64,
-          "title": "Id",
-          "type": "string"
-        },
-        "name": {
-          "maxLength": 128,
-          "title": "Name",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "name"
-      ],
-      "title": "LearningAdvancedModelChoice",
       "type": "object"
     },
     "LearningAdvancedValues": {
@@ -153,15 +123,9 @@
           "minimum": 1,
           "title": "Rank",
           "type": "integer"
-        },
-        "starting_model": {
-          "maxLength": 64,
-          "title": "Starting Model",
-          "type": "string"
         }
       },
       "required": [
-        "starting_model",
         "rank",
         "learning_rate",
         "epochs",
@@ -943,6 +907,17 @@
           ],
           "title": "Starting Model State",
           "type": "string"
+        },
+        "stronger_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningStartingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "train_in_quiet_hours": {
           "title": "Train In Quiet Hours",
