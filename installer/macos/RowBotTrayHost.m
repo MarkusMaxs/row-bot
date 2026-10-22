@@ -463,6 +463,41 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     return NO;
 }
 
+// Opening Row-Bot again while it runs (Finder, Spotlight, the Dock) shows it (B382).
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    (void)flag;
+    RowBotLog(self.dataDir, @"reopen");
+    [self openRowBot:nil];
+    return NO;
+}
+
+// macOS quitting the app (System Settings' "Quit & Reopen", logging out) stops
+// the Python launcher first, which stops the server and the window: quitting
+// only this host would leave them running without it (B382).
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    NSTask *task = self.pythonTask;
+    if (!task.running) {
+        return NSTerminateNow;
+    }
+    if (!self.quitting) {
+        RowBotLog(self.dataDir, @"terminate_requested");
+        self.quitting = YES;
+        [self terminateWindowIfKnown];
+        [task terminate];
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        for (int waited = 0; task.running && waited < 120; waited++) {
+            [NSThread sleepForTimeInterval:0.25];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp replyToApplicationShouldTerminate:YES];
+        });
+    });
+    return NSTerminateLater;
+}
+
 // -- Move to Applications ---------------------------------------------------
 
 - (BOOL)shouldOfferMoveToApplications {
@@ -821,12 +856,9 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     [self launchPrimary];
 }
 
+// A Row-Bot that is still running (one quitting after its host went) is left to
+// the Python launcher: it shows that one, or takes over once it has stopped (B382).
 - (void)startPrimaryLauncherIfNeeded {
-    NSInteger port = [self activePort];
-    if (port > 0) {
-        RowBotLog(self.dataDir, @"server_already_active port=%ld", (long)port);
-        return;
-    }
     if (self.pythonTask && self.pythonTask.running) {
         RowBotLog(self.dataDir, @"primary_launcher_already_running pid=%d", self.pythonTask.processIdentifier);
         return;
@@ -906,6 +938,9 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     }
 }
 
+// Quit stops the whole app: this host's launcher (which stops the server and the
+// window), or the launcher a host before this one left running (B382). The
+// launcher clears launcher_state.json itself as it stops.
 - (void)quitRowBot:(id)sender {
     (void)sender;
     RowBotLog(self.dataDir, @"quit_requested");
@@ -916,17 +951,25 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
         RowBotHTTP(url, @"POST", 2.5);
     }
     [self terminateWindowIfKnown];
-    [[NSFileManager defaultManager] removeItemAtPath:self.launcherStatePath error:nil];
     if (self.pythonTask && self.pythonTask.running) {
         [self.pythonTask terminate];
+    } else if (port > 0) {
+        [self terminateOtherLauncherOnPort:port];
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (self.pythonTask && self.pythonTask.running) {
-            [self.pythonTask terminate];
-        }
         [[NSStatusBar systemStatusBar] removeStatusItem:self.statusItem];
         [NSApp terminate:nil];
     });
+}
+
+// The launcher named by launcher_state.json, when its server is the one answering.
+- (void)terminateOtherLauncherOnPort:(NSInteger)port {
+    NSDictionary *state = [self launcherState];
+    NSInteger pid = RowBotIntegerValue([state objectForKey:@"pid"]);
+    if (pid > 1 && pid != getpid() && RowBotIntegerValue([state objectForKey:@"port"]) == port) {
+        kill((pid_t)pid, SIGTERM);
+        RowBotLog(self.dataDir, @"launcher_terminate_requested pid=%ld", (long)pid);
+    }
 }
 
 @end

@@ -103,6 +103,12 @@ _held_instance_locks: dict[Path, "_InstanceLock"] = {}
 # Set by quit_for_relaunch() in direct mode; main() exits with this code.
 _EXIT_REQUESTED = threading.Event()
 _requested_exit_code = 0
+# Set by the macOS host (installer/macos/RowBotTrayHost.m) for the launcher it starts.
+_NATIVE_HOST_ENV = "ROW_BOT_NATIVE_TRAY_HOST"
+# The macOS window exits with this when Row-Bot is quit from it (its app menu, the
+# Dock, System Settings' "Quit & Reopen"): all of Row-Bot quits, not just the window.
+_WINDOW_QUIT_EXIT_CODE = 77
+_APP_QUIT_REQUESTED = threading.Event()
 _LEGACY_RUNTIME_ENV_VARS = frozenset(
     {
         "THOTH_AUTO_START_OLLAMA",
@@ -1894,6 +1900,19 @@ if sys.platform == "darwin":
         NSApp.activateIgnoringOtherApps_(True)  # Bring to front
     except Exception:
         pass
+    # Quitting Row-Bot here (the app menu, the Dock, System Settings' "Quit & Reopen")
+    # quits all of it: the launcher sees this exit code (B382). Closing the window
+    # only ends pywebview's run loop, so it never posts this notification.
+    try:
+        from AppKit import NSApplicationWillTerminateNotification
+        from Foundation import NSNotificationCenter, NSOperationQueue
+
+        _QUIT_OBSERVER = NSNotificationCenter.defaultCenter().addObserverForName_object_queue_usingBlock_(
+            NSApplicationWillTerminateNotification, None, NSOperationQueue.mainQueue(),
+            lambda _notification: os._exit(77),
+        )
+    except Exception:
+        pass
 
 import webview
 import threading
@@ -2908,17 +2927,8 @@ class RowBotTray:
             self._restart_lock.release()
 
     def _send_window_command(self, action: str, timeout: float = 1.5) -> bool:
-        port = self._window_control_port
-        if not port:
-            return False
         path = "/main/show" if action == "main-show" else f"/buddy/{action}"
-        url = f"http://127.0.0.1:{int(port)}{path}"
-        try:
-            with urllib.request.urlopen(url, timeout=timeout) as response:
-                body = response.read(64).decode("utf-8", errors="replace").lower()
-                return getattr(response, "status", 200) == 200 and "true" in body
-        except (OSError, urllib.error.URLError, TimeoutError):
-            return False
+        return _ask_window(self._window_control_port, path, timeout=timeout)
 
     def _ensure_native_window_for_buddy(self) -> bool:
         if self._is_window_alive():
@@ -3390,6 +3400,72 @@ def _block_until_interrupted(
             _clear_launcher_state()
 
 
+def _ask_window(control_port: int | None, path: str, *, timeout: float = 1.5) -> bool:
+    """Ask the app window, through its control port, to do *path* (``/main/show``, ``/buddy/show``)."""
+    if not control_port:
+        return False
+    url = f"http://127.0.0.1:{int(control_port)}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            body = response.read(64).decode("utf-8", errors="replace").lower()
+            return getattr(response, "status", 200) == 200 and "true" in body
+    except (OSError, urllib.error.URLError, TimeoutError):
+        return False
+
+
+def _native_host_pid() -> int | None:
+    """The macOS host that started this launcher, while it is still the parent."""
+    if os.name != "posix" or os.environ.get(_NATIVE_HOST_ENV) != "1":
+        return None
+    parent = os.getppid()
+    return parent if parent > 1 else None
+
+
+def _stop_when_host_quits(host: int | None, *, interval: float = 1.0) -> threading.Thread | None:
+    """Quit (stopping the server and the window) once the macOS host has gone (B382).
+
+    macOS can end the host alone ("Quit & Reopen" after granting a permission, a
+    crash); the launcher then belongs to launchd, and a reopened Row-Bot would find
+    it still holding the data folder."""
+    if host is None:
+        return None
+
+    def watch() -> None:
+        while not _EXIT_REQUESTED.wait(interval):
+            if os.getppid() != host:
+                logger.warning("The %s app quit without stopping its launcher; quitting", APP_DISPLAY_NAME)
+                _EXIT_REQUESTED.set()
+                return
+
+    thread = threading.Thread(target=watch, daemon=True, name="row-bot-host-watch")
+    thread.start()
+    return thread
+
+
+def _quit_app_when_window_quits(window: subprocess.Popen) -> threading.Thread:
+    """Row-Bot quit from its window quits all of Row-Bot; closing the window doesn't (B382)."""
+
+    def watch() -> None:
+        if window.wait() == _WINDOW_QUIT_EXIT_CODE:
+            logger.info("%s was quit from its window; quitting", APP_DISPLAY_NAME)
+            _APP_QUIT_REQUESTED.set()
+            _EXIT_REQUESTED.set()
+
+    thread = threading.Thread(target=watch, daemon=True, name="row-bot-window-quit")
+    thread.start()
+    return thread
+
+
+def _end_native_host(host: int | None) -> None:
+    """After Row-Bot was quit from its window, the macOS host quits too (its menu-bar item goes)."""
+    if host is None or not _APP_QUIT_REQUESTED.is_set() or os.getppid() != host:
+        return
+    try:
+        os.kill(host, signal.SIGTERM)
+    except OSError:
+        logger.debug("Could not end the macOS host %s", host, exc_info=True)
+
+
 def _run_direct(args: argparse.Namespace) -> None:
     """Run Row-Bot without a tray icon, for Linux/browser/server modes."""
     host_input = getattr(args, "_dynamic_host_input", args.host)
@@ -3413,11 +3489,41 @@ def _run_direct(args: argparse.Namespace) -> None:
     restart_lock = threading.Lock()
     launcher_control: LauncherControlServer | None = None
     splash_proc: subprocess.Popen | None = _claim_early_splash()
+    native_host = _native_host_pid()
+    _stop_when_host_quits(native_host)
+    window_lock = threading.Lock()
+    window_control_port: int | None = None
+    window_proc: subprocess.Popen | None = None
+    native_window = False  # Row-Bot opened its own window (not the browser)
+
+    def _start_window() -> None:
+        nonlocal window_control_port, window_proc
+        window_control_port = window_control_port or _find_free_port(port + 10000, max_tries=50)
+        window_proc = _open_window(port, window_control_port)
+        if window_proc is None:
+            window_control_port = None
+        else:
+            _quit_app_when_window_quits(window_proc)
+
+    def _show_window() -> None:
+        # The app window when Row-Bot opened one: shown again, or opened anew when it
+        # has gone (closed, or ended by macOS); otherwise the client in the browser (B382).
+        nonlocal window_proc
+        with window_lock:
+            if not native_window:
+                _open_in_browser(port)
+                return
+            if window_proc is not None and window_proc.poll() is None:
+                if _ask_window(window_control_port, "/main/show"):
+                    return
+                _RowBotProcess._terminate_process(window_proc, label=f"{APP_DISPLAY_NAME} window",
+                                                  timeout=3, kill_tree=True)
+            logger.info("Opening the %s window again", APP_DISPLAY_NAME)
+            _start_window()
+            publish_state()
 
     def _show_again() -> bool:
-        # Direct modes have no window of their own to raise: open the client.
-        threading.Thread(target=_open_in_browser, args=(port,), daemon=True,
-                         name="row-bot-open-again").start()
+        threading.Thread(target=_show_window, daemon=True, name="row-bot-open-again").start()
         return True
 
     def _restart_direct_child() -> None:
@@ -3529,15 +3635,13 @@ def _run_direct(args: argparse.Namespace) -> None:
     mode_for_state = selected_mode
     opened_mode = "server" if args.server or args.no_open else "browser"
     fallback_reason: str | None = None
-    window_control_port: int | None = None
-    window_proc: subprocess.Popen | None = None
 
     if not args.no_open:
         if selected_mode == "native" and _has_display_server():
-            window_control_port = _find_free_port(port + 10000, max_tries=50)
-            window_proc = _open_window(port, window_control_port)
+            with window_lock:
+                _start_window()
+                native_window = window_proc is not None
             if window_proc is None:
-                window_control_port = None
                 mode_for_state = "browser"
                 opened_mode = "browser"
                 fallback_reason = "native_window_start_failed"
@@ -3576,19 +3680,22 @@ def _run_direct(args: argparse.Namespace) -> None:
     else:
         logger.info("%s is running at %s", APP_DISPLAY_NAME, _url_for_port(port))
 
-    _write_launcher_state(
-        port=port,
-        mode=mode_for_state,
-        owns_server=owns_server,
-        window_control_port=window_control_port,
-        window_pid=window_proc.pid if window_proc else None,
-        requested_mode=requested_mode,
-        selected_mode=selected_mode,
-        opened_mode=opened_mode,
-        window_authorized=bool(window_proc and window_control_port),
-        fallback_reason=fallback_reason,
-        launcher_control=launcher_control,
-    )
+    def publish_state() -> None:
+        _write_launcher_state(
+            port=port,
+            mode=mode_for_state,
+            owns_server=owns_server,
+            window_control_port=window_control_port,
+            window_pid=window_proc.pid if window_proc else None,
+            requested_mode=requested_mode,
+            selected_mode=selected_mode,
+            opened_mode=opened_mode,
+            window_authorized=bool(window_proc and window_control_port),
+            fallback_reason=fallback_reason,
+            launcher_control=launcher_control,
+        )
+
+    publish_state()
 
     if owns_server:
         try:
@@ -3598,17 +3705,19 @@ def _run_direct(args: argparse.Namespace) -> None:
                 restart_in_progress=restart_lock.locked,
             )
         finally:
-            if window_proc is not None:
-                _RowBotProcess._terminate_process(
-                    window_proc,
-                    label=f"{APP_DISPLAY_NAME} window",
-                    timeout=3,
-                    kill_tree=True,
-                )
+            with window_lock:
+                native_window = False  # a request arriving now opens nothing
+                if window_proc is not None:
+                    _RowBotProcess._terminate_process(
+                        window_proc,
+                        label=f"{APP_DISPLAY_NAME} window",
+                        timeout=3,
+                        kill_tree=True,
+                    )
             if launcher_control is not None:
                 launcher_control.stop()
             _apply_ready_update_on_quit()
-
+            _end_native_host(native_host)
 
 def _timestamp() -> str:
     return time.strftime("%Y%m%d-%H%M%S")
