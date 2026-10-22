@@ -118,6 +118,20 @@ def live_work(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def builds_by_day(requests: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Which build answered which simulated days' requests, in order (a request asked before builds were
+    recorded counts as ``""``)."""
+
+    spans: list[dict[str, Any]] = []
+    for item in sorted(requests, key=lambda value: (int(value.get("day") or 0), str(value.get("id") or ""))):
+        build, day = str(item.get("build") or ""), int(item.get("day") or 0)
+        if spans and spans[-1]["build"] == build:
+            spans[-1]["last_day"] = max(spans[-1]["last_day"], day)
+        else:
+            spans.append({"build": build, "first_day": day, "last_day": day})
+    return spans
+
+
 def _arm_roles(comparison: Mapping[str, Any]) -> dict[str, str]:
     """role (baseline / new / main) -> the arm's key."""
 
@@ -205,6 +219,7 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
         "stages": result.get("stages"), "past": result.get("past"), "live": live_work(result.get("requests") or ()),
         "container": (result.get("profile") or {}).get("container"),
         "builds": list(result.get("builds") or []),
+        "builds_by_day": builds_by_day(result.get("requests") or ()),
         "versions": [{key: item.get(key) for key in ("version", "trained_after_day", "state", "steps", "loss",
                                                      "training_seconds", "phase", "failure", "gguf_bytes",
                                                      "compared_on_day")}
@@ -339,8 +354,11 @@ def _survival_note(check: Mapping[str, Any]) -> str:
         notes.append(f"continued from checkpoint {check['resumes_from']}")
     if check.get("seconds_from_message_to_pause") is not None:
         notes.append(f"paused {check['seconds_from_message_to_pause']:g} s after the message")
-    elif check.get("seconds_to_pause") is not None:
-        notes.append(f"paused {check['seconds_to_pause']:g} s after the turn ended")
+    elif check.get("seconds_to_pause") is not None and check.get("state_after_use") == "paused":
+        notes.append("paused before the person's turn ended" if not check["seconds_to_pause"] else
+                     f"paused {check['seconds_to_pause']:g} s after the person's turn ended")
+    if check.get("state_after_use") not in (None, "paused"):
+        notes.append(f"still {check['state_after_use']} when the check stopped waiting")
     if check.get("kind") and check.get("routed") is not None:
         notes.append(f"{check['kind'].replace('_', ' ')}: {check['routed']} routed, {check.get('passed', 0)} passed")
     if check.get("why"):
@@ -404,9 +422,10 @@ def markdown(report: Mapping[str, Any]) -> str:
                      f"{live['approvals']['approved']}/{live['approvals']['asked']} approved; routed turns "
                      f"{live['routed']['turns']} ({live['routed']['answered_by_personal_model']} answered by the personal "
                      f"model); the product's kind of work agreed with the request's {_pct(live['kinds_agree'])}.")
-        if person.get("builds"):
-            lines.append("- Builds: " + "; ".join(f"`{item.get('build') or '?'}` from day {item.get('from_day')}"
-                                                  for item in person["builds"]) + ".")
+        if person.get("builds_by_day"):
+            lines.append("- Builds that answered the requests: " + "; ".join(
+                (f"`{item['build']}`" if item["build"] else "before builds were recorded")
+                + f" days {item['first_day']}-{item['last_day']}" for item in person["builds_by_day"]) + ".")
         past = person.get("past") or {}
         lines.append(f"- Past: {past.get('conversations', '–')} conversations, {past.get('turns', '–')} turns imported "
                      f"as partial ({(past.get('import') or {}).get('state', '–')}).")
