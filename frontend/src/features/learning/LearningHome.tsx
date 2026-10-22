@@ -55,6 +55,8 @@ import {
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
+  memoryAdvice,
+  memoryNeedWords,
   plural,
   quietHoursWords,
   sizeWords,
@@ -531,6 +533,17 @@ function PersonalModel({
             {hardware?.state === 'gpu' && hardware.tier && (
               <span className="learning-muted learning-fact-note">
                 {hardware.tier.summary}
+                {hardware.tier.system_memory_gb
+                  ? ` ${memoryNeedWords(hardware.tier.system_memory_gb)}`
+                  : ''}
+              </span>
+            )}
+            {hardware?.state === 'low_memory' && hardware.tier && (
+              <span className="learning-muted learning-fact-note">
+                Its memory can’t hold training yet: it needs about{' '}
+                {hardware.tier.system_memory_gb} GB of RAM and virtual memory,
+                and this computer has {hardware.memory?.limit_gb} GB.{' '}
+                {memoryAdvice(hardware.memory?.system)}
               </span>
             )}
           </dd>

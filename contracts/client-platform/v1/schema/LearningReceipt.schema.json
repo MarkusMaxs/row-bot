@@ -1017,6 +1017,7 @@
                 "planning",
                 "up_to_date",
                 "gpu_busy",
+                "memory_busy",
                 "comparing"
               ],
               "type": "string"

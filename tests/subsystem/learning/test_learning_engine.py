@@ -216,6 +216,12 @@ def test_the_worker_runs_the_engines_base_interpreter_never_a_venv_launcher(setu
     assert command.env["UNSLOTH_CE_LOSS_TARGET_GB"] == "1"
     assert command.env["TRITON_CACHE_DIR"].startswith(str(engine.cache_dir(setup.root)))
     assert not set(command.env) & set(TELEMETRY_ENV)  # the worker sets those itself, last
+    # The 32 GB tier's model trains from its pre-quantized checkpoint (O105), not its 16-bit files.
+    save_learning_settings(setup.root, enabled=True, starting_model="qwen3.8-27b")
+    learning.invalidate()
+    argv = local.command(None).argv
+    assert argv[argv.index("--model") + 1] == str(weights.training_dir(weights.QWEN38_27B, setup.root))
+    assert weights.training_dir(weights.QWEN38_27B, setup.root).name == "qwen3.8-27b-train-4bit"
 
 
 def test_uv_comes_from_its_verified_wheel(tmp_path):

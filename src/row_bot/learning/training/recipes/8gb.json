@@ -29,5 +29,8 @@
   "serve_context": 32768,
   "quantization": "Q8_0",
   "reasoning": "off",
-  "memory_mib": 8192
+  "memory_mib": 8192,
+  "system_memory_mib": {
+    "windows": 15360
+  }
 }

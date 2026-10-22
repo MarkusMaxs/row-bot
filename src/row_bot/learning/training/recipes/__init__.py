@@ -17,6 +17,7 @@ import functools
 import hashlib
 import json
 import math
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,11 +36,21 @@ SETTING_NAMES = frozenset({
 })
 # O23: Row-Bot's real envelope is 10.75K tokens, so no recipe trains on less than 16K.
 MIN_TRAINING_CONTEXT = 16_384
+# O105: the systems a recipe's measured system memory is given for (Windows charges what a run holds on
+# the card to its commit limit too, so its figure is larger than Linux's).
+SYSTEMS = frozenset({"windows", "linux"})
 _KEYS = frozenset({
     "format", "version", "id", "tier", "certified", "title", "starting_model", "method", "evidence", "settings",
     "epochs", "checkpoint_every", "min_examples", "min_new_examples", "validation_share", "serve_context",
-    "quantization", "reasoning", "memory_mib",
+    "quantization", "reasoning", "memory_mib", "system_memory_mib",
 })
+
+
+def this_system(platform: str | None = None) -> str:
+    """``windows`` or ``linux`` (or the platform's own name, which no recipe measures)."""
+
+    platform = platform or sys.platform
+    return "windows" if platform == "win32" else "linux" if platform.startswith("linux") else platform
 
 
 class RecipeError(ValueError):
@@ -75,6 +86,15 @@ class Recipe:
     # The graphics memory a run needs free to start (its measured peak, rounded up): a card that also
     # drives the desktop trains when this much is free, not its whole tier (O91, L2x).
     memory_mib: int = 8192
+    # The computer's memory a run needs free (RAM and virtual memory), per system, measured as the
+    # commit it added at its peak (O105). A system without a figure isn't checked.
+    system_memory_mib: Mapping[str, int] = MappingProxyType({})
+
+    def system_memory_need(self, platform: str | None = None) -> int | None:
+        """MiB of RAM and virtual memory a run needs free on this system, or None (not measured)."""
+
+        value = self.system_memory_mib.get(this_system(platform))
+        return int(value) if value else None
 
     @property
     def name(self) -> str:
@@ -140,6 +160,13 @@ def parse(text: str, *, source: str = "") -> Recipe:
         raise RecipeError("invalid_recipe", "method, quantization or reasoning")
     if not isinstance(data["certified"], bool):
         raise RecipeError("invalid_recipe", "certified")
+    system = data["system_memory_mib"]
+    if not isinstance(system, dict) or set(system) - SYSTEMS:
+        raise RecipeError("invalid_recipe", "system_memory_mib")
+    for key, value in system.items():
+        _number(value, f"system_memory_mib.{key}", integer=True, low=1024, high=1_048_576)
+    if data["certified"] and "windows" not in system:
+        raise RecipeError("invalid_recipe", "a certified recipe says what it needs of the computer's memory (O105)")
     recipe = Recipe(
         id=data["id"], version=int(data["version"]), tier=data["tier"], certified=data["certified"],
         title=data["title"], starting_model=data["starting_model"], method=data["method"],
@@ -154,6 +181,7 @@ def parse(text: str, *, source: str = "") -> Recipe:
         quantization=data["quantization"], reasoning=data["reasoning"],
         sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         memory_mib=_number(data["memory_mib"], "memory_mib", integer=True, low=1024, high=262_144),
+        system_memory_mib=MappingProxyType(dict(system)),
     )
     if recipe.certified and recipe.max_seq_length < MIN_TRAINING_CONTEXT:
         raise RecipeError("invalid_recipe", "a certified recipe trains on at least 16K tokens (O23)")
@@ -252,9 +280,11 @@ __all__ = [
     "ORDER",
     "Recipe",
     "RecipeError",
+    "SYSTEMS",
     "all_recipes",
     "default",
     "for_hardware",
     "load",
     "parse",
+    "this_system",
 ]

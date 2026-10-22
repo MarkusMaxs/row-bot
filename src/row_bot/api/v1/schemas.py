@@ -4214,7 +4214,7 @@ class LearningRunnerStatus(WireModel):
         "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
         "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-        "planned", "planning", "up_to_date", "gpu_busy", "comparing",
+        "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
     ] | None = None
 
 
@@ -4334,16 +4334,31 @@ class LearningTier(WireModel):
     label: str = Field(max_length=32)
     certified: bool
     summary: str = Field(max_length=256)
+    # The computer's memory (RAM and virtual memory) its training needs free here, as measured (O105).
+    system_memory_gb: int | None = Field(default=None, ge=1, le=4096)
+
+
+class LearningMemory(WireModel):
+    # The most RAM and virtual memory can hold (Windows' commit limit; Linux: RAM and swap), and what is
+    # free of it now; ``system`` words the advice ("raise virtual memory" or "add swap").
+    limit_gb: int = Field(ge=0, le=65536)
+    free_gb: int = Field(ge=0, le=65536)
+    system: Literal["windows", "linux", "other"]
 
 
 class LearningHardware(WireModel):
     # old_driver: a card that fits, with an NVIDIA driver older than 570 ("Update your NVIDIA
-    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46).
-    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "container", "unknown"]
+    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46);
+    # low_memory: a card that could train, on a computer whose RAM and virtual memory can't hold
+    # its smallest tier's training (O105; ``tier`` says what it needs).
+    state: Literal["gpu", "old_driver", "small_gpu", "low_memory", "no_gpu", "container", "unknown"]
     gpu: LearningGpu | None
     # The certified recipe tier this computer trains with, and larger ones still being measured.
     tier: LearningTier | None
     larger_tiers: list[LearningTier] = Field(max_length=8)
+    # Certified larger tiers the card fits but the computer's memory can't hold (O105).
+    memory_short: list[LearningTier] = Field(default_factory=list, max_length=8)
+    memory: LearningMemory | None = None
     starting_models: list[LearningStartingModel] = Field(max_length=8)
     engine_download_bytes: int = Field(ge=0)
     free_bytes: int | None = Field(default=None, ge=0)

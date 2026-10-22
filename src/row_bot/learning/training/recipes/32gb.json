@@ -29,5 +29,6 @@
   "serve_context": 65536,
   "quantization": "Q4_K_M",
   "reasoning": "off",
-  "memory_mib": 32768
+  "memory_mib": 32768,
+  "system_memory_mib": {}
 }

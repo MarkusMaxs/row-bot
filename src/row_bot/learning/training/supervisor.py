@@ -54,7 +54,7 @@ RECOMMENDED_RECIPE: dict[str, Any] = {"name": "recommended", "settings": {"repor
 
 class TrainingError(RuntimeError):
     """A refused training action; ``code`` is stable (``learning_off``, ``learning_paused``,
-    ``nothing_to_train``, ``training_changed``, ``gpu_busy``)."""
+    ``nothing_to_train``, ``training_changed``, ``gpu_busy``, ``memory_busy``)."""
 
     def __init__(self, code: str) -> None:
         self.code = code
@@ -65,6 +65,12 @@ def _gpu_free() -> bool:
     from row_bot.learning.training import hardware
 
     return hardware.gpu_free_for_training()
+
+
+def _memory_free() -> bool:
+    from row_bot.learning.training import hardware
+
+    return hardware.memory_free_for_training()
 
 
 class Dataset(Protocol):
@@ -109,6 +115,7 @@ class TrainingSupervisor:
         lease: ResourceLease | None = None,
         start_threads: bool = True,
         gpu_free: Callable[[], bool] | None = None,
+        memory_free: Callable[[], bool] | None = None,
     ) -> None:
         self._root = root
         self.jobs = TrainingJobs(root, store=store, clock=clock)
@@ -119,6 +126,8 @@ class TrainingSupervisor:
         self.lease = lease or ResourceLease()
         # Whether the graphics card's memory is free to train now (another app may hold it, L2c).
         self.gpu_free: Callable[[], bool] = gpu_free or _gpu_free
+        # Whether the computer has the memory (RAM and virtual memory) free that the run needs (O105).
+        self.memory_free: Callable[[], bool] = memory_free or _memory_free
         self._start_threads = start_threads
         self._lock = threading.RLock()
         self._changed = threading.Condition(self._lock)
@@ -207,7 +216,7 @@ class TrainingSupervisor:
                 return job
             if job is None or job.state not in ("planned", "waiting", "paused") or not self.engine.ready():
                 raise TrainingError("nothing_to_train")
-            if self.lease.read().busy or not self.gpu_free():
+            if self.lease.read().busy or not self.gpu_free() or not self.memory_free():
                 moved = self.jobs.move(job.id, "waiting", reason="train_now", trigger="train_now")
                 self._ensure_watch()
                 self._notify()
@@ -278,6 +287,8 @@ class TrainingSupervisor:
             self._require_on()
             if not self.gpu_free():
                 raise TrainingError("gpu_busy")
+            if not self.memory_free():
+                raise TrainingError("memory_busy")
             return self._launch(job, trigger)
 
     def _lease_folder(self, job: Job) -> tuple[Path, int]:
@@ -542,7 +553,7 @@ class TrainingSupervisor:
                 return False
             if not settings.enabled or settings.paused or not self.engine.ready():
                 return False  # the runner takes it up again when Learning resumes
-            if not self.lease.read().busy and self.gpu_free():
+            if not self.lease.read().busy and self.gpu_free() and self.memory_free():
                 self._launch(job, "train_now")
             return True
 

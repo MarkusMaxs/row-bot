@@ -276,3 +276,18 @@ export const DOWNLOAD_FAILURES: Record<string, string> = {
   no_cuda:
     'The training engine couldn’t use the graphics card. Update your NVIDIA driver, then try again.',
 };
+
+/** What a tier's training needs of the computer's memory, measured (O105). */
+export function memoryNeedWords(gb: number | null | undefined): string {
+  return gb
+    ? `Training needs about ${gb} GB of this computer’s memory free (RAM and virtual memory).`
+    : '';
+}
+
+/** How to give training more memory on this system (O105): never "close Row-Bot". */
+export function memoryAdvice(system: string | null | undefined): string {
+  if (system === 'windows')
+    return 'Raise Windows’ virtual memory (Advanced system settings › Performance › Virtual memory), then check again.';
+  if (system === 'linux') return 'Add swap space or RAM, then check again.';
+  return 'Add RAM, then check again.';
+}

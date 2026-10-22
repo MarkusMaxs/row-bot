@@ -15,6 +15,8 @@ import {
   ENGINE_TELEMETRY,
   limitMeaning,
   limitOptions,
+  memoryAdvice,
+  memoryNeedWords,
   quietHoursWords,
   sizeWords,
 } from './words';
@@ -72,9 +74,35 @@ function HardwareRows({
         </div>
       </div>
     );
+  if (hardware.state === 'low_memory' && hardware.tier) {
+    // O105: the card could train, but RAM and virtual memory together can't hold its smallest run.
+    return (
+      <div className="learning-stack-tight">
+        <p>
+          <span className="learning-label">This computer: </span>
+          {hardware.gpu?.label}
+        </p>
+        <p>
+          This computer’s memory can’t hold training yet: it needs about{' '}
+          {hardware.tier.system_memory_gb} GB of RAM and virtual memory, and
+          this computer has {hardware.memory?.limit_gb} GB.
+        </p>
+        <p className="learning-muted">
+          {memoryAdvice(hardware.memory?.system)}
+        </p>
+        <div className="learning-actions-inline">
+          <Button className="small" onClick={onCheckAgain}>
+            Check again
+          </Button>
+        </div>
+      </div>
+    );
+  }
   if (hardware.state === 'gpu' && hardware.tier) {
     // Every certified model this card trains, its own tier's first (the recommendation, D3).
     const models = hardware.starting_models;
+    // O105: larger tiers the card fits but the computer's memory can't hold (the smallest one's need).
+    const short = hardware.memory_short?.[0];
     return (
       <div className="learning-stack-tight">
         <p>
@@ -82,6 +110,26 @@ function HardwareRows({
           {hardware.gpu?.label}
         </p>
         <p>{hardware.tier.summary}</p>
+        {hardware.tier.system_memory_gb && (
+          <p className="learning-muted">
+            {memoryNeedWords(hardware.tier.system_memory_gb)}
+          </p>
+        )}
+        {short && hardware.memory && (
+          <div className="learning-stack-tight">
+            <p className="learning-muted">
+              Larger models need about {short.system_memory_gb} GB of RAM and
+              virtual memory to train, and this computer has{' '}
+              {hardware.memory.limit_gb} GB.{' '}
+              {memoryAdvice(hardware.memory.system)}
+            </p>
+            <div className="learning-actions-inline">
+              <Button className="small" variant="ghost" onClick={onCheckAgain}>
+                Check again
+              </Button>
+            </div>
+          </div>
+        )}
         {hardware.larger_tiers.map((tier) => (
           <p className="learning-muted" key={tier.id}>
             {tier.summary}

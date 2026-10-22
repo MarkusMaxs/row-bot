@@ -160,6 +160,28 @@ def test_training_waits_while_another_app_holds_the_graphics_cards_memory(setup)
     assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
 
 
+def test_training_waits_while_other_apps_hold_the_computers_memory(setup):
+    # O105: Windows charges what a run holds on the card to RAM and virtual memory too; Row-Bot waits for
+    # that memory and never closes another app.
+    job = _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    memory = {"free": False}
+    setup.supervisor.gpu_free = lambda: True
+    setup.supervisor.memory_free = lambda: memory["free"]
+
+    assert (setup.runner.status().state, setup.runner.status().reason) == ("waiting", "memory_busy")
+    assert (setup.runner.check().state, setup.runner.check().reason) == ("waiting", "memory_busy")
+    assert setup.engine.commands == [] and setup.supervisor.jobs.get(job.id).state == "planned"
+    setup.when.now = DAY
+    waiting = setup.supervisor.train_now(job.id)  # Train now waits for the memory too
+    assert waiting.state == "waiting" and setup.engine.commands == []
+
+    memory["free"] = True
+    setup.supervisor.watch()
+    assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
+
+
 def test_train_now_waiting_for_a_chat_starts_once_it_ends_even_after_a_restart(setup):
     job = _plan(setup)
     setup.when.now = DAY

@@ -37,11 +37,20 @@ class WeightFile:
     name: str
     size: int
     sha256: str
+    # Another repository's file at its own pinned revision (a training checkpoint takes the starting
+    # model's tokenizer and chat template, so it trains on rows rendered as the version is served).
+    repo: str = ""
+    revision: str = ""
 
 
 @dataclass(frozen=True)
 class PinnedModel:
-    """A starting model at one exact revision, file by file."""
+    """A starting model at one exact revision, file by file.
+
+    ``training``: the checkpoint the trainer loads when it isn't these files (O105: Qwen3.8 27B trains
+    from Unsloth's pre-quantized 4-bit checkpoint, because quantizing the 16-bit weights while loading
+    them holds them in the computer's memory). The 16-bit files stay: the export merges the trained
+    adapter into them and the starting model's own GGUF is made from them. Both are one download."""
 
     id: str
     name: str
@@ -50,10 +59,13 @@ class PinnedModel:
     licence: str
     licence_id: str
     files: tuple[WeightFile, ...]
+    training: PinnedModel | None = None
 
     @property
     def download_bytes(self) -> int:
-        return sum(item.size for item in self.files)
+        """Everything the model downloads, its training checkpoint included."""
+
+        return sum(item.size for item in self.files) + (self.training.download_bytes if self.training else 0)
 
     @property
     def weights_bytes(self) -> int:
@@ -62,7 +74,7 @@ class PinnedModel:
         return sum(item.size for item in self.files if item.name.endswith(".safetensors"))
 
     def url(self, item: WeightFile) -> str:
-        return f"https://huggingface.co/{self.repo}/resolve/{self.revision}/{item.name}"
+        return f"https://huggingface.co/{item.repo or self.repo}/resolve/{item.revision or self.revision}/{item.name}"
 
     def pinned(self) -> list[fetch.Pinned]:
         return [fetch.Pinned(self.url(item), item.name, item.sha256, item.size) for item in self.files]
@@ -185,6 +197,35 @@ QWEN38_27B = PinnedModel(
         WeightFile("video_preprocessor_config.json", 385, "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"),
         WeightFile("vocab.json", 6_722_759, "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"),
     ),
+    # The 32 GB tier trains from Unsloth's pre-quantized 4-bit checkpoint (its weights and config: NF4 with
+    # double quantization), with Qwen's own licence, tokenizer and chat template from the revision above,
+    # so the rows it trains on are rendered as the version is served (O96, O105; L2x).
+    training=PinnedModel(
+        id="qwen3.8-27b-train-4bit",
+        name="Qwen3.8 27B, 4-bit for training",
+        repo="unsloth/Qwen3.8-27B-unsloth-bnb-4bit",
+        revision="8aa5f05d26b7205477066e1449e0af13f762a299",
+        licence="Apache 2.0",
+        licence_id="apache-2.0",
+        files=(
+            WeightFile("config.json", 4_291, "2d239652486841d13eab478b738beaa43bac88e2052f9b4c5afbefd94e59522a"),
+            WeightFile("model.safetensors", 22_344_833_801,
+                       "d5ced71fee428687bca87ed1b62a1518e936e8698b180fbba35431ebd31e1a25"),
+            *(WeightFile(name, size, sha, "Qwen/Qwen3.8-27B", "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0")
+              for name, size, sha in (
+                ("LICENSE", 11_544, "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"),
+                ("chat_template.jinja", 8_952, "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"),
+                ("generation_config.json", 202, "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e"),
+                ("merges.txt", 3_353_259, "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d"),
+                ("preprocessor_config.json", 390, "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"),
+                ("tokenizer.json", 12_809_320, "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3"),
+                ("tokenizer_config.json", 17_928, "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"),
+                ("video_preprocessor_config.json", 385,
+                 "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13"),
+                ("vocab.json", 6_722_759, "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"),
+            )),
+        ),
+    ),
 )
 MODELS: dict[str, PinnedModel] = {model.id: model for model in (QWEN35_2B, QWEN35_4B, QWEN35_9B, QWEN38_27B)}
 
@@ -214,14 +255,37 @@ def _manifest(model: PinnedModel) -> dict:
     return {
         "format": FORMAT, "id": model.id, "name": model.name, "source": f"https://huggingface.co/{model.repo}",
         "repo": model.repo, "revision": model.revision, "licence": model.licence, "licence_id": model.licence_id,
-        "licence_file": "LICENSE", "files": [{"name": item.name, "bytes": item.size, "sha256": item.sha256}
-                                             for item in model.files],
+        "licence_file": "LICENSE",
+        "files": [{"name": item.name, "bytes": item.size, "sha256": item.sha256,
+                   **({"repo": item.repo, "revision": item.revision} if item.repo else {})} for item in model.files],
     }
 
 
 def status(model: PinnedModel, root: Path | None = None) -> WeightsStatus:
-    """Downloaded (every pinned file there, at its size), partly downloaded, or not at all."""
+    """Downloaded (every pinned file there, at its size), partly downloaded, or not at all; a model with
+    a training checkpoint is downloaded when both are (``folder`` is the starting model's own)."""
 
+    own = _status(model, root)
+    if model.training is None:
+        return own
+    extra = _status(model.training, root)
+    states = {own.state, extra.state}
+    if states == {"downloaded"}:
+        return WeightsStatus("downloaded", own.bytes + extra.bytes, own.folder)
+    if "damaged" in states:
+        return WeightsStatus("damaged", own.bytes + extra.bytes, own.folder if own.state == "damaged" else extra.folder)
+    done = sum(sum(item.size for item in part.files) if found.state == "downloaded" else found.bytes
+               for part, found in ((model, own), (model.training, extra)) if found.state in ("downloaded", "partial"))
+    return WeightsStatus("partial", done) if done else WeightsStatus("not_downloaded")
+
+
+def training_dir(model: PinnedModel, root: Path | None = None) -> Path:
+    """The folder the trainer loads: the training checkpoint's when the model has one."""
+
+    return model_dir(model.training or model, root)
+
+
+def _status(model: PinnedModel, root: Path | None = None) -> WeightsStatus:
     folder = model_dir(model, root)
     if _plain_dir(folder):
         try:
@@ -263,14 +327,24 @@ def download(
     progress: Callable[[int], None] = lambda _bytes: None,
     check: Callable[[], None] = lambda: None,
 ) -> Path:
-    """Download (or finish downloading) ``model`` and publish it. ``progress`` gets the bytes
-    on disk so far; ``check`` raises :class:`fetch.Stopped` to stop. Raises ``fetch.FetchError``."""
+    """Download (or finish downloading) ``model`` and publish it, its training checkpoint first.
+    ``progress`` gets the bytes on disk so far; ``check`` raises :class:`fetch.Stopped` to stop.
+    Raises ``fetch.FetchError``. Returns the starting model's own folder."""
 
-    found = status(model, root)
-    if found.state == "downloaded" and found.folder is not None:
-        progress(model.download_bytes)
-        return found.folder
     fetcher = fetcher or fetch.Fetcher()
+    earlier = 0
+    if model.training is not None:
+        _download(model.training, root, fetcher, progress, check)
+        earlier = model.training.download_bytes
+    return _download(model, root, fetcher, lambda current: progress(earlier + current), check)
+
+
+def _download(model: PinnedModel, root: Path | None, fetcher: fetch.Fetcher, progress: Callable[[int], None],
+              check: Callable[[], None]) -> Path:
+    found = _status(model, root)
+    if found.state == "downloaded" and found.folder is not None:
+        progress(sum(item.size for item in model.files))
+        return found.folder
     partial = partial_dir(model, root)
     partial.mkdir(parents=True, exist_ok=True)
     files = model.pinned()
@@ -296,10 +370,11 @@ def download(
 
 
 def delete(model: PinnedModel, root: Path | None = None) -> int:
-    """Delete the model (and any partial download). Returns the bytes freed."""
+    """Delete the model, its training checkpoint and any partial download. Returns the bytes freed."""
 
     freed = 0
-    for folder in (model_dir(model, root), partial_dir(model, root)):
+    parts = (model, model.training) if model.training is not None else (model,)
+    for folder in (path for part in parts for path in (model_dir(part, root), partial_dir(part, root))):
         if os.path.lexists(folder):
             freed += folder_bytes(folder)
             doomed = folder.with_name(f".removing-{uuid.uuid4().hex[:8]}")
@@ -334,4 +409,5 @@ __all__ = [
     "models_dir",
     "partial_dir",
     "status",
+    "training_dir",
 ]

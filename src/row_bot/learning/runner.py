@@ -221,6 +221,8 @@ class LearningRunner:
         if not act:
             if not self.supervisor.gpu_free():
                 return RunnerStatus("waiting", "gpu_busy")  # another app holds the card's memory
+            if not self.supervisor.memory_free():
+                return RunnerStatus("waiting", "memory_busy")  # other apps hold the computer's memory (O105)
             return RunnerStatus("scheduled", "now")
         if self.comparisons is not None and self.comparisons.running():
             return RunnerStatus("waiting", "comparing")  # a version's comparison has the card
@@ -249,8 +251,8 @@ class LearningRunner:
         try:
             self.supervisor.start(job, trigger)
         except TrainingError as error:
-            if error.code == "gpu_busy":
-                return RunnerStatus("waiting", "gpu_busy")
+            if error.code in ("gpu_busy", "memory_busy"):
+                return RunnerStatus("waiting", error.code)
             return RunnerStatus("nothing_to_do", "no_data" if error.code == "nothing_to_train" else error.code)
         return RunnerStatus("training")
 

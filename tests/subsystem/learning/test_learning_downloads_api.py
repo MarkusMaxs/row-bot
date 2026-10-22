@@ -125,6 +125,28 @@ def test_an_old_driver_is_reported_by_the_hardware_check(world):
     _error(_command(client, headers, "start_download"), "learning_download_unavailable")
 
 
+def test_the_hardware_check_says_what_training_needs_of_the_computers_memory(world, monkeypatch):
+    # O105: each tier's measured need, the computer's memory, and the tiers it can't hold.
+    client, headers, found = world
+    table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id != "32gb", tier.summary,
+                                (hardware.QWEN35_2B,), {"8gb": 15_360, "16gb": 30_720, "24gb": 41_984}.get(tier.id))
+                  for tier in hardware.TIERS)
+    monkeypatch.setattr(hardware, "TIERS", table)
+    small = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")],
+                              hardware.SystemMemory(limit_mib=36_864, free_mib=20_480))
+    hardware.check(refresh=True, detector=lambda: small)
+    found.gpu = small
+
+    response = client.get("/api/v1/learning/hardware", headers=headers)
+
+    assert response.status_code == 200
+    view = LearningHardware.model_validate_json(response.text).model_dump()
+    assert view["state"] == "gpu" and view["tier"]["id"] == "16gb" and view["tier"]["system_memory_gb"] == 30
+    assert [(tier["id"], tier["system_memory_gb"]) for tier in view["memory_short"]] == [("24gb", 41)]
+    assert view["memory"]["limit_gb"] == 36 and view["memory"]["free_gb"] == 20
+    assert view["memory"]["system"] in ("windows", "linux", "other")
+
+
 def test_without_the_preview_flag_there_is_no_download(api, monkeypatch):
     client, headers, _data, _ = api
     set_learning_preview(monkeypatch, False)

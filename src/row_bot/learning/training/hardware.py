@@ -15,6 +15,7 @@ to train here".
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import shutil
 import subprocess
@@ -66,7 +67,10 @@ MIN_DRIVER = 570
 
 @dataclass(frozen=True)
 class Tier:
-    """A recipe tier by graphics memory. Uncertified tiers are shown as "measured soon"."""
+    """A recipe tier by graphics memory. Uncertified tiers are shown as "measured soon".
+
+    ``system_memory_mib``: the computer's memory (RAM and virtual memory) its recipe needs free on this
+    system, as measured (O105); None where it wasn't measured."""
 
     id: str
     label: str
@@ -74,6 +78,7 @@ class Tier:
     certified: bool
     summary: str
     models: tuple[StartingModel, ...] = ()
+    system_memory_mib: int | None = None
 
 
 def _tier(tier_id: str, label: str, min_memory_mib: int, summary: str, model: StartingModel) -> Tier:
@@ -84,12 +89,12 @@ def _tier(tier_id: str, label: str, min_memory_mib: int, summary: str, model: St
     from row_bot.learning.training import recipes
 
     try:
-        certified = recipes.load(tier_id).certified
+        recipe = recipes.load(tier_id)
     except Exception:  # noqa: BLE001 - a recipe that can't be read certifies nothing
-        certified = False
-    if not certified:
+        recipe = None
+    if recipe is None or not recipe.certified:
         return Tier(tier_id, label, min_memory_mib, False, f"Larger models for {label} cards: measured soon.")
-    return Tier(tier_id, label, min_memory_mib, True, summary, (model,))
+    return Tier(tier_id, label, min_memory_mib, True, summary, (model,), recipe.system_memory_need())
 
 
 TIERS: tuple[Tier, ...] = (
@@ -143,17 +148,36 @@ def engine_variant(gpu: Gpu | None) -> str | None:
 
 
 @dataclass(frozen=True)
+class SystemMemory:
+    """This computer's memory for training (O105), in MiB: ``limit_mib`` is the most RAM and virtual
+    memory can hold (Windows' commit limit: RAM plus page files; Linux: RAM plus swap), ``free_mib`` what
+    is free of it now. Windows charges what a run holds on the graphics card to it too."""
+
+    limit_mib: int
+    free_mib: int
+
+    @property
+    def limit_gb(self) -> int:
+        return max(1, round(self.limit_mib / 1024))
+
+
+@dataclass(frozen=True)
 class HardwareCheck:
     """``gpu``: an NVIDIA card a certified recipe fits; ``old_driver``: such a card whose driver
-    is older than 570 (O25); ``small_gpu``: one too small to train on; ``no_gpu``: none found;
-    ``container``: Row-Bot's Docker image, which doesn't train in 5.4 (O46); ``unknown``: the check
-    itself failed."""
+    is older than 570 (O25); ``small_gpu``: one too small to train on; ``low_memory``: a card that
+    could train, on a computer whose RAM and virtual memory can't hold even its smallest tier's run
+    (O105); ``no_gpu``: none found; ``container``: Row-Bot's Docker image, which doesn't train in 5.4
+    (O46); ``unknown``: the check itself failed."""
 
-    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "container", "unknown"]
+    state: Literal["gpu", "old_driver", "small_gpu", "low_memory", "no_gpu", "container", "unknown"]
     gpu: Gpu | None = None
     # The certified tier this card trains with, and the larger tiers it fits once measured.
     tier: Tier | None = None
     larger_tiers: tuple[Tier, ...] = ()
+    # The computer's memory when it was checked, and the certified larger tiers the card fits but the
+    # computer's memory can't hold (O105: offered once virtual memory is raised).
+    memory: SystemMemory | None = None
+    memory_short: tuple[Tier, ...] = ()
 
     @property
     def can_train(self) -> bool:
@@ -169,8 +193,8 @@ class HardwareCheck:
     def starting_models(self) -> tuple[StartingModel, ...]:
         """Every certified starting model this card trains, its own tier's first (the recommendation)."""
 
-        if self.tier is None:
-            return ()
+        if self.tier is None or self.state == "low_memory":
+            return ()  # O105: nothing is offered that this computer's memory can't hold
         fits = [tier for tier in TIERS if tier.certified and tier.min_memory_mib <= self.tier.min_memory_mib]
         return tuple(model for tier in reversed(fits) for model in tier.models)
 
@@ -224,27 +248,82 @@ def _parse(output: str) -> list[Gpu]:
     return found
 
 
-def classify(gpus: Sequence[Gpu]) -> HardwareCheck:
-    """The largest card's tier (pure: no I/O)."""
+def classify(gpus: Sequence[Gpu], memory: SystemMemory | None = None) -> HardwareCheck:
+    """The largest card's tier (pure: no I/O): the largest certified tier its card fits and the
+    computer's memory can hold (O105; a tier without a figure for this system, or a computer whose
+    memory couldn't be read, isn't held back)."""
 
     if not gpus:
-        return HardwareCheck("no_gpu")
+        return HardwareCheck("no_gpu", memory=memory)
     gpu = max(gpus, key=lambda item: item.memory_mib)
     fits = [tier for tier in TIERS if gpu.memory_mib >= tier.min_memory_mib]
     certified = [tier for tier in fits if tier.certified]
     if not certified:
-        return HardwareCheck("small_gpu", gpu)
-    best = certified[-1]
+        return HardwareCheck("small_gpu", gpu, memory=memory)
+    held = [tier for tier in certified if memory is None or not tier.system_memory_mib
+            or tier.system_memory_mib <= memory.limit_mib]
+    if not held:
+        return HardwareCheck("low_memory", gpu, certified[0], memory=memory)
+    best = held[-1]
+    short = tuple(tier for tier in certified if tier not in held and tier.min_memory_mib > best.min_memory_mib)
     larger = tuple(tier for tier in fits if not tier.certified and tier.min_memory_mib > best.min_memory_mib)
     if engine_variant(gpu) is None:
-        return HardwareCheck("old_driver", gpu, best, larger)
-    return HardwareCheck("gpu", gpu, best, larger)
+        return HardwareCheck("old_driver", gpu, best, larger, memory, short)
+    return HardwareCheck("gpu", gpu, best, larger, memory, short)
+
+
+class _MemoryStatus(ctypes.Structure):
+    _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong), ("total_phys", ctypes.c_ulonglong),
+                ("avail_phys", ctypes.c_ulonglong), ("total_page_file", ctypes.c_ulonglong),
+                ("avail_page_file", ctypes.c_ulonglong), ("total_virtual", ctypes.c_ulonglong),
+                ("avail_virtual", ctypes.c_ulonglong), ("avail_extended_virtual", ctypes.c_ulonglong)]
+
+
+def _windows_memory() -> SystemMemory | None:
+    status = _MemoryStatus()
+    status.length = ctypes.sizeof(_MemoryStatus)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
+        return None
+    # The "page file" figures are the commit limit and what's left of it (RAM plus every page file).
+    return SystemMemory(int(status.total_page_file // 1_048_576), int(status.avail_page_file // 1_048_576))
+
+
+def _linux_memory(text: str) -> SystemMemory | None:
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        name, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            values[name.strip()] = int(parts[0])  # kB
+    if "MemTotal" not in values or "MemAvailable" not in values:
+        return None
+    limit = values["MemTotal"] + values.get("SwapTotal", 0)
+    free = values["MemAvailable"] + values.get("SwapFree", 0)
+    return SystemMemory(limit // 1024, free // 1024)
+
+
+def system_memory(*, platform: str | None = None, read_text: Callable[[str], str] | None = None
+                  ) -> SystemMemory | None:
+    """This computer's memory for training now, or None where it can't be read (never raises)."""
+
+    platform = platform or sys.platform
+    try:
+        if platform == "win32":
+            return _windows_memory()
+        if platform.startswith("linux"):
+            from pathlib import Path
+
+            return _linux_memory((read_text or (lambda path: Path(path).read_text(encoding="ascii")))("/proc/meminfo"))
+    except (OSError, ValueError, AttributeError):
+        logger.debug("Learning could not read this computer's memory", exc_info=True)
+    return None
 
 
 def detect(
     *,
     run: Runner = subprocess.run,
     which: Callable[[str], str | None] = shutil.which,
+    memory: Callable[[], SystemMemory | None] = system_memory,
 ) -> HardwareCheck:
     """Ask ``nvidia-smi`` once. Never raises; ``unknown`` when the check itself failed. In Row-Bot's
     Docker image training is unavailable (GPU containers are out of scope for 5.4, O46)."""
@@ -274,7 +353,7 @@ def detect(
     if getattr(result, "returncode", 1) != 0:
         # The tool is there but has no card to report (or no working driver).
         return HardwareCheck("no_gpu")
-    return classify(_parse(str(getattr(result, "stdout", "") or "")))
+    return classify(_parse(str(getattr(result, "stdout", "") or "")), memory())
 
 
 _lock = threading.Lock()
@@ -367,6 +446,38 @@ def training_need_mib(found: HardwareCheck | None = None) -> int | None:
     return need or None
 
 
+def training_system_need_mib(found: HardwareCheck | None = None) -> int | None:
+    """The computer's memory (RAM and virtual memory) the recipe this computer trains with needs free on
+    this system (O105), or None when it wasn't measured here or there is no recipe."""
+
+    from row_bot.learning.training import recipes
+
+    try:
+        recipe = recipes.current(check=found if found is not None else peek())
+    except Exception:  # noqa: BLE001 - no recipe: nothing to wait for
+        return None
+    return recipe.system_memory_need()
+
+
+def memory_free_for_training(*, reader: Callable[[], SystemMemory | None] = system_memory) -> bool:
+    """Whether the computer has the memory free that training needs now (O105): Row-Bot waits, and
+    never closes or touches another app. True when it can't be read or wasn't measured here."""
+
+    found = peek()
+    if found is None or found.state != "gpu":
+        return True
+    need = training_system_need_mib(found)
+    if not need:
+        return True
+    reading = reader()
+    if reading is None:
+        return True
+    free = reading.free_mib >= need
+    if not free:
+        logger.info("Learning waits for memory: training needs %s MiB free, %s MiB is", need, reading.free_mib)
+    return free
+
+
 def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None = None,
                           clock: Callable[[], float] | None = None) -> bool:
     """Whether the card has the memory free to train now (read at most every 30 s). True when this
@@ -406,6 +517,7 @@ __all__ = [
     "MIN_DRIVER",
     "Gpu",
     "HardwareCheck",
+    "SystemMemory",
     "QWEN35_2B",
     "STARTING_MODELS",
     "StartingModel",
@@ -419,4 +531,7 @@ __all__ = [
     "forget",
     "gpu_free_for_training",
     "gpu_memory",
+    "memory_free_for_training",
+    "system_memory",
+    "training_system_need_mib",
 ]

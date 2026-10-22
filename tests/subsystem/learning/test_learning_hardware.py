@@ -29,13 +29,16 @@ def _which(found: bool = True):
     return lambda name: "/fake/bin/nvidia-smi" if found and name == "nvidia-smi" else None
 
 
+ROOMY = hardware.SystemMemory(limit_mib=131_072, free_mib=90_000)  # never the real computer's memory
+
+
 def test_an_8_gb_card_trains_with_the_certified_small_model_recipe():
     calls: list = []
 
     check = hardware.detect(run=_run("NVIDIA GeForce RTX 5070 Laptop GPU, 8151, 596.08\n", calls=calls),
-                            which=_which())
+                            which=_which(), memory=lambda: ROOMY)
 
-    assert check.state == "gpu" and check.can_train
+    assert check.state == "gpu" and check.can_train and check.memory == ROOMY
     assert check.gpu and check.gpu.label == "NVIDIA GeForce RTX 5070 Laptop (8\u00a0GB)"
     assert check.tier and check.tier.certified and check.tier.id == "8gb"
     assert check.tier.summary == "Can train small models (up to about 2B) on your tasks."
@@ -52,7 +55,7 @@ def test_an_8_gb_card_trains_with_the_certified_small_model_recipe():
 def test_a_larger_card_uses_the_certified_recipe_and_lists_its_own_tiers_as_measured_soon():
     check = hardware.detect(
         run=_run("NVIDIA GeForce RTX 3060, 12288, 580.1\nNVIDIA GeForce RTX 5090, 32607, 580.1\n"),
-        which=_which(),
+        which=_which(), memory=lambda: ROOMY,
     )
 
     assert check.state == "gpu"
@@ -76,7 +79,7 @@ def test_a_larger_card_uses_the_certified_recipe_and_lists_its_own_tiers_as_meas
 def test_without_a_card_that_fits_this_computer_cant_train(run, found, state, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")  # no fallback location to look in
 
-    check = hardware.detect(run=run, which=_which(found))
+    check = hardware.detect(run=run, which=_which(found), memory=lambda: ROOMY)
 
     assert check.state == state and not check.can_train and check.tier is None
 
@@ -86,7 +89,7 @@ def test_the_docker_image_says_training_is_unavailable(monkeypatch):
     calls: list = []
 
     check = hardware.detect(run=_run("NVIDIA GeForce RTX 5070 Laptop GPU, 8151, 596.08\n", calls=calls),
-                            which=_which())
+                            which=_which(), memory=lambda: ROOMY)
 
     assert check.state == "container" and not check.can_train and calls == []
 
@@ -144,3 +147,78 @@ def test_the_check_is_kept_for_the_process_until_asked_again():
 
     assert first.state == again.state == "no_gpu" and len(asked) == 2
     assert fresh.state == "gpu" and [tier.id for tier in fresh.larger_tiers] == ["16gb"]
+
+
+# ── The computer's memory (O105) ─────────────────────────────────────────────
+
+
+def _tiers(monkeypatch, needs: dict[str, int]) -> None:
+    """The tier table with these tiers certified, each needing this much of the computer's memory."""
+
+    table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id in needs,
+                                tier.summary if tier.id in needs else f"Larger models for {tier.label} cards: measured soon.",
+                                (hardware.QWEN35_2B,) if tier.id in needs else (), needs.get(tier.id))
+                  for tier in hardware.TIERS)
+    monkeypatch.setattr(hardware, "TIERS", table)
+
+
+def test_a_tier_the_computers_memory_cant_hold_isnt_offered_and_says_what_it_needs(monkeypatch):
+    _tiers(monkeypatch, {"8gb": 15_360, "16gb": 30_720, "24gb": 40_960})
+    card = [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")]
+
+    # 32 GB of RAM and a small page file: 36 GB of memory in all.
+    check = hardware.classify(card, hardware.SystemMemory(limit_mib=36_864, free_mib=20_000))
+
+    assert check.state == "gpu" and check.can_train and check.tier.id == "16gb"
+    assert [tier.id for tier in check.memory_short] == ["24gb"]  # the card fits it, the memory doesn't
+    assert [tier.id for tier in check.larger_tiers] == ["32gb"]  # still being measured
+    assert check.tier.system_memory_mib == 30_720 and check.memory.limit_gb == 36
+    # Enough virtual memory: every certified tier the card fits.
+    roomy = hardware.classify(card, ROOMY)
+    assert roomy.tier.id == "24gb" and roomy.memory_short == ()
+    # Memory that couldn't be read holds nothing back.
+    assert hardware.classify(card, None).tier.id == "24gb"
+
+
+def test_a_computer_whose_memory_cant_hold_even_the_smallest_tier_says_so_up_front(monkeypatch):
+    _tiers(monkeypatch, {"8gb": 15_360})
+    card = [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08")]
+
+    check = hardware.classify(card, hardware.SystemMemory(limit_mib=12_288, free_mib=6_000))
+
+    assert check.state == "low_memory" and not check.can_train
+    assert check.tier.id == "8gb" and check.tier.system_memory_mib == 15_360  # what it would need
+    assert check.starting_models == () and check.variant is None
+
+
+def test_training_waits_until_the_computer_has_the_memory_it_needs(monkeypatch):
+    hardware.check(refresh=True, detector=lambda: hardware.classify([hardware.Gpu("NVIDIA RTX 5070", 8_151, "596")],
+                                                                    ROOMY))
+    try:
+        need = hardware.training_system_need_mib()
+        assert need is not None and need >= 8 * 1024  # the 8 GB recipe's measured figure for this system
+        free = lambda mib: lambda: hardware.SystemMemory(limit_mib=131_072, free_mib=mib)  # noqa: E731
+        assert hardware.memory_free_for_training(reader=free(need)) is True
+        assert hardware.memory_free_for_training(reader=free(need - 1)) is False  # other apps hold it: wait
+        assert hardware.memory_free_for_training(reader=lambda: None) is True  # unreadable: nothing to wait for
+        hardware.check(refresh=True, detector=lambda: hardware.HardwareCheck("no_gpu"))
+        assert hardware.memory_free_for_training(reader=free(0)) is True  # no card: nothing trains here
+    finally:
+        hardware.forget()
+
+
+def test_the_computers_memory_is_read_from_the_system():
+    meminfo = ("MemTotal:       32768000 kB\nMemFree:  100 kB\nMemAvailable:   20480000 kB\n"
+               "SwapTotal: 8192000 kB\nSwapFree: 4096000 kB\n")
+
+    linux = hardware.system_memory(platform="linux", read_text=lambda path: meminfo)
+
+    assert linux == hardware.SystemMemory(limit_mib=(32_768_000 + 8_192_000) // 1024,
+                                          free_mib=(20_480_000 + 4_096_000) // 1024)
+    assert hardware.system_memory(platform="linux", read_text=lambda path: "garbage") is None
+    assert hardware.system_memory(platform="darwin") is None  # nothing trains on a Mac
+    real = hardware.system_memory()  # this computer's own (Windows: the commit limit; Linux: RAM and swap)
+    if sys.platform == "win32" or sys.platform.startswith("linux"):
+        assert real is not None and 0 < real.free_mib <= real.limit_mib
+    else:
+        assert real is None

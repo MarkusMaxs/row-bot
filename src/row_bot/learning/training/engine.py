@@ -939,8 +939,9 @@ class LocalEngine:
         for folder in ("triton", "inductor", "unsloth", "hf"):
             (cache_dir(self._root) / folder).mkdir(parents=True, exist_ok=True)
         return EngineCommand(
+            # The training checkpoint where the model has one (the 27B's pre-quantized 4-bit, O105).
             argv=(str(found.python), "-I", "-S", str(ENTRY), "train", "--site", str(found.site),
-                  "--protocol", str(PROTOCOL_PATH), "--model", str(weights_status.folder)),
+                  "--protocol", str(PROTOCOL_PATH), "--model", str(weights.training_dir(model, self._root))),
             env=engine_variables(self._root),
             name="unsloth",
         )

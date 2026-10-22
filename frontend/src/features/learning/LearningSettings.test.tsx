@@ -458,3 +458,79 @@ it('a 32 GB card offers its own tier’s model first, the smaller tiers’ as ch
     }),
   );
 });
+
+it('the setup sheet says what training needs of the computer’s memory, and what to do when it can’t hold a tier (O105)', async () => {
+  const GPU_32GB = {
+    ...GPU_8GB,
+    gpu: {
+      name: 'NVIDIA GeForce RTX 5090',
+      memory_gb: 32,
+      label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+    },
+    tier: {
+      id: '16gb',
+      label: '16 GB',
+      certified: true,
+      summary: 'Can train models up to about 4B on your tasks.',
+      system_memory_gb: 30,
+    },
+    memory_short: [
+      {
+        id: '24gb',
+        label: '24 GB',
+        certified: true,
+        summary: 'Can train models up to about 9B on your tasks.',
+        system_memory_gb: 41,
+      },
+    ],
+    memory: { limit_gb: 36, free_gb: 20, system: 'windows' as const },
+  } satisfies typeof GPU_8GB;
+  const io = fakeIO(learningSnapshot(), { hardware: GPU_32GB });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'Training needs about 30 GB of this computer’s memory free (RAM and virtual memory).',
+    ),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByText(
+      /^Larger models need about 41 GB of RAM and virtual memory to train, and this computer has 36 GB\. Raise Windows’ virtual memory/,
+    ),
+  ).toBeVisible();
+  fireEvent.click(within(sheet).getByRole('button', { name: 'Check again' }));
+  await act(async () => undefined);
+  expect(io.hardware).toHaveBeenLastCalledWith(true);
+});
+
+it('a computer whose memory can’t hold training says so up front, with what to do (O105)', async () => {
+  const io = fakeIO(learningSnapshot(), {
+    hardware: {
+      ...GPU_8GB,
+      state: 'low_memory',
+      tier: { ...GPU_8GB.tier!, system_memory_gb: 15 },
+      starting_models: [],
+      memory: { limit_gb: 12, free_gb: 5, system: 'linux' },
+    },
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'This computer’s memory can’t hold training yet: it needs about 15 GB of RAM and virtual memory, and this computer has 12 GB.',
+    ),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByText('Add swap space or RAM, then check again.'),
+  ).toBeVisible();
+  expect(
+    within(sheet).queryByRole('combobox', { name: 'Starting model' }),
+  ).toBeNull();
+  expect(
+    within(sheet).getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
+});

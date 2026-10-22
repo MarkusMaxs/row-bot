@@ -72,6 +72,11 @@ def _text(**changes) -> str:
     {"settings": {"max_seq_length": 8192}},  # a certified recipe trains on at least 16K (O23)
     {"settings": {"max_seq_length": 16384, "report_to": "wandb"}},
     {"settings": {"max_seq_length": 16384, "rank": True}},
+    {"system_memory_mib": None},
+    {"system_memory_mib": {"macos": 16384}},  # O105: only the systems a recipe is measured on
+    {"system_memory_mib": {"windows": "16 GB"}},
+    {"system_memory_mib": {"windows": 512}},
+    {"system_memory_mib": {"linux": 16384}},  # a certified recipe says what it needs on Windows
 ])
 def test_a_recipe_file_is_read_strictly(changes):
     with pytest.raises(recipes.RecipeError) as error:
@@ -116,3 +121,16 @@ def test_the_recipe_follows_the_starting_model_the_person_chose(data_dir):
     small = _card(8_188)
     save_learning_settings(data_dir, enabled=True, starting_model=certified[0].starting_model)
     assert recipes.current(data_dir, small).id == "8gb"
+
+
+def test_a_recipe_says_what_it_needs_of_the_computers_memory_on_each_system():
+    # O105: Windows charges what a run holds on the card to its commit limit, so its figure is measured
+    # there; a system without a figure isn't checked.
+    recipe = recipes.parse(_text(system_memory_mib={"windows": 15_360, "linux": 9_216}), source="8gb.json")
+
+    assert recipe.system_memory_need("win32") == 15_360 and recipe.system_memory_need("linux") == 9_216
+    assert recipe.system_memory_need("darwin") is None
+    windows_only = recipes.parse(_text(system_memory_mib={"windows": 15_360}), source="8gb.json")
+    assert windows_only.system_memory_need("linux") is None
+    for shipped in recipes.all_recipes():
+        assert not shipped.certified or shipped.system_memory_need("win32")  # every certified tier measured

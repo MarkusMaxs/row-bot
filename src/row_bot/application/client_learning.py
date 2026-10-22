@@ -71,7 +71,7 @@ _RUNNER_REASONS = frozenset({
     "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
     "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
     "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-    "planned", "planning", "up_to_date", "gpu_busy", "comparing",
+    "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
 })
 _VERSION_PHASES = frozenset({"exporting", "export_failed", "making_ready", "ready", "runtime_failed",
                              "waiting_for_you"})
@@ -746,14 +746,23 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
         free = None
 
     def tier(value: Any) -> dict[str, Any]:
-        return {"id": value.id, "label": value.label, "certified": value.certified, "summary": value.summary}
+        need = getattr(value, "system_memory_mib", None)
+        return {"id": value.id, "label": value.label, "certified": value.certified, "summary": value.summary,
+                "system_memory_gb": max(1, -(-int(need) // 1024)) if need else None}
 
+    from row_bot.learning.training import recipes
+
+    memory = found.memory
+    system = recipes.this_system()
     result = {
         "state": found.state,
         "gpu": {"name": _text(found.gpu.name, 128), "memory_gb": found.gpu.memory_gb, "label": _text(found.gpu.label, 160)}
         if found.gpu else None,
         "tier": tier(found.tier) if found.tier else None,
         "larger_tiers": [tier(item) for item in found.larger_tiers],
+        "memory_short": [tier(item) for item in found.memory_short],
+        "memory": {"limit_gb": memory.limit_mib // 1024, "free_gb": memory.free_mib // 1024,
+                   "system": system if system in ("windows", "linux") else "other"} if memory else None,
         "starting_models": [_model_view(item) for item in found.starting_models],
         "engine_download_bytes": hardware.engine_download_bytes(found.variant),
         "free_bytes": free,
