@@ -276,6 +276,12 @@ def _raise_for_status(response: Any) -> None:
 
 def _safe_response_text(response: Any) -> str:
     try:
+        # A streamed answer's body is read first, or its reason is lost (B393).
+        if getattr(response, "is_stream_consumed", True) is False and hasattr(response, "read"):
+            response.read()
+    except Exception:
+        pass
+    try:
         payload = response.json()
         if isinstance(payload, dict):
             for key in ("error", "message", "detail"):

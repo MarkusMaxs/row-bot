@@ -368,6 +368,23 @@ def _responses_url(base_url: str) -> str:
 
 
 def _safe_response_text(response: Any) -> str:
+    """ChatGPT's own reason for a failed request; a streamed answer's body is read first (B393)."""
+    try:
+        if getattr(response, "is_stream_consumed", True) is False and hasattr(response, "read"):
+            response.read()
+    except Exception:
+        pass
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])[:300]
+        for key in ("detail", "message"):
+            if isinstance(payload.get(key), str) and payload[key]:
+                return payload[key][:300]
     try:
         return str(getattr(response, "text", "") or "")[:300]
     except Exception:
