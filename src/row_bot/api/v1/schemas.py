@@ -5179,6 +5179,8 @@ class TaskEditableFields(WireModel):
     notify_only: bool
     notify_label: str = Field(max_length=4096)
     channels: list[OpaqueId] | None = Field(max_length=32)
+    # The IANA zone the schedule keeps its times in; None means the computer's.
+    timezone: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def prompt_budget(self) -> TaskEditableFields:

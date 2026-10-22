@@ -79,6 +79,8 @@ _WORKFLOW_READ_ONLY_DEFAULT_DENY_TOOLS = {
     "video_gen",
     "x",
 }
+# What a scheduled time that fell while Row-Bot was closed does (N9): skipped, or run once on start.
+MISSED_RUN_RULES = ("skip", "run_once")
 _SCHEMA_LOCK = threading.RLock()
 _APPROVAL_CHANNEL_PUSH_LOCK = threading.RLock()
 _SCHEMA_READY_PATH: str | None = None
@@ -119,7 +121,12 @@ _CREATE_TABLE_SQL = {
             agent_profile_id    TEXT DEFAULT '',
             profile_migration_status TEXT DEFAULT '',
             profile_migration_note TEXT DEFAULT '',
-            profile_migration_snapshot_json TEXT DEFAULT '{}'
+            profile_migration_snapshot_json TEXT DEFAULT '{}',
+            workspace_id        TEXT DEFAULT '',
+            workspace_name      TEXT DEFAULT '',
+            timezone            TEXT DEFAULT '',
+            missed_runs         TEXT DEFAULT 'skip',
+            always_ask          TEXT DEFAULT '[]'
         )
     """,
     "task_runs": """
@@ -136,6 +143,10 @@ _CREATE_TABLE_SQL = {
             pipeline_state_id TEXT,
             task_name       TEXT DEFAULT '',
             task_icon       TEXT DEFAULT '',
+            workspace_id    TEXT DEFAULT '',
+            workspace_name  TEXT DEFAULT '',
+            late_for        TEXT DEFAULT '',
+            notice          TEXT DEFAULT '',
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         )
     """,
@@ -265,6 +276,15 @@ _COLUMN_MIGRATIONS = {
         ("profile_migration_status", "TEXT DEFAULT ''"),
         ("profile_migration_note", "TEXT DEFAULT ''"),
         ("profile_migration_snapshot_json", "TEXT DEFAULT '{}'"),
+        # A workflow's own code folder (N9); none keeps the conversation's.
+        ("workspace_id", "TEXT DEFAULT ''"),
+        ("workspace_name", "TEXT DEFAULT ''"),
+        # The IANA zone its schedule keeps its times in; given the computer's on first start.
+        ("timezone", "TEXT DEFAULT ''"),
+        # A scheduled time while Row-Bot was closed: 'skip' it or 'run_once' on start.
+        ("missed_runs", "TEXT DEFAULT 'skip'"),
+        # Apps and tools whose actions always wait for the person ("Always ask me").
+        ("always_ask", "TEXT DEFAULT '[]'"),
     ],
     "task_runs": [
         ("finished_at", "TEXT"),
@@ -275,6 +295,11 @@ _COLUMN_MIGRATIONS = {
         ("task_name", "TEXT DEFAULT ''"),
         ("task_icon", "TEXT DEFAULT ''"),
         ("pipeline_state_id", "TEXT"),
+        ("workspace_id", "TEXT DEFAULT ''"),
+        ("workspace_name", "TEXT DEFAULT ''"),
+        ("late_for", "TEXT DEFAULT ''"),
+        # A plain sentence for the person about how the run ended (N9), e.g. "Not approved in time".
+        ("notice", "TEXT DEFAULT ''"),
     ],
     "pipeline_state": [
         ("current_step_index", "INTEGER DEFAULT 0"),
@@ -314,11 +339,12 @@ _REQUIRED_COLUMNS = {
         "concurrency_group", "trigger", "tools_override", "channels",
         "advanced_mode", "agent_profile_id", "profile_migration_status",
         "profile_migration_note", "profile_migration_snapshot_json",
+        "workspace_id", "workspace_name", "timezone", "missed_runs", "always_ask",
     },
     "task_runs": {
         "id", "task_id", "thread_id", "started_at", "finished_at", "status",
         "status_message", "steps_total", "steps_done", "pipeline_state_id",
-        "task_name", "task_icon",
+        "task_name", "task_icon", "workspace_id", "workspace_name", "late_for", "notice",
     },
     "pipeline_state": {
         "run_id", "task_id", "thread_id", "current_step_index",
@@ -451,6 +477,14 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE tasks SET safety_mode = 'auto' WHERE safety_mode IS NULL "
         "OR safety_mode IN ('allow_all', 'allow-all', 'auto_edit', 'agent_run')"
+    )
+    # Schedules saved before they kept a zone (5.3) keep the computer's zone, so nothing moves.
+    from row_bot.schedule_zones import local_zone_name
+
+    conn.execute(
+        "UPDATE tasks SET timezone = ? WHERE COALESCE(timezone, '') = '' "
+        "AND (COALESCE(schedule, '') != '' OR COALESCE(at, '') != '')",
+        (local_zone_name(),),
     )
     conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -1786,6 +1820,11 @@ def create_task(
     task_id: str | None = None,
     validate: Callable[[], None] | None = None,
     record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
+    timezone: str | None = None,
+    workspace_id: str = "",
+    workspace_name: str = "",
+    missed_runs: str = "skip",
+    always_ask: list[str] | None = None,
 ) -> str:
     """Create a new task and return its ID.
 
@@ -1802,6 +1841,12 @@ def create_task(
             "Only one of schedule, at, or delay_minutes may be set."
         )
     validate_workflow_steps(steps)
+    from row_bot import schedule_zones
+
+    if timezone and not schedule_zones.is_zone(timezone):
+        raise ValueError("timezone must be an IANA zone such as Europe/London.")
+    if missed_runs not in MISSED_RUN_RULES:
+        raise ValueError("missed_runs must be 'skip' or 'run_once'.")
 
     # ── delay_minutes → at conversion ────────────────────────────────
     if delay_minutes is not None:
@@ -1809,6 +1854,9 @@ def create_task(
             raise ValueError("delay_minutes must be positive.")
         at = (datetime.now() + timedelta(minutes=delay_minutes)).isoformat()
         delete_after_run = True  # one-shot timers auto-delete
+        timezone = None  # ``at`` is the computer's own time
+    # A schedule keeps its times in a zone: the one chosen, else the computer's (N9).
+    timezone = (timezone or schedule_zones.local_zone_name()) if (schedule or at) else (timezone or "")
 
     # ── Validate delivery settings ────────────────────────────────────
     _validate_delivery(delivery_channel, delivery_target)
@@ -1869,8 +1917,10 @@ def create_task(
             "persistent_thread_id, delete_after_run, created_at, enabled, skills_override, "
             "steps, safety_mode, concurrency_group, trigger, tools_override, channels, "
             "advanced_mode, agent_profile_id, profile_migration_status, "
-            "profile_migration_note, profile_migration_snapshot_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "profile_migration_note, profile_migration_snapshot_json, timezone, "
+            "workspace_id, workspace_name, missed_runs, always_ask) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?)",
             (
                 task_id, name, description, icon, json.dumps(prompts),
                 schedule, at, int(notify_only), notify_label,
@@ -1888,6 +1938,11 @@ def create_task(
                 profile_migration_status,
                 profile_migration_note,
                 json.dumps(profile_migration_snapshot, sort_keys=True),
+                timezone,
+                str(workspace_id or ""),
+                str(workspace_name or ""),
+                missed_runs,
+                json.dumps(list(always_ask or [])),
             ),
         )
         if validate is not None:
@@ -2219,10 +2274,11 @@ def update_task(
         "tools_override", "channels", "advanced_mode", "agent_profile_id",
         "profile_migration_status", "profile_migration_note",
         "profile_migration_snapshot_json",
+        "timezone", "workspace_id", "workspace_name", "missed_runs", "always_ask",
     }
     if expected_revision is not None and set(kwargs) - {
         "name", "description", "icon", "prompts", "schedule", "at", "enabled",
-        "notify_only", "notify_label", "channels",
+        "notify_only", "notify_label", "channels", "timezone",
     }:
         # The reviewed editor does not run legacy profile conversion or graph
         # rewrites before CAS. Existing unreviewed callers retain their API.
@@ -2287,6 +2343,16 @@ def update_task(
             if key == "steps" and isinstance(value, list):
                 assign_step_ids(value)
                 _canonicalize_workflow_steps(value)
+            if key == "timezone":
+                from row_bot import schedule_zones
+
+                if value and not schedule_zones.is_zone(value):
+                    raise TaskMutationError("invalid_task_schedule", task_id)
+                value = value or ""
+            if key == "missed_runs" and value not in MISSED_RUN_RULES:
+                raise TaskMutationError("invalid_task_settings", task_id)
+            if key == "always_ask":
+                value = list(value or [])
             if key in ("prompts", "allowed_commands", "allowed_recipients",
                        "skills_override", "steps", "trigger",
                        "tools_override", "channels", "profile_migration_snapshot_json"):
@@ -2297,6 +2363,15 @@ def update_task(
                 f"UPDATE tasks SET {key} = ? WHERE id = ?",
                 (value, task_id),
             )
+        if {"schedule", "at"} & set(kwargs):
+            # A schedule keeps its times in a zone: the computer's unless one was chosen (N9).
+            from row_bot import schedule_zones
+
+            conn.execute(
+                "UPDATE tasks SET timezone = ? WHERE id = ? AND COALESCE(timezone, '') = '' "
+                "AND (COALESCE(schedule, '') != '' OR COALESCE(at, '') != '')",
+                (schedule_zones.local_zone_name(), task_id),
+            )
         if validate is not None:
             validate()
         if record_commit is not None:
@@ -2306,7 +2381,7 @@ def update_task(
         conn.close()
 
     # Re-sync APScheduler job if schedule-related fields changed
-    _SCHEDULE_KEYS = {"schedule", "at", "enabled", "notify_only", "delete_after_run"}
+    _SCHEDULE_KEYS = {"schedule", "at", "enabled", "notify_only", "delete_after_run", "timezone"}
     if _scheduler is not None and _SCHEDULE_KEYS & set(kwargs):
         sync_task_schedule(task_id, validate=validate)
 
@@ -2508,6 +2583,15 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d["profile_migration_snapshot_json"] = {}
     if d.get("safety_mode"):
         d["safety_mode"] = legacy_safety_mode_to_approval_mode(d.get("safety_mode"))
+    d["workspace_id"] = str(d.get("workspace_id") or "")
+    d["workspace_name"] = str(d.get("workspace_name") or "")
+    d["timezone"] = str(d.get("timezone") or "")
+    d["missed_runs"] = d.get("missed_runs") if d.get("missed_runs") in MISSED_RUN_RULES else "skip"
+    try:
+        raw_ask = json.loads(d.get("always_ask") or "[]")
+    except (TypeError, ValueError):
+        raw_ask = []
+    d["always_ask"] = [str(item) for item in raw_ask if isinstance(item, str)] if isinstance(raw_ask, list) else []
     # Auto-convert: if steps is empty but prompts exist, synthesize steps
     if not d["steps"] and d["prompts"]:
         d["steps"] = _prompts_to_steps(d["prompts"])
@@ -5337,53 +5421,79 @@ _DAY_MAP = {
 _DAY_TO_AP = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
 
 
-def _build_trigger(task: dict):
-    """Build an APScheduler trigger from a task's schedule/at fields.
+def _schedule_trigger(sched: Mapping[str, Any], tz):
+    """The wall-clock trigger of a daily, weekly or cron schedule in its zone (None for others)."""
+    from row_bot import schedule_zones
+
+    kind = sched["kind"]
+    if kind == "daily":
+        cron = schedule_zones.cron_trigger(hour=sched["hour"], minute=sched["minute"])
+    elif kind == "weekly":
+        day_int = _DAY_MAP.get(sched["day"])
+        if day_int is None:
+            return None
+        cron = schedule_zones.cron_trigger(
+            day_of_week=_DAY_TO_AP[day_int], hour=sched["hour"], minute=sched["minute"]
+        )
+    elif kind == "cron":
+        try:
+            cron = schedule_zones.crontab_trigger(sched["expr"])
+        except Exception:
+            logger.warning("Invalid cron expression: %s", sched["expr"])
+            return None
+    else:
+        return None
+    return schedule_zones.WallClockTrigger(cron, tz)
+
+
+def _saved_instant(value: object, tz=None) -> datetime | None:
+    """A saved time as an instant: a wall-clock time in *tz* (a one-time ``at``), else the
+    computer's local time (``last_run``, written by ``datetime.now()``)."""
+    try:
+        parsed = datetime.fromisoformat(str(value or "").strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed
+    if tz is not None:
+        from row_bot import schedule_zones
+
+        return schedule_zones.resolve(parsed, tz)
+    return parsed.astimezone()
+
+
+def _build_trigger(task: dict, *, now: datetime | None = None):
+    """Build an APScheduler trigger from a task's schedule/at fields, in its zone.
 
     Returns a trigger object or *None* if the task has no valid schedule.
     """
-    # One-shot ``at`` tasks — fire once at a specific datetime
+    from row_bot import schedule_zones
+
+    tz = schedule_zones.zone(task.get("timezone"))
+    now = (now or datetime.now()).astimezone()
+    # One-shot ``at`` tasks — fire once at a specific wall-clock time in the zone
     at_str = task.get("at")
     if at_str:
-        try:
-            from apscheduler.triggers.date import DateTrigger
-            at_dt = datetime.fromisoformat(at_str)
-            # Only schedule if in the future
-            if at_dt > datetime.now():
-                return DateTrigger(run_date=at_dt)
-            # Already past — check if it already fired
-            lr = task.get("last_run")
-            if lr:
-                try:
-                    if datetime.fromisoformat(lr) >= at_dt:
-                        return None  # Already fired
-                except (ValueError, TypeError):
-                    pass
-            # Past but never fired — fire immediately
-            return DateTrigger(run_date=datetime.now() + timedelta(seconds=2))
-        except (ValueError, TypeError):
-            pass
-        return None
+        from apscheduler.triggers.date import DateTrigger
+        at_dt = _saved_instant(at_str, tz)
+        if at_dt is None:
+            return None
+        # Only schedule if in the future
+        if at_dt > now:
+            return DateTrigger(run_date=at_dt)
+        # Already past — check if it already fired
+        last = _saved_instant(task.get("last_run"))
+        if last and last >= at_dt:
+            return None  # Already fired
+        # Past but never fired — fire immediately
+        return DateTrigger(run_date=now + timedelta(seconds=2))
 
     sched = _parse_schedule(task.get("schedule"))
     if not sched:
         return None
 
     kind = sched["kind"]
-
-    if kind == "daily":
-        from apscheduler.triggers.cron import CronTrigger
-        return CronTrigger(hour=sched["hour"], minute=sched["minute"])
-
-    elif kind == "weekly":
-        from apscheduler.triggers.cron import CronTrigger
-        day_int = _DAY_MAP.get(sched["day"])
-        if day_int is None:
-            return None
-        ap_day = _DAY_TO_AP[day_int]
-        return CronTrigger(day_of_week=ap_day, hour=sched["hour"], minute=sched["minute"])
-
-    elif kind == "interval":
+    if kind == "interval":
         from apscheduler.triggers.interval import IntervalTrigger
         hours = sched["hours"]
         if hours <= 0:
@@ -5396,47 +5506,41 @@ def _build_trigger(task: dict):
         if minutes <= 0:
             return None
         return IntervalTrigger(minutes=int(minutes))
-
-    elif kind == "cron":
-        try:
-            from apscheduler.triggers.cron import CronTrigger
-            return CronTrigger.from_crontab(sched["expr"])
-        except Exception:
-            logger.warning("Invalid cron expression: %s", sched["expr"])
-            return None
-
-    return None
+    return _schedule_trigger(sched, tz)
 
 
 def estimate_next_run(task: Mapping[str, Any], now: datetime | None = None) -> str | None:
-    """Next fire time implied by a saved schedule, as a local ISO timestamp.
+    """Next fire time implied by a saved schedule, as an ISO timestamp.
 
-    This reads saved metadata only and never asks the scheduler, so list views
-    stay free of runtime probes. Daily, weekly, cron and one-time schedules are
-    exact; interval schedules are estimated from the last run. Disabled,
-    unscheduled, finished or unreadable schedules return None.
+    In the schedule's zone with its offset when it keeps one; a schedule saved
+    without a zone reads as local time with no offset. This reads saved
+    metadata only and never asks the scheduler, so list views stay free of
+    runtime probes. Daily, weekly, cron and one-time schedules are exact;
+    interval schedules are estimated from the last run. Disabled, unscheduled,
+    finished or unreadable schedules return None.
     """
     if not task.get("enabled"):
         return None
-    now = (now or datetime.now()).replace(microsecond=0)
+    from row_bot import schedule_zones
 
-    def local(value: object) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(str(value or "").strip())
-        except ValueError:
-            return None
-        return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+    named = str(task.get("timezone") or "")
+    tz = schedule_zones.zone(named)
+    now = (now or datetime.now()).astimezone().replace(microsecond=0)
+
+    def shown(value: datetime) -> str:
+        value = value.astimezone(tz) if named else value.astimezone().replace(tzinfo=None)
+        return value.isoformat(timespec="seconds")
 
     at = str(task.get("at") or "").strip()
     if at:
-        at_dt = local(at)
+        at_dt = _saved_instant(at, tz)
         if at_dt is None:
             return None
         if at_dt > now:
-            return at_dt.isoformat(timespec="seconds")
-        last = local(task.get("last_run"))
+            return shown(at_dt)
+        last = _saved_instant(task.get("last_run"))
         # A past one-time task that never ran is scheduled immediately.
-        return None if last and last >= at_dt else now.isoformat(timespec="seconds")
+        return None if last and last >= at_dt else shown(now)
     sched = _parse_schedule(task.get("schedule"))
     if not sched:
         return None
@@ -5447,31 +5551,19 @@ def estimate_next_run(task: Mapping[str, Any], now: datetime | None = None) -> s
             if kind == "interval"
             else timedelta(minutes=int(sched["minutes"]))
         )
-        last = local(task.get("last_run"))
+        last = _saved_instant(task.get("last_run"))
         if delta <= timedelta(0) or last is None:
             return None
         upcoming = last + delta
         if upcoming <= now:
             upcoming = last + delta * (int((now - last) / delta) + 1)
-        return upcoming.isoformat(timespec="seconds")
+        return shown(upcoming)
     try:
-        from apscheduler.triggers.cron import CronTrigger
-
-        if kind == "daily":
-            trigger = CronTrigger(hour=sched["hour"], minute=sched["minute"])
-        elif kind == "weekly":
-            day = _DAY_MAP.get(sched["day"])
-            if day is None:
-                return None
-            trigger = CronTrigger(
-                day_of_week=_DAY_TO_AP[day], hour=sched["hour"], minute=sched["minute"]
-            )
-        else:
-            trigger = CronTrigger.from_crontab(sched["expr"])
-        fire = trigger.get_next_fire_time(None, now.astimezone())
+        trigger = _schedule_trigger(sched, tz)
+        fire = trigger.get_next_fire_time(None, now) if trigger else None
     except Exception:
         return None
-    return fire.astimezone().replace(tzinfo=None).isoformat(timespec="seconds") if fire else None
+    return shown(fire) if fire else None
 
 
 def _job_id(task_id: str) -> str:

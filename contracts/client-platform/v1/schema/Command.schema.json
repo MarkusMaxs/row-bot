@@ -9488,6 +9488,19 @@
             }
           ],
           "title": "Schedule"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
         }
       },
       "required": [
