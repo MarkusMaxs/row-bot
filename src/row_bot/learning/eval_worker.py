@@ -833,24 +833,6 @@ def _register_fake_apps() -> list[str]:
     return list(APP_TOOLS.values())
 
 
-def _empty_libraries() -> list[str]:
-    """The person's own libraries are empty in the throwaway profile, and their tools say so.
-
-    The documents tool embeds the query before it looks at the (empty) library, so where the
-    embedding model isn't on this computer it answered every call with an error, and small models
-    called it again and again (L2v). In the worker it answers as an empty library does, with the
-    same name, description and schema the model sees when it serves."""
-
-    from row_bot.tools import registry
-
-    changed: list[str] = []
-    tool = registry.get_tool("documents")
-    if tool is not None:
-        tool.execute = lambda query: f"No results found for: {query}"  # type: ignore[method-assign]
-        changed.append("documents")
-    return changed
-
-
 def _forget_task(thread_id: str) -> None:
     """What one task's turn left in the worker's profile goes before the next task, so no task
     (or arm) finds another's conversation or memories (L2v): its thread, and every memory (the
@@ -1261,7 +1243,6 @@ def worker_main() -> int:
         import row_bot.agent  # noqa: F401 - binds the runtime before the gate patches the ledger
 
         _setup_providers(spec, notes, endpoint_keys)
-        _empty_libraries()
         fake = _register_fake_apps()
         tools = [name for name in safe_tools(spec.get("tools") or ()) if name not in fake]
         gate = _TaskGate()

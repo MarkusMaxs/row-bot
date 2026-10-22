@@ -507,7 +507,6 @@ class ChatOpenAICompatible(BaseChatModel):
         owns_client = self.http_client is None
         request_timeout = _httpx_timeout(self.timeout)
         scope = current_cancellation_scope()
-        unregister_callbacks: list[Any] = []
         raw_lines = 0
         data_lines = 0
         decoded_events = 0
@@ -528,14 +527,6 @@ class ChatOpenAICompatible(BaseChatModel):
             ))
             with context as response:
                 _raise_for_status(response, self.endpoint)
-                if scope is not None:
-                    close_response = getattr(response, "close", None)
-                    if callable(close_response):
-                        unregister_callbacks.append(scope.register(close_response, "openai_compatible_response.close"))
-                    if owns_client:
-                        close_client = getattr(client, "close", None)
-                        if callable(close_client):
-                            unregister_callbacks.append(scope.register(close_client, "openai_compatible_client.close"))
                 for line in response.iter_lines():
                     if scope is not None and scope.is_cancelled():
                         return
@@ -558,11 +549,6 @@ class ChatOpenAICompatible(BaseChatModel):
             raise
         finally:
             cancelled = scope is not None and scope.is_cancelled()
-            for unregister in reversed(unregister_callbacks):
-                try:
-                    unregister()
-                except Exception:
-                    logger.debug("custom_openai_stream: unregister cancellation callback failed", exc_info=True)
             if cancelled:
                 logger.debug(
                     "custom_openai_stream: cancelled provider=%s model=%s raw_lines=%d data_lines=%d decoded=%d",
@@ -1335,9 +1321,10 @@ def _text_tool_call_from_match(match: re.Match[str], index: int) -> dict[str, An
 
 
 def _new_http_client(timeout: float) -> Any:
-    import httpx
+    # Its requests register with Stop as they start; Stop shuts their sockets down (``cancellable_http``).
+    from row_bot.providers.transports.cancellable_http import cancellable_http_client
 
-    return httpx.Client(timeout=_httpx_timeout(timeout))
+    return cancellable_http_client(timeout=_httpx_timeout(timeout))
 
 
 def _httpx_timeout(read_timeout: float) -> Any:

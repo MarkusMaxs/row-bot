@@ -19,6 +19,8 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { TaskGraphStepEdit } from '../../api/types';
+import { AppIcon } from '../apps/parts';
+import type { StepApp } from './StepApps';
 import {
   arrowPath,
   edgePath,
@@ -67,6 +69,8 @@ export interface WorkflowFlowchartProps {
   issues: ReadonlyMap<number, StepIssue>;
   kindLabel: (type: string) => string;
   summary: (step: TaskGraphStepEdit) => string;
+  /** The apps a step names, shown by their icons. */
+  apps?: (step: TaskGraphStepEdit) => readonly StepApp[];
 }
 
 /**
@@ -82,6 +86,7 @@ export default function WorkflowFlowchart({
   issues,
   kindLabel,
   summary,
+  apps = () => [],
 }: WorkflowFlowchartProps) {
   const id = useId();
   const layout = useMemo(
@@ -158,6 +163,9 @@ export default function WorkflowFlowchart({
       : `step ${to + 1} · ${kindLabel(steps[to].type)}`;
   function describe(index: number) {
     const parts = [summary(steps[index]) || EMPTY[steps[index].type] || ''];
+    const named = apps(steps[index]);
+    if (named.length)
+      parts.push(`Uses ${named.map((app) => app.name).join(', ')}`);
     for (const link of links.filter((item) => item.from === index))
       parts.push(
         link.branch
@@ -286,6 +294,12 @@ export default function WorkflowFlowchart({
                   </span>
                   {step.id.startsWith('draft_') && (
                     <span className="workflow-chart-new">New</span>
+                  )}
+                  {apps(step).map(
+                    (app) =>
+                      app.icon && (
+                        <AppIcon key={app.id} icon={app.icon} size={14} />
+                      ),
                   )}
                 </span>
                 <span

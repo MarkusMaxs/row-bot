@@ -606,6 +606,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Data folder leftover sweep failed")
 
+    # Deletes still offering Undo when the app stopped are finished (B343).
+    try:
+        from row_bot.thread_cleanup import resume_held_deletions
+        with _startup_phase("held_conversation_deletes"):
+            resume_held_deletions()
+    except Exception:
+        logger.exception("Held conversation deletes could not be resumed")
+
     # Recordings a crash cut short are marked, and their working files removed (F2).
     try:
         from row_bot.recordings import sweep_leftovers

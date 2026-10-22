@@ -2286,7 +2286,7 @@
           "type": "string"
         },
         "payload": {
-          "$ref": "#/$defs/EmptyPayload"
+          "$ref": "#/$defs/DeletePayload"
         },
         "type": {
           "const": "conversation.delete",
@@ -2487,6 +2487,43 @@
         "payload"
       ],
       "title": "ConversationRenameCommand",
+      "type": "object"
+    },
+    "ConversationRestoreCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/EmptyPayload"
+        },
+        "type": {
+          "const": "conversation.restore",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationRestoreCommand",
       "type": "object"
     },
     "ConversationResumeCommand": {
@@ -2838,6 +2875,18 @@
         "nonce"
       ],
       "title": "DefaultModelPayload",
+      "type": "object"
+    },
+    "DeletePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "undo": {
+          "default": false,
+          "title": "Undo",
+          "type": "boolean"
+        }
+      },
+      "title": "DeletePayload",
       "type": "object"
     },
     "DeveloperRepositoryBranchCreateCommand": {
@@ -11315,6 +11364,7 @@
       "conversation.queue.edit": "#/$defs/ConversationQueueEditCommand",
       "conversation.queue.remove": "#/$defs/ConversationQueueRemoveCommand",
       "conversation.rename": "#/$defs/ConversationRenameCommand",
+      "conversation.restore": "#/$defs/ConversationRestoreCommand",
       "conversation.resume": "#/$defs/ConversationResumeCommand",
       "conversation.skills": "#/$defs/ConversationSkillsCommand",
       "conversation.steer": "#/$defs/ConversationSteerCommand",
@@ -11451,6 +11501,9 @@
     },
     {
       "$ref": "#/$defs/ConversationDeleteCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationRestoreCommand"
     },
     {
       "$ref": "#/$defs/ConversationSubmitCommand"
