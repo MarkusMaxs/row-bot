@@ -457,6 +457,15 @@ class TrainingSupervisor:
                                    message["step"])
                 self._notify(wake=False)
                 return
+            elif kind == "kept":
+                # Which pass the run kept and each pass's validation loss (O117): its model card says so.
+                try:
+                    (jobs_module.run_dir(job.id, self.jobs.root) / jobs_module.KEPT_FILE).write_text(
+                        json.dumps({key: message[key] for key in ("pass", "losses", "most", "reason")},
+                                   sort_keys=True), encoding="utf-8")
+                except OSError:
+                    logger.warning("Learning couldn't record which pass a training run kept")
+                return
             elif kind == "artifacts":
                 # What the finished run produced (names, sizes, SHA-256): the version's adapter is checked
                 # against it before it is exported (L2c).

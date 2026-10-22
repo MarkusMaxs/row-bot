@@ -88,6 +88,7 @@ class VersionState:
     free_bytes: int | None = None
     trained_at: float | None = None
     examples: int = 0
+    kept_pass: Mapping[str, Any] = field(default_factory=dict)
     updated_at: float = 0.0
     verified_at: float | None = None
     checks: Mapping[str, Any] = field(default_factory=dict)
@@ -218,6 +219,29 @@ def _provider_name(provider: str, terms: Mapping[str, str]) -> str:
     return provider
 
 
+def _passes(recipe: Any) -> str:
+    if getattr(recipe, "best_pass", False) and recipe.epochs > 1:
+        return f"up to {recipe.epochs} passes"
+    return "one pass" if recipe.epochs == 1 else f"{recipe.epochs} passes"
+
+
+def kept_words(kept: Mapping[str, Any]) -> str | None:
+    """Which pass a version kept, in plain words (O117), or None."""
+
+    if not kept or not kept.get("pass"):
+        return None
+    number, losses = int(kept["pass"]), list(kept.get("losses") or ())
+    if kept.get("reason") == "no_validation_rows":
+        return ("- Trained one pass: no newer examples were held back to compare passes on, so its first pass "
+                "was kept.")
+    trained = len(losses)
+    shown = ", ".join("-" if value is None else f"{float(value):.3f}" for value in losses)
+    stopped = (f" Training stopped after pass {trained} because it did no better."
+               if trained < int(kept.get("most") or trained) else "")
+    return (f"- Kept pass {number} of {trained}: the one that did best on the examples held back to check it "
+            f"(validation loss by pass: {shown}).{stopped}")
+
+
 def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState, recipe: Any,
                engine_versions: Mapping[str, str]) -> str:
     """What the version is, in plain words (D14): what it was trained on, from which providers'
@@ -266,7 +290,10 @@ def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState
         lines.append(f"- Starting model: {identity.base.name} at revision {identity.base.version}.")
     lines.append(f"- Recipe: {recipe.title} ({recipe.name}): LoRA rank {recipe.settings.get('rank')}, "
                  f"{recipe.max_seq_length:,}-token examples, "
-                 f"{'one pass' if recipe.epochs == 1 else f'{recipe.epochs} passes'}, no reasoning.")
+                 f"{_passes(recipe)}, no reasoning.")
+    kept = kept_words(state.kept_pass)
+    if kept:
+        lines.append(kept)
     if engine_versions:
         lines.append("- Training engine: " + ", ".join(f"{key} {value}" for key, value in sorted(engine_versions.items()))
                      + ".")
@@ -494,6 +521,7 @@ class ReleaseMaker:
                         if isinstance(item, dict)}
             try:
                 adapter, adapter_bytes, adapter_sha = export.copy_adapter(run / "checkpoints", folder / "adapter", expected)
+                state = self._save(folder, state, kept_pass=_read_json(run / jobs_module.KEPT_FILE))
                 release = self._record(job, state, recipe, model, weights_folder, adapter_sha, run)
                 state = self._save(folder, state, release_id=release.id, adapter_bytes=adapter_bytes,
                                    examples=int(_read_json(folder / DATASET_FILE).get("examples") or 0))
@@ -597,13 +625,17 @@ class ReleaseMaker:
                             providers=tuple(str(item)[:64] for item in manifest.get("providers") or ())[:64],
                             rendering=str(rendering.get("name"))[:64] if rendering.get("name") else None)
         recipe_pin = Pin(recipe.name, str(recipe.version), recipe.sha256)
+        kept = state.kept_pass or {}
+        # The adapter is the kept pass's (O117): its pin says which.
+        method = (f"{recipe.method}, pass {int(kept['pass'])} of {len(kept.get('losses') or ())}"
+                  if kept.get("pass") else recipe.method)
         release = Release(
             id=contracts.new_id("rel"), kind="model", version=state.version, created_at=float(self.clock()),
             label=f"Personal model v{state.version}", parent_ids=(parent.id,) if parent else (),
             status="candidate",
             identity=ReleaseIdentity(
                 base=base, tokenizer=tokenizer, template=template,
-                adapter=Pin("adapter_model.safetensors", recipe.method, adapter_sha or None),
+                adapter=Pin("adapter_model.safetensors", method, adapter_sha or None),
                 quantization=recipe.quantization, data=data, recipe=recipe_pin,
             ),
             source_thread_ids=tuple(str(item) for item in manifest.get("conversations") or ())[:50_000],

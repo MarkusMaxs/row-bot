@@ -163,11 +163,37 @@ def test_the_model_card_says_what_it_was_trained_on_in_plain_words(maker_for):
     assert "Left out: 3 kept back as hidden tests, 2 a tool failed." in card
     assert "Answers from: Ollama (on this computer), OpenAI." in card
     assert "may be limited by their terms" in card  # D7
-    assert "Starting model: Qwen/Qwen3.5-2B" in card and "LoRA rank 16, 16,384-token examples, 3 passes" in card
+    assert "Starting model: Qwen/Qwen3.5-2B" in card and "LoRA rank 16, 16,384-token examples, up to 3 passes" in card
     assert "Training engine: torch 2.10.0, unsloth 2026.4.1." in card
     assert "Runs in Ollama: Row-Bot's check and one real task with a tool passed." in card
     assert "Not yet compared with your main model." in card
     assert "chat-1" not in card and "ep_1" not in card  # counts, never ids or content
+
+
+def test_a_version_says_which_pass_it_kept_on_its_card_and_in_its_identity(maker_for):
+    maker = maker_for()
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    (jobs_module.run_dir(job.id, maker_for.root) / jobs_module.KEPT_FILE).write_text(json.dumps(
+        {"pass": 1, "losses": [0.5, 0.61], "most": 3, "reason": "lowest_validation_loss"}), encoding="utf-8")
+
+    maker.tick()
+
+    folder = releases.version_dir(1, maker_for.root)
+    card = (folder / releases.MODEL_CARD_FILE).read_text(encoding="utf-8")
+    assert ("Kept pass 1 of 2: the one that did best on the examples held back to check it (validation loss by "
+            "pass: 0.500, 0.610). Training stopped after pass 2 because it did no better.") in card
+    state = releases.read_state(folder)
+    release = LearningStore(maker_for.root).get("release", state.release_id)
+    assert release.identity.adapter.version == "lora_sft, pass 1 of 2"
+    assert json.loads((folder / releases.MANIFEST_FILE).read_text(encoding="utf-8"))["identity"]["adapter"][
+        "version"] == "lora_sft, pass 1 of 2"
+
+
+def test_a_version_without_validation_rows_says_it_trained_one_pass():
+    words = releases.kept_words({"pass": 1, "losses": [None], "most": 3, "reason": "no_validation_rows"})
+
+    assert words == ("- Trained one pass: no newer examples were held back to compare passes on, so its first pass "
+                     "was kept.")
 
 
 def test_each_version_names_the_one_before_it(maker_for):
