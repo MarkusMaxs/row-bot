@@ -193,7 +193,7 @@ def collect(store: LearningStore, *, now: float, book: corrections.Book | None =
     left: Counter[str] = Counter()
     found: list[Evidence] = []
     for signal in book.signals:
-        if signal.created_at < since or not signal.decision_id:
+        if not since <= signal.created_at <= now or not signal.decision_id:
             continue
         decision = book.decisions.get(signal.decision_id)
         if decision is None:
@@ -213,7 +213,7 @@ def collect(store: LearningStore, *, now: float, book: corrections.Book | None =
     for decision in book.decisions.values():
         if decision.kind != "tool_call" or decision.status not in ("error", "timeout"):
             continue
-        if decision.created_at < since or decision.id in signalled or decision.id in held:
+        if not since <= decision.created_at <= now or decision.id in signalled or decision.id in held:
             continue
         if decision.episode_id in skipped_episodes:
             left["held_out"] += 1

@@ -265,6 +265,7 @@ const CHANGE_EMPTY: Record<ChangeFilter, string> = {
 function ChangeRow({ change }: { change: LearningChangeView }) {
   return (
     <EntityRow
+      className="learning-change-row"
       title={change.title}
       icon={<GraduationCap size={16} />}
       status={{ tone: 'neutral', label: 'Waiting to be tested' }}

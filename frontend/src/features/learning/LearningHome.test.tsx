@@ -210,7 +210,7 @@ it('Overnight says what last night found and drafted, in counts', () => {
     within(night).getByText('1 kind of work needs more examples'),
   ).toBeVisible();
   expect(
-    within(night).getByText('One looks like a bug in Row-Bot itself'),
+    within(night).getByText('1 of them looks like a bug in Row-Bot itself'),
   ).toBeVisible();
   expect(
     within(night).getByText(

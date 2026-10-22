@@ -611,3 +611,12 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+/* A drafted change's state and kind wrap on a phone rather than cut "Waiting to be tested" short. */
+.learning-change-row .entity-row-meta {
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 0;
+}
+.learning-change-row .entity-row-meta .status-indicator {
+  flex: none;
+}

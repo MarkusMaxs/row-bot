@@ -387,7 +387,10 @@ export function overnightLines(night: LearningOvernight): OvernightLine[] {
     });
   if (night.looks_like_bug)
     lines.push({
-      text: `${night.looks_like_bug === 1 ? 'One looks' : `${night.looks_like_bug} look`} like a bug in Row-Bot itself`,
+      text:
+        night.looks_like_bug === 1
+          ? '1 of them looks like a bug in Row-Bot itself'
+          : `${night.looks_like_bug} of them look like bugs in Row-Bot itself`,
     });
   if (night.left_out)
     lines.push({

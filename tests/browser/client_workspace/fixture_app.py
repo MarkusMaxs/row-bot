@@ -4228,6 +4228,75 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
     return {"action": action}
 
 
+# ── Learning (preview), L3a: last night's look and the changes it drafted ──
+
+
+def _l3a_drafts() -> None:
+    """Two drafted changes (a lesson and a way of working) and a kind that needs more examples."""
+
+    import time as _time
+
+    from row_bot import evolution
+    from row_bot.learning.contracts import Attempt
+    from row_bot.learning.store import LearningStore
+
+    drafts = [
+        ("lesson", "Use the current policy", "document_lookups",
+         "When two versions of a policy exist, answer from the newest approved one and say which you used.",
+         {"chats": 3, "corrections": 2, "stops": 1, "retries": 0, "denials": 0, "failures": 0, "imported": 1},
+         False, {}),
+        ("behaviour", "Check the calendar before booking", "tool_workflows",
+         "Before adding an event, look at that day's calendar and say if it overlaps another event.",
+         {"chats": 2, "corrections": 0, "stops": 2, "retries": 1, "denials": 0, "failures": 0, "imported": 0},
+         True, {"slot": "tool_guidance"}),
+    ]
+    for number, (kind, title, work, text, why, never, extra) in enumerate(drafts):
+        evolution.create_proposal(
+            insight_ids=[], proposal_type=kind, title=title, rationale="Fixture draft.", status="draft",
+            payload={"text": text, "kind_of_work": work, **extra,
+                     "learning": {"issue": f"{work}:fixture{number}", "attempt_id": f"att_fixture{number}",
+                                  "kind_of_work": work, "state": "waiting_to_test", "never_automatic": never,
+                                  "why": why}})
+    LearningStore().put(Attempt(id="att_fixture_examples", change_kind="wait", hypothesis="Not enough yet.",
+                                created_at=_time.time(), kind_of_work="small_coding", reason="needs_examples",
+                                issue="small_coding:corrected"))
+
+
+def _l3a_forget_drafts() -> None:
+    from row_bot import evolution
+
+    store = evolution._load_store()
+    store["proposals"] = [item for item in store["proposals"]
+                          if not isinstance((item.get("payload") or {}).get("learning"), dict)]
+    evolution._save_store(store)
+
+
+@app.post("/__l3a_fixture/learning/{action}")
+def l3a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict:
+    """Learning (preview) for the L3a spec: last night's look in each of its states, and the changes it
+    drafted. Nothing reaches a model, a GPU or a download: the reports and drafts are written directly."""
+    predecessor._authorize(x_fixture_token)
+    from datetime import date
+
+    from row_bot.learning import diagnosis
+    from row_bot.learning.store import LearningStore
+
+    night = date.today().isoformat()
+    if action == "night":
+        diagnosis._save(LearningStore(), diagnosis.NightReport(night, found=3, drafted=2, refused=1,
+                                                               needs_examples=1, bugs=1))
+        _l3a_drafts()
+    elif action in {"claude_plan", "stopped", "nothing", "unavailable"}:
+        diagnosis._save(LearningStore(), diagnosis.NightReport(
+            night, state=action, found=2 if action == "stopped" else 0, drafted=1 if action == "stopped" else 0,
+            diagnosed=1 if action == "stopped" else 0))
+    elif action == "restore":
+        _l3a_forget_drafts()
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
 # ── Learning (preview), L2b: the personal model's download, its states set by the spec ──
 
 _GB = 1_000_000_000
