@@ -295,3 +295,21 @@ def test_moving_a_ready_version_to_another_runtime_takes_it_out_of_ollama(maker_
     state = releases.read_state(releases.version_dir(1, maker_for.root))
     assert (state.phase, state.runtime, state.command) == (releases.WAITING, "lmstudio", command)
     assert maker_for.withdrawn == [("ollama", 1)] and exporter.calls == []  # the same file, not exported again
+
+
+def test_try_again_still_makes_a_version_that_couldnt_start_ready_while_the_next_one_waits(maker_for):
+    failing = maker_for(server=Server(serving.ServeOutcome("failed", "ollama", reason="tool_turn_failed")))
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    failing.tick()
+    folder = releases.version_dir(1, maker_for.root)
+    assert releases.couldnt_start(releases.read_state(folder))
+    assert not releases.holds_back(maker_for.jobs.get(job.id), maker_for.root)
+    assert releases.trained_example_ids(maker_for.root) == set()  # not counted as trained
+    nxt = maker_for.jobs.plan(steps_total=1, checkpoint_every=1)  # the runner planned v2
+    assert nxt.version == 2 and failing.due() is None
+
+    maker_for(server=Server(_ready())).start(maker_for.jobs.get(job.id))  # Try again
+
+    state = releases.read_state(folder)
+    assert state.phase == releases.READY and maker_for.jobs.get(job.id).state == "ready"
+    assert not releases.couldnt_start(state) and releases.trained_example_ids(maker_for.root) == {"ep_1", "ep_2"}

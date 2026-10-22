@@ -261,3 +261,40 @@ def test_dream_waits_while_training_holds_the_lease(monkeypatch):
         lease_module.release_training()
     assert dream_cycle._should_dream() is True
     assert dream_cycle.is_dreaming() is False
+
+
+def test_a_version_that_couldnt_start_lets_the_runner_plan_the_next_one(setup):
+    from row_bot.learning.training import releases
+
+    first = _plan(setup)
+    for state in ("preparing", "running", "evaluating"):
+        setup.supervisor.jobs.move(first.id, state)
+    folder = releases.version_dir(1, setup.root)
+    planned: list = []
+
+    class Planner:
+        def due(self):
+            return True
+
+        def plan(self):
+            job = setup.supervisor.jobs.plan(steps_total=10, checkpoint_every=5)
+            planned.append(job)
+            return SimpleNamespace(job=job)
+
+        def summary(self, compute=True):
+            return SimpleNamespace(enough=True, new_examples=0)
+
+        def recipe(self):
+            return SimpleNamespace(min_new_examples=50)
+
+    runner = LearningRunner(setup.supervisor, root=setup.root, hours=setup.runner.hours, planner=Planner())
+    releases.write_state(folder, releases.VersionState(version=1, phase=releases.MAKING_READY, job_id=first.id))
+    assert runner.status().state == "trained"  # being made ready: nothing else is planned
+
+    releases.write_state(folder, releases.VersionState(version=1, phase=releases.RUNTIME_FAILED, job_id=first.id,
+                                                       failure="tool_turn_failed"))
+    assert (runner.status().state, runner.status().reason) == ("nothing_to_do", "planning")  # not "up to date"
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    assert runner.check().state == "training"
+    assert [job.version for job in planned] == [2] and setup.supervisor.jobs.get(first.id).state == "evaluating"
