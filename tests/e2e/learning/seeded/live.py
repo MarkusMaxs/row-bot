@@ -1127,7 +1127,7 @@ class PersonRun:
 
         self._wait_for_person()
         runner = self.runner()
-        self.clock.set(int(self.args.days) + 1, 2)  # the night after the last day
+        self._clock_at_least(int(self.args.days) + 1, 2)  # the night after the last day (or later)
         watching = self._yield_watch()
         try:
             for _ in range(4):
@@ -1147,6 +1147,16 @@ class PersonRun:
         self.note(f"benchmark of v{version}: {(result.get('overall') or {}).get('line')}")
         return {"state": "done", "version": version, "day": int(self.args.days), "fresh": True,
                 "comparison": _comparison_summary(result)}
+
+    def _clock_at_least(self, day: int, hour: int) -> None:
+        """Move the clock to ``day`` at ``hour`` unless it is already later (the checks after the run come in
+        either order, and a resumed run may have moved on)."""
+
+        from datetime import datetime, timedelta
+
+        target = datetime.combine(self.clock.first_day, datetime.min.time()) + timedelta(days=day - 1, hours=hour)
+        if target > self.clock.now():
+            self.clock.set(day, hour)
 
     def _newest_ready(self) -> tuple[int, Any] | None:
         from row_bot.learning.training import releases
@@ -1265,7 +1275,7 @@ class PersonRun:
             events.append({"event": "trial", "version": version, "kind": kind, "day": self.clock.day,
                            "asked_for": True})
             asked_for = True
-        self.clock.set(int(self.args.days) + 1, 9)
+        self._clock_at_least(int(self.args.days) + 1, 9)
         asked, prompts = [], []
         for _ in range(3):
             try:
