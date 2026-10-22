@@ -1155,8 +1155,10 @@ class PersonRun:
                 "restored_state": back.state}
 
     def _trial_use_undo(self) -> dict[str, Any]:
-        """Trial, use and Undo of the newest version. When the product never offered it, the person asks
-        for it (as L2c2's e2e did), on the kind of work their requests are most often routed as."""
+        """Trial, use and Undo of the newest version, on requests of the days after the run. A kind the
+        product put in trial is used when such requests are left; otherwise the person asks for a trial
+        (as L2c2's e2e did) on the kind of work, other than "other", that the most requests left are
+        routed as (ties: the kind they asked most during the run), so the trial has requests to route."""
 
         from collections import Counter
 
@@ -1167,16 +1169,19 @@ class PersonRun:
             return {"state": "not_run", "why": "no version was made"}
         version, state = newest
         events = self.state.data["uses"]
-        assigned = use.read(self.data).assignments
+        used = {item["id"] for item in self.state.data["requests"]}
+        left = Counter(_classified(request) for request in self.history.stream
+                       if request.day > int(self.args.days) and request.id not in used)
+        left.pop("other", None)
+        assigned = [kind for kind in sorted(use.read(self.data).assignments) if left.get(kind)]
         if assigned:
-            kind = sorted(assigned)[0]
+            kind = assigned[0]
             asked_for = False
         else:
-            counted = Counter(record.get("kind") for record in self.state.data["requests"]
-                              if record.get("kind") not in (None, "other"))
-            if not counted:
-                return {"state": "not_run", "why": "no request was routed to a kind of work"}
-            kind = counted.most_common(1)[0][0]
+            if not left:
+                return {"state": "not_run", "why": "no request left that is routed to a kind of work"}
+            asked = Counter(record.get("kind") for record in self.state.data["requests"])
+            kind = max(sorted(left), key=lambda item: (left[item], asked.get(item, 0)))
             use.start_trial(version, kind, state.model_ref, root=self.data, clock=self.clock.time)
             events.append({"event": "trial", "version": version, "kind": kind, "day": self.clock.day,
                            "asked_for": True})
