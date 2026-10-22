@@ -424,13 +424,15 @@ _NOT_SURE = "Not sure it went through: X didn't confirm it."
 
 
 def _settled_text(account: XAccount, action: str, target: str, outcome: Outcome, *, checked: bool) -> str:
+    deleting = action == "delete"
     if outcome.status == "posted":
-        found = f"{_NOT_SURE} Row-Bot read {account.handle}'s latest posts and found it.\n" if checked else ""
+        found = ("" if not checked else f"{_NOT_SURE} Row-Bot looked on X and the post is gone.\n" if deleting
+                 else f"{_NOT_SURE} Row-Bot read {account.handle}'s latest posts and found it.\n")
         return found + _posted(account, action, target, outcome)
     if outcome.status == "failed" and checked:
-        return (f"{_NOT_SURE} Row-Bot read {account.handle}'s latest posts and it isn't there: it didn't "
-                f"{'delete' if action == 'delete' else 'post'}. Nothing was sent again; trying again needs a new "
-                "approval.")
+        return ((f"{_NOT_SURE} Row-Bot looked on X and the post is still there: it wasn't deleted." if deleting
+                 else f"{_NOT_SURE} Row-Bot read {account.handle}'s latest posts and it isn't there: it didn't post.")
+                + " Nothing was sent again; trying again needs a new approval.")
     if outcome.status == "failed":
         return f"Nothing was {'deleted' if action == 'delete' else 'posted'} as {account.handle}. {outcome.detail}".strip()
     return (f"{_NOT_SURE} Row-Bot couldn't read {account.handle}'s latest posts to check, so it may or may not "

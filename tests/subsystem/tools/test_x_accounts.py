@@ -477,3 +477,16 @@ def test_tokens_never_appear_in_results_cards_settings_or_logs(x, person, monkey
     seen = "\n".join([*outputs, json.dumps(asked), settings, caplog.text, json.dumps(x_posting.operations()),
                       *(path.read_text(encoding="utf-8") for path in Path(x_accounts._path()).parent.glob("*.json"))])
     assert not [secret for secret in _SECRETS if secret in seen]
+
+
+def test_an_unconfirmed_delete_is_checked_on_x_and_never_sent_twice(x, person):
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    post = fake.post("111", "An old announcement")
+    fake.after_send = "disconnect"
+
+    result = tool._x_post("delete", tweet_id=post["id"])
+
+    assert "Not sure it went through: X didn't confirm it. Row-Bot looked on X and the post is gone." in result
+    assert f"Deleted as @rowbot_ai: post {post['id']}" in result
+    assert fake.posts == [] and fake.requests.count(("DELETE", f"/2/tweets/{post['id']}")) == 1
