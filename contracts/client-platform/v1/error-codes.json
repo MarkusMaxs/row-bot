@@ -710,6 +710,8 @@
     "workspace_undo_unconfirmed": 409,
     "worktree_create_failed": 409,
     "worktree_exists": 409,
-    "worktree_unavailable": 409
+    "worktree_unavailable": 409,
+    "x_account_required": 409,
+    "x_account_unavailable": 409
   }
 }

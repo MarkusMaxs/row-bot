@@ -150,18 +150,25 @@ def share_project_to_x(
     *,
     text: str = "",
     pages: str | None = None,
+    account: str | None = None,
     validate: Callable[[], None] | None = None,
     checkpoint: Callable[[str, int, int], None] | None = None,
     directory: pathlib.Path | None = None,
     strict: bool = False,
 ) -> dict:
-    """Post up to four slide images to X using the existing X tool integration."""
+    """Post up to four slide images to X as the account the person chose (the only one, if just one is
+    connected). The person's own review and confirmation is the approval; it is sent at most once."""
+    from row_bot import x_accounts
+    from row_bot.tools import x_posting
     from row_bot.tools.x_tool import XTool
 
     tweet_text = text.strip() or project.name
 
     if strict and (validate is None or checkpoint is None or directory is None):
         raise ValueError('sharing_admission_required')
+    if not XTool()._is_op_enabled("x_post_tweet"):
+        raise ValueError("Posting is turned off in Settings › Apps › X.")
+    chosen = x_accounts.resolve(account, required=True)
     with (nullcontext(str(directory)) if directory is not None else tempfile.TemporaryDirectory()) as tmp_dir:
         selected = export_png_files(project, pages, directory=tmp_dir)
         if strict and len(selected) > 4:
@@ -169,6 +176,7 @@ def share_project_to_x(
         media_paths = [str(path) for path in selected[:4]]
         if not media_paths:
             raise ValueError("No slides were selected for X sharing.")
+        media = x_posting.media_facts(media_paths)
         if validate:
             validate()
         if checkpoint:
@@ -180,13 +188,13 @@ def share_project_to_x(
             if checkpoint:
                 checkpoint('send_not_started', 0, 1)
             raise
-        result = XTool()._x_post("post", text=tweet_text, media_paths=media_paths,
-                               **({'require_all_media': True} if strict else {}))
+        sent = x_posting.post_as(chosen, "post", tweet_text, "", media)
         if checkpoint:
-            checkpoint('send_submitted' if result.startswith('Tweet posted successfully!') else 'send_uncertain', 0, 1)
+            checkpoint('send_submitted' if sent.status == "posted" else 'send_uncertain', 0, 1)
 
     return {
-        "success": result.startswith("Tweet posted successfully!"),
-        "detail": result,
+        "success": sent.status == "posted",
+        "detail": sent.text,
         "media_count": len(media_paths),
+        "url": sent.url,
     }

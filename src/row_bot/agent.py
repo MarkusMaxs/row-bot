@@ -5874,13 +5874,14 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             # Workflows and chats gate alike: block=strip destructive tools; every other level wraps them,
             # and the gate resolves each call by the level (the person under Ask, the reviewer first under
             # Auto, the level itself under Hands-off). A workflow run pauses when the person is asked.
-            # run_command self-gates at runtime via classify_command.
+            # run_command self-gates at runtime via classify_command, and a tool marked
+            # row_bot_gates_itself (x_post) asks with its own card, bound to exactly what it sends.
             if approval_mode == "block":
                 lc_tools = [t for t in lc_tools
                             if t.name not in destructive_names]
             else:
                 for t in lc_tools:
-                    if t.name in destructive_names:
+                    if t.name in destructive_names and not (t.metadata or {}).get("row_bot_gates_itself"):
                         _wrap_with_interrupt_gate(t, always_ask=t.name in app_asks)
 
             lc_tools = _apply_provider_tool_schema_compatibility(

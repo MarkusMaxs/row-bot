@@ -1504,6 +1504,11 @@ const CATALOG: Record<string, Entry> = {
     'review',
   ],
   sharing_media_limit: ['Choose up to four pages for X.', 'review'],
+  x_account_required: ['Choose the X account to post as.', 'review'],
+  x_account_unavailable: [
+    'No X account is connected. Connect one in Settings › Apps › X.',
+    'review',
+  ],
   sharing_outcome_uncertain: [
     "Row-Bot couldn't confirm whether it was shared. Check the destination before trying again.",
     'review',

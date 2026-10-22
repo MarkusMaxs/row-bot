@@ -20,7 +20,7 @@ import sys
 import time
 from typing import Any
 
-from row_bot import account_tokens
+from row_bot import account_tokens, x_accounts
 from row_bot.data_paths import get_row_bot_data_dir
 
 _MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -1402,6 +1402,7 @@ def _account(
     post_operations: list[str] | None = None,
     engage_operations: list[str] | None = None,
     callback_url: str | None = None,
+    x_accounts: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "account_id": account_id,
@@ -1414,6 +1415,7 @@ def _account(
         "post_operations": post_operations or [],
         "engage_operations": engage_operations or [],
         "callback_url": callback_url,
+        "x_accounts": x_accounts or [],
     }
 
 
@@ -1500,7 +1502,7 @@ def _accounts(
             enabled=_enabled("x", tools, registered),
             configured=x_id["configured"] and x_secret["configured"],
             authentication_state=(
-                account_tokens.state("x")
+                x_accounts.overall_state()
                 if x_id["configured"] and x_secret["configured"]
                 else "not_configured"
             ),
@@ -1518,6 +1520,8 @@ def _accounts(
             post_operations=post_ops,
             engage_operations=engage_ops,
             callback_url=X_OAUTH_CALLBACK_URL,
+            # Each connected X account, read from the list and the keychain only (no X call).
+            x_accounts=x_accounts.summaries(),
         ),
     }
 
