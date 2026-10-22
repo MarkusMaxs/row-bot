@@ -148,7 +148,7 @@ class ReleaseCheck:
             env[PROTECT_ENV] = protect
         env.update({"ROW_BOT_DATA_DIR": str(data), "ROW_BOT_LEARNING_PREVIEW": "1",
                     "ROW_BOT_DESKTOP_NOTIFICATIONS": "off", "ROW_BOT_AUTO_START_OLLAMA": "0",
-                    "PYTHONUNBUFFERED": "1"})
+                    "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
         return env
 
     def run_person(self, tier: str, person: str, spent_before: int) -> dict[str, Any]:
@@ -270,6 +270,10 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # a log file on Windows is cp1252 otherwise
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
     args = parse(argv)
     try:
         check = ReleaseCheck(args)

@@ -52,11 +52,11 @@ def test_the_gpu_is_booked_after_other_lanes_and_the_persons_own_training(tmp_pa
 
     gate = scratch.GpuGate(booking, "lane-B", label="S1 test", clock=lambda: "20:00", sleep=sleep,
                            training=lambda: training.pop(0) if training else False, say=lambda _text: None)
-    gate.acquire("training v1")
+    gate.acquire("training v1", expect="30 min, 9 GB")
     assert len(waits) == 2  # lane A's open booking, then the person's own training
     gate.acquire("comparison")  # already holding: no second line
     lines = booking.read_text(encoding="utf-8").splitlines()
-    assert lines[-1].startswith("20:00 lane-B START S1 test: training v1")
+    assert lines[-1] == "20:00 lane-B START S1 test: training v1 (expect 30 min, 9 GB; yields to the person's Learning engine)"
     assert scratch.open_bookings(booking.read_text(encoding="utf-8")) == {"lane-B": lines[-1].split("START ", 1)[1]}
     gate.release()
     assert booking.read_text(encoding="utf-8").splitlines()[-1] == "20:00 lane-B END S1 test"

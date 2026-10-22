@@ -148,8 +148,9 @@ class GpuGate:
         with self.booking.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(line.rstrip("\n") + "\n")
 
-    def acquire(self, what: str) -> None:
-        """Wait until the card is ours, then book it (once per holding: a second call is a no-op)."""
+    def acquire(self, what: str, expect: str = "") -> None:
+        """Wait until the card is ours, then book it (once per holding: a second call is a no-op).
+        ``expect`` says how long and how much graphics memory, as the booking file asks."""
 
         if self.held is not None:
             return
@@ -169,7 +170,9 @@ class GpuGate:
             self.waited += WAIT_SECONDS
         mine = open_bookings(self._read()).get(self.lane)
         if mine is None:
-            self._append(f"{self.clock()} {self.lane} START {self.label}: {what} (yields to the person's Learning engine)")
+            terms = "; ".join(item for item in (f"expect {expect}" if expect else "",
+                                                 "yields to the person's Learning engine") if item)
+            self._append(f"{self.clock()} {self.lane} START {self.label}: {what} ({terms})")
         self.held = what
 
     def release(self) -> None:

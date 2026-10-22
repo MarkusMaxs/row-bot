@@ -671,7 +671,7 @@ class PersonRun:
         training); a comparison also shares the main model's kept pack results between the seeded people."""
 
         def booked(*args: Any, **kwargs: Any) -> Any:
-            self.gpu.acquire(phase)
+            self.gpu.acquire(f"{phase}, simulated day {self.clock.day}", expect=self._gpu_expect())
             started = time.monotonic()
             if phase == "comparison":
                 self._share_cache(into_profile=True)
@@ -686,6 +686,13 @@ class PersonRun:
                     self._gpu_time(phase, time.monotonic() - started)
 
         return booked
+
+    def _gpu_expect(self) -> str:
+        """The booking's honest size: a night holds the card for its training, the version and its
+        comparison (the tier's graphics-memory cap plus the engine's own)."""
+
+        cap = {"8gb": 9, "16gb": 17, "24gb": 25, "32gb": 33}.get(self.args.tier, 9)
+        return f"{30 if self.args.pilot_compare else 90} min, {cap} GB"
 
     def _share_cache(self, *, into_profile: bool) -> None:
         """The main model's kept pack results (O31's 30-day cache: model, task, metric version, budget and
