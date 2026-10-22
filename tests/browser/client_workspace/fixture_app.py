@@ -2019,8 +2019,98 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         call["quiesced"] = True
 
 
+# ── N11: incognito chats ───────────────────────────────────────────────────
+# The model's save_memory call is scripted; its card is the real tool's own in
+# an incognito chat (run in a small graph, so it asks as it does in a turn).
+# The answer's result is scripted: nothing is written to memory here.
+_N11_PENDING: dict[str, tuple[str, dict]] = {}
+_N11_COFFEE = {"category": "preference", "subject": "Coffee", "content": "I take it black, no sugar.", "tags": ""}
+
+
+def _n11_card(thread: str) -> dict | None:
+    """The real save_memory card for *thread*, or None when the chat is not incognito (it would save)."""
+    from typing import TypedDict
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from row_bot.threads import incognito_state
+    from row_bot.tools import memory_tool
+
+    if not incognito_state(thread).incognito:
+        return None
+
+    class State(TypedDict):
+        result: str
+
+    builder = StateGraph(State)
+    builder.add_node("save", lambda _state: {"result": memory_tool._save_memory(**_N11_COFFEE)})
+    builder.add_edge(START, "save")
+    builder.add_edge("save", END)
+    paused = builder.compile(checkpointer=InMemorySaver()).invoke(
+        {"result": ""}, {"configurable": {"thread_id": thread}})
+    [asked] = paused["__interrupt__"]
+    return dict(asked.value)
+
+
+def _n11_stream(text: str, config: dict):
+    from row_bot.threads import append_checkpoint_messages
+
+    call = predecessor._record("submit", config, "n11")
+    thread = call["conversation_id"]
+    identity = f"n11:{call['generation_id']}"
+    try:
+        append_checkpoint_messages(thread, [HumanMessage(
+            content=text, id=call["submission_id"] or fixture_id(identity + ":user"))])
+        card = _n11_card(thread) if "remember" in text else None
+        if card is None:
+            yield from _natural_final(call, thread, "Here are three quiet places for a weekend away.", "n11")
+            return
+        tool_id = fixture_id(identity + ":tool")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "save_memory", "args": _N11_COFFEE}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": "save_memory", "args": _N11_COFFEE}
+        _N11_PENDING[thread] = (tool_id, _N11_COFFEE)
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **card}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n11_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                stop_event=None):
+    """Save or Don't save on the incognito card: the call's result, and a short reply."""
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools.memory_tool import INCOGNITO_NOT_SAVED
+
+    thread = str(config["configurable"]["thread_id"])
+    pending = _N11_PENDING.pop(thread, None)
+    if pending is None:
+        yield from _n12b_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                                resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n11-answer")
+    identity = f"n11-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        tool_id, args = pending
+        content = ("Approval: asked; approved by you\nMemory saved successfully.\nSubject: Coffee\n"
+                   "Content: I take it black, no sugar." if approved
+                   else f"Approval: asked; denied by you — did not run\n{INCOGNITO_NOT_SAVED}")
+        result_id = fixture_id(identity + ":result")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="save_memory",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "save_memory",
+                            "args": args, "content": content}
+        final = "Saved: you take your coffee black, no sugar." if approved else "Okay, I won't save that."
+        yield from _natural_final(call, thread, final, "n11-answer")
+    finally:
+        call["quiesced"] = True
+
+
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("n11 ") and text.rstrip().endswith("fixture"):
+        # Incognito chats (N11): a plain reply, or the real save_memory card in an incognito chat.
+        yield from _n11_stream(text, config)
+        return
     if text.startswith("n12b ") and text.rstrip().endswith("fixture"):
         # Computer use, rebuilt (N12-B): the real computer tool on a fake desktop.
         yield from _n12b_stream(text, config)
@@ -4064,7 +4154,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _n12b_resume
+    agent.resume_stream_agent = _n11_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -4075,7 +4165,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _n12b_resume
+    client_platform_service.resume_factory = _n11_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier
