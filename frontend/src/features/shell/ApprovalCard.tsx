@@ -13,6 +13,7 @@ import { Button, Hint, Kbd, Skeleton } from '../../ui/primitives';
 import { absoluteTime, humanizeToken, relativeTime } from '../../ui/format';
 import FolderSetupCard from './FolderSetupCard';
 import QuestionCard from './QuestionCard';
+import XPostDetails from './XPostDetails';
 import { AppIcon } from '../apps/parts';
 import { WaitingSince } from './waiting-since';
 import { readPendingApprovalsNow } from './pending-approvals';
@@ -344,9 +345,13 @@ export default function ApprovalCard({
     hint?.question ||
     approvalQuestion(view?.action_label || action, app);
   const risk = view?.risk_class || hint?.risk_class || 'unknown';
+  // A post on X (N7) shows exactly what goes out, and as whom, in place of the reason.
+  const post = view?.x_post ?? null;
   // The reason names every field already when an app's tool asks; the key argument would repeat one.
   const argument =
-    view && fieldsWritten(view) ? '' : keyArgument(view?.safe_argument_summary);
+    post || (view && fieldsWritten(view))
+      ? ''
+      : keyArgument(view?.safe_argument_summary);
   if (answered)
     return (
       <p className="approval-card-answered">
@@ -448,12 +453,16 @@ export default function ApprovalCard({
           <div className="approval-card-context">
             {app && <span className="approval-card-app">{app.name}</span>}
             <strong>{question}</strong>
-            <span
-              className="approval-card-reason"
-              data-fields={fieldsWritten(view) || undefined}
-            >
-              {reasonWords(view)}
-            </span>
+            {post ? (
+              <XPostDetails post={post} />
+            ) : (
+              <span
+                className="approval-card-reason"
+                data-fields={fieldsWritten(view) || undefined}
+              >
+                {reasonWords(view)}
+              </span>
+            )}
             {argument && (
               <code className="approval-card-argument">{argument}</code>
             )}

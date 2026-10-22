@@ -38,6 +38,7 @@ import {
   SquareTerminal,
   Square,
   Play,
+  Plus,
   Trash2,
   Unlink,
   Volume2,
@@ -81,6 +82,8 @@ import { favouritesFirst } from '../shell/model-choices';
 import {
   Button,
   Disclosure,
+  EntityList,
+  EntityRow,
   IconButton,
   Input,
   Segmented,
@@ -4276,6 +4279,72 @@ function GoogleAccount({
   );
 }
 
+type XAccountSummary = NonNullable<AccountItem['x_accounts']>[number];
+
+/**
+ * Each connected X account (N7): its handle, name and numeric ID, its own
+ * status and Remove; then Add another account. X signs in whichever account
+ * is open in the browser, so the hint says how to add a different one.
+ */
+function XAccountList({
+  accounts,
+  auth,
+  canAdd,
+}: {
+  accounts: XAccountSummary[];
+  auth: AccountAuth | null;
+  canAdd: boolean;
+}) {
+  return (
+    <div className="settings-x-accounts">
+      <EntityList label="X accounts">
+        {accounts.map((row) => {
+          const handle = row.username ? `@${row.username}` : 'Your X account';
+          return (
+            <EntityRow
+              key={row.id || 'before'}
+              title={
+                row.username && row.name ? `${handle} · ${row.name}` : handle
+              }
+              icon={<AtSign size={16} />}
+              status={ACCOUNT_STATES[accountState([row.state])]}
+              meta={
+                row.id
+                  ? `ID ${row.id}`
+                  : 'Signed in before Row-Bot 5.3; Check shows its name'
+              }
+              action={
+                auth && (
+                  <IconButton
+                    size="sm"
+                    label={`Remove ${handle}`}
+                    disabled={auth.locked}
+                    onClick={() => auth.removeX({ id: row.id, handle })}
+                  >
+                    <Unlink size={16} aria-hidden />
+                  </IconButton>
+                )
+              }
+            />
+          );
+        })}
+      </EntityList>
+      {auth && canAdd && (
+        <div className="settings-x-add">
+          <Button className="small" disabled={auth.locked} onClick={auth.start}>
+            <Plus size={14} aria-hidden />
+            Add another account
+          </Button>
+          <span className="muted">
+            X signs in the account open in your browser. To add a different one,
+            switch accounts on x.com first.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function XAccount({
   account,
   mutation,
@@ -4287,6 +4356,7 @@ function XAccount({
 }) {
   const state = accountState([account.authentication_state]);
   const usable = auth && auth.snapshot;
+  const accounts = account.x_accounts ?? [];
   return (
     <AccountRow
       anchor="x"
@@ -4296,10 +4366,12 @@ function XAccount({
       state={state}
       meta={
         state === 'reconnect'
-          ? 'The sign-in expired or was turned down'
+          ? accounts.length > 1
+            ? 'An account’s sign-in expired or was turned down'
+            : 'The sign-in expired or was turned down'
           : state === 'unchecked'
             ? 'Signed in; Check confirms it works'
-            : 'Post and read on X for you. Posting always asks first.'
+            : 'Post and read on X for you. Every post names its account and asks you first.'
       }
       actions={
         usable && (
@@ -4311,7 +4383,6 @@ function XAccount({
             onReconnect={
               account.configured && auth.canSignIn ? auth.start : undefined
             }
-            onDisconnect={auth.disconnect}
           />
         )
       }
@@ -4386,6 +4457,13 @@ function XAccount({
         },
       ]}
     >
+      {accounts.length > 0 && (
+        <XAccountList
+          accounts={accounts}
+          auth={usable ? auth : null}
+          canAdd={Boolean(account.configured && auth?.canSignIn)}
+        />
+      )}
       <AccessSwitch
         mutation={mutation}
         field="x.enabled"
