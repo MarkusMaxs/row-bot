@@ -109,6 +109,7 @@ import {
   ATTACHMENT_LIMITS,
 } from './attachment-limits';
 import ApprovalCard from './ApprovalCard';
+import { waitingWords } from './InPlaceApproval';
 import {
   readPendingApprovalsNow,
   usePendingApprovals,
@@ -136,7 +137,9 @@ import { publicBlockText } from './TranscriptBlocks';
 import {
   answerStreaming,
   buildTranscript,
+  finishedLiveSteps,
   liveMedia,
+  settleFinishedSteps,
   turnStarts,
 } from './transcript-model';
 import {
@@ -769,9 +772,15 @@ export default function Conversation({
   }, [earlierRows, rows]);
   // Tool results fold into their parent; charts and generated media hoist
   // onto it and render once (B4, B22).
+  // A step the live turn finished (a question just answered) reads as finished in its saved row, with its
+  // card in place, before the reply that follows it (N4).
+  const finishedSteps = finishedLiveSteps(state.activity);
+  const finishedKey = [...finishedSteps.keys()].join();
   const items = useMemo(
-    () => buildTranscript(transcriptRows),
-    [transcriptRows],
+    () => buildTranscript(settleFinishedSteps(transcriptRows, finishedSteps)),
+    // finishedKey stands for finishedSteps: they change together.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [transcriptRows, finishedKey],
   );
   const earlierIds = useMemo(
     () => new Set(earlierRows.map((row) => row.id)),
@@ -3278,11 +3287,13 @@ export default function Conversation({
                     key={item.id}
                     className="message message-assistant"
                     role="group"
-                    aria-label={`${item.title} needs your approval`}
+                    aria-label={waitingWords(item)}
                   >
                     <div className="transcript-content">
                       <p className="message-text">
-                        {item.title} is waiting for your approval.
+                        {item.kind === 'question'
+                          ? `${item.title} has a question.`
+                          : `${item.title} is waiting for your approval.`}
                       </p>
                       <ApprovalCard id={item.id} notice />
                     </div>

@@ -35,6 +35,8 @@ class TaskEditableFields:
     notify_only: bool
     notify_label: str
     channels: tuple[str, ...] | None
+    # The IANA zone the schedule keeps its times in (N9); None means the computer's.
+    timezone: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,11 @@ def _validate_fields(fields: TaskEditableFields, *, schedule: bool = True) -> No
         _text(fields.schedule, 256, required=True)
     if fields.at is not None:
         _text(fields.at, 80, required=True)
+    if fields.timezone is not None:
+        from row_bot.schedule_zones import is_zone
+
+        if not is_zone(fields.timezone):
+            raise TaskControlError("invalid_task_schedule")
     if not schedule:
         return
     if fields.schedule is not None and fields.at is not None:
@@ -138,6 +145,7 @@ def _snapshot(row: dict, revision: str) -> TaskEditorSnapshot:
         enabled=bool(row.get("enabled")), schedule=row.get("schedule"), at=row.get("at"),
         notify_only=bool(row.get("notify_only")), notify_label=row.get("notify_label") or "",
         channels=None if row.get("channels") is None else tuple(row["channels"]),
+        timezone=row.get("timezone") or None,
     )
     # Do not silently truncate an existing workflow into an editable subset.
     _validate_fields(fields, schedule=False)
@@ -198,15 +206,26 @@ def _runs_now(fields: TaskEditableFields, *, before: TaskEditableFields | None =
     """
     if not fields.enabled or fields.at is None:
         return False
-    at = datetime.fromisoformat(fields.at)
-    if at > datetime.now():
+    from row_bot.schedule_zones import zone
+
+    at = tasks._saved_instant(fields.at, zone(fields.timezone))
+    if at is None or at > datetime.now().astimezone():
         return False
     if before is not None and before.enabled and before.at == fields.at and last_run:
-        try:
-            return datetime.fromisoformat(last_run) < at
-        except (TypeError, ValueError):
-            return True
+        last = tasks._saved_instant(last_run)
+        return last is None or last < at
     return True
+
+
+def _with_zone(fields: TaskEditableFields) -> TaskEditableFields:
+    """A schedule saved without a zone keeps its times in the computer's (N9)."""
+    if fields.timezone is not None or (fields.schedule is None and fields.at is None):
+        return fields
+    from dataclasses import replace
+
+    from row_bot.schedule_zones import local_zone_name
+
+    return replace(fields, timezone=local_zone_name())
 
 
 def create_saved_task(
@@ -216,6 +235,7 @@ def create_saved_task(
     """Create once using the server admission's stable identity, or verify replay."""
     _identity(stable_task_id)
     _validate_fields(fields)
+    fields = _with_zone(fields)
     if not fields.notify_only and not fields.prompts:
         raise TaskControlError("invalid_task_fields")
     validate()
@@ -245,6 +265,7 @@ def update_saved_task(
     record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
 ) -> TaskSaveResult:
     _validate_fields(fields)
+    fields = _with_zone(fields)
     if not isinstance(expected_revision, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
         raise TaskControlError("invalid_task_revision")
     validate()

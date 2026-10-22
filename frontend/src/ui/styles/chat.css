@@ -1205,6 +1205,171 @@
 .approval-card[data-kind='setup'] .approval-card-icon {
   color: var(--accent-solid);
 }
+/* Row-Bot's question with options (N4): header chips, the question, and the
+   options as large rows to tap. A calm accent like a setup card, never a
+   warning: a question is not a risk. */
+.approval-card[data-kind='question'] {
+  border-color: color-mix(in srgb, var(--accent-solid) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-subtle) 60%, var(--surface));
+}
+.approval-card[data-kind='question'] .approval-card-icon {
+  color: var(--accent-solid);
+}
+.question-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.question-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  line-height: 20px;
+}
+.question-card-chip[data-state='current'] {
+  border-color: color-mix(in srgb, var(--accent-solid) 45%, transparent);
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.question-card-chip[data-state='next'] {
+  color: var(--text-muted);
+}
+.question-card-options {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: 6px;
+  min-width: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+}
+.question-card-question {
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  font-weight: var(--weight-semibold);
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.question-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.question-option:hover {
+  background: var(--surface-hover);
+}
+.question-option[data-checked] {
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-subtle) 55%, var(--surface));
+}
+.question-option:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.question-option input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent-solid);
+}
+.question-option input:focus-visible {
+  outline: none;
+}
+.question-option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.question-option-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.question-option-tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent-solid);
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  line-height: 18px;
+}
+.question-option-description {
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+  line-height: 18px;
+}
+.question-option-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  padding: 0 4px;
+  border: 1px solid var(--border-hairline);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font: 500 11px/1 var(--font-mono);
+}
+.question-card-options:disabled .question-option {
+  cursor: default;
+}
+.question-card-other {
+  width: 100%;
+}
+.question-card .approval-card-actions .question-card-back {
+  margin-inline-end: auto;
+}
+/* The digit keys are for a keyboard; a phone taps, on rows the card's full width. */
+@media (pointer: coarse), (max-width: 640px) {
+  .question-option-key {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .question-card-options {
+    grid-column: 1 / -1;
+  }
+  /* Under the full-width options, the actions keep the card's right edge, as on a desktop. */
+  .question-card .approval-card-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
+/* Answered: one plain, quiet line ("You chose: Beta.1 now"). */
+.transcript-card.question-answered {
+  border-color: var(--border-hairline);
+  background: none;
+}
+.transcript-card.question-answered .transcript-card-icon {
+  color: var(--text-muted);
+}
+
 /* The registered folders a folder card offers (B277): one row each. */
 .folder-setup-choices {
   display: grid;

@@ -366,6 +366,19 @@
       "title": "Server Epoch",
       "type": "string"
     },
+    "server_timezone": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Server Timezone"
+    },
     "server_utc_offset_minutes": {
       "anyOf": [
         {

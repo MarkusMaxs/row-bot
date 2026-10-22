@@ -5,9 +5,12 @@ import type { PendingApproval } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
 import { useOverlay } from '../../ui/overlays';
-import { Hint, IconButton, InlineEmpty } from '../../ui/primitives';
-import { absoluteTime, parseTimestamp } from '../../ui/format';
+import { Button, Hint, IconButton, InlineEmpty } from '../../ui/primitives';
+import ApprovalCard from './ApprovalCard';
 import { unannounced, usePendingApprovals } from './pending-approvals';
+import { WaitingSince } from './waiting-since';
+
+export { WaitingSince, waitingSince } from './waiting-since';
 
 /** A request that is no longer waiting: someone answered it elsewhere. */
 const ANSWERED = new Set([
@@ -22,29 +25,52 @@ const SOURCE_WORDS: Record<PendingApproval['source'], string> = {
   agent: 'Agent',
 };
 
-/** "Waiting since 9:00 AM", "… since yesterday, 9:00 AM", or with the date. */
-export function waitingSince(value: string, now = new Date()): string {
-  const date = parseTimestamp(value);
-  if (!date) return '';
-  const time = new Intl.DateTimeFormat(undefined, {
-    timeStyle: 'short',
-  }).format(date);
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (date.toDateString() === now.toDateString())
-    return `Waiting since ${time}`;
-  if (date.toDateString() === yesterday.toDateString())
-    return `Waiting since yesterday, ${time}`;
-  return `Waiting since ${absoluteTime(date)}`;
+/** "‘Daily News’ needs your approval", or "has a question" when Row-Bot asks one (N4). */
+export function waitingWords(item: Pick<PendingApproval, 'title' | 'kind'>) {
+  return item.kind === 'question'
+    ? `${item.title} has a question`
+    : `${item.title} needs your approval`;
 }
 
-export function WaitingSince({ value }: { value: string | null | undefined }) {
-  const words = value ? waitingSince(value) : '';
-  if (!words) return null;
+/**
+ * Answer for Row-Bot's question where it waits in a list (N4): the question
+ * card, in a dialog, with Answer and Skip. Never Approve / Deny.
+ */
+function QuestionDecision({
+  approvalId,
+  subject,
+  onResolved,
+}: {
+  approvalId: string;
+  subject: string;
+  onResolved?: () => void;
+}) {
+  const overlay = useOverlay();
   return (
-    <time dateTime={value!} title={absoluteTime(value)}>
-      {words}
-    </time>
+    <Button
+      variant="primary"
+      className="small"
+      aria-label={`Answer: ${subject}`}
+      onClick={(event) =>
+        overlay.open({
+          title: 'Row-Bot has a question',
+          description: subject,
+          returnFocusTo: event.currentTarget,
+          content: (
+            <ApprovalCard
+              id={approvalId}
+              notice
+              onResolved={() => {
+                onResolved?.();
+                overlay.close();
+              }}
+            />
+          ),
+        })
+      }
+    >
+      Answer
+    </Button>
   );
 }
 
@@ -58,11 +84,40 @@ export function ApprovalDecision({
   approvalId,
   subject,
   onResolved,
+  kind = 'approval',
 }: {
   approvalId: string;
   /** What is being approved, for the buttons' group name. */
   subject: string;
   /** After it was answered (here or, as it turned out, elsewhere). */
+  onResolved?: () => void;
+  /** Row-Bot's question is answered on its card, never approved (N4). */
+  kind?: PendingApproval['kind'];
+}) {
+  if (kind === 'question')
+    return (
+      <QuestionDecision
+        approvalId={approvalId}
+        subject={subject}
+        onResolved={onResolved}
+      />
+    );
+  return (
+    <ApprovalButtons
+      approvalId={approvalId}
+      subject={subject}
+      onResolved={onResolved}
+    />
+  );
+}
+
+function ApprovalButtons({
+  approvalId,
+  subject,
+  onResolved,
+}: {
+  approvalId: string;
+  subject: string;
   onResolved?: () => void;
 }) {
   const { controller } = useRuntime();
@@ -133,7 +188,8 @@ export function ApprovalDecision({
 
 /**
  * Every waiting approval with Approve / Deny in place, what it is, since
- * when it waits, and a link to where it was asked.
+ * when it waits, and a link to where it was asked. Row-Bot's questions have
+ * Answer instead (N4).
  */
 export function PendingApprovalList({
   items,
@@ -149,7 +205,14 @@ export function PendingApprovalList({
   if (!items.length)
     return <InlineEmpty>Nothing is waiting for your approval.</InlineEmpty>;
   return (
-    <ul className="pending-approvals" aria-label="Waiting for your approval">
+    <ul
+      className="pending-approvals"
+      aria-label={
+        items.some((item) => item.kind === 'question')
+          ? 'Waiting for you'
+          : 'Waiting for your approval'
+      }
+    >
       {items.map((item) => {
         const to = item.task_id
           ? `/?tab=workflows&workflow=${encodeURIComponent(item.task_id)}`
@@ -160,7 +223,7 @@ export function PendingApprovalList({
           <li
             key={item.id}
             className="pending-approval"
-            aria-label={`${item.title} needs your approval`}
+            aria-label={waitingWords(item)}
           >
             <div className="pending-approval-text">
               <strong>{item.title}</strong>
@@ -196,6 +259,7 @@ export function PendingApprovalList({
               <ApprovalDecision
                 approvalId={item.id}
                 subject={item.title}
+                kind={item.kind}
                 onResolved={onChanged}
               />
             </div>
@@ -243,8 +307,10 @@ export function useApprovalNotices(openConversationId: string | null): void {
     if (!fresh.length) return;
     overlay.notify(
       fresh.length === 1
-        ? `‘${fresh[0].title}’ needs your approval`
-        : `${fresh.length} approvals are waiting for you`,
+        ? waitingWords({ ...fresh[0], title: `‘${fresh[0].title}’` })
+        : fresh.every((item) => item.kind === 'question')
+          ? `${fresh.length} questions are waiting for you`
+          : `${fresh.length} approvals are waiting for you`,
       'warning',
       {
         label: 'Review',

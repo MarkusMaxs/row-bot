@@ -114,9 +114,12 @@ def read_buddy(*, validate: Callable[[], None]) -> BuddySnapshot:
         reaction = _EVENT_REACTIONS[BuddyEventType(state.details.get("event_type"))]
     except (ValueError, KeyError):
         reaction = _EVENT_REACTIONS[BuddyEventType.IDLE]
-    # Labels/details from another conversation or tool may contain private data.
+    # Labels/details from another conversation or tool may contain private data: only fixed words show.
+    label = reaction[5]
+    if state.details.get("event_type") == BuddyEventType.APPROVAL_NEEDED.value and state.details.get("question"):
+        label = "Row-Bot has a question"  # N4: a question waits, not an approval.
     status = BuddyStatus(str(state.mood), reaction[1], int(state.energy), int(state.focus),
-        int(state.alert), int(state.event_id), reaction[5] if saved.get("visible", True) else "Hidden")
+        int(state.alert), int(state.event_id), label if saved.get("visible", True) else "Hidden")
     validate()
     return BuddySnapshot(1, revision, _preferences(saved), status,
                          native_placement_retained=saved.get("placement") != "docked")
