@@ -85,7 +85,7 @@ BROWSER_SMOKE_SPECS = (
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
-    "capability-surfaces", "conversation-layout", "media", "message-content",
+    "capability-surfaces", "conversation-layout", "ledger-fixes", "media", "message-content",
     "navigation", "panels", "persistence", "polish-visual", "resources",
     "settings-claude-plan", "settings-models", "settings-routes", "settings", "sidebar", "suggestions",
     "terminal", "theme", "visual-alignment", "voice", "workflows",

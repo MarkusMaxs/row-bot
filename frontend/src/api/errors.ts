@@ -665,6 +665,7 @@ const CATALOG: Record<string, Entry> = {
     'none',
   ],
   conversation_deleting: ['This conversation is being deleted.', 'none'],
+  restore_expired: ["It's too late to undo that delete.", 'none'],
   conversation_export_too_large: [
     'This conversation is too large to export as one file.',
     'none',

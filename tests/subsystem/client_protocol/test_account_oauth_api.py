@@ -695,3 +695,38 @@ def test_x_reads_its_numeric_expiry(tmp_path, monkeypatch, keychain):
             account_tokens.write("x", saved)
             states.append(_states(local, headers, "x")[0])
     assert states == ["expired", "saved_unchecked", "saved_unchecked"]
+
+
+def _access(registry):
+    return registry.is_enabled("gmail"), registry.is_enabled("calendar")
+
+
+def test_a_first_google_sign_in_turns_on_the_access_its_setup_reviewed(tmp_path, monkeypatch, keychain):
+    """F29: signing in to Google left Gmail and Calendar off, so Google read "Off". The setup reviewed both
+    (sending and changes always ask first), so a first sign-in turns them on and Google reads Connected."""
+    from row_bot.integrations import builtin
+    from row_bot.tools import registry
+
+    _google_ready(tmp_path, monkeypatch)
+    monkeypatch.setattr(owner, "_google_flow", lambda: b'{"token":"first-token"}')
+    monkeypatch.setattr(owner, "Thread", ImmediateThread)
+    registry.set_enabled("gmail", False)
+    registry.set_enabled("calendar", False)
+    receipt = owner.execute_account_auth(**_command(owner.read_account_auth(account="google"), "start"))
+    assert receipt["phase"] == "completed" and receipt["snapshot"]["state"] == "connected"
+    assert _access(registry) == (True, True)
+    google = next(row for row in builtin.rows() if row["id"] == "builtin:account:google")
+    assert (google["lifecycle"], google["blockers"]) == ("installed", [])
+
+
+def test_signing_in_again_keeps_the_access_switches_as_they_were(tmp_path, monkeypatch, keychain):
+    from row_bot.tools import registry
+
+    _google_ready(tmp_path, monkeypatch, token={"token": "old-token"})
+    monkeypatch.setattr(owner, "_google_flow", lambda: b'{"token":"new-token"}')
+    monkeypatch.setattr(owner, "Thread", ImmediateThread)
+    registry.set_enabled("gmail", True)
+    registry.set_enabled("calendar", False)  # The person turned Calendar off.
+    receipt = owner.execute_account_auth(**_command(owner.read_account_auth(account="google"), "start"))
+    assert receipt["phase"] == "completed"
+    assert _access(registry) == (True, False)
