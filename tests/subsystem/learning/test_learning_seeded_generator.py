@@ -57,6 +57,22 @@ def test_a_longer_run_keeps_the_earlier_days(histories):
         assert len(longer.stream) > len(history.stream)
 
 
+def test_the_pasts_replies_are_in_the_main_models_words_and_keep_every_fact(histories):
+    for person, history in histories.items():
+        templates = generator.generate(person, seed=SEED, days=0, phrased=False)
+        pairs = [(plain, phrased) for before, after in zip(templates.past, history.past, strict=True)
+                 for plain, phrased in zip(before.requests, after.requests, strict=True)]
+        reworded = [(plain, phrased) for plain, phrased in pairs if plain.answer != phrased.answer]
+        assert len(reworded) >= 0.8 * len(pairs), person  # the kept file covers this seed's past
+        for plain, phrased in reworded:
+            assert generator.keeps_facts(plain.answer, phrased.answer, generator.answer_of(plain)), phrased.id
+        # Not a few replies over and over: about one of its own per distinct template reply, or more.
+        assert len({phrased.answer for _, phrased in reworded}) >= 0.9 * len({plain.answer for plain, _ in reworded})
+        # Another seed has another past: the kept replies don't apply to it.
+        assert (generator.generate(person, seed=SEED + 1, days=0).to_dict()
+                == generator.generate(person, seed=SEED + 1, days=0, phrased=False).to_dict())
+
+
 def test_the_history_is_the_same_with_windows_line_endings(tmp_path, monkeypatch, histories):
     people = tmp_path / "people"
     shutil.copytree(generator.PEOPLE_DIR, people)

@@ -5,7 +5,10 @@ under ``files/``) gets, from one seed,
 
 - a **30-day past**: conversations (their requests, Row-Bot's tool calls, results and answers,
   a few mistakes the person corrected in their next message), the documents and data that arrived
-  in the workspace, and the fake apps' state, ready for the past-chat import (partial fidelity);
+  in the workspace, and the fake apps' state, ready for the past-chat import (partial fidelity). The
+  replies are the main model's own words where ``people/<id>/past_replies.json`` keeps one for the
+  seed (written once by ``phrasing.py``; a template's few words otherwise: a model trained on those
+  learns to answer everything in a few words);
 - a **live stream**: requests over simulated days, each with the person's hidden intent and a
   checkable right outcome (a pack-style :class:`~row_bot.learning.packs.PackTask`: the product's own
   verifiers decide, and every request carries a reference that passes and a decoy that fails).
@@ -28,7 +31,7 @@ import json
 import operator
 import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -228,6 +231,48 @@ def _number(value: float, decimals: int) -> str:
     if decimals <= 0:
         return str(int(round(value)))
     return f"{value:.{decimals}f}"
+
+
+#: ``people/<id>/past_replies.json``: the past's replies in the main model's own words (``phrasing.py``).
+REPLIES_FILE = "past_replies.json"
+REPLIES_FORMAT = "row_bot.learning.seeded_past_replies"
+_FACT = re.compile(r"[^\s,;()]*[0-9@/#][^\s,;()]*")
+
+
+def facts_of(template: str, answer: str) -> list[str]:
+    """What a reply must keep of a template reply: every token with a digit, ``@``, ``/`` or ``#`` (numbers,
+    dates, paths, addresses, issue numbers) and the right answer itself."""
+
+    found = [token.strip(".:!?'\"*`") for token in _FACT.findall(template)]
+    if answer and not any(answer in token for token in found):
+        found.append(answer)
+    return [token for token in found if token]
+
+
+def keeps_facts(template: str, reply: str, answer: str) -> bool:
+    """Whether ``reply`` says everything ``template`` does (thousands separators and Markdown aside)."""
+
+    plain = re.sub(r"(?<=\d),(?=\d{3}\b)", "", reply).replace("*", "").replace("`", "").lower()
+    return bool(reply.strip()) and all(fact.lower() in plain for fact in facts_of(template, answer))
+
+
+def answer_of(request: Request) -> str:
+    """The right answer itself, for a request checked by its answer (empty for one checked otherwise)."""
+
+    return str(request.task.reference.answer or "") if request.task.verifier.kind == "answer" else ""
+
+
+def past_replies(person_id: str, seed: int) -> dict[str, dict[str, str]]:
+    """The kept replies for this person and seed (none for another seed: its past differs)."""
+
+    path = PEOPLE_DIR / person_id / REPLIES_FILE
+    try:
+        data = json.loads(_text(path))
+    except (OSError, ValueError):
+        return {}
+    if data.get("format") != REPLIES_FORMAT or int(data.get("seed") or 0) != int(seed):
+        return {}
+    return dict(data.get("replies") or {})
 
 
 def _calculated(value: float) -> str:
@@ -832,8 +877,6 @@ def _make_request(person: dict[str, Any], builder: Builder, template: str, day: 
 def _past_mistake(request: Request, rng: random.Random) -> Request:
     """A past request Row-Bot first got wrong (its decoy), corrected in the person's next message."""
 
-    from dataclasses import replace
-
     if request.task.verifier.kind not in ("answer",) or not request.task.decoy.answer:
         return request
     correction = rng.choice(("That's not right - ", "No, ", "Hmm, not quite: ")) + request.intent[:1].lower() + \
@@ -841,12 +884,17 @@ def _past_mistake(request: Request, rng: random.Random) -> Request:
     return replace(request, mistake=(request.steps, f"It's {request.task.decoy.answer}.", correction))
 
 
-def generate(person_id: str, *, seed: int, days: int, requests_per_day: tuple[int, int] | None = None) -> History:
-    """The person's 30-day past and ``days`` live days, from ``seed`` (the same seed, the same history)."""
+def generate(person_id: str, *, seed: int, days: int, requests_per_day: tuple[int, int] | None = None,
+             phrased: bool = True) -> History:
+    """The person's 30-day past and ``days`` live days, from ``seed`` (the same seed, the same history).
+
+    ``phrased``: the past's replies are the main model's own words where ``past_replies.json`` keeps one for
+    this seed (and it says what the template's reply says); otherwise the template's reply."""
 
     if days < 0:
         raise GeneratorError("days can't be negative")
     person = load_person(person_id)
+    replies = past_replies(person_id, seed) if phrased else {}
     rng = random.Random(f"{int(seed)}/{person_id}")
     world = World(person, random.Random(f"{int(seed)}/{person_id}/world"))
     builder = Builder(person, world, rng)
@@ -870,6 +918,9 @@ def generate(person_id: str, *, seed: int, days: int, requests_per_day: tuple[in
                     continue
                 if rng.random() < float(policy.get("past_mistake_share", 0.1)):
                     request = _past_mistake(request, rng)
+                kept = replies.get(request.id)
+                if kept and kept.get("template") == request.answer and kept.get("reply"):
+                    request = replace(request, answer=str(kept["reply"]))
                 turns.append(request)
             if turns:
                 title = turns[0].prompt[:48].rstrip()
