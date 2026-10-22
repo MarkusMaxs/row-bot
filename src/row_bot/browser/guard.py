@@ -7,8 +7,9 @@ request interception (CDP ``Fetch``) with narrow URL patterns, and each is
 decided here:
 
 - an address on this computer (``localhost``, ``127.0.0.1``, ``[::1]``) runs
-  only when the page's conversation has allowed that exact origin, and only
-  to read (a grant never lets a page post forms or upload to the server);
+  only when the page's conversation has allowed that exact origin (the person
+  allowed it, so its forms and uploads work too; paying, sending, deleting and
+  the rest still ask first, D19);
 - every other local-network address (private, link-local and metadata IPs,
   ``.local`` and ``.internal`` names) never runs.
 
@@ -42,11 +43,10 @@ PATTERNS: tuple[str, ...] = tuple(
 BLOCKED_REASON = "BlockedByClient"
 
 
-READS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-
 def allowed(url: str, conversation: str | None, granted: Callable[[str, str], bool], method: str = "GET") -> bool:
-    """Whether a request from *conversation*'s page to *url* may run."""
+    """Whether a request from *conversation*'s page to *url* may run (any method)."""
+
+    del method  # A granted address takes form posts and uploads too.
 
     kind = url_host_kind(url)
     if kind in {None, "public"}:
@@ -57,8 +57,7 @@ def allowed(url: str, conversation: str | None, granted: Callable[[str, str], bo
         origin = local_development_origin(
             "http" + text[2:] if text[:3].casefold() == "ws:" else "https" + text[3:]
             if text[:4].casefold() == "wss:" else text)
-        return bool(origin and conversation and str(method or "GET").upper() in READS
-                    and granted(conversation, origin))
+        return bool(origin and conversation and granted(conversation, origin))
     return False
 
 

@@ -238,7 +238,7 @@ def test_a_grant_covers_one_origin_in_one_conversation(browser):
     granted = browser.engine._granted
     assert guard.allowed("http://localhost:5173/app", "conversation-a", granted)
     assert guard.allowed("ws://localhost:5173/hmr", "conversation-a", granted)
-    assert not guard.allowed("http://localhost:5173/api", "conversation-a", granted, "POST")  # Only reads.
+    assert guard.allowed("http://localhost:5173/api", "conversation-a", granted, "POST")  # Forms work too.
     assert not guard.allowed("http://localhost:5174/", "conversation-a", granted)
     assert not guard.allowed("http://localhost:5173/", "conversation-b", granted)
     browser.conversation = "conversation-b"

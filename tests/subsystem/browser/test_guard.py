@@ -1,7 +1,7 @@
 """The local-address guard (F4, N12-A): only requests that look local pause, and each is decided.
 
 Public sites run untouched. An address on this computer runs only for the conversation that
-allowed it, and only to read. The local network (private, link-local and metadata IPs, .local
+allowed it (forms and uploads included). The local network (private, link-local and metadata IPs, .local
 and .internal names) never runs. A fake CDP session stands in for Chromium.
 """
 
@@ -25,7 +25,7 @@ def _granted(conversation: str, origin: str) -> bool:
     ("https://www.homeserve.co.uk/claim", "chat-a", "POST", True),  # The public internet: as any browser.
     ("http://localhost:5173/app", "chat-a", "GET", True),  # Allowed in this chat.
     ("ws://localhost:5173/hmr", "chat-a", "GET", True),  # Its live-reload socket too.
-    ("http://localhost:5173/api", "chat-a", "POST", False),  # A grant only reads.
+    ("http://localhost:5173/api", "chat-a", "POST", True),  # The person allowed it: its forms work too.
     ("http://localhost:5173/app", "chat-b", "GET", False),  # Another chat's grant.
     ("http://localhost:5173/app", None, "GET", False),  # A page no chat owns.
     ("http://127.0.0.1:5173/app", "chat-a", "GET", False),  # Another origin, though the same computer.
@@ -99,5 +99,5 @@ def test_a_paused_request_continues_or_fails_and_a_blocked_page_is_reported():
     asyncio.run(run())
     answers = [(method, params.get("requestId"), params.get("errorReason")) for method, params in session.sent[1:]]
     assert answers == [("Fetch.continueRequest", "1", None), ("Fetch.failRequest", "2", "BlockedByClient"),
-                       ("Fetch.failRequest", "3", "BlockedByClient")]
-    assert blocked == [("http://192.168.1.1/", True), ("http://localhost:5173/api/delete", False)]
+                       ("Fetch.continueRequest", "3", None)]
+    assert blocked == [("http://192.168.1.1/", True)]

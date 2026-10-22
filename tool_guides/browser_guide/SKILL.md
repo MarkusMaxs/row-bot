@@ -38,8 +38,8 @@ BROWSER AUTOMATION (Row-Bot's browser):
   chat; it asks them once per address, and a dev server you started here
   with start_process opens without asking. Use the exact address the server
   printed. Other addresses on the local network (other computers, routers)
-  never open; say so instead of retrying. Pages on a local address can be
-  read and clicked, but forms that post or upload to it stay blocked.
+  never open; say so instead of retrying. Once allowed, a local app works
+  as any site does, forms included.
 - SCREENSHOTS: browser_screenshot shows the person a picture of the page in
   the chat (full_page=true for the whole page).
 - PAGE SIZES: browser_viewport shows the page at phone, tablet or desktop

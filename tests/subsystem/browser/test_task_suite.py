@@ -45,12 +45,6 @@ def world(tmp_path, monkeypatch):
     conversation = threads.create_thread("Book a plumber", seed_default_skills=False)
     token = _current_thread_id_var.set(conversation)
     with Sites(slow_seconds=1.5) as sites:
-        # The fixture sites stand in for public websites (a local grant only reads), though served here.
-        from row_bot.browser import guard
-
-        kind = guard.url_host_kind
-        monkeypatch.setattr(guard, "url_host_kind", lambda url: "public" if str(url).startswith(
-            (sites.service, sites.auth)) else kind(url))
         state.sites, state.chat, state.manager = sites, conversation, manager
         state.engine = manager.get_session()
         for origin in (sites.service, sites.auth):
