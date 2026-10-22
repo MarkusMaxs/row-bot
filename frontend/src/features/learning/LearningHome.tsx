@@ -52,6 +52,7 @@ import {
   VersionReview,
   VersionsSection,
 } from './PersonalModelUse';
+import { CardRoomNotice } from './CardRoomNotice';
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
@@ -424,6 +425,19 @@ function PersonalModel({
         {`${hardware.gpu?.label ?? 'This graphics card'} can train a personal model, but its driver is too old. Training needs NVIDIA driver 570 or newer.`}
       </EmptyState>
     );
+  else if (hardware?.state === 'low_memory')
+    state = (
+      <EmptyState
+        title="This computer’s memory can’t hold training yet"
+        action={
+          <Button className="small" onClick={() => check(true)}>
+            Check again
+          </Button>
+        }
+      >
+        {`Training needs about ${hardware.tier?.system_memory_gb ?? ''} GB of RAM and virtual memory, and this computer has ${hardware.memory?.limit_gb ?? ''} GB. ${memoryAdvice(hardware.memory?.system)}`}
+      </EmptyState>
+    );
   else if (hardware?.state === 'container')
     state = (
       <EmptyState title="Training isn’t available here" action={settings}>
@@ -464,6 +478,9 @@ function PersonalModel({
       comparison.state === 'waiting');
   return (
     <div className="learning-section-list">
+      {model.room && (
+        <CardRoomNotice io={io} room={model.room} model={starting.name} />
+      )}
       {download && <DownloadProgress io={io} snapshot={snapshot} />}
       {preparing && (
         <VersionCard

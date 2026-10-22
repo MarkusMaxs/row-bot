@@ -165,7 +165,8 @@
         "reset_advanced",
         "retrain_without",
         "dismiss",
-        "review_version"
+        "review_version",
+        "use_smaller_model"
       ],
       "title": "Action",
       "type": "string"
@@ -271,6 +272,17 @@
       "default": "",
       "maxLength": 256,
       "title": "Message Id",
+      "type": "string"
+    },
+    "model": {
+      "default": "",
+      "enum": [
+        "",
+        "qwen3.5-2b",
+        "qwen3.5-9b",
+        "qwen3.8-27b"
+      ],
+      "title": "Model",
       "type": "string"
     },
     "note": {

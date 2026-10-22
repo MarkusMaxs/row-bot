@@ -97,6 +97,20 @@
     "LearningTier": {
       "additionalProperties": false,
       "properties": {
+        "card_need_gb": {
+          "anyOf": [
+            {
+              "maximum": 4096,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Card Need Gb"
+        },
         "certified": {
           "title": "Certified",
           "type": "boolean"
@@ -143,6 +157,20 @@
   },
   "additionalProperties": false,
   "properties": {
+    "card_free_gb": {
+      "anyOf": [
+        {
+          "maximum": 4096,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Card Free Gb"
+    },
     "engine_download_bytes": {
       "minimum": 0,
       "title": "Engine Download Bytes",
@@ -197,6 +225,17 @@
       "maxItems": 8,
       "title": "Memory Short",
       "type": "array"
+    },
+    "recommended": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningTier"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "starting_models": {
       "items": {

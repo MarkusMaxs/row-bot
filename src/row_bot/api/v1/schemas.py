@@ -4157,6 +4157,15 @@ class LearningAdvanced(WireModel):
     data_mix: list[LearningDataMixItem] = Field(max_length=4)
 
 
+class LearningCardRoom(WireModel):
+    # O112: training waited for room on the graphics card this many quiet-hours nights; what its run needs
+    # free on the card and what the card had; the next smaller model Row-Bot offers (None: none smaller).
+    nights: int = Field(ge=0, le=7)
+    need_gb: float = Field(ge=0, le=4096)
+    free_gb: float = Field(ge=0, le=4096)
+    smaller: LearningStartingModel | None = None
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
@@ -4186,6 +4195,8 @@ class LearningPersonalModel(WireModel):
     uses: list[LearningUse] = Field(default_factory=list, max_length=4)
     advanced: LearningAdvanced | None = None
     export_folder: str = Field(default="", max_length=1024)
+    # O112: two or more quiet-hours nights without room on the card (else None).
+    room: LearningCardRoom | None = None
 
 
 class LearningNeedsYou(WireModel):
@@ -4341,6 +4352,8 @@ class LearningTier(WireModel):
     summary: str = Field(max_length=256)
     # The computer's memory (RAM and virtual memory) its training needs free here, as measured (O105).
     system_memory_gb: int | None = Field(default=None, ge=1, le=4096)
+    # The graphics memory its training needs free on the card (its measured peak with a margin, O112).
+    card_need_gb: float | None = Field(default=None, ge=0, le=4096)
 
 
 class LearningMemory(WireModel):
@@ -4364,6 +4377,10 @@ class LearningHardware(WireModel):
     # Certified larger tiers the card fits but the computer's memory can't hold (O105).
     memory_short: list[LearningTier] = Field(default_factory=list, max_length=8)
     memory: LearningMemory | None = None
+    # O112: what the card had free when checked, and the tier Row-Bot recommends for it (the largest whose
+    # need fits; None when the card's free memory couldn't be read).
+    card_free_gb: float | None = Field(default=None, ge=0, le=4096)
+    recommended: LearningTier | None = None
     starting_models: list[LearningStartingModel] = Field(max_length=8)
     engine_download_bytes: int = Field(ge=0)
     free_bytes: int | None = Field(default=None, ge=0)
@@ -4412,9 +4429,11 @@ class LearningCommand(WireModel):
         "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
         "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
         "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-        "review_version",
+        "review_version", "use_smaller_model",
     ]
     setup: LearningSetupChoices | None = None
+    # use_smaller_model (O112): the smaller starting model the Personal model view offered.
+    model: Literal["", "qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b"] = ""
     # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
     # Needs you line to dismiss.
     version: int | None = Field(default=None, ge=1, le=100_000)

@@ -42,6 +42,22 @@ export function defaultChoices(
   };
 }
 
+/**
+ * O112: when the card's free memory can't hold its own tier's model, say why Row-Bot recommends a
+ * smaller one ("Your graphics card has about 6 GB free now…, so Row-Bot recommends Qwen3.5 2B").
+ */
+function roomNote(hardware: LearningHardware): string {
+  const recommended = hardware.recommended;
+  const tier = hardware.tier;
+  if (!recommended || !tier || recommended.id === tier.id) return '';
+  const model = hardware.starting_models[0]?.name ?? 'a smaller model';
+  const free = hardware.card_free_gb ?? 0;
+  const larger = tier.card_need_gb
+    ? ` Larger models need about ${Math.ceil(tier.card_need_gb)} GB free on it.`
+    : '';
+  return `Your graphics card has about ${Math.floor(free)} GB free now (your display and other apps use the rest), so Row-Bot recommends ${model}.${larger}`;
+}
+
 /** What this computer can do, in words, while the check runs and after. */
 function HardwareRows({
   hardware,
@@ -114,6 +130,9 @@ function HardwareRows({
           <p className="learning-muted">
             {memoryNeedWords(hardware.tier.system_memory_gb)}
           </p>
+        )}
+        {roomNote(hardware) && (
+          <p className="learning-muted">{roomNote(hardware)}</p>
         )}
         {short && hardware.memory && (
           <div className="learning-stack-tight">

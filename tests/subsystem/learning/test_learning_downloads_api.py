@@ -147,6 +147,48 @@ def test_the_hardware_check_says_what_training_needs_of_the_computers_memory(wor
     assert view["memory"]["system"] in ("windows", "linux", "other")
 
 
+def test_after_two_nights_without_room_on_the_card_the_view_offers_a_smaller_model(world):
+    # O112: no silent forever-wait. A 16 GB card that also runs the display never has the 9B's 15.6 GB free;
+    # after two quiet-hours nights the Personal model view says so and offers the 2B, which one tap (after the
+    # client's ask) makes the starting model and downloads.
+    import json
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import jobs as jobs_module
+    from tests.fixtures.learning import save_learning_settings
+
+    client, headers, found = world
+    card = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 600)],
+                             hardware.SystemMemory(limit_mib=131_072, free_mib=90_000))
+    hardware.check(refresh=True, detector=lambda: card)
+    found.gpu = card
+    root = runner_module.get().supervisor.jobs.root
+    save_learning_settings(root, enabled=True, starting_model="qwen3.5-9b")
+    from row_bot.learning.training import recipes
+
+    nine = next(recipe for recipe in recipes.certified_for(card)
+                if recipe.starting_model == "qwen3.5-9b")
+    path = jobs_module.models_dir(root) / runner_module.ROOM_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"nights": ["2026-10-21"], "free_mib": 9_216, "need_mib": nine.memory_mib,
+                                "model": "qwen3.5-9b"}), encoding="utf-8")
+    assert _snapshot(client, headers)["personal_model"]["room"] is None  # one night: not yet
+
+    path.write_text(json.dumps({"nights": ["2026-10-21", "2026-10-22"], "free_mib": 9_216,
+                                "need_mib": nine.memory_mib, "model": "qwen3.5-9b"}), encoding="utf-8")
+    room = _snapshot(client, headers)["personal_model"]["room"]
+    assert (room["nights"], room["free_gb"], room["smaller"]["id"]) == (2, 9.0, "qwen3.5-2b")
+    assert room["need_gb"] == round(nine.memory_mib / 1024, 1)
+    _error(_command(client, headers, "use_smaller_model", model="qwen3.8-27b"), "learning_training_changed")
+
+    receipt = _ok(_command(client, headers, "use_smaller_model", model="qwen3.5-2b"))
+
+    assert receipt["summary"].startswith("Switched to Qwen3.5 2B.")
+    model = receipt["snapshot"]["personal_model"]
+    assert model["starting_model"]["id"] == "qwen3.5-2b" and model["room"] is None
+    assert runner_module.card_room(root) is None
+
+
 def test_without_the_preview_flag_there_is_no_download(api, monkeypatch):
     client, headers, _data, _ = api
     set_learning_preview(monkeypatch, False)

@@ -425,6 +425,9 @@ def forget() -> None:
 # training doesn't start until the card is free.
 MEMORY_QUERY = ("--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits")
 TRAINING_FREE_SHARE = 0.9
+# What another program may hold on a card whose tier the recipe fills (the 2B on an 8 GB card: its 95% cap
+# plus the CUDA context leave about 160 MiB of an 8,151 MiB card, L0d).
+IDLE_CARD_MIB = 160
 MEMORY_SECONDS = 30.0
 _memory_seen: tuple[float, bool] | None = None
 
@@ -533,6 +536,8 @@ def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None
         # card: on a 32 GB card that also drives the desktop (browsers and apps hold 3-6 GB) the 2B trains
         # beside them (L2w), and a recipe that needs more than is free waits instead of spilling.
         need = training_need_mib(found) or TRAINING_FREE_SHARE * total
+        # A recipe that needs its whole tier (the 2B on an 8 GB card) starts when the card is all but empty.
+        need = min(need, total - IDLE_CARD_MIB)
         free = total > 0 and total - used >= need
     with _lock:
         _memory_seen = (now, free)

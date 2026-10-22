@@ -36,6 +36,9 @@ SETTING_NAMES = frozenset({
 })
 # O23: Row-Bot's real envelope is 10.75K tokens, so no recipe trains on less than 16K.
 MIN_TRAINING_CONTEXT = 16_384
+# What the CUDA context and its libraries hold on the card beside PyTorch's own memory (measured 410-600 MiB on
+# the RTX 5090): a recipe's need on the card (``memory_mib``) includes it, PyTorch's cap doesn't (O112).
+CONTEXT_MIB = 512
 # O105: the systems a recipe's measured system memory is given for (Windows charges what a run holds on
 # the card to its commit limit too, so its figure is larger than Linux's).
 SYSTEMS = frozenset({"windows", "linux"})
@@ -118,10 +121,20 @@ class Recipe:
     def checkpoint_interval(self, steps: int) -> int:
         return max(1, min(self.checkpoint_every, int(steps)))
 
-    def spec(self) -> dict[str, Any]:
-        """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting)."""
+    def spec(self, card_mib: int | None = None) -> dict[str, Any]:
+        """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting).
 
-        return {"name": self.name, "settings": {**dict(self.settings), "report_to": "none"}}
+        ``card_mib``: the card it trains on. Its cap is then at most the recipe's own need on the card,
+        less the CUDA context's share (O112): training starts when the need is free, so PyTorch never holds
+        more than was free (on Windows more would spill into system memory, W8). On a card the size of
+        its tier (or smaller) the recipe's own certified cap stays."""
+
+        settings = {**dict(self.settings), "report_to": "none"}
+        if card_mib and self.memory_mib and card_mib > int(self.tier.removesuffix("gb")) * 1024:
+            cap = float(settings.get("vram_cap", 0.95))
+            share = (self.memory_mib - CONTEXT_MIB) / float(card_mib)
+            settings["vram_cap"] = round(max(0.2, min(cap, share)), 4)
+        return {"name": self.name, "settings": settings}
 
 
 def _number(value: Any, where: str, *, integer: bool = False, low: float = 0.0, high: float = math.inf) -> Any:
@@ -221,7 +234,8 @@ def for_hardware(check: Any) -> Recipe | None:
 
     if check is None or not getattr(check, "can_train", False):
         return None
-    tier = getattr(check, "tier", None)
+    # O112: the tier Row-Bot recommends (the largest whose need fits the card's free memory), else the card's.
+    tier = getattr(check, "recommended", None) or getattr(check, "tier", None)
     fits = [tier.id] if tier is not None else []
     fits += [item.id for item in getattr(check, "larger_tiers", ()) or ()]
     chosen: Recipe | None = None
@@ -248,9 +262,14 @@ def certified_for(check: Any) -> tuple[Recipe, ...]:
 
 
 def for_model(model_id: str, check: Any) -> Recipe | None:
-    """The certified recipe that trains ``model_id`` on this card, or None."""
+    """The certified recipe that trains ``model_id`` on this card, or None: the largest one whose need on
+    the card fits what it had free when checked (O112), else the smallest (it waits for room)."""
 
-    return next((recipe for recipe in certified_for(check) if recipe.starting_model == model_id), None)
+    found = [recipe for recipe in certified_for(check) if recipe.starting_model == model_id]
+    gpu = getattr(check, "gpu", None)
+    free = getattr(gpu, "free_mib", None) if gpu is not None else None
+    roomy = [recipe for recipe in found if free is None or recipe.memory_mib <= free]
+    return (roomy or found[-1:] or [None])[0]
 
 
 def current(root: Any = None, check: Any = None) -> Recipe:

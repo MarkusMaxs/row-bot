@@ -134,3 +134,27 @@ def test_a_recipe_says_what_it_needs_of_the_computers_memory_on_each_system():
     assert windows_only.system_memory_need("linux") is None
     for shipped in recipes.all_recipes():
         assert not shipped.certified or shipped.system_memory_need("win32")  # every certified tier measured
+
+
+def test_a_model_trains_with_the_largest_recipe_whose_need_fits_the_cards_free_memory():
+    nine = [recipe for recipe in recipes.all_recipes() if recipe.certified and recipe.starting_model == "qwen3.5-9b"]
+    if len(nine) < 2:
+        pytest.skip("one certified recipe trains the 9B")
+    small = min(nine, key=lambda recipe: recipe.memory_mib)
+    large = max(nine, key=lambda recipe: recipe.memory_mib)
+    card = lambda used: hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", used)])  # noqa: E731
+
+    assert recipes.for_model("qwen3.5-9b", card(1_000)) == large
+    assert recipes.for_model("qwen3.5-9b", card(32_607 - large.memory_mib + 1)) != large
+    assert recipes.for_model("qwen3.5-9b", card(32_607 - small.memory_mib + 1)) == small  # waits for room
+
+
+def test_a_runs_cap_on_a_larger_card_is_the_recipes_need_less_the_cuda_context():
+    recipe = recipes.load("8gb")
+
+    on_8gb = recipe.spec(8_151)["settings"]["vram_cap"]
+    on_32gb = recipe.spec(32_607)["settings"]["vram_cap"]
+
+    assert on_8gb == recipe.settings["vram_cap"]  # the card it fills keeps its certified cap
+    assert on_32gb == round((recipe.memory_mib - recipes.CONTEXT_MIB) / 32_607, 4)  # never more than was free
+    assert recipe.spec()["settings"]["vram_cap"] == recipe.settings["vram_cap"]

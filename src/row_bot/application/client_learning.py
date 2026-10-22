@@ -35,7 +35,7 @@ _ACTIONS = frozenset({
     "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
     "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
     "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-    "review_version",
+    "review_version", "use_smaller_model",
 })
 # Using the personal model (L2c2): its comparison, trial, keep and undo, Export…, Delete version,
 # Advanced and Retrain without it. Every one of them is the person's own choice (D24).
@@ -274,8 +274,59 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "runtimes": _runtimes(),
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
+        "room": _room_view(settings),
         **_use_parts(),
     }
+
+
+def _room_view(settings: learning.LearningSettings) -> dict[str, Any] | None:
+    """O112: after two quiet-hours nights without room on the card for this model, what it needs, what the
+    card had, and the next smaller certified model: the largest whose need fits what was free, else the
+    smallest below this one."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import hardware, recipes
+
+    try:
+        found = runner_module.card_room()
+        if not found or len(found["nights"]) < runner_module.ROOM_NIGHTS or found["model"] != settings.starting_model:
+            return None
+        check = hardware.peek()
+        smaller: list[tuple[int, Any]] = []
+        for model in check.starting_models if check is not None else ():
+            recipe = recipes.for_model(model.id, check) if model.id != settings.starting_model else None
+            if recipe is not None and (not found["need_mib"] or recipe.memory_mib < found["need_mib"]):
+                smaller.append((int(recipe.memory_mib), model))
+        roomy = [item for item in smaller if item[0] <= found["free_mib"]]
+        pick = max(roomy, key=lambda item: item[0]) if roomy else min(smaller, key=lambda item: item[0], default=None)
+        return {"nights": len(found["nights"]), "need_gb": round(found["need_mib"] / 1024, 1),
+                "free_gb": round(found["free_mib"] / 1024, 1), "smaller": _model_view(pick[1]) if pick else None}
+    except Exception:
+        logger.debug("Learning could not read the nights it waited for the card", exc_info=True)
+        return None
+
+
+def _use_smaller_model(model_id: str) -> str:
+    """O112: train the smaller model the Personal model view offered (the person tapped it and agreed to its
+    download): it becomes the starting model, a run planned for the larger one that never started is set
+    aside, and its download starts."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import hardware
+
+    offered = (_room_view(learning.read_settings()) or {}).get("smaller") or {}
+    if not model_id or offered.get("id") != model_id:
+        raise ClientPlatformError("learning_training_changed")
+    supervisor = runner_module.get().supervisor
+    if learning.store_exists():
+        job = supervisor.jobs.current()
+        if job is not None and job.state in ("planned", "waiting") and not job.steps_done:
+            supervisor.jobs.move(job.id, "stopped", reason="model_changed")
+    _save({"starting_model": model_id})
+    runner_module.forget_card_room()
+    name = hardware.STARTING_MODELS[model_id].name
+    words = _answer_download("download")
+    return f"Switched to {name}. {words}"
 
 
 def _use_parts() -> dict[str, Any]:
@@ -747,8 +798,10 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
 
     def tier(value: Any) -> dict[str, Any]:
         need = getattr(value, "system_memory_mib", None)
+        card = getattr(value, "need_mib", None)
         return {"id": value.id, "label": value.label, "certified": value.certified, "summary": value.summary,
-                "system_memory_gb": max(1, -(-int(need) // 1024)) if need else None}
+                "system_memory_gb": max(1, -(-int(need) // 1024)) if need else None,
+                "card_need_gb": round(int(card) / 1024, 1) if card else None}
 
     from row_bot.learning.training import recipes
 
@@ -763,6 +816,8 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
         "memory_short": [tier(item) for item in found.memory_short],
         "memory": {"limit_gb": memory.limit_mib // 1024, "free_gb": memory.free_mib // 1024,
                    "system": system if system in ("windows", "linux") else "other"} if memory else None,
+        "card_free_gb": round(found.gpu.free_mib / 1024, 1) if found.gpu and found.gpu.free_mib is not None else None,
+        "recommended": tier(found.recommended) if found.recommended else None,
         "starting_models": [_model_view(item) for item in found.starting_models],
         "engine_download_bytes": hardware.engine_download_bytes(found.variant),
         "free_bytes": free,
@@ -1138,6 +1193,8 @@ def _use_action(action: str, wire: dict[str, Any]) -> str:
 
     from row_bot.learning import kinds, model_compare, use, versions
 
+    if action == "use_smaller_model":
+        return _use_smaller_model(str(wire.get("model") or ""))
     settings = learning.read_settings()
     version = wire.get("version")
     kind = wire.get("kind") or ""
@@ -1390,6 +1447,9 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     item_id = _text(command.get("item_id"), 128)
     if action == "dismiss" and not item_id:
         raise ClientPlatformError("invalid_learning_command")
+    model_id = _text(command.get("model"), 32)
+    if action == "use_smaller_model" and model_id not in learning.STARTING_MODELS:
+        raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
         "command_id": command["command_id"],
@@ -1411,6 +1471,7 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "folder": folder,
         "advanced": dict(advanced_values) if isinstance(advanced_values, dict) else None,
         "item_id": item_id,
+        "model": model_id,
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:

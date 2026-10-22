@@ -45,7 +45,7 @@ def test_an_8_gb_card_trains_with_the_certified_small_model_recipe():
     assert [(model.name, model.licence) for model in check.tier.models] == [("Qwen3.5 2B", "Apache 2.0")]
     assert check.larger_tiers == ()
     (args, kwargs), = calls
-    assert args[0] == "/fake/bin/nvidia-smi" and "--query-gpu=name,memory.total,driver_version" in args
+    assert args[0] == "/fake/bin/nvidia-smi" and "--query-gpu=name,memory.total,driver_version,memory.used" in args
     assert kwargs["timeout"] <= 15 and kwargs["check"] is False
     if sys.platform == "win32":
         # No console window flashes up from the desktop app.
@@ -222,3 +222,59 @@ def test_the_computers_memory_is_read_from_the_system():
         assert real is not None and 0 < real.free_mib <= real.limit_mib
     else:
         assert real is None
+
+
+# ── Room on the card (O112) ─────────────────────────────────────────────────
+
+
+def _needs(monkeypatch, needs: dict[str, int]) -> None:
+    """The tier table with these tiers certified, each needing this much free on the card."""
+
+    table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id in needs, tier.summary,
+                                ((hardware.QWEN35_2B,) if tier.id == "8gb" else (hardware.QWEN35_9B,))
+                                if tier.id in needs else (), None, needs.get(tier.id))
+                  for tier in hardware.TIERS)
+    monkeypatch.setattr(hardware, "TIERS", table)
+
+
+def test_the_check_recommends_the_largest_model_whose_need_fits_what_the_card_has_free(monkeypatch):
+    _needs(monkeypatch, {"8gb": 8_192, "16gb": 15_616, "24gb": 20_480})
+    card = lambda used: [hardware.Gpu("NVIDIA GeForce RTX 4090", 24_564, "596.08", used)]  # noqa: E731
+
+    roomy = hardware.classify(card(1_200), ROOMY)  # 23.3 GB free
+    busy = hardware.classify(card(6_000), ROOMY)  # the display and other apps hold 6 GB
+    full = hardware.classify(card(17_000), ROOMY)  # 7.4 GB free: nothing fits, the smallest waits for room
+
+    assert (roomy.tier.id, roomy.recommended.id) == ("24gb", "24gb")
+    assert (busy.tier.id, busy.recommended.id) == ("24gb", "16gb")
+    assert busy.starting_models[0].id == "qwen3.5-9b" and busy.gpu.free_mib == 18_564
+    assert (full.recommended.id, [model.id for model in full.starting_models]) == ("8gb", ["qwen3.5-2b", "qwen3.5-9b"])
+    unknown = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 4090", 24_564, "596.08")], ROOMY)
+    assert unknown.recommended is None and unknown.recommended_tier.id == "24gb"  # the driver didn't say
+
+
+def test_the_check_reads_what_the_card_has_in_use():
+    check = hardware.detect(run=_run("NVIDIA GeForce RTX 5090, 32607, 610.60, 5120\n"), which=_which(),
+                            memory=lambda: ROOMY)
+
+    assert check.gpu.used_mib == 5_120 and check.gpu.free_mib == 27_487
+
+
+def test_training_waits_for_the_recipes_measured_need_not_a_share_of_the_card():
+    from row_bot.learning.training import recipes
+
+    found = hardware.classify([hardware.Gpu("NVIDIA RTX 5090", 32_607, "610", 3_000)], ROOMY)
+    hardware.check(refresh=True, detector=lambda: found)
+    try:
+        need = recipes.current(check=found).memory_mib
+        assert hardware.training_need_mib() == need
+        # Exactly the recipe's need (its measured peak with a margin), never a share of the card.
+        assert hardware.gpu_free_for_training(memory=lambda: (32_607 - need, 32_607), clock=lambda: 1.0) is True
+        assert hardware.gpu_free_for_training(memory=lambda: (32_607 - need + 1, 32_607), clock=lambda: 100.0) is False
+        # The 2B fills an 8 GB card: it starts when the card is all but empty (160 MiB for others).
+        hardware.check(refresh=True, detector=lambda: hardware.classify(
+            [hardware.Gpu("NVIDIA RTX 5070 Laptop", 8_151, "596", 0)], ROOMY))
+        assert hardware.gpu_free_for_training(memory=lambda: (150, 8_151), clock=lambda: 200.0) is True
+        assert hardware.gpu_free_for_training(memory=lambda: (700, 8_151), clock=lambda: 300.0) is False
+    finally:
+        hardware.forget()

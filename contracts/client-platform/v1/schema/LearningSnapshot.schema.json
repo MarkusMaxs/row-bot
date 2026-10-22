@@ -170,6 +170,47 @@
       "title": "LearningAdvancedValues",
       "type": "object"
     },
+    "LearningCardRoom": {
+      "additionalProperties": false,
+      "properties": {
+        "free_gb": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Free Gb",
+          "type": "number"
+        },
+        "need_gb": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Need Gb",
+          "type": "number"
+        },
+        "nights": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Nights",
+          "type": "integer"
+        },
+        "smaller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningStartingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "nights",
+        "need_gb",
+        "free_gb"
+      ],
+      "title": "LearningCardRoom",
+      "type": "object"
+    },
     "LearningChannelNote": {
       "additionalProperties": false,
       "properties": {
@@ -854,6 +895,17 @@
           "maxLength": 1024,
           "title": "Export Folder",
           "type": "string"
+        },
+        "room": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningCardRoom"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "runtime": {
           "default": "row_bot",

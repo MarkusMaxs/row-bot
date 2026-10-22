@@ -534,3 +534,46 @@ it('a computer whose memory can’t hold training says so up front, with what to
     within(sheet).getByRole('button', { name: 'Check again' }),
   ).toBeVisible();
 });
+
+it('setup says why it recommends a smaller model when the graphics card has little free (O112)', async () => {
+  const io = fakeIO(learningSnapshot(), {
+    hardware: {
+      ...GPU_8GB,
+      gpu: {
+        name: 'NVIDIA GeForce RTX 4080',
+        memory_gb: 16,
+        label: 'NVIDIA GeForce RTX 4080 (16 GB)',
+      },
+      tier: {
+        id: '16gb',
+        label: '16 GB',
+        certified: true,
+        summary: 'Can train models up to about 9B on your tasks.',
+        card_need_gb: 15.3,
+      },
+      recommended: { ...GPU_8GB.tier!, card_need_gb: 8 },
+      card_free_gb: 9.6,
+      starting_models: [
+        GPU_8GB.starting_models[0],
+        {
+          id: 'qwen3.5-9b',
+          name: 'Qwen3.5 9B',
+          licence: 'Apache 2.0',
+          download_bytes: 19_300_000_000,
+        },
+      ],
+    },
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'Your graphics card has about 9 GB free now (your display and other apps use the rest), so Row-Bot recommends Qwen3.5 2B. Larger models need about 16 GB free on it.',
+    ),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByRole('combobox', { name: 'Starting model' }),
+  ).toHaveDisplayValue(/^Qwen3\.5 2B/);
+});
