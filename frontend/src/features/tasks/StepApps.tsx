@@ -70,3 +70,18 @@ export default function StepApps({
     </Field>
   );
 }
+
+/** The apps a saved step names, as chips: its icon and name (B345). */
+export function StepAppChips({ apps }: { apps: readonly StepApp[] }) {
+  if (!apps.length) return null;
+  return (
+    <ul className="step-app-chips" aria-label="Apps this step uses">
+      {apps.map((app) => (
+        <li key={app.id}>
+          {app.icon && <AppIcon icon={app.icon} size={14} />}
+          <span>{app.name}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}

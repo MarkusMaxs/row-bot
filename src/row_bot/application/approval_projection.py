@@ -74,7 +74,8 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
     # and a code folder to use or a repository to clone as a folder card
     # where the person picks the folder (B277).
     from row_bot.application.conversation_traces import app_of_tool
-    app = app_of_tool(tool_name) if len(items) == 1 else None
+    # A tool this runtime didn't issue still names its app in words, never as a raw name (B388).
+    app = app_of_tool(tool_name, words=True) if len(items) == 1 else None
     if app:  # Shown with its logo and name, so the person knows which app is asking.
         projected["app"] = app
     setup = item.get("setup")

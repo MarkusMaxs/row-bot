@@ -234,6 +234,8 @@ contract is `src/row_bot/install_layout.py`):
 ├── Row-Bot.exe                         # Starts the active version; shortcuts point here
 ├── state.json                          # Active and previous version, update and rollback state
 └── versions\
+    ├── Row-Bot Server.exe              # The server program, its Python DLLs and python3XX._pth: copies
+    │                                   # from the active version, at a path no update changes (B365)
     └── X.Y.Z\                          # One folder per version, never changed after install
         ├── version.json                # Version, Python version and uv.lock hash
         ├── python\                     # Embedded Python 3.13 runtime
@@ -303,6 +305,12 @@ Ollama is installed system-wide via its official installer.
 `python\playwright-browsers` if it bundles Chromium, otherwise
 `<data dir>\playwright-browsers`, as the macOS host and the Linux wrapper do) and starts `versions\<active>\python\python.exe
 versions\<active>\app\launcher.py` with its own arguments in a hidden console.
+The launcher runs the server as `versions\Row-Bot Server.exe`, which it keeps in
+step with the active version (the version's signed program, its Python DLLs and
+a `._pth` pointing at the version's folders). Windows Firewall ties its answer to
+a program's path, so with phone or LAN access on it asks once, not after every
+update. Without that copy the server runs as the version's own
+`python\Row-Bot Server.exe`.
 It starts it again when it exits with code 75. A version that has not become
 ready since it was switched to and fails to start twice in a row is replaced by
 the previous one (when that one can start), recorded as `last_rollback` in
