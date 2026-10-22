@@ -1242,6 +1242,23 @@ def paired_analysis(differences: Sequence[tuple[str, float]], *, resamples: int 
             "high": round(_percentile(boots, 0.975), 6), "p_value": round(p_value, 6), "exact": exact}
 
 
+def holm(p_values: Mapping[str, float | None], *, family: Sequence[str] | None = None) -> dict[str, float]:
+    """Holm-adjusted p-values across a confirmatory family (§7). The family is the pre-registered one
+    (``family``, else the given names); a member with no p-value (not tested) enters as 1, so it is never
+    rejected and still counts in the family's size."""
+
+    members = list(dict.fromkeys(family if family is not None else p_values))
+    raw = {name: 1.0 if p_values.get(name) is None else min(1.0, max(0.0, float(p_values[name])))
+           for name in members}
+    order = sorted(members, key=lambda name: (raw[name], members.index(name)))
+    adjusted: dict[str, float] = {}
+    running = 0.0
+    for rank, name in enumerate(order):
+        running = max(running, min(1.0, (len(order) - rank) * raw[name]))
+        adjusted[name] = round(running, 6)
+    return {name: adjusted[name] for name in members}
+
+
 def interval_verdict(analysis: Mapping[str, Any]) -> str:
     """What the interval says: ``better`` (it lies above 0), ``worse`` (below 0) or ``unclear``; the
     product's own verdict rule is unchanged (a promotion rule, E4) and reported beside it."""
@@ -1273,17 +1290,23 @@ def _analysis(first: Sequence[CaseResult], second: Sequence[CaseResult], cluster
             means.setdefault(key, []).append((fraction, other[task][1]))
 
     def summary(key: str) -> dict[str, Any]:
-        found = paired_analysis(rows.get(key, []), resamples=RESAMPLES, permutations=PERMUTATIONS, seed=seed)
-        pairs = means.get(key, [])
-        found["baseline"] = round(sum(item[0] for item in pairs) / len(pairs), 6) if pairs else None
-        found["arm"] = round(sum(item[1] for item in pairs) / len(pairs), 6) if pairs else None
-        found["enough"] = found["problems"] >= MIN_PROBLEMS
-        found["interval_verdict"] = interval_verdict(found)
-        found["not_worse"] = found["low"] is not None and found["low"] > -MARGIN
-        return found
+        return _summarized(paired_analysis(rows.get(key, []), resamples=RESAMPLES, permutations=PERMUTATIONS,
+                                           seed=seed), means.get(key, []))
 
     return {"overall": summary("overall"),
             "by_kind": {kind: summary(kind) for kind in sorted(key for key in rows if key != "overall")}}
+
+
+def _summarized(found: dict[str, Any], pairs: Sequence[tuple[float, float]]) -> dict[str, Any]:
+    """A paired analysis with each arm's mean over the paired problems, the minimum-size flag (§7), what
+    the interval says and the non-inferiority flag (lower bound above -10 points)."""
+
+    found["baseline"] = round(sum(item[0] for item in pairs) / len(pairs), 6) if pairs else None
+    found["arm"] = round(sum(item[1] for item in pairs) / len(pairs), 6) if pairs else None
+    found["enough"] = found["problems"] >= MIN_PROBLEMS
+    found["interval_verdict"] = interval_verdict(found)
+    found["not_worse"] = found["low"] is not None and found["low"] > -MARGIN
+    return found
 
 
 def _replay_shape(arm: Arm) -> str:
@@ -1391,7 +1414,11 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
              on_case: Callable[[str, CaseResult], None] | None = None, repeats: int = 1,
              seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
              kind_key: Callable[[str], str] | None = None,
-             pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
+             pairs: Sequence[tuple[str, str]] = (),
+             inspect: Callable[[Mapping[str, list[CaseResult]]], None] | None = None) -> Comparison:
+    """``inspect`` sees every arm's per-problem results before they are dropped: only this module's own
+    analyses pass it (the freeze evaluation), so no per-problem result leaves an audit run (E10)."""
+
     if not arms:
         raise EvaluationError("no_arms")
     repeats = max(1, int(repeats))
@@ -1561,6 +1588,8 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                 f"{other} vs {base}": _analysis([*visible[base], *results[base]], [*visible[other], *results[other]],
                                                 joined, seed=seed, kind_key=kind_key)
                 for base, other in both}
+    if inspect is not None:
+        inspect(results)
     return Comparison(comparison_set, suite, arm_results, budget, stopped, calibration, paired, judge_used,
                       repeats=repeats, repeated={arm.name: _repeat_record(results[arm.name]) for arm in arms},
                       analysis=analysis, clusters={} if aggregate_only else clusters)
@@ -1662,6 +1691,195 @@ def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] 
     return count + (len(vault.replay_tasks(asked_by=who)) if include_replay else 0)
 
 
+# ── The paper's freeze evaluation (pre-registration §7): only aggregates leave ──
+
+#: The hidden problems' splits (§3.3, §5): real work nobody corrected (the captured action is the
+#: reference), real work with a held-out correction (the corrected action, O87) and the packs' hidden tasks.
+SPLITS: tuple[str, ...] = ("real_uncorrected", "real_corrected", "packs")
+
+
+def _scores(cases: Sequence[CaseResult], *, majority: bool = False) -> dict[str, float]:
+    """Each problem's score over its counted runs: the pass fraction ``s(i, a)`` (§6.1), or with
+    ``majority`` 1 when more than half of its counted runs passed, else 0 (§7's sensitivity analysis)."""
+
+    runs: dict[str, list[int]] = {}
+    for case in cases:
+        if case.counted:
+            runs.setdefault(case.task_id, []).append(int(case.passed))
+    if majority:
+        return {task: 1.0 if 2 * sum(found) > len(found) else 0.0 for task, found in runs.items()}
+    return {task: sum(found) / len(found) for task, found in runs.items()}
+
+
+def _pair_summary(base: Mapping[str, float], other: Mapping[str, float], problems: Sequence[str],
+                  clusters: Mapping[str, str], *, seed: int) -> dict[str, Any]:
+    """``other`` against ``base`` on the ``problems`` both counted (a problem with no counted run in an
+    arm leaves the pair, §8.3)."""
+
+    paired = [task for task in problems if task in base and task in other]
+    rows = [(clusters.get(task, task), other[task] - base[task]) for task in paired]
+    return _summarized(paired_analysis(rows, seed=seed), [(base[task], other[task]) for task in paired])
+
+
+def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseResult]], tasks: Sequence[PackTask],
+                     replay: Sequence[ReplayCase], contrasts: Sequence[tuple[str, str]], *,
+                     seed: int) -> dict[str, Any]:
+    """Per arm and split: problems, counted problems, the mean score, run statuses and causes. Per contrast
+    and split: the primary analysis and §7's sensitivity analyses (exact fidelity only, a majority vote,
+    without clustering, per main model), per kind of work, and how many problems left the pair."""
+
+    from row_bot.learning import kinds
+
+    split = {task.id: "packs" for task in tasks}
+    clusters = {task.id: task.id for task in tasks}
+    kind = {task.id: kinds.from_label(task.kind_of_work) for task in tasks}
+    exact: set[str] = set()
+    model: dict[str, str] = {}
+    ordinals: dict[str, str] = {}
+    for case in sorted(replay, key=lambda item: (item.created_at, item.decision_id)):
+        split[case.decision_id] = "real_corrected" if case.reference_source == "corrected" else "real_uncorrected"
+        clusters[case.decision_id] = case.conversation_id or case.thread_id or case.decision_id
+        kind[case.decision_id] = kinds.from_label(case.kind_of_work)
+        if case.fidelity == "exact":
+            exact.add(case.decision_id)
+        # The captured main model, named only by its order of first use (no model name leaves).
+        model[case.decision_id] = ordinals.setdefault(str(case.model_ref or ""), f"model_{len(ordinals) + 1}")
+    by_split = {name: [task for task, found in split.items() if found == name] for name in SPLITS}
+    fractions = {arm.name: _scores(results[arm.name]) for arm in arms}
+    majority = {arm.name: _scores(results[arm.name], majority=True) for arm in arms}
+
+    per_arm: dict[str, Any] = {}
+    for arm in arms:
+        rows: dict[str, Any] = {}
+        for name, problems in by_split.items():
+            wanted = set(problems)
+            cases = [case for case in results[arm.name] if case.task_id in wanted]
+            scored = [fractions[arm.name][task] for task in problems if task in fractions[arm.name]]
+            rows[name] = {
+                "problems": len(problems), "counted": len(scored),
+                "mean": round(sum(scored) / len(scored), 6) if scored else None,
+                "runs": dict(sorted(Counter(case.status for case in cases).items())),
+                "causes": dict(sorted(Counter(case.cause for case in cases if case.cause).items())),
+            }
+        per_arm[arm.name] = {"splits": rows}
+
+    def summary(scores: Mapping[str, Mapping[str, float]], base: str, other: str, problems: Sequence[str],
+                grouping: Mapping[str, str]) -> dict[str, Any]:
+        return _pair_summary(scores[base], scores[other], problems, grouping, seed=seed)
+
+    unclustered = {task: task for task in split}
+    found: dict[str, Any] = {}
+    for base, other in contrasts:
+        entry: dict[str, Any] = {}
+        for name, problems in by_split.items():
+            part: dict[str, Any] = {
+                "primary": summary(fractions, base, other, problems, clusters),
+                "majority_vote": summary(majority, base, other, problems, clusters),
+                "unclustered": summary(fractions, base, other, problems, unclustered),
+                "left_pair": sum(1 for task in problems
+                                 if task not in fractions[base] or task not in fractions[other]),
+                "by_kind": {key: summary(fractions, base, other, [task for task in problems if kind[task] == key],
+                                         clusters)
+                            for key in kinds.KINDS if any(kind[task] == key for task in problems)},
+            }
+            if name != "packs":
+                part["exact_only"] = summary(fractions, base, other, [task for task in problems if task in exact],
+                                             clusters)
+                part["per_main_model"] = {
+                    label: summary(fractions, base, other, [task for task in problems if model[task] == label],
+                                   clusters)
+                    for label in sorted({model[task] for task in problems})}
+            entry[name] = part
+        found[f"{other} vs {base}"] = entry
+    return {"arms": per_arm, "contrasts": found, "main_models": len(ordinals)}
+
+
+def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts: Sequence[tuple[str, str]],
+                 client: ModelClient | None = None, budget: Budget = Budget(), meter: TokenMeter | None = None,
+                 store: Any | None = None, runner: PackRunner | None = None, cache: ArmCache | None = None,
+                 packs: Iterable[str] | None = None, verifiers: Iterable[str] | None = None, repeats: int = 3,
+                 seed: int = ANALYSIS_SEED, on_progress: Callable[[int, int], None] | None = None,
+                 clock: Callable[[], float] = time.time) -> dict[str, Any]:
+    """The pre-registered freeze evaluation (§7): the arms on every hidden problem the vault holds from
+    before ``as_of`` (real work, by its captured time) and the packs' hidden tasks, ``repeats`` runs per arm,
+    one budget, this module's checker. Returns aggregates only: per arm and split, counts, mean scores, run
+    statuses and causes; per contrast ((baseline, arm) names) and split, the primary paired analysis and §7's
+    sensitivity analyses. No problem, id, text or per-problem result leaves (E10)."""
+
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    if not gate.is_enabled(saved.root) and not audit.vault_exists(saved.root):
+        raise EvaluationError("learning_off")
+    names = {arm.name for arm in arms}
+    if not contrasts or {name for pair in contrasts for name in pair} - names:
+        raise EvaluationError("unknown_arm")
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    vault = _vault(saved)
+    allowed = None if verifiers is None else set(verifiers)
+    tasks = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
+             if allowed is None or task.verifier.kind in allowed]
+    everything = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)]
+    replay = [case for case in everything if case.created_at <= float(as_of)]
+    total = (len(tasks) + len(replay)) * len(arms) * max(1, int(repeats))
+    done = [0]
+
+    def counted(_arm: str, _case: CaseResult) -> None:
+        done[0] += 1
+        if on_progress is not None:
+            on_progress(done[0], total)
+
+    found: dict[str, Any] = {}
+
+    def inspect(results: Mapping[str, list[CaseResult]]) -> None:
+        found.update(_freeze_analysis(arms, results, tasks, replay, contrasts, seed=seed))
+
+    comparison = _compare(arms, tasks, replay, client=client, judge=None, calibration=None, budget=budget,
+                          meter=meter, store=saved, save=False, clock=clock, backend="auto", suite="audit",
+                          aggregate_only=True, runner=runner, cache=cache, on_case=counted, repeats=repeats,
+                          seed=seed, inspect=inspect)
+    for item in comparison.arms:
+        found["arms"][item.arm.name].update({
+            "tokens": int(item.measured_tokens), "cloud_tokens": int(item.measured_cloud_tokens),
+            "seconds": round(float(item.seconds), 1), "ran": int(item.ran), "cached": int(item.cached),
+            "identical": dict(comparison.repeated.get(item.arm.name, {})),
+        })
+    splits = {name: sum(1 for case in replay if (case.reference_source == "corrected") == (name == "real_corrected"))
+              for name in SPLITS[:2]}
+    return {"metric_version": METRIC_VERSION, "repeats": comparison.repeats, "seed": int(seed),
+            "resamples": RESAMPLES, "permutations": PERMUTATIONS, "stopped": bool(comparison.stopped),
+            "budget": budget.to_dict(),
+            "problems": {**splits, "packs": len(tasks), "after_as_of": len(everything) - len(replay)}, **found}
+
+
+def audit_counts(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
+    """How many hidden problems the vault holds (packs, real work uncorrected and corrected, by fidelity,
+    retired) and how many held-out corrections wait for it: counts only. Never creates a vault."""
+
+    from row_bot.learning import holdout
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    waiting = holdout.waiting_for_vault(saved) if saved.exists() else set()
+    counts = {"vault": 0, "pack_tasks": 0, "uncorrected": 0, "corrected": 0, "exact": 0, "redacted": 0,
+              "retired": 0, "corrections_waiting": len(waiting)}
+    if not audit.vault_exists(saved.root):
+        return counts
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    vault = _vault(saved)
+    summary = vault.summary(asked_by=who)
+    held = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)]
+    corrected = sum(1 for case in held if case.reference_source == "corrected")
+    counts.update({
+        "vault": 1, "pack_tasks": int(summary.get("pack_tasks", 0)), "uncorrected": len(held) - corrected,
+        "corrected": corrected, "exact": sum(1 for case in held if case.fidelity == "exact"),
+        "redacted": sum(1 for case in held if case.fidelity == "redacted"),
+        "retired": int(summary.get("retired_replay_tasks", 0)),
+        "corrections_waiting": len(waiting - {case.decision_id for case in held}),
+    })
+    return counts
+
+
 def is_novel(candidate: PackTask | str, *, asked_by: str, store: Any | None = None) -> bool:
     """Whether a proposed practice task is far enough from every hidden test (L4b). Yes or no only."""
 
@@ -1716,7 +1934,11 @@ __all__ = [
     "CACHE_DAYS",
     "LimitReached",
     "PackRunner",
+    "SPLITS",
+    "audit_counts",
     "audit_size",
+    "freeze_check",
+    "holm",
     "CalibrationCase",
     "Calibration",
     "CaseResult",
