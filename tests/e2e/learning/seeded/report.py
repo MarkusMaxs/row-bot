@@ -91,6 +91,9 @@ def live_work(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     attempts = [attempt for item in asked for attempt in item.get("attempts") or ()]
     approvals = [approval for attempt in attempts for approval in attempt.get("approvals") or ()]
     classified = [item for item in asked if item.get("kind") == item.get("intended")]
+    by_intent: dict[str, list[float]] = {}
+    for item in asked:
+        _add(by_intent, str(item.get("intended") or "other"), float(item.get("kind") == item.get("intended")), 1)
     routed = [item for item in requests if (item.get("attempts") or [{}])[0].get("routed")]
     return {
         "requests": len(asked),
@@ -104,6 +107,8 @@ def live_work(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "approvals": {"asked": len(approvals), "approved": sum(1 for item in approvals if item.get("approved"))},
         "words_from_template": sum(1 for reaction in reactions if reaction.get("source") == "template"),
         "kinds_agree": rate(len(classified), len(asked)),
+        # Row-Bot's kind of work for each request against the kind it was meant as (routing goes by the former).
+        "kinds_by_intent": {kind: rate(*value) for kind, value in sorted(by_intent.items())},
         "routed": {"turns": len(routed),
                    "answered_by_personal_model": sum(1 for item in routed
                                                      if not item["attempts"][0]["routed"].get("fallback")),
@@ -193,6 +198,7 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
         "person": result.get("person"), "name": result.get("name"), "tier": result.get("tier"),
         "days": result.get("days"), "history": result.get("history"), "model": result.get("model"),
         "stages": result.get("stages"), "past": result.get("past"), "live": live_work(result.get("requests") or ()),
+        "container": (result.get("profile") or {}).get("container"),
         "versions": [{key: item.get(key) for key in ("version", "trained_after_day", "state", "steps", "loss",
                                                      "training_seconds", "phase", "failure", "gguf_bytes",
                                                      "compared_on_day")}
@@ -266,6 +272,8 @@ def build(results: Sequence[Mapping[str, Any]], *, run: Mapping[str, Any] | None
             "tokens": {key: sum(int(person["tokens"][key]) for person in members) for key in members[0]["tokens"]}
             if members else {},
             "gpu_hours": round(sum(person["gpu_hours"] for person in members), 3),
+            "kinds_by_intent": _pool_live(members, "kinds_by_intent"),
+            "container": sorted({str(person.get("container")) for person in members}),
         }
     total_tokens = sum(person["tokens"]["total_cloud"] for person in people)
     return {
@@ -275,6 +283,14 @@ def build(results: Sequence[Mapping[str, Any]], *, run: Mapping[str, Any] | None
                    "within_cap": None if cap_tokens is None else total_tokens <= cap_tokens},
         "not_built": list(NOT_BUILT),
     }
+
+
+def _pool_live(people: Sequence[Mapping[str, Any]], key: str) -> dict[str, Any]:
+    table: dict[str, list[float]] = {}
+    for person in people:
+        for kind, value in ((person.get("live") or {}).get(key) or {}).items():
+            _add(table, kind, float(value["passed"]), float(value["total"]))
+    return {kind: rate(*value) for kind, value in sorted(table.items())}
 
 
 def _tally(checks: Iterable[Mapping[str, Any]]) -> dict[str, int]:
@@ -334,6 +350,17 @@ def markdown(report: Mapping[str, Any]) -> str:
         lines += ["", f"Seeded work as asked (main model, or a personal model in trial): first try "
                       f"{_pct(overall['live_first_try'])}; after the person's corrections {_pct(overall['live_final'])}.",
                   ""]
+        kinds = overall.get("kinds_by_intent") or {}
+        if kinds:
+            lines.append("Row-Bot's kind of work (it routes by this) against the kind each request was meant as: "
+                         + "; ".join(f"{LABELS.get(kind, kind).lower()} {_pct(value)}" for kind, value in kinds.items())
+                         + ".")
+            lines.append("")
+        containers = overall.get("container") or []
+        lines.append("Coding pack: " + ("ran with a container engine (Docker)." if containers == ["True"] else
+                                        "left out: no container engine." if containers == ["False"] else
+                                        f"container engine per person: {', '.join(containers)}."))
+        lines.append("")
         lines.append("Survival checks: " + "; ".join(
             f"{name.replace('_', ' ')} " + ", ".join(f"{state} {count}" for state, count in sorted(tally.items()))
             for name, tally in overall["survival"].items()))

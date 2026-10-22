@@ -123,11 +123,15 @@ def test_the_markdown_shows_rates_with_intervals_and_names_what_isnt_built():
     result = _result("mara", first=8, final=9)
     result["versions"]["2"] = {"version": 2, "trained_after_day": 12, "state": "evaluating", "steps": 60,
                                "phase": "runtime_failed", "failure": "tool_turn_failed"}
+    result["profile"] = {"container": True}
     built = report.build([result], run={"build": "abc1234", "seed": 1, "days": 30},
                          tiers={"8gb": "ran", "32gb": "not certified yet (L2x certifies the larger tiers)"},
                          cap_tokens=25_000_000)
     text = report.markdown(built)
     assert "- v2: trained after day 12, 60 steps, runtime_failed (tool_turn_failed); comparison: –" in text
+    # Row-Bot routed every request as "other": half were meant as document lookups.
+    assert "document lookups 0/5 = 0.0% [0.0, 43.5]; other 5/5 = 100.0% [56.5, 100.0]" in text
+    assert "Coding pack: ran with a container engine (Docker)." in text
     assert "8/10 = 80.0% [49.0, 94.3]" in text
     assert "Tier **32gb**: not certified yet" in text
     assert "| Harder split (O31) | not built yet (L3b)" in text
