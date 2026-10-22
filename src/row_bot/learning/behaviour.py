@@ -133,7 +133,8 @@ def _entry(raw: Any) -> Entry | None:
     change = str(raw.get("change_id") or "")
     if slot not in SLOTS or not text or not change:
         return None
-    return Entry(change[:128], slot, text[:MAX_TEXT], str(raw.get("title") or "")[:200])
+    # ``use`` keeps each one to MAX_TEXT; the section as a whole is capped when it is rendered.
+    return Entry(change[:128], slot, text[:MAX_SECTION], str(raw.get("title") or "")[:200])
 
 
 def read(root: Path | None = None) -> Overlay:

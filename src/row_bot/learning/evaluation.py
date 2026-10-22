@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sys
 import time
 from collections import Counter
@@ -98,7 +99,9 @@ RESULTS_FORMAT = "row_bot.learning.test_results"
 PURPOSE = "learning_test"
 
 Status = Literal["passed", "failed", "budget", "error", "unverified", "skipped", "not_run"]
-Check = Literal["exact_action", "tool_choice"]
+# ``stated_answer`` (L3b): a held-out Teach whose person said what the answer should have been, with no redo
+# to take a corrected action from; the re-asked reply passes when it states that answer (``compare_action``).
+Check = Literal["exact_action", "tool_choice", "stated_answer"]
 
 
 class EvaluationError(RuntimeError):
@@ -151,6 +154,11 @@ class Arm:
     # small-context prompt and tools, deferred tools behind ``tool_search`` / ``tool_invoke``. None:
     # asked as captured (a cloud main model is served as it was captured).
     serve_context: int | None = None
+    # What the real runtime (the evaluation worker, O56) runs this arm with (L3b): lessons as the
+    # memories recall finds, (title, text); ways of working as the turn's overlay, (slot, text). The
+    # in-process tool loop and replay use ``guidance`` instead.
+    lessons: tuple[tuple[str, str], ...] = ()
+    ways: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -605,6 +613,25 @@ def _same_value(expected: Any, actual: Any) -> bool:
     return expected == actual
 
 
+_KEY_TOKEN = re.compile(r"\b(?=[\w.,:/-]*\d)[\w.,:/-]+\b|\b[A-Z]{2,}[\w-]*\b")
+
+
+def _states(answer: str, reply: str) -> tuple[bool | None, str]:
+    """Whether ``reply`` states the person's ``answer`` without a judge (``stated_answer``)."""
+
+    wanted, said = normalize(answer), normalize(reply)
+    if not wanted:
+        return None, "no answer to compare with"
+    if wanted in said:
+        return True, ""
+    keys = {normalize(token).strip(".,:") for token in _KEY_TOKEN.findall(str(answer or ""))}
+    keys.discard("")
+    if not keys:
+        return None, "an answer in words and no calibrated judge"
+    missing = sorted(key for key in keys if key not in said)
+    return (True, "") if not missing else (False, "a different answer")
+
+
 def compare_action(candidate: Action, reference: Action, *, check: Check = "exact_action",
                    judge: Judge | None = None, task_text: str = "") -> tuple[bool | None, str]:
     """Whether a new action matches the reference. None: nothing executable could decide.
@@ -613,7 +640,20 @@ def compare_action(candidate: Action, reference: Action, *, check: Check = "exac
     by every argument the reference gave (extra arguments are allowed). An answer
     matches a short reference answer by its normalized text; a long one needs a
     calibrated judge.
+
+    ``stated_answer`` (a Teach's own answer as the reference): the reply passes when it states it. A
+    calibrated judge decides when there is one; otherwise the reply must hold the answer's words, or
+    every number and identifier the answer gives. A reply that calls a tool first can't be followed by
+    replay, so no check decides it.
     """
+
+    if check == "stated_answer":
+        if candidate.tool_calls:
+            return None, "called a tool first, which replay can't follow"
+        if judge is not None:
+            verdict = judge.judge(task_text, reference.text, candidate.text)
+            return verdict, "" if verdict else ("the judge could not tell" if verdict is None else "the judge failed it")
+        return _states(reference.text, candidate.text)
 
     if reference.tool_calls:
         if not candidate.tool_calls:
@@ -1003,6 +1043,9 @@ class ArmCache:
                             METRIC_VERSION, budget.to_dict(), signature]
         if repeat:
             parts.append(int(repeat))
+        if arm.lessons or arm.ways:
+            # The main model with the lessons and ways of working in use is its own entry (L3b).
+            parts.append({"lessons": [list(item) for item in arm.lessons], "ways": [list(item) for item in arm.ways]})
         material = json.dumps(parts, sort_keys=True)
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
@@ -1573,7 +1616,9 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
 
 def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.ReplayCandidate], int]:
     """Held-out corrections (O87) ready for the vault, each with its corrected action: the first move of
-    the redo the person accepted (``corrections.accepted_redo``). Returns them and how many wait for one."""
+    the redo the person accepted (``corrections.accepted_redo``), or, when they didn't redo a reply they
+    taught about, the answer they said it should have given (Teach's "What should it have done?", L3b,
+    checked as ``stated_answer``). Returns them and how many wait for one."""
 
     if not waiting:
         return [], 0
@@ -1581,6 +1626,7 @@ def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.Re
 
     book = corrections.Book(saved)
     bad = _signalled(saved)
+    answers = _taught_answers(saved)
     episodes: dict[str, str] = {}
     found: list[audit.ReplayCandidate] = []
     missing = 0
@@ -1590,6 +1636,11 @@ def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.Re
         redo = corrections.accepted_redo(saved, decision, book=book) if decision is not None else None
         first = corrections.first_call(book, redo) if redo is not None else None
         action = _action_of(saved, first) if first is not None else None
+        check: Check = "exact_action"
+        if action is None and problem is not None and decision is not None and decision.kind == "model_call":
+            said = answers.get(decision_id)
+            if said:
+                action, check = Action((), said), "stated_answer"
         if problem is None or action is None:
             missing += 1
             continue
@@ -1598,10 +1649,26 @@ def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.Re
         if isinstance(case, str) or case.check != "exact_action":
             missing += 1
             continue
+        if check != case.check:
+            case = replace(case, check=check)
         found.append(audit.ReplayCandidate(decision_id, case.created_at, case.thread_id,
                                            case.conversation_id or case.thread_id, case.kind_of_work,
                                            case.to_content()))
     return found, missing
+
+
+def _taught_answers(saved: Any) -> dict[str, str]:
+    """The answer each Teach on a reply said it should have given (the newest per decision), by decision."""
+
+    found: dict[str, tuple[float, str]] = {}
+    for item in saved.find("signal", limit=100_000):
+        answer = str(getattr(item, "answer", None) or "").strip()
+        if getattr(item, "kind", "") != "teach" or not answer or getattr(item, "withdrawn_at", None) is not None:
+            continue
+        decision_id = str(getattr(item, "decision_id", None) or "")
+        if decision_id and (decision_id not in found or item.created_at >= found[decision_id][0]):
+            found[decision_id] = (float(item.created_at), answer)
+    return {key: value for key, (_at, value) in found.items()}
 
 
 def _action_of(saved: Any, decision: Decision) -> Action | None:
@@ -1629,7 +1696,7 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 on_progress: Callable[[int, int], None] | None = None, repeats: int = 3,
                 seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
                 kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = (),
-                corrected: bool | None = None) -> Comparison:
+                corrected: bool | None = None, focus: Focus | None = None) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
     work and tokens per arm, and the paired analysis; no task, id or text (E10).
 
@@ -1640,7 +1707,12 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
     comparison of the same arms) adds the analysis of visible and hidden problems together, and
     ``pairs`` the analysis of more (baseline, arm) pairs.
     ``verifiers`` leaves out hidden tasks checked any other way (``code_tests`` need a container
-    for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more."""
+    for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more.
+
+    ``focus`` (a change's test, L3b) runs only some of the person's hidden work, chosen here: up to
+    ``own`` problems of its kind of work (held-out corrections first, then the newest) and up to
+    ``other`` of other kinds, each labelled with its kind of work (a problem whose episode had none is
+    classified from the person's own request, ``kinds``)."""
 
     from row_bot.learning.store import LearningStore
 
@@ -1654,6 +1726,9 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
              if allowed is None or task.verifier.kind in allowed]
     replay = ([ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who, origin=_origin(corrected))]
               if include_replay else [])
+    if focus is not None:
+        replay = _focused(replay, focus)
+        tasks = _per_pack(tasks, focus.packs)
     total = (len(tasks) + len(replay)) * len(arms) * max(1, int(repeats))
     done = [0]
 
@@ -1670,15 +1745,68 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
 
 def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,
                verifiers: Iterable[str] | None = None, include_replay: bool = True,
-               corrected: bool | None = None) -> int:
+               corrected: bool | None = None, focus: Focus | None = None) -> int:
     """How many hidden problems an :func:`audit_check` with the same choices would run (a count only)."""
 
     allowed = None if verifiers is None else set(verifiers)
     vault = _vault(store)
     who = f"{_caller()}: {asked_by}".strip(": ")
-    count = sum(1 for task in vault.hidden_tasks(asked_by=who, packs=packs)
-                if allowed is None or task.verifier.kind in allowed)
-    return count + (len(vault.replay_tasks(asked_by=who, origin=_origin(corrected))) if include_replay else 0)
+    hidden = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
+              if allowed is None or task.verifier.kind in allowed]
+    count = len(_per_pack(hidden, focus.packs) if focus is not None else hidden)
+    if not include_replay:
+        return count
+    replay = vault.replay_tasks(asked_by=who, origin=_origin(corrected))
+    if focus is not None:
+        return count + len(_focused([ReplayCase.from_content(item) for item in replay], focus))
+    return count + len(replay)
+
+
+@dataclass(frozen=True)
+class Focus:
+    """Which of the person's hidden problems a change's test runs (chosen inside this module, E10)."""
+
+    kind: str
+    own: int = 8
+    other: int = 4
+    # The packs' hidden tasks: at most this many of each pack asked for (None: all of them).
+    packs: int | None = None
+
+
+def kind_label_of(case: ReplayCase) -> str:
+    """A replayed decision's kind of work: its episode's, else what the person asked (``kinds``, no call)."""
+
+    from row_bot.learning import kinds
+
+    kind = kinds.from_label(case.kind_of_work)
+    if kind == kinds.OTHER and case.text:
+        kind = kinds.classify(kinds.Request(case.text)).kind
+    return kinds.label(kind)
+
+
+def _per_pack(tasks: Sequence[PackTask], limit: int | None) -> list[PackTask]:
+    if limit is None:
+        return list(tasks)
+    seen: Counter[str] = Counter()
+    kept = []
+    for task in tasks:
+        seen[task.pack] += 1
+        if seen[task.pack] <= max(0, int(limit)):
+            kept.append(task)
+    return kept
+
+
+def _focused(replay: Sequence[ReplayCase], focus: Focus) -> list[ReplayCase]:
+    from row_bot.learning import kinds
+
+    labelled = [replace(case, kind_of_work=kind_label_of(case)) for case in replay]
+    mine = kinds.label(focus.kind)
+    own = sorted((case for case in labelled if case.kind_of_work == mine),
+                 key=lambda case: (case.reference_source != "corrected", -case.created_at, case.decision_id))
+    others = sorted((case for case in labelled if case.kind_of_work != mine),
+                    key=lambda case: (-case.created_at, case.decision_id))
+    chosen = own[: max(0, int(focus.own))] + others[: max(0, int(focus.other))]
+    return sorted(chosen, key=lambda case: (case.created_at, case.decision_id))
 
 
 def _origin(corrected: bool | None) -> str | None:
@@ -1931,6 +2059,8 @@ __all__ = [
     "SPLITS",
     "audit_counts",
     "audit_size",
+    "Focus",
+    "kind_label_of",
     "freeze_check",
     "holm",
     "CalibrationCase",

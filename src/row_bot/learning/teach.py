@@ -116,17 +116,21 @@ def teach(
     tool_call_id: str = "",
     category: str | None = None,
     note: str = "",
+    answer: str = "",
     store: LearningStore | None = None,
     lookup: scope.ThreadLookup | None = None,
     clock: Callable[[], float] = time.time,
 ) -> Taught:
-    """Save a Teach on a reply (``message_id``) or a failed step (``tool_call_id``)."""
+    """Save a Teach on a reply (``message_id``) or a failed step (``tool_call_id``). ``answer`` is the
+    optional "What should it have done?": when the person doesn't redo the turn, it is the reference a
+    held-out correction is tested against (L3b)."""
 
     clean = str(thread_id or "")
     if not valid_thread_id(clean) or (category is not None and category not in CATEGORIES):
         raise TeachError("invalid_learning_command")
     text = str(note or "").strip()
-    if len(text) > MAX_NOTE:
+    should = str(answer or "").strip()
+    if len(text) > MAX_NOTE or len(should) > MAX_NOTE:
         raise TeachError("invalid_learning_command")
     settings = gate.read_settings()
     if not settings.enabled:
@@ -140,6 +144,8 @@ def teach(
     target = find_step(saved, clean, tool_call_id) if tool_call_id else find_reply(saved, clean, message_id)
     if text:
         text, _ = redaction.redact_text(text)
+    if should:
+        should, _ = redaction.redact_text(should)
     conversation = facts.root_thread_id if valid_thread_id(facts.root_thread_id) else clean
     signal = Signal(
         id=new_id("sig"),
@@ -151,6 +157,7 @@ def teach(
         decision_id=target.id if target else None,
         category=category,  # type: ignore[arg-type]
         note=text[:MAX_NOTE] or None,
+        answer=should[:MAX_NOTE] or None,
     )
     if not saved.put(signal):
         raise TeachError("learning_chat_not_used")
