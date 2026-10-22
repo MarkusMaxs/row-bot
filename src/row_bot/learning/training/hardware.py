@@ -29,7 +29,8 @@ from row_bot.learning.training import weights as _weights
 
 logger = logging.getLogger(__name__)
 
-QUERY = ("--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
+# The card's memory in use too (O112): what it has free when setup asks decides the recommendation.
+QUERY = ("--query-gpu=name,memory.total,driver_version,memory.used", "--format=csv,noheader,nounits")
 # A laptop's graphics card asleep (Optimus) can take about 5 s to answer: measured
 # 1.0-5.0 s on the RTX 5070 Laptop. The sheet shows "Checking..." meanwhile.
 TIMEOUT_SECONDS = 15.0
@@ -69,7 +70,8 @@ class Tier:
     """A recipe tier by graphics memory. Uncertified tiers are shown as "measured soon".
 
     ``system_memory_mib``: the computer's memory (RAM and virtual memory) its recipe needs free on this
-    system, as measured (O105); None where it wasn't measured."""
+    system, as measured (O105); ``need_mib``: the graphics memory its recipe needs free (its measured peak on
+    the card with a margin, O112). None where not certified."""
 
     id: str
     label: str
@@ -78,6 +80,7 @@ class Tier:
     summary: str
     models: tuple[StartingModel, ...] = ()
     system_memory_mib: int | None = None
+    need_mib: int | None = None
 
 
 def _tier(tier_id: str, label: str, min_memory_mib: int, summary: str, model: StartingModel) -> Tier:
@@ -93,7 +96,8 @@ def _tier(tier_id: str, label: str, min_memory_mib: int, summary: str, model: St
         recipe = None
     if recipe is None or not recipe.certified:
         return Tier(tier_id, label, min_memory_mib, False, f"Larger models for {label} cards: measured soon.")
-    return Tier(tier_id, label, min_memory_mib, True, summary, (model,), recipe.system_memory_need())
+    return Tier(tier_id, label, min_memory_mib, True, summary, (model,), recipe.system_memory_need(),
+                int(recipe.memory_mib))
 
 
 TIERS: tuple[Tier, ...] = (
@@ -112,6 +116,12 @@ class Gpu:
     name: str
     memory_mib: int
     driver: str = ""
+    # In use when the check ran (the display, other apps); None when the driver didn't say.
+    used_mib: int | None = None
+
+    @property
+    def free_mib(self) -> int | None:
+        return None if self.used_mib is None else max(0, self.memory_mib - self.used_mib)
 
     @property
     def memory_gb(self) -> int:
@@ -180,6 +190,13 @@ class HardwareCheck:
     # computer's memory can't hold (O105: offered once virtual memory is raised).
     memory: SystemMemory | None = None
     memory_short: tuple[Tier, ...] = ()
+    # O112: the tier Row-Bot recommends, the largest one whose card need fits what the card had free when
+    # checked (the display and other apps use the rest); None when that couldn't be read (then ``tier``).
+    recommended: Tier | None = None
+
+    @property
+    def recommended_tier(self) -> Tier | None:
+        return self.recommended or self.tier
 
     @property
     def can_train(self) -> bool:
@@ -199,8 +216,9 @@ class HardwareCheck:
             return ()  # O105: nothing is offered that this computer's memory can't hold
         fits = [tier for tier in TIERS if tier.certified and tier.min_memory_mib <= self.tier.min_memory_mib]
         found: dict[str, StartingModel] = {}
-        for model in (model for tier in reversed(fits) for model in tier.models):
-            found.setdefault(model.id, model)  # one entry per model: larger tiers train the 9B too
+        first = self.recommended_tier
+        for model in (*(first.models if first else ()), *(model for tier in reversed(fits) for model in tier.models)):
+            found.setdefault(model.id, model)  # the recommendation first; one entry per model
         return tuple(found.values())
 
 
@@ -248,8 +266,12 @@ def _parse(output: str) -> list[Gpu]:
             memory = int(float(parts[1]))
         except ValueError:
             continue
+        try:
+            used = int(float(parts[3])) if len(parts) > 3 else None
+        except ValueError:
+            used = None
         if memory > 0:
-            found.append(Gpu(parts[0][:128], memory, parts[2][:32] if len(parts) > 2 else ""))
+            found.append(Gpu(parts[0][:128], memory, parts[2][:32] if len(parts) > 2 else "", used))
     return found
 
 
@@ -272,9 +294,14 @@ def classify(gpus: Sequence[Gpu], memory: SystemMemory | None = None) -> Hardwar
     best = held[-1]
     short = tuple(tier for tier in certified if tier not in held and tier.min_memory_mib > best.min_memory_mib)
     larger = tuple(tier for tier in fits if not tier.certified and tier.min_memory_mib > best.min_memory_mib)
+    # O112: recommend the largest held tier whose card need fits what the card has free (else the smallest:
+    # it waits for room, and after two nights without it the Personal model view offers the next smaller).
+    free = gpu.free_mib
+    roomy = [tier for tier in held if free is None or not tier.need_mib or tier.need_mib <= free]
+    recommended = (roomy[-1] if roomy else held[0]) if free is not None else None
     if engine_variant(gpu) is None:
-        return HardwareCheck("old_driver", gpu, best, larger, memory, short)
-    return HardwareCheck("gpu", gpu, best, larger, memory, short)
+        return HardwareCheck("old_driver", gpu, best, larger, memory, short, recommended)
+    return HardwareCheck("gpu", gpu, best, larger, memory, short, recommended)
 
 
 class _MemoryStatus(ctypes.Structure):
@@ -438,8 +465,8 @@ def forget_memory_reading() -> None:
 
 
 def training_need_mib(found: HardwareCheck | None = None) -> int | None:
-    """The memory the recipe this computer trains with needs free: its measured need (the 8 GB recipe,
-    8,192 MiB; L2x's larger tiers their measured peak), or None when there is no recipe for it."""
+    """The graphics memory the recipe this computer trains with needs free: its measured peak on the card
+    with a margin (O112), or None when there is no recipe for it."""
 
     from row_bot.learning.training import recipes
 
@@ -502,12 +529,10 @@ def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None
     free = True
     if reading is not None:
         used, total = reading
-        # A recipe for a smaller tier needs only its tier's memory: on a 32 GB card that also drives the
-        # desktop (browsers and apps hold 3-6 GB), the 8 GB recipe trains beside them (L2w).
-        need = TRAINING_FREE_SHARE * total
-        tier = training_need_mib(found)
-        if tier:
-            need = min(need, tier)
+        # The recipe's own need (O112: its measured peak on the card with a margin), never a share of the
+        # card: on a 32 GB card that also drives the desktop (browsers and apps hold 3-6 GB) the 2B trains
+        # beside them (L2w), and a recipe that needs more than is free waits instead of spilling.
+        need = training_need_mib(found) or TRAINING_FREE_SHARE * total
         free = total > 0 and total - used >= need
     with _lock:
         _memory_seen = (now, free)

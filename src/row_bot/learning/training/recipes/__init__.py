@@ -154,7 +154,8 @@ def parse(text: str, *, source: str = "") -> Recipe:
     for key, value in settings.items():
         _number(value, f"settings.{key}")
     for key in ("id", "tier", "title", "starting_model", "method", "evidence", "quantization", "reasoning"):
-        if not isinstance(data[key], str) or not data[key] or len(data[key]) > 512:
+        # The evidence says what was measured, in full (O105, O111); the other fields are short names.
+        if not isinstance(data[key], str) or not data[key] or len(data[key]) > (2048 if key == "evidence" else 512):
             raise RecipeError("invalid_recipe", key)
     if data["method"] not in METHODS or data["quantization"] not in QUANTIZATIONS or data["reasoning"] != "off":
         raise RecipeError("invalid_recipe", "method, quantization or reasoning")
