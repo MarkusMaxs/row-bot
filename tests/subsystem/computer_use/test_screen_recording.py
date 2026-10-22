@@ -76,7 +76,8 @@ def screen(service, tmp_path, monkeypatch):  # noqa: F811
                             ffmpeg=ffmpeg_runtime.Ffmpeg(executable="C:/Tools/ffmpeg/ffmpeg.exe", source="path",
                                                          version="7.1", licence="GPL version 3 or later"))
     monkeypatch.setattr(ffmpeg_runtime, "find", lambda: state.ffmpeg)
-    monkeypatch.setattr("row_bot.agent.get_current_thread_id", lambda: state.chat)
+    monkeypatch.setattr("row_bot.agent.get_active_runtime_context",
+                        lambda: {"thread_id": state.chat, "runtime_surface": "normal_chat"})
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: state.mode)
     monkeypatch.setattr("langgraph.types.interrupt", lambda payload: state.asked.append(payload) or state.answer)
     monkeypatch.setattr("row_bot.computer_use.readiness.readiness",
@@ -90,10 +91,9 @@ def screen(service, tmp_path, monkeypatch):  # noqa: F811
 
 
 def _computer(action: str, **kwargs) -> str:
-    from row_bot.tools.computer_use_tool import ComputerUseTool
+    from row_bot.tools.computer_use_tool import computer_record
 
-    [tool] = ComputerUseTool().as_langchain_tools()
-    return tool.func(action, **kwargs)
+    return computer_record({"start_recording": "start", "stop_recording": "stop"}.get(action, action), **kwargs)
 
 
 @pytest.mark.parametrize("code", [ReadinessCode.NOT_INSTALLED, ReadinessCode.DISCLOSURE_REQUIRED,
@@ -217,12 +217,9 @@ def test_hands_off_records_without_asking(screen):
 
 def test_the_recording_tools_stay_out_of_the_models_and_generic_paths(screen):
     client = CuaClient("fake-cua-driver.exe", transport_factory=lambda *_args: screen.transport)
-    with pytest.raises(PermissionError):
-        client._call("start_recording", {"output_dir": "/tmp/x"})
-    with pytest.raises(PermissionError):
-        client.call_reviewed_driver_tool("stop_recording")
-    with pytest.raises(ValueError, match="Unsupported Computer action"):
-        client.call_action("start_recording")
+    for tool in ("start_recording", "stop_recording"):
+        with pytest.raises(PermissionError):
+            client.call(tool, {"output_dir": "/tmp/x"})
     with pytest.raises(PermissionError):
         client.call_recording("install_ffmpeg", {"confirm": True})
     with pytest.raises(PermissionError):

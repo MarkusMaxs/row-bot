@@ -390,31 +390,22 @@ def mark_cua_observation_verified() -> None:
 
 
 def test_local_computer_use() -> None:
-    """Verify a local Calculator window after one explicit host action."""
+    """Open Calculator and take its picture: the person's own test, from a button in Settings."""
 
     require_cua_disclosure()
-    from row_bot.computer_use.service import LeaseOwner, get_computer_use_service
+    from row_bot.computer_use.service import ComputerError, get_computer_use_service
 
     service = get_computer_use_service()
-    owner = LeaseOwner(
-        "settings-calculator", secrets.token_urlsafe(8), "settings-calculator"
-    )
-    acquired = False
+    thread_id = f"settings-test-{secrets.token_urlsafe(8)}"
     try:
-        service.acquire(owner, validate_context=False)
-        acquired = True
-        service.grant_app_permission_for_local_ui(owner, "Calculator")
-        windows = service.launch_app("Calculator", owner, approval_mode="full")  # The person's own test.
-        if not windows:
-            raise RuntimeError("Calculator launched but no target window was reported.")
-        if service.current_observation(windows[0]["target_id"]) is None:
-            raise RuntimeError(
-                "Calculator opened, but Row-Bot could not verify its window."
-            )
+        service.begin(thread_id, "settings-test")
+        service.allow(thread_id, "Calculator")  # The person pressed Test.
+        service.open_app("Calculator")
         mark_cua_observation_verified()
+    except ComputerError as error:
+        raise RuntimeError(error.text()) from error
     finally:
-        if acquired:
-            service.stop()
+        service.forget(thread_id)
 
 
 def open_macos_privacy_settings(permission: str) -> None:

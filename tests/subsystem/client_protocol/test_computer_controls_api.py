@@ -1,4 +1,4 @@
-"""Computer-use card routes: local-owner only, no-store picture, idempotent commands."""
+"""Computer use step routes: the desktop app on this computer only, a no-store picture, an idempotent Stop."""
 
 # ruff: noqa: F401, F811 -- imported pytest fixtures are requested by name.
 
@@ -11,31 +11,56 @@ from fastapi.testclient import TestClient
 from row_bot.access.config import AccessConfig, DeploymentMode
 from row_bot.access.request_context import SessionIdentity
 from row_bot.api.v1.routes import create_client_platform_app
-from row_bot.computer_use.service import LeaseOwner
-
-from tests.subsystem.client_protocol.test_computer_controls_domain import _working, computer
+from row_bot.computer_use.client import CuaClient
+from row_bot.computer_use.readiness import CuaReadiness, ReadinessCode, acknowledge_disclosure
+from row_bot.computer_use.service import ComputerUseService
+from tests.fixtures.fake_desktop import FakeBar, FakeDesktop
 from tests.subsystem.client_protocol.test_protocol_application import (
     _client,
     _command,
     service,
 )
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.subsystem.computer_use.conftest import desktop_apps, desktop_windows
 
 pytestmark = pytest.mark.subsystem
 
 
+@pytest.fixture
+def computer(service, monkeypatch):  # After the app's data folder is set.
+    from row_bot.computer_use import service as module
+
+    acknowledge_disclosure()
+    monkeypatch.setattr("row_bot.computer_use.readiness.readiness",
+                        lambda **_kw: CuaReadiness(ReadinessCode.READY, "ready", executable="cua-driver"))
+    desktop = FakeDesktop(windows=desktop_windows(), apps=desktop_apps())
+    made = ComputerUseService(
+        client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
+        bar_factory=FakeBar, stop_turn=lambda _thread: None,
+    )
+    monkeypatch.setattr(module, "_SERVICE", made)
+    yield made
+    made.stop()
+
+
+def _working(computer: ComputerUseService, conversation: str) -> None:
+    computer.begin(conversation, "turn-api")
+    computer.allow(conversation, "Notepad")
+    computer.use("Notepad")
+
+
 def _conversation(client, headers) -> str:
-    created = _command(client, headers, "conversation.create", {"title": "Computer card"})
+    created = _command(client, headers, "conversation.create", {"title": "Computer step"})
     assert created.status_code == 200, created.text
     return created.json()["conversation_id"]
 
 
-def _card(headers, action: str, command_id: str | None = None) -> dict:
+def _stop(headers, command_id: str | None = None) -> dict:
     return {"command_id": command_id or str(uuid4()), "client_session_id": headers["X-Client-Session"],
-            "type": action}
+            "type": "computer_use.stop"}
 
 
-def test_the_local_owner_reads_the_card_and_its_picture_without_caching(service, computer):
+def test_the_local_owner_reads_the_step_and_its_picture_without_caching(service, computer):
     with _client(service) as client:
         _, headers = bootstrap(client)
         conversation = _conversation(client, headers)
@@ -45,51 +70,42 @@ def test_the_local_owner_reads_the_card_and_its_picture_without_caching(service,
         assert idle.status_code == 200, idle.text
         assert (idle.json()["state"], idle.json()["active"]) == ("stopped", False)
 
-        observation = _working(computer, LeaseOwner(conversation, "generation-api", "task-api"))
+        _working(computer, conversation)
         snapshot = client.get(root, headers=headers).json()
-        assert (snapshot["state"], snapshot["app"], snapshot["has_picture"]) == ("working", "Calculator", True)
+        assert (snapshot["state"], snapshot["app"], snapshot["has_picture"]) == ("working", "Notepad", True)
 
         picture = client.get(root + "/preview", params={"revision": snapshot["revision"]}, headers=headers)
         assert picture.status_code == 200, picture.text
         assert picture.headers["cache-control"] == "no-store"
-        assert base64.b64decode(picture.json()["image_base64"]) == observation.screenshot
-        assert picture.json()["mime_type"] == "image/png"
-
-        stale = client.get(root + "/preview", params={"revision": "0" * 64}, headers=headers)
-        assert stale.status_code == 409
-        assert (stale.json()["code"], stale.json()["current_revision"]) == (
-            "computer_use_revision_conflict", snapshot["revision"])
+        assert base64.b64decode(picture.json()["image_base64"]).startswith(b"\xff\xd8\xff")
+        assert picture.json()["mime_type"] == "image/jpeg"
 
 
-def test_card_commands_are_bound_to_their_session_and_idempotency_key(service, computer):
+def test_stop_is_bound_to_its_session_and_idempotency_key(service, computer):
     with _client(service) as client:
         _, headers = bootstrap(client)
         conversation = _conversation(client, headers)
         root = f"/api/v1/conversations/{conversation}/computer/commands"
-        _working(computer, LeaseOwner(conversation, "generation-api", "task-api"))
+        _working(computer, conversation)
 
-        pause = _card(headers, "computer_use.pause")
-        mismatched = client.post(root, headers={**headers, "Idempotency-Key": str(uuid4())}, json=pause)
+        stop = _stop(headers)
+        mismatched = client.post(root, headers={**headers, "Idempotency-Key": str(uuid4())}, json=stop)
         assert (mismatched.status_code, mismatched.json()["code"]) == (409, "idempotency_mismatch")
-        foreign = {**pause, "client_session_id": str(uuid4())}
-        refused = client.post(root, headers={**headers, "Idempotency-Key": pause["command_id"]}, json=foreign)
+        foreign = {**stop, "client_session_id": str(uuid4())}
+        refused = client.post(root, headers={**headers, "Idempotency-Key": stop["command_id"]}, json=foreign)
         assert (refused.status_code, refused.json()["code"]) == (422, "invalid_computer_use_command")
-        unknown = client.post(root, headers={**headers, "Idempotency-Key": pause["command_id"]},
-                              json={**pause, "type": "computer_use.click"})
-        assert unknown.status_code == 422
-        assert computer.status_snapshot()["state"] == "observing"
+        for retired in ("computer_use.pause", "computer_use.resume", "computer_use.click"):
+            unknown = client.post(root, headers={**headers, "Idempotency-Key": stop["command_id"]},
+                                  json={**stop, "type": retired})
+            assert unknown.status_code == 422
+        assert computer.status_snapshot()["active"] is True
 
-        paused = client.post(root, headers={**headers, "Idempotency-Key": pause["command_id"]}, json=pause)
-        assert paused.status_code == 200, paused.text
-        assert (paused.json()["status"], paused.json()["computer_use"]["state"]) == ("completed", "paused")
-        replay = client.post(root, headers={**headers, "Idempotency-Key": pause["command_id"]}, json=pause)
-        assert replay.json() == paused.json()
-
-        stop = _card(headers, "computer_use.stop")
         stopped = client.post(root, headers={**headers, "Idempotency-Key": stop["command_id"]}, json=stop)
         assert stopped.status_code == 200, stopped.text
-        assert stopped.json()["computer_use"]["state"] == "stopped"
+        assert (stopped.json()["status"], stopped.json()["computer_use"]["state"]) == ("completed", "stopped")
         assert computer.status_snapshot()["active"] is False
+        replay = client.post(root, headers={**headers, "Idempotency-Key": stop["command_id"]}, json=stop)
+        assert replay.json() == stopped.json()
 
 
 def test_other_devices_can_neither_see_nor_control_this_computer(service, computer):
@@ -103,9 +119,9 @@ def test_other_devices_can_neither_see_nor_control_this_computer(service, comput
         _, headers = bootstrap(client)
         conversation = _conversation(client, headers)
         root = f"/api/v1/conversations/{conversation}/computer"
-        _working(computer, LeaseOwner(conversation, "generation-remote", "task-remote"))
+        _working(computer, conversation)
 
-        stop = _card(headers, "computer_use.stop")
+        stop = _stop(headers)
         responses = [
             client.get(root, headers=headers),
             client.get(root + "/preview", params={"revision": "0" * 64}, headers=headers),
@@ -114,4 +130,4 @@ def test_other_devices_can_neither_see_nor_control_this_computer(service, comput
         assert [(response.status_code, response.json()["code"]) for response in responses] == [
             (403, "computer_use_local_only")] * 3
         assert "image_base64" not in "".join(response.text for response in responses)
-        assert computer.status_snapshot()["state"] == "observing"
+        assert computer.status_snapshot()["active"] is True

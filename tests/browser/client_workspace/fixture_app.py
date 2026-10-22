@@ -867,7 +867,7 @@ def _s3_stream(text: str, config: dict):
         elif "screen recording" in text:
             problem = setup_problem()
             assert problem.startswith("Recording your screen needs Computer use set up."), problem
-            steps = [("computer_use", {"action": "start_recording"}, lambda: (problem, []))]
+            steps = [("computer_record", {"action": "start"}, lambda: (problem, []))]
             final = ("I can't record your screen yet: that needs Computer use set up. Open **Settings › System › "
                      "Browser and computer use**, turn on Computer use and finish its setup, then ask me again. "
                      "I can record Row-Bot's own browser without it.")

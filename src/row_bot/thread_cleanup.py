@@ -282,9 +282,9 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
     try:
         from row_bot.computer_use.service import get_computer_use_service
 
-        get_computer_use_service().close_for_thread(thread_id)
+        get_computer_use_service().forget(thread_id)  # Its session, and the apps it was allowed to use.
     except Exception:
-        logger.debug("Could not clear Computer Use state for %s", thread_id, exc_info=True)
+        logger.debug("Could not clear computer use state for %s", thread_id, exc_info=True)
 
     return active
 

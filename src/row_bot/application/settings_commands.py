@@ -802,7 +802,7 @@ def _run_system_action(field: str) -> dict[str, str] | None:
         test_local_computer_use()
         return {
             "code": "ready",
-            "message": "Computer Use test passed.",
+            "message": "Computer use works: Row-Bot opened Calculator and saw its window.",
             "remediation": "",
         }
     if field == "computer_use.use_managed_runtime":

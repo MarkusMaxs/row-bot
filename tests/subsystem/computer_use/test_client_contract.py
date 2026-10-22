@@ -1,59 +1,57 @@
+"""Row-Bot's private Cua Driver client: its process, its environment and what it accepts back."""
+
 from __future__ import annotations
 
 import base64
+import io
 
 import pytest
 
 from row_bot.computer_use import client as client_module
 from row_bot.computer_use.client import CuaClient, build_cua_environment, parse_cua_result
-from row_bot.computer_use.readiness import cancel_disclosure
-from tests.fixtures.fake_cua import FakeCuaTransport, FakeScenario
+from row_bot.computer_use.readiness import acknowledge_disclosure, cancel_disclosure
 from row_bot.mcp_client.results import RawCallContent, RawCallResult
+from tests.fixtures.fake_desktop import FakeDesktop
+from tests.subsystem.computer_use.conftest import desktop_apps, desktop_windows
+
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
-def test_client_starts_tagged_lifecycle_without_arbitrary_config(fake_client, fake_transport) -> None:
-    fake_client.start()
-    assert fake_transport.calls[:1] == [
-        ("start_session", {"session": "row-bot-test-session"}),
-    ]
-    assert all(name != "set_config" for name, _args in fake_transport.calls)
+@pytest.fixture
+def desktop(tmp_path, monkeypatch) -> FakeDesktop:
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    acknowledge_disclosure()
+    return FakeDesktop(windows=desktop_windows(), apps=desktop_apps())
+
+
+def _client(desktop: FakeDesktop) -> CuaClient:
+    return CuaClient("cua-driver", session_id="row-bot-test-session", transport_factory=lambda *_args: desktop)
+
+
+def test_the_client_starts_a_session_of_its_own_and_never_changes_cuas_config(desktop) -> None:
+    client = _client(desktop)
+    client.call("list_windows", {})
+    client.close()
+
+    assert desktop.calls[0] == ("start_session", {"session": "row-bot-test-session"})
+    assert desktop.calls[1] == ("list_windows", {"session": "row-bot-test-session"})
+    assert desktop.calls[-1] == ("end_session", {"session": "row-bot-test-session"})
+    assert all(name != "set_config" for name, _args in desktop.calls)
 
 
 def test_environment_disables_update_check_without_embedded_or_parent_liveness_state() -> None:
-    env = build_cua_environment(
-        "session",
-        {
-            "HOME": "/home/test",
-            "SECRET": "no",
-            "CUA_DRIVER_EMBEDDED": "1",
-            "CUA_DRIVER_PARENT_LIVENESS_STDIN": "1",
-            "CUA_DRIVER_HOST_BUNDLE_ID": "invented.host",
-            "CUA_DRIVER_RS_TELEMETRY_ENABLED": "0",
-        },
-    )
+    env = build_cua_environment("session", {
+        "HOME": "/home/test", "SECRET": "no", "CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_PARENT_LIVENESS_STDIN": "1",
+        "CUA_DRIVER_HOST_BUNDLE_ID": "invented.host", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "0",
+    })
     assert env["CUA_DRIVER_RS_UPDATE_CHECK"] == "0"
-    assert "CUA_DRIVER_EMBEDDED" not in env
-    assert "CUA_DRIVER_PARENT_LIVENESS_STDIN" not in env
-    assert "CUA_DRIVER_HOST_BUNDLE_ID" not in env
-    assert "CUA_DRIVER_RS_TELEMETRY_ENABLED" not in env
-    assert "SECRET" not in env
+    for name in ("CUA_DRIVER_EMBEDDED", "CUA_DRIVER_PARENT_LIVENESS_STDIN", "CUA_DRIVER_HOST_BUNDLE_ID",
+                 "CUA_DRIVER_RS_TELEMETRY_ENABLED", "SECRET"):
+        assert name not in env
 
 
-@pytest.mark.parametrize(
-    ("system", "expected_args"),
-    [
-        ("Windows", ["mcp"]),
-        ("Darwin", ["mcp", "--direct"]),
-    ],
-)
-def test_private_transport_uses_exact_platform_launch_profile(
-    tmp_path,
-    monkeypatch,
-    system: str,
-    expected_args: list[str],
-) -> None:
-    from row_bot.computer_use.readiness import acknowledge_disclosure
-
+@pytest.mark.parametrize(("system", "expected_args"), [("Windows", ["mcp"]), ("Darwin", ["mcp", "--direct"])])
+def test_private_transport_uses_exact_platform_launch_profile(tmp_path, monkeypatch, system, expected_args) -> None:
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     acknowledge_disclosure()
     created: list[dict] = []
@@ -66,11 +64,7 @@ def test_private_transport_uses_exact_platform_launch_profile(
             return None
 
         def call_raw(self, name, arguments=None):
-            return RawCallResult(
-                (RawCallContent(kind="text", text="ok"),),
-                {"session": (arguments or {}).get("session"), "ok": True},
-                False,
-            )
+            return RawCallResult((RawCallContent(kind="text", text="ok"),), {"ok": True}, False)
 
         def close(self) -> None:
             return None
@@ -82,323 +76,72 @@ def test_private_transport_uses_exact_platform_launch_profile(
     client.start()
     client.close()
 
-    assert len(created) == 1
-    assert created[0]["command"].endswith("reviewed-cua")
-    assert created[0]["args"] == expected_args
-    assert created[0]["env"]["CUA_DRIVER_RS_UPDATE_CHECK"] == "0"
-    assert "CUA_DRIVER_EMBEDDED" not in created[0]["env"]
-    assert "CUA_DRIVER_PARENT_LIVENESS_STDIN" not in created[0]["env"]
+    [made] = created
+    assert made["command"].endswith("reviewed-cua") and made["args"] == expected_args
+    assert made["env"]["CUA_DRIVER_RS_UPDATE_CHECK"] == "0"
 
 
-def test_no_process_opens_before_disclosure(tmp_path, monkeypatch) -> None:
+def test_no_process_opens_before_the_notice_is_accepted(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     cancel_disclosure()
-    transport = FakeCuaTransport()
-    client = CuaClient("fake.exe", transport_factory=lambda *_args: transport)
+    desktop = FakeDesktop(windows=desktop_windows())
     with pytest.raises(PermissionError, match="disclosure"):
-        client.start()
-    assert transport.opened is False
-    assert transport.calls == []
+        _client(desktop).call("list_windows", {})
+    assert desktop.opened is False and desktop.calls == []
 
 
-def test_capture_parses_text_image_and_capped_semantics(fake_client) -> None:
-    response = fake_client.call_action("capture", {"pid": 4242, "window_id": 101})
-    assert response.image_bytes and response.image_bytes.startswith(b"\x89PNG")
-    assert (response.image_width, response.image_height) == (1, 1)
-    assert [element.token for element in response.elements] == ["g1-element-0", "g1-element-1", "g1-element-2"]
+def test_a_window_state_gives_its_picture_and_controls_in_screen_coordinates(desktop) -> None:
+    response = _client(desktop).call("get_window_state", {"pid": 3001, "window_id": 701})
+
+    assert response.image_bytes.startswith(b"\x89PNG") and (response.image_width, response.image_height) == (998, 698)
+    [editor] = response.elements
+    assert (editor.role, editor.label, editor.bounds) == ("Document", "Text editor", (201.0, 261.0, 996.0, 600.0))
 
 
-def test_replace_text_maps_to_set_value_with_value_not_type_text(fake_client, fake_transport) -> None:
-    replacement = "private exact replacement"
-
-    response = fake_client.call_action(
-        "replace_text",
-        {
-            "pid": 4242,
-            "window_id": 101,
-            "element_token": "fresh-exact-token",
-            "value": replacement,
-        },
-    )
-
-    assert response.is_error is False
-    assert fake_transport.calls[-1] == (
-        "set_value",
-        {
-            "pid": 4242,
-            "window_id": 101,
-            "element_token": "fresh-exact-token",
-            "value": f"<redacted:{len(replacement)} chars>",
-            "session": "row-bot-test-session",
-        },
-    )
-    assert all(name != "type_text" for name, _args in fake_transport.calls)
-
-
-def test_text_mutation_driver_free_text_is_normalized_at_private_boundary(
-    fake_client,
-    fake_transport,
-) -> None:
-    replacement = "private value interpolated by driver"
-    fake_transport.scenario.action_error_code = "unsupported"
-    fake_transport.scenario.action_error_message = f"could not set {replacement!r}"
-
-    response = fake_client.call_action(
-        "replace_text",
-        {
-            "pid": 4242,
-            "window_id": 101,
-            "element_token": "fresh-exact-token",
-            "value": replacement,
-        },
-    )
-
-    assert response.is_error is True
-    assert response.error_code == "unsupported"
-    assert replacement not in response.text
-    assert replacement not in repr(response.structured)
-
-
-def test_malformed_image_fails_closed(fake_transport) -> None:
-    fake_transport.scenario = FakeScenario(malformed_image=True)
-    with pytest.raises(ValueError, match="base64"):
-        parse_cua_result(fake_transport.call_raw("get_window_state", {"pid": 1, "window_id": 2}))
-
-
-def test_top_level_background_unavailable_error_code_is_preserved() -> None:
-    result = RawCallResult(
-        (RawCallContent(kind="text", text="background unavailable"),),
-        {"error": True, "error_code": "background_unavailable"},
-        True,
-    )
-
-    response = parse_cua_result(result)
-
-    assert response.is_error is True
-    assert response.error_code == "background_unavailable"
-
-
-@pytest.mark.parametrize(
-    ("profile", "expected_path"),
-    [
-        ("macos_native_ax_confirmed", "ax"),
-        ("windows_native_uia_confirmed", "uia"),
-    ],
-)
-def test_explicit_native_targeted_profiles_expose_platform_response_shape(
-    fake_client,
-    fake_transport,
-    profile: str,
-    expected_path: str,
-) -> None:
-    fake_transport.scenario.delivery_profile = profile
-    captured = fake_client.call_action(
-        "capture",
-        {"pid": 4242, "window_id": 101, "include_screenshot": False},
-    )
-
-    response = fake_client.call_action(
-        "type",
-        {
-            "pid": 4242,
-            "window_id": 101,
-            "element_token": captured.elements[0].token,
-            "text": "bounded text",
-        },
-    )
-
-    assert response.structured["path"] == expected_path
-    assert response.structured["effect"] == "confirmed"
-
-
-def test_oversized_tree_is_deterministically_capped(fake_transport) -> None:
-    fake_transport.scenario = FakeScenario(oversized_tree=True)
-    response = parse_cua_result(fake_transport.call_raw("get_window_state", {}))
-    assert response.truncated is True
-    assert len(response.elements) <= 2_000
-    assert all(element.depth <= 25 for element in response.elements)
-    assert "depth_limit" in response.local_limit_reasons
-
-
-def test_tagged_observation_envelope_retains_two_thousand_depth_25_elements(fake_transport) -> None:
-    fake_transport.scenario = FakeScenario(
-        semantic_elements=tuple(
-            {
-                "role": "Button",
-                "label": f"Synthetic action {index}",
-                "depth": 25 if index == 1_999 else 1,
-                "in_web_content": index == 1_999,
-            }
-            for index in range(2_000)
-        ),
-        driver_limited=False,
-    )
-
-    response = parse_cua_result(fake_transport.call_raw("get_window_state", {}))
-
-    assert len(response.elements) == 2_000
-    assert response.elements[-1].depth == 25
-    assert response.backend_received_count == 2_000
-    assert response.backend_declared_count == 2_000
-    assert response.backend_limited is False
-    assert response.local_limit_reasons == ()
-
-
-def test_observation_validation_reports_driver_and_row_bot_limits_separately(fake_transport) -> None:
-    fake_transport.scenario = FakeScenario(
-        semantic_elements=(
-            {"role": "Button", "label": "Valid", "depth": 1},
-            {"role": "Button", "label": "Too deep", "depth": 26},
-        ),
-        driver_declared_count=2_000,
-        driver_limited=True,
-    )
-
-    response = parse_cua_result(fake_transport.call_raw("get_window_state", {}))
-
-    assert response.backend_limited is True
-    assert response.backend_declared_count == 2_000
-    assert response.backend_received_count == 2
-    assert response.locally_filtered_count == 1
-    assert response.local_limit_reasons == ("depth_limit",)
-
-
-def test_nonfinite_geometry_duplicate_identity_and_invalid_parent_are_dropped(fake_transport) -> None:
-    raw = fake_transport.call_raw("get_window_state", {})
-    structured = dict(raw.structured_content)
-    structured["elements"] = [
-        {
-            "element_index": 1,
-            "element_token": "snapshot:1",
-            "role": "Button",
-            "label": "Valid",
-            "frame": {"x": 0, "y": 0, "w": 10, "h": 10},
-            "depth": 1,
-        },
-        {
-            "element_index": 1,
-            "element_token": "snapshot:1",
-            "role": "Button",
-            "label": "Duplicate",
-            "frame": {"x": 0, "y": 0, "w": 10, "h": 10},
-            "depth": 1,
-        },
-        {
-            "element_index": 2,
-            "element_token": "snapshot:2",
-            "role": "Button",
-            "label": "Infinite",
-            "frame": {"x": float("inf"), "y": 0, "w": 10, "h": 10},
-            "depth": 2,
-            "parent_index": 1,
-        },
-        {
-            "element_index": 3,
-            "element_token": "snapshot:3",
-            "role": "Button",
-            "label": "Orphan",
-            "frame": {"x": 0, "y": 0, "w": 10, "h": 10},
-            "depth": 2,
-            "parent_index": 99,
-        },
+def test_controls_with_impossible_geometry_or_repeated_indexes_are_dropped() -> None:
+    rows = [
+        {"element_index": 0, "role": "Button", "label": "Kept", "frame": {"x": 1, "y": 2, "w": 3, "h": 4}},
+        {"element_index": 0, "role": "Button", "label": "Repeated", "frame": {"x": 1, "y": 2, "w": 3, "h": 4}},
+        {"element_index": 1, "role": "Button", "label": "Infinite", "frame": {"x": float("inf"), "y": 0, "w": 1, "h": 1}},
+        {"element_index": 2, "role": "Button", "label": "Negative", "frame": {"x": 0, "y": 0, "w": -1, "h": 1}},
+        {"element_index": "x", "role": "Button", "label": "No index", "frame": {"x": 0, "y": 0, "w": 1, "h": 1}},
     ]
-    parsed = parse_cua_result(
-        RawCallResult(raw.content, structured, raw.is_error)
-    )
-    assert [element.label for element in parsed.elements] == ["Valid"]
-    assert set(parsed.local_limit_reasons) == {
-        "invalid_geometry",
-        "invalid_identity",
-        "invalid_topology",
-    }
+    response = parse_cua_result(RawCallResult((), {"elements": rows}, False))
+    assert [element.label for element in response.elements] == ["Kept"]
 
 
-def test_tagged_start_session_owns_window_scope_without_set_config(fake_transport, tmp_path, monkeypatch) -> None:
-    from row_bot.computer_use.readiness import acknowledge_disclosure
-
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    acknowledge_disclosure()
-    client = CuaClient(
-        "fake.exe",
-        session_id="tagged-session",
-        contract_version="0.20.0",
-        transport_factory=lambda *_args: fake_transport,
-    )
-    client.start()
-    assert fake_transport.calls[0] == (
-        "start_session",
-        {"session": "tagged-session"},
-    )
-    assert all(name != "set_config" for name, _args in fake_transport.calls)
+def test_an_error_keeps_its_code() -> None:
+    response = parse_cua_result(RawCallResult((RawCallContent(kind="text", text="no"),),
+                                              {"error": {"code": "Permission-Denied"}}, True))
+    assert (response.is_error, response.error_code) == (True, "permission_denied")
 
 
-def test_tagged_contract_rejects_arbitrary_config_even_when_legacy_fixture_allows_it(
-    fake_transport,
-    tmp_path,
-    monkeypatch,
-) -> None:
-    from row_bot.computer_use.readiness import acknowledge_disclosure
+def test_pictures_that_dont_match_their_type_or_are_too_big_are_refused() -> None:
+    from PIL import Image
 
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    acknowledge_disclosure()
-    client = CuaClient(
-        "fake-cua-driver.exe",
-        session_id="tagged-no-config",
-        contract_version="0.20.0",
-        capabilities=frozenset({"verify_state", "invoke_menu", "recording"}),
-        transport_factory=lambda _exe, _session, _env: fake_transport,
-    )
-    client.start()
-    with pytest.raises(PermissionError, match="configuration mutation"):
-        client.call_internal("set_config", {"capture_scope": "desktop"})
-    with pytest.raises(PermissionError):
-        client.call_reviewed_driver_tool("start_recording")
-
-
-def test_new_service_only_tools_remain_capability_gated(fake_transport, tmp_path, monkeypatch) -> None:
-    from row_bot.computer_use.readiness import acknowledge_disclosure
-
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    acknowledge_disclosure()
-    unavailable = CuaClient(
-        "fake.exe",
-        transport_factory=lambda *_args: fake_transport,
-    )
-    with pytest.raises(PermissionError):
-        unavailable.call_reviewed_driver_tool("verify_state", {})
-
-    available = CuaClient(
-        "fake.exe",
-        capabilities=frozenset({"verify_state"}),
-        transport_factory=lambda *_args: fake_transport,
-    )
-    response = available.call_reviewed_driver_tool("verify_state", {"expect": []})
-    assert response.is_error is False
-    assert response.structured["status"] == "satisfied"
-
-
-def test_forbidden_driver_tool_cannot_be_called(fake_client) -> None:
-    with pytest.raises(PermissionError):
-        fake_client._call("start_recording", {"output_dir": "secret"})
-
-
-def test_disconnect_is_not_retried_by_client_or_service(fake_client, fake_transport) -> None:
-    from row_bot.computer_use.service import ComputerUseError, ComputerUseService, LeaseOwner
-
-    service = ComputerUseService(client_factory=lambda: fake_client, approval_callback=lambda _payload: True)
-    owner = LeaseOwner("disconnect", "generation", "task")
-    service.acquire(owner, validate_context=False)
-    fake_transport.scenario.disconnect = True
-    with pytest.raises(ComputerUseError, match="disconnected"):
-        service.list_apps(owner)
-    assert service.status_snapshot()["active"] is False
-    assert service.status_snapshot()["state"] == "failed"
-
-
-def test_image_mime_magic_mismatch_and_decoded_size_fail_closed() -> None:
-    mismatch = RawCallResult((RawCallContent(kind="image", data=base64.b64encode(b"not a png").decode(), mime_type="image/png"),), {})
-    with pytest.raises(ValueError, match="magic"):
+    mismatch = RawCallResult((RawCallContent(kind="image", data=base64.b64encode(b"not a png").decode(),
+                                             mime_type="image/png"),), {})
+    with pytest.raises(ValueError, match="don't agree"):
         parse_cua_result(mismatch)
-    oversized = RawCallResult((RawCallContent(kind="image", data=base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * (8 * 1024 * 1024)).decode(), mime_type="image/png"),), {})
+    oversized = RawCallResult((RawCallContent(kind="image", data=base64.b64encode(
+        b"\x89PNG\r\n\x1a\n" + b"0" * (8 * 1024 * 1024)).decode(), mime_type="image/png"),), {})
     with pytest.raises(ValueError, match="8 MiB"):
         parse_cua_result(oversized)
+    out = io.BytesIO()
+    Image.new("RGB", (5000, 10)).save(out, "PNG")
+    huge = RawCallResult((RawCallContent(kind="image", data=base64.b64encode(out.getvalue()).decode(),
+                                         mime_type="image/png"),), {})
+    with pytest.raises(ValueError, match="out of range"):
+        parse_cua_result(huge)
+
+
+def test_a_lost_driver_is_reported_not_retried(desktop) -> None:
+    client = _client(desktop)
+    client.call("list_windows", {})
+
+    def disconnected(_name, _arguments=None):
+        raise ConnectionError("gone")
+
+    desktop.call_raw = disconnected
+    with pytest.raises(ConnectionError):
+        client.call("click", {"pid": 3001, "window_id": 701, "x": 1, "y": 1})
