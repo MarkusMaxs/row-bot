@@ -121,8 +121,30 @@ def write_state(folder: Path, state: VersionState) -> VersionState:
     return state
 
 
-def latest_state(root: Path | None = None) -> VersionState | None:
-    """The newest version's state (the Personal model view follows it)."""
+def couldnt_start(state: VersionState | None) -> bool:
+    """A version its runtime couldn't start (a failed load, probe or tool turn) and that was never ready.
+    It stays listed with Try again, Change where it runs and Delete, but it doesn't hold up the next
+    version, and what it was trained on doesn't count as trained (it may have been trained another way,
+    as the preview's first pilot was). A runtime that isn't there yet (``waiting_for_you``) isn't this."""
+
+    return state is not None and state.phase == RUNTIME_FAILED and not state.verified_at
+
+
+def holds_back(job: Any, root: Path | None = None) -> bool:
+    """Whether the unsettled ``job`` keeps the next version from being planned: every one does, except a
+    finished run whose version couldn't start."""
+
+    if job is None:
+        return False
+    if job.state != "evaluating" or not job.version:
+        return True
+    state = read_state(version_dir(int(job.version), root))
+    return not (state is not None and state.job_id == job.id and couldnt_start(state))
+
+
+def latest_state(root: Path | None = None, *, started: bool = False) -> VersionState | None:
+    """The newest version's state (the Personal model view follows it); with ``started``, the newest
+    one that didn't fail to start (what new examples are counted against)."""
 
     folder = versions_dir(root)
     if not folder.is_dir():
@@ -131,15 +153,16 @@ def latest_state(root: Path | None = None) -> VersionState | None:
     for entry in folder.iterdir():
         if entry.is_dir() and entry.name.startswith("v") and entry.name[1:].isdigit():
             state = read_state(entry)
-            if state is not None:
+            if state is not None and not (started and couldnt_start(state)):
                 found.append(state)
     return max(found, key=lambda item: item.version) if found else None
 
 
 def trained_example_ids(root: Path | None = None) -> set[str]:
-    """The examples the newest version was trained on (ids only), to count what is new since."""
+    """The examples the newest version was trained on (ids only), to count what is new since. A version
+    that couldn't start doesn't count."""
 
-    state = latest_state(root)
+    state = latest_state(root, started=True)
     if state is None:
         return set()
     try:

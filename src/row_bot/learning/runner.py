@@ -165,7 +165,8 @@ class LearningRunner:
             return RunnerStatus("nothing_to_do", "no_data"), None
         from row_bot.learning.training import releases
 
-        if releases.latest_state(self._root) is not None and summary.new_examples < self.planner.recipe().min_new_examples:
+        if (releases.latest_state(self._root, started=True) is not None
+                and summary.new_examples < self.planner.recipe().min_new_examples):
             return RunnerStatus("trained", "up_to_date"), None
         return RunnerStatus("nothing_to_do", "planning"), None
 
@@ -177,6 +178,11 @@ class LearningRunner:
             return RunnerStatus("paused")
         supervisor = self.supervisor
         job = supervisor.jobs.current() if supervisor.jobs.store.exists() else None
+        if job is not None and job.state == "evaluating":
+            from row_bot.learning.training import releases
+
+            if not releases.holds_back(job, self._root):
+                job = None  # its version couldn't start: the next one is planned (it stays listed)
         if supervisor.training() and (job is None or job.state in jobs_module.LIVE):
             return RunnerStatus("training")
         engine_ready = supervisor.engine.ready()
