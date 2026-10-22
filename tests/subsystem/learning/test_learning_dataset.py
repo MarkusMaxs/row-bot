@@ -314,5 +314,5 @@ def test_the_summary_counts_examples_needed_and_new_since_the_last_version(work,
 
     summary = dataset.summarize(compiled, recipe, trained_ids=trained, at=5.0)
 
-    assert (summary.examples, summary.needed, summary.new_examples, summary.enough) == (3, 100, 2, False)
+    assert (summary.examples, summary.needed, summary.new_examples, summary.enough) == (3, 90, 2, False)
     assert summary.dataset_id == compiled.id and len(ids) == 3

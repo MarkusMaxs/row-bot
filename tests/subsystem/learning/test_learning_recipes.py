@@ -32,6 +32,9 @@ def test_every_shipped_recipe_reads_and_the_measured_tiers_are_certified():
     for recipe in found.values():
         if recipe.certified:  # measured with a gradient-norm and loss check (O111), its words say so
             assert "gradient norms" in recipe.evidence and "measured on an RTX" in recipe.evidence
+            # O97/O114: 90 rows in the serving shape (imported ones count once rendered, O113) is the smallest
+            # set three passes were measured to help.
+            assert recipe.min_examples == 90
 
 
 def test_a_computer_trains_with_the_best_certified_recipe_its_card_fits():

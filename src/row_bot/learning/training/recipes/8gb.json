@@ -23,7 +23,7 @@
   },
   "epochs": 3,
   "checkpoint_every": 10,
-  "min_examples": 100,
+  "min_examples": 90,
   "min_new_examples": 50,
   "validation_share": 0.1,
   "serve_context": 32768,
