@@ -358,6 +358,12 @@ def injection_problems(text: str) -> list[str]:
     return found
 
 
+def learning_draft(proposal: dict[str, Any]) -> bool:
+    """A change Learning drafted: it is shown, tested and used in Learning, never in the other lists."""
+
+    return isinstance(_safe_payload(proposal.get("payload")).get("learning"), dict)
+
+
 def learning_untested(proposal: dict[str, Any]) -> bool:
     """A change Learning drafted that hasn't passed its tests yet: never applied (L3b tests and uses it)."""
 
@@ -1870,7 +1876,7 @@ def review_skill_library_dry_run(*, create_proposals: bool = True) -> dict[str, 
 
 
 def evolution_summary() -> str:
-    proposals = list_proposals()
+    proposals = [proposal for proposal in list_proposals() if not learning_draft(proposal)]
     runs = list_action_runs(limit=8)
     reports = list_curator_reports(limit=3)
     active = [p for p in proposals if p.get("status") not in TERMINAL_PROPOSAL_STATUSES]

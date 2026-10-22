@@ -208,6 +208,8 @@ def test_learning_drafts_are_never_applied_or_listed_as_skill_suggestions_before
 
     listed, _revision = skill_commands._proposal_store()
     assert proposal["id"] not in {item["id"] for item in listed}
+    # Nor does its text reach the agent through Row-Bot's own status before it's tested.
+    assert "rota_lookup" not in evolution.evolution_summary()
 
 
 def test_nothing_is_proposed_again_while_open_or_after_a_no_without_new_evidence(work, store, clock):
