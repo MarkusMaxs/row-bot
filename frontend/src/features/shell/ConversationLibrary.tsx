@@ -118,7 +118,30 @@ export type SingleDeleteOutcome =
 /**
  * Delete one conversation with the Library's receipt and recovery rules: an
  * unconfirmed outcome is kept for the Library page to check, never retried.
+ * The server keeps it restorable for a short while (B343), so the notice that
+ * follows can offer Undo (restoreConversation).
  */
+/** Undo a delete the server still holds; throws when it is too late. */
+export async function restoreConversation(
+  controller: Pick<ClientController, 'getSnapshot' | 'command'>,
+  row: Pick<ConversationView, 'id' | 'revision'>,
+): Promise<void> {
+  const session = controller.getSnapshot().handshake?.client_session_id;
+  if (!session) throw { code: 'session_expired' };
+  const key = crypto.randomUUID();
+  await controller.command(
+    row.id,
+    {
+      command_id: key,
+      client_session_id: session,
+      type: 'conversation.restore',
+      expected_revision: row.revision,
+      payload: {},
+    },
+    key,
+  );
+}
+
 export async function deleteOneConversation(
   controller: Pick<ClientController, 'getSnapshot' | 'command'>,
   row: Pick<ConversationView, 'id' | 'revision'>,
@@ -135,7 +158,7 @@ export async function deleteOneConversation(
     client_session_id: session,
     type: 'conversation.delete',
     expected_revision: row.revision,
-    payload: {},
+    payload: { undo: true },
   };
   writePendingRecovery({
     target: row.id,

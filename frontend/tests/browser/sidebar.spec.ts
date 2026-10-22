@@ -438,3 +438,70 @@ test('the conversation library keeps its selection bar in view over a long list 
   await page.keyboard.press('Escape');
   await expect(bar).toHaveCount(0);
 });
+
+test('a chat deleted from the sidebar stays deleted when the page closes while Undo is offered (B343)', async ({
+  context,
+  page,
+}, info) => {
+  await blockFixtureServiceWorkers(context);
+  const headers = {
+    'X-Fixture-Token': process.env.ROW_BOT_BROWSER_CONTROL_TOKEN!,
+    Origin: new URL(process.env.ROW_BOT_BROWSER_BASE_URL!).origin,
+  };
+  const title = `Undo journey ${info.project.name} ${info.retry}`;
+  expect(
+    (
+      await page.request.post(
+        `/__p3_fixture/named-conversation/${encodeURIComponent(title)}`,
+        { headers },
+      )
+    ).ok(),
+  ).toBe(true);
+  const openSidebar = async (target: typeof page) => {
+    await target.goto('/app-v2/');
+    await expect(target.locator('.connection-status.connected')).toHaveText(
+      'Connected',
+    );
+    const nav = target.getByRole('navigation', {
+      name: 'Workspace navigation',
+      exact: true,
+    });
+    if (!(await nav.isVisible()))
+      await target
+        .getByRole('button', { name: 'Toggle navigation', exact: true })
+        .click();
+    await expect(
+      nav.getByRole('button', { name: 'New chat', exact: true }),
+    ).toBeVisible();
+    return nav;
+  };
+  const nav = await openSidebar(page);
+  await expect(
+    nav.getByRole('button', { name: title, exact: true }),
+  ).toBeVisible();
+  await nav
+    .getByRole('button', { name: `Actions for ${title}`, exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: 'Delete…', exact: true }).click();
+  await page
+    .getByRole('alertdialog')
+    .getByRole('button', { name: 'Delete conversation', exact: true })
+    .click();
+  // Notices wait behind the phone's navigation sheet.
+  if (info.project.use.viewport!.width < 1024)
+    await page.keyboard.press('Escape');
+  const undo = page
+    .locator('.toast', { hasText: `Deleted '${title}'.` })
+    .getByRole('button', { name: 'Undo', exact: true });
+  await expect(undo).toBeVisible();
+  // Close the page while Undo is still on offer, then come back.
+  await page.close();
+  const again = await context.newPage();
+  const navAgain = await openSidebar(again);
+  await expect(
+    navAgain.getByRole('button', { name: 'New chat', exact: true }),
+  ).toBeVisible();
+  await expect(
+    navAgain.getByRole('button', { name: title, exact: true }),
+  ).toHaveCount(0);
+});

@@ -143,7 +143,38 @@ describe('tool activity', () => {
     // An app's tool reads as a verb only when its title begins with one.
     const app = { item_id: 'mcp:x', name: 'GitHub', icon: 'letter:G' };
     expect(approvalQuestion('mcp_x', { ...app, tool: 'Get commit' })).toBe(
-      'Allow GitHub to get commit?',
+      'Allow GitHub to get a commit?',
+    );
+    expect(approvalQuestion('mcp_x', { ...app, tool: 'List commits' })).toBe(
+      'Allow GitHub to list commits?',
+    );
+    expect(approvalQuestion('mcp_x', { ...app, tool: 'Get data' })).toBe(
+      'Allow GitHub to get data?',
+    );
+    expect(
+      approvalQuestion('mcp_x', { ...app, tool: 'Add issue comment' }),
+    ).toBe('Allow GitHub to add issue comment?');
+    // The server names an app tool's app; one it can't reads in words, never "MCP" or its raw name, and
+    // never guesses an app (two connections can make one name) (B388).
+    expect(
+      approvalQuestion('mcp_stripe_create_product', {
+        ...app,
+        name: 'Stripe',
+        tool: 'Create product',
+      }),
+    ).toBe('Allow Stripe to create a product?');
+    expect(approvalQuestion('mcp_stripe_create_product')).toBe(
+      'Allow “Stripe create product”?',
+    );
+    expect(approvalAction('mcp_stripe_create_product')).toBe(
+      'Stripe create product',
+    );
+    // Its step row too, never "Running MCP stripe create product" (B391).
+    expect(stepVerb('mcp_stripe_create_product', 'pending')).toBe(
+      'Running stripe create product',
+    );
+    expect(stepVerb('mcp_stripe_create_product', 'failed')).toBe(
+      'Stripe create product failed',
     );
     expect(
       approvalQuestion('mcp_x', { ...app, name: 'Counter', tool: 'Counter' }),
