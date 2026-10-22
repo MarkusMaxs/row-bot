@@ -24,7 +24,9 @@ def test_the_settings_test_opens_calculator_as_the_persons_own_action(tmp_path, 
         3101, 801, "ApplicationFrameHost.exe", "Calculator", (100, 100, 400, 600),
         controls=[FakeControl("Button", "Seven", (20, 300, 80, 60))])
     service = ComputerUseService(client_factory=lambda: CuaClient("cua", transport_factory=lambda *_a: desktop),
-                                 bar_factory=FakeBar, stop_turn=lambda _thread: None)
+                                 bar_factory=FakeBar, stop_turn=lambda _thread: None,
+                                 window_display=desktop.window_display,
+                                 cursor_position=desktop.cursor_position)
     monkeypatch.setattr(service_module, "_SERVICE", service)
     marked = []
     monkeypatch.setattr(readiness_module, "mark_cua_observation_verified", lambda: marked.append(True))

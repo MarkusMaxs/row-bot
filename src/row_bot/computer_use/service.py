@@ -32,7 +32,7 @@ from typing import Any, Callable
 from langgraph.errors import GraphBubbleUp
 
 from row_bot.cancellation import current_cancellation_scope
-from row_bot.computer_use import policy
+from row_bot.computer_use import display, policy
 from row_bot.computer_use.client import CuaClient, CuaResponse
 from row_bot.computer_use.control_bar import ControlBar
 from row_bot.computer_use.screen import Shot, Window, take
@@ -54,6 +54,8 @@ _SHELL_PROCESSES = frozenset({
 # Processes that host other apps' windows (Store apps, Python apps): their windows go by their titles.
 _FRAME_HOSTS = frozenset({"applicationframehost", "python", "pythonw"})
 _DONE = {"click": "Clicked", "double_click": "Double-clicked", "right_click": "Right-clicked"}
+# How far (physical pixels) the pointer may be from where a click aimed: Cua rounds to whole pixels.
+_POINTER_SLACK = 3
 
 
 class ComputerError(RuntimeError):
@@ -126,6 +128,8 @@ class ComputerUseService:
         bar_factory: Callable[..., Any] | None = None,
         stop_turn: Callable[[str], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        window_display: Callable[[int], display.WindowDisplay | None] = display.window_display,
+        cursor_position: Callable[[], tuple[int, int] | None] = display.cursor_position,
     ) -> None:
         from row_bot.computer_use.client import default_client
 
@@ -133,6 +137,8 @@ class ComputerUseService:
         self._bar_factory = bar_factory or ControlBar
         self._stop_turn = stop_turn or _stop_turn
         self._clock = clock
+        self._window_display = window_display
+        self._cursor_position = cursor_position
         self._lock = threading.RLock()
         self._acting = threading.Lock()
         self._driver = threading.RLock()
@@ -644,8 +650,10 @@ class ComputerUseService:
         if response.is_error or response.image_bytes is None:
             raise ComputerError(f"Row-Bot couldn't take a picture of {current.app}.", code="no_picture",
                                 fix="Make sure its window is on the screen and not minimized, then try again.")
+        # Windows: how the window draws on its display, so a point maps to where it really is on screen.
+        facts = self._window_display(current.window_id)
         shot = take(current, response.image_bytes, (response.image_width, response.image_height),
-                    response.elements if controls else ())
+                    response.elements if controls else (), facts.scaling if facts else None)
         with self._lock:
             if controls:
                 session.window, session.shot = current, shot
@@ -777,6 +785,8 @@ class ComputerUseService:
             if response.is_error:
                 raise ComputerError(f"That didn't go through: {response.text[:200] or 'Cua Driver refused it'}.",
                                     code="driver", fix="Take a screenshot and try again.")
+            if action in _DONE and shot.scaling is not None:
+                self._check_pointer(window, shot, point, arguments, response)
             if action in {"click", "double_click"}:
                 with self._lock:
                     session.last_control = control
@@ -784,6 +794,28 @@ class ComputerUseService:
             after = self._capture(session)
         self._arm(session)
         return done, after
+
+    def _check_pointer(self, window: Window, shot: Shot, point: tuple[float, float], arguments: dict[str, Any],
+                       response: CuaResponse) -> None:
+        """A click went where it aimed (Windows): the pointer is on the screen point the model's point is.
+
+        Cua says it clicked wherever its own mapping put the pointer; a click that landed elsewhere must
+        not read as done.
+        """
+
+        aimed = shot.to_screen(*point)
+        pointer = self._cursor_position()
+        if logger.isEnabledFor(logging.DEBUG):
+            facts = self._window_display(window.window_id)
+            logger.debug("Click in %s: model %s → screen (%.1f, %.1f) → Cua (%s, %s); pointer %s; Cua: %s; %s",
+                         window.app, point, *aimed, arguments.get("x"), arguments.get("y"), pointer,
+                         response.text[:160], facts.words() if facts else "no display facts")
+        if pointer is None or math.dist(pointer, aimed) <= _POINTER_SLACK:
+            return
+        raise ComputerError(
+            f"The pointer went to {pointer[0]},{pointer[1]} on the screen, not to the point Row-Bot aimed at in "
+            f"{window.app} ({round(aimed[0])},{round(aimed[1])}), so the click may have landed somewhere else.",
+            code="driver", fix="Take a screenshot to see what happened before going on.")
 
     @staticmethod
     def _point(shot: Shot, x: float | None, y: float | None) -> tuple[float, float]:

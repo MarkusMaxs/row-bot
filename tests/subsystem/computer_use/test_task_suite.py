@@ -102,6 +102,73 @@ def test_a_click_maps_to_the_right_screen_point_on_any_monitor_and_scale(turn, d
     assert desktop.window(501).bounds[0] < 0 and desktop.ratios[2501] > 1.5
 
 
+def smoke_notes(left: int) -> FakeWindow:
+    """The real-driver smoke's Tk window as Cua 0.20.0 pictured it on a 150 % display (22 Oct).
+
+    The app is DPI-unaware, so Windows stretches it: its frame on screen is 632×438 physical pixels, but it
+    drew itself at two thirds of that in the top-left corner of Cua's 630×436 picture, the Count button at
+    (20, 100), and Cua sends a picture point to the frame's origin + 1 + the point, 1:1. Count really is at
+    (288, 392)–(528, 476) on the main monitor, where a click there before the fix never reached it.
+    """
+
+    return FakeWindow(pid=5101, window_id=1101, process="python.exe", title="Smoke Notes",
+                      bounds=(left, 240, 632, 438), window_dpi=96, monitor_dpi=144, border=(11, 0),
+                      controls=[FakeControl("Button", "Count", (20, 100, 160, 56), colour=(255, 0, 255)),
+                                FakeControl("Edit", "Notes", (20, 190, 300, 40), colour=(0, 255, 255))])
+
+
+def _by_eye(picture: bytes, colour: tuple[int, int, int]) -> tuple[int, int]:
+    """The middle of the patch of *colour* in the model's picture: where a model looking at it would aim."""
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(picture)) as image:
+        rgb = image.convert("RGB")
+        points = [(x, y) for y in range(rgb.height) for x in range(rgb.width)
+                  if all(abs(a - b) < 40 for a, b in zip(rgb.getpixel((x, y)), colour))]
+    xs, ys = [x for x, _y in points], [y for _x, y in points]
+    return (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
+
+
+@pytest.mark.parametrize("left", [251, 3840 + 251], ids=["main-monitor", "second-monitor"])
+def test_a_click_lands_on_a_window_windows_stretches_for_a_150_percent_display(turn, desktop, left):
+    turn.mode = "full"
+    desktop.windows.append(smoke_notes(left))
+
+    result = turn.call("screenshot", app="Smoke Notes")
+    # The model sees the window as it drew itself, not the black rest of Cua's picture.
+    assert "screenshot 416×291" in result
+    picture = turn.service.latest().image
+    from PIL import Image
+
+    with Image.open(io.BytesIO(picture)) as image:
+        assert image.convert("L").getpixel((image.width - 3, image.height - 3)) > 200
+
+    # By the controls list (the window's accessibility tree, in screen pixels) and by eye (its colours).
+    x, y = controls(result)["Count"]
+    assert turn.call("click", x=x, y=y).startswith(f"Clicked at {x},{y} (Count).")
+    by_eye = _by_eye(picture, (0, 255, 255))
+    assert turn.call("click", x=by_eye[0], y=by_eye[1]).startswith(f"Clicked at {by_eye[0]},{by_eye[1]} (Notes).")
+    landed = [entry for entry in desktop.inputs if entry["kind"] == "click"]
+    assert [entry["control"] for entry in landed] == ["Count", "Notes"]
+    # Where the window really drew Count on screen, on either monitor.
+    count_x, count_y = landed[0]["screen"]
+    assert left + 37 <= count_x < left + 277 and 392 <= count_y < 476
+
+
+def test_a_click_that_lands_away_from_its_aim_says_so_and_not_that_it_clicked(turn, desktop):
+    turn.mode = "full"
+    result = turn.call("screenshot", app="Calculator")
+    desktop.pointer_drift = (40, 0)  # Cua put the pointer somewhere else than Row-Bot aimed.
+
+    x, y = controls(result)["Seven"]
+    clicked = turn.call("click", x=x, y=y)
+
+    assert clicked.startswith("Error: The pointer went to ") and "so the click may have landed somewhere else" in clicked
+    assert "Clicked" not in clicked
+    assert clicked.endswith("Fix: Take a screenshot to see what happened before going on.")
+
+
 def test_a_model_that_sees_images_gets_the_window_after_each_action(turn, monkeypatch):
     from langchain_core.messages import AIMessage, ToolMessage
     from PIL import Image

@@ -37,6 +37,7 @@ def computer(service, monkeypatch):  # After the app's data folder is set.
     made = ComputerUseService(
         client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
         bar_factory=FakeBar, stop_turn=lambda _thread: None,
+        window_display=desktop.window_display, cursor_position=desktop.cursor_position,
     )
     monkeypatch.setattr(module, "_SERVICE", made)
     yield made

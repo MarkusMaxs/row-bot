@@ -53,6 +53,8 @@ def computer(platform, desktop, monkeypatch):
         client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
         bar_factory=FakeBar,
         stop_turn=lambda thread_id: platform.stop_conversation(thread_id),
+        window_display=desktop.window_display,
+        cursor_position=desktop.cursor_position,
     )
     service.SETTLE_SECONDS = 0
     monkeypatch.setattr(module, "_SERVICE", service)

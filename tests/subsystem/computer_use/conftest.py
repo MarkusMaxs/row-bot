@@ -204,6 +204,8 @@ def computer(tmp_path, monkeypatch, desktop: FakeDesktop, stopped_turns: list[st
         client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
         bar_factory=FakeBar,
         stop_turn=stopped_turns.append,
+        window_display=desktop.window_display,
+        cursor_position=desktop.cursor_position,
     )
     service.SETTLE_SECONDS = 0
     monkeypatch.setattr(computer_use_tool, "get_computer_use_service", lambda: service)

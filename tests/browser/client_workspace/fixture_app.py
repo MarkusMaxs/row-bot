@@ -432,6 +432,8 @@ def _n12b_reset() -> None:
         client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
         bar_factory=_FakeBar,
         stop_turn=client_platform_service.stop_conversation,
+        window_display=desktop.window_display,
+        cursor_position=desktop.cursor_position,
     )
     service.SETTLE_SECONDS = 0
     module._SERVICE = service
