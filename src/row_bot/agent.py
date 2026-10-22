@@ -4214,6 +4214,9 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             _emit_context_event("platform_segment", {"segment_id": segment_id})
     llm_messages, created, inputs, prepared = _prepare_agent_request(state, config)
     _remember_request_estimate(config, getattr(prepared, "raw_estimated_input_tokens", 0))
+    # A model that sees images gets the browser page's picture right after the action that took it.
+    from row_bot.browser.model_view import with_page_picture
+    llm_messages = with_page_picture(llm_messages, str(((config or {}).get("configurable") or {}).get("thread_id") or ""))
     if execution is not None:
         generation_registry.check_dispatch(execution)
         from row_bot.application.client_queue import acknowledge_consumed
@@ -8231,9 +8234,11 @@ def _stream_graph(agent, input_data, config: dict,
         _current_provider_call = None
 
     # Domain-specific Browser protection remains separate from the global
-    # exact-repeat guard enforced at the tool invocation boundary.
+    # exact-repeat guard enforced at the tool invocation boundary. A real task
+    # (a multi-step form) takes dozens of page actions; this only stops a
+    # runaway loop.
     _loop_detected = False
-    _BROWSER_TOOL_LIMIT = 14
+    _BROWSER_TOOL_LIMIT = 80
     _browser_tool_count = 0
     _recent_browser_actions: list[str] = []
     _browser_budget_exceeded = False
@@ -8395,9 +8400,10 @@ def _stream_graph(agent, input_data, config: dict,
                                 _browser_tool_count += 1
                                 _recent_browser_actions.append(_browser_action_name(runtime_tool_name))
                                 _recent_browser_actions = _recent_browser_actions[-8:]
-                                _snapshot_heavy = len(_recent_browser_actions) >= 6 and all(
-                                    action in {"snapshot", "take_screenshot", "navigate", "navigate_back", "back"}
-                                    for action in _recent_browser_actions[-6:]
+                                # Only looking, never acting, many times in a row: stuck.
+                                _snapshot_heavy = len(_recent_browser_actions) >= 8 and all(
+                                    action in {"snapshot", "take_screenshot", "screenshot", "wait_for"}
+                                    for action in _recent_browser_actions[-8:]
                                 )
                                 if _browser_tool_count >= _BROWSER_TOOL_LIMIT or _snapshot_heavy:
                                     _browser_budget_exceeded = True
