@@ -7588,6 +7588,8 @@ class HandshakeView(Choices):
     session_ttl_seconds: int = Field(ge=0, le=43200)
     # The server's current UTC offset: times it sends without an offset are its wall clock (B341).
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
+    # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
+    server_timezone: str | None = Field(default=None, max_length=64)
     native_adapter: NativeAdapter
     limits: Limits
 

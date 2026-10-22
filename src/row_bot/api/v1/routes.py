@@ -78,6 +78,15 @@ _SCREEN_SETTINGS_ACTIONS = frozenset({
     ("system", "computer_use.open_accessibility"),
     ("system", "computer_use.open_screen_recording"),
 })
+
+
+def _schedule_zone_name() -> str:
+    """The computer's IANA zone, as a new workflow schedule starts with it."""
+    from row_bot.schedule_zones import local_zone_name
+
+    return local_zone_name()
+
+
 _STATUS = {
     "not_found": 404,
     "cursor_expired": 410,
@@ -1532,6 +1541,8 @@ def create_router(
                 "server_utc_offset_minutes": round(
                     datetime.now().astimezone().utcoffset().total_seconds() / 60
                 ),
+                # A new schedule keeps its times in this zone unless another is chosen (N9).
+                "server_timezone": _schedule_zone_name(),
                 "native_adapter": {
                     "available": local_owner,
                     "proof_required": True,
