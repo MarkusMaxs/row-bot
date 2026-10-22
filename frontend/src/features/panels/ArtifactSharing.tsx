@@ -558,7 +558,9 @@ export default function ArtifactSharing(props: ArtifactSharingProps) {
                 ? 'Remote access link ready. Sign-in or pairing is required.'
                 : 'Local link ready.'}
             </p>
-          ) : outcome.status === 'submitted' && safeUrl(outcome.url) ? (
+          ) : outcome.status === 'submitted' &&
+            options.action === 'x' &&
+            safeUrl(outcome.url) ? (
             <p>
               Posted on X.{' '}
               <a
