@@ -1,0 +1,22 @@
+{
+  "additionalProperties": false,
+  "description": "Sign out of one site, or every site (no site).",
+  "properties": {
+    "site": {
+      "anyOf": [
+        {
+          "maxLength": 253,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Site"
+    }
+  },
+  "title": "BrowserSitesClear",
+  "type": "object"
+}
