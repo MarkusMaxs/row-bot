@@ -9,7 +9,6 @@ real one with its page work faked.
 from __future__ import annotations
 
 import json
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +26,7 @@ class _Engine(BrowserEngine):
         self.actions: list[tuple[str, str, str]] = []
         self.played: list[list[dict]] = []
         self.cleared: list[str | None] = []
+        self.quit_after_picture = False
 
     def person_action(self, chat_id, action, *, url="", tab=""):
         self.actions.append((chat_id, action, url))
@@ -38,6 +38,12 @@ class _Engine(BrowserEngine):
         self.played.append(events)
         self.take_control(chat_id)
         return "ok"
+
+    def latest_frame(self, chat_id):
+        frame = super().latest_frame(chat_id)
+        if frame is not None and self.quit_after_picture:
+            self._closed = True  # Row-Bot quits right after the first picture: the stream ends with it.
+        return frame
 
     def sites(self):
         return [{"site": "homeserve.co.uk", "cookies": 3}] if None not in self.cleared else []
@@ -91,9 +97,9 @@ def test_the_live_stream_sends_the_pane_state_and_the_latest_picture(service, br
     record.tabs, record.active, record.acting = [tab], tab, 'Clicking button "Next"'
     engine._live[chat] = _Live(frame=Frame(4, "/9j/4AAQ", 1280, 800))
     events: dict[str, dict] = {}
-    # Row-Bot quits half a second in: the stream ends with its browser (and the test client, which reads
-    # whole responses, gets it).
-    threading.Timer(0.5, engine.close).start()
+    # Row-Bot quits once the stream has its first picture: the stream ends with the browser (and the test
+    # client, which reads whole responses, gets it).
+    engine.quit_after_picture = True
     with _client(service) as client:
         _, headers = bootstrap(client)
         response = client.get(f"/api/v1/conversations/{chat}/browser/live", params={"width": 960},
