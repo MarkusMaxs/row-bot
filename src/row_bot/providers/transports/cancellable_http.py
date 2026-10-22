@@ -33,7 +33,8 @@ import httpx
 
 from row_bot.cancellation import current_cancellation_scope
 
-_ONE_REQUEST_PER_CONNECTION = httpx.Limits(max_keepalive_connections=0)
+# One connection per request: a request's socket is its own.
+ONE_REQUEST_PER_CONNECTION = httpx.Limits(max_keepalive_connections=0)
 _CONNECTED = (".connect_tcp.complete", ".start_tls.complete")
 _ENDED = (".response_closed.started", ".connect_tcp.failed", ".start_tls.failed")
 
@@ -160,11 +161,33 @@ class _StoppableAsyncClient(httpx.AsyncClient):
             raise
 
 
-def _hooks(kwargs: dict[str, Any], start: Callable[..., Any], learn: Callable[..., Any]) -> dict[str, list]:
+def request_stop_hooks(
+    *, asynchronous: bool = False, stopped: type[RequestStopped] = RequestStopped
+) -> dict[str, list[Callable[..., Any]]]:
+    """The event hooks that make a client's requests stoppable: each registers with Stop as it starts.
+
+    These module's clients carry them; a client another library builds can take them too, with
+    ``limits=ONE_REQUEST_PER_CONNECTION`` (only these module's clients also turn a failure after Stop into
+    ``stopped``).
+    """
+    if asynchronous:
+        async def astart(request: httpx.Request) -> None:
+            _start(request, stopped, asynchronous=True)
+
+        return {"request": [astart], "response": [_alearn_from_response]}
+
+    def start(request: httpx.Request) -> None:
+        _start(request, stopped, asynchronous=False)
+
+    return {"request": [start], "response": [_learn_from_response]}
+
+
+def _client_kwargs(kwargs: dict[str, Any], *, asynchronous: bool, stopped: type[RequestStopped]) -> dict[str, Any]:
     hooks = dict(kwargs.pop("event_hooks", None) or {})
-    hooks["request"] = [*hooks.get("request", []), start]
-    hooks["response"] = [*hooks.get("response", []), learn]
-    return hooks
+    for event, ours in request_stop_hooks(asynchronous=asynchronous, stopped=stopped).items():
+        hooks[event] = [*hooks.get(event, []), *ours]
+    kwargs.setdefault("limits", ONE_REQUEST_PER_CONNECTION)
+    return {**kwargs, "event_hooks": hooks}
 
 
 def cancellable_http_client(*, stopped: type[RequestStopped] = RequestStopped, **kwargs: Any) -> httpx.Client:
@@ -173,22 +196,11 @@ def cancellable_http_client(*, stopped: type[RequestStopped] = RequestStopped, *
     ``stopped`` is the error a stopped request raises: an SDK's own subclass of ``RequestStopped``, so the SDK
     doesn't retry it. A caller's event hooks run first.
     """
-
-    def start(request: httpx.Request) -> None:
-        _start(request, stopped, asynchronous=False)
-
-    kwargs.setdefault("limits", _ONE_REQUEST_PER_CONNECTION)
-    return _StoppableClient(stopped=stopped, event_hooks=_hooks(kwargs, start, _learn_from_response), **kwargs)
+    return _StoppableClient(stopped=stopped, **_client_kwargs(kwargs, asynchronous=False, stopped=stopped))
 
 
 def cancellable_async_http_client(
     *, stopped: type[RequestStopped] = RequestStopped, **kwargs: Any
 ) -> httpx.AsyncClient:
     """An ``httpx.AsyncClient`` whose requests Stop ends at once (see ``cancellable_http_client``)."""
-
-    async def start(request: httpx.Request) -> None:
-        _start(request, stopped, asynchronous=True)
-
-    kwargs.setdefault("limits", _ONE_REQUEST_PER_CONNECTION)
-    return _StoppableAsyncClient(stopped=stopped, event_hooks=_hooks(kwargs, start, _alearn_from_response),
-                                 **kwargs)
+    return _StoppableAsyncClient(stopped=stopped, **_client_kwargs(kwargs, asynchronous=True, stopped=stopped))
