@@ -1279,16 +1279,22 @@ class PersonRun:
             asked_for = True
         self._clock_at_least(int(self.args.days) + 1, 9)
         asked, prompts = [], []
-        for _ in range(3):
-            try:
-                request = self._extra_request("trial", kind)
-            except RuntimeError:
-                break
-            record = self.ask(request, label="trial")
-            self.state.data["requests"].append(record)
-            asked.append(record)
-            prompts.append(request.prompt)
-            self.save()
+        # One booking for the trial's turns (each would book on its own, and another lane could take the card
+        # between them).
+        self.gpu.acquire(f"trial: turns on personal model v{version}", expect="10 min, 4 GB")
+        try:
+            for _ in range(3):
+                try:
+                    request = self._extra_request("trial", kind)
+                except RuntimeError:
+                    break
+                record = self.ask(request, label="trial")
+                self.state.data["requests"].append(record)
+                asked.append(record)
+                prompts.append(request.prompt)
+                self.save()
+        finally:
+            self.gpu.release()
         routed = [record for record in asked if record["attempts"][0].get("routed")]
         answered = [record for record in routed if not record["attempts"][0]["routed"].get("fallback")]
         back = use.undo(kind, root=self.data, clock=self.clock.time)
