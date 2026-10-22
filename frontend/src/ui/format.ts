@@ -22,6 +22,18 @@ export function setServerUtcOffset(minutes: number | null | undefined) {
     typeof minutes === 'number' && Number.isFinite(minutes) ? minutes : null;
 }
 
+// The computer's IANA zone, from the handshake: a new schedule keeps its times in it (N9).
+let serverZone: string | null = null;
+
+export function setServerTimezone(zone: string | null | undefined) {
+  serverZone = typeof zone === 'string' && zone ? zone : null;
+}
+
+/** The zone the Row-Bot computer is in, once the handshake said; null before. */
+export function serverTimezone(): string | null {
+  return serverZone;
+}
+
 const OFFSET_LESS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/;
 
 /**

@@ -4197,6 +4197,109 @@ def s11_reset(x_fixture_token: str = Header(default="")) -> dict:
     return {"ok": True}
 
 
+# N9: a workflow with its own code folder, a schedule zone, "Run once when Row-Bot starts" and "Always ask me",
+# with the runs that show each state. Records only: the workflow is switched off and nothing is scheduled or run.
+_N9_TASK = "Landing checks"
+_N9_CARD = {
+    "action": "Post on X", "destination": "@rowbot", "account": "X account",
+    "text": "Landing checks passed for row-bot.ai at 09:00.\n\nAll 12 pages load in under a second.",
+    "media": [{"name": "landing-checks.png", "size": 184320, "fingerprint": "3f9a1c07be52", "kind": "image"}],
+}
+
+
+@app.post("/__n9_fixture/workflows")
+def n9_workflows(x_fixture_token: str = Header(default="")) -> dict:
+    """Seed the N9 workflow, its code folders, a set-up app for "Always ask me" and four runs."""
+    from datetime import datetime, timedelta
+
+    p4_provider_credentials(x_fixture_token)
+    from row_bot import api_keys, tasks
+    from row_bot.developer import storage
+    from row_bot.developer.state import DeveloperWorkspace
+    from row_bot.integrations import builtin
+
+    api_keys.set_key("TAVILY_API_KEY", "synthetic-n9-key")
+    api_keys.set_key("WOLFRAM_ALPHA_APPID", "synthetic-n9-key")
+    builtin.changed()
+    root = predecessor.DATA / "n9-folders"
+    for ident, name in (("dev_n9_landing", "row-bot-landing"), ("dev_n9_docs", "docs-site")):
+        (root / name).mkdir(parents=True, exist_ok=True)
+        if storage.get_workspace(ident) is None:
+            storage.save_workspace(DeveloperWorkspace(id=ident, name=name, path=str(root / name)))
+    for task in tasks.list_tasks():
+        if task["name"] == _N9_TASK:
+            tasks.delete_task(task["id"])
+    task_id = tasks.create_task(
+        _N9_TASK, description="Checks the landing page every morning and posts the result.", icon="🛬",
+        steps=[{"type": "prompt", "id": "check", "always_ask": True,
+                "prompt": "Run the landing page checks and post a short summary on X."},
+               {"type": "notify", "id": "tell", "channel": "desktop", "message": "Landing checks: {{prev_output}}"}],
+        schedule="daily:09:00", timezone="Europe/London", safety_mode="auto", enabled=False,
+        workspace_id="dev_n9_landing", workspace_name="row-bot-landing", missed_runs="run_once",
+        always_ask=["builtin:tool:web_search"], apply_default_skills=False,
+    )
+    now = datetime.now()
+    runs = [  # Oldest first: the newest, waiting on its card, is the one the run history opens.
+        ("n9-late", "completed", now - timedelta(days=3, hours=2), "2026-10-19T09:00:00+01:00", "", 2),
+        ("n9-folder-gone", "blocked", now - timedelta(days=2),
+         "", "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings.", 0),
+        ("n9-not-approved", "stopped", now - timedelta(days=1), "", "Not approved in time", 0),
+        ("n9-asking", "paused", now - timedelta(minutes=12), "", "", 0),
+    ]
+    conn = tasks._get_conn()
+    try:
+        for run_id, status, started, late_for, notice, done in runs:
+            finished = None if status == "paused" else (started + timedelta(minutes=3)).isoformat()
+            conn.execute(
+                "INSERT INTO task_runs (id,task_id,thread_id,started_at,finished_at,status,status_message,steps_total,"
+                "steps_done,task_name,task_icon,workspace_id,workspace_name,late_for,notice,fix) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, task_id, f"{run_id}-thread", started.isoformat(), finished, status, notice, 2, done,
+                 _N9_TASK, "🛬", "" if status == "blocked" else "dev_n9_landing",
+                 "" if status == "blocked" else "row-bot-landing", late_for, notice,
+                 "choose_folder" if status == "blocked" else ""),
+            )
+        capture = {"run_id": "n9-asking", "thread_id": "n9-asking-thread", "task": {"id": task_id},
+                   "policy": {"approval_mode": "auto"}}
+        conn.execute(
+            "INSERT INTO pipeline_state (run_id,task_id,thread_id,current_step_index,step_outputs,status,resume_token,"
+            "config,graph_interrupted,created_at,updated_at) VALUES (?,?,?,0,'{}','paused',?,?,'true',?,?)",
+            ("n9-asking", task_id, "n9-asking-thread", "n9-token", json.dumps({"_reviewed_task_run": capture}),
+             now.isoformat(), now.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO approval_requests (id,run_id,task_id,step_id,resume_token,message,status,requested_at,"
+            "timeout_at,approval_payload_json) VALUES (?,?,?,?,?,?,'pending',?,?,?)",
+            ("n9-approval", "n9-asking", task_id, "check", "n9-token", "Step 1/2: Post on X",
+             (now - timedelta(minutes=11)).isoformat(), (now + timedelta(hours=23, minutes=49)).isoformat(),
+             json.dumps({"person_only": True, "binding": "f" * 64, "card": _N9_CARD,
+                         "reason": "You asked to approve this yourself."})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"task_id": task_id}
+
+
+@app.post("/__n9_fixture/reset")
+def n9_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Remove the N9 workflow and its runs' waiting card, so later journeys find nothing waiting."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+
+    for task in tasks.list_tasks():
+        if task["name"] == _N9_TASK:
+            tasks.delete_task(task["id"])
+    conn = tasks._get_conn()
+    try:
+        conn.execute("DELETE FROM approval_requests WHERE id = 'n9-approval'")
+        conn.execute("DELETE FROM task_runs WHERE id LIKE 'n9-%'")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
 @app.post("/__n4_fixture/helper")
 def n4_helper(payload: dict, x_fixture_token: str = Header(default="")) -> dict:
     """A helper this chat started, waiting on its question (a record: nothing runs)."""

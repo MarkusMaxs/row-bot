@@ -9528,6 +9528,19 @@
             }
           ],
           "title": "Schedule"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
         }
       },
       "required": [
@@ -9548,6 +9561,18 @@
     "TaskGraphFields": {
       "additionalProperties": false,
       "properties": {
+        "always_ask": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Always Ask"
+        },
         "apps": {
           "anyOf": [
             {
@@ -10048,6 +10073,16 @@
           "title": "Agent Profile Id",
           "type": "string"
         },
+        "always_ask": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Always Ask",
+          "type": "array"
+        },
         "approval_mode": {
           "enum": [
             "block",
@@ -10069,6 +10104,15 @@
             }
           ],
           "title": "Concurrency Group"
+        },
+        "missed_runs": {
+          "default": "skip",
+          "enum": [
+            "skip",
+            "run_once"
+          ],
+          "title": "Missed Runs",
+          "type": "string"
         },
         "model_override": {
           "anyOf": [
@@ -10106,6 +10150,19 @@
           ],
           "title": "Trigger Type",
           "type": "string"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
         }
       },
       "required": [

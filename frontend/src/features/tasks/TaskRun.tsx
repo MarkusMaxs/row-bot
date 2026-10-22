@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type {
+  TaskApprovalCard,
   TaskApprovalPage,
   TaskApprovalResult,
   TaskApprovalReview,
@@ -10,13 +11,25 @@ import type {
   TaskStopResult,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
-import { Play, RefreshCw } from 'lucide-react';
+import {
+  File,
+  Film,
+  Folder,
+  FolderOpen,
+  Image,
+  Music,
+  Play,
+  RefreshCw,
+  UserCheck,
+} from 'lucide-react';
 import { Button, IconButton, InlineEmpty, Skeleton } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import { When, runStatus } from '../home/home-format';
 import ApprovalCard from '../shell/ApprovalCard';
 import { WaitingSince } from '../shell/InPlaceApproval';
 import { approvalTag } from '../shell/approval-levels';
+import { formatBytes } from '../shell/MediaPreview';
+import { wallTimeOf } from './schedule-zones';
 
 export interface TaskRunProps {
   taskId: string;
@@ -47,6 +60,15 @@ export interface TaskRunProps {
   openConversation: (conversationId: string) => void;
   /** A followed run ended: the list behind the drawer can re-read (B178). */
   onFinished?: () => void;
+  /** Open this workflow's settings at its Code folder (its folder was removed, N9). */
+  onChooseFolder?: () => void;
+}
+
+/** A run's status in words: one its code folder stopped needs you, not a safety block (N9). */
+function runView(run: TaskRunSummary) {
+  return run.fix === 'choose_folder'
+    ? { label: 'Needs you', tone: 'warning' as const }
+    : runStatus(run.status);
 }
 
 // How often the drawer re-reads a run that is still going.
@@ -72,6 +94,7 @@ export default function TaskRun({
   loadRun,
   openConversation,
   onFinished,
+  onChooseFolder,
 }: TaskRunProps) {
   const [review, setReview] = useState<TaskRunReview | null>(null);
   const [history, setHistory] = useState<TaskRunPage | null>(null);
@@ -187,7 +210,7 @@ export default function TaskRun({
   }, [followId, loadRun, taskId]);
 
   function finished(done: TaskRunSummary) {
-    setNotice(`Run finished · ${runStatus(done.status).label}.`);
+    setNotice(`Run finished · ${runView(done).label}.`);
     onFinished?.();
     const ticket = epoch.current;
     loadReview(taskId).then(
@@ -306,7 +329,7 @@ export default function TaskRun({
     }
   }
 
-  const selectedStatus = selected ? runStatus(selected.status) : null;
+  const selectedStatus = selected ? runView(selected) : null;
   const progress =
     selected && selected.steps_total > 0
       ? Math.min(1, selected.steps_done / selected.steps_total)
@@ -389,7 +412,22 @@ export default function TaskRun({
                     fallback="at an unknown time"
                   />
                 </span>
+                {selected.workspace_name && (
+                  <span className="task-run-folder">
+                    <Folder size={12} aria-hidden />
+                    In {selected.workspace_name}
+                  </span>
+                )}
               </header>
+              {selected.late_for && (
+                <p className="home-caption">
+                  Ran late: Row-Bot was closed at{' '}
+                  {wallTimeOf(selected.late_for)}.
+                </p>
+              )}
+              {selected.notice && terminal.has(selected.status) && (
+                <p className="task-run-notice">{selected.notice}</p>
+              )}
               {progress !== null && (
                 <div className="task-run-progress">
                   <progress
@@ -423,6 +461,16 @@ export default function TaskRun({
                 </p>
               )}
               <div className="task-run-actions">
+                {selected.fix === 'choose_folder' && onChooseFolder && (
+                  <Button
+                    variant="primary"
+                    className="small"
+                    onClick={onChooseFolder}
+                  >
+                    <FolderOpen size={14} aria-hidden />
+                    Choose a folder
+                  </Button>
+                )}
                 <Button
                   className="small"
                   onClick={() => openConversation(selected.conversation_id)}
@@ -481,9 +529,29 @@ export default function TaskRun({
                     className="task-run-approval"
                     key={approval.id}
                     aria-label="Pending task approval"
+                    data-person-only={approval.person_only || undefined}
                   >
-                    <h3>Approval needed</h3>
-                    <p className="task-approval-message">{approval.message}</p>
+                    {approval.person_only ? (
+                      <>
+                        <h3>
+                          <UserCheck size={14} aria-hidden />
+                          Only you can approve this
+                        </h3>
+                        <p className="home-caption">
+                          You asked to approve this yourself, so Auto and
+                          Hands-off never answer it for you.
+                        </p>
+                      </>
+                    ) : (
+                      <h3>Approval needed</h3>
+                    )}
+                    {approval.card ? (
+                      <ActionCard card={approval.card} />
+                    ) : (
+                      <p className="task-approval-message">
+                        {approval.message}
+                      </p>
+                    )}
                     <p className="home-caption">
                       <WaitingSince value={approval.requested_at} />
                     </p>
@@ -584,7 +652,7 @@ export default function TaskRun({
           ) : (
             <ul className="task-run-history">
               {history.items.map((item) => {
-                const view = runStatus(item.status);
+                const view = runView(item);
                 return (
                   <li key={item.id}>
                     <button
@@ -635,6 +703,59 @@ export default function TaskRun({
         </>
       )}
     </section>
+  );
+}
+
+const MEDIA_ICONS = { image: Image, video: Film, audio: Music, file: File };
+
+/** Exactly what a person-only approval lets happen (N9). */
+function ActionCard({ card }: { card: TaskApprovalCard }) {
+  const media = card.media ?? [];
+  return (
+    <dl className="task-action-card">
+      <dt>Action</dt>
+      <dd>{card.action}</dd>
+      {card.destination && (
+        <>
+          <dt>To</dt>
+          <dd>{card.destination}</dd>
+        </>
+      )}
+      {card.account && (
+        <>
+          <dt>As</dt>
+          <dd>{card.account}</dd>
+        </>
+      )}
+      {card.text && (
+        <>
+          <dt>Text</dt>
+          <dd className="task-action-text">{card.text}</dd>
+        </>
+      )}
+      {media.length > 0 && (
+        <>
+          <dt>{media.length === 1 ? 'File' : 'Files'}</dt>
+          <dd>
+            <ul className="task-action-media">
+              {media.map((item) => {
+                const Icon = MEDIA_ICONS[item.kind];
+                return (
+                  <li key={`${item.name}-${item.fingerprint}`}>
+                    <Icon size={14} aria-hidden />
+                    <span className="task-action-media-name">{item.name}</span>
+                    <span>{formatBytes(item.size)}</span>
+                    <code title="Fingerprint of its contents">
+                      {item.fingerprint}
+                    </code>
+                  </li>
+                );
+              })}
+            </ul>
+          </dd>
+        </>
+      )}
+    </dl>
   );
 }
 
