@@ -133,6 +133,7 @@ def test_a_removed_folder_stops_the_run_before_it_starts(setup, removal):
     assert run.notice == (
         "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings."
     )
+    assert run.fix == "choose_folder"  # Its one fix: choose another folder in its settings.
     assert setup.started == []
     _controls, after = _settings(task_id)
     assert (after.workspace_name, after.workspace_available) == ("row-bot-landing", False)
@@ -160,3 +161,20 @@ def test_choosing_none_goes_back_to_the_conversations_folder(setup):
 
     assert cleared.fields.workspace_id is None
     assert (setup.tasks.get_task(task_id)["workspace_id"], setup.tasks.get_task(task_id)["workspace_name"]) == ("", "")
+
+
+def test_home_offers_choosing_another_folder_for_a_run_its_folder_stopped(setup):
+    """Needs you names the problem and offers the same fix as the run: choose a folder."""
+    task_id = _workflow(setup.tasks)
+    controls, snapshot = _settings(task_id)
+    _save(controls, snapshot, workspace_id=setup.folders["row-bot-landing"][0])
+    setup.storage.remove_workspace(setup.folders["row-bot-landing"][0])
+    _run(setup, task_id)
+    from row_bot.application.client_monitor import read_attention
+
+    [problem] = [item for item in read_attention(include_update=False)["problems"]
+                 if item["id"] == f"workflow:{task_id}"]
+
+    assert problem["title"] == "Landing checks needs a code folder"
+    assert problem["fix"] == {"kind": "choose_folder", "href": f"/?tab=workflows&workflow={task_id}&fix=folder",
+                              "target": None, "name": "Landing checks"}

@@ -18,6 +18,19 @@
       ],
       "title": "Finished At"
     },
+    "fix": {
+      "anyOf": [
+        {
+          "const": "choose_folder",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Fix"
+    },
     "id": {
       "maxLength": 128,
       "minLength": 1,

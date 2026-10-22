@@ -603,3 +603,31 @@ it('shows a person-only card with exactly what will happen (N9)', async () => {
   expect(within(card).getByText('0a1b2c3d4e5f')).toBeInTheDocument();
   expect(within(card).getByRole('button', { name: 'Approve' })).toBeEnabled();
 });
+
+it('a run its removed folder stopped needs you and offers choosing a folder (N9)', async () => {
+  const onChooseFolder = vi.fn();
+  render(
+    <TaskRun
+      {...props({
+        onChooseFolder,
+        loadHistory: vi.fn().mockResolvedValue(
+          history([
+            {
+              ...runSummary('run-a', 'blocked'),
+              notice:
+                "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings.",
+              fix: 'choose_folder',
+            },
+          ]),
+        ),
+      })}
+    />,
+  );
+  const run = await screen.findByRole('region', { name: 'Selected run' });
+  expect(within(run).getByText('Needs you')).toBeInTheDocument();
+  expect(within(run).queryByText('Blocked')).not.toBeInTheDocument();
+  const choose = within(run).getByRole('button', { name: 'Choose a folder' });
+  expect(choose).toHaveClass('primary');
+  fireEvent.click(choose);
+  expect(onChooseFolder).toHaveBeenCalledOnce();
+});

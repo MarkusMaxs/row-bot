@@ -48,6 +48,8 @@ class TaskRunSummary:
     late_for: str | None = None
     # A plain sentence about how it ended, e.g. "Not approved in time".
     notice: str | None = None
+    # The one thing the person can do about it: "choose_folder" when its code folder was removed.
+    fix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,8 @@ def _summary(row: dict) -> TaskRunSummary:
     return TaskRunSummary(row["id"], row["task_id"], row["thread_id"], row["status"] or "unknown",
                           row["started_at"] or "", row["finished_at"], row["steps_total"], row["steps_done"],
                           row.get("workspace_id") or None, row.get("workspace_name") or None,
-                          row.get("late_for") or None, row.get("notice") or None)
+                          row.get("late_for") or None, row.get("notice") or None,
+                          row.get("fix") if row.get("fix") == "choose_folder" else None)
 
 
 def get_task_run(task_id: str, run_id: str) -> TaskRunSummary:

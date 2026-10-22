@@ -1144,19 +1144,39 @@ export default function TaskLibrary() {
     taskEditSessions?.subscribe ?? noTaskSubscription,
     taskEditSessions?.getSnapshot ?? noTaskSnapshot,
   );
-  // Overview links open one workflow's runs: /?tab=workflows&workflow=<id>.
+  // A workflow its removed code folder stopped opens its settings at Code folder (N9).
+  const [folderFor, setFolderFor] = useState<string | null>(null);
+  const chooseFolder = useCallback(
+    (id: string, name: string) => {
+      setRunsFor(null);
+      setFolderFor(id);
+      taskEditSessions?.open('settings', id, name);
+    },
+    [taskEditSessions],
+  );
+  // Overview links open one workflow's runs: /?tab=workflows&workflow=<id>;
+  // with &fix=folder, its settings at the Code folder instead.
   const requestedRuns = search.get('workflow');
+  const requestedFix = search.get('fix');
   useEffect(() => {
     if (!requestedRuns) return;
-    setRunsFor({ id: requestedRuns, name: '' });
     setSearch(
       (current) => {
         const next = new URLSearchParams(current);
         next.delete('workflow');
+        next.delete('fix');
         return next;
       },
       { replace: true },
     );
+    if (requestedFix === 'folder') {
+      controller.taskEditor(requestedRuns).then(
+        (task) => chooseFolder(requestedRuns, task.fields.name),
+        () => chooseFolder(requestedRuns, ''),
+      );
+      return;
+    }
+    setRunsFor({ id: requestedRuns, name: '' });
     // The link carries only the id; name the drawer once the task is read.
     controller.taskEditor(requestedRuns).then(
       (task) =>
@@ -1167,7 +1187,7 @@ export default function TaskLibrary() {
         ),
       () => {},
     );
-  }, [controller, requestedRuns, setSearch]);
+  }, [controller, requestedRuns, requestedFix, setSearch, chooseFolder]);
   useEffect(() => {
     if (!state.handshake) return;
     const abort = new AbortController();
@@ -1311,6 +1331,9 @@ export default function TaskLibrary() {
           modelOptions={modelOptions}
           loadFolders={loadFolders}
           loadApps={loadApps}
+          focus={
+            folderFor === selected.session.taskId ? 'workspace_id' : undefined
+          }
           webhook={{
             localBase: window.location.origin,
             readAddress: reach.readAddress,
@@ -1535,6 +1558,7 @@ export default function TaskLibrary() {
               openConversation(id);
             }}
             onFinished={() => setReload((value) => value + 1)}
+            onChooseFolder={() => chooseFolder(runsFor.id, runsFor.name)}
           />
         )}
       </Drawer>

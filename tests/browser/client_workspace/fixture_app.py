@@ -4252,11 +4252,12 @@ def n9_workflows(x_fixture_token: str = Header(default="")) -> dict:
             finished = None if status == "paused" else (started + timedelta(minutes=3)).isoformat()
             conn.execute(
                 "INSERT INTO task_runs (id,task_id,thread_id,started_at,finished_at,status,status_message,steps_total,"
-                "steps_done,task_name,task_icon,workspace_id,workspace_name,late_for,notice) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "steps_done,task_name,task_icon,workspace_id,workspace_name,late_for,notice,fix) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run_id, task_id, f"{run_id}-thread", started.isoformat(), finished, status, notice, 2, done,
                  _N9_TASK, "🛬", "" if status == "blocked" else "dev_n9_landing",
-                 "" if status == "blocked" else "row-bot-landing", late_for, notice),
+                 "" if status == "blocked" else "row-bot-landing", late_for, notice,
+                 "choose_folder" if status == "blocked" else ""),
             )
         capture = {"run_id": "n9-asking", "thread_id": "n9-asking-thread", "task": {"id": task_id},
                    "policy": {"approval_mode": "auto"}}

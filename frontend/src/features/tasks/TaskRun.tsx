@@ -15,6 +15,7 @@ import {
   File,
   Film,
   Folder,
+  FolderOpen,
   Image,
   Music,
   Play,
@@ -59,6 +60,15 @@ export interface TaskRunProps {
   openConversation: (conversationId: string) => void;
   /** A followed run ended: the list behind the drawer can re-read (B178). */
   onFinished?: () => void;
+  /** Open this workflow's settings at its Code folder (its folder was removed, N9). */
+  onChooseFolder?: () => void;
+}
+
+/** A run's status in words: one its code folder stopped needs you, not a safety block (N9). */
+function runView(run: TaskRunSummary) {
+  return run.fix === 'choose_folder'
+    ? { label: 'Needs you', tone: 'warning' as const }
+    : runStatus(run.status);
 }
 
 // How often the drawer re-reads a run that is still going.
@@ -84,6 +94,7 @@ export default function TaskRun({
   loadRun,
   openConversation,
   onFinished,
+  onChooseFolder,
 }: TaskRunProps) {
   const [review, setReview] = useState<TaskRunReview | null>(null);
   const [history, setHistory] = useState<TaskRunPage | null>(null);
@@ -199,7 +210,7 @@ export default function TaskRun({
   }, [followId, loadRun, taskId]);
 
   function finished(done: TaskRunSummary) {
-    setNotice(`Run finished · ${runStatus(done.status).label}.`);
+    setNotice(`Run finished · ${runView(done).label}.`);
     onFinished?.();
     const ticket = epoch.current;
     loadReview(taskId).then(
@@ -318,7 +329,7 @@ export default function TaskRun({
     }
   }
 
-  const selectedStatus = selected ? runStatus(selected.status) : null;
+  const selectedStatus = selected ? runView(selected) : null;
   const progress =
     selected && selected.steps_total > 0
       ? Math.min(1, selected.steps_done / selected.steps_total)
@@ -450,6 +461,16 @@ export default function TaskRun({
                 </p>
               )}
               <div className="task-run-actions">
+                {selected.fix === 'choose_folder' && onChooseFolder && (
+                  <Button
+                    variant="primary"
+                    className="small"
+                    onClick={onChooseFolder}
+                  >
+                    <FolderOpen size={14} aria-hidden />
+                    Choose a folder
+                  </Button>
+                )}
                 <Button
                   className="small"
                   onClick={() => openConversation(selected.conversation_id)}
@@ -631,7 +652,7 @@ export default function TaskRun({
           ) : (
             <ul className="task-run-history">
               {history.items.map((item) => {
-                const view = runStatus(item.status);
+                const view = runView(item);
                 return (
                   <li key={item.id}>
                     <button

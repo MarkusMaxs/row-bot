@@ -75,6 +75,8 @@ export interface TaskSettingsEditorProps {
   ) => Promise<ReadonlyArray<{ id: string; name: string }>>;
   /** The apps set up here, for "Always ask me" (N9). */
   loadApps?: (signal?: AbortSignal) => Promise<readonly StepApp[]>;
+  /** Opened to fix one thing: the Code folder a removed folder left (N9). */
+  focus?: 'workspace_id';
 }
 
 /** Load a list once for the editor; null until it is known. */
@@ -182,6 +184,7 @@ export default function TaskSettingsEditor({
   webhook,
   loadFolders,
   loadApps,
+  focus,
   session: injectedSession,
 }: TaskSettingsEditorProps) {
   const session = useTaskEditSession(injectedSession, 'settings', taskId);
@@ -253,6 +256,14 @@ export default function TaskSettingsEditor({
   const reviewAbort = useRef<AbortController | null>(null);
   const effectPending = useRef(false);
   const inputId = useId();
+  const ready = fields !== null;
+  // Opened from a run its removed folder stopped: the Code folder is the one thing to change.
+  useEffect(() => {
+    if (focus !== 'workspace_id' || !ready) return;
+    const field = document.getElementById(`${inputId}-folder`);
+    field?.scrollIntoView?.({ block: 'center' });
+    field?.focus();
+  }, [focus, ready, inputId]);
 
   useEffect(() => {
     const abort = session.beginRead(reload);

@@ -147,6 +147,7 @@ _CREATE_TABLE_SQL = {
             workspace_name  TEXT DEFAULT '',
             late_for        TEXT DEFAULT '',
             notice          TEXT DEFAULT '',
+            fix             TEXT DEFAULT '',
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         )
     """,
@@ -307,6 +308,8 @@ _COLUMN_MIGRATIONS = {
         ("late_for", "TEXT DEFAULT ''"),
         # A plain sentence for the person about how the run ended (N9), e.g. "Not approved in time".
         ("notice", "TEXT DEFAULT ''"),
+        # The one thing the person can do about how it ended: "choose_folder" (its folder was removed).
+        ("fix", "TEXT DEFAULT ''"),
     ],
     "pipeline_state": [
         ("current_step_index", "INTEGER DEFAULT 0"),
@@ -351,7 +354,7 @@ _REQUIRED_COLUMNS = {
     "task_runs": {
         "id", "task_id", "thread_id", "started_at", "finished_at", "status",
         "status_message", "steps_total", "steps_done", "pipeline_state_id",
-        "task_name", "task_icon", "workspace_id", "workspace_name", "late_for", "notice",
+        "task_name", "task_icon", "workspace_id", "workspace_name", "late_for", "notice", "fix",
     },
     "pipeline_state": {
         "run_id", "task_id", "thread_id", "current_step_index",
@@ -2836,8 +2839,22 @@ _RUN_SUMMARY_COLUMNS = (
     "id,task_id,thread_id,substr(status,1,80) AS status,"
     "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done,"
     "substr(COALESCE(workspace_id,''),1,128) AS workspace_id,substr(COALESCE(workspace_name,''),1,256) AS workspace_name,"
-    "substr(COALESCE(late_for,''),1,80) AS late_for,substr(COALESCE(notice,''),1,512) AS notice"
+    "substr(COALESCE(late_for,''),1,80) AS late_for,substr(COALESCE(notice,''),1,512) AS notice,"
+    "substr(COALESCE(fix,''),1,32) AS fix"
 )
+
+
+def newest_run_fix(task_id: str) -> str:
+    """What the person can do about how a workflow's newest run ended: "choose_folder" (N9), or ""."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT substr(COALESCE(fix,''),1,32) FROM task_runs WHERE task_id=? "
+            "ORDER BY started_at DESC, id DESC LIMIT 1", (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row[0]) if row else ""
 
 
 def read_task_run(run_id: str) -> dict | None:
@@ -3087,7 +3104,8 @@ def _record_run_recall_notices(run_id: str, generation_id: str) -> None:
 
 @_schema_retry
 def _finish_run(run_id: str, status: str = "completed",
-                status_message: str = "", terminal_reason: str = "", notice: str = "") -> None:
+                status_message: str = "", terminal_reason: str = "", notice: str = "",
+                fix: str = "") -> None:
     conn = _get_conn()
     row = conn.execute(
         "SELECT status, status_message FROM task_runs WHERE id = ?",
@@ -3114,6 +3132,8 @@ def _finish_run(run_id: str, status: str = "completed",
     )
     if notice:
         conn.execute("UPDATE task_runs SET notice = ? WHERE id = ?", (notice, run_id))
+    if fix:
+        conn.execute("UPDATE task_runs SET fix = ? WHERE id = ?", (fix, run_id))
     if status in ("completed", "completed_delivery_failed"):
         # A finished run is done, however it got there: a last notify step, "next": "end", a condition that
         # ended early or a resumed approval all used to leave it at "2 of 3 steps" (B313).
@@ -4300,7 +4320,7 @@ def run_task_background(
         if refusal:
             _update_pipeline_status(run_id, "blocked")
             _finish_run(run_id, "blocked", status_message=refusal, terminal_reason="code_folder_unavailable",
-                        notice=refusal)
+                        notice=refusal, fix="choose_folder")
             _emit_buddy_workflow_event("error", task_id=task_id, thread_id=thread_id,
                                        label="Workflow needs attention", error=refusal)
             return

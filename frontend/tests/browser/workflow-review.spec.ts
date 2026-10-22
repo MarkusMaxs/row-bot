@@ -175,5 +175,21 @@ test('run history shows the person-only card, the folder, a late run and how run
       "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings.",
     ),
   ).toBeVisible();
+  // It needs you (not a safety block), with its one fix.
+  await expect(selected.getByText('Needs you', { exact: true })).toBeVisible();
+  await expect(selected.getByText('Blocked', { exact: true })).toHaveCount(0);
+  const chooseFolder = selected.getByRole('button', {
+    name: 'Choose a folder',
+  });
+  await expect(chooseFolder).toBeVisible();
   await everywhere(page, info, 'workflow-folder-removed', selected);
+
+  await chooseFolder.click();
+  const editor = page.getByRole('region', {
+    name: 'Workflow settings editor',
+    exact: true,
+  });
+  await expect(
+    editor.getByRole('combobox', { name: 'Code folder' }),
+  ).toBeFocused();
 });

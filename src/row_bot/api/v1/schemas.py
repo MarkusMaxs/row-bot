@@ -2066,7 +2066,7 @@ class ProblemFix(WireModel):
     """The one fix offered with a problem (Phase 18). The client words it and
     runs it through the owner that does it in Settings: a channel restart or
     an account sign-in reviewed as there, or opening the exact setting."""
-    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again"]
+    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again", "choose_folder"]
     # Where it is fixed by hand, an in-app path ("/settings/access#tunnel").
     href: str | None = Field(max_length=160, pattern=r"^/[A-Za-z0-9/?=&#._:-]{0,159}$")
     # restart_channel: the channel's id; reconnect_account: "google" or "x".
@@ -5248,6 +5248,8 @@ class TaskRunSummary(WireModel):
     late_for: str | None = Field(default=None, max_length=80)
     # A plain sentence about how it ended, e.g. "Not approved in time".
     notice: str | None = Field(default=None, max_length=512)
+    # The one thing the person can do about it: choose another code folder (it was removed).
+    fix: Literal["choose_folder"] | None = None
 
 
 class TaskRunPage(WireModel):

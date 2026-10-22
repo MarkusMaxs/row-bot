@@ -727,3 +727,25 @@ it('says in plain words when the saved folder is no longer a code folder (N9)', 
     ),
   ).toBeInTheDocument();
 });
+
+it('opened to choose a folder, it focuses the Code folder (N9)', async () => {
+  render(
+    withRuntime(
+      <TaskSettingsEditor
+        {...props({
+          focus: 'workspace_id',
+          load: vi.fn().mockResolvedValue(
+            snapshot({
+              fields: { ...fields, workspace_id: 'dev_gone' },
+              workspace_name: 'row-bot-landing',
+              workspace_available: false,
+            }),
+          ),
+          loadFolders: vi.fn().mockResolvedValue(folders),
+        })}
+      />,
+    ),
+  );
+  const folder = await screen.findByRole('combobox', { name: 'Code folder' });
+  await vi.waitFor(() => expect(folder).toHaveFocus());
+});
