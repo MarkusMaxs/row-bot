@@ -143,6 +143,25 @@ def test_requests_without_a_scope_and_after_a_stop_work_as_usual() -> None:
         assert client.post(f"{server.url}/v1/chat", json={}).json() == {"ok": True}
 
 
+def test_stop_ends_a_request_after_an_earlier_one_finished() -> None:
+    # The provider would keep the first connection; each request goes out on its own, so Stop finds its socket
+    # even before the provider answers.
+    with fake_provider_http([Reply(body=b'{"ok": true}', keep_alive=True), HOLD]) as server:
+        client = cancellable_http_client()
+        assert client.post(f"{server.url}/v1/chat", json={}).json() == {"ok": True}
+        scope = CancellationScope()
+        worker, outcome = _under_scope(lambda: client.post(f"{server.url}/v1/chat", json={}), scope)
+        held = server.held(1)
+
+        scope.cancel("user")
+        worker.join(PROMPTLY)
+
+        assert held.connection != server.seen[0].connection
+        assert not worker.is_alive()
+        assert isinstance(outcome.get("error"), RequestStopped)
+        assert held.hung_up.wait(PROMPTLY)
+
+
 def test_a_client_that_keeps_connections_and_borrows_the_hooks_stops_a_stream_on_a_kept_one() -> None:
     # Another library's client given these clients' hooks (documents with a local model): its second request
     # goes out on the first one's connection, whose socket the stop learns when the response arrives.
