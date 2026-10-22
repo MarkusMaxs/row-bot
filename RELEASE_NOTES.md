@@ -93,6 +93,9 @@ Code. Read **Upgrade Notes** below before upgrading.
 - **Google is ready after sign-in** - the first sign-in turns on the Gmail and
   Calendar access you reviewed, so Google no longer reads Off.
 - **App access after Save** - an app's page shows the access you just chose.
+- **Clearer refusals** - when ChatGPT or Ollama Cloud refuses a request, the
+  error says why. A chat or workflow set to a model ChatGPT no longer offers
+  says so and asks you to choose another model.
 
 ### Home And Conversations
 
