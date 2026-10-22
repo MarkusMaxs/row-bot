@@ -31,13 +31,13 @@ def _comparison(new_visible, new_own, main_visible):
                  {"key": "v1", "role": "new", "label": "v1 (new)", "seconds_per_task": 2.9, "cloud_tokens_per_task": 0},
                  {"key": "main", "role": "main", "label": "GPT-6.1 Sol", "seconds_per_task": 9.5,
                   "cloud_tokens_per_task": 31000}],
-        "details": {
-            "visible": {"base": {"document_lookups": [4, 16], "small_coding": [2, 16]},
-                        "v1": {"document_lookups": [new_visible, 16], "small_coding": [3, 16]},
-                        "main": {"document_lookups": [main_visible, 16], "small_coding": [16, 16]}},
-            "hidden": {"base": {"document_lookups": [2, 8], "own_work": [3, 12]},
-                       "v1": {"document_lookups": [3, 8], "own_work": [new_own, 12]},
-                       "main": {"document_lookups": [8, 8], "own_work": [11, 12]}},
+        "details": {  # keyed as the product keys them: by label, the person's own work as "Your work"
+            "visible": {"base": {"Document lookups": [4, 16], "Small coding tasks": [2, 16]},
+                        "v1": {"Document lookups": [new_visible, 16], "Small coding tasks": [3, 16]},
+                        "main": {"Document lookups": [main_visible, 16], "Small coding tasks": [16, 16]}},
+            "hidden": {"base": {"Document lookups": [2, 8], "Your work": [3, 12]},
+                       "v1": {"Document lookups": [3, 8], "Your work": [new_own, 12]},
+                       "main": {"Document lookups": [8, 8], "Your work": [11, 12]}},
         },
         "analysis": {"seed": 20261022, "combined": {
             "v1": {"overall": {"difference": 0.05, "low": -0.02, "high": 0.12, "p_value": 0.21, "problems": 52,
@@ -86,6 +86,7 @@ def test_one_persons_report_has_denominators_intervals_and_the_products_paired_a
     assert models["new"]["own_work"]["overall"] == report.rate(6, 12)
     assert models["main"]["hidden_packs"]["overall"] == report.rate(8, 8)
     assert "own_work" not in models["new"]["hidden_packs"]  # the held-out seeded work is its own row
+    assert models["new"]["visible"]["small_coding"] == report.rate(3, 16)
     assert person["paired"]["new"]["combined"]["overall"]["difference"] == 0.05
     assert person["paired"]["new"]["combined"]["by_kind"]["own_work"]["low"] == 0.08
     assert person["paired"]["baseline"] == "the starting model"

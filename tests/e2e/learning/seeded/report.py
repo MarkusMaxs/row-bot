@@ -128,17 +128,22 @@ def model_rates(comparison: Mapping[str, Any]) -> dict[str, Any]:
     """Per arm (start / version / main): pass rates on the visible packs, the hidden pack split and the
     held-out seeded work, overall and per kind, from the comparison's own tables."""
 
+    from row_bot.learning.kinds import LABELS as PRODUCT_LABELS
+
+    # The comparison's tables are keyed by what people see ("Document lookups"); a held-out problem of the
+    # person's own work is under its episode's kind of work, or "Your work" when it has none.
+    packs = {label: kind for kind, label in PRODUCT_LABELS.items()}
     details = comparison.get("details") or {}
     roles = _arm_roles(comparison)
     found: dict[str, Any] = {}
     for role, key in roles.items():
         tables: dict[str, dict[str, list[float]]] = {"visible": {}, "hidden_packs": {}, "own_work": {}}
-        for kind, (passed, total) in ((details.get("visible") or {}).get(key) or {}).items():
-            _add(tables["visible"], kind, passed, total)
+        for label, (passed, total) in ((details.get("visible") or {}).get(key) or {}).items():
+            _add(tables["visible"], packs.get(label, label), passed, total)
             _add(tables["visible"], "overall", passed, total)
-        for kind, (passed, total) in ((details.get("hidden") or {}).get(key) or {}).items():
-            part = "own_work" if kind == "own_work" else "hidden_packs"
-            _add(tables[part], kind, passed, total)
+        for label, (passed, total) in ((details.get("hidden") or {}).get(key) or {}).items():
+            part = "hidden_packs" if label in packs else "own_work"
+            _add(tables[part], packs.get(label, "own_work"), passed, total)
             _add(tables[part], "overall", passed, total)
         found[role] = {part: {kind: rate(*value) for kind, value in sorted(table.items())}
                        for part, table in tables.items()}
