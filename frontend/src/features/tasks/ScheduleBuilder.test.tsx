@@ -15,9 +15,12 @@ import ScheduleBuilder, {
   type ScheduleDraft,
 } from './ScheduleBuilder';
 import { clockTime } from '../home/home-format';
-import { absoluteTime } from '../../ui/format';
+import { absoluteTime, setServerTimezone } from '../../ui/format';
 
 afterEach(cleanup);
+
+// No Row-Bot computer zone is known here: a new schedule keeps this machine's.
+const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const defaults = parseSchedule(null, null);
 function draft(patch: Partial<ScheduleDraft>): ScheduleDraft {
@@ -338,14 +341,14 @@ describe('nextFire', () => {
       ).toEqual(new Date(2026, 2, 9, 9));
     });
 
-    it('moves a time skipped by the change to the same instant the scheduler uses', () => {
-      // 02:30 does not exist on 8 March 2026 in New York; APScheduler fires
-      // at 02:30 EST, which is 03:30 EDT (07:30 UTC).
+    it('runs a time skipped by the change at the next valid minute, as the scheduler does', () => {
+      // 02:30 does not exist on 8 March 2026 in New York: the clocks go from
+      // 02:00 EST to 03:00 EDT, so it runs at 03:00 EDT (07:00 UTC).
       const next = nextFire(
         repeat({ frequency: 'daily', time: '02:30' }),
         new Date(2026, 2, 7, 12),
       );
-      expect(next?.toISOString()).toBe('2026-03-08T07:30:00.000Z');
+      expect(next?.toISOString()).toBe('2026-03-08T07:00:00.000Z');
     });
 
     it('keeps the local wall-clock time when clocks fall back', () => {
@@ -396,7 +399,11 @@ describe('ScheduleBuilder', () => {
   it('writes a local one-shot date and keeps it separate from repeats', () => {
     const onChange = renderBuilder({ enabled: false });
     fireEvent.click(screen.getByRole('radio', { name: 'Once' }));
-    expect(onChange).toHaveBeenLastCalledWith({ schedule: null, at: '' });
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: null,
+      at: '',
+      timezone: ZONE,
+    });
     const field = screen.getByLabelText('Date and time');
     expect(field).toHaveAttribute('type', 'datetime-local');
     expect(field).toBeRequired();
@@ -405,28 +412,37 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: null,
       at: '2027-01-01T10:00',
+      timezone: ZONE,
     });
     // The one-off time already names when it runs: no separate "next" run.
     const when = new Date(2027, 0, 1, 10);
-    expect(preview()?.textContent).toBe(`Once · ${absoluteTime(when)}`);
+    expect(preview()?.textContent).toBe(
+      `Once · ${absoluteTime(when)} · ${ZONE}`,
+    );
     expect(preview()?.querySelector('time')).toBeNull();
 
     fireEvent.click(screen.getByRole('radio', { name: 'Repeats' }));
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'daily:09:00',
       at: null,
+      timezone: ZONE,
     });
     expect(screen.queryByLabelText('Date and time')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('radio', { name: 'Once' }));
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: null,
       at: '2027-01-01T10:00',
+      timezone: ZONE,
     });
     expect(screen.getByLabelText('Date and time')).toHaveValue(
       '2027-01-01T10:00',
     );
     fireEvent.click(screen.getByRole('radio', { name: 'Manually' }));
-    expect(onChange).toHaveBeenLastCalledWith({ schedule: null, at: null });
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: null,
+      at: null,
+      timezone: ZONE,
+    });
   });
 
   it('says when a one-off time is not after now', () => {
@@ -434,19 +450,20 @@ describe('ScheduleBuilder', () => {
     const onChange = renderBuilder({ at: '2026-09-26T07:30' });
     expect(screen.getByRole('radio', { name: 'Once' })).toBeChecked();
     expect(preview()?.textContent).toBe(
-      `Once · ${absoluteTime(new Date(2026, 8, 26, 7, 30))} · this time has passed`,
+      `Once · ${absoluteTime(new Date(2026, 8, 26, 7, 30))} · ${ZONE} · this time has passed`,
     );
     const field = screen.getByLabelText('Date and time');
     fireEvent.change(field, { target: { value: '2026-09-26T08:00' } });
     expect(preview()).toHaveTextContent('· this time has passed');
     fireEvent.change(field, { target: { value: '2026-09-26T08:01' } });
     expect(preview()?.textContent).toBe(
-      `Once · ${absoluteTime(new Date(2026, 8, 26, 8, 1))}`,
+      `Once · ${absoluteTime(new Date(2026, 8, 26, 8, 1))} · ${ZONE}`,
     );
     // The warning only describes the draft; the chosen time is still saved.
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: null,
       at: '2026-09-26T08:01',
+      timezone: ZONE,
     });
     fireEvent.change(field, { target: { value: '' } });
     expect(preview()?.textContent).toBe('Choose a date and time');
@@ -459,6 +476,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'daily:09:00',
       at: null,
+      timezone: ZONE,
     });
     expect(screen.getByLabelText('Repeats')).toHaveValue('daily');
     expect(
@@ -490,11 +508,13 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'daily:07:30',
       at: null,
+      timezone: ZONE,
     });
     fireEvent.change(screen.getByLabelText('Time'), { target: { value: '' } });
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'daily:09:00',
       at: null,
+      timezone: ZONE,
     });
   });
 
@@ -506,6 +526,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'cron:30 7 * * mon-fri',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent(`Weekdays at ${clockTime(7, 30)}`);
     expect(preview()).toHaveTextContent(
@@ -532,6 +553,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'cron:0 8 22 * *',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent(
       `Monthly on the 22nd at ${clockTime(8, 0)}`,
@@ -546,6 +568,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'cron:30 7 1 * *',
       at: null,
+      timezone: ZONE,
     });
     fireEvent.change(screen.getByLabelText('Day of the month'), {
       target: { value: '31' },
@@ -567,6 +590,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'weekly:mon:09:00',
       at: null,
+      timezone: ZONE,
     });
     const days = screen.getByRole('group', { name: 'Days of the week' });
     const toggles = Array.from(days.querySelectorAll('button'));
@@ -588,12 +612,14 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'cron:0 9 * * mon,wed',
       at: null,
+      timezone: ZONE,
     });
     fireEvent.click(monday);
     expect(monday).toHaveAttribute('aria-pressed', 'false');
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'weekly:wed:09:00',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent(
       `Every Wednesday at ${clockTime(9, 0)}`,
@@ -615,6 +641,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'interval:2',
       at: null,
+      timezone: ZONE,
     });
     expect(screen.queryByLabelText('Time')).not.toBeInTheDocument();
     const hours = screen.getByLabelText('Every (hours)');
@@ -623,6 +650,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'interval:6',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent(
       'Every 6 hours · counted from when it is saved',
@@ -632,6 +660,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'interval:1',
       at: null,
+      timezone: ZONE,
     });
     fireEvent.change(screen.getByLabelText('Repeats'), {
       target: { value: 'minutes' },
@@ -642,6 +671,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'interval_minutes:45',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent('Every 45 minutes');
   });
@@ -670,6 +700,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'cron:0 9 * * 1',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent(`Every Tuesday at ${clockTime(9, 0)}`);
     expect(preview()?.querySelector('time')).toBeNull();
@@ -677,6 +708,7 @@ describe('ScheduleBuilder', () => {
     expect(onChange).toHaveBeenLastCalledWith({
       schedule: 'cron:*/10 * * * *',
       at: null,
+      timezone: ZONE,
     });
     expect(preview()).toHaveTextContent('Custom schedule');
   });
@@ -747,6 +779,142 @@ describe('ScheduleBuilder', () => {
     fireEvent.keyDown(manual, { key: 'ArrowRight' });
     expect(screen.getByRole('radio', { name: 'Once' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Once' })).toHaveFocus();
-    expect(onChange).toHaveBeenLastCalledWith({ schedule: null, at: '' });
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: null,
+      at: '',
+      timezone: ZONE,
+    });
+  });
+});
+
+describe('a schedule in its own timezone (N9)', () => {
+  afterEach(() => setServerTimezone(null));
+  const at = (iso: string) => new Date(iso);
+
+  it('keeps the wall-clock time in its zone whatever the machine zone', () => {
+    // 09:00 in Tokyo is 00:00 UTC, every day of the year.
+    expect(
+      nextFire(repeat({}), at('2026-10-22T12:00:00Z'), 'Asia/Tokyo'),
+    ).toEqual(at('2026-10-23T00:00:00Z'));
+    // London's clocks go back on 25 October 2026: 09:00 stays 09:00.
+    expect(
+      nextFire(repeat({}), at('2026-10-24T09:00:00Z'), 'Europe/London'),
+    ).toEqual(at('2026-10-25T09:00:00Z'));
+  });
+
+  it('runs a time that does not exist that day at the next valid minute', () => {
+    // 01:30 on 29 March 2026 does not exist in London: it runs at 02:00 BST.
+    expect(
+      nextFire(
+        repeat({ time: '01:30' }),
+        at('2026-03-28T12:00:00Z'),
+        'Europe/London',
+      ),
+    ).toEqual(at('2026-03-29T01:00:00Z'));
+  });
+
+  it('runs a time that happens twice once, the first time', () => {
+    // 01:30 happens twice in London on 25 October 2026; the first is BST.
+    expect(
+      nextFire(
+        repeat({ time: '01:30' }),
+        at('2026-10-24T12:00:00Z'),
+        'Europe/London',
+      ),
+    ).toEqual(at('2026-10-25T00:30:00Z'));
+  });
+
+  it('shows the zone next to the time and names it in the next-run preview', () => {
+    render(
+      <ScheduleBuilder
+        schedule="daily:09:00"
+        at={null}
+        timezone="Asia/Tokyo"
+        enabled
+        now={at('2026-10-22T12:00:00Z')}
+        onChange={vi.fn()}
+      />,
+    );
+    const preview = document.querySelector('.schedule-preview');
+    expect(preview).toHaveTextContent(
+      `Every day at ${clockTime(9, 0)} · Asia/Tokyo`,
+    );
+    const next = preview?.querySelector('time');
+    expect(next).toHaveAttribute('datetime', '2026-10-23T00:00:00.000Z');
+    expect(next).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, {
+        timeZone: 'Asia/Tokyo',
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(at('2026-10-23T00:00:00Z')),
+    );
+    expect(screen.getByRole('button', { name: 'Timezone' })).toHaveTextContent(
+      'Asia/Tokyo',
+    );
+  });
+
+  it('starts a new schedule in the Row-Bot computer zone', () => {
+    setServerTimezone('America/New_York');
+    const onChange = vi.fn();
+    render(
+      <ScheduleBuilder
+        schedule={null}
+        at={null}
+        enabled
+        now={at('2026-10-22T12:00:00Z')}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeats' }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: 'daily:09:00',
+      at: null,
+      timezone: 'America/New_York',
+    });
+  });
+
+  it('finds a zone by searching and writes it with the schedule', async () => {
+    const onChange = vi.fn();
+    render(
+      <ScheduleBuilder
+        schedule="daily:09:00"
+        at={null}
+        timezone="Europe/London"
+        enabled
+        now={at('2026-10-22T12:00:00Z')}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Timezone' }));
+    fireEvent.change(
+      screen.getByRole('combobox', { name: 'Search timezone' }),
+      {
+        target: { value: 'tokyo' },
+      },
+    );
+    fireEvent.click(await screen.findByRole('option', { name: /Asia\/Tokyo/ }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      schedule: 'daily:09:00',
+      at: null,
+      timezone: 'Asia/Tokyo',
+    });
+  });
+
+  it('leaves the zone out of an interval, which counts the same anywhere', () => {
+    render(
+      <ScheduleBuilder
+        schedule="interval:4"
+        at={null}
+        timezone="Europe/London"
+        enabled
+        onChange={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Timezone' }),
+    ).not.toBeInTheDocument();
+    expect(document.querySelector('.schedule-preview')).not.toHaveTextContent(
+      'Europe/London',
+    );
   });
 });

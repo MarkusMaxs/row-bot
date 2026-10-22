@@ -1,8 +1,20 @@
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { CalendarClock } from 'lucide-react';
-import { Input, Segmented, Select } from '../../ui/primitives';
-import { absoluteTime, parseTimestamp } from '../../ui/format';
+import {
+  Combobox,
+  Input,
+  Segmented,
+  Select,
+  type ComboboxOption,
+} from '../../ui/primitives';
 import { cronDays, ordinal, scheduleWords } from '../home/home-format';
+import {
+  defaultZone,
+  wallAt,
+  zonedInstant,
+  zoneNames,
+  zoneTime,
+} from './schedule-zones';
 
 type Mode = 'manual' | 'once' | 'repeat';
 type Frequency =
@@ -167,27 +179,49 @@ export function buildSchedule(draft: ScheduleDraft): {
   }
 }
 
-/** The next time a daily or day-of-week schedule fires, from the builder. */
-export function nextFire(draft: ScheduleDraft, now: Date): Date | null {
-  if (draft.mode === 'once') return parseTimestamp(draft.at);
+const localZone = () =>
+  Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+/** A one-off's wall-clock date and time ("2027-01-01T10:00") as an instant in its zone. */
+export function onceAt(at: string, zone: string): Date | null {
+  const found = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(at);
+  if (!found) return null;
+  const [year, month, day, hour, minute] = found.slice(1).map(Number);
+  return zonedInstant(Date.UTC(year, month - 1, day, hour, minute), zone);
+}
+
+/**
+ * The next time a daily or day-of-week schedule fires, from the builder: at
+ * its wall-clock time in its zone, as the scheduler places it (N9).
+ */
+export function nextFire(
+  draft: ScheduleDraft,
+  now: Date,
+  zone: string = localZone(),
+): Date | null {
+  if (draft.mode === 'once') return onceAt(draft.at, zone);
   if (
     draft.mode !== 'repeat' ||
     !['daily', 'weekdays', 'days', 'monthly'].includes(draft.frequency)
   )
     return null;
   const [hour, minute] = draft.time.split(':').map(Number);
+  const today = new Date(wallAt(now.getTime(), zone));
+  const wall = (months: number, date: number) =>
+    Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth() + months,
+      date,
+      hour || 0,
+      minute || 0,
+    );
   if (draft.frequency === 'monthly') {
     // A month without that day (the 31st in April) is skipped.
     for (let offset = 0; offset < 13; offset += 1) {
-      const candidate = new Date(
-        now.getFullYear(),
-        now.getMonth() + offset,
-        draft.date,
-        hour || 0,
-        minute || 0,
-      );
-      if (candidate.getDate() === draft.date && candidate > now)
-        return candidate;
+      const candidate = wall(offset, draft.date);
+      if (new Date(candidate).getUTCDate() !== draft.date) continue;
+      const fire = zonedInstant(candidate, zone);
+      if (fire > now) return fire;
     }
     return null;
   }
@@ -198,34 +232,54 @@ export function nextFire(draft: ScheduleDraft, now: Date): Date | null {
         ? DAY_ORDER.slice(0, 5)
         : draft.days;
   for (let offset = 0; offset < 8; offset += 1) {
-    const candidate = new Date(now);
-    candidate.setDate(now.getDate() + offset);
-    candidate.setHours(hour || 0, minute || 0, 0, 0);
-    const key = DAY_ORDER[(candidate.getDay() + 6) % 7];
-    if (candidate > now && allowed.includes(key)) return candidate;
+    const candidate = wall(0, today.getUTCDate() + offset);
+    const key = DAY_ORDER[(new Date(candidate).getUTCDay() + 6) % 7];
+    const fire = zonedInstant(candidate, zone);
+    if (fire > now && allowed.includes(key)) return fire;
   }
   return null;
 }
 
+export type ScheduleValue = {
+  schedule: string | null;
+  at: string | null;
+  /** The IANA zone the schedule keeps its times in. */
+  timezone: string;
+};
+
 export default function ScheduleBuilder({
   schedule,
   at,
+  timezone = null,
   enabled,
   onChange,
   now = new Date(),
 }: {
   schedule: string | null;
   at: string | null;
+  /** The saved zone; a new schedule starts with the Row-Bot computer's. */
+  timezone?: string | null;
   enabled: boolean;
-  onChange: (value: { schedule: string | null; at: string | null }) => void;
+  onChange: (value: ScheduleValue) => void;
   now?: Date;
 }) {
   const id = useId();
   const [draft, setDraft] = useState(() => parseSchedule(schedule, at));
-  const update = (patch: Partial<ScheduleDraft>) => {
+  const [zone, setZone] = useState(() => timezone || defaultZone());
+  const zoneOptions = useMemo<ComboboxOption[]>(
+    () =>
+      zoneNames(zone).map((name) => ({
+        value: name,
+        label: name.replaceAll('_', ' '),
+        keywords: [name],
+      })),
+    [zone],
+  );
+  const update = (patch: Partial<ScheduleDraft>, nextZone = zone) => {
     const next = { ...draft, ...patch };
     setDraft(next);
-    onChange(buildSchedule(next));
+    setZone(nextZone);
+    onChange({ ...buildSchedule(next), timezone: nextZone });
   };
   const built = buildSchedule(draft);
   const words =
@@ -237,15 +291,21 @@ export default function ScheduleBuilder({
             draft.frequency === 'cron' &&
             !draft.cron.trim()
           ? 'Enter a cron expression'
-          : scheduleWords(built.schedule, built.at);
+          : draft.mode === 'once'
+            ? `Once · ${zoneTime(onceAt(draft.at, zone) ?? now, zone)}`
+            : scheduleWords(built.schedule, built.at);
   // A one-off run already names its time; say so only when it has passed.
-  const upcoming = draft.mode === 'once' ? null : nextFire(draft, now);
+  const upcoming = draft.mode === 'once' ? null : nextFire(draft, now, zone);
   const passed =
     draft.mode === 'once' &&
-    (parseTimestamp(draft.at)?.getTime() ?? Infinity) <= now.getTime();
+    (onceAt(draft.at, zone)?.getTime() ?? Infinity) <= now.getTime();
   const interval =
     draft.mode === 'repeat' &&
     (draft.frequency === 'hours' || draft.frequency === 'minutes');
+  // Times of day keep their place in a zone; an interval counts on whatever the zone.
+  const zoned =
+    (draft.mode === 'once' && !!draft.at) ||
+    (draft.mode === 'repeat' && !interval);
   return (
     <div className="schedule-builder">
       <Segmented
@@ -403,16 +463,31 @@ export default function ScheduleBuilder({
           )}
         </>
       )}
+      {(draft.mode === 'once' || (draft.mode === 'repeat' && !interval)) && (
+        <div className="schedule-field">
+          <span id={`${id}-zone`}>Timezone</span>
+          <Combobox
+            label="Timezone"
+            value={zone}
+            options={zoneOptions}
+            placeholder="Search timezones"
+            onChange={(value) => value && update({}, value)}
+          />
+        </div>
+      )}
       <p className="schedule-preview" aria-live="polite">
         <CalendarClock size={14} aria-hidden />
         <span>
-          <strong>{words}</strong>
+          <strong>
+            {words}
+            {zoned && ` · ${zone}`}
+          </strong>
           {upcoming && (
             <span>
               {' '}
               · next{' '}
               <time dateTime={upcoming.toISOString()}>
-                {absoluteTime(upcoming)}
+                {zoneTime(upcoming, zone)}
               </time>
               {!enabled && ' once enabled'}
             </span>

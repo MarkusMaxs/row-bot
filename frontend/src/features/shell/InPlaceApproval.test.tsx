@@ -208,3 +208,27 @@ it('does not announce an approval in the conversation on screen', async () => {
   expect(pendingApprovals).toHaveBeenCalled();
   expect(notify).not.toHaveBeenCalled();
 });
+
+it('announces Row-Bot’s question as a question, answered on its card (N4)', async () => {
+  pendingApprovals.mockResolvedValue(
+    page(
+      item({ id: 'question-beta', title: 'Plan the beta', kind: 'question' }),
+    ),
+  );
+  render(<Notices openConversation={null} />);
+  await act(async () => undefined);
+  expect(notify.mock.calls[0][0]).toBe('‘Plan the beta’ has a question');
+
+  render(
+    <ApprovalDecision
+      approvalId="question-beta"
+      subject="Plan the beta"
+      kind="question"
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Answer: Plan the beta' }),
+  );
+  expect(open.mock.calls[0][0].title).toBe('Row-Bot has a question');
+  expect(intent).not.toHaveBeenCalled();
+});

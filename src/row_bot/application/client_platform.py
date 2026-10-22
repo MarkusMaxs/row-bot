@@ -151,12 +151,35 @@ def _buddy_follows(conversation_id: str, event: tuple, handle: Any = None) -> No
         elif not getattr(handle, "approval_granted", False):
             # An action the person already approved for this turn asks
             # nobody, so Buddy never says "Needs approval" for it (B333).
-            _buddy(conversation_id, "approval.needed", "Approval pending",
-                   approval_id=str(getattr(handle, "approval_id", "") or ""))
+            from row_bot.questions import question_item
+            asking = question_item(payload) is not None
+            _buddy(conversation_id, "approval.needed", "Row-Bot has a question" if asking else "Approval pending",
+                   approval_id=str(getattr(handle, "approval_id", "") or ""), **({"question": True} if asking else {}))
     elif kind == "done":
         _buddy(conversation_id, "generation.done", "Done")
     elif kind == "error":
         _buddy(conversation_id, "generation.error", "Error")
+
+
+def _question_answer(asked: dict | None, payload: dict) -> dict | None:
+    """The resume value a resolve carries for Row-Bot's question: its answers (Answer) or skipped (Skip).
+
+    Answers are checked against the question's own options; answers sent for an approval are refused, so an
+    answer can never stand in for one.
+    """
+    from row_bot import questions
+
+    answers = payload.get("answers")
+    if asked is None:
+        if answers is not None:
+            raise ClientPlatformError("question_answer_invalid")
+        return None
+    if payload.get("decision") != "approve":
+        return questions.skipped()
+    try:
+        return questions.answer(asked, answers)
+    except questions.QuestionError:
+        raise ClientPlatformError("question_answer_invalid") from None
 
 
 def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: str,
@@ -321,6 +344,10 @@ class ClientPlatformService:
             threads.migrate_checkpoint_message_ids(conversation_id)
             if self.registry.active(conversation_id):
                 raise ClientPlatformError("generation_active")
+            # Nothing runs here: a turn this process left behind (its end couldn't be recorded, or it was
+            # admitted and never started) can't keep the conversation from taking a message (B399).
+            if settled := admissions.settle_leftovers(conversation_id, self.registry.server_epoch):
+                _LOG.warning("Settled %d leftover turn(s) in %s", settled, conversation_id)
             submission_id = str(configurable.get("platform_submission_id") or uuid.uuid4())
             generation_id = str(configurable.get("generation_id") or uuid.uuid4())
             admitted = admissions.reserve(conversation_id, submission_id, generation_id,
@@ -359,8 +386,13 @@ class ClientPlatformService:
             remember_context(conversation_id, generation_id, config, queue_context)
             handle = self.registry.register(conversation_id, generation_id=generation_id,
                                             pass_id=admitted["pass_id"], cancel_scope=cancel_scope)
-            admissions.start(handle.pass_id, handle.execution_id, handle.server_epoch)
-            handle.segment_id = admissions.start_segment(handle.pass_id)
+            try:
+                admissions.start(handle.pass_id, handle.execution_id, handle.server_epoch)
+                handle.segment_id = admissions.start_segment(handle.pass_id)
+            except BaseException:
+                # Never launched: the conversation must not look busy for good (B399).
+                self.registry.finish(handle, status="interrupted")
+                raise
             handle.input_checkpoint_revision = threads.get_latest_checkpoint_revision(conversation_id)
             handle.model_ref = str(configurable.get("model_override") or "")
             handle.submission_id = submission_id
@@ -751,9 +783,13 @@ class ClientPlatformService:
             if snapshot.get("generation") is None and not self.registry.active(conversation_id):
                 snapshot["generation"] = self._paused_approval_generation(conversation_id)
             present = {row["id"] for row in snapshot["rows"]}
+            # Only live rows the projection dropped to stay within its bound come back from their live text. A
+            # live row retired as the twin of its saved answer never does: it came back as an empty "Paged
+            # content" row that stayed after its text was thrown away (B401).
+            evicted = self.projection.evicted_live_rows(conversation_id)
             for reference in references(conversation_id)[-100:]:
                 row_id = "assistant:" + reference
-                if row_id not in present:
+                if row_id not in present and row_id in evicted:
                     row = {"id": row_id, "role": "assistant", "blocks": [],
                            "content_status": "lazy", "content_ref": reference,
                            "render_revision": snapshot["projection_revision"]}
@@ -1405,7 +1441,11 @@ class ClientPlatformService:
         if followup is None and not resume and str(payload.get("text") or "").strip():
             # The person's message answers a goal that waits on them (B318).
             from row_bot import goals
-            goals.resume_goal_for_answer(conversation_id)
+            try:
+                goals.resume_goal_for_answer(conversation_id)
+            except Exception:
+                # The turn is admitted: it still runs, or it would never end (B399).
+                _LOG.warning("The goal waiting in %s could not take the answer", conversation_id, exc_info=True)
 
         def producer() -> None:
             from row_bot.application.conversation_followups import after_platform_turn, live_goal
@@ -1479,9 +1519,13 @@ class ClientPlatformService:
                             learning_route, self.stream_factory or stream_agent, prepared_text, enabled, config,
                             stop_event=handle.cancel_scope.stop_event)
                     else:
+                        # A question's answer resumes its own interrupt only (N4).
+                        answered = ({"resume_values": approval_context["resume_values"]}
+                                    if (approval_context or {}).get("resume_values") else {})
                         events = ((self.resume_factory or resume_stream_agent)(enabled, config,
                                   bool((approval_context or {}).get("approved")),
-                                  interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event)
+                                  interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event,
+                                  **answered)
                                   if resume else (self.stream_factory or stream_agent)(prepared_text, enabled, config, stop_event=handle.cancel_scope.stop_event))
                     if approval_context is not None and not approval_context.get("approved"):
                         events = _settled_denial(
@@ -1817,6 +1861,11 @@ class ClientPlatformService:
             row = conn.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone()
         if not row or row["status"] != "pending":
             raise ClientPlatformError("approval_already_resolved")
+        from row_bot import questions
+        asked = questions.stored_question(row["approval_payload_json"])
+        answer = _question_answer(asked, payload)
+        if row["resume_kind"] == "conversation" and asked is not None:
+            return self._answer_question_locked(approval_id, row, asked, answer, runtime_surface=runtime_surface)
         if row["resume_kind"] == "conversation":
             conversation_id = str(row["source_thread_id"])
             approved = payload.get("decision") == "approve"
@@ -1858,9 +1907,41 @@ class ClientPlatformService:
                                                        isinstance(item, dict) and item.get("tool") == "computer_use"
                                                        for item in (interrupt if isinstance(interrupt, list) else [interrupt]))})
             return {**result, "approval_id": approval_id}
-        if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve"):
+        if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve", answer=answer):
             raise ClientPlatformError("approval_already_resolved")
         return {"approval_id": approval_id, "status": "completed"}
+
+    def _answer_question_locked(self, approval_id: str, row: Any, asked: dict, answer: dict, *,
+                                runtime_surface: str) -> dict:
+        """The person answered (or skipped) Row-Bot's question in a conversation: only the question goes on (N4).
+
+        Never an approval: the turn resumes the question's own interrupt with the answer, and any action asked
+        beside it asks again for itself.
+        """
+        from row_bot import questions
+        from row_bot.application import client_computer_controls as computer
+        conversation_id = str(row["source_thread_id"])
+        stored = computer.approval_context(row["approval_payload_json"])
+        try:
+            resume_values = questions.resume_values(stored.get("interrupt"), answer)
+        except questions.QuestionError:
+            raise ClientPlatformError("approval_already_resolved") from None
+        answered = questions.outcome(answer) == "answered"
+        # A computer the turn was using keeps its session when the turn goes on, as after an approval.
+        lease_generation = computer.prepare_approval_resume(self, conversation_id, stored, approved=True,
+                                                            runtime_surface=runtime_surface)
+        context = self.claim_legacy_approval(approval_id, conversation_id, answered)
+        from row_bot.application.conversation_followups import after_approval
+        # A goal waiting on its question goes on either way: skipping is not a denial.
+        after_approval(conversation_id, approved=True)
+        _buddy(conversation_id, "approval.approved" if answered else "approval.denied",
+               "Answered" if answered else "Skipped", approval_id=approval_id)
+        result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,
+                             approval_context={"approved": True, "interrupt_ids": context["interrupt_ids"],
+                                               "resume_values": resume_values,
+                                               "pass_id": context.get("pass_id"),
+                                               "generation_id": lease_generation, "computer": False})
+        return {**result, "approval_id": approval_id}
 
 
 client_platform_service = ClientPlatformService()
