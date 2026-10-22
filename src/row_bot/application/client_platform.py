@@ -783,9 +783,13 @@ class ClientPlatformService:
             if snapshot.get("generation") is None and not self.registry.active(conversation_id):
                 snapshot["generation"] = self._paused_approval_generation(conversation_id)
             present = {row["id"] for row in snapshot["rows"]}
+            # Only live rows the projection dropped to stay within its bound come back from their live text. A
+            # live row retired as the twin of its saved answer never does: it came back as an empty "Paged
+            # content" row that stayed after its text was thrown away (B401).
+            evicted = self.projection.evicted_live_rows(conversation_id)
             for reference in references(conversation_id)[-100:]:
                 row_id = "assistant:" + reference
-                if row_id not in present:
+                if row_id not in present and row_id in evicted:
                     row = {"id": row_id, "role": "assistant", "blocks": [],
                            "content_status": "lazy", "content_ref": reference,
                            "render_revision": snapshot["projection_revision"]}
