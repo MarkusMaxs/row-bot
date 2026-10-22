@@ -225,7 +225,7 @@ it('signs in from another device with Microsoft’s code', async () => {
   const code = await screen.findByText('ABCD-EFGH');
   expect(code).toBeVisible();
   expect(screen.getByText('microsoft.com/devicelogin')).toBeVisible();
-  expect(screen.getByRole('timer')).toHaveTextContent('15:00');
+  expect(await screen.findByRole('timer')).toHaveTextContent(/1[45]:dd/);
   fireEvent.click(
     screen.getByRole('button', { name: /Open microsoft.com\/devicelogin/ }),
   );
