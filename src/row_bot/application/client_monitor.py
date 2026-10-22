@@ -589,9 +589,12 @@ def read_pending_approvals() -> dict[str, Any]:
         else:
             source, title = "workflow", str(row.get("task_name") or "") or "Workflow"
             conversation_id, task_id = None, str(row.get("task_id") or "") or None
+        from row_bot.questions import stored_question
         items.append({
             "id": str(row["id"]),
             "source": source,
+            # Row-Bot's question (N4) is answered on its card, not approved.
+            "kind": "question" if stored_question(row.get("approval_payload_json")) is not None else "approval",
             "title": _bounded(title, 160),
             "what": _bounded(str(row.get("message") or "").strip(), 512),
             "requested_at": _bounded(row.get("requested_at"), 80),

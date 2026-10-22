@@ -4159,6 +4159,8 @@ class PendingApproval(WireModel):
     ids to answer it (``/approvals/{id}``) or open where it was raised."""
     id: OpaqueId
     source: Literal["workflow", "conversation", "agent"]
+    # "question": Row-Bot asks the person to choose (N4), answered on its card rather than approved.
+    kind: Literal["approval", "question"] = "approval"
     title: str = Field(max_length=160)
     what: str = Field(max_length=512)
     requested_at: str = Field(max_length=80)
@@ -4993,12 +4995,22 @@ class AgentStartPayload(WireModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=16000)]
 
 
+class ApprovalAnswer(WireModel):
+    """The person's answer to one of Row-Bot's questions (N4): the options picked, by position, or their own words."""
+
+    choices: list[Annotated[int, Field(ge=0, le=3)]] = Field(default_factory=list, max_length=4)
+    other: str = Field(default="", max_length=500)
+
+
 class ApprovalPayload(WireModel):
     decision: Literal["approve", "reject"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
     # "turn" also approves later actions of the same kind until the turn ends (F21); only kinds the view marks
     # repeatable take it, others are approved once.
     scope: Literal["once", "turn"] = "once"
+    # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
+    # person's input, never an approval of an action.
+    answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
 
 
 class DeckSetupPayload(WireModel):
@@ -5254,6 +5266,8 @@ class TaskApprovalReview(WireModel):
     message_truncated: bool
     response_available: bool
     nonce: str | None = Field(default=None, max_length=128)
+    # "question": Row-Bot's question (N4), answered on its own card (/approvals/{id}), never approved here.
+    kind: Literal["approval", "question"] = "approval"
 
 
 class TaskApprovalPage(WireModel):
@@ -6616,6 +6630,23 @@ class ApprovalSetup(WireModel):
     folders: list[ApprovalFolderChoice] = Field(default_factory=list, max_length=8)
 
 
+class ApprovalQuestionOption(WireModel):
+    """One option of a question card; the recommended one carries its own tag."""
+
+    label: str = Field(min_length=1, max_length=60)
+    description: str = Field(default="", max_length=160)
+    recommended: bool = False
+
+
+class ApprovalQuestion(WireModel):
+    """One of Row-Bot's questions (N4): a header chip, the question and 2 to 4 options; "Other" is always offered."""
+
+    header: str = Field(min_length=1, max_length=12)
+    question: str = Field(min_length=1, max_length=300)
+    multi_select: bool = False
+    options: list[ApprovalQuestionOption] = Field(min_length=2, max_length=4)
+
+
 class ToolActivity(WireModel):
     state: Literal["tool_call", "tool_done"]
     tool_name: str = Field(default="", max_length=128)
@@ -6668,6 +6699,8 @@ class ApprovalRequired(WireModel):
     # The card's question in Row-Bot's own words, when the action has one ("Allow Row-Bot's browser to open
     # localhost:5173 in this chat?"); otherwise the card asks from the action's name.
     question: str = Field(default="", max_length=240)
+    # Row-Bot's questions with options (N4): a question card, answered rather than approved.
+    questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
 
 
 class GenerationError(WireModel):
@@ -7193,10 +7226,18 @@ class AppViewAppSetting(WireModel):
     enabled: bool
 
 
+class TraceQuestionAnswer(WireModel):
+    """One answered question, as its collapsed card says it ("Beta timing: Beta.1 now")."""
+
+    header: str = Field(min_length=1, max_length=12)
+    answer: str = Field(min_length=1, max_length=600)
+
+
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
         "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
+        "question_answered",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7229,6 +7270,9 @@ class TraceSpecialization(WireModel):
     # sandbox_unprepared (a test run that lacked its tools) says which in error_code:
     # "pytest_missing" or "packages_missing".
     job_id: str = Field(default="", max_length=64, pattern=r"^(prep-[0-9a-f]{8})?$")
+    # question_answered (N4): how Row-Bot's question ended and, when answered, what the person chose.
+    outcome: Literal["", "answered", "skipped", "timed_out"] = ""
+    answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
 
 
 class TranscriptTraceItem(WireModel):
@@ -7571,6 +7615,8 @@ class ApprovalView(WireModel):
     reviewer_reason: str = Field(default="", max_length=240)
     # The card's question in Row-Bot's own words, when the action has one.
     question: str = Field(default="", max_length=240)
+    # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
+    questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
     policy_revision: Revision
     nonce: str = Field(min_length=32, max_length=256)
 
