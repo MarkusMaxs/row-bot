@@ -379,6 +379,40 @@ def test_delete_learning_data_removes_it_and_switched_off_chats_stay_off(api, no
     assert receipt["snapshot"]["opted_out_conversations"] == ["chat-a"]
 
 
+def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, monkeypatch):
+    # The command dispatcher's last branch deletes everything: every other action the API accepts, whatever
+    # its fields, ends in its own branch (or is refused) and never reaches it.
+    import typing
+
+    from row_bot.api.v1 import security
+    from row_bot.api.v1.schemas import LearningCommand
+
+    client, headers, data, _ = api
+    monkeypatch.setattr(security.ClientSecurity, "rate", lambda self, session, lane: None)  # ~70 requests in a row
+    _turn_on(client, headers)
+    _captured_reply(data, "chat-a", "run-msg-3")  # the actions below name chat-b (opt_out removes its own)
+    deleted: list[str] = []
+    monkeypatch.setattr(LearningStore, "delete_all", lambda self: deleted.append("store") or None)
+    actions = [action for action in typing.get_args(LearningCommand.model_fields["action"].annotation)
+               if action != "delete_data"]
+    actions.sort(key=lambda action: action in ("turn_off", "pause"))  # everything else while Learning is on
+    fields = {"version": 1, "kind": "document_lookups", "job_id": "job_unknown", "runtime": "ollama",
+              "folder": "C:/nowhere", "item_id": "item_unknown", "model": "qwen3.5-2b", "download": "not_now",
+              "conversation_id": "chat-b", "message_id": "run-msg-3", "signal_id": "sig_unknown",
+              "category": "wrong_answer"}
+    extra = {"turn_on": {"setup": SETUP},
+             "save_advanced": {"advanced": {"starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002,
+                                            "epochs": 3, "context": 16384}}}
+
+    reached = 0
+    for action in actions:
+        response = _command(client, headers, action, **fields, **extra.get(action, {}))
+        reached += response.status_code != 422  # the API took it (it reached Learning's own checks)
+
+    assert len(actions) >= 30 and reached == len(actions) and deleted == []
+    assert LearningStore(data).owned_by("chat-a")  # what Learning recorded is still there
+
+
 def test_delete_with_nothing_to_delete_is_refused(api, no_channels):
     client, headers, _data, _ = api
 
