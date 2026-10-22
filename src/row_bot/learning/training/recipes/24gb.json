@@ -7,7 +7,7 @@
   "title": "24 GB graphics cards",
   "starting_model": "qwen3.5-9b",
   "method": "lora_sft",
-  "evidence": "Not certified: a candidate until the RTX 5090 results (scripts/learning_gpu_check.py) are read (L2c2). Qwen3.5 9B as QLoRA at 16K, served at Q4_K_M (O26).",
+  "evidence": "Not certified (L2x, RTX 5090 under a 22 GB cap): Qwen3.5 9B as QLoRA at 32K loaded and trained (95% of the card busy) but every run was ended before its result: on Windows each byte a run holds on the card is also charged to the computer's commit (RAM + page file), and the shared computer it ran on had 19-33 GB of commit free. Measure again on a computer with nothing else running or a larger page file.",
   "settings": {
     "max_seq_length": 16384,
     "bits": 4,
