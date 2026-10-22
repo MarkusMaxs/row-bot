@@ -1,7 +1,12 @@
-"""Learning's quiet-hours runner (L2a; L3a adds diagnosis to the same slot).
+"""Learning's quiet-hours runner (L2a; L3a adds the nightly look for things to improve).
 
 Quiet hours are Dream Cycle's hours (D12). Once a minute while Learning is on the runner
-looks at what is due, after Dream:
+looks at what is due, after Dream, in this order:
+
+- **the night's look for things to improve** (L3a, :class:`NightLook`): once a night, when nobody
+  is using Row-Bot, the vault takes its share of new work and held-out corrections first, then
+  ``diagnosis`` groups issues and drafts changes. It stops before its next model call when the
+  person comes back or Learning is paused, and goes on later that night;
 
 - a personal-model training run starts or continues when **Train during quiet hours**
   is on, training happens on this computer, the training engine and its weights are
@@ -158,13 +163,96 @@ class QuietHours:
         return (self.now() - began).total_seconds() >= DREAM_GRACE_SECONDS
 
 
+class NightLook:
+    """The night's look for things to improve (L3a): after Dream, while nobody uses Row-Bot, before
+    training. ``client`` and ``check_model`` are the diagnosis call's (tests pass fakes)."""
+
+    def __init__(self, *, lease: Any, root: Path | None = None, hours: QuietHours | None = None,
+                 client: Any = None, check_model: Callable[[], None] | None = None,
+                 clock: Callable[[], float] | None = None) -> None:
+        self.lease = lease
+        self._root = root
+        self.hours = hours or QuietHours(root)
+        self.client = client
+        self.check_model = check_model
+        self.clock = clock
+        self.running = False
+
+    def _store(self) -> Any:
+        from row_bot.learning.store import LearningStore
+
+        return LearningStore(self._root, clock=self.clock) if self.clock is not None else LearningStore(self._root)
+
+    def tonight(self) -> str | None:
+        began = self.hours.started_at()
+        return began.date().isoformat() if began is not None else None
+
+    def done_tonight(self) -> bool:
+        from row_bot.learning import diagnosis
+
+        night = self.tonight()
+        found = diagnosis.last_night(self._store()) if gate.store_exists(self._root) else None
+        return bool(night and found and found.get("night") == night and found.get("state") != "stopped")
+
+    def due(self) -> bool:
+        """Learning is on, it is quiet hours after Dream, and tonight's look hasn't finished."""
+
+        if not gate.is_enabled(self._root) or not gate.store_exists(self._root):
+            return False
+        if not self.hours.inside() or not self.hours.dream_done():
+            return False
+        return not self.done_tonight()
+
+    def tick(self) -> Any:
+        """Run tonight's look when it is due and the computer is free; returns its report, else None."""
+
+        if not self.due() or not self.lease.read().free:
+            return None
+        night = self.tonight()
+        if night is None:
+            return None
+        from row_bot.learning import diagnosis, holdout
+
+        store = self._store()
+        try:
+            holdout.mark_corrections(store)  # first: drafting never sees a correction held out tonight
+        except Exception:
+            logger.exception("Learning couldn't hold out tonight's corrections; it looks again tomorrow night")
+            diagnosis.note_night(store, night, "failed")
+            return None
+        try:
+            from row_bot.learning import evaluation
+
+            evaluation.refresh_audit(store=store, asked_by="quiet hours")
+        except Exception:
+            logger.warning("Learning couldn't refresh its hidden tests tonight", exc_info=True)
+        client = self.client
+        if client is None:
+            from row_bot.learning.calls import LedgerModelClient
+
+            client = LedgerModelClient()
+        self.running = True
+        try:
+            return diagnosis.run(
+                store, client=client, night=night,
+                should_stop=lambda: not gate.is_enabled(self._root) or not self.lease.read().free,
+                check_model=self.check_model or diagnosis.check_default_model)
+        except Exception:
+            logger.exception("Learning's look for things to improve failed")
+            diagnosis.note_night(store, night, "failed")
+            return None
+        finally:
+            self.running = False
+
+
 class LearningRunner:
     """Decides what is due and asks the supervisor to start it. With a ``planner`` (L2c) it plans
-    runs from the dataset, and with ``releases`` it makes each finished run a version."""
+    runs from the dataset, and with ``releases`` it makes each finished run a version. With a
+    ``look`` (L3a) the night's look for things to improve runs first."""
 
     def __init__(self, supervisor: TrainingSupervisor, *, root: Path | None = None,
                  hours: QuietHours | None = None, planner: Any = None, releases: Any = None,
-                 comparisons: Any = None, unloader: Any = None) -> None:
+                 comparisons: Any = None, unloader: Any = None, look: NightLook | None = None) -> None:
         self.supervisor = supervisor
         self._root = root
         self.hours = hours or QuietHours(root)
@@ -173,6 +261,7 @@ class LearningRunner:
         # L2c2: a ready version's comparison, and O51's unloading of Row-Bot's own resident model.
         self.comparisons = comparisons
         self.unloader = unloader
+        self.look = look
         self._last = RunnerStatus("off")
         self._lock = threading.Lock()
 
@@ -335,8 +424,17 @@ class LearningRunner:
         """One pass: start or continue what is due, and make a finished run a version."""
 
         with self._lock:
+            if self.look is not None:
+                try:
+                    self.look.tick()  # Dream → the night's look → training
+                except Exception:
+                    logger.exception("Learning's look for things to improve failed")
             try:
-                self._last = self._decide(act=True)
+                if self.look is not None and self.look.due():
+                    # Tonight's look hasn't finished (the person came back): training waits for it.
+                    self._last = RunnerStatus("waiting", "in_use")
+                else:
+                    self._last = self._decide(act=True)
             except Exception:
                 logger.exception("Learning's quiet-hours runner failed")
             if self.releases is not None:
@@ -380,7 +478,8 @@ def get() -> LearningRunner:
             supervisor.dataset = LearningDataset(planner)
             comparisons = Comparisons(lease=supervisor.lease, training=supervisor.training)
             _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs),
-                                     comparisons=comparisons, unloader=OwnModelUnloader())
+                                     comparisons=comparisons, unloader=OwnModelUnloader(),
+                                     look=NightLook(lease=supervisor.lease))
         return _runner
 
 
@@ -389,9 +488,10 @@ def loaded() -> LearningRunner | None:
 
 
 def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=None,
-              comparisons=None) -> TrainingSupervisor:
-    """Plug in the training engine, the dataset compiler, the lease, the planner, the release maker or
-    the comparisons (L2b, L2c, L2c2; the fake ones in tests and the browser fixture)."""
+              comparisons=None, look=None) -> TrainingSupervisor:
+    """Plug in the training engine, the dataset compiler, the lease, the planner, the release maker,
+    the comparisons or the night's look (L2b, L2c, L2c2, L3a; the fake ones in tests and the browser
+    fixture)."""
 
     runner = get()
     supervisor = runner.supervisor
@@ -401,8 +501,12 @@ def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=N
             runner.planner.engine = engine
     if dataset is not None:
         supervisor.dataset = dataset
+    if look is not None:
+        runner.look = look
     if lease is not None:
         supervisor.lease = lease
+        if runner.look is not None:
+            runner.look.lease = lease
     if planner is not None:
         runner.planner = planner
     if releases is not None:
@@ -521,6 +625,7 @@ __all__ = [
     "DREAM_GRACE_SECONDS",
     "INTERVAL_SECONDS",
     "LearningRunner",
+    "NightLook",
     "QuietHours",
     "RunnerStatus",
     "configure",

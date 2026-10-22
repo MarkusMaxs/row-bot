@@ -103,7 +103,7 @@ def test_a_correction_in_the_next_message_becomes_a_signal_on_the_reply(work, le
     assert report.confirmed == (first[-1],) and report.considered == 2
     [found] = [item for item in store.find("signal") if item.kind == "next_message_correction"]
     assert found.decision_id == first[-1] and found.thread_id == "chat-1"
-    assert found.created_at >= clock.now  # dated when Learning confirmed it, so holdout's walk never skips it
+    assert clock.now - 1 < found.created_at < clock.now  # dated when Learning confirmed it: holdout never skips it
     assert other[-1] not in {item.decision_id for item in store.find("signal")}
     assert corrections.confirm(store).confirmed == ()  # each message is judged once
 

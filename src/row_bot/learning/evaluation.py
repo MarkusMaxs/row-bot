@@ -54,12 +54,19 @@ from typing import Any, Literal, Protocol
 
 from row_bot import learning as gate
 from row_bot.learning import audit
+from row_bot.learning.calls import (
+    LedgerModelClient,
+    ModelClient,
+    ModelReply,
+    estimate_tokens,
+    text_of,
+)
 from row_bot.learning.contracts import Cost, Decision, TaskFixture, TestRun, new_id
 from row_bot.learning.packs import PackTask, visible_tasks
 from row_bot.learning.packs.fake_apps import FakeApps
 from row_bot.learning.packs.verify import Outcome, normalize, solve, verify
 from row_bot.learning.sandbox import Sandbox, SandboxError
-from row_bot.learning.spending import TokenMeter, is_local_provider
+from row_bot.learning.spending import TokenMeter
 from row_bot.learning.store import MARK_HELD_OUT
 
 logger = logging.getLogger(__name__)
@@ -89,8 +96,6 @@ JUDGE_MIN_AGREEMENT = 0.85
 SHORT_TEXT = 160
 RESULTS_FORMAT = "row_bot.learning.test_results"
 PURPOSE = "learning_test"
-_CHARS_PER_TOKEN = 3.5
-_OUTPUT_ALLOWANCE = 4_096
 
 Status = Literal["passed", "failed", "budget", "error", "unverified", "skipped", "not_run"]
 Check = Literal["exact_action", "tool_choice"]
@@ -331,97 +336,8 @@ def sign_test(better: int, worse: int) -> float:
 # ── The model ───────────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class ModelReply:
-    message: Any
-    input_tokens: int
-    output_tokens: int
-    local: bool
-    model_ref: str
-
-    @property
-    def tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
-
-
-class ModelClient(Protocol):
-    """How evaluation asks a model; tests pass a fake."""
-
-    def invoke(self, messages: Sequence[Any], *, tools: Sequence[Mapping[str, Any]] | None, model_ref: str | None,
-               purpose: str) -> ModelReply: ...
-
-    def is_local(self, model_ref: str | None) -> bool: ...
-
-
-def estimate_tokens(messages: Sequence[Any], tools: Sequence[Mapping[str, Any]] | None = None) -> int:
-    """An upper-leaning token estimate of one call: what is sent plus room for the answer."""
-
-    chars = 0
-    for message in messages:
-        content = getattr(message, "content", message.get("content") if isinstance(message, Mapping) else "")
-        chars += len(content if isinstance(content, str) else json.dumps(content, default=str)) + 16
-        calls = getattr(message, "tool_calls", None)
-        if calls:
-            chars += len(json.dumps(calls, default=str))
-    if tools:
-        chars += len(json.dumps(list(tools), default=str))
-    return math.ceil(chars / _CHARS_PER_TOKEN) + _OUTPUT_ALLOWANCE
-
-
-class LedgerModelClient:
-    """Learning's own model calls (E13): the default chat model at the lowest effort unless the
-    arm names its model (D1), tagged ``learning_*`` in the usage ledger."""
-
-    def __init__(self) -> None:
-        self._models: dict[tuple[str, str], tuple[Any, str, str]] = {}
-
-    def _resolve(self, model_ref: str | None, purpose: str) -> tuple[Any, str, str]:
-        key = (str(model_ref or ""), purpose)
-        cached = self._models.get(key)
-        if cached is not None:
-            return cached
-        from row_bot import models
-        from row_bot.providers import background
-        from row_bot.providers.reasoning import canonical_reasoning_model_ref
-        from row_bot.providers.resolution import resolve_provider_config
-
-        ref = background.background_model_ref(purpose, task_model=model_ref)
-        if not ref:
-            raise EvaluationError("no_model", "choose a default model first")
-        resolved = resolve_provider_config(ref, allow_legacy_local=True)
-        canonical = canonical_reasoning_model_ref(resolved.provider_id, resolved.runtime_model)
-        reasoning = background.background_reasoning(canonical)
-        llm = models.get_llm_for(resolved.selection_ref, reasoning_plan=reasoning.plan)
-        found = (llm, resolved.selection_ref, resolved.provider_id)
-        self._models[key] = found
-        return found
-
-    def is_local(self, model_ref: str | None) -> bool:
-        try:
-            return is_local_provider(self._resolve(model_ref, PURPOSE)[2])
-        except Exception:
-            return False
-
-    def invoke(self, messages: Sequence[Any], *, tools: Sequence[Mapping[str, Any]] | None, model_ref: str | None,
-               purpose: str = PURPOSE) -> ModelReply:
-        from row_bot.providers.usage_ledger import with_usage_purpose
-
-        llm, selection_ref, provider = self._resolve(model_ref, purpose)
-        runnable: Any = llm.bind_tools(list(tools)) if tools else llm
-        if provider == "ollama" and getattr(llm, "reasoning", None) is True:
-            runnable = runnable.bind(reasoning=False)
-        message = with_usage_purpose(runnable, purpose).invoke(list(messages))
-        usage = getattr(message, "usage_metadata", None) or {}
-        estimate = estimate_tokens(messages, tools) - _OUTPUT_ALLOWANCE
-        input_tokens = int(usage.get("input_tokens") or estimate)
-        output_tokens = int(usage.get("output_tokens") or math.ceil(len(_text_of(message)) / _CHARS_PER_TOKEN))
-        return ModelReply(message, input_tokens, output_tokens, is_local_provider(provider), selection_ref)
-
-
 def _text_of(message: Any) -> str:
-    from row_bot.providers.background import reply_text
-
-    return reply_text(message)
+    return text_of(message)
 
 
 def _ask(client: ModelClient, messages: Sequence[Any], tools: Sequence[Mapping[str, Any]] | None, arm: Arm,

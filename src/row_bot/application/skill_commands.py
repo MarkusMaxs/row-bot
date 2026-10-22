@@ -394,6 +394,9 @@ def _proposal_store() -> tuple[list[dict], str]:
                 "consolidate_skills",
             }:
                 continue
+            payload = value.get("payload")
+            if isinstance(payload, dict) and isinstance(payload.get("learning"), dict):
+                continue  # Learning's own draft: it's tested and offered in Learning (L3b), not here
             public = {
                 "id": _text(value.get("id"), 128, required=True),
                 "type": value["proposal_type"],

@@ -981,7 +981,7 @@ class _TaskGate:
         if not local and self.cloud_cap is not None and self.cloud_spent + estimate > self.cloud_cap:
             self.refused = "limit"
             raise ModelCallRefused("learning evaluation budget: the monthly limit would be passed")
-        from row_bot.learning.evaluation import _OUTPUT_ALLOWANCE
+        from row_bot.learning.calls import OUTPUT_ALLOWANCE as _OUTPUT_ALLOWANCE
 
         self.sent[str(run_id)] = max(0, int(estimate) - _OUTPUT_ALLOWANCE)
 

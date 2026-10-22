@@ -346,8 +346,9 @@ def confirm(store: LearningStore, *, clock: Callable[[], float] | None = None,
             continue
         known.add(reply.id)
         confirmed.append((episode, reply))
+    # Dated just before now, in the order the messages came (anything made after this pass is newer).
     records = [Signal(id=new_id("sig"), kind=NEXT_MESSAGE, thread_id=reply.thread_id,
-                      created_at=now + index * 1e-6, conversation_id=reply.conversation_id,
+                      created_at=now - (len(confirmed) - index) * 1e-6, conversation_id=reply.conversation_id,
                       episode_id=reply.episode_id, decision_id=reply.id)
                for index, (_episode, reply) in enumerate(confirmed)]
     if records:
