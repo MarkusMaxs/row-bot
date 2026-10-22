@@ -527,7 +527,7 @@ def test_a_tested_change_is_reviewed_used_and_undone_through_the_api(api, no_cha
     _turn_on(client, headers)
     learning_block = {"issue": "tool_workflows:corrected", "attempt_id": None, "kind_of_work": "tool_workflows",
                       "state": "tested", "never_automatic": False, "why": {"chats": 2, "corrections": 2},
-                      "test": {"verdict": "better", "rows": [{"label": "Tool workflows it hadn't seen", "total": 8,
+                      "test": {"verdict": "better", "rows": [{"label": "Tool workflows it hadn’t seen", "total": 8,
                                                               "without": 5, "with": 7}],
                                "note": "Testing used 400K tokens.", "small": True, "tested_at": 1.0,
                                "own": {"problems": 8, "difference": 0.25, "low": 0.0, "high": 0.5}}}
@@ -538,7 +538,7 @@ def test_a_tested_change_is_reviewed_used_and_undone_through_the_api(api, no_cha
 
     [view] = _snapshot(client, headers)["changes"]
     assert (view["state"], view["change"], view["setting"]) == ("ready", "way_of_working", "How Row-Bot uses its tools")
-    assert view["test"]["rows"] == [{"label": "Tool workflows it hadn't seen", "total": 8, "without": 5,
+    assert view["test"]["rows"] == [{"label": "Tool workflows it hadn’t seen", "total": 8, "without": 5,
                                      "with_change": 7}]
     assert view["test"]["difference"] == 25.0 and view["test"]["verdict"] == "better"
 

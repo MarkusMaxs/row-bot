@@ -297,14 +297,14 @@ def _testing_now() -> dict[str, Any] | None:
 
 
 _CHANGE_OF = {"lesson": "lesson", "behaviour": "way_of_working", "create_skill": "skill", "patch_skill": "skill"}
-_VERDICTS = frozenset({"better", "no_difference", "worse", "worse_elsewhere"})
+_CHANGE_VERDICTS = frozenset({"better", "no_difference", "worse", "worse_elsewhere"})
 _KINDS = ("document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other")
 _WHY = ("chats", "corrections", "stops", "retries", "denials", "failures", "imported")
 
 
 def _test_view(meta: dict[str, Any]) -> dict[str, Any] | None:
     test = meta.get("test")
-    if not isinstance(test, dict) or test.get("verdict") not in _VERDICTS:
+    if not isinstance(test, dict) or test.get("verdict") not in _CHANGE_VERDICTS:
         return None
     rows = [{"label": _text(row.get("label"), 120), "total": max(0, int(row.get("total") or 0)),
              "without": max(0, int(row.get("without") or 0)), "with_change": max(0, int(row.get("with") or 0))}

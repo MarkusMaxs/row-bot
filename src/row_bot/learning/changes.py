@@ -605,7 +605,7 @@ class Tester:
         local = sum(item.local_tokens for item in parts)
         rows = []
         if own.get("problems"):
-            rows.append(_row(f"{kinds.label(kind)} it hadn't seen", own))
+            rows.append(_row(f"{kinds.label(kind)} it hadn’t seen", own))
         if rest.get("problems"):
             rows.append(_row("Other tasks", rest))
         small = any(item.small_sample for item in parts) or int(own.get("problems") or 0) < evaluation.SMALL_SAMPLE

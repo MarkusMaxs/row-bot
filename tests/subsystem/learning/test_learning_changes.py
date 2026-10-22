@@ -100,7 +100,7 @@ def test_a_draft_is_tested_with_and_without_it_and_offered_only_when_better(stor
 
     assert result.verdict == "better"
     own, rest = result.rows
-    assert (own["label"], own["total"], own["without"], own["with"]) == ("Document lookups it hadn't seen", 3, 0, 3)
+    assert (own["label"], own["total"], own["without"], own["with"]) == ("Document lookups it hadn’t seen", 3, 0, 3)
     # Coding tasks need a container (none here): one transform and one tool workflow.
     assert (rest["label"], rest["total"], rest["without"], rest["with"]) == ("Other tasks", 2, 2, 2)
     assert "Small test, so expect some variation." in result.note

@@ -294,7 +294,7 @@ function lessonMeta(item: LearningLessonView): string {
   const kind =
     item.kind && item.kind !== 'other' ? kindLabel(item.kind) : 'Your work';
   return item.status === 'in_use'
-    ? `${kind} · used ${timesWords(item.used ?? 0)} this month`
+    ? `${kind} · ${item.used ? `used ${timesWords(item.used)} this month` : 'not used yet this month'}`
     : kind;
 }
 

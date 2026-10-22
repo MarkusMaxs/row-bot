@@ -60,8 +60,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # Row-Bot's questions with options (asked, answered, collapsed; a helper's and a workflow's),
 # a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
 # and Learning (preview): turning it on, its tab, Teach and Undo, a chat switched off, the personal
-# model's download, training, its versions, comparing, trying and using it, and the night's look
-# for things to improve with the changes it drafted.
+# model's download, training, its versions, comparing, trying and using it, the night's look
+# for things to improve with the changes it drafted, and testing and using those changes.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -95,6 +95,7 @@ BROWSER_SMOKE_SPECS = (
     "learning-use",
     "learning-diagnosis",
     "learning-starting-model",
+    "learning-changes",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (

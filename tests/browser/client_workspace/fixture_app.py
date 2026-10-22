@@ -4426,6 +4426,157 @@ def l3a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
     return {"action": action}
 
 
+# ── Learning (preview), L3b: changes tested, ready, in use, not used; lessons; Used a lesson ──
+
+_L3B_CHAT = "l3b-policies"
+
+
+def _l3b_change(kind: str, title: str, work: str, text: str, *, state: str, test: dict | None = None,
+                status: str = "draft", slot: str = "", why: dict | None = None, never: bool = False) -> str:
+    from row_bot import evolution
+
+    learning = {"issue": f"{work}:l3b-{title[:12]}", "attempt_id": None, "kind_of_work": work, "state": state,
+                "never_automatic": never,
+                "why": why or {"chats": 4, "corrections": 2, "stops": 1, "retries": 0, "denials": 0, "failures": 0,
+                               "imported": 0}}
+    if test is not None:
+        learning["test"] = test
+    payload = {"text": text, "kind_of_work": work, "learning": learning, **({"slot": slot} if slot else {})}
+    return str(evolution.create_proposal(insight_ids=[], proposal_type=kind, title=title, rationale="Fixture.",
+                                         status=status, payload=payload, dedupe=False)["id"])
+
+
+def _l3b_test(label: str, total: int, without: int, with_change: int, verdict: str = "better",
+              difference: float = 0.25) -> dict:
+    import time as _time
+
+    return {"verdict": verdict, "rows": [{"label": label, "total": total, "without": without, "with": with_change},
+                                         {"label": "Other tasks", "total": 18, "without": 17, "with": 17}],
+            "note": "Testing used 1.1M tokens · Small test, so expect some variation.", "small": True,
+            "tested_at": _time.time() - 5 * 3600,
+            "own": {"problems": total, "difference": difference, "low": 0.05, "high": 0.45}}
+
+
+def _l3b_changes() -> None:
+    import json as _json
+    import time as _time
+    from datetime import date
+
+    from row_bot.learning import changes, diagnosis
+    from row_bot.learning.store import LearningStore
+
+    _l3b_change("lesson", "Pick documents by ID, not title", "document_lookups",
+                "When two documents share a title, choose by ID and say which one you picked.", state="tested",
+                status="ready", test=_l3b_test("Document lookups it hadn’t seen", 12, 7, 10))
+    _l3b_change("behaviour", "Check the calendar before booking", "tool_workflows",
+                "Before adding an event, read that day's calendar and say if it overlaps another event.",
+                state="tested", status="ready", slot="tool_guidance",
+                test=_l3b_test("Tool workflows it hadn’t seen", 9, 4, 7))
+    _l3b_change("lesson", "Use the current policy", "document_lookups",
+                "Answer from the newest approved policy and name its ID.", state="edited",
+                test=_l3b_test("Document lookups it hadn’t seen", 12, 8, 10))
+    _l3b_change("lesson", "Pick the newest file", "structured_transforms",
+                "When a folder holds several exports, use the newest one.", state="not_better", status="rejected",
+                test=_l3b_test("Structured transforms it hadn’t seen", 10, 9, 9, verdict="no_difference",
+                               difference=0.0))
+    _l3b_change("behaviour", "Hand long reports to a helper", "other",
+                "When a report needs more than ten steps, hand it to a helper and say so.", state="waiting_to_test",
+                slot="delegation", never=True)
+    used = _l3b_change("lesson", "Say which document you used", "document_lookups",
+                       "After answering from a document, name the document and its ID.", state="tested",
+                       status="ready", test=_l3b_test("Document lookups it hadn’t seen", 12, 9, 11))
+    changes.use(used, by="automatic")
+    night = date.today().isoformat()
+    store = LearningStore()
+    diagnosis._save(store, diagnosis.NightReport(night, found=4, drafted=3, refused=0))  # noqa: SLF001
+    store.set_meta_values({changes.NIGHT_KEY: _json.dumps(changes.NightTests(
+        night, tested=3, ready=2, not_better=1, used=1, tokens=2_400_000).to_dict())})
+    memory = changes.block(changes.get(used))["memory_id"]
+    _l3b_chat(memory)
+    del _time
+
+
+def _l3b_chat(memory_id: str) -> None:
+    """A chat whose first turn recalled the lesson in use: its reply says "Used a lesson"."""
+
+    from datetime import datetime, timezone
+
+    from row_bot import threads, turn_context
+
+    if not threads._thread_exists(_L3B_CHAT):  # noqa: SLF001
+        threads.create_thread("Policies", thread_id=_L3B_CHAT, seed_default_skills=False)
+    values = turn_context.TurnContextValues(
+        now=datetime.now(timezone.utc), memories=({"id": memory_id, "subject": "Say which document you used",
+                                                   "content": "Name the document and its ID."},),
+        recall_block=lambda memories: "Relevant memories:\n- Name the document and its ID.")
+    context = turn_context.build_message(turn_id="l3b-t1", values=values, baseline=turn_context.Baseline(),
+                                         summary_marker="")
+    threads.append_checkpoint_messages(_L3B_CHAT, [
+        HumanMessage(id="l3b-ask-1", content="What is the client dinner limit?"), context,
+        AIMessage(id="l3b-reply-1", content="85 EUR a person, from POL-114 (Travel policy, updated 2026-02-10)."),
+    ])
+
+
+def _l3b_testing() -> None:
+    from row_bot import learning
+    from row_bot.learning import changes
+
+    proposal = next(item for item in changes.learning_changes() if item.get("title") == "Hand long reports to a helper")
+    path = learning.folder_path() / changes.PROGRESS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"change_id": proposal["id"], "title": proposal["title"], "state": "running",
+                                "done": 9, "total": 24}), encoding="utf-8")
+
+
+def _l3b_saved_lesson() -> None:
+    from row_bot import knowledge_graph
+
+    knowledge_graph.save_entity("self_knowledge", "Shell: pip needs --user on macOS",
+                                "On macOS, install Python packages with --user when the system Python is used.")
+
+
+def _l3b_restore() -> None:
+    from row_bot import knowledge_graph, learning
+    from row_bot.learning import changes
+
+    for proposal in changes.learning_changes():
+        if changes.view_state(proposal) == "in_use":
+            try:
+                changes.undo(str(proposal["id"]))
+            except Exception:  # noqa: BLE001
+                pass
+    _l3a_forget_drafts()
+    for row in knowledge_graph.list_entity_summaries("self_knowledge", limit=200):
+        knowledge_graph.delete_entity(str(row["id"]))
+    for name in (learning.WAYS_OF_WORKING_FILE, learning.LESSONS_FILE):
+        (learning.data_dir() / name).unlink(missing_ok=True)
+    (learning.folder_path() / changes.PROGRESS_FILE).unlink(missing_ok=True)
+    from row_bot import threads
+    from row_bot.thread_cleanup import delete_thread
+
+    if threads._thread_exists(_L3B_CHAT):  # noqa: SLF001 - its turn context names this test's lesson
+        delete_thread(_L3B_CHAT)
+
+
+@app.post("/__l3b_fixture/learning/{action}")
+def l3b_learning(action: str, x_fixture_token: str = Header(default="")) -> dict:
+    """Learning (preview) for the L3b spec: changes in each state (tested, ready, edited, in use by itself, not
+    used, waiting), last night's tests, a test running now, a lesson Row-Bot saved for itself, and a chat whose
+    reply used a lesson. Nothing reaches a model, a GPU or a download: tests are written as their results."""
+    predecessor._authorize(x_fixture_token)
+    if action == "changes":
+        _l3b_changes()
+    elif action == "testing":
+        _l3b_testing()
+    elif action == "saved_lesson":
+        _l3b_saved_lesson()
+    elif action == "restore":
+        _l3b_restore()
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
 # ── Learning (preview), L2b: the personal model's download, its states set by the spec ──
 
 _GB = 1_000_000_000

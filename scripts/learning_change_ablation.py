@@ -193,9 +193,160 @@ def phase_harder(args: argparse.Namespace) -> None:
     })
 
 
+SERVE_CONTEXT = 32_768
+PAIRS = (("none", "lessons"), ("none", "ways"), ("none", "both"), ("lessons", "both"), ("ways", "both"))
+
+
+def load_drafts(paths: list[str]) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    """The lessons ((title, text)) and ways of working ((slot, text)) Learning drafted for the seeded people
+    (L3a's product arm, ``grouped``): what the 2x2 turns on and off. Skills are left out."""
+
+    from row_bot.learning import behaviour
+
+    lessons, ways = [], []
+    for path in paths:
+        found = json.loads(Path(path).read_text(encoding="utf-8"))
+        for item in (found.get("grouped") or {}).get("drafts") or ():
+            text = " ".join(str(item.get("text") or "").split())
+            if not text:
+                continue
+            if item.get("change") == "lesson":
+                lessons.append((str(item.get("title") or "Lesson"), text))
+            elif item.get("change") == "way_of_working":
+                slot = str(item.get("slot") or "guidance")
+                ways.append((slot if slot in behaviour.SLOTS else "guidance", text[: behaviour.MAX_TEXT]))
+    return tuple(lessons), tuple(ways)
+
+
+def phase_serve(args: argparse.Namespace) -> None:
+    """Make the personal model ready in Row-Bot's own server, as the product serves it (32K, the bridge)."""
+
+    data = Path(args.data).resolve()
+    _refuse(data)
+    boot(data, None)
+    from row_bot.learning.training import hardware, serving
+
+    found = hardware.detect()
+    hardware.check(refresh=True, detector=lambda: found)
+    folder = Path(args.out) / "serve" / "pm"
+    folder.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    outcome = serving.serve("row_bot", version=1, gguf=Path(args.gguf), serve_context=SERVE_CONTEXT, folder=folder,
+                            root=data, tag="row-bot-personal-l3b", tool_turn=False)
+    entry = {**serving.describe(outcome), "seconds": round(time.monotonic() - started, 1), "gguf": Path(args.gguf).name}
+    _write(Path(args.out), "serve_pm.json", entry)
+    _say(f"serve: {entry.get('state')} {entry.get('model_ref')}")
+
+
+def phase_twobytwo(args: argparse.Namespace) -> None:
+    import contextlib
+
+    from row_bot.learning import evaluation, kinds
+    from row_bot.learning.packs import PACKS, harder, visible_tasks
+    from row_bot.learning.sandbox import container_runtime
+    from row_bot.learning.spending import TokenMeter
+    from row_bot.learning.store import LearningStore
+
+    data = Path(args.data).resolve()
+    _refuse(data)
+    local = args.model != "main"
+    ref, sign_in = boot(data, None if local else Path(args.eval_profile))
+    if local:
+        ref = args.model
+    lessons, ways = load_drafts(args.drafts)
+    _say(f"pool: {len(lessons)} lessons, {len(ways)} ways of working; model {ref}")
+    serve = SERVE_CONTEXT if local else None
+    texts_l, texts_w = tuple(text for _title, text in lessons), tuple(text for _slot, text in ways)
+    arms = [
+        evaluation.Arm("none", model_ref=ref, serve_context=serve),
+        evaluation.Arm("lessons", model_ref=ref, serve_context=serve, lessons=lessons, guidance=texts_l),
+        evaluation.Arm("ways", model_ref=ref, serve_context=serve, ways=ways, guidance=texts_w),
+        evaluation.Arm("both", model_ref=ref, serve_context=serve, lessons=lessons, ways=ways,
+                       guidance=texts_l + texts_w),
+    ]
+    container = bool(container_runtime())
+    chosen = [task for task in harder.tasks() if container or task.verifier.kind != "code_tests"]
+    if args.harder_ids:
+        wanted = set(args.harder_ids.split(","))
+        chosen = [task for task in chosen if task.id in wanted]
+    if args.visible:
+        per_pack: dict[str, int] = {}
+        for task in visible_tasks():
+            if not container and task.pack == "small_coding":
+                continue
+            per_pack[task.pack] = per_pack.get(task.pack, 0) + 1
+            if per_pack[task.pack] <= args.visible:
+                chosen.append(task)
+    packs = [] if args.no_hidden_packs else [pack for pack in PACKS if container or pack != "small_coding"]
+    verifiers = None if container else ["answer", "json_answer", "file", "app_state"]
+    store = LearningStore(data)
+    meter = TokenMeter(int(args.cap))
+    cache = evaluation.ArmCache(data)
+    budget = evaluation.Budget(task_tokens=150_000)
+    started = time.monotonic()
+    done = [0]
+
+    def counted(_arm: str = "", case: Any = None) -> None:
+        done[0] += 1
+        if case is not None:
+            _check_limit(case)
+        if done[0] % 10 == 0:
+            _say(f"{done[0]} runs in {round((time.monotonic() - started) / 60, 1)} min ({cache.hits} kept)")
+
+    worker, runner = _worker(arms, data, ref, local=local)
+    hold = contextlib.nullcontext()
+    if local:
+        from row_bot.learning.training import llama_server
+
+        hold = llama_server.get(data).hold()
+    try:
+        with hold:
+            shown = evaluation.compare(arms, tasks=chosen, runner=runner, cache=cache, meter=meter, store=store,
+                                       save=False, on_case=counted, budget=budget, repeats=args.repeats,
+                                       kind_key=kinds.from_label, pairs=PAIRS) if chosen else None
+            hidden = None
+            if args.replay != "none" or packs:
+                hidden = evaluation.audit_check(
+                    arms, asked_by="the L3b ablation", store=store, runner=runner, cache=cache, meter=meter,
+                    packs=packs, verifiers=verifiers, budget=budget, save=False, repeats=args.repeats,
+                    combine_with=shown, kind_key=kinds.from_label, pairs=PAIRS,
+                    include_replay=args.replay != "none", corrected={"corrected": True, "uncorrected": False,
+                                                                     "all": None}.get(args.replay),
+                    on_progress=lambda *_done: counted())
+    finally:
+        worker.stop()
+        if sign_in is not None:
+            sign_in.scrub()
+    _write(Path(args.out), f"twobytwo_{args.label}.json", {
+        "model": ref if not local else "personal model (Qwen3.5 9B QLoRA, Row-Bot's own server, 32K)",
+        "label": args.label, "repeats": args.repeats, "container": container,
+        "pool": {"lessons": len(lessons), "ways": len(ways)},
+        "visible_and_harder_tasks": len(chosen), "minutes": round((time.monotonic() - started) / 60, 1),
+        "shown": _summary(shown) if shown is not None else None,
+        "hidden": _summary(hidden) if hidden is not None else None,
+    })
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="phase", required=True)
+    serve_parser = sub.add_parser("serve")
+    serve_parser.add_argument("--data", required=True)
+    serve_parser.add_argument("--gguf", required=True)
+    serve_parser.add_argument("--out", required=True)
+    two = sub.add_parser("twobytwo")
+    two.add_argument("--data", required=True)
+    two.add_argument("--drafts", action="append", required=True, help="an L3a ablation result (its drafts)")
+    two.add_argument("--model", default="main", help="main (the ChatGPT lane) or a served local model's ref")
+    two.add_argument("--eval-profile", default="")
+    two.add_argument("--out", required=True)
+    two.add_argument("--label", required=True)
+    two.add_argument("--repeats", type=int, default=3)
+    two.add_argument("--visible", type=int, default=0, help="visible tasks per pack beside the harder split")
+    two.add_argument("--harder-ids", default="", help="only these harder tasks (comma-separated)")
+    two.add_argument("--no-hidden-packs", action="store_true")
+    two.add_argument("--replay", choices=("none", "corrected", "uncorrected", "all"), default="corrected")
+    two.add_argument("--cap", type=int, default=4_000_000)
     harder_parser = sub.add_parser("harder")
     harder_parser.add_argument("--data", required=True)
     harder_parser.add_argument("--eval-profile", required=True)
@@ -207,6 +358,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.phase == "harder":
             phase_harder(args)
+        elif args.phase == "serve":
+            phase_serve(args)
+        else:
+            phase_twobytwo(args)
     except Limited as error:
         _say(f"STOPPED: a usage or rate limit ({error}). Nothing more is sent.")
         return 3
