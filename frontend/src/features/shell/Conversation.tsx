@@ -109,6 +109,7 @@ import {
   ATTACHMENT_LIMITS,
 } from './attachment-limits';
 import ApprovalCard from './ApprovalCard';
+import { waitingWords } from './InPlaceApproval';
 import {
   readPendingApprovalsNow,
   usePendingApprovals,
@@ -3266,11 +3267,13 @@ export default function Conversation({
                     key={item.id}
                     className="message message-assistant"
                     role="group"
-                    aria-label={`${item.title} needs your approval`}
+                    aria-label={waitingWords(item)}
                   >
                     <div className="transcript-content">
                       <p className="message-text">
-                        {item.title} is waiting for your approval.
+                        {item.kind === 'question'
+                          ? `${item.title} has a question.`
+                          : `${item.title} is waiting for your approval.`}
                       </p>
                       <ApprovalCard id={item.id} notice />
                     </div>

@@ -14,6 +14,7 @@ import { Play, RefreshCw } from 'lucide-react';
 import { Button, IconButton, InlineEmpty, Skeleton } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import { When, runStatus } from '../home/home-format';
+import ApprovalCard from '../shell/ApprovalCard';
 import { WaitingSince } from '../shell/InPlaceApproval';
 import { approvalTag } from '../shell/approval-levels';
 
@@ -455,71 +456,92 @@ export default function TaskRun({
               {loadingApprovals && (
                 <Skeleton label="Loading pending approvals" />
               )}
-              {approvals?.items.map((approval) => (
-                <article
-                  className="task-run-approval"
-                  key={approval.id}
-                  aria-label="Pending task approval"
-                >
-                  <h3>Approval needed</h3>
-                  <p className="task-approval-message">{approval.message}</p>
-                  <p className="home-caption">
-                    <WaitingSince value={approval.requested_at} />
-                  </p>
-                  {approval.expires_at && (
-                    <p className="home-caption">
-                      Expires <When value={approval.expires_at} />
-                    </p>
-                  )}
-                  {approval.message_truncated && (
-                    <p role="status">
-                      This review is too large to show completely. Open the
-                      existing conversation approval surface to review it.
-                    </p>
-                  )}
-                  {!approval.response_available &&
-                    !approval.message_truncated && (
+              {approvals?.items.map((approval) =>
+                approval.kind === 'question' ? (
+                  // Row-Bot's question (N4): answered on its own card, never approved.
+                  <article
+                    className="task-run-approval"
+                    key={approval.id}
+                    aria-label="Row-Bot has a question"
+                  >
+                    <ApprovalCard
+                      id={approval.id}
+                      notice
+                      onResolved={() => setReload((value) => value + 1)}
+                    />
+                    {approval.expires_at && (
                       <p className="home-caption">
-                        This approval uses its existing conversation controls,
-                        or the workflow is still finishing its pause. Open the
-                        conversation or refresh after it finishes.
+                        If nobody answers, Row-Bot goes on with its
+                        recommendation <When value={approval.expires_at} />.
                       </p>
                     )}
-                  <div className="task-run-actions">
-                    {[false, true].map((approved) => (
-                      <Button
-                        key={String(approved)}
-                        variant={approved ? 'primary' : 'secondary'}
-                        className="small"
-                        disabled={
-                          !!busy ||
-                          !approval.response_available ||
-                          actionUnconfirmed
-                        }
-                        onClick={() => {
-                          const ticket = epoch.current;
-                          void actOnRun('approval', async () => {
-                            const result = await respondApproval(
-                              approval,
-                              approved,
-                            );
-                            if (ticket !== epoch.current) return;
-                            setApprovals(null);
-                            updateRun(result.run);
-                            setNotice(
-                              approved
-                                ? 'Approval recorded.'
-                                : 'Rejection recorded.',
-                            );
-                          });
-                        }}
-                      >
-                        {approved ? 'Approve' : 'Reject'}
-                      </Button>
-                    ))}
-                  </div>
-                </article>
-              ))}
+                  </article>
+                ) : (
+                  <article
+                    className="task-run-approval"
+                    key={approval.id}
+                    aria-label="Pending task approval"
+                  >
+                    <h3>Approval needed</h3>
+                    <p className="task-approval-message">{approval.message}</p>
+                    <p className="home-caption">
+                      <WaitingSince value={approval.requested_at} />
+                    </p>
+                    {approval.expires_at && (
+                      <p className="home-caption">
+                        Expires <When value={approval.expires_at} />
+                      </p>
+                    )}
+                    {approval.message_truncated && (
+                      <p role="status">
+                        This review is too large to show completely. Open the
+                        existing conversation approval surface to review it.
+                      </p>
+                    )}
+                    {!approval.response_available &&
+                      !approval.message_truncated && (
+                        <p className="home-caption">
+                          This approval uses its existing conversation controls,
+                          or the workflow is still finishing its pause. Open the
+                          conversation or refresh after it finishes.
+                        </p>
+                      )}
+                    <div className="task-run-actions">
+                      {[false, true].map((approved) => (
+                        <Button
+                          key={String(approved)}
+                          variant={approved ? 'primary' : 'secondary'}
+                          className="small"
+                          disabled={
+                            !!busy ||
+                            !approval.response_available ||
+                            actionUnconfirmed
+                          }
+                          onClick={() => {
+                            const ticket = epoch.current;
+                            void actOnRun('approval', async () => {
+                              const result = await respondApproval(
+                                approval,
+                                approved,
+                              );
+                              if (ticket !== epoch.current) return;
+                              setApprovals(null);
+                              updateRun(result.run);
+                              setNotice(
+                                approved
+                                  ? 'Approval recorded.'
+                                  : 'Rejection recorded.',
+                              );
+                            });
+                          }}
+                        >
+                          {approved ? 'Approve' : 'Reject'}
+                        </Button>
+                      ))}
+                    </div>
+                  </article>
+                ),
+              )}
               {approvals && approvals.total > approvals.items.length && (
                 <p className="home-caption">
                   Showing {approvals.items.length} of {approvals.total} pending
