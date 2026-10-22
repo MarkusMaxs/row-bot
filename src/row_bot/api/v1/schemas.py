@@ -165,10 +165,18 @@ class CreatePayload(WireModel):
         "New conversation"
     )
     agent_profile_id: str = Field(default="", max_length=256)
+    # Incognito from the start (N11): nothing in it is read for memory.
+    incognito: bool = False
 
 
 class PinPayload(WireModel):
     pinned: bool
+
+
+class IncognitoPayload(WireModel):
+    """Turn incognito on or off for a conversation (N11)."""
+
+    incognito: bool
 
 
 class EmptyPayload(WireModel):
@@ -6251,6 +6259,7 @@ class Command(WireModel):
         "conversation.create",
         "conversation.rename",
         "conversation.pin",
+        "conversation.incognito",
         "conversation.delete",
         "conversation.restore",
         "conversation.submit",
@@ -6434,6 +6443,7 @@ COMMAND_PAYLOADS = {
     "conversation.create": CreatePayload,
     "conversation.rename": RenamePayload,
     "conversation.pin": PinPayload,
+    "conversation.incognito": IncognitoPayload,
     "conversation.delete": DeletePayload,
     "conversation.restore": EmptyPayload,
     "conversation.submit": SubmitPayload,
@@ -7107,6 +7117,8 @@ class ConversationView(WireModel):
     revision: Revision
     title: str = Field(max_length=256)
     pinned: bool
+    # Incognito (N11): nothing in it is read for memory, and memory is saved only when the person says so.
+    incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
