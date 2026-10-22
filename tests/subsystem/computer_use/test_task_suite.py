@@ -72,7 +72,7 @@ def test_the_homeserve_claim_runs_click_after_click_and_asks_only_to_use_edge_an
     # Only Row-Bot's first use of Edge and the payment asked; nothing handed a click back to the person.
     assert questions_asked(turn) == ["Let Row-Bot use Microsoft Edge in this chat?", "Pay in Microsoft Edge?"]
     assert turn.asked[1]["description"] == (
-        'Row-Bot will click "Confirm and pay £60" in Microsoft Edge ("HomeServe – Make a claim - Microsoft Edge"). '
+        'Row-Bot will click "Confirm and pay £60" in Microsoft Edge ("HomeServe – Make a claim"). '
         "This can charge you.")
     for result in steps[2:]:
         lowered = result.casefold()

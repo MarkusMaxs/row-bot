@@ -86,7 +86,6 @@
     "command_metadata_unavailable": 503,
     "computer_use_local_only": 403,
     "computer_use_outcome_uncertain": 409,
-    "computer_use_revision_conflict": 409,
     "conversation_action_unconfirmed": 409,
     "conversation_archive_unavailable": 409,
     "conversation_deleting": 409,

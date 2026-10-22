@@ -455,11 +455,11 @@ def review_settings_update(
     elif (page, field) == ("system", "computer_use.check"):
         summary = "Run local Cua Driver diagnostics and check required permissions"
     elif (page, field) == ("system", "computer_use.test"):
-        summary = "Open Calculator briefly and verify local Computer Use access"
+        summary = "Open Calculator and take a picture of it, to show computer use works"
     elif (page, field) == ("system", "computer_use.use_managed_runtime"):
         summary = "Use Row-Bot's reviewed managed Cua Driver runtime"
     elif (page, field) == ("system", "computer_use.remove"):
-        summary = "Remove Row-Bot's managed Cua Driver runtime and disable Computer Use"
+        summary = "Remove Row-Bot's Cua Driver and turn computer use off"
     elif (page, field) == ("system", "computer_use.open_accessibility"):
         summary = "Open macOS Accessibility permission settings"
     elif (page, field) == ("system", "computer_use.open_screen_recording"):
@@ -826,7 +826,7 @@ def _run_system_action(field: str) -> dict[str, str] | None:
         return {
             "code": "opened",
             "message": f"Opened macOS {'Accessibility' if permission == 'accessibility' else 'Screen Recording'} settings.",
-            "remediation": "Switch on Row-Bot, then run Check Computer Use setup again.",
+            "remediation": "Switch on Row-Bot, then run Check setup again.",
         }
     if field in {"tunnel.check", "tunnel.start_main", "tunnel.stop_main"}:
         from row_bot.app_port import get_app_port
@@ -971,10 +971,10 @@ def _apply(
         _write_tool_setting(root, "system", "computer_use.enabled", False)
         action_result = {
             "code": "removed" if removed else "not_installed",
-            "message": "Computer Use runtime removed."
+            "message": "Cua Driver removed."
             if removed
-            else "Computer Use runtime was not installed.",
-            "remediation": "Install the reviewed runtime to use Computer Use again.",
+            else "Cua Driver wasn't installed.",
+            "remediation": "Install Cua Driver to use computer use again.",
         }
     elif (page, field) == ("system", "workspace.folder_grant"):
         if resolve_folder_grant is None:

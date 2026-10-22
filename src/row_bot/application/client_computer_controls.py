@@ -222,7 +222,7 @@ def read_computer_preview(
     validate: Callable[[], None],
     computer: Any | None = None,
 ) -> dict[str, Any]:
-    """The latest picture, while the card's state is still the one it last read.
+    """The latest picture, and the step's revision now (the one the step read, or a later one).
 
     Reading it may take a new picture when the last one is a second or two old (the live view).
     """
@@ -233,8 +233,6 @@ def read_computer_preview(
     validate()
     conversation_id = _identifier(conversation_id)
     public, picture = _snapshot(conversation_id, _service(computer), with_picture=True)
-    if public["revision"] != expected_revision and not public["active"]:
-        raise _error("computer_use_revision_conflict", public["revision"])
     state = (
         "inactive" if not public["active"]
         else "hidden" if public["state"] == "paused"

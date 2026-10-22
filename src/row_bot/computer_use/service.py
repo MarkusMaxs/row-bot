@@ -713,7 +713,7 @@ class ComputerUseService:
                 raise ComputerError(policy.SECRET_REFUSAL[secret], code="secret")
 
         consequence = policy.classify(
-            action, app=window.app, window=policy.window_facts(window.title, shot.labels()),
+            action, app=window.app, window=policy.window_facts(_title_of(window), shot.labels()),
             control=control if action != "type" else session.last_control, keys=parsed_keys, text=text,
         )
         if consequence is not None:
@@ -725,15 +725,19 @@ class ComputerUseService:
             arguments.update(zip(("x", "y"), shot.to_cua(*point)))
             name = f' ({control.label[:60]})' if control and control.label else ""
             done = f"{_DONE[action]} at {round(point[0])},{round(point[1])}{name}."
+            shown = (f'{_DONE[action]} "{control.label[:60]}"' if control and control.label
+                     else f"{_DONE[action]} in the window")
         elif action == "drag":
             tool = "drag"
             (from_x, from_y), (end_x, end_y) = shot.to_cua(*point), shot.to_cua(*end)
             arguments.update(from_x=from_x, from_y=from_y, to_x=end_x, to_y=end_y)
             done = f"Dragged from {round(point[0])},{round(point[1])} to {round(end[0])},{round(end[1])}."
+            shown = "Dragged in the window"
         elif action == "type":
             tool = "type_text"
             arguments["text"] = text[:4000]
             done = f"Typed {len(text)} characters."
+            shown = done[:-1]  # Never the words themselves.
         elif action == "key":
             modifiers, key = parsed_keys
             tool = "hotkey" if modifiers else "press_key"
@@ -742,6 +746,7 @@ class ComputerUseService:
             else:
                 arguments["key"] = key
             done = f"Pressed {policy.key_words(modifiers, key)}."
+            shown = done[:-1]
         elif action == "scroll":
             direction, amount = _scroll(scroll)
             tool = "scroll"
@@ -749,6 +754,7 @@ class ComputerUseService:
             if point is not None:
                 arguments.update(zip(("x", "y"), shot.to_cua(*point)))
             done = f"Scrolled {direction} {amount}."
+            shown = f"Scrolled {direction}"
         else:
             raise ComputerError(f'"{action}" isn\'t an action.', code="input", fix=f"Use one of: {', '.join(ACTIONS)}.")
 
@@ -758,7 +764,7 @@ class ComputerUseService:
             if point is not None:
                 bar.avoid(shot.to_screen(*point))
             with self._lock:
-                session.doing = done[:-1]
+                session.doing = shown
                 self._revision += 1
             bar.busy(True)
             try:
@@ -801,7 +807,7 @@ class ComputerUseService:
                 "generation_id": session.generation_id if session else "",
                 "state": session.state if session else "ready",
                 "app": window.app if window else "",
-                "window": window.title if window else "",
+                "window": _title_of(window) if window else "",
                 "doing": session.doing if session else "",
                 "person_acted": bool(session and session.person_acted),
                 "has_thumbnail": bool(session and session.live),
@@ -844,6 +850,15 @@ class ComputerUseService:
     def problem(self, thread_id: str) -> ComputerError | None:
         with self._lock:
             return self._problems.get(thread_id)
+
+
+def _title_of(window: Window) -> str:
+    """A window's title without the app's name it ends with ("Inbox - Microsoft Edge" → "Inbox")."""
+
+    for dash in (" - ", " – ", " — "):
+        if window.title.endswith(dash + window.app):
+            return window.title[: -len(dash + window.app)]
+    return window.title
 
 
 def _refused_foreground(response: CuaResponse) -> bool:

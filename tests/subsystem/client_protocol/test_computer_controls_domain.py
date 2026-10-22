@@ -205,8 +205,8 @@ def test_the_step_shows_the_app_what_row_bot_does_and_a_live_picture_in_its_own_
     mine = _read()
     assert {key: mine[key] for key in ("active", "state", "app", "window", "doing", "has_picture", "problem",
                                        "can_stop")} == {
-        "active": True, "state": "working", "app": "Notepad", "window": "notes.txt - Notepad",
-        "doing": "Clicked at 20,100 (Text editor)", "has_picture": True, "problem": None, "can_stop": True}
+        "active": True, "state": "working", "app": "Notepad", "window": "notes.txt",
+        "doing": 'Clicked "Text editor"', "has_picture": True, "problem": None, "can_stop": True}
     picture = _preview(mine["revision"])
     assert (picture["state"], picture["mime_type"]) == ("available", "image/jpeg")
     assert base64.b64decode(picture["image_base64"]).startswith(b"\xff\xd8\xff")
@@ -217,14 +217,13 @@ def test_the_step_shows_the_app_what_row_bot_does_and_a_live_picture_in_its_own_
     del shot
 
 
-def test_a_bad_or_stale_revision_is_refused(computer):
+def test_a_bad_revision_is_refused_and_an_old_one_reads_the_step_as_it_is_now(computer):
     from row_bot.application.client_computer_controls import ClientComputerControlError
 
     with pytest.raises(ClientComputerControlError, match="invalid_computer_use_command"):
         _preview("not-a-revision")
-    with pytest.raises(ClientComputerControlError) as stale:
-        _preview("0" * 64)
-    assert (stale.value.code, stale.value.current_revision) == ("computer_use_revision_conflict", _read()["revision"])
+    ended = _preview("0" * 64)  # The session ended since the step read it: no error, nothing to show.
+    assert (ended["state"], ended["revision"], ended["image_base64"]) == ("inactive", _read()["revision"], None)
 
 
 def test_stop_releases_the_computer_ends_the_turn_and_reads_its_first_outcome_again(platform, computer, tmp_path):

@@ -123,7 +123,7 @@ import { DeliveryIoContext, type DeliveryIo } from './deliveries';
 import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
-import { ComputerUseCard, useComputerUse } from './ComputerUseCard';
+import { ComputerStep, useComputerUse } from './ComputerStep';
 import { BrowserStep } from '../browser/BrowserThumbnail';
 import { registerPromptSender } from './composer-bridge';
 import ConversationHeader from './ConversationHeader';
@@ -884,11 +884,9 @@ export default function Conversation({
     turnKey: `${generation?.generation_id ?? ''}:${generation?.status ?? ''}`,
     load: controller.computerUse,
   });
-  // A paused computer waits on an approval; the card's Resume answers it,
-  // so the approval card stays away (never both).
+  // The person used the computer: Row-Bot asks "Carry on?" on the question card below.
   const computerPause =
-    Boolean(computer.snapshot?.approval_id) &&
-    computer.snapshot?.approval_id === generation?.approval_id;
+    Boolean(computer.snapshot?.active) && computer.snapshot?.state === 'paused';
   const lastActivity = state.activity.at(-1)?.event;
   const thinkingActive =
     Boolean(running) && lastActivity?.type === 'generation.activity';
@@ -3361,7 +3359,7 @@ export default function Conversation({
                           />
                         )}
                         {computer.visible && (
-                          <ComputerUseCard
+                          <ComputerStep
                             conversationId={id}
                             snapshot={computer.snapshot}
                             stopped={computer.stopped}
@@ -3373,7 +3371,6 @@ export default function Conversation({
                         )}
                         {generation?.approval_id &&
                           generation.status === 'waiting_approval' &&
-                          !computerPause &&
                           computer.checked && (
                             <ApprovalCard
                               id={generation.approval_id}

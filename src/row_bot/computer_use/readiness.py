@@ -256,7 +256,7 @@ def readiness(*, enabled: bool | None = None) -> CuaReadiness:
     if not enabled:
         return CuaReadiness(
             ReadinessCode.DISABLED,
-            "Computer Use is off.",
+            "Computer use is off.",
             version=str(manifest["version"]),
         )
     if not disclosure_acknowledged():
@@ -270,7 +270,7 @@ def readiness(*, enabled: bool | None = None) -> CuaReadiness:
     if asset is None:
         return CuaReadiness(
             ReadinessCode.UNSUPPORTED,
-            "Computer Use is unavailable on this platform.",
+            "Computer use works on Windows and macOS only.",
             version=str(manifest["version"]),
             remediation="Use Browser or a supported Windows/macOS host.",
         )
@@ -345,11 +345,11 @@ def readiness(*, enabled: bool | None = None) -> CuaReadiness:
     ) == "macos-universal" and not _is_macos_app_bundle_executable(executable):
         return CuaReadiness(
             ReadinessCode.DEGRADED,
-            "The managed macOS helper needs repair before Computer Use can run.",
+            "Cua Driver needs repair on this Mac before computer use can run.",
             version=str(manifest["version"]),
             executable=executable,
             hash_status="verified",
-            remediation="Reinstall Computer Use to repair its macOS helper.",
+            remediation="Reinstall Cua Driver to repair it.",
             details={"repair_required": True},
         )
     if not installed.get("doctor_ok"):
@@ -363,7 +363,7 @@ def readiness(*, enabled: bool | None = None) -> CuaReadiness:
         )
     return CuaReadiness(
         ReadinessCode.READY,
-        "Cua Driver is ready for task-scoped Computer Use.",
+        "Cua Driver is ready.",
         version=str(manifest["version"]),
         executable=executable,
         hash_status="verified",
