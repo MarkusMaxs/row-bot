@@ -257,7 +257,8 @@ def _run_agent_sync(user_text: str, config: dict) -> tuple[str, dict | None, lis
 
 
 def _resume_agent_sync(config: dict, approved: bool,
-                       *, interrupt_ids: list[str] | None = None) -> tuple[str, dict | None, list]:
+                       *, interrupt_ids: list[str] | None = None,
+                       resume_values: dict | None = None) -> tuple[str, dict | None, list]:
     """Resume a paused agent after interrupt approval/denial."""
     config = build_channel_runtime_config(config, "approval")
     from row_bot.tools import registry as tool_registry
@@ -271,7 +272,8 @@ def _resume_agent_sync(config: dict, approved: bool,
     interrupt_data: dict | None = None
 
     for event_type, payload in agent_mod.resume_stream_agent(
-        enabled, config, approved, interrupt_ids=interrupt_ids
+        enabled, config, approved, interrupt_ids=interrupt_ids,
+        **({"resume_values": resume_values} if resume_values else {}),
     ):
         if event_type == "token":
             full_answer.append(payload)
@@ -491,8 +493,7 @@ async def _handle_inbound_sms(request) -> Any:
                     "data": result.interrupt_data, "config": config
                 }
             from row_bot.channels import approval as approval_helpers
-            detail = approval_helpers.format_interrupt_text(result.interrupt_data)
-            _send_reply(from_number, detail + "\nReply YES or NO.")
+            _send_reply(from_number, approval_helpers.interrupt_prompt(result.interrupt_data, "Reply YES or NO."))
         return Response("<Response/>", media_type=_XML)
     cmd_response = ch_commands.dispatch(
         "sms",
@@ -508,6 +509,21 @@ async def _handle_inbound_sms(request) -> Any:
     from row_bot.channels import approval as approval_helpers
     with _pending_lock:
         task_approval = _pending_task_approvals.get(from_number)
+    if task_approval and task_approval.get("data") is not None:
+        # Row-Bot's question from a workflow or a helper (N4): one reply per question, then it goes on.
+        state, value = approval_helpers.question_reply(task_approval, body)
+        if state in {"again", "next"}:
+            _send_reply(from_number, value)
+            return Response("<Response/>", media_type=_XML)
+        with _pending_lock:
+            _pending_task_approvals.pop(from_number, None)
+        from row_bot.tasks import respond_to_approval
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: respond_to_approval(task_approval["resume_token"], state == "answered", answer=value,
+                                              note="Answered via SMS", source="sms"))
+        _send_reply(from_number, approval_helpers.answered_text(task_approval["data"], value) if result
+                    else "This question can no longer be answered.")
+        return Response("<Response/>", media_type=_XML)
     if task_approval:
         decision = approval_helpers.is_approval_text(body)
         if decision is None:
@@ -545,7 +561,18 @@ async def _handle_inbound_sms(request) -> Any:
         interrupt = _pending_interrupts.get(from_number)
 
     if interrupt:
-        decision = approval_helpers.is_approval_text(body)
+        resume_values = None
+        if approval_helpers.question_of(interrupt.get("data")) is not None:
+            # Row-Bot's question (N4): one reply per question; only the question goes on with the answer.
+            state, value = approval_helpers.question_reply(interrupt, body)
+            if state in {"again", "next"}:
+                _send_reply(from_number, value)
+                return Response("<Response/>", media_type=_XML)
+            resume_values = approval_helpers.question_resume(interrupt.get("data"), value)
+            chosen = approval_helpers.answered_text(interrupt.get("data"), value)
+            decision = True
+        else:
+            decision = approval_helpers.is_approval_text(body)
         if decision is None:
             _send_reply(from_number, "Approval pending. Reply YES or NO.")
             return Response("<Response/>", media_type=_XML)
@@ -554,6 +581,8 @@ async def _handle_inbound_sms(request) -> Any:
         if interrupt is None:
             _send_reply(from_number, "This approval is no longer pending.")
             return Response("<Response/>", media_type=_XML)
+        if resume_values is not None:
+            _send_reply(from_number, chosen)
         approved = bool(decision)
         config = interrupt.get("config", {})
         interrupt_ids = approval_helpers.extract_interrupt_ids(
@@ -565,7 +594,7 @@ async def _handle_inbound_sms(request) -> Any:
         answer, new_interrupt, context_notices = await loop.run_in_executor(
             None,
             lambda: _resume_agent_sync(
-                config, approved, interrupt_ids=interrupt_ids
+                config, approved, interrupt_ids=interrupt_ids, resume_values=resume_values
             ),
         )
         if answer and not ch_runtime.channel_turn_is_suspended(answer):
@@ -583,8 +612,7 @@ async def _handle_inbound_sms(request) -> Any:
                 _pending_interrupts[from_number] = {
                     "data": new_interrupt, "config": config
                 }
-            detail = approval_helpers.format_interrupt_text(new_interrupt)
-            _send_reply(from_number, detail + "\nReply YES or NO.")
+            _send_reply(from_number, approval_helpers.interrupt_prompt(new_interrupt, "Reply YES or NO."))
         elif answer and not ch_runtime.channel_turn_is_suspended(answer):
             thread_id = ch_runtime.thread_id_from_config(config)
             if thread_id:
@@ -605,8 +633,8 @@ async def _handle_inbound_sms(request) -> Any:
                         _pending_interrupts[from_number] = {
                             "data": goal_result.interrupt_data, "config": config
                         }
-                    detail = approval_helpers.format_interrupt_text(goal_result.interrupt_data)
-                    _send_reply(from_number, detail + "\nReply YES or NO.")
+                    _send_reply(from_number, approval_helpers.interrupt_prompt(goal_result.interrupt_data,
+                                                                              "Reply YES or NO."))
         return Response("<Response/>", media_type=_XML)
 
     # Normal message
@@ -660,8 +688,7 @@ async def _handle_inbound_sms(request) -> Any:
                 "data": interrupt_data, "config": config
             }
         from row_bot.channels import approval as approval_helpers
-        detail = approval_helpers.format_interrupt_text(interrupt_data)
-        _send_reply(from_number, detail + "\nReply YES or NO.")
+        _send_reply(from_number, approval_helpers.interrupt_prompt(interrupt_data, "Reply YES or NO."))
 
     return Response("<Response/>", media_type=_XML)
 
@@ -955,7 +982,11 @@ class SMSChannel(Channel):
         task_name = config.get("task_name", "Unknown task")
         message = config.get("message", "Approval required.")
         resume_token = config.get("resume_token", "")
-        text = f"Approval: {task_name}\n{message}\nReply YES or NO."
+        from row_bot.channels import approval as approval_helpers
+
+        question = approval_helpers.question_of(interrupt_data)
+        text = (f"{task_name}\n{approval_helpers.question_prompt(question)}" if question
+                else f"Approval: {task_name}\n{message}\nReply YES or NO.")
         try:
             send_outbound(str(target), text)
             import time as _time
@@ -964,6 +995,7 @@ class SMSChannel(Channel):
                     "resume_token": resume_token,
                     "task_name": task_name,
                     "_ts": _time.time(),
+                    **({"data": question} if question else {}),
                 }
             return str(target)
         except Exception as exc:
@@ -976,7 +1008,9 @@ class SMSChannel(Channel):
         """Clear pending task approval and notify that it was resolved elsewhere."""
         with _pending_lock:
             _pending_task_approvals.pop(message_ref, None)
-        action = "Approved" if status == "approved" else "Denied"
+        from row_bot.channels.approval import resolution_words
+
+        action = resolution_words(status)
         try:
             send_outbound(message_ref,
                           f"{action} (via {source})" if source else action)

@@ -342,6 +342,7 @@ def _resume_agent_sync(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict | None = None,
     event_queue=None,
 ) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
@@ -360,7 +361,8 @@ def _resume_agent_sync(
     used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
-        enabled, config, approved, interrupt_ids=interrupt_ids
+        enabled, config, approved, interrupt_ids=interrupt_ids,
+        **({"resume_values": resume_values} if resume_values else {}),
     ):
         if event_type == "token":
             full_answer.append(payload)
@@ -724,9 +726,14 @@ async def _send_discord_interrupt_approval_card(
 ) -> int | None:
     from row_bot.channels import approval as approval_helpers
 
-    detail = approval_helpers.format_interrupt_text(interrupt_data)
-    view = _make_discord_interrupt_view()
-    text = detail if view is not None else f"{detail}\n\nReply **yes** or **no**."
+    if approval_helpers.question_of(interrupt_data) is not None:
+        # Row-Bot's question (N4): numbered options, answered with the number(s) or the person's own words.
+        view = None
+        text = approval_helpers.interrupt_prompt(interrupt_data, "")
+    else:
+        detail = approval_helpers.format_interrupt_text(interrupt_data)
+        view = _make_discord_interrupt_view()
+        text = detail if view is not None else f"{detail}\n\nReply **yes** or **no**."
     sent = await channel.send(text, **({"view": view} if view is not None else {}))
     message_id = getattr(sent, "id", None)
     _store_discord_interrupt(
@@ -1034,12 +1041,14 @@ async def _stream_agent_resume_to_discord(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict | None = None,
 ) -> tuple[str, dict | None, list[bytes], list[str], ChannelDeliveryResult]:
     stream_config = _discord_stream_config()
     consumer = ChannelStreamConsumer(DiscordStreamTransport(channel), stream_config)
     result, delivery = await consume_channel_producer(
         consumer, lambda sink: _resume_agent_sync(
             config, approved, interrupt_ids=interrupt_ids, event_queue=sink,
+            **({"resume_values": resume_values} if resume_values else {}),
         ),
     )
     answer, interrupt_data, captured_images, captured_video_paths = result
@@ -1301,6 +1310,22 @@ async def _process_message(client, message, is_mention: bool = False) -> None:
     with _pending_lock:
         _msg_key = _task_approval_by_channel.get(channel_id)
         task_approval = _pending_task_approvals.get(_msg_key) if _msg_key else None
+    if task_approval and task_approval.get("data") is not None:
+        # Row-Bot's question from a workflow or a helper (N4): one reply per question, then it goes on.
+        state, value = approval_helpers.question_reply(task_approval, text)
+        if state in {"again", "next"}:
+            await message.channel.send(value)
+            return
+        with _pending_lock:
+            _pending_task_approvals.pop(_msg_key, None)
+            _task_approval_by_channel.pop(channel_id, None)
+        from row_bot.tasks import respond_to_approval
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: respond_to_approval(task_approval["resume_token"], state == "answered", answer=value,
+                                              note="Answered via Discord", source="discord"))
+        await message.channel.send(approval_helpers.answered_text(task_approval["data"], value) if result
+                                   else "This question can no longer be answered.")
+        return
     if task_approval:
         decision = approval_helpers.is_approval_text(text)
         if decision is None:
@@ -1340,7 +1365,18 @@ async def _process_message(client, message, is_mention: bool = False) -> None:
     interrupt = _peek_discord_interrupt(channel_id)
 
     if interrupt:
-        decision = approval_helpers.is_approval_text(text)
+        resume_values = None
+        if approval_helpers.question_of(interrupt.get("data")) is not None:
+            # Row-Bot's question (N4): one reply per question; only the question goes on with the answer.
+            state, value = approval_helpers.question_reply(interrupt, text)
+            if state in {"again", "next"}:
+                await message.channel.send(value)
+                return
+            resume_values = approval_helpers.question_resume(interrupt.get("data"), value)
+            chosen = approval_helpers.answered_text(interrupt.get("data"), value)
+            decision = True
+        else:
+            decision = approval_helpers.is_approval_text(text)
         if decision is None:
             await message.channel.send(
                 "There's a pending approval - please use the approval "
@@ -1351,6 +1387,8 @@ async def _process_message(client, message, is_mention: bool = False) -> None:
         if interrupt is None:
             await message.channel.send("This approval is no longer pending.")
             return
+        if resume_values is not None:
+            await message.channel.send(chosen)
         approved = bool(decision)
         config = interrupt.get("config", {})
         interrupt_ids = approval_helpers.extract_interrupt_ids(
@@ -1363,6 +1401,7 @@ async def _process_message(client, message, is_mention: bool = False) -> None:
             config,
             approved,
             interrupt_ids=interrupt_ids,
+            resume_values=resume_values,
         )
         if answer and not delivery.delivered and not delivery.uncertain:
             await _send_discord_safe_text(message.channel, answer)
@@ -1743,7 +1782,11 @@ class DiscordChannel(Channel):
         task_name = config.get("task_name", "Unknown task")
         message = config.get("message", "Approval required to continue.")
         resume_token = config.get("resume_token", "")
+        from row_bot.channels import approval as approval_helpers
+
+        question = approval_helpers.question_of(interrupt_data)
         rich_text = (
+            f"**{subject_label}:** {task_name}\n{approval_helpers.question_prompt(question)}" if question else
             "Approval Required\n"
             f"**{subject_label}:** {task_name}\n"
             f"{message}\n\n"
@@ -1757,7 +1800,8 @@ class DiscordChannel(Channel):
                 # A user id opens their DM; a conversation's channel or
                 # Discord thread (a parent thread's target) is used as is.
                 channel = await _resolve_send_channel(int(target))
-                view = _make_discord_task_approval_view()
+                # A question is answered by reply, never with Approve / Deny.
+                view = None if question else _make_discord_task_approval_view()
                 kwargs = {"view": view} if view is not None else {}
                 sent = await channel.send(rich_text, **kwargs)
                 return int(channel.id), int(getattr(sent, "id", channel.id))
@@ -1770,6 +1814,7 @@ class DiscordChannel(Channel):
                     "task_name": task_name,
                     "dm_channel_id": dm_channel_id,
                     "_ts": _time.time(),
+                    **({"data": question} if question else {}),
                 }
                 _task_approval_by_channel[dm_channel_id] = msg_id
             return str(msg_id)
@@ -1809,7 +1854,9 @@ class DiscordChannel(Channel):
             info = _pending_task_approvals.pop(ref_int, None)
             if info:
                 _task_approval_by_channel.pop(int(info.get("dm_channel_id", ref_int)), None)
-        action = "Approved" if status == "approved" else "Denied"
+        from row_bot.channels.approval import resolution_words
+
+        action = resolution_words(status)
         target = int(info.get("dm_channel_id", ref_int)) if info else ref_int
         try:
             send_outbound(target,

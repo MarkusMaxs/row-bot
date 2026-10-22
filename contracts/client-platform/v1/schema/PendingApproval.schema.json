@@ -35,6 +35,15 @@
       "title": "Id",
       "type": "string"
     },
+    "kind": {
+      "default": "approval",
+      "enum": [
+        "approval",
+        "question"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
     "parent_conversation_id": {
       "anyOf": [
         {

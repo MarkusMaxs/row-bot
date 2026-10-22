@@ -114,9 +114,19 @@ export default function AttentionIndicator({
   const updateLink = update ? (
     <UpdateLink update={update} compact={compact} onNavigate={onNavigate} />
   ) : null;
+  // Row-Bot's questions (N4) count as things that need the person, in their own words.
+  const asking = waiting.filter((item) => item.kind === 'question').length;
+  const waitingWords = !asking
+    ? `${waitingTotal} ${waitingTotal === 1 ? 'approval is' : 'approvals are'} waiting`
+    : asking === waitingTotal
+      ? waitingTotal === 1
+        ? 'Row-Bot has a question'
+        : `${waitingTotal} questions are waiting`
+      : `${waitingTotal} things need you`;
   const words = others
     ? `${total} ${total === 1 ? 'thing needs' : 'things need'} you`
-    : `${waitingTotal} ${waitingTotal === 1 ? 'approval is' : 'approvals are'} waiting`;
+    : waitingWords;
+  const listTitle = asking ? 'Waiting for you' : 'Waiting for your approval';
   if (waitingTotal) {
     const otherWords = `${others} more ${others === 1 ? 'needs' : 'need'} you`;
     const close = (to: string) => (event: MouseEvent<HTMLAnchorElement>) => {
@@ -152,9 +162,9 @@ export default function AttentionIndicator({
               align="start"
               sideOffset={8}
               collisionPadding={12}
-              aria-label="Waiting for your approval"
+              aria-label={listTitle}
             >
-              <strong>Waiting for your approval</strong>
+              <strong>{listTitle}</strong>
               <PendingApprovalList
                 items={waiting}
                 onChanged={approvals.refresh}

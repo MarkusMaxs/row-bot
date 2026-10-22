@@ -9,6 +9,7 @@ import threading
 import time
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Any, Iterator
 
 from row_bot.models import get_llm, get_llm_for, get_context_policy, get_context_size, get_current_model, is_model_local, is_cloud_model, get_cloud_provider, set_active_model_override, _active_model_override
@@ -5979,6 +5980,16 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     )
                     _install_custom_tool_validation_repair(reader, readiness.provider_id)
                     lc_tools.extend(reader)
+                # Asking the person a question with options (N4): every agent can, under every approval level;
+                # a question is never an action to approve, so no level or profile takes it away.
+                from row_bot.questions import QUESTION_TOOL, build_tool as build_question_tool
+
+                if QUESTION_TOOL not in {str(getattr(tool, "name", "") or "") for tool in lc_tools}:
+                    asker = _apply_provider_tool_schema_compatibility(
+                        [build_question_tool()], readiness, has_explicit_allowlist=False
+                    )
+                    _install_custom_tool_validation_repair(asker, readiness.provider_id)
+                    lc_tools.extend(asker)
 
             from row_bot.tools.discovery import estimate_bound_tool_schema_tokens
 
@@ -6047,13 +6058,18 @@ def _paused_at_a_question(state: Any) -> bool:
     return any(getattr(task, "interrupts", None) for task in getattr(state, "tasks", ()) or ())
 
 
-def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
-    """Return normalized interrupt data from a paused LangGraph state."""
+def _waiting_interrupts(state: Any) -> list[dict[str, Any]]:
+    """The questions a paused state waits on, each with its ``__interrupt_id``.
 
-    if not _paused_at_a_question(state):
-        return None
-    all_interrupts: list[dict[str, Any]] = []
+    A tool call that went on with its own answer while a call beside it still
+    waits (Row-Bot's question, N4) keeps its old question in the saved writes:
+    a call with a result is finished, so it waits on nothing.
+    """
+
+    waiting: list[dict[str, Any]] = []
     for task in getattr(state, "tasks", ()) or ():
+        if getattr(task, "result", None):
+            continue
         for intr in getattr(task, "interrupts", ()) or ():
             value = getattr(intr, "value", None)
             item = (
@@ -6062,7 +6078,16 @@ def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
                 else {"description": str(value)}
             )
             item["__interrupt_id"] = str(getattr(intr, "id", "") or "")
-            all_interrupts.append(item)
+            waiting.append(item)
+    return waiting
+
+
+def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
+    """Return normalized interrupt data from a paused LangGraph state."""
+
+    if not _paused_at_a_question(state):
+        return None
+    all_interrupts = _waiting_interrupts(state)
     if not all_interrupts:
         return None
     return {"type": "interrupt", "interrupts": all_interrupts}
@@ -7532,10 +7557,24 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None,
         return None
 
 
+def _resume_value(approved: bool, interrupt_ids: list[str] | None,
+                  resume_values: Mapping[str, Any] | None) -> Any:
+    """What ``Command(resume=...)`` carries: an approval for each waiting id, or a question's answer by its id."""
+    if resume_values:
+        return dict(resume_values)
+    if interrupt_ids:
+        return {iid: approved for iid in interrupt_ids}
+    return approved
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None):
     """Resume an interrupted agent graph after user approval/denial.
+
+    ``resume_values`` (a question's answer, by its interrupt id) resumes only
+    those interrupts, in place of ``approved``: anything else waiting asks again.
 
     Yields the same ``(event_type, payload)`` tuples as ``stream_agent``.
     """
@@ -7581,10 +7620,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _resume_value(approved, interrupt_ids, resume_values)
     try:
         for event in _stream_graph(
             agent,
@@ -7616,6 +7652,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
 
 def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, approved: bool,
                                *, interrupt_ids: list[str] | None = None,
+                               resume_values: Mapping[str, Any] | None = None,
                                stop_event: threading.Event | None = None) -> str | dict:
     """Resume an interrupted agent graph (non-streaming, for tasks).
 
@@ -7671,10 +7708,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
             f"This paused agent run cannot be resumed safely: {exc}"
         ) from exc
 
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _resume_value(approved, interrupt_ids, resume_values)
 
     try:
         for _event in agent.stream(
@@ -7706,13 +7740,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
     # Check for another interrupt (agent may call a second dangerous tool)
     state = agent.get_state(config)
     if _paused_at_a_question(state):
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             return {"type": "interrupt", "interrupts": all_interrupts}
 
@@ -7728,6 +7756,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
 
 def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None) -> str | dict:
     """Resume the shared graph and apply the durable orchestration guard."""
 
@@ -7736,6 +7765,7 @@ def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: b
         config,
         approved,
         interrupt_ids=interrupt_ids,
+        resume_values=resume_values,
         stop_event=stop_event,
     )
     _complete_unified_parent_pass(result, enabled_tool_names, config)
@@ -8672,13 +8702,7 @@ def _stream_graph(agent, input_data, config: dict,
             latest_ai_message=_latest_ai_message_from_state(agent, config),
             phase_timings=phase_timings,
         )
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             yield ("interrupt", all_interrupts)
             return
