@@ -2088,7 +2088,7 @@ class ProblemFix(WireModel):
     """The one fix offered with a problem (Phase 18). The client words it and
     runs it through the owner that does it in Settings: a channel restart or
     an account sign-in reviewed as there, or opening the exact setting."""
-    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again"]
+    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again", "choose_folder"]
     # Where it is fixed by hand, an in-app path ("/settings/access#tunnel").
     href: str | None = Field(max_length=160, pattern=r"^/[A-Za-z0-9/?=&#._:-]{0,159}$")
     # restart_channel: the channel's id; reconnect_account: "google" or "x".
@@ -4181,6 +4181,8 @@ class PendingApproval(WireModel):
     ids to answer it (``/approvals/{id}``) or open where it was raised."""
     id: OpaqueId
     source: Literal["workflow", "conversation", "agent"]
+    # "question": Row-Bot asks the person to choose (N4), answered on its card rather than approved.
+    kind: Literal["approval", "question"] = "approval"
     title: str = Field(max_length=160)
     what: str = Field(max_length=512)
     requested_at: str = Field(max_length=80)
@@ -5015,12 +5017,22 @@ class AgentStartPayload(WireModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=16000)]
 
 
+class ApprovalAnswer(WireModel):
+    """The person's answer to one of Row-Bot's questions (N4): the options picked, by position, or their own words."""
+
+    choices: list[Annotated[int, Field(ge=0, le=3)]] = Field(default_factory=list, max_length=4)
+    other: str = Field(default="", max_length=500)
+
+
 class ApprovalPayload(WireModel):
     decision: Literal["approve", "reject"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
     # "turn" also approves later actions of the same kind until the turn ends (F21); only kinds the view marks
     # repeatable take it, others are approved once.
     scope: Literal["once", "turn"] = "once"
+    # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
+    # person's input, never an approval of an action.
+    answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
 
 
 class DeckSetupPayload(WireModel):
@@ -5201,6 +5213,8 @@ class TaskEditableFields(WireModel):
     notify_only: bool
     notify_label: str = Field(max_length=4096)
     channels: list[OpaqueId] | None = Field(max_length=32)
+    # The IANA zone the schedule keeps its times in; None means the computer's.
+    timezone: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def prompt_budget(self) -> TaskEditableFields:
@@ -5249,6 +5263,15 @@ class TaskRunSummary(WireModel):
     finished_at: str | None = Field(max_length=80)
     steps_total: int = Field(ge=0)
     steps_done: int = Field(ge=0)
+    # The code folder the run worked in, by id and by name as it was then.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    workspace_name: str | None = Field(default=None, max_length=256)
+    # The scheduled time it missed while Row-Bot was closed, when it ran once on start instead.
+    late_for: str | None = Field(default=None, max_length=80)
+    # A plain sentence about how it ended, e.g. "Not approved in time".
+    notice: str | None = Field(default=None, max_length=512)
+    # The one thing the person can do about it: choose another code folder (it was removed).
+    fix: Literal["choose_folder"] | None = None
 
 
 class TaskRunPage(WireModel):
@@ -5264,6 +5287,24 @@ class TaskRunResult(WireModel):
     replayed: bool
 
 
+class TaskApprovalMedia(WireModel):
+    name: str = Field(max_length=256)
+    size: int = Field(ge=0)
+    # The first hex digits of the SHA-256 of its contents.
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{6,64}$")
+    kind: Literal["image", "video", "audio", "file"]
+
+
+class TaskApprovalCard(WireModel):
+    """Exactly what a person-only ("Always ask me") approval lets happen."""
+
+    action: str = Field(max_length=1024)
+    destination: str | None = Field(default=None, max_length=1024)
+    account: str | None = Field(default=None, max_length=256)
+    text: str | None = Field(default=None, max_length=16384)
+    media: list[TaskApprovalMedia] = Field(default_factory=list, max_length=16)
+
+
 class TaskApprovalReview(WireModel):
     id: OpaqueId
     task_id: OpaqueId
@@ -5276,6 +5317,11 @@ class TaskApprovalReview(WireModel):
     message_truncated: bool
     response_available: bool
     nonce: str | None = Field(default=None, max_length=128)
+    # "question": Row-Bot's question (N4), answered on its own card (/approvals/{id}), never approved here.
+    kind: Literal["approval", "question"] = "approval"
+    # The person's own "Always ask me" approval: no approval level answers it for them.
+    person_only: bool = False
+    card: TaskApprovalCard | None = None
 
 
 class TaskApprovalPage(WireModel):
@@ -5582,6 +5628,8 @@ class TaskGraphFields(WireModel):
     apps: list[Annotated[str, StringConstraints(min_length=3, max_length=512)]] | None = Field(
         default=None, max_length=8
     )
+    # "Always ask me": what the step does waits for the person's own approval under every level.
+    always_ask: bool | None = None
 
 
 class TaskGraphStepEdit(WireModel):
@@ -5616,6 +5664,14 @@ class TaskSettingsFields(WireModel):
     agent_profile_id: str = Field(min_length=1, max_length=128)
     approval_mode: ApprovalLevel
     persistent_enabled: bool
+    # The workflow's own code folder: every step runs in it. None: the conversation's.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    # A scheduled time while Row-Bot was closed: skip it, or run once when Row-Bot starts.
+    missed_runs: Literal["skip", "run_once"] = "skip"
+    # Apps and tools whose actions always wait for the person ("Always ask me").
+    always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -5629,6 +5685,9 @@ class TaskSettingsSnapshot(WireModel):
     conversation_id: OpaqueId | None
     # The person turned Hands-off on once on this install: choosing it needs no dialog again.
     full_autonomy_confirmed: bool = False
+    # The saved folder's name (kept when it is removed) and whether it is still a code folder.
+    workspace_name: str | None = Field(default=None, max_length=256)
+    workspace_available: bool = True
 
 
 class TaskSettingsUpdatePayload(WireModel):
@@ -6638,6 +6697,23 @@ class ApprovalSetup(WireModel):
     folders: list[ApprovalFolderChoice] = Field(default_factory=list, max_length=8)
 
 
+class ApprovalQuestionOption(WireModel):
+    """One option of a question card; the recommended one carries its own tag."""
+
+    label: str = Field(min_length=1, max_length=60)
+    description: str = Field(default="", max_length=160)
+    recommended: bool = False
+
+
+class ApprovalQuestion(WireModel):
+    """One of Row-Bot's questions (N4): a header chip, the question and 2 to 4 options; "Other" is always offered."""
+
+    header: str = Field(min_length=1, max_length=12)
+    question: str = Field(min_length=1, max_length=300)
+    multi_select: bool = False
+    options: list[ApprovalQuestionOption] = Field(min_length=2, max_length=4)
+
+
 class ToolActivity(WireModel):
     state: Literal["tool_call", "tool_done"]
     tool_name: str = Field(default="", max_length=128)
@@ -6690,6 +6766,8 @@ class ApprovalRequired(WireModel):
     # The card's question in Row-Bot's own words, when the action has one ("Allow Row-Bot's browser to open
     # localhost:5173 in this chat?"); otherwise the card asks from the action's name.
     question: str = Field(default="", max_length=240)
+    # Row-Bot's questions with options (N4): a question card, answered rather than approved.
+    questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
 
 
 class GenerationError(WireModel):
@@ -7215,10 +7293,18 @@ class AppViewAppSetting(WireModel):
     enabled: bool
 
 
+class TraceQuestionAnswer(WireModel):
+    """One answered question, as its collapsed card says it ("Beta timing: Beta.1 now")."""
+
+    header: str = Field(min_length=1, max_length=12)
+    answer: str = Field(min_length=1, max_length=600)
+
+
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
         "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
+        "question_answered",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7251,6 +7337,9 @@ class TraceSpecialization(WireModel):
     # sandbox_unprepared (a test run that lacked its tools) says which in error_code:
     # "pytest_missing" or "packages_missing".
     job_id: str = Field(default="", max_length=64, pattern=r"^(prep-[0-9a-f]{8})?$")
+    # question_answered (N4): how Row-Bot's question ended and, when answered, what the person chose.
+    outcome: Literal["", "answered", "skipped", "timed_out"] = ""
+    answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
 
 
 class TranscriptTraceItem(WireModel):
@@ -7567,6 +7656,8 @@ class HandshakeView(Choices):
     session_ttl_seconds: int = Field(ge=0, le=43200)
     # The server's current UTC offset: times it sends without an offset are its wall clock (B341).
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
+    # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
+    server_timezone: str | None = Field(default=None, max_length=64)
     native_adapter: NativeAdapter
     limits: Limits
 
@@ -7593,6 +7684,8 @@ class ApprovalView(WireModel):
     reviewer_reason: str = Field(default="", max_length=240)
     # The card's question in Row-Bot's own words, when the action has one.
     question: str = Field(default="", max_length=240)
+    # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
+    questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
     policy_revision: Revision
     nonce: str = Field(min_length=32, max_length=256)
 

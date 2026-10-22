@@ -41,13 +41,13 @@ async function everywhere(
   name: string,
   settle: () => Promise<void> = async () => {},
 ) {
-  await settle();
+  await expect(settle).toPass();
   await views(page, info, name);
   await page.setViewportSize(PHONE);
-  await settle();
+  await expect(settle).toPass();
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
-  await settle();
+  await expect(settle).toPass();
 }
 
 async function seed(page: Page, path: string) {

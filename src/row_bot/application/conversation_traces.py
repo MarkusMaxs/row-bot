@@ -27,10 +27,11 @@ TraceGroupKind = Literal["generic", "browser", "computer"]
 TraceSpecializationKind = Literal[
     "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
     "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
+    "question_answered",
 ]
 CARD_SPECIALIZATIONS = frozenset({
     "resource_created", "resource_bound", "setup_needed", "connect_apps", "background_process", "recording",
-    "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
+    "video_edit", "delivery", "sandbox_job", "sandbox_unprepared", "question_answered",
 })
 # A recording of Row-Bot's browser or of the screen a step started or stopped (F2): the result's
 # first line after its approval line names it, and the card follows it by that id.
@@ -154,6 +155,9 @@ class TraceSpecialization:
     delivery_id: str = ""
     # sandbox_job: Prepare sandbox, or the sandbox image's download, the card follows (re-read by id).
     job_id: str = ""
+    # question_answered (N4): how Row-Bot's question ended, and each answer ({header, answer}) when answered.
+    outcome: str = ""
+    answers: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -617,6 +621,26 @@ def _card_specialization(name: str, payload: dict[str, Any] | None) -> TraceSpec
     return None
 
 
+def _question_specialization(name: str, payload: dict[str, Any] | None) -> TraceSpecialization | None:
+    """Row-Bot's answered (or skipped) question, collapsed to what the person chose (N4)."""
+    if name != "ask_person" or not payload or payload.get("ok") is not True or payload.get("kind") != "question_answered":
+        return None
+    outcome = str(payload.get("outcome") or "")
+    if outcome not in {"answered", "skipped", "timed_out"}:
+        return None
+    raw = payload.get("answers") if isinstance(payload.get("answers"), list) else []
+    answers = []
+    for entry in raw[:4]:
+        if not isinstance(entry, dict):
+            continue
+        header, answer = _clean_text(entry.get("header"), 12), _clean_text(entry.get("answer"), 600)
+        if header and answer:
+            answers.append({"header": header, "answer": answer})
+    if outcome == "answered" and not answers:
+        return None
+    return TraceSpecialization(kind="question_answered", outcome=outcome, answers=tuple(answers))
+
+
 def _process_specialization(name: str, content: Any) -> TraceSpecialization | None:
     """The background process a run_command or start_process step left running, by its handle line."""
     if name not in _PROCESS_TOOLS or not isinstance(content, str):
@@ -694,6 +718,7 @@ def specialize_tool_result(result: Any) -> TraceSpecialization | None:
         or _skill_specialization(name, payload)
         or _agent_specialization(name, payload)
         or _card_specialization(name, payload)
+        or _question_specialization(name, payload)
         or _media_specialization(result)
     )
 
@@ -841,6 +866,9 @@ def _public_specialization(
             **({"edit_id": specialization.edit_id} if specialization.edit_id else {}),
             **({"delivery_id": specialization.delivery_id} if specialization.delivery_id else {}),
             **({"job_id": specialization.job_id} if specialization.job_id else {}),
+            **({"outcome": specialization.outcome,
+                "answers": [dict(answer) for answer in specialization.answers]}
+               if specialization.kind == "question_answered" else {}),
         }
         if specialization.kind in CARD_SPECIALIZATIONS
         else {}
