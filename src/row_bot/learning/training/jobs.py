@@ -14,8 +14,8 @@ changes nothing.
 **Files.** A job's bulk lives in its run folder, ``learning_models/runs/<job id>/``
 in the data folder (:func:`run_dir`): ``data/`` (the prepared examples the worker is
 leased), ``checkpoints/checkpoint-<step>/`` (each with its manifest, the newest two
-kept), ``kept_pass.json`` (the pass a run that chooses one kept, O117), ``work/`` (the
-worker's own folder) and ``worker.log`` (the tail of what it wrote). ``learning_models/`` is re-downloadable or re-trainable bulk: profile backups
+kept), ``passes.json`` (each pass's validation loss and saved adapter, for a run of more than one
+pass, O119), ``work/`` (the worker's own folder) and ``worker.log`` (the tail of what it wrote). ``learning_models/`` is re-downloadable or re-trainable bulk: profile backups
 leave it out (O39) and a restore leaves it where it is.
 
 **Recovery.** After a crash or a restart a job left preparing, running or pausing has
@@ -61,7 +61,7 @@ def _check_plan(spec: dict[str, Any], steps_total: int) -> None:
         "resume_from": None, "lease": {"dataset": somewhere, "examples": 0}, "output": somewhere,
         "recipe": spec["recipe"],
     })
-KEPT_FILE = "kept_pass.json"
+PASSES_FILE = "passes.json"
 MAX_TRANSITIONS = 200
 
 TRANSITIONS: dict[str, frozenset[str]] = {
@@ -457,7 +457,7 @@ __all__ = [
     "HELD",
     "JobStateError",
     "KEEP_CHECKPOINTS",
-    "KEPT_FILE",
+    "PASSES_FILE",
     "KIND",
     "LIVE",
     "MODELS_FOLDER",

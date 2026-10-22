@@ -205,8 +205,7 @@ export function trainingView(
       )
         return null;
       return {
-        // The steps it trained: fewer than planned when a pass did no better (O117).
-        title: `Trained ${training.version ? `v${training.version}` : 'a new version'} · ${(training.step || (training.steps_total ?? 0)).toLocaleString()} steps.`,
+        title: `Trained ${training.version ? `v${training.version}` : 'a new version'} · ${(training.steps_total ?? training.step).toLocaleString()} steps.`,
         detail:
           'Row-Bot prepares it to run next, and asks you before using it.',
         actions: [],
