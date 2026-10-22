@@ -274,6 +274,26 @@ test('training waits while another app holds the graphics card', async ({
   await shoot(page, info, 'model-gpu-busy');
 });
 
+test('training waits while other apps hold the computer’s memory (O105)', async ({
+  page,
+}, info) => {
+  await turnOn(page);
+  await l2c(page, 'setup');
+  await l2c(page, 'memory-busy');
+  await openModel(page);
+  await expect(
+    training(page).getByText(
+      'Training v1 starts when this computer has the memory free.',
+    ),
+  ).toBeVisible();
+  await expect(
+    training(page).getByText(
+      /^Other apps are using this computer’s memory \(RAM and virtual memory\)\. Closing some frees it\./,
+    ),
+  ).toBeVisible();
+  await shoot(page, info, 'model-memory-busy');
+});
+
 test('the Docker image says training is unavailable', async ({
   page,
 }, info) => {

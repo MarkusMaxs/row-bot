@@ -4191,9 +4191,16 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
                                      ("lockfile", "tools_platform", lockfile),
                                      ("server_files", "status", server_files)):
         _l2x.setdefault(f"{module}.{attribute}", getattr(owner, attribute))
-    if action == "card":  # name: 5090 (the 32 GB tier) or none (no NVIDIA card: not on this computer)
-        gpus = [] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")]
-        found = hardware.classify(gpus)
+    if action == "card":
+        # name: 5090 (the 32 GB tier, with 128 GB of RAM and virtual memory), 5090-short (memory that can't
+        # hold its largest certified tier, O105), 4060-low (an 8 GB card on a computer whose memory can't
+        # hold even the 8 GB tier) or none (no NVIDIA card: not on this computer)
+        needs = sorted(tier.system_memory_mib for tier in hardware.TIERS if tier.certified and tier.system_memory_mib)
+        limit = {"5090-short": needs[-1] - 1024, "4060-low": needs[0] - 3072}.get(name, 131_072)
+        memory = hardware.SystemMemory(limit_mib=limit, free_mib=min(limit, 90_000) // 2)
+        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08")] if name == "4060-low"
+                else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")])
+        found = hardware.classify(gpus, memory)
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found
         lockfile.tools_platform = lambda platforms=None: "windows-x64"  # a build for this computer
@@ -4486,8 +4493,13 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         planner.counts = (_L2C_EXAMPLES, 100, 0, 11)
     elif action == "version":
         _l2c_version(name)
-    elif action == "gpu-busy":  # a local model still loaded in Ollama holds the card: Train now waits
-        supervisor.gpu_free = lambda: False
+    elif action in ("gpu-busy", "memory-busy"):
+        # A local model still loaded in Ollama holds the card, or other apps hold the computer's memory
+        # (O105): Train now waits.
+        if action == "gpu-busy":
+            supervisor.gpu_free = lambda: False
+        else:
+            supervisor.memory_free = lambda: False
         planner.counts = (_L2C_EXAMPLES, 100, _L2C_EXAMPLES, 11)
         job = supervisor.jobs.plan(steps_total=_L2C_STEPS, checkpoint_every=10,
                                    dataset={"id": "ds_" + "e" * 32, "examples": _L2C_EXAMPLES})

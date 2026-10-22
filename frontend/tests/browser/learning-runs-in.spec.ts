@@ -135,6 +135,54 @@ async function runsIn(page: Page) {
   return page.getByRole('dialog', { name: 'Where your personal model runs' });
 }
 
+async function setupSheet(page: Page, card: string) {
+  await l1a(page, 'preview');
+  await l2x(page, 'card', card);
+  await page.goto('/app-v2/settings/learning');
+  await page.getByRole('button', { name: 'Turn on Learning' }).click();
+  return page.getByRole('dialog', { name: 'Turn on Learning' });
+}
+
+test('setup says what training needs of the computer’s memory, and what to do when it can’t hold a tier (O105)', async ({
+  page,
+}, info) => {
+  const sheet = await setupSheet(page, '5090-short');
+  await expect(sheet.getByText(GPU)).toBeVisible();
+  await expect(
+    sheet.getByText(
+      /^Training needs about \d+ GB of this computer’s memory free \(RAM and virtual memory\)\.$/,
+    ),
+  ).toBeVisible();
+  await expect(
+    sheet.getByText(
+      /^Larger models need about \d+ GB of RAM and virtual memory to train, and this computer has \d+ GB\./,
+    ),
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
+  await shoot(page, info, 'setup-memory-short');
+});
+
+test('a computer whose memory can’t hold training says so up front (O105)', async ({
+  page,
+}, info) => {
+  const sheet = await setupSheet(page, '4060-low');
+  await expect(sheet.getByText('NVIDIA GeForce RTX 4060 (8 GB)')).toBeVisible();
+  await expect(
+    sheet.getByText(
+      /^This computer’s memory can’t hold training yet: it needs about \d+ GB of RAM and virtual memory, and this computer has \d+ GB\.$/,
+    ),
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole('combobox', { name: 'Starting model' }),
+  ).toHaveCount(0);
+  await expect(
+    sheet.getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
+  await shoot(page, info, 'setup-low-memory');
+});
+
 test('Row-Bot runs v1 itself: starting, ready, Runs in, and each way out when it can’t start', async ({
   page,
 }, info) => {
