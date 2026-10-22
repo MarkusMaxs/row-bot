@@ -58,6 +58,16 @@ runs:
         file "$APP_EXEC" | grep -q "Mach-O"
         plutil -lint "$APP_PATH/Contents/Info.plist"
         "$APP_EXEC" --self-test
+        # The window and the splash run as Row-Bot itself (B385): the host runs the
+        # bundle's Python, and to macOS that process is the Row-Bot bundle, so the
+        # Dock, Cmd-Tab and Force Quit name Row-Bot. It runs no other Python.
+        AS_ROW_BOT="$(PYTHONNOUSERSITE=1 "$APP_EXEC" --run-python "$RESOURCES/python" -s -B -c \
+          'import sys; from Foundation import NSBundle; b = NSBundle.mainBundle(); print(b.bundleIdentifier(), b.objectForInfoDictionaryKey_("CFBundleName"), sys.executable.endswith("/python/bin/python3"))')"
+        test "$AS_ROW_BOT" = "ai.row-bot.assistant Row-Bot True" || { echo "::error::--run-python gave: $AS_ROW_BOT"; exit 1; }
+        if "$APP_EXEC" --run-python "$(python3 -c 'import sys; print(sys.base_prefix)')" -c pass 2>/dev/null; then
+          echo "::error::the host ran a Python that is not Row-Bot's"
+          exit 1
+        fi
         if ! PYTHON="$(resolve_bundle_python "$RESOURCES")"; then
           echo "::error::Bundled Python not found under $RESOURCES/python/bin"
           find "$APP_PATH" -maxdepth 5 -path '*/python/bin/*' -print || true

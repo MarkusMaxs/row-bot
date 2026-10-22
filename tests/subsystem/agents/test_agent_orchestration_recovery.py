@@ -613,3 +613,37 @@ def test_interrupted_work_with_nothing_left_offers_only_dismiss(
     assert orchestrator.dismiss_orchestrations("parent") == 1
     assert orchestrator.get_orchestration(finished["id"])["status"] == "stopped"
     assert orchestrator.get_thread_orchestration_activity(["parent"])["parent"]["state"] == "terminal"
+
+
+def test_restart_stops_background_helpers_of_a_chat_that_already_answered(
+    tmp_path,
+    reload_for_data_dir,
+):
+    """B396: the chat answered while an optional helper went on in the background. A restart ended the
+    helper, but its run still read "running", so the chat's row spun "Background agents working" for good."""
+    agent_runs, orchestrator = _fresh_modules(tmp_path, reload_for_data_dir)
+    orchestration = orchestrator.create_or_get_orchestration(
+        parent_thread_id="parent",
+        parent_generation_id="generation-1",
+        root_objective="Answer, and keep checking in the background.",
+        model_ref="provider:model",
+        approval_mode="block",
+        runtime_surface="normal_chat",
+        orchestration_version=2,
+    )
+    orchestrator.transition_orchestration(orchestration["id"], "running")
+    helper = agent_runs.create_agent_run(
+        run_id="background-helper", status="running", parent_thread_id="parent",
+        thread_id="child-background-helper", prompt="Keep checking", model_override="provider:model",
+    )
+    orchestrator.register_member(orchestration["id"], helper["id"], required=False)
+    orchestrator.complete_parent_pass(orchestration["id"], "Here is the answer.", foreground=True)
+    activity = orchestrator.get_thread_orchestration_activity(["parent"])["parent"]
+    assert (activity["state"], activity["phase"]) == ("active", "background")
+
+    # Row-Bot restarts: nothing runs any more.
+    agent_runs.recover_stale_agent_runs()
+    orchestrator.repair_interrupted_orchestrations_batch(limit=10)
+
+    assert agent_runs.get_agent_run(helper["id"])["status"] == "stopped"
+    assert orchestrator.get_thread_orchestration_activity(["parent"])["parent"]["state"] == "terminal"

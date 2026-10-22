@@ -276,8 +276,9 @@ def test_attach_never_replaces_a_dmg_and_records_the_one_it_attached(tmp_path) -
 class FakeMac:
     """codesign, stapler, hdiutil and plutil for a DMG and the app inside."""
 
-    def __init__(self, *, team="33PQRTZLNW", app_team="33PQRTZLNW", version="5.2.0", stapled=True):
+    def __init__(self, *, team="33PQRTZLNW", app_team="33PQRTZLNW", version="5.2.0", stapled=True, mount_error=""):
         self.team, self.app_team, self.version, self.stapled = team, app_team, version, stapled
+        self.mount_error = mount_error
         self.calls: list[list[str]] = []
 
     def __call__(self, argv, **_kwargs):
@@ -291,6 +292,8 @@ class FakeMac:
             code = 0 if self.stapled else 65
         elif argv[0] == "plutil":
             out = self.version + "\n"
+        elif argv[:2] == ["hdiutil", "attach"] and self.mount_error:
+            code, err = 1, self.mount_error + "\n"
         return subprocess.CompletedProcess(argv, code, stdout=out, stderr=err)
 
 
@@ -309,6 +312,15 @@ def test_a_dmg_is_checked_before_it_is_attached(tmp_path, mac, problem) -> None:
 
     assert problems == [] if problem is None else any(problem in item for item in problems)
     assert mac.calls[-1][:2] == ["hdiutil", "detach"]
+
+
+def test_a_dmg_that_does_not_mount_says_why(tmp_path) -> None:
+    mac = FakeMac(mount_error="hdiutil: attach failed - Resource temporarily unavailable")
+
+    problems = notarize.verify_dmg(tmp_path / "Row-Bot-5.2.0-macOS-arm64.dmg", "5.2.0", notarized=True, run=mac)
+
+    assert problems == ["Row-Bot-5.2.0-macOS-arm64.dmg does not mount: "
+                        "hdiutil: attach failed - Resource temporarily unavailable"]
 
 
 def test_a_tool_that_gives_no_answer_counts_as_no_answer(tmp_path) -> None:
