@@ -42,10 +42,13 @@ EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
 MAX_RESTARTS = 3
 STAGES = ("profile", "past", "days", "checks", "tidy")
-#: Rough cloud tokens per live request (a turn or two on GPT-6.1 Sol with the person's tools) and per
-#: comparison of a version (the main model on the packs once, its replay of held-out work), for --plan.
-PLAN_TOKENS_PER_REQUEST = 60_000
-PLAN_TOKENS_PER_COMPARISON = 2_500_000
+#: Rough cloud tokens for --plan, from the pilots: a live request (a turn or two on GPT-6.1 Sol with the
+#: person's tools, a correction now and then: about 50K), the main model on the packs once a run (64 visible
+#: + 32 hidden x 3, kept 30 days and shared between the people), and its replay of a person's held-out work
+#: in each of their comparisons (about three: the runner's two and the benchmark).
+PLAN_TOKENS_PER_REQUEST = 50_000
+PLAN_TOKENS_MAIN_PACKS = 2_500_000
+PLAN_TOKENS_REPLAY_PER_PERSON = 3_000_000
 
 Runner = Callable[[list[str], Mapping[str, str], Path], int]
 
@@ -121,7 +124,9 @@ class ReleaseCheck:
                          "past_turns": sum(len(item.requests) for item in history.past),
                          "live_requests": len(history.stream), "history": history.fingerprint()[:12]})
         requests = sum(row["live_requests"] for row in rows)
-        estimate = requests * PLAN_TOKENS_PER_REQUEST + len(rows) * 2 * PLAN_TOKENS_PER_COMPARISON
+        estimate = (requests * PLAN_TOKENS_PER_REQUEST + PLAN_TOKENS_MAIN_PACKS
+                    + len(rows) * PLAN_TOKENS_REPLAY_PER_PERSON) * len([tier for tier in self.tiers
+                                                                       if self.tier_status(tier) == "ran"] or [1])
         return {"people": rows, "tiers": {tier: self.tier_status(tier) for tier in self.tiers},
                 "estimated_cloud_tokens": estimate, "cap": self.args.cap_tokens,
                 "fits": estimate <= self.args.cap_tokens}
