@@ -203,3 +203,75 @@ def test_existing_callable_embedding_compatibility_is_preserved(stores):
     facade.embedding_factory = lambda: embedding.embed_query
     assert len(facade.similarity_search("query", k=10)) == 4
     assert embedding.queries == ["query"]
+
+
+@pytest.fixture
+def documents_tool(tmp_path, monkeypatch, reload_for_data_dir):
+    """The documents tool over a fresh library where the local embedding model isn't downloaded: loading it fails
+    as a cache miss does. Every attempt to load or download a model is counted."""
+    import row_bot.embedding_providers as embedding_providers
+    import row_bot.tools.documents_tool  # noqa: F401 - registers the tool
+    from row_bot.tools import registry
+
+    (documents,) = reload_for_data_dir(tmp_path / "data", "row_bot.documents")
+    embedding_providers.release_embedding_resources("test reset", collect=False)
+    attempts = []
+
+    def missing(*_args, **_kwargs):
+        attempts.append("load")
+        raise OSError("Model not found in the local cache")
+
+    monkeypatch.setattr(embedding_providers, "ensure_embedding_runtime_available", lambda _cfg=None: None)
+    monkeypatch.setattr(embedding_providers, "_get_or_build_provider", missing)
+    monkeypatch.setattr(embedding_providers, "download_local_embedding_model",
+                        lambda *_args, **_kwargs: attempts.append("download"))
+
+    def add_document() -> None:
+        from row_bot.document_index import build_unpublished_document, publish_document
+
+        work = tmp_path / "work" / "travel"
+        manifest = build_unpublished_document(
+            document_id="travel", original_name="travel.md", stored_name="travel.md", content_sha256="a" * 64,
+            chunks=[Document(page_content="Client dinners: up to 85 EUR per person.", metadata={"chunk_index": 0})],
+            work_document_dir=work, embedding=FakeEmbeddings(),
+            embedding_metadata={"provider": "fake", "model": "v1", "dimension": 3},
+        )
+        publish_document(work, manifest, index_root=documents.DOCUMENT_INDEX_DIR)
+
+    tool = registry.get_tool("documents").as_langchain_tool()
+    yield tool, add_document, attempts
+    embedding_providers.release_embedding_resources("test cleanup", collect=False)
+
+
+def test_an_empty_library_answers_without_any_embedding_model(documents_tool):
+    """L2v: an empty library answered every call with the embedding model's error, and small models called it again
+    and again (51 times in one run)."""
+    tool, _add_document, attempts = documents_tool
+
+    assert tool.invoke({"query": "travel policy"}) == "No results found for: travel policy"
+    assert tool.invoke({"query": "travel policy"}) == "No results found for: travel policy"
+    assert attempts == []  # no model loaded, no download asked for
+
+
+def test_a_library_with_documents_still_says_the_embedding_model_is_missing(documents_tool):
+    tool, add_document, attempts = documents_tool
+    add_document()
+
+    answer = tool.invoke({"query": "travel policy"})
+
+    assert answer == "Error in 📄 Documents: The selected local embedding model is not available in the local cache."
+    assert attempts == ["load"]
+
+
+def test_a_library_with_documents_is_searched_as_before(documents_tool, monkeypatch):
+    import row_bot.documents as documents
+
+    tool, add_document, _attempts = documents_tool
+    add_document()
+    monkeypatch.setattr(documents, "get_embedding_provider_for_recall", lambda _config=None: FakeEmbeddings())
+    monkeypatch.setattr("row_bot.document_index.active_embedding_metadata",
+                        lambda _config=None: {"provider": "fake", "model": "v1", "dimension": 3})
+
+    answer = tool.invoke({"query": "client dinners"})
+
+    assert answer == "[Result 1]\nClient dinners: up to 85 EUR per person.\nSOURCE_URL: travel.md"
