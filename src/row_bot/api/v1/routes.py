@@ -10327,6 +10327,7 @@ def create_router(
                 "reviewer_reason",
                 "question",
                 "questions",
+                "memory_text",
                 "policy_revision",
             )
             if k in view
