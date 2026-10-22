@@ -1,10 +1,124 @@
 {
+  "$defs": {
+    "TaskApprovalCard": {
+      "additionalProperties": false,
+      "description": "Exactly what a person-only (\"Always ask me\") approval lets happen.",
+      "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account"
+        },
+        "action": {
+          "maxLength": 1024,
+          "title": "Action",
+          "type": "string"
+        },
+        "destination": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Destination"
+        },
+        "media": {
+          "items": {
+            "$ref": "#/$defs/TaskApprovalMedia"
+          },
+          "maxItems": 16,
+          "title": "Media",
+          "type": "array"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "maxLength": 16384,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "TaskApprovalCard",
+      "type": "object"
+    },
+    "TaskApprovalMedia": {
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": {
+          "pattern": "^[0-9a-f]{6,64}$",
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "image",
+            "video",
+            "audio",
+            "file"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 256,
+          "title": "Name",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 0,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "size",
+        "fingerprint",
+        "kind"
+      ],
+      "title": "TaskApprovalMedia",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "approval_mode": {
       "maxLength": 64,
       "title": "Approval Mode",
       "type": "string"
+    },
+    "card": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TaskApprovalCard"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "expires_at": {
       "anyOf": [
@@ -46,6 +160,11 @@
       ],
       "default": null,
       "title": "Nonce"
+    },
+    "person_only": {
+      "default": false,
+      "title": "Person Only",
+      "type": "boolean"
     },
     "requested_at": {
       "maxLength": 80,

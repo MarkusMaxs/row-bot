@@ -4506,6 +4506,11 @@ _current_external_discovery_active_var: _contextvars.ContextVar[bool] = _context
 _current_app_scope_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
     "current_app_scope", default=None
 )
+# A workflow run's "Always ask me" rules (N9): {"step": bool, "items": [app or tool ids]}. An
+# action they cover waits for the person under every approval level (see _person_rule_refusal).
+_current_person_rules_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
+    "current_person_rules", default=None
+)
 
 
 def current_app_scope() -> dict | None:
@@ -4637,6 +4642,7 @@ def _set_active_runtime_context(
     agent_run_id: str = "",
     external_discovery_active: bool = False,
     app_scope: dict | None = None,
+    person_rules: dict | None = None,
 ) -> None:
     _current_thread_id_var.set(thread_id or "")
     _current_runtime_surface_var.set(runtime_surface or "")
@@ -4660,6 +4666,7 @@ def _set_active_runtime_context(
     _current_agent_run_id_var.set(agent_run_id or "")
     _current_external_discovery_active_var.set(bool(external_discovery_active))
     _current_app_scope_var.set(dict(app_scope) if isinstance(app_scope, dict) else None)
+    _current_person_rules_var.set(dict(person_rules) if isinstance(person_rules, dict) else None)
     _current_authorized_skill_records_var.set(None)
     _current_effective_tool_parent_names_var.set(())
     _current_bound_tool_schema_tokens_var.set(0)
@@ -5502,7 +5509,13 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
         except Exception:
             return 'BLOCKED: The selected Agent Profile policy is unavailable.'
 
-    from row_bot.tools.approval_gate import collect_decisions, with_decisions
+    from contextlib import nullcontext
+
+    from row_bot.tools.approval_gate import approved_by_person, collect_decisions, with_decisions
+
+    def person_rule(function, args, kwargs) -> tuple[str | None, str]:
+        arguments = call_arguments(argument_function or function, args, kwargs)
+        return _person_rule_refusal(tool.name, arguments, source=source, parent=parent)
 
     def sync(function):
         @wraps(function)
@@ -5512,7 +5525,11 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
                 return blocked
             # Every approval decided while it runs is recorded on its result (the activity shows it).
             with collect_decisions() as decisions:
-                result = function(*args, **kwargs)
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = function(*args, **kwargs)
             return with_decisions(decisions, result)
         return guarded
 
@@ -5523,7 +5540,11 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
             if blocked is not None:
                 return blocked
             with collect_decisions() as decisions:
-                result = await function(*args, **kwargs)
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = await function(*args, **kwargs)
             return with_decisions(decisions, result)
         return guarded
 
@@ -5537,6 +5558,62 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
     else:
         updates['_arun'] = asynchronous(tool._arun)
     return tool.model_copy(update=updates)
+
+
+PERSON_RULE_REFUSAL = (
+    "The person didn't approve this action, so it did not run. Don't try to do it another way; "
+    "say what you would have done."
+)
+
+
+def _person_rule_covers(rules: dict, name: str, *, source: str, parent: str) -> bool:
+    """Whether a workflow's "Always ask me" rules name this tool: its step's rule, the tool or
+    tool group, or the app it belongs to."""
+    if rules.get("step"):
+        return True
+    items = {str(item) for item in rules.get("items") or []}
+    if not items:
+        return False
+    if name in items or parent in items:
+        return True
+    try:
+        from row_bot.integrations.scope import app_for_tool
+
+        app = app_for_tool(name)
+    except Exception:
+        logger.debug("The app of %s can't be told", name, exc_info=True)
+        app = None
+    return bool(app and app.get("item_id") in items)
+
+
+def _person_rule_refusal(name: str, arguments: dict | None, *, source: str, parent: str) -> tuple[str | None, str]:
+    """(refusal, binding) for one call under a workflow's "Always ask me" rules (N9).
+
+    An action the rules cover (anything but a read) waits for the person under every level, on a
+    card that says exactly what will happen; it runs only with the arguments they approved. The
+    binding is returned when they approved, so what the tool asks inside counts as approved.
+    """
+    rules = _current_person_rules_var.get(None)
+    if not rules:
+        return None, ""
+    from row_bot.tools.profile_policy import action_effect
+
+    if action_effect(name, arguments, source=source, parent=parent) == "read_only":
+        return None, ""
+    if not _person_rule_covers(rules, name, source=source, parent=parent):
+        return None, ""
+    from row_bot.approval_messages import plain_tool_call
+    from row_bot.tools.action_card import describe_action
+    from row_bot.tools.approval_gate import call_binding, person_approval, with_approval
+
+    card = describe_action(name, arguments, source=source, parent=parent)
+    binding = call_binding(name, arguments, (item["fingerprint"] for item in card["media"]))
+    payload = {"tool": name, "label": card["action"][:120], "description": plain_tool_call(name, arguments or {}),
+               "args": arguments or {}, "card": card}
+    approved, line = person_approval(payload, binding=binding)
+    if approved:
+        return None, binding
+    return with_approval(line, PERSON_RULE_REFUSAL), ""
 
 
 def _tool_left_out(name: str, source: str, parent: str, servers: set[str], parents: set[str]) -> bool:
@@ -6177,6 +6254,7 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _log_runtime_decision(
@@ -6904,6 +6982,7 @@ def stream_chat_only(
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(model_label)
     _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for(configurable))
@@ -7312,6 +7391,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     # A chat on another of the owner's devices runs like one on this computer.
     auto_allowed = runtime_mode == "auto" and runtime_surface in {"normal_chat", "remote_client", "channel"}
@@ -7414,6 +7494,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _graph_build_started = time.perf_counter()
@@ -7563,6 +7644,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7652,6 +7734,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:

@@ -5251,6 +5251,24 @@ class TaskRunResult(WireModel):
     replayed: bool
 
 
+class TaskApprovalMedia(WireModel):
+    name: str = Field(max_length=256)
+    size: int = Field(ge=0)
+    # The first hex digits of the SHA-256 of its contents.
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{6,64}$")
+    kind: Literal["image", "video", "audio", "file"]
+
+
+class TaskApprovalCard(WireModel):
+    """Exactly what a person-only ("Always ask me") approval lets happen."""
+
+    action: str = Field(max_length=1024)
+    destination: str | None = Field(default=None, max_length=1024)
+    account: str | None = Field(default=None, max_length=256)
+    text: str | None = Field(default=None, max_length=16384)
+    media: list[TaskApprovalMedia] = Field(default_factory=list, max_length=16)
+
+
 class TaskApprovalReview(WireModel):
     id: OpaqueId
     task_id: OpaqueId
@@ -5263,6 +5281,9 @@ class TaskApprovalReview(WireModel):
     message_truncated: bool
     response_available: bool
     nonce: str | None = Field(default=None, max_length=128)
+    # The person's own "Always ask me" approval: no approval level answers it for them.
+    person_only: bool = False
+    card: TaskApprovalCard | None = None
 
 
 class TaskApprovalPage(WireModel):
@@ -5569,6 +5590,8 @@ class TaskGraphFields(WireModel):
     apps: list[Annotated[str, StringConstraints(min_length=3, max_length=512)]] | None = Field(
         default=None, max_length=8
     )
+    # "Always ask me": what the step does waits for the person's own approval under every level.
+    always_ask: bool | None = None
 
 
 class TaskGraphStepEdit(WireModel):

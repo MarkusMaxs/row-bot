@@ -77,6 +77,10 @@ class TaskApprovalReview:
     approval_mode: str
     message_truncated: bool
     response_available: bool
+    # The person's own "Always ask me" approval (N9): no level answers it for them, and its card
+    # says exactly what will happen (action, destination, account, full text, media).
+    person_only: bool = False
+    card: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -230,6 +234,37 @@ def list_task_runs(task_id: str, *, cursor: str | None = None, limit: int = 50) 
     return TaskRunPage(task_id, revision, tuple(items), next_cursor, total)
 
 
+def _text(value: object, limit: int) -> str:
+    text = value if isinstance(value, str) else ""
+    return "".join(c for c in text if c in "\n\t" or ord(c) >= 32).strip()[:limit]
+
+
+def _approval_card(approval: dict) -> dict | None:
+    """The bounded card of a person-only approval, from the terms it was made with."""
+    try:
+        payload = json.loads(approval.get("approval_payload_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    card = payload.get("card") if isinstance(payload, dict) and payload.get("person_only") else None
+    if not isinstance(card, dict):
+        return None
+    media = []
+    for item in card.get("media") if isinstance(card.get("media"), list) else []:
+        if len(media) == 16 or not isinstance(item, dict):
+            continue
+        size, fingerprint = item.get("size"), str(item.get("fingerprint") or "")
+        if type(size) is not int or size < 0 or not re.fullmatch(r"[0-9a-f]{6,64}", fingerprint):
+            continue
+        kind = item.get("kind") if item.get("kind") in {"image", "video", "audio", "file"} else "file"
+        media.append({"name": _text(item.get("name"), 256) or "file", "size": size,
+                      "fingerprint": fingerprint, "kind": kind})
+    return {"action": _text(card.get("action"), 1024) or "Run a tool",
+            "destination": _text(card.get("destination"), 1024) or None,
+            "account": _text(card.get("account"), 256) or None,
+            "text": _text(card.get("text"), 16384) or None,
+            "media": media}
+
+
 def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None, limit: int = 8) -> TaskApprovalPage:
     _identity(task_id)
     _identity(run_id)
@@ -261,6 +296,7 @@ def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None,
                 capture = state["config"].get("_reviewed_task_run")
                 message = approval.get("message") or ""
                 truncated = len(message) > 16384
+                card = _approval_card(approval)
                 draining = any(h.domain == "workflow" and h.domain_id == run_id
                                for h in generation_registry.active(state["thread_id"]))
                 expired = bool(approval.get("timeout_at") and approval["timeout_at"] <= tasks.datetime.now().isoformat())
@@ -272,6 +308,7 @@ def list_task_approvals(task_id: str, run_id: str, *, cursor: str | None = None,
                     truncated, bool(capture and not truncated and not draining and not expired and state["status"] == "paused"
                                     and state.get("resume_token") == approval.get("resume_token")
                                     and approval.get("resume_kind") in {None, "", "workflow"}),
+                    card is not None, card,
                 )
                 item_size = len(json.dumps(asdict(item), ensure_ascii=True).encode()) + 2
                 if len(items) == limit or size + item_size > 240 * 1024:

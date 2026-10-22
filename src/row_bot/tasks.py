@@ -2248,8 +2248,9 @@ def update_task_settings(
                 dependency_trigger = _row_to_dict(dependency).get("trigger")
                 target = dependency_trigger.get("target_task") if isinstance(dependency_trigger, dict) and dependency_trigger.get("type") == "task_complete" else None
         for key, value in values.items():
-            conn.execute(f"UPDATE tasks SET {key} = ? WHERE id = ?",
-                         (json.dumps(value) if key == "trigger" and value is not None else value, task_id))
+            if key in ("trigger", "always_ask") and value is not None:
+                value = json.dumps(value)
+            conn.execute(f"UPDATE tasks SET {key} = ? WHERE id = ?", (value, task_id))
         _task_editor_row(conn, task_id)
         if record_commit is not None:
             record_commit(conn, task_id)
@@ -2363,7 +2364,7 @@ def update_task(
             if key == "always_ask":
                 value = list(value or [])
             if key in ("prompts", "allowed_commands", "allowed_recipients",
-                       "skills_override", "steps", "trigger",
+                       "skills_override", "steps", "trigger", "always_ask",
                        "tools_override", "channels", "profile_migration_snapshot_json"):
                 value = json.dumps(value, sort_keys=True) if value is not None else None
             if key in ("notify_only", "delete_after_run", "advanced_mode"):
@@ -4407,10 +4408,11 @@ def run_task_background(
             def _format_interrupt_details(interrupts: list[dict]) -> list[str]:
                 return [_approval_detail(intr) for intr in interrupts]
 
-            def _create_graph_interrupt_approval(step_id: str, approval_msg: str) -> tuple[str, str]:
+            def _create_graph_interrupt_approval(step_id: str, approval_msg: str,
+                                                 terms: dict | None = None) -> tuple[str, str]:
                 return create_approval_request(
                     run_id=run_id, task_id=task_id,
-                    step_id=step_id, message=approval_msg,
+                    step_id=step_id, message=approval_msg, **(terms or {}),
                 )
 
             def _save_graph_interrupt_state(
@@ -4536,6 +4538,7 @@ def run_task_background(
                             config["configurable"]["generation_id"] = generation_id
                             config["configurable"]["root_objective"] = prompt
                             _use_step_apps(config, step)
+                            _use_person_rules(config, task, step)
                             try:
                                 result = invoke_agent(
                                     prompt,
@@ -4634,7 +4637,9 @@ def run_task_background(
                                 # it; Hands-off approves it (an approval never asks under Hands-off;
                                 # anything else that waits, such as a setup card, goes on); under Ask,
                                 # and under Auto when the reviewer asked, the run pauses and notifies.
-                                if approval_mode == "block":
+                                # The person's own "Always ask me" card always waits for them (N9).
+                                person_held = _person_only_interrupt(interrupts)
+                                if approval_mode == "block" and not person_held:
                                     logger.info(
                                         "Task '%s' step %d: interrupt in block mode — refusing",
                                         task["name"], step_index + 1,
@@ -4650,7 +4655,7 @@ def run_task_background(
                                     step_succeeded = True
                                     break
 
-                                if approval_mode == "full":
+                                if approval_mode == "full" and not person_held:
                                     logger.info(
                                         "Task '%s' step %d: interrupt under Hands-off — approving",
                                         task["name"], step_index + 1,
@@ -4673,7 +4678,7 @@ def run_task_background(
                                     + "; ".join(details)
                                 )
                                 resume_token, approval_req_id = _create_graph_interrupt_approval(
-                                    step_id, approval_msg,
+                                    step_id, approval_msg, _person_approval_terms(person_held, step),
                                 )
                                 _save_graph_interrupt_state(
                                     step_index, step_outputs, config, resume_token,
@@ -5208,6 +5213,30 @@ def run_task_background(
                         step_outputs=step_outputs,
                     )
                     notify_channel = step.get("channel", "desktop")
+                    if step.get("always_ask") or notify_channel in (task.get("always_ask") or []):
+                        # "Always ask me" (N9): the message goes out only once the person approved
+                        # exactly this text to this destination.
+                        card = _delivery_card(task, notify_channel, notify_msg)
+                        from row_bot.tools.approval_gate import call_binding
+
+                        binding = call_binding("notify", {"channel": notify_channel,
+                                                          "destination": card["destination"], "text": notify_msg})
+                        if not _claim_person_approval(run_id, step_id, binding):
+                            approval_msg = f"Step {step_index + 1}/{total}: Send to {card['destination']}"
+                            resume_token, approval_req_id = create_approval_request(
+                                run_id=run_id, task_id=task_id, step_id=step_id, message=approval_msg,
+                                timeout_minutes=int(step.get("timeout_minutes") or PERSON_APPROVAL_TIMEOUT_MINUTES),
+                                approval_payload_json=_person_payload(binding, card),
+                            )
+                            _save_pipeline_state(
+                                run_id=run_id, task_id=task_id, thread_id=thread_id,
+                                current_step_index=step_index, step_outputs=step_outputs,
+                                config=config, resume_token=resume_token, status="paused",
+                            )
+                            paused = True
+                            _task_log(f"⏸ Step {step_index + 1}: Waiting for your approval")
+                            _notify_approval_channels(approval_req_id, resume_token, approval_msg)
+                            break
                     if notify_channel == "desktop":
                         from row_bot.notifications import notify as _notify
                         _validate_effect()
@@ -6628,6 +6657,115 @@ def resume_workflows_waiting_for_child_agent(child_run_id: str) -> int:
 
 # ── Approval Request Management ─────────────────────────────────────────────
 
+# ── "Always ask me" (N9) ─────────────────────────────────────────────────────
+# An approval the person's own rule asks for: only they can give it, it is bound to exactly what
+# its card shows, and it expires at the step's timeout (24 hours unless the step sets one).
+
+PERSON_APPROVAL_TIMEOUT_MINUTES = 24 * 60
+NOT_APPROVED_IN_TIME = "Not approved in time"
+NOT_APPROVED = "You didn't approve it, so it didn't happen."
+
+
+def _person_only_interrupt(interrupts: Sequence[Any]) -> dict | None:
+    """The person-only card among a step's paused questions, if any."""
+    return next((item for item in interrupts or ()
+                 if isinstance(item, Mapping) and item.get("person_only") and item.get("binding")), None)
+
+
+def _person_payload(binding: str, card: Mapping[str, Any]) -> dict[str, Any]:
+    from row_bot.tools.approval_gate import PERSON_RULE_REASON
+
+    return {"person_only": True, "binding": str(binding), "card": dict(card), "reason": PERSON_RULE_REASON}
+
+
+def _person_approval_terms(held: Mapping[str, Any] | None, step: Mapping[str, Any]) -> dict[str, Any]:
+    """create_approval_request terms for a person-only card: its details, binding and expiry."""
+    if not held:
+        return {}
+    return {"timeout_minutes": int(step.get("timeout_minutes") or PERSON_APPROVAL_TIMEOUT_MINUTES),
+            "approval_payload_json": _person_payload(str(held["binding"]), held.get("card") or {})}
+
+
+def _person_payload_of(approval: Mapping[str, Any] | None) -> dict | None:
+    """The person-only terms an approval request was made with, or None."""
+    if not approval:
+        return None
+    try:
+        payload = json.loads(approval.get("approval_payload_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and payload.get("person_only") and payload.get("binding") else None
+
+
+@_schema_retry
+def _approval_for_token(resume_token: str) -> dict | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM approval_requests WHERE resume_token = ?", (resume_token,)).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+@_schema_retry
+def _claim_person_approval(run_id: str, step_id: str, binding: str) -> bool:
+    """Use, once, the person's approval of exactly *binding* for this step of this run."""
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT id, approval_payload_json FROM approval_requests WHERE run_id = ? AND step_id = ? "
+            "AND status = 'approved' AND COALESCE(response_note, '') != 'used' ORDER BY responded_at DESC",
+            (run_id, step_id),
+        ).fetchall()
+        for row in rows:
+            held = _person_payload_of(dict(row))
+            if held and held["binding"] == binding:
+                conn.execute("UPDATE approval_requests SET response_note = 'used' WHERE id = ?", (row["id"],))
+                conn.commit()
+                return True
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def _delivery_card(task: Mapping[str, Any], channel: str, text: str) -> dict:
+    from row_bot.tools.action_card import describe_delivery
+
+    if channel == "desktop":
+        return describe_delivery("This computer", "", text, account="Row-Bot")
+    target = ""
+    try:
+        from row_bot.channels import registry as channel_registry
+
+        adapter = channel_registry.get(channel)
+        label = str(getattr(adapter, "display_name", "") or getattr(adapter, "name", "") or channel)
+    except Exception:
+        label = channel
+    if task.get("delivery_channel") == channel:
+        target = str(task.get("delivery_target") or "")
+    return describe_delivery(label, target, text, account=label)
+
+
+def _stop_unapproved_run(state: Mapping[str, Any], task: Mapping[str, Any], enabled_tool_names: list[str],
+                         *, timed_out: bool) -> None:
+    """Stop a run whose person-only approval was denied or not given in time."""
+    run_id = str(state["run_id"])
+    if state.get("graph_interrupted") == "true":
+        try:  # The tool call that waited is settled, so the conversation can go on later.
+            from row_bot.agent import repair_orphaned_tool_calls
+
+            repair_orphaned_tool_calls(enabled_tool_names, state.get("config") or {})
+        except Exception:
+            logger.debug("Could not settle the tool call of run %s", run_id, exc_info=True)
+    notice = NOT_APPROVED_IN_TIME if timed_out else NOT_APPROVED
+    _update_pipeline_status(run_id, "stopped")
+    _finish_run(run_id, "stopped", status_message=notice, terminal_reason="not_approved", notice=notice)
+    _emit_buddy_workflow_event("cancelled", task_id=str(state.get("task_id") or ""),
+                               thread_id=str(state.get("thread_id") or ""), label=notice)
+
+
 @_schema_retry
 def create_approval_request(
     run_id: str,
@@ -7255,6 +7393,7 @@ def _resume_graph_interrupted(
             return
         if isinstance(result, dict) and result.get("type") == "interrupt":
             interrupts = result.get("interrupts", [])
+            person_held = _person_only_interrupt(interrupts)
 
             # Empty interrupts — auto-continue
             if not interrupts:
@@ -7264,7 +7403,7 @@ def _resume_graph_interrupted(
                 )
                 # Treat as success — result is empty, keep going
                 pass  # fall through to success path below
-            elif approval_mode == "block":
+            elif approval_mode == "block" and not person_held:
                 # Block mode — refuse the chained interrupt
                 logger.info(
                     "Task '%s' graph resume: chained interrupt in block mode — refusing",
@@ -7278,8 +7417,9 @@ def _resume_graph_interrupted(
                 except Exception as exc2:
                     logger.error("Block-mode resume denial failed: %s", exc2)
                 # Fall through to success path
-            elif approval_mode == "full":
+            elif approval_mode == "full" and not person_held:
                 # Hands-off approves the chained interrupt; under Auto it waits for the person.
+                # The person's own "Always ask me" card always waits for them (N9).
                 logger.info(
                     "Task '%s' graph resume: chained interrupt under Hands-off — approving",
                     task["name"],
@@ -7304,6 +7444,7 @@ def _resume_graph_interrupted(
                     task_id=task_id,
                     step_id=step_id,
                     message=approval_msg,
+                    **_person_approval_terms(person_held, paused_step),
                 )
                 _save_pipeline_state(
                     run_id=run_id,
@@ -7441,6 +7582,19 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
     paused_step = steps[paused_step_index] if paused_step_index < len(steps) else {}
     paused_step_type = paused_step.get("type", "prompt")
 
+    asked = _approval_for_token(resume_token)
+    held = _person_payload_of(asked)
+    timed_out = bool(asked and asked.get("status") == "timed_out")
+    if held and not approved and (timed_out or state.get("graph_interrupted") != "true"):
+        # The person's own approval (N9) not given: the action never runs and the run stops here.
+        _stop_unapproved_run(state, task, enabled, timed_out=timed_out)
+        return
+    if held:
+        # The answer is bound to exactly what the card showed; the tool runs only with that.
+        from row_bot.tools.approval_gate import bound_answer
+
+        approved = bound_answer(approved, held["binding"])
+
     if state.get("graph_interrupted") == "true":
         _update_pipeline_status(state["run_id"], "running")
         _resume_graph_interrupted(
@@ -7481,7 +7635,8 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
         # No target or "end" — stop the pipeline
         _update_pipeline_status(state["run_id"], "stopped")
         _finish_run(state["run_id"], "stopped",
-                    status_message="Approval denied by user")
+                    status_message="Approval timed out" if timed_out else "Approval denied by user",
+                    notice=NOT_APPROVED_IN_TIME if timed_out else "")
         _emit_buddy_workflow_event(
             "cancelled",
             task_id=state["task_id"],
@@ -8096,6 +8251,16 @@ def _use_step_apps(config: dict, step: dict) -> None:
         config["configurable"]["app_scope"] = scope
     else:
         config["configurable"].pop("app_scope", None)
+
+
+def _use_person_rules(config: dict, task: Mapping[str, Any], step: Mapping[str, Any]) -> None:
+    """A step's "Always ask me", and the workflow's apps and tools that always ask (N9): an
+    action they cover waits for the person under every approval level."""
+    rules = {"step": bool(step.get("always_ask")), "items": [str(item) for item in task.get("always_ask") or []]}
+    if rules["step"] or rules["items"]:
+        config["configurable"]["person_rules"] = rules
+    else:
+        config["configurable"].pop("person_rules", None)
 
 
 def _resolve_step_index(steps: list[dict], target: str) -> int | None:
