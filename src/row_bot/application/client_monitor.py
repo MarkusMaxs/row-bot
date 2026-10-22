@@ -414,12 +414,18 @@ def _mcp_problems() -> list[dict[str, str]]:
     except Exception:
         return []
     enabled = int(status.get("enabled_server_count") or 0)
-    connected = int(status.get("connected_server_count") or 0)
-    if not status.get("enabled") or not enabled or connected >= enabled:
+    # Only an app that tried and failed: one still starting or connecting (every app, just after Row-Bot
+    # starts) isn't a problem yet (B400).
+    failed = sum(1 for server in (status.get("servers") or {}).values()
+                 if server.get("enabled") and server.get("status") in _MCP_FAILED)
+    if not status.get("enabled") or not enabled or not failed:
         return []
-    return [_problem("mcp", "An app isn't connected",
-                     f"{connected} of {enabled} apps that are on are connected.", "mcp",
+    return [_problem("mcp", "An app isn't connected" if failed == 1 else f"{failed} apps aren't connected",
+                     f"{failed} of {enabled} apps that are on couldn't connect.", "mcp",
                      _open("/settings/apps", "Apps"))]
+
+
+_MCP_FAILED = {"failed", "error", "sdk_missing", "dependency_missing", "cleanup_incomplete"}
 
 
 # An app that is on but can't be used until the person acts, in words.
