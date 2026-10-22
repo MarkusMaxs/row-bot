@@ -8463,6 +8463,9 @@ class AppView(AppRef):
     docs_url: str = Field(max_length=512)
     key_url: str = Field(max_length=512)
     icon_license: IconLicense | None
+    # What to know before setting it up, and another app it points to for that.
+    note: str = Field(default="", max_length=256)
+    see_also: str = Field(default="", pattern=r"^([a-z0-9][a-z0-9-]{0,63})?$")
 
 
 class AppList(WireModel):
