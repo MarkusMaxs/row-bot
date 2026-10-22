@@ -160,18 +160,18 @@ def test_a_run_planned_under_an_older_recipe_starts_with_the_current_one_and_the
 
     monkeypatch.setattr(evaluation, "refresh_audit", lambda **_kwargs: {"added": 0})
     planner, jobs, engine, recipe, _measured, _trained = setup
-    older = replace(recipe, best_pass=False, epochs=2)
+    older = replace(recipe, epochs=2)
     _turns(work, 4)
     job = planner_module.Planner(planner.root, jobs=jobs, engine=engine, clock=planner.clock,
                                  recipe_for=lambda: older, measure=lambda rows, limit: [(100, 10) for _ in rows],
                                  lookup=planner._lookup, roots=lambda: ()).plan(force=True).job
-    assert (job.steps_total, jobs.plan_of(job)["recipe"]["settings"]["best_pass"]) == (2, 0)
+    assert (job.steps_total, jobs.plan_of(job)["recipe"]["settings"]["passes"]) == (2, 2)
     advanced.save({"rank": 32}, recipe, planner.root)  # the person's own choice in Advanced
 
     started = planner_module.LearningDataset(planner).starting(job)
 
     settings = jobs.plan_of(started)["recipe"]["settings"]
-    assert (settings["best_pass"], settings["passes"], started.steps_total) == (1, 3, 3)  # one step a pass
+    assert (settings["passes"], started.steps_total) == (3, 3)  # one step a pass
     assert (settings["rank"], settings["alpha"]) == (32, 32)  # their choice stays
     assert jobs.plan_of(started)["dataset"] == jobs.plan_of(job)["dataset"]  # the same rows
     assert jobs.get(job.id).steps_total == 3

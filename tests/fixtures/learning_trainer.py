@@ -20,8 +20,8 @@ Options (all optional):
   stopping the worker ends it too.
 - ``checkpoint_bytes`` (2048): the size of each checkpoint's fake weights.
 - ``validation_losses``: what each pass "measures" on the lease's validation rows when the
-  recipe keeps the best pass (O117). The choosing is the real engine's own (``Passes`` in
-  ``learning_engine/trainer.py``); with no ``validation.jsonl`` in the lease it trains one pass.
+  recipe trains several passes (O119; none without a ``validation.jsonl`` in the lease). Each pass's
+  adapter is saved and reported by the real engine's own ``Passes`` (``learning_engine/trainer.py``).
 """
 
 from __future__ import annotations
@@ -183,17 +183,16 @@ def main() -> None:
             folder.mkdir(parents=True, exist_ok=True)
             (folder / "adapter.bin").write_bytes(_weights(-1000 - number, size))
             losses = options.get("validation_losses") or []
-            if not passes.record(number, float(losses[number - 1]) if measured else None):
-                break
+            passes.record(number, float(losses[number - 1]) if measured else None)
         if pause_now and step < total:
             send("paused", step=step)
             os._exit(0)
 
     adapter = output / "adapter.bin"
-    kept = passes.kept()
-    if kept is not None:
-        send("kept", **kept)
-        adapter.write_bytes((passes.folder(kept["pass"]) / "adapter.bin").read_bytes())
+    report = passes.report()
+    if report is not None:
+        send("passes", **report)
+        adapter.write_bytes((passes.folder(passes.most) / "adapter.bin").read_bytes())  # the last pass's
     else:
         adapter.write_bytes(_weights(-1, size))
     send("artifacts", files=[{"name": adapter.name, "bytes": adapter.stat().st_size,

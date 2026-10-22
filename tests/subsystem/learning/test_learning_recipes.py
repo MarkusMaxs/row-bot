@@ -47,9 +47,7 @@ def test_steps_checkpoints_and_the_protocol_spec():
     spec = recipe.spec()
     assert spec["name"] == "8gb-v1" and spec["settings"]["report_to"] == "none"
     assert spec["settings"]["max_seq_length"] == 16_384
-    # O117: up to three passes, the one with the lowest validation loss kept (every tier).
-    assert (spec["settings"]["passes"], spec["settings"]["best_pass"]) == (3, 1)
-    assert all(item.best_pass for item in recipes.all_recipes())
+    assert spec["settings"]["passes"] == 3  # each pass's adapter kept, so an earlier one can be used (O119)
 
 
 def _text(**changes) -> str:
@@ -70,8 +68,6 @@ def _text(**changes) -> str:
     {"quantization": "F16"},
     {"method": "full_finetune"},
     {"certified": "yes"},
-    {"best_pass": None},
-    {"best_pass": 1},
     {"validation_share": 0.9},
     {"serve_context": 8192},
     {"settings": {"max_seq_length": 8192}},  # a certified recipe trains on at least 16K (O23)
