@@ -380,21 +380,9 @@ _STATUS.update(
     {
         "invalid_browser_command": 422,
         "invalid_browser_url": 422,
-        "browser_action_denied": 403,
+        "browser_disabled": 403,
         "browser_navigation_denied": 403,
-        "browser_receipt_unavailable": 404,
-        "browser_revision_conflict": 409,
-        "browser_session_inactive": 409,
-        "browser_window_unavailable": 409,
-        "browser_action_failed": 409,
-        "browser_outcome_uncertain": 409,
-        "browser_status_unavailable": 503,
-        "exact_page_target_contract_required": 409,
-        "exact_page_target_and_hidden_text_contract_required": 409,
-        "semantic_page_observation_contract_required": 409,
-        "owned_tab_identity_contract_required": 409,
-        "private_preview_export_unavailable": 409,
-        "use_computer_use_for_external_browser": 409,
+        "browser_unavailable": 503,
     }
 )
 _STATUS.update(
@@ -2585,9 +2573,9 @@ def create_router(
         )
         return await respond(request, dto.ConversationActionReceipt, result)
 
-    async def browser_control_authority(
-        conversation_id: str, request: Request, current: Any
-    ) -> tuple[Callable[[], None], Callable[[str], None], str]:
+    async def browser_authority(conversation_id: str, request: Request, current: Any) -> Callable[[], None]:
+        """The Browser pane is the person's own view: any signed-in device of theirs, for a visible chat."""
+
         await readable_conversation(conversation_id)
         access = dispatch_validation(request, current)
 
@@ -2599,87 +2587,150 @@ def create_router(
             if admissions.deletion_state(conversation_id) != "active":
                 raise ProtocolError("conversation_deleting", 409)
 
-        def validate_action(kind: str) -> None:
-            from row_bot.application.profile_controls import freeze_profile
-            from row_bot.tools import registry as tool_registry
-            from row_bot.tools.profile_policy import dispatch_refusal
+        return validate
 
-            validate()
-            if not tool_registry.is_enabled(kind):
-                raise ProtocolError("browser_action_denied", 403)
-            row = service._metadata(conversation_id)
-            context = {
-                "thread_id": conversation_id,
-                "approval_mode": row.get("approval_mode"),
-                "agent_profile_id": row.get("agent_profile_id") or "",
-            }
-            if "tool_allowlist" in row:
-                context["tool_allowlist"] = row.get("tool_allowlist")
-            freeze_profile(context)
-            allowed = context.get("tool_allowlist")
-            refusal = dispatch_refusal(
-                context["agent_profile_snapshot"],
-                kind,
-                {},
-                source="core",
-                parent="browser",
-                allowlist=tuple(allowed) if allowed is not None else None,
-            )
-            if refusal:
-                raise ProtocolError("browser_action_denied", 403)
-
-        from row_bot.runtime import admissions
-
-        authority_id = admissions.keyed_digest(
-            {
-                "session": current.id,
-                "conversation": conversation_id,
-                "server_epoch": service.server_epoch,
-            },
-            read_only=True,
-        )
-        return validate, validate_action, authority_id
-
+    # The Browser pane (N12-A): state, the live page, the person's input and the pane's controls.
     @router.get("/conversations/{conversation_id}/browser")
-    async def browser_control_snapshot(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
+    async def browser_pane_state(conversation_id: str, request: Request) -> JSONResponse:
         current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_controls
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_state
 
-        result = await call(read_browser_controls, conversation_id, validate=validate)
-        return await respond(request, dto.BrowserControlSnapshot, result)
+        await call(validate)
+        return await respond(request, dto.BrowserPaneState, await call(pane_state, conversation_id))
 
-    @router.get("/conversations/{conversation_id}/browser/preview")
-    async def browser_control_preview(
-        conversation_id: str, request: Request, revision: str
-    ) -> JSONResponse:
-        current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_preview
+    @router.get("/conversations/{conversation_id}/browser/live")
+    async def browser_live(
+        conversation_id: str,
+        request: Request,
+        view: str = "pane",
+        width: int = 1280,
+        height: int = 0,
+        scale: float = 1.0,
+    ) -> StreamingResponse:
+        """The pane's state and live picture as server-sent events, while the client watches.
 
-        result = await call(
-            read_browser_preview,
+        A pane sends its own size (``width`` × ``height`` CSS pixels at ``scale``): the
+        page lays out at that size while it shows, so the picture fills it 1:1.
+        Pictures come at most ``fps`` a second and only the latest is sent, so a
+        slow connection gets fewer pictures rather than a growing queue; a slow
+        connection also gets them smaller and lighter. A hidden pane closes the
+        stream and the screencast stops when nobody watches.
+        """
+
+        current = await session(request, lane="observation")
+        if view not in {"pane", "thumb"} or not 0 <= height <= 4000 or not 1.0 <= scale <= 4.0:
+            raise ProtocolError("invalid_browser_command", 422)
+        validate = await browser_authority(conversation_id, request, current)
+        await call(validate)
+        from row_bot.application.client_browser import _manager, frame_view, pane_state
+
+        engine = _manager().get_session()
+        watch = engine.watch(
             conversation_id,
-            revision,
-            validate=validate,
+            kind=view,
+            width=max(160, min(int(width), 1600)),
+            loop=asyncio.get_running_loop(),
+            height=height if view == "pane" else 0,
+            scale=scale,
         )
-        response = await respond(request, dto.BrowserPreview, result)
-        response.headers["Cache-Control"] = "no-store"
-        return response
+        fps = 12.0 if view == "pane" else 2.0
+
+        async def stream() -> Any:
+            sent_seq, sent_revision = -1, -1
+            heartbeat = security.clock()
+            slow = 0
+            try:
+                yield ": connected\n\n"
+                # The stream ends with the browser too (Row-Bot quitting), so shutdown never waits on it.
+                while not await request.is_disconnected() and not engine.closed:
+                    security.session(await _context(request), current.id, current.csrf)
+                    changed = await watch.changed(timeout=15.0)
+                    state = pane_state(conversation_id)
+                    if state["revision"] != sent_revision:
+                        sent_revision = state["revision"]
+                        yield "event: state\ndata: " + dto.BrowserPaneState.model_validate(state).model_dump_json() + "\n\n"
+                    frame = watch.frame()
+                    if frame is not None and frame.seq != sent_seq and state["status"] == "running":
+                        sent_seq = frame.seq
+                        view_frame = frame_view(frame)
+                        if slow >= 3:
+                            view_frame = await asyncio.to_thread(_lighter, view_frame)
+                        started = security.clock()
+                        yield "event: frame\ndata: " + dto.BrowserFrame.model_validate(view_frame).model_dump_json() + "\n\n"
+                        spent = security.clock() - started
+                        # A send that waits means the connection is slow: lighter pictures until it isn't.
+                        slow = min(6, slow + 1) if spent > 0.25 else max(0, slow - 1)
+                        await asyncio.sleep(max(0.0, 1.0 / fps - spent))
+                    if not changed and security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+            except ProtocolError:
+                return
+            finally:
+                watch.close()
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=HEADERS)
+
+    def _lighter(frame: dict[str, Any]) -> dict[str, Any]:
+        """A smaller, lighter JPEG of one picture, for a slow connection."""
+
+        import base64
+        import io
+
+        from PIL import Image
+
+        try:
+            picture = Image.open(io.BytesIO(base64.b64decode(frame["image_base64"])))
+            picture.thumbnail((max(160, picture.width // 2), max(120, picture.height // 2)))
+            output = io.BytesIO()
+            picture.convert("RGB").save(output, format="JPEG", quality=45)
+            return {**frame, "image_base64": base64.b64encode(output.getvalue()).decode("ascii")}
+        except Exception:
+            return frame
+
+    @router.post("/conversations/{conversation_id}/browser/input")
+    async def browser_input(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserInput, 64 * 1024)
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_input
+
+        await call(validate)
+        events = [event.model_dump(mode="json") for event in body.events]
+        return await respond(request, dto.BrowserInputResult, await call(pane_input, conversation_id, events))
+
+    @router.post("/conversations/{conversation_id}/browser/actions")
+    async def browser_action(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserPaneAction, 16 * 1024)
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_action
+
+        await call(validate)
+        result = await call(pane_action, conversation_id, body.action, url=body.url, tab=body.tab)
+        return await respond(request, dto.BrowserPaneState, result)
+
+    @router.get("/browser/sites")
+    async def browser_sites(request: Request) -> JSONResponse:
+        await session(request, lane="view")
+        from row_bot.application.client_browser import sites
+
+        return await respond(request, dto.BrowserSitePage, await call(sites))
+
+    @router.post("/browser/sites/clear")
+    async def browser_sites_clear(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserSitesClear, 4096)
+        from row_bot.application.client_browser import clear_sites
+
+        return await respond(request, dto.BrowserSitesCleared, await call(clear_sites, body.site))
 
     # Local addresses (F4): what this conversation's browser may open now, and Remove.
     @router.get("/conversations/{conversation_id}/browser/local-addresses")
     async def browser_local_addresses(conversation_id: str, request: Request) -> JSONResponse:
         current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
+        validate = await browser_authority(conversation_id, request, current)
         from row_bot.application.recording_views import read_local_addresses
 
         await call(validate)
@@ -2691,9 +2742,7 @@ def create_router(
         conversation_id: str, grant_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
+        validate = await browser_authority(conversation_id, request, current)
         if len(grant_id or "") != 32 or any(char not in "0123456789abcdef" for char in grant_id):
             raise ProtocolError("local_address_unavailable", 404)
         from row_bot.application.recording_views import remove_local_address
@@ -2703,102 +2752,6 @@ def create_router(
         if result is None:
             raise ProtocolError("local_address_unavailable", 404)
         return await respond(request, dto.LocalAddressPage, result)
-
-    @router.post("/conversations/{conversation_id}/browser/review")
-    async def browser_control_review(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        body = await _body(request, dto.BrowserReviewRequest, 16 * 1024)
-        validate, validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import review_browser_command
-
-        result = await call(
-            review_browser_command,
-            body.action,
-            body.payload,
-            conversation_id,
-            validate=validate,
-        )
-        await call(validate_action, result["policy_action"])
-        result["nonce"] = security.approval_nonce(
-            current,
-            "browser-control:" + conversation_id,
-            result["revision"],
-            result["action_digest"],
-        )
-        return await respond(request, dto.BrowserReview, result)
-
-    @router.get("/conversations/{conversation_id}/browser/commands/{command_id}")
-    async def browser_control_receipt(
-        conversation_id: str, command_id: UUID, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="view")
-        validate, _validate_action, authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_receipt
-
-        result = await call(
-            read_browser_receipt,
-            owner_id=current.id,
-            authority_id=authority_id,
-            conversation_id=conversation_id,
-            command_id=str(command_id),
-            validate=validate,
-        )
-        return await respond(request, dto.BrowserReceipt, result)
-
-    @router.post("/conversations/{conversation_id}/browser/commands")
-    async def browser_control_command(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        body = await _body(request, dto.Command, 32 * 1024)
-        if not body.type.startswith("browser."):
-            raise ProtocolError("invalid_browser_command", 422)
-        if str(body.client_session_id) != current.id:
-            raise ProtocolError("invalid_browser_command", 422)
-        key = request.headers.get("idempotency-key", "")
-        if key != str(body.command_id):
-            raise ProtocolError("idempotency_mismatch", 409)
-        wire = body.model_dump(mode="json")
-        nonce = wire["payload"]["nonce"]
-        validate, validate_action, authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-
-        def validate_review(command: dict[str, Any], review: dict[str, Any]) -> None:
-            validate()
-            if review.get("conversation_id") != conversation_id:
-                raise ProtocolError("browser_action_denied", 403)
-            security.consume_nonce(
-                current,
-                "browser-control:" + conversation_id,
-                review["revision"],
-                review["action_digest"],
-                nonce,
-                str(body.command_id),
-            )
-
-        from row_bot.application.client_browser_controls import (
-            execute_browser_command,
-        )
-
-        result = await call(
-            execute_browser_command,
-            wire,
-            conversation_id,
-            owner_id=current.id,
-            authority_id=authority_id,
-            key=key,
-            validate=validate,
-            validate_action=validate_action,
-            validate_review=validate_review,
-        )
-        return await respond(request, dto.BrowserReceipt, result)
 
     async def computer_control_authority(
         conversation_id: str, request: Request, current: Any

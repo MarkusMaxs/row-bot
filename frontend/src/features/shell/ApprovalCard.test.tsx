@@ -14,8 +14,36 @@ const approval = vi.fn();
 const intent = vi.fn();
 const pendingApprovals = vi.fn();
 const open = vi.fn();
+const browserLive = vi.fn(async function* (
+  _conversation: string,
+  _view: string,
+  _size: unknown,
+  signal: AbortSignal,
+) {
+  yield {
+    state: {
+      schema_version: 1,
+      conversation_id: 'conversation-a',
+      status: 'running',
+      control: 'agent',
+      acting: '',
+      waiting: 'Waiting for your OK in the chat',
+      url: 'https://homecover.example/claim/5',
+      title: 'Pay your excess',
+      site: 'homecover.example',
+      loading: false,
+      sign_in: '',
+      recording: false,
+      tabs: [],
+      revision: 1,
+    },
+  };
+  await new Promise((resolve) => signal.addEventListener('abort', resolve));
+});
 vi.mock('../../runtime', () => ({
-  useRuntime: () => ({ controller: { approval, intent, pendingApprovals } }),
+  useRuntime: () => ({
+    controller: { approval, intent, pendingApprovals, browserLive },
+  }),
 }));
 vi.mock('../../ui/overlays', () => ({
   useOverlay: () => ({ open, notify: vi.fn(), close: vi.fn() }),
@@ -507,4 +535,30 @@ it('asks to post on X as the named account with the full text, the reply link an
   ).toBeVisible();
   // The reason's sentence isn't repeated beside the card's own facts.
   expect(within(card).queryByText(/^Reply as @rowbot_ai to/)).toBeNull();
+});
+
+it('an approval for a browser action shows the page and opens the Browser pane (N12-A)', async () => {
+  const { onBrowserPaneRequest } = await import('../browser/open-pane');
+  const opened: string[] = [];
+  const stop = onBrowserPaneRequest((conversation) =>
+    opened.push(conversation),
+  );
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'Browser Click',
+    question: 'Pay on homecover.example?',
+    reason:
+      'Row-Bot will click "Confirm and pay £60" on homecover.example. This can charge you.',
+    risk_class: 'high',
+  });
+  render(<ApprovalCard id="approval-a" conversationId="conversation-a" />);
+  const card = await screen.findByRole('complementary', {
+    name: 'Approval required: Pay on homecover.example?',
+  });
+  const picture = await within(card).findByRole('button', {
+    name: 'Open the browser: homecover.example',
+  });
+  fireEvent.click(picture);
+  expect(opened).toEqual(['conversation-a']);
+  stop();
 });

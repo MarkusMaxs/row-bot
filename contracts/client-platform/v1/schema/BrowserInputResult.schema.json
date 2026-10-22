@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "control": {
+      "enum": [
+        "agent",
+        "person"
+      ],
+      "title": "Control",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "agent_acting",
+        "no_page"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "control"
+  ],
+  "title": "BrowserInputResult",
+  "type": "object"
+}

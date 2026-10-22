@@ -194,7 +194,6 @@ export class ClientController {
   private draftRevisions = new Map<string, string>();
   private draftWrites = new Set<string>();
   private dirtyDrafts = new Set<string>();
-  private browserCommandAttempts = new Set<string>();
   private draftStates = new Map<string, ClientState['draftStatus']>();
   private seen = new Set<string>();
   private sequences = new Map<string, bigint>();
@@ -612,7 +611,6 @@ export class ClientController {
       }
       this.drafts.clear();
       this.draftRevisions.clear();
-      this.browserCommandAttempts.clear();
       this.update({
         handshake: null,
         conversations: [],
@@ -1540,10 +1538,13 @@ export class ClientController {
         'browser_navigate',
         'browser_click',
         'browser_type',
+        'browser_select',
+        'browser_press',
         'browser_scroll',
-        'browser_snapshot',
-        'browser_back',
-        'browser_tab',
+        'browser_wait_for',
+        'browser_tabs',
+        'browser_upload',
+        'browser_download',
       ].includes(event.payload.tool_name ?? '') &&
       this.state.conversation?.id === event.conversation_id
     )
@@ -1553,7 +1554,7 @@ export class ClientController {
         conversation_revision: this.state.conversation.revision,
         descriptor: {
           panel_kind: 'browser.live',
-          title: 'Managed browser',
+          title: 'Browser',
           required_capabilities: ['browser_navigate'],
         },
       });
@@ -2779,14 +2780,6 @@ export class ClientController {
       },
     });
   };
-  browserPreview = (
-    conversationId: string,
-    revision: string,
-    signal?: AbortSignal,
-  ) =>
-    this.query(() =>
-      this.transport.browserPreview?.(conversationId, revision, signal),
-    );
   reviewDreamRun = (
     body: import('./types').DreamRunRequest,
     signal?: AbortSignal,
@@ -3191,88 +3184,55 @@ export class ClientController {
       export: result.export ?? undefined,
     };
   };
-  browserControls = (conversation: string, signal?: AbortSignal) =>
-    this.query(() => this.transport.browserControls?.(conversation, signal));
-  reviewBrowserControl = (
+  /** What the Browser pane shows (never starts the browser). */
+  browserPane = (conversation: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.browserPane?.(conversation, signal));
+  /**
+   * The pane's state and live picture while it watches (N12-A): yields each
+   * state and the latest frame; ends when the signal aborts or the stream
+   * closes. The caller reconnects (a hidden pane doesn't watch at all).
+   */
+  browserLive = (
     conversation: string,
-    action: import('./types').BrowserReview['action'],
-    payload: import('./types').BrowserReviewRequest['payload'],
-    signal?: AbortSignal,
+    view: 'pane' | 'thumb',
+    size: import('./types').BrowserLiveSize,
+    signal: AbortSignal,
   ) => {
-    const body = validateWire<import('./types').BrowserReviewRequest>(
-      'BrowserReviewRequest',
-      { action, type: action, payload },
+    if (!this.state.handshake || !this.online || this.disposed)
+      throw clientError({ code: 'authentication_required' });
+    const stream = this.transport.browserLive?.(
+      conversation,
+      view,
+      size,
+      signal,
     );
-    return this.query(() =>
-      this.transport.reviewBrowserControl?.(conversation, body, signal),
-    );
+    if (!stream) throw clientError({ code: 'capability_unavailable' });
+    return stream;
   };
-  browserControlReceipt = (
+  /** The person's mouse, wheel and keys in the pane, in the page's CSS pixels. */
+  browserInput = (
     conversation: string,
-    command: string,
+    events: import('./types').BrowserInputEvent[],
     signal?: AbortSignal,
   ) =>
     this.query(() =>
-      this.transport.browserControlReceipt?.(conversation, command, signal),
+      this.transport.browserInput?.(conversation, { events }, signal),
     );
-  executeBrowserControl = async (
+  /** The pane's controls: address bar, Back, Forward, Reload, tabs, control and Restart. */
+  browserAction = (
     conversation: string,
-    original: {
-      command_id: string;
-      type: import('./types').BrowserReview['action'];
-      payload: Record<string, unknown> & { nonce: string; revision: string };
-    },
-    review: import('./types').BrowserReview,
-  ) => {
-    const handshake = this.state.handshake;
-    if (!handshake) throw clientError({ code: 'authentication_required' });
-    if (
-      review.conversation_id !== conversation ||
-      review.action !== original.type ||
-      review.revision !== original.payload.revision ||
-      review.nonce !== original.payload.nonce
-    )
-      throw clientError({ code: 'browser_revision_conflict' });
-    const command = {
-      ...original,
-      client_session_id: handshake.client_session_id,
-      expected_revision: '0',
-    };
-    if (!isCommand(command)) throw clientError({ code: 'invalid_command' });
-    const result = await this.authenticatedResult(async (signal) => {
-      if (
-        !this.transport.executeBrowserControl ||
-        !this.transport.browserControlReceipt
-      )
-        throw clientError({ code: 'unsupported_command' });
-      if (this.browserCommandAttempts.has(original.command_id)) {
-        try {
-          return await this.transport.browserControlReceipt(
-            conversation,
-            original.command_id,
-            signal,
-          );
-        } catch (cause) {
-          if (clientError(cause).code !== 'not_found') throw cause;
-        }
-      }
-      this.browserCommandAttempts.add(original.command_id);
-      return this.transport.executeBrowserControl(
-        conversation,
-        command,
-        signal,
-      );
-    });
-    if (
-      result.command_id !== original.command_id ||
-      result.action !== original.type ||
-      result.conversation_id !== conversation
-    )
-      throw clientError({ code: 'protocol_incompatible' });
-    if (result.status !== 'partial')
-      this.browserCommandAttempts.delete(original.command_id);
-    return result;
-  };
+    action: import('./types').BrowserPaneAction,
+    signal?: AbortSignal,
+  ) =>
+    this.query(() =>
+      this.transport.browserAction?.(conversation, action, signal),
+    );
+  browserSites = (signal?: AbortSignal) =>
+    this.query(() => this.transport.browserSites?.(signal));
+  clearBrowserSites = (site: string | null, signal?: AbortSignal) =>
+    this.query(() =>
+      this.transport.clearBrowserSites?.(site ? { site } : {}, signal),
+    );
   /** The conversation's computer-use card: this computer's own screen, so the desktop app here only. */
   computerUse = (conversation: string, signal?: AbortSignal) =>
     this.query(() => this.transport.computerUse?.(conversation, signal));
@@ -5655,7 +5615,6 @@ export class ClientController {
     this.transport.clearSession();
     this.listeners.clear();
     this.commandClaims.clear();
-    this.browserCommandAttempts.clear();
     this.seen.clear();
     this.sequences.clear();
     this.retiredSubscriptions.clear();

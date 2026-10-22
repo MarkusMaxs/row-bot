@@ -345,121 +345,110 @@ class ConversationActionReceipt(WireModel):
     export: ConversationActionExport | None = None
 
 
-BrowserAction = Literal[
-    "browser.navigate",
-    "browser.take_over",
-    "browser.check",
-    "browser.back",
-    "browser.end",
-]
-BrowserRevision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-
-
-class BrowserAvailability(WireModel):
-    state: Literal["available", "check_on_use", "unavailable"]
-    code: str | None = Field(max_length=128)
-
-
-class BrowserControlSnapshot(WireModel):
-    schema_version: Literal[1]
-    conversation_id: OpaqueId
-    revision: BrowserRevision
-    active: bool
-    paused: bool
-    state: Literal[
-        "idle",
-        "acting",
-        "observing",
-        "waiting_user",
-        "waiting_approval",
-        "needs_attention",
-    ]
-    site: str = Field(max_length=120)
+class BrowserTab(WireModel):
+    """One of a conversation's tabs in Row-Bot's browser."""
+    id: str = Field(pattern=r"^t[0-9]{1,6}$")
+    title: str = Field(max_length=160)
     url: str = Field(max_length=2048)
-    last_action: str = Field(max_length=160)
-    availability: dict[str, BrowserAvailability] = Field(max_length=12)
+    active: bool
 
 
-class BrowserPreview(WireModel):
+class BrowserPaneState(WireModel):
+    """What the Browser pane shows for one conversation: never page content or field values."""
     schema_version: Literal[1]
     conversation_id: OpaqueId
-    revision: BrowserRevision
-    state: Literal["available", "waiting", "shielded", "inactive"]
-    image_base64: str | None = Field(default=None, max_length=2_000_000)
+    status: Literal["stopped", "starting", "running", "crashed"]
+    # Who drives the page: Row-Bot, or the person (Take control / Give back).
+    control: Literal["agent", "person"]
+    # What Row-Bot is doing on the page now ("Clicking button \"Next\""), and what it waits on.
+    acting: str = Field(max_length=160)
+    waiting: str = Field(max_length=160)
+    url: str = Field(max_length=2048)
+    title: str = Field(max_length=160)
+    site: str = Field(max_length=253)
+    loading: bool
+    # The page asks for something only the person types: a password, a one-time code or card details.
+    sign_in: Literal["", "password", "code", "card"]
+    recording: bool
+    tabs: list[BrowserTab] = Field(max_length=32)
+    revision: int = Field(ge=0)
 
 
-class BrowserRevisionInput(WireModel):
-    revision: BrowserRevision
+class BrowserFrame(WireModel):
+    """One live picture of the page (a JPEG) and the page's size in CSS pixels."""
+    seq: int = Field(ge=0)
+    css_width: float = Field(ge=0, le=100_000)
+    css_height: float = Field(ge=0, le=100_000)
+    image_base64: str = Field(min_length=1, max_length=8_000_000)
 
 
-class BrowserNavigateInput(BrowserRevisionInput):
-    url: str = Field(min_length=1, max_length=8192)
-
-
-BROWSER_REVIEW_PAYLOADS = {
-    "browser.navigate": BrowserNavigateInput,
-    "browser.take_over": BrowserRevisionInput,
-    "browser.check": BrowserRevisionInput,
-    "browser.back": BrowserRevisionInput,
-    "browser.end": BrowserRevisionInput,
-}
-
-
-class BrowserReviewRequest(WireModel):
-    action: BrowserAction
-    type: BrowserAction
-    payload: dict
+class BrowserInputEvent(WireModel):
+    """The person's mouse, wheel or key in the pane, in the page's CSS pixels."""
+    type: Literal["mouse", "key", "text"]
+    action: Literal["move", "down", "up", "wheel", ""] = ""
+    x: float = Field(default=0, ge=-10_000, le=100_000)
+    y: float = Field(default=0, ge=-10_000, le=100_000)
+    dx: float = Field(default=0, ge=-100_000, le=100_000)
+    dy: float = Field(default=0, ge=-100_000, le=100_000)
+    button: Literal["left", "right", "middle"] = "left"
+    clicks: int = Field(default=1, ge=1, le=3)
+    key: str = Field(default="", max_length=32)
+    text: str = Field(default="", max_length=4096)
 
     @model_validator(mode="after")
-    def typed_payload(self) -> BrowserReviewRequest:
-        if self.type != self.action:
-            raise ValueError("Browser review type must match action.")
-        self.payload = (
-            BROWSER_REVIEW_PAYLOADS[self.action]
-            .model_validate(self.payload)
-            .model_dump(mode="json")
-        )
+    def complete(self) -> BrowserInputEvent:
+        if self.type == "mouse" and self.action not in {"move", "down", "up", "wheel"}:
+            raise ValueError("A mouse event moves, presses, releases or turns the wheel.")
+        if self.type == "key" and (self.action not in {"down", "up"} or not self.key):
+            raise ValueError("A key event presses or releases one named key.")
+        if self.type == "text" and not self.text:
+            raise ValueError("A text event has text.")
+        if any(ord(character) < 32 and character not in "\t\n" for character in self.key + self.text):
+            raise ValueError("Control characters aren't keys or text.")
         return self
 
-    @classmethod
-    def model_json_schema(cls, **kwargs: Any) -> dict:
-        return _variant_schema(cls, BROWSER_REVIEW_PAYLOADS, **kwargs)
+
+class BrowserInput(WireModel):
+    events: list[BrowserInputEvent] = Field(min_length=1, max_length=64)
 
 
-class BrowserReview(WireModel):
-    schema_version: Literal[1]
-    action: BrowserAction
-    conversation_id: OpaqueId
-    revision: BrowserRevision
-    policy_action: str = Field(min_length=1, max_length=128)
-    policy_decision: Literal["allow", "ask"]
-    policy_reason: str = Field(max_length=512)
-    approval_required: Literal[True]
-    origin_and_path: str = Field(max_length=2048)
-    query_present: bool
-    disclosures: list[str] = Field(min_length=1, max_length=8)
-    action_digest: BrowserRevision
-    nonce: str = Field(min_length=1, max_length=128)
+class BrowserInputResult(WireModel):
+    status: Literal["ok", "agent_acting", "no_page"]
+    control: Literal["agent", "person"]
 
 
-class BrowserCommandRevisionPayload(BrowserRevisionInput):
-    nonce: str = Field(min_length=1, max_length=128)
+class BrowserPaneAction(WireModel):
+    """The pane's own controls: the address bar, Back, Forward, Reload, tabs, control and Restart."""
+    action: Literal[
+        "navigate", "back", "forward", "reload", "stop_loading", "take_control", "give_back",
+        "new_tab", "switch_tab", "close_tab", "restart",
+    ]
+    url: str = Field(default="", max_length=8192)
+    tab: str = Field(default="", pattern=r"^(t[0-9]{1,6})?$")
 
 
-class BrowserCommandNavigatePayload(BrowserNavigateInput):
-    nonce: str = Field(min_length=1, max_length=128)
+class BrowserSite(WireModel):
+    """A site with saved sign-ins (cookies) in Row-Bot's browser."""
+    site: str = Field(min_length=1, max_length=253)
+    cookies: int = Field(ge=0)
 
 
-class BrowserReceipt(WireModel):
-    schema_version: Literal[1]
-    command_id: UUID
-    action: BrowserAction
-    conversation_id: OpaqueId
-    status: Literal["completed", "partial", "rejected"]
-    code: str | None = Field(max_length=128)
-    revision: BrowserRevision | None
-    browser_control: BrowserControlSnapshot | None
+class BrowserSitePage(WireModel):
+    items: list[BrowserSite] = Field(max_length=2000)
 
+
+class BrowserSitesClear(WireModel):
+    """Sign out of one site, or every site (no site)."""
+    site: str | None = Field(default=None, min_length=1, max_length=253)
+
+
+class BrowserSitesCleared(WireModel):
+    cleared: int = Field(ge=0)
+    items: list[BrowserSite] = Field(max_length=2000)
+
+
+# A 64-hex revision (computer use's card state).
+BrowserRevision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
 ComputerUseAction = Literal[
     "computer_use.stop",
@@ -6380,11 +6369,6 @@ class Command(WireModel):
         "developer.repository.sandbox.configure",
         "developer.repository.sandbox.rebuild",
         "developer.repository.sandbox.cleanup",
-        "browser.navigate",
-        "browser.take_over",
-        "browser.check",
-        "browser.back",
-        "browser.end",
         "mcp.facade.control",
         "knowledge.create",
         "knowledge.edit",
@@ -6570,11 +6554,6 @@ COMMAND_PAYLOADS = {
     "developer.repository.sandbox.configure": DeveloperRepositorySandboxPayload,
     "developer.repository.sandbox.rebuild": DeveloperRepositoryRevisionPayload,
     "developer.repository.sandbox.cleanup": DeveloperRepositoryRevisionPayload,
-    "browser.navigate": BrowserCommandNavigatePayload,
-    "browser.take_over": BrowserCommandRevisionPayload,
-    "browser.check": BrowserCommandRevisionPayload,
-    "browser.back": BrowserCommandRevisionPayload,
-    "browser.end": BrowserCommandRevisionPayload,
     "mcp.facade.control": McpChatPayload,
     "knowledge.create": KnowledgeWritePayload,
     "knowledge.edit": KnowledgeWritePayload,

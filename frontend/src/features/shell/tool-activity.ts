@@ -35,6 +35,8 @@ import {
   Zap,
   type LucideIcon,
   PackageOpen,
+  Upload,
+  Download,
 } from 'lucide-react';
 import type {
   TranscriptTraceGroup,
@@ -78,10 +80,18 @@ const EXACT: Record<string, Verb> = {
   browser_navigate: verb('Opened page', 'Opening page', Globe),
   browser_click: verb('Clicked in the browser', 'Clicking', MousePointerClick),
   browser_type: verb('Typed in the browser', 'Typing', MousePointerClick),
+  browser_select: verb(
+    'Chose an option',
+    'Choosing an option',
+    MousePointerClick,
+  ),
+  browser_press: verb('Pressed a key', 'Pressing a key', MousePointerClick),
   browser_scroll: verb('Scrolled the page', 'Scrolling', MousePointerClick),
-  browser_snapshot: verb('Read the browser', 'Reading the browser', Globe),
-  browser_back: verb('Went back', 'Going back', Globe),
-  browser_tab: verb('Switched tab', 'Switching tab', Globe),
+  browser_wait_for: verb('Read the page', 'Reading the page', Globe),
+  browser_extract: verb('Read the page', 'Reading the page', Globe),
+  browser_tabs: verb('Used the tabs', 'Using the tabs', Globe),
+  browser_upload: verb('Uploaded a file', 'Uploading a file', Upload),
+  browser_download: verb('Downloaded a file', 'Downloading a file', Download),
   browser_screenshot: verb('Took a screenshot', 'Taking a screenshot', Camera),
   browser_viewport: verb(
     'Changed the page size',

@@ -1,46 +1,60 @@
-"""Thin tool schemas and registry for Row-Bot's managed Python Playwright backend."""
+"""The agent's browser tools: Row-Bot's browser, shown in the Browser pane.
+
+Every action returns the page after it: a short accessibility outline with
+stable refs (``[ref=e12]``), so one call does the job and a ref from the last
+result works in the next call. A model that sees images also gets a picture
+of the page (``browser.model_view``).
+
+Row-Bot never types a password, one-time code or card number: the person does,
+in the pane. Paying, buying, booking with a charge, sending, posting, deleting
+and changing account settings ask first (D19, ``browser.policy``). While the
+person has control of the browser, the agent's actions wait.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+import time
+from typing import Any, Literal, Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from row_bot.browser import BrowserSession, BrowserSessionManager
+from row_bot.browser import local_access as _local
+from row_bot.browser import model_view
 from row_bot.browser.history import (
+    HISTORY_PATH as _DEFAULT_HISTORY_PATH,
     append_browser_history as _append_history,
     clear_browser_history as _clear_history,
     get_browser_history as _get_history,
 )
-from row_bot.browser.history import HISTORY_PATH as _DEFAULT_HISTORY_PATH
-from row_bot.browser import local_access as _local
 from row_bot.browser.policy import (
-    consequential_browser_target as _consequential_browser_target,
+    Consequence,
+    PageFacts,
+    approval_request,
+    classify,
     history_url as _history_url,
     navigation_policy as _navigation_policy,
+    upload_consequence,
 )
-from row_bot.browser.service import BrowserWorkItem as _BrowserWorkItem
-from row_bot.browser.service import browser_runs_headless as _browser_runs_headless
+from row_bot.browser.service import ACTION_TIMEOUT_MS, NAVIGATION_TIMEOUT_MS, STOPPED, BrowserStopped
+from row_bot.cancellation import current_cancellation_scope
 from row_bot.tools import registry
 from row_bot.tools.base import BaseTool
 
-
 DATA_DIR = _DEFAULT_HISTORY_PATH.parent
 _HISTORY_PATH = _DEFAULT_HISTORY_PATH
-
-
-def _build_snapshot_js(max_elements: int) -> str:
-    """Compatibility source contract: values stay hidden and no DOM refs are written."""
-
-    return f"""
-() => ({{
-  max_elements: {max(0, int(max_elements))},
-  value_length: true,
-  collector: 'exact ephemeral element handles; no mutable DOM reference attributes'
-}})
-"""
+# How long an action waits for the person to give the browser back.
+CONTROL_WAIT_SECONDS = 300.0
+_SECRET_REFUSAL = {
+    "password": ("That's a password field. Row-Bot never types passwords: ask the person (ask_person) to sign in "
+                 "in the browser pane, then carry on."),
+    "code": ("That's a one-time code field. The person types it in the browser pane: ask them (ask_person), then "
+             "carry on."),
+    "card": ("That's a card field. Row-Bot never types card numbers: ask the person (ask_person) to enter their "
+             "card details in the browser pane."),
+}
 
 
 def get_browser_history(thread_id: str) -> list[dict]:
@@ -64,33 +78,75 @@ def _get_thread_id() -> str:
         return "default"
 
 
+_session_manager = BrowserSessionManager()
+
+
+def get_session_manager() -> BrowserSessionManager:
+    return _session_manager
+
+
+# ── Arguments ─────────────────────────────────────────────────────────────────
+
+
 class _NavigateInput(BaseModel):
-    url: str = Field(description="The HTTP(S) URL to open in Row-Bot's managed browser")
+    url: str = Field(description="Web address to open, or back, forward or reload")
 
 
 class _ClickInput(BaseModel):
-    ref: str = Field(description="Opaque target token from the current managed-browser observation")
+    ref: str = Field(description="Ref from the page outline, e.g. e12")
+    double: bool = Field(default=False, description="Double-click")
+    right: bool = Field(default=False, description="Right-click")
 
 
 class _TypeInput(BaseModel):
-    ref: str = Field(description="Opaque input token from the current managed-browser observation")
-    text: str = Field(description="Text to enter; the value is never returned or persisted")
-    submit: bool = Field(default=False, description="Press Enter after typing")
+    ref: str = Field(description="Ref of the field")
+    text: str = Field(description="Text to type (replaces what's there)")
+    submit: bool = Field(default=False, description="Press Enter afterwards")
+
+
+class _SelectInput(BaseModel):
+    ref: str = Field(description="Ref of the dropdown")
+    options: list[str] = Field(description="Option label(s) to choose")
+
+
+class _PressInput(BaseModel):
+    key: str = Field(description="Key or combination, e.g. Enter, Escape, ArrowDown, Control+A")
+    ref: Optional[str] = Field(default=None, description="Ref to focus first; else the focused element")
 
 
 class _ScrollInput(BaseModel):
-    direction: str = Field(default="down", description="Scroll direction: up or down")
-    amount: int = Field(default=3, ge=1, le=20, description="Number of approximately 400-pixel steps")
+    direction: Literal["up", "down"] = Field(default="down")
+    amount: int = Field(default=3, ge=1, le=20, description="Screens of about 400 px")
+    ref: Optional[str] = Field(default=None, description="Scroll this element into view instead")
 
 
-class _TabInput(BaseModel):
-    action: str = Field(default="list", description="Tab action: list, switch, new, or close")
-    tab_id: Optional[int] = Field(default=None, description="Owned tab index for switch/close")
-    url: Optional[str] = Field(default=None, description="Optional HTTP(S) URL for a new owned tab")
+class _WaitInput(BaseModel):
+    text: Optional[str] = Field(default=None, description="Wait until this text shows")
+    gone: Optional[str] = Field(default=None, description="Wait until this text goes")
+    seconds: Optional[float] = Field(default=None, ge=0, le=30, description="Or just wait this long")
+
+
+class _TabsInput(BaseModel):
+    action: Literal["list", "switch", "new", "close"] = Field(default="list")
+    tab: Optional[str] = Field(default=None, description="Tab id for switch or close, e.g. t2")
+    url: Optional[str] = Field(default=None, description="Address for a new tab")
 
 
 class _ScreenshotInput(BaseModel):
-    full_page: bool = Field(default=False, description="Capture the whole scrollable page instead of what's on screen")
+    full_page: bool = Field(default=False, description="The whole page instead of what's on screen")
+
+
+class _ExtractInput(BaseModel):
+    ref: Optional[str] = Field(default=None, description="Only this element's text")
+
+
+class _UploadInput(BaseModel):
+    ref: str = Field(description="Ref of the upload button or file field")
+    files: list[str] = Field(description="Files from this chat or the workspace, by name or path")
+
+
+class _DownloadInput(BaseModel):
+    ref: str = Field(description="Ref of the link or button that downloads")
 
 
 class _ViewportInput(BaseModel):
@@ -103,17 +159,13 @@ class _RecordInput(BaseModel):
     max_minutes: int = Field(default=5, ge=1, le=15, description="For start: stops by itself after this many minutes")
 
 
-_session_manager = BrowserSessionManager()
-
-
-def get_session_manager() -> BrowserSessionManager:
-    return _session_manager
+# ── Shared steps ──────────────────────────────────────────────────────────────
 
 
 def _normalise_url(url: str) -> tuple[str | None, str]:
     selected = str(url or "").strip()
     if selected.casefold().startswith("javascript:"):
-        return None, "Error: javascript: URLs are not allowed."
+        return None, "Error: javascript: addresses don't open."
     if not selected.casefold().startswith(("http://", "https://")):
         # A local development server is plain http unless the person says otherwise.
         bare = "http://" + selected
@@ -146,7 +198,7 @@ def _local_address_refusal(session: BrowserSession, thread_id: str, url: str, to
         return None, f"Opened without asking: Row-Bot started the server at {label} in this chat."
     from row_bot.tools.approval_gate import approval_check
 
-    session.mark_waiting_approval(thread_id, "Approve a local address")
+    session.set_waiting(thread_id, "Waiting for your OK in the chat")
     refusal, line = approval_check(
         _local.approval_request(origin, tool=tool),
         risks=(_local.LOCAL_ADDRESS_RISK,),
@@ -156,11 +208,550 @@ def _local_address_refusal(session: BrowserSession, thread_id: str, url: str, to
         ),
         cancelled_message=f"The person didn't allow {label}; it wasn't opened.",
     )
+    session.set_waiting(thread_id, "")
     if refusal:
-        session.end_activity(thread_id)
         return refusal, ""
     session.allow_local_address(thread_id, origin, source=_local.source_of(line))
     return None, ""
+
+
+def _wait_for_control(session: BrowserSession, thread_id: str) -> str | None:
+    """Wait while the person has control of the browser; a refusal when they keep it too long."""
+
+    if not session.person_has_control(thread_id):
+        return None
+    scope = current_cancellation_scope()
+    session.set_waiting(thread_id, "Waiting for you to give back control")
+    deadline = time.monotonic() + CONTROL_WAIT_SECONDS
+    try:
+        while session.person_has_control(thread_id):
+            if scope is not None and scope.is_cancelled():
+                return STOPPED
+            if time.monotonic() >= deadline:
+                return ("The person still has control of the browser, so nothing was done. Ask them (ask_person) to "
+                        "press Give back in the browser pane when they're finished.")
+            time.sleep(0.25)
+    finally:
+        session.set_waiting(thread_id, "")
+    return None
+
+
+def _failure(exc: BaseException) -> str:
+    text = str(exc)
+    if isinstance(exc, BrowserStopped):
+        return STOPPED
+    if "couldn't start" in text or "No browser" in text or "No browser could be launched" in text:
+        return ("Row-Bot's browser couldn't start. Chrome or Edge, or Row-Bot's own browser (Settings › System › "
+                "Browser and computer use), is needed.")
+    if isinstance(exc, TimeoutError):
+        return "Row-Bot's browser took too long to answer. Try again; if it keeps happening, restart it in the pane."
+    return "Row-Bot's browser couldn't do that. Try again; if it keeps happening, restart it in the browser pane."
+
+
+def _plain_error(verb: str, what: str, exc: BaseException) -> str:
+    text = str(exc)
+    if "ERR_BLOCKED_BY_CLIENT" in text:
+        return "Blocked: that address is on this computer or the local network and this chat hasn't allowed it."
+    if "ERR_NAME_NOT_RESOLVED" in text:
+        return "That site couldn't be found: check the address."
+    if "ERR_CONNECTION_REFUSED" in text:
+        return "Nothing answered at that address: the server may not be running."
+    if "ERR_INTERNET_DISCONNECTED" in text:
+        return "This computer is offline."
+    if "ERR_ABORTED" in text and verb == "open":
+        return "The address didn't open a page (it may have started a download)."
+    if "Timeout" in text or "timeout" in text:
+        if verb == "open":
+            return "The page is taking a long time to load; here is what's there so far."
+        return f"Couldn't {verb} {what}: it didn't respond (it may be hidden, disabled or covered)."
+    return f"Couldn't {verb} {what}."
+
+
+def _what(info: dict[str, Any] | None, ref: str) -> str:
+    if info and info.get("name"):
+        return f'{info.get("role") or "control"} "{str(info["name"])[:80]}"'
+    return f"ref {ref}"
+
+
+def _keep_picture(session: BrowserSession, thread_id: str) -> None:
+    if not model_view.model_sees_images():
+        model_view.forget(thread_id)
+        return
+    model_view.keep(thread_id, session.model_picture(thread_id))
+
+
+def _history(thread_id: str, action: str, **values: Any) -> None:
+    try:
+        append_browser_history(thread_id, {"action": action, **values, "timestamp": datetime.now().isoformat()})
+    except Exception:
+        pass
+
+
+def _run(session: BrowserSession, thread_id: str, label: str, step: Any, *, settle: bool = True) -> str:
+    refusal = _wait_for_control(session, thread_id)
+    if refusal:
+        return refusal
+    try:
+        result = session.act(thread_id, label, step, settle=settle)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return _failure(exc)
+    _keep_picture(session, thread_id)
+    return result.text
+
+
+def _ask_first(session: BrowserSession, thread_id: str, tool: str, consequence: Consequence, url: str,
+               verb: str) -> str | None:
+    """The approval a consequential action needs (D19); a refusal, or None to go ahead."""
+
+    from row_bot.tools.approval_gate import approval_check
+
+    session.set_waiting(thread_id, "Waiting for your OK in the chat")
+    refusal, _line = approval_check(
+        approval_request(tool, consequence, url=url, verb=verb),
+        risks=(consequence.risk,),
+        blocked_message=(f"BLOCKED: {consequence.question()[:-1]} needs approval, and this chat is on Block. "
+                         "Ask the person to do it in the browser pane, or to change the approval level."),
+        cancelled_message=f"The person said no; Row-Bot didn't {verb} it.",
+    )
+    session.set_waiting(thread_id, "")
+    return refusal
+
+
+def _facts(info: dict[str, Any]) -> PageFacts:
+    return PageFacts(
+        url=str(info.get("url") or ""),
+        card_fields=bool(info.get("card")),
+        shows_price=bool(info.get("price")),
+        search_form=bool(info.get("search")),
+        form_submit_label=str(info.get("submit") or ""),
+    )
+
+
+async def _focused_secret(page: Any) -> str:
+    try:
+        return str(await page.evaluate(
+            "() => { const e = document.activeElement; if (!e || e.tagName !== 'INPUT') return '';"
+            " const t = (e.type || '').toLowerCase(), a = (e.autocomplete || '').toLowerCase();"
+            " if (t === 'password') return 'password'; if (a.includes('one-time-code')) return 'code';"
+            " if (/cc-(number|csc|exp)/.test(a)) return 'card'; return ''; }"
+        ) or "")
+    except Exception:
+        return ""
+
+
+def _printable(key: str) -> bool:
+    last = key.split("+")[-1]
+    return len(last) == 1 and not any(part in {"Control", "Meta", "Alt"} for part in key.split("+")[:-1])
+
+
+# ── The tools ─────────────────────────────────────────────────────────────────
+
+
+def browser_navigate(url: str) -> str:
+    """Open a web address (or go back, forward or reload) and return the page."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    word = str(url or "").strip().casefold()
+    if word in {"back", "forward", "reload"}:
+        async def history_step(tab: Any) -> str:
+            page = tab.page
+            try:
+                if word == "back":
+                    moved = await page.go_back(wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+                elif word == "forward":
+                    moved = await page.go_forward(wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+                else:
+                    moved = await page.reload(wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+            except Exception as exc:
+                return _plain_error("open", "the page", exc)
+            tab.refs.reset()
+            return {"back": "Went back.", "forward": "Went forward.", "reload": "Reloaded."}[word] if moved or \
+                word == "reload" else f"There's no page to go {word} to."
+
+        _history(thread_id, word)
+        return _run(session, thread_id, {"back": "Going back", "forward": "Going forward",
+                                          "reload": "Reloading"}[word], history_step)
+    selected, error = _normalise_url(url)
+    if selected is None:
+        return error
+    policy, reason = _navigation_policy(selected)
+    if policy == "block":
+        return f"BLOCKED: {reason}"
+    refusal, note = _local_address_refusal(session, thread_id, selected, "browser_navigate")
+    if refusal:
+        return refusal
+
+    async def step(tab: Any) -> str:
+        try:
+            await tab.page.goto(selected, wait_until="domcontentloaded", timeout=NAVIGATION_TIMEOUT_MS)
+        except Exception as exc:
+            return _plain_error("open", selected, exc)
+        tab.refs.reset()
+        return f"Opened {_history_url(selected)}."
+
+    _history(thread_id, "navigate", url=_history_url(selected))
+    result = _run(session, thread_id, f"Opening {_history_url(selected)[:80]}", step)
+    return f"{note}\n{result}" if note else result
+
+
+def browser_click(ref: str, double: bool = False, right: bool = False) -> str:
+    """Click a control on the page by its ref; returns the page after it."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    try:
+        info = session.inspect(thread_id, ref)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return _failure(exc)
+    if info is not None:
+        consequence = classify(action="click", control=str(info.get("name") or ""), role=str(info.get("role") or ""),
+                               page=_facts(info))
+        if consequence is not None:
+            refusal = _ask_first(session, thread_id, "browser_click", consequence, str(info.get("url") or ""), "click")
+            if refusal:
+                return refusal
+
+    async def step(tab: Any) -> str:
+        locator = await session.locate(tab, ref)
+        try:
+            if double:
+                await locator.dblclick(timeout=ACTION_TIMEOUT_MS)
+            else:
+                await locator.click(button="right" if right else "left", timeout=ACTION_TIMEOUT_MS)
+        except Exception as exc:
+            return _plain_error("click", _what(info, ref), exc)
+        return f"Clicked {_what(info, ref)}."
+
+    _history(thread_id, "click")
+    return _run(session, thread_id, f"Clicking {_what(info, ref)}"[:160], step)
+
+
+def browser_type(ref: str, text: str, submit: bool = False) -> str:
+    """Type into a field (replacing its text); never into passwords or card fields."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    try:
+        info = session.inspect(thread_id, ref)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return _failure(exc)
+    if info is not None and info.get("secret") in _SECRET_REFUSAL:
+        session.note_secret(thread_id, str(info["secret"]))
+        return _SECRET_REFUSAL[str(info["secret"])]
+    if info is not None and submit:
+        consequence = classify(action="submit", control=str(info.get("name") or ""),
+                               role=str(info.get("role") or ""), page=_facts(info))
+        if consequence is not None:
+            refusal = _ask_first(session, thread_id, "browser_type", consequence, str(info.get("url") or ""), "submit")
+            if refusal:
+                return refusal
+
+    async def step(tab: Any) -> str:
+        locator = await session.locate(tab, ref)
+        try:
+            await locator.fill(text, timeout=ACTION_TIMEOUT_MS)
+            if submit:
+                await locator.press("Enter", timeout=ACTION_TIMEOUT_MS)
+        except Exception as exc:
+            return _plain_error("type into", _what(info, ref), exc)
+        return f"Typed into {_what(info, ref)}" + (" and pressed Enter." if submit else ".")
+
+    _history(thread_id, "type", text_length=len(text), submit=submit)
+    return _run(session, thread_id, f"Typing into {_what(info, ref)}"[:160], step)
+
+
+def browser_select(ref: str, options: list[str]) -> str:
+    """Choose option(s) in a dropdown by their labels."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    wanted = [str(option) for option in (options or []) if str(option).strip()]
+    if not wanted:
+        return "Name the option(s) to choose."
+
+    async def step(tab: Any) -> str:
+        locator = await session.locate(tab, ref)
+        try:
+            try:
+                await locator.select_option(label=wanted, timeout=ACTION_TIMEOUT_MS)
+            except Exception:
+                try:
+                    await locator.select_option(value=wanted, timeout=ACTION_TIMEOUT_MS)
+                except Exception:
+                    # A custom dropdown: open it, then pick each option by name.
+                    await locator.click(timeout=ACTION_TIMEOUT_MS)
+                    for option in wanted:
+                        await tab.page.get_by_role("option", name=option).first.click(timeout=ACTION_TIMEOUT_MS)
+        except Exception as exc:
+            return _plain_error("choose", ", ".join(wanted), exc)
+        return f"Chose {', '.join(wanted)}."
+
+    _history(thread_id, "select")
+    return _run(session, thread_id, f"Choosing {', '.join(wanted)}"[:160], step)
+
+
+def browser_press(key: str, ref: str | None = None) -> str:
+    """Press a key (Enter, Escape, ArrowDown, Control+A) on a ref or the focused element."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    chosen = str(key or "").strip()
+    if not chosen:
+        return "Name the key to press."
+    info = None
+    if ref:
+        try:
+            info = session.inspect(thread_id, ref)
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            return _failure(exc)
+        if info is not None and info.get("secret") in _SECRET_REFUSAL and _printable(chosen):
+            session.note_secret(thread_id, str(info["secret"]))
+            return _SECRET_REFUSAL[str(info["secret"])]
+    if chosen.split("+")[-1] == "Enter":
+        facts = _facts(info) if info else session.page_facts(thread_id)
+        consequence = classify(action="submit", control=str((info or {}).get("name") or ""),
+                               role=str((info or {}).get("role") or ""), page=facts)
+        if consequence is not None:
+            refusal = _ask_first(session, thread_id, "browser_press", consequence, facts.url, "submit")
+            if refusal:
+                return refusal
+
+    async def step(tab: Any) -> str:
+        try:
+            if ref:
+                locator = await session.locate(tab, ref)
+                await locator.press(chosen, timeout=ACTION_TIMEOUT_MS)
+            else:
+                secret = await _focused_secret(tab.page)
+                if secret and _printable(chosen):
+                    return _SECRET_REFUSAL[secret]
+                await tab.page.keyboard.press(chosen)
+        except Exception as exc:
+            return _plain_error("press", chosen, exc)
+        return f"Pressed {chosen}."
+
+    _history(thread_id, "press")
+    return _run(session, thread_id, f"Pressing {chosen}"[:160], step)
+
+
+def browser_scroll(direction: str = "down", amount: int = 3, ref: str | None = None) -> str:
+    """Scroll the page (or bring a ref into view); returns the page after it."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+
+    async def step(tab: Any) -> str:
+        try:
+            if ref:
+                locator = await session.locate(tab, ref)
+                await locator.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
+                return f"Scrolled ref {ref} into view."
+            # The page's own size: it follows the Browser pane, so ask the page.
+            width, height = await tab.page.evaluate("() => [innerWidth, innerHeight]")
+            await tab.page.mouse.move(width / 2, height / 2)
+            steps = max(1, min(int(amount), 20))
+            await tab.page.mouse.wheel(0, (-1 if direction == "up" else 1) * steps * 400)
+        except Exception as exc:
+            return _plain_error("scroll", "the page", exc)
+        return f"Scrolled {direction}."
+
+    return _run(session, thread_id, f"Scrolling {direction}", step)
+
+
+def browser_wait_for(text: str | None = None, gone: str | None = None, seconds: float | None = None) -> str:
+    """Wait for text to show or go (or a few seconds); returns the page. With nothing, just reads the page."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+
+    async def step(tab: Any) -> str:
+        import asyncio
+
+        try:
+            if text:
+                await tab.page.get_by_text(text).first.wait_for(state="visible", timeout=30_000)
+                return f'"{text[:80]}" is showing.'
+            if gone:
+                await tab.page.get_by_text(gone).first.wait_for(state="hidden", timeout=30_000)
+                return f'"{gone[:80]}" has gone.'
+            if seconds:
+                await asyncio.sleep(min(float(seconds), 30.0))
+                return f"Waited {float(seconds):g} seconds."
+        except Exception:
+            return f'Still waiting: "{(text or gone or "")[:80]}" after 30 seconds. Here is the page now.'
+        return ""
+
+    return _run(session, thread_id, "Waiting for the page" if (text or gone or seconds) else "Reading the page", step)
+
+
+def browser_tabs(action: str = "list", tab: str | None = None, url: str | None = None) -> str:
+    """List, switch, open or close this chat's tabs."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    note = ""
+    selected_url = None
+    if action == "new" and url:
+        selected_url, error = _normalise_url(url)
+        if selected_url is None:
+            return error
+        policy, reason = _navigation_policy(selected_url)
+        if policy == "block":
+            return f"BLOCKED: {reason}"
+        refusal, note = _local_address_refusal(session, thread_id, selected_url, "browser_tabs")
+        if refusal:
+            return refusal
+
+    async def step(current: Any) -> str:
+        return await session.tab_step(thread_id, action, tab, selected_url)
+
+    _history(thread_id, f"tab_{action}", url=_history_url(selected_url) if selected_url else None)
+    result = _run(session, thread_id, {"list": "Checking tabs", "switch": "Switching tab", "new": "Opening a tab",
+                                        "close": "Closing a tab"}.get(action, "Tabs"), step)
+    return f"{note}\n{result}" if note else result
+
+
+def browser_extract(ref: str | None = None) -> str:
+    """The page's text (or one element's), to read it."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    refusal = _wait_for_control(session, thread_id)
+    if refusal:
+        return refusal
+    try:
+        return session.extract(thread_id, ref)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return _failure(exc)
+
+
+def browser_upload(ref: str, files: list[str]) -> str:
+    """Upload files from this chat or the workspace through a page's upload control (asks first)."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    from row_bot.file_deliveries import resolve
+    from row_bot.media_sources import SourceError
+
+    try:
+        sources = resolve(list(files or []), thread_id)
+    except SourceError as exc:
+        return str(exc)
+    if not sources:
+        return "Name the file(s) to upload."
+    try:
+        payloads = [_payload(source) for source in sources]
+    except SourceError as exc:
+        return str(exc)
+    url = session.current_url(thread_id)
+    refusal = _ask_first(session, thread_id, "browser_upload", upload_consequence(url, [s.name for s in sources]),
+                         url, "upload")
+    if refusal:
+        return refusal
+
+    async def step(tab: Any) -> str:
+        locator = await session.locate(tab, ref)
+        try:
+            is_file = await locator.evaluate("e => e.tagName === 'INPUT' && e.type === 'file'")
+            if is_file:
+                await locator.set_input_files(payloads, timeout=ACTION_TIMEOUT_MS)
+            else:
+                async with tab.page.expect_file_chooser(timeout=ACTION_TIMEOUT_MS) as chooser:
+                    await locator.click(timeout=ACTION_TIMEOUT_MS)
+                await (await chooser.value).set_files(payloads)
+        except Exception as exc:
+            return _plain_error("upload through", f"ref {ref}", exc)
+        return "Uploaded " + ", ".join(source.name for source in sources) + "."
+
+    _history(thread_id, "upload", files=len(sources))
+    return _run(session, thread_id, "Uploading " + ", ".join(s.name for s in sources)[:120], step)
+
+
+def _payload(source: Any) -> dict[str, Any]:
+    from row_bot.media_sources import SourceError
+
+    limit = 50 * 1024 * 1024
+    if source.size_bytes > limit:
+        raise SourceError(f"{source.name} is over 50 MB, too large to upload from here.")
+    if source.ref:
+        from row_bot.application.attachments import AttachmentError, read_attachment
+
+        try:
+            _metadata, data = read_attachment(source.ref)
+        except AttachmentError:
+            raise SourceError(f"{source.name} can't be read.") from None
+    else:
+        try:
+            data = source.path.read_bytes()
+        except OSError:
+            raise SourceError(f"{source.name} can't be read.") from None
+    return {"name": source.name, "mimeType": source.mime_type or "application/octet-stream", "buffer": data}
+
+
+def browser_download(ref: str) -> str:
+    """Click a download link or button and keep the file in this chat's files."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+
+    async def step(tab: Any) -> str:
+        locator = await session.locate(tab, ref)
+        try:
+            async with tab.page.expect_download(timeout=30_000) as started:
+                await locator.click(timeout=ACTION_TIMEOUT_MS)
+            await session.finish_download(await started.value)
+        except Exception as exc:
+            return _plain_error("download from", f"ref {ref}", exc)
+        return ""
+
+    _history(thread_id, "download")
+    return _run(session, thread_id, "Downloading", step)
+
+
+def browser_screenshot(full_page: bool = False) -> str:
+    """Show the person a picture of this chat's page (saved to the chat's files)."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    try:
+        image, words = session.capture_page(thread_id, full_page=full_page)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return _failure(exc)
+    if image is None:
+        return words
+    if not _show_image(image):
+        return "The screenshot was taken but couldn't be shown in the chat."
+    _keep_picture(session, thread_id)
+    return f"{words} Saved to this chat's files and shown to the person."
+
+
+def browser_viewport(preset: str, device_scale: float | None = None) -> str:
+    """Show this chat's page at a phone, tablet or desktop size."""
+
+    thread_id = _get_thread_id()
+    session = _session_manager.get_session(thread_id)
+    refusal = _wait_for_control(session, thread_id)
+    if refusal:
+        return refusal
+    try:
+        return session.set_viewport(preset, device_scale, thread_id)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return _failure(exc)
 
 
 def _show_image(image: bytes) -> bool:
@@ -190,6 +781,104 @@ def _record_approval(minutes: int) -> dict:
     }
 
 
+def browser_record(action: str, max_minutes: int = 5) -> str:
+    """Start or stop recording this chat's page in Row-Bot's browser to a video."""
+
+    from row_bot import recordings
+    from row_bot.browser.recording import encoder_problem
+
+    thread_id = _get_thread_id()
+    if action == "stop":
+        record = recordings.active_for(thread_id, "browser")
+        if record is None:
+            latest = recordings.latest_for(thread_id, "browser")
+            return recordings.summary(latest) if latest else "Row-Bot's browser isn't being recorded in this chat."
+        recordings.stop(record.recording_id, by="agent")
+        recordings.wait(record, 30)
+        return recordings.summary(record)
+    if action != "start":
+        return "Use action start or stop."
+    running = recordings.active_for(thread_id, "browser")
+    if running is not None:
+        return recordings.summary(running)
+    problem = encoder_problem()
+    if problem:
+        return problem
+    session = _session_manager.get_session(thread_id)
+    current = session.current_url(thread_id)
+    if not current or current in {"about:blank"}:
+        return "Open a page with browser_navigate first; the recording follows this chat's page."
+    minutes = recordings.minutes(max_minutes, "browser")
+    from row_bot.tools.approval_gate import approval_check
+
+    refusal, _line = approval_check(
+        _record_approval(minutes),
+        risks=("records Row-Bot's browser window to a video saved in the chat",),
+        blocked_message="BLOCKED: Recording needs approval, and this chat is on Block.",
+        cancelled_message="The person didn't allow recording; nothing was recorded.",
+    )
+    if refusal:
+        return refusal
+
+    def begin(record, path):
+        try:
+            return session.start_recording(
+                path,
+                max_seconds=record.max_seconds,
+                size_limit=recordings.SIZE_LIMIT,
+                on_end=lambda reason, video: recordings.finished(record, reason, video),
+                thread_id=thread_id,
+            )
+        except LookupError:
+            raise recordings.RecordingError(
+                "Open a page with browser_navigate first; the recording follows this chat's page."
+            ) from None
+
+    try:
+        record = recordings.start(thread_id, "browser", max_minutes=minutes, begin=begin)
+    except recordings.RecordingError as exc:
+        return str(exc)
+    except Exception:
+        return "Row-Bot's browser couldn't start recording. Try again in a moment."
+    return (
+        recordings.summary(record)
+        + " Do the steps to record, then call browser_record with action stop; the video is saved "
+        "to this chat's files."
+    )
+
+
+_TOOLS: tuple[tuple[Any, str, str, type[BaseModel] | None], ...] = (
+    (browser_navigate, "browser_navigate",
+     "Open a web address in Row-Bot's browser (or back, forward, reload) and return the page with refs. "
+     "The person watches in the Browser pane and stays signed in to sites there. Addresses on this computer "
+     "(localhost:5173) ask the person once per chat; servers you started here open without asking.",
+     _NavigateInput),
+    (browser_click, "browser_click", "Click a control by its ref; returns the page after it.", _ClickInput),
+    (browser_type, "browser_type",
+     "Type into a field by ref (submit=true presses Enter). Never passwords, codes or card numbers: the person "
+     "types those in the Browser pane.", _TypeInput),
+    (browser_select, "browser_select", "Choose option(s) in a dropdown by ref.", _SelectInput),
+    (browser_press, "browser_press", "Press a key or combination (Enter, Escape, Tab, ArrowDown).", _PressInput),
+    (browser_scroll, "browser_scroll", "Scroll the page, or bring a ref into view.", _ScrollInput),
+    (browser_wait_for, "browser_wait_for",
+     "Wait for text to show or go, or a few seconds; with nothing, returns the page as it is now.", _WaitInput),
+    (browser_tabs, "browser_tabs", "List, switch, open or close this chat's tabs.", _TabsInput),
+    (browser_extract, "browser_extract", "Read the page's text (or one element's) to answer from it.",
+     _ExtractInput),
+    (browser_upload, "browser_upload", "Upload files from this chat or the workspace through an upload control.",
+     _UploadInput),
+    (browser_download, "browser_download", "Download a file by clicking its link; it's kept in this chat's files.",
+     _DownloadInput),
+    (browser_screenshot, "browser_screenshot",
+     "Show the person a picture of the page in the chat (saved to its files).", _ScreenshotInput),
+    (browser_viewport, "browser_viewport",
+     "Show the page at a phone, tablet or desktop size to check a responsive layout.", _ViewportInput),
+    (browser_record, "browser_record",
+     "Record this chat's page in Row-Bot's browser to a video (asks first): start, do the steps, then stop. "
+     "To record the whole screen use computer_use start_recording.", _RecordInput),
+)
+
+
 class BrowserTool(BaseTool):
     @property
     def name(self) -> str:
@@ -202,8 +891,8 @@ class BrowserTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Navigate websites and automate ordinary web pages in Row-Bot's owned browser profile using direct Python Playwright. "
-            "Use Computer Use instead for an already-open browser, browser chrome, native dialogs, or OS windows."
+            "Use websites in Row-Bot's own browser, shown live in the Browser pane, where the person stays signed "
+            "in. Use Computer Use for desktop apps or the person's own browser."
         )
 
     @property
@@ -220,341 +909,12 @@ class BrowserTool(BaseTool):
 
     @property
     def untrusted_tool_names(self) -> set[str]:
-        return {
-            "browser_navigate", "browser_click", "browser_type", "browser_scroll",
-            "browser_snapshot", "browser_back", "browser_tab", "browser_screenshot",
-        }
+        return {name for _function, name, _description, _schema in _TOOLS if name != "browser_record"}
 
     def as_langchain_tools(self) -> list:
-        def browser_navigate(url: str) -> str:
-            """Open an ordinary website in Row-Bot's managed browser and return one bounded observation."""
-
-            selected, error = _normalise_url(url)
-            if selected is None:
-                return error
-            thread_id = _get_thread_id()
-            session = _session_manager.get_session(thread_id)
-            policy, reason = _navigation_policy(selected, session.current_url(thread_id))
-            if policy == "block":
-                return f"BLOCKED: {reason}"
-            local = _local.local_development_origin(selected) is not None
-            refusal, note = _local_address_refusal(session, thread_id, selected, "browser_navigate")
-            if refusal:
-                return refusal
-            if policy == "ask" and not (local and reason.startswith("Navigation targets a local")):
-                from row_bot.tools.approval_gate import gate_action
-
-                session.mark_waiting_approval(thread_id, "Approve website navigation")
-                blocked = gate_action({
-                    "tool": "browser_navigate", "label": "Managed Browser navigation",
-                    "action": "navigate", "origin_and_path": _history_url(selected), "reason": reason,
-                })
-                if blocked:
-                    session.end_activity(thread_id)
-                    return blocked
-            result = session.navigate(selected, thread_id)
-            append_browser_history(thread_id, {
-                "action": "navigate", "url": _history_url(selected), "timestamp": datetime.now().isoformat(),
-            })
-            return f"{note}\n{result}" if note else result
-
-        def browser_click(ref: str) -> str:
-            """Click one exact opaque target from the current managed-browser observation."""
-
-            thread_id = _get_thread_id()
-            session = _session_manager.get_session(thread_id)
-            metadata = session.pending_approval_proof(thread_id, "click", ref)
-            replaying_approval = metadata is not None
-            if metadata is None:
-                metadata = session.describe_ref(ref, thread_id)
-            if not metadata:
-                return "ERROR [stale_observation]: Observe the same managed page again before retrying."
-            consequence = _consequential_browser_target(metadata)
-            if consequence:
-                from row_bot.tools.approval_gate import gate_action
-
-                if not replaying_approval:
-                    session.stage_approval_proof(thread_id, "click", ref, metadata)
-                session.mark_waiting_approval(thread_id, "Approve page action")
-                blocked = gate_action({
-                    "tool": "browser_click", "label": "Managed Browser consequential action",
-                    "action": "click", "target": str(metadata.get("label") or "control")[:160],
-                    "reason": consequence,
-                })
-                if blocked:
-                    session.clear_approval_proof(thread_id)
-                    session.end_activity(thread_id)
-                    return blocked
-                try:
-                    result = session.click_after_approval(metadata, thread_id)
-                finally:
-                    session.clear_approval_proof(thread_id)
-            else:
-                result = session.click(ref, thread_id)
-            append_browser_history(thread_id, {
-                "action": "click", "target_token_revision": str(ref).split("_", 1)[0],
-                "timestamp": datetime.now().isoformat(),
-            })
-            return result
-
-        def browser_type(ref: str, text: str, submit: bool = False) -> str:
-            """Enter hidden text into one exact opaque input; optionally submit it."""
-
-            thread_id = _get_thread_id()
-            session = _session_manager.get_session(thread_id)
-            metadata = session.pending_approval_proof(thread_id, "type", ref)
-            replaying_approval = metadata is not None
-            if metadata is None:
-                metadata = session.describe_ref(ref, thread_id)
-            if not metadata:
-                return "ERROR [stale_observation]: Observe the same managed page again before retrying."
-            consequence = _consequential_browser_target(metadata, submit=submit)
-            if consequence:
-                from row_bot.tools.approval_gate import gate_action
-
-                if not replaying_approval:
-                    session.stage_approval_proof(thread_id, "type", ref, metadata)
-                session.mark_waiting_approval(thread_id, "Approve form action")
-                blocked = gate_action({
-                    "tool": "browser_type", "label": "Managed Browser form action",
-                    "action": "type_and_submit" if submit else "type",
-                    "target": str(metadata.get("label") or "field")[:160], "reason": consequence,
-                    "data_summary": f"Text entry ({len(text)} characters; value hidden)",
-                })
-                if blocked:
-                    session.clear_approval_proof(thread_id)
-                    session.end_activity(thread_id)
-                    return blocked
-                try:
-                    result = session.type_text_after_approval(
-                        metadata,
-                        text,
-                        submit,
-                        thread_id,
-                    )
-                finally:
-                    session.clear_approval_proof(thread_id)
-            else:
-                result = session.type_text(ref, text, submit, thread_id)
-            append_browser_history(thread_id, {
-                "action": "type", "target_token_revision": str(ref).split("_", 1)[0],
-                "text_length": len(text), "submit": submit, "timestamp": datetime.now().isoformat(),
-            })
-            return result
-
-        def browser_scroll(direction: str = "down", amount: int = 3) -> str:
-            """Scroll the current owned page and return one fresh semantic observation."""
-
-            thread_id = _get_thread_id()
-            result = _session_manager.get_session(thread_id).scroll(direction, amount, thread_id)
-            append_browser_history(thread_id, {
-                "action": "scroll", "direction": direction, "amount": amount,
-                "timestamp": datetime.now().isoformat(),
-            })
-            return result
-
-        def browser_snapshot() -> str:
-            """Replace the current ephemeral observation and return new opaque target tokens."""
-
-            thread_id = _get_thread_id()
-            return _session_manager.get_session(thread_id).snapshot(thread_id)
-
-        def browser_back() -> str:
-            """Navigate the owned page back and return one fresh observation."""
-
-            thread_id = _get_thread_id()
-            result = _session_manager.get_session(thread_id).go_back(thread_id)
-            append_browser_history(thread_id, {"action": "back", "timestamp": datetime.now().isoformat()})
-            return result
-
-        def browser_tab(action: str = "list", tab_id: int | None = None, url: str | None = None) -> str:
-            """List, switch, open, or close only tabs owned by this task."""
-
-            if action == "new" and url:
-                selected, error = _normalise_url(url)
-                if selected is None:
-                    return error
-                url = selected
-            thread_id = _get_thread_id()
-            session = _session_manager.get_session(thread_id)
-            note = ""
-            if action == "new" and url:
-                policy, reason = _navigation_policy(url, session.current_url(thread_id))
-                if policy == "block":
-                    return f"BLOCKED: {reason}"
-                local = _local.local_development_origin(url) is not None
-                refusal, note = _local_address_refusal(session, thread_id, url, "browser_tab")
-                if refusal:
-                    return refusal
-                if policy == "ask" and not (local and reason.startswith("Navigation targets a local")):
-                    from row_bot.tools.approval_gate import gate_action
-
-                    session.mark_waiting_approval(thread_id, "Approve new task tab")
-                    blocked = gate_action({
-                        "tool": "browser_tab", "label": "Managed Browser new-tab navigation",
-                        "action": "new_tab", "origin_and_path": _history_url(url), "reason": reason,
-                    })
-                    if blocked:
-                        session.end_activity(thread_id)
-                        return blocked
-            result = session.tab_action(action, tab_id, url, thread_id)
-            append_browser_history(thread_id, {
-                "action": f"tab_{action}", "tab_id": tab_id,
-                "url": _history_url(url) if url else None, "timestamp": datetime.now().isoformat(),
-            })
-            return f"{note}\n{result}" if note else result
-
-        def browser_screenshot(full_page: bool = False) -> str:
-            """Save a picture of this chat's page to its files and show it to the person."""
-
-            thread_id = _get_thread_id()
-            image, words = _session_manager.get_session(thread_id).capture_page(thread_id, full_page=full_page)
-            if image is None:
-                return words
-            if not _show_image(image):
-                return "The screenshot was taken but couldn't be shown in the chat."
-            return f"{words} Saved to this chat's files and shown to the person."
-
-        def browser_viewport(preset: str, device_scale: float | None = None) -> str:
-            """Show this chat's page at a phone, tablet or desktop size."""
-
-            thread_id = _get_thread_id()
-            return _session_manager.get_session(thread_id).set_viewport(preset, device_scale, thread_id)
-
-        def browser_record(action: str, max_minutes: int = 5) -> str:
-            """Start or stop recording this chat's page in Row-Bot's browser to a video."""
-
-            from row_bot import recordings
-            from row_bot.browser.recording import encoder_problem
-
-            thread_id = _get_thread_id()
-            if action == "stop":
-                record = recordings.active_for(thread_id, "browser")
-                if record is None:
-                    latest = recordings.latest_for(thread_id, "browser")
-                    return recordings.summary(latest) if latest else "Row-Bot's browser isn't being recorded in this chat."
-                recordings.stop(record.recording_id, by="agent")
-                recordings.wait(record, 30)
-                return recordings.summary(record)
-            if action != "start":
-                return "Use action start or stop."
-            running = recordings.active_for(thread_id, "browser")
-            if running is not None:
-                return recordings.summary(running)
-            problem = encoder_problem()
-            if problem:
-                return problem
-            session = _session_manager.get_session(thread_id)
-            if not session.current_url(thread_id) or session.current_url(thread_id) in session._BLANK_URLS:
-                return "Open a page with browser_navigate first; the recording follows this chat's page."
-            minutes = recordings.minutes(max_minutes, "browser")
-            from row_bot.tools.approval_gate import approval_check
-
-            refusal, _line = approval_check(
-                _record_approval(minutes),
-                risks=("records Row-Bot's browser window to a video saved in the chat",),
-                blocked_message="BLOCKED: Recording needs approval, and this chat is on Block.",
-                cancelled_message="The person didn't allow recording; nothing was recorded.",
-            )
-            if refusal:
-                return refusal
-
-            def begin(record, path):
-                try:
-                    return session.start_recording(
-                        path,
-                        max_seconds=record.max_seconds,
-                        size_limit=recordings.SIZE_LIMIT,
-                        on_end=lambda reason, video: recordings.finished(record, reason, video),
-                        thread_id=thread_id,
-                    )
-                except LookupError:
-                    raise recordings.RecordingError(
-                        "Open a page with browser_navigate first; the recording follows this chat's page."
-                    ) from None
-
-            try:
-                record = recordings.start(thread_id, "browser", max_minutes=minutes, begin=begin)
-            except recordings.RecordingError as exc:
-                return str(exc)
-            except Exception:
-                return "Row-Bot's browser couldn't start recording. Try again in a moment."
-            return (
-                recordings.summary(record)
-                + " Do the steps to record, then call browser_record with action stop; the video is saved "
-                "to this chat's files."
-            )
-
         return [
-            StructuredTool.from_function(
-                func=browser_navigate, name="browser_navigate",
-                description=(
-                    "Open a website in Row-Bot's owned managed browser profile; returns opaque exact target tokens. "
-                    "Addresses on this computer (localhost:5173, 127.0.0.1:8000) open once the person allows them "
-                    "for this chat (one ask per address); servers you started here with start_process open "
-                    "without asking. Other local-network addresses never open."
-                ),
-                args_schema=_NavigateInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_click, name="browser_click",
-                description="Click an exact opaque target from the current managed-browser observation.",
-                args_schema=_ClickInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_type, name="browser_type",
-                description=(
-                    "Enter hidden text into an exact current managed-browser input target. "
-                    "For a search field, use submit=true so this call returns the post-submit observation; "
-                    "do not add a separate snapshot before opening a result."
-                ),
-                args_schema=_TypeInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_scroll, name="browser_scroll",
-                description="Scroll the current managed page and return one semantic observation.",
-                args_schema=_ScrollInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_snapshot, name="browser_snapshot",
-                description="Refresh the managed page observation; old opaque target tokens become stale.",
-            ),
-            StructuredTool.from_function(
-                func=browser_back, name="browser_back",
-                description="Navigate the current owned managed-browser page back.",
-            ),
-            StructuredTool.from_function(
-                func=browser_tab, name="browser_tab",
-                description="Manage only this task's tabs in Row-Bot's owned browser profile.",
-                args_schema=_TabInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_screenshot, name="browser_screenshot",
-                description=(
-                    "Save a picture of this chat's current page to the chat's files and show it to the person "
-                    "(what's on screen, or the whole page). Use it when they want to see the page; use "
-                    "browser_snapshot to read it yourself."
-                ),
-                args_schema=_ScreenshotInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_viewport, name="browser_viewport",
-                description=(
-                    "Show this chat's page at a phone, tablet or desktop size (with an optional device scale), "
-                    "to check a responsive layout. It stays until changed; observe the page again afterwards."
-                ),
-                args_schema=_ViewportInput,
-            ),
-            StructuredTool.from_function(
-                func=browser_record, name="browser_record",
-                description=(
-                    "Record this chat's page in Row-Bot's browser to a video saved in the chat's files (asks first). "
-                    "Start, do the steps, then stop. It records only Row-Bot's browser: to record the whole "
-                    "screen use computer_use start_recording; without Computer use, tell the person that "
-                    "recording the screen needs it (Settings › System › Browser and computer use)."
-                ),
-                args_schema=_RecordInput,
-            ),
+            StructuredTool.from_function(func=function, name=name, description=description, args_schema=schema)
+            for function, name, description, schema in _TOOLS
         ]
 
 
