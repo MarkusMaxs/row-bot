@@ -806,12 +806,12 @@ def undo(change_id: str, *, store: Any = None, clock: Callable[[], float] = time
     payload = proposal.get("payload") or {}
     if kind == "lesson":
         memory_id = str(meta.get("memory_id") or "")
-        _lesson_record(saved, proposal, memory_id, now, status="off")
         # A lesson Row-Bot saved for itself was a memory before it was tested: Undo keeps it, untested.
         if memory_id and meta.get("origin") != "agent_saved":
             from row_bot import knowledge_graph
 
             knowledge_graph.delete_entity(memory_id)
+        _lesson_record(saved, proposal, "", now, status="off")
     elif kind == "way_of_working":
         from row_bot.learning import behaviour
 
