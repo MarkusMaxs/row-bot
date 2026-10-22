@@ -27,6 +27,9 @@ def world(api, no_channels, tmp_path, monkeypatch):
         downloads._downloads = found.downloads(start_threads=False)  # noqa: SLF001 - the app's, faked
         yield client, headers, found
 
+# A starting model larger than the 16 GB tier's, standing in for one the larger tiers might offer.
+LARGER = hardware.StartingModel("test-larger", "A larger model", "Apache 2.0", 30_000_000_000)
+
 
 def _error(response, code: str, status: int = 409) -> None:
     assert response.status_code == status, response.text
@@ -128,8 +131,8 @@ def test_an_old_driver_is_reported_by_the_hardware_check(world):
 def test_the_hardware_check_says_what_training_needs_of_the_computers_memory(world, monkeypatch):
     # O105: each tier's measured need, the computer's memory, and the tiers it can't hold.
     client, headers, found = world
-    models = {"8gb": hardware.QWEN35_2B, "16gb": hardware.QWEN35_9B, "24gb": hardware.QWEN38_27B,
-              "32gb": hardware.QWEN38_27B}
+    models = {"8gb": hardware.QWEN35_2B, "16gb": hardware.QWEN35_9B, "24gb": LARGER,
+              "32gb": LARGER}
     table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id != "32gb", tier.summary,
                                 (models[tier.id],), {"8gb": 15_360, "16gb": 30_720, "24gb": 41_984}.get(tier.id))
                   for tier in hardware.TIERS)
@@ -181,7 +184,7 @@ def test_after_two_nights_without_room_on_the_card_the_view_offers_a_smaller_mod
     room = _snapshot(client, headers)["personal_model"]["room"]
     assert (room["nights"], room["free_gb"], room["smaller"]["id"]) == (2, 9.0, "qwen3.5-2b")
     assert room["need_gb"] == round(nine.memory_mib / 1024, 1)
-    _error(_command(client, headers, "use_smaller_model", model="qwen3.8-27b"), "learning_training_changed")
+    _error(_command(client, headers, "use_smaller_model", model="qwen3.5-9b"), "learning_training_changed")
 
     receipt = _ok(_command(client, headers, "use_smaller_model", model="qwen3.5-2b"))
 

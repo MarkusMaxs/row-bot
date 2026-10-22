@@ -13,6 +13,9 @@ from row_bot.learning.training import hardware
 
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]  # runs a process (faked here)
 
+# A starting model larger than the 16 GB tier's, standing in for one the larger tiers might offer.
+LARGER = hardware.StartingModel("test-larger", "A larger model", "Apache 2.0", 30_000_000_000)
+
 
 def _run(stdout: str = "", returncode: int = 0, error: Exception | None = None, calls: list | None = None):
     def run(args, **kwargs):
@@ -157,8 +160,8 @@ def test_the_check_is_kept_for_the_process_until_asked_again():
 def _tiers(monkeypatch, needs: dict[str, int]) -> None:
     """The tier table with these tiers certified, each needing this much of the computer's memory."""
 
-    models = {"8gb": hardware.QWEN35_2B, "16gb": hardware.QWEN35_9B, "24gb": hardware.QWEN38_27B,
-              "32gb": hardware.QWEN38_27B}  # a larger model per tier, so a tier held back offers something
+    models = {"8gb": hardware.QWEN35_2B, "16gb": hardware.QWEN35_9B, "24gb": LARGER,
+              "32gb": LARGER}  # a larger model per tier, so a tier held back offers something
     table = tuple(hardware.Tier(tier.id, tier.label, tier.min_memory_mib, tier.id in needs,
                                 tier.summary if tier.id in needs else f"Larger models for {tier.label} cards: measured soon.",
                                 (models[tier.id],) if tier.id in needs else (), needs.get(tier.id))

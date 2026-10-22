@@ -466,8 +466,7 @@ def _remove_downloads(root: Path | None, model: weights.PinnedModel) -> None:
     for leftover in engine_dir(root).glob(".staging-*") if engine_dir(root).is_dir() else ():
         _remove_tree(leftover)
     _remove_tree(server_files.downloads_dir(root))
-    for part in (model, model.training) if model.training is not None else (model,):
-        _remove_tree(weights.partial_dir(part, root))
+    _remove_tree(weights.partial_dir(model, root))
 
 
 # ── The app's downloads ─────────────────────────────────────────────────────
