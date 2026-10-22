@@ -321,6 +321,10 @@ class ClientPlatformService:
             threads.migrate_checkpoint_message_ids(conversation_id)
             if self.registry.active(conversation_id):
                 raise ClientPlatformError("generation_active")
+            # Nothing runs here: a turn this process left behind (its end couldn't be recorded, or it was
+            # admitted and never started) can't keep the conversation from taking a message (B399).
+            if settled := admissions.settle_leftovers(conversation_id, self.registry.server_epoch):
+                _LOG.warning("Settled %d leftover turn(s) in %s", settled, conversation_id)
             submission_id = str(configurable.get("platform_submission_id") or uuid.uuid4())
             generation_id = str(configurable.get("generation_id") or uuid.uuid4())
             admitted = admissions.reserve(conversation_id, submission_id, generation_id,
@@ -359,8 +363,13 @@ class ClientPlatformService:
             remember_context(conversation_id, generation_id, config, queue_context)
             handle = self.registry.register(conversation_id, generation_id=generation_id,
                                             pass_id=admitted["pass_id"], cancel_scope=cancel_scope)
-            admissions.start(handle.pass_id, handle.execution_id, handle.server_epoch)
-            handle.segment_id = admissions.start_segment(handle.pass_id)
+            try:
+                admissions.start(handle.pass_id, handle.execution_id, handle.server_epoch)
+                handle.segment_id = admissions.start_segment(handle.pass_id)
+            except BaseException:
+                # Never launched: the conversation must not look busy for good (B399).
+                self.registry.finish(handle, status="interrupted")
+                raise
             handle.input_checkpoint_revision = threads.get_latest_checkpoint_revision(conversation_id)
             handle.model_ref = str(configurable.get("model_override") or "")
             handle.submission_id = submission_id
@@ -1390,7 +1399,11 @@ class ClientPlatformService:
         if followup is None and not resume and str(payload.get("text") or "").strip():
             # The person's message answers a goal that waits on them (B318).
             from row_bot import goals
-            goals.resume_goal_for_answer(conversation_id)
+            try:
+                goals.resume_goal_for_answer(conversation_id)
+            except Exception:
+                # The turn is admitted: it still runs, or it would never end (B399).
+                _LOG.warning("The goal waiting in %s could not take the answer", conversation_id, exc_info=True)
 
         def producer() -> None:
             from row_bot.application.conversation_followups import after_platform_turn, live_goal
