@@ -148,3 +148,27 @@ def test_the_markdown_shows_rates_with_intervals_and_names_what_isnt_built():
         assert f"{item['stage']}: **not built yet** ({item['work_package']})" in text
     assert "+5.0 pt [-2.0, +12.0], p 0.21, n 52" in text
     assert "of a 25,000,000 cap" in text
+
+
+def test_the_nights_looks_for_things_to_improve_add_up_and_say_the_drafts_wait(tmp_path):
+    result = _result("mara", first=8, final=9)
+    result["nights"] = {
+        "1": {"steps": {"vault": {"outcome": {"summary": {"correction_tasks": 0}}},
+                        "look": {"outcome": {"state": "nothing", "found": 0, "drafted": 0, "tokens": 0}}}},
+        "2": {"steps": {"vault": {"outcome": {"summary": {"correction_tasks": 1}}},
+                        "look": {"outcome": {"state": "done", "found": 3, "diagnosed": 3, "drafted": 2, "refused": 1,
+                                             "needs_examples": 0, "bugs": 1, "tokens": 9_000,
+                                             "drafts": {"lesson": 1, "way_of_working": 1},
+                                             "refusals": {"url": 1}}}}},
+        "3": {"steps": {"look": {"outcome": {"ran": False}}}},
+    }
+
+    person = report.person_report(result)
+    text = report.markdown(report.build([result], run={"build": "abc1234"}, tiers={"8gb": "ran"},
+                                        cap_tokens=25_000_000))
+
+    looks = person["looks"]
+    assert (looks["nights"], looks["found"], looks["drafted"], looks["refused"], looks["tokens"]) == (2, 3, 2, 1, 9_000)
+    assert looks["drafts"] == {"lesson": 1, "way_of_working": 1} and looks["held_out_corrections_stored"] == 1
+    assert ("Looks for things to improve (L3a): 2 nights, 3 issues found, 3 diagnosed, 2 drafts (1 lesson, "
+            "1 way of working; waiting to be tested: L3b isn't built yet), 1 refused by E9 (1 url)") in text

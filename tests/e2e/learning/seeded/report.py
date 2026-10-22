@@ -31,10 +31,9 @@ LABELS = {"document_lookups": "Document lookups", "structured_transforms": "Stru
           "own_work": "Held-out seeded work"}
 #: Stages of the Learning loop that later work packages build; the report names them, never zeros.
 NOT_BUILT = (
-    {"stage": "Issues, lessons, skills and ways of working (diagnosis, drafting, testing, use/undo)",
-     "work_package": "L3a, L3b"},
+    {"stage": "Testing the drafted lessons, skills and ways of working, using and undoing them (the drafts wait)",
+     "work_package": "L3b"},
     {"stage": "The harder pack split where the main model fails (O31)", "work_package": "L3b"},
-    {"stage": "Held-out corrections stored and tested in the vault (O87)", "work_package": "L3a"},
     {"stage": "Improver strategies: three inherited generations at equal budget, frozen control (D15, H3)",
      "work_package": "L4a"},
     {"stage": "Practice tasks from failure patterns, the quick question (D17)", "work_package": "L4b"},
@@ -244,10 +243,38 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
             "simulated_person": int((tokens.get("sim_person") or {}).get("total") or 0),
             "total_cloud": int(tokens.get("cloud_total") or 0),
         },
+        "looks": looks(result.get("nights") or {}),
         "gpu_hours": round(float(gpu.get("seconds") or 0) / 3600, 3),
         "gpu_hours_by_phase": {name: round(value / 3600, 3) for name, value in sorted(phases.items())},
         "refused_tool_calls": result.get("refused_tool_calls", 0),
     }
+
+
+def looks(nights: Mapping[str, Any]) -> dict[str, Any]:
+    """The nights' looks for things to improve (L3a), added up: issues found and diagnosed, drafts by kind of
+    change (waiting to be tested: L3b), E9 refusals by reason, needs more examples, bugs and tokens; and how
+    many held-out corrections the vault stores after the last night."""
+
+    total: dict[str, Any] = {"nights": 0, "found": 0, "diagnosed": 0, "drafted": 0, "refused": 0,
+                             "needs_examples": 0, "train": 0, "waits": 0, "bugs": 0, "tokens": 0, "drafts": {},
+                             "refusals": {}, "states": {}, "held_out_corrections_stored": None}
+    for day in sorted(nights, key=lambda value: int(value) if str(value).isdigit() else 0):
+        steps = (nights[day] or {}).get("steps") or {}
+        found = (steps.get("look") or {}).get("outcome") or {}
+        vault = ((steps.get("vault") or {}).get("outcome") or {}).get("summary") or {}
+        if "correction_tasks" in vault:
+            total["held_out_corrections_stored"] = int(vault["correction_tasks"])
+        if not found or found.get("ran") is False:
+            continue
+        total["nights"] += 1
+        state = str(found.get("state") or "?")
+        total["states"][state] = total["states"].get(state, 0) + 1
+        for key in ("found", "diagnosed", "drafted", "refused", "needs_examples", "train", "waits", "bugs", "tokens"):
+            total[key] += int(found.get(key) or 0)
+        for key in ("drafts", "refusals"):
+            for name, count in (found.get(key) or {}).items():
+                total[key][name] = total[key].get(name, 0) + int(count)
+    return total
 
 
 # ── Overall ──────────────────────────────────────────────────────────────────
@@ -464,6 +491,16 @@ def markdown(report: Mapping[str, Any]) -> str:
             lines.append(f"| Seconds per task | {person['time_per_task'].get('baseline')} | "
                          f"{person['time_per_task'].get('new')} | {person['time_per_task'].get('main')} |")
         lines.append("")
+        look = person.get("looks") or {}
+        if look.get("nights"):
+            drafts = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in sorted(look["drafts"].items()))
+            refused = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in sorted(look["refusals"].items()))
+            lines.append(f"- Looks for things to improve (L3a): {look['nights']} nights, {look['found']} issues found, "
+                         f"{look['diagnosed']} diagnosed, {look['drafted']} drafts ({drafts or 'none'}; waiting to be "
+                         f"tested: L3b isn't built yet), {look['refused']} refused by E9 ({refused or 'none'}), "
+                         f"{look['needs_examples']} need more examples, {look['bugs']} look like a bug, "
+                         f"{look['tokens']:,} diagnosis tokens; held-out corrections in the vault: "
+                         f"{look['held_out_corrections_stored'] if look['held_out_corrections_stored'] is not None else '–'}.")
         lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}{_survival_note(check)}"
                                                for name, check in person["survival"].items()))
         lines.append("- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
