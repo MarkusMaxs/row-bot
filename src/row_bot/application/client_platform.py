@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from dataclasses import asdict
 from typing import Any, TYPE_CHECKING
@@ -42,6 +42,16 @@ _LOG = logging.getLogger(__name__)
 # whoever closes or replaces that state settles it first (settle_background).
 _BACKGROUND_LOCK = threading.RLock()  # Re-entrant: a start that runs its work at once may finish under it.
 _BACKGROUND: set[threading.Thread] = set()
+
+
+@contextmanager
+def _turn_end_step(conversation_id: str, step: str) -> Iterator[None]:
+    """One step of ending a turn. A step that fails is logged and the turn still ends: its conversation
+    never keeps showing a reply being written with nothing running (B396)."""
+    try:
+        yield
+    except Exception:
+        _LOG.warning("Ending a turn in %s: %s failed", conversation_id, step, exc_info=True)
 
 
 def run_in_background(target: Callable[[], None], *, name: str) -> None:
@@ -400,35 +410,42 @@ class ClientPlatformService:
         with _COMMAND_LOCK:
             if handle.producer_done.is_set():
                 return
+            conversation_id = handle.conversation_id
             status = "stopped" if handle.cancel_scope.is_cancelled() else status
             if status == "stopped":
                 self._keep_stopped_reply(handle)
             if status not in {"completed", "waiting_approval"}:
-                self._answer_open_calls(handle.conversation_id, status)
+                self._answer_open_calls(conversation_id, status)
             # Clients reset on a checkpoint installed below and resubscribe
             # from a snapshot, which carries no queue: an update published
             # after it never reaches them and they kept "1 queued" (B97).
-            self._publish_queue(handle.conversation_id, finishing=handle.pass_id)
-            self._refresh_checkpoint(handle.conversation_id)
+            with _turn_end_step(conversation_id, "publishing the queue"):
+                self._publish_queue(conversation_id, finishing=handle.pass_id)
+            with _turn_end_step(conversation_id, "reading the saved reply in"):
+                self._refresh_checkpoint(conversation_id)
             from row_bot.application.live_content import discard, references
-            for reference in references(handle.conversation_id):
+            for reference in references(conversation_id):
                 if reference.startswith(f"live:{handle.pass_id}:"):
-                    self.projection.settle_live(handle.conversation_id, "assistant:" + reference, adopted=False)
-                    discard(handle.conversation_id, reference)
-            status = admissions.finish(handle.pass_id, status, boundary={
-                "execution_id": handle.execution_id, "server_epoch": handle.server_epoch,
-                "segment_id": handle.segment_id, "message_id": handle.output_message_id,
-                "checkpoint_revision": handle.output_checkpoint_revision})
-            self._publish_queue(handle.conversation_id)
+                    with _turn_end_step(conversation_id, "retiring the live reply"):
+                        self.projection.settle_live(conversation_id, "assistant:" + reference, adopted=False)
+                        discard(conversation_id, reference)
+            with _turn_end_step(conversation_id, "recording the turn"):
+                status = admissions.finish(handle.pass_id, status, boundary={
+                    "execution_id": handle.execution_id, "server_epoch": handle.server_epoch,
+                    "segment_id": handle.segment_id, "message_id": handle.output_message_id,
+                    "checkpoint_revision": handle.output_checkpoint_revision})
+            with _turn_end_step(conversation_id, "publishing the queue"):
+                self._publish_queue(conversation_id)
             from row_bot.application import client_queue
             # Pause waiting inputs before announcing the terminal state, so a
             # client that re-reads its waiting messages on that state sees
             # their paused revision rather than a stale one.
             if status != "completed":
-                client_queue.pause_pending(self, handle.conversation_id)
+                with _turn_end_step(conversation_id, "pausing waiting messages"):
+                    client_queue.pause_pending(self, conversation_id)
             final_view = {**handle.view(), "status": status, "revision": str(handle.revision + 1),
                           "quiesced": True, "cleanup_complete": True, "can_stop": False}
-            self.projection.publish(handle.conversation_id, "generation.state", final_view)
+            self.projection.publish(conversation_id, "generation.state", final_view)
             self.registry.finish(handle, status=status)
             from row_bot.application import approval_grants
             if status == "waiting_approval" and handle.approval_granted:
@@ -1403,10 +1420,11 @@ class ClientPlatformService:
             status = "interrupted"
             final_text = ""
             error_text = ""  # A provider limit here makes a goal wait (B244).
-            # The goal this turn works on, even if the model finishes it mid-turn.
-            started_goal = live_goal(conversation_id)
+            started_goal = None
             _buddy(conversation_id, "generation.started", "Thinking")
             try:
+                # The goal this turn works on, even if the model finishes it mid-turn.
+                started_goal = live_goal(conversation_id)
                 self.registry.check_dispatch(handle)
                 files = []
                 if attachment_refs:
@@ -1520,10 +1538,11 @@ class ClientPlatformService:
                         recheck_after_failed_turn(model_ref)
                     except Exception:
                         _LOG.warning("Monitor could not recheck the model after a failed turn", exc_info=True)
-                after_platform_turn(conversation_id, generation_id=generation_id, status=status,
-                                    assistant_text=final_text, model_ref=model_ref,
-                                    goal_id=str((started_goal or {}).get("id") or ""),
-                                    error_text=error_text)
+                with _turn_end_step(conversation_id, "the goal's step"):
+                    after_platform_turn(conversation_id, generation_id=generation_id, status=status,
+                                        assistant_text=final_text, model_ref=model_ref,
+                                        goal_id=str((started_goal or {}).get("id") or ""),
+                                        error_text=error_text)
                 self.finish_execution(handle, status)
                 from row_bot.application.conversation_naming import after_turn
                 after_turn(self, conversation_id, status=status, reply=final_text, model_ref=model_ref)

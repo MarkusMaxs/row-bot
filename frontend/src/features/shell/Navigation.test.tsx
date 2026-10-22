@@ -1036,6 +1036,56 @@ it('uses canonical orchestration activity and stops spinning after failure or co
   ).toBeNull();
 });
 
+it('stops the open row spinning once the server says its reply has ended', async () => {
+  const { controller, transport } = await setup(2);
+  const page = await transport.getTranscript('conversation-a');
+  const running = {
+    execution_id: 'execution-a',
+    conversation_id: 'conversation-a',
+    generation_id: 'generation-a',
+    pass_id: 'pass-a',
+    segment_id: null,
+    status: 'running' as const,
+    revision: '1',
+    cancel_requested: false,
+    quiesced: false,
+    cleanup_complete: false,
+    external_outcome: 'not_applicable' as const,
+    approval_id: null,
+    can_stop: true,
+  };
+  const snapshot = {
+    conversation_id: page.conversation_id,
+    server_epoch: page.server_epoch,
+    projection_revision: page.projection_revision,
+    cursor: page.cursor,
+    checkpoint_revision: page.checkpoint_revision,
+    rows: page.rows,
+    generation: running,
+  };
+  transport.setSnapshot(snapshot);
+  vi.useFakeTimers();
+  await act(async () => controller.selectConversation('conversation-a'));
+  expect(screen.getByRole('img', { name: 'Generating response' })).toHaveClass(
+    'nav-activity-spin',
+  );
+  // The reply ends, but its end never reaches this page; the list says idle.
+  transport.setSnapshot({
+    ...snapshot,
+    projection_revision: String(BigInt(snapshot.projection_revision) + 1n),
+    generation: {
+      ...running,
+      status: 'completed',
+      revision: '2',
+      quiesced: true,
+      cleanup_complete: true,
+      can_stop: false,
+    },
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(15000));
+  expect(screen.queryByRole('img', { name: 'Generating response' })).toBeNull();
+});
+
 it('rechecks background work without resetting the list and marks failed reads stale', async () => {
   const { controller, transport, list } = await setup(55);
   vi.useFakeTimers();
