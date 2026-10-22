@@ -89,16 +89,30 @@ test('Row-Bot asks with options, the answer goes on, and the card collapses to t
   await page.keyboard.press('Enter');
 
   const transcript = page.getByRole('log', { name: 'Conversation' });
-  await expect(
-    transcript.getByText("Thanks. I'll plan the beta that way.", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  const reply = transcript.getByText("Thanks. I'll plan the beta that way.", {
+    exact: true,
+  });
+  await expect(reply).toBeVisible();
   await expect(card).toHaveCount(0);
   const answered = transcript.getByRole('group', {
     name: 'You chose: Beta.1 now',
   });
   await expect(answered).toBeVisible();
+  // In the past tense, and in order: the question, your answer, then the reply.
+  await expect(transcript.getByText('Waiting for your answer')).toHaveCount(0);
+  await expect(
+    transcript.getByText('Asked you a question').first(),
+  ).toBeVisible();
+  // The live row settles into the saved one meanwhile: read both once they stand still.
+  await expect
+    .poll(async () => {
+      const [chosenAt, replyAt] = await Promise.all([
+        answered.boundingBox(),
+        reply.boundingBox(),
+      ]);
+      return chosenAt && replyAt ? chosenAt.y < replyAt.y : null;
+    })
+    .toBe(true);
   await everywhere(page, info, 'question-answered');
 });
 
