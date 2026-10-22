@@ -1673,10 +1673,15 @@ def recover_stale_agent_runs() -> dict[str, int]:
             f"SELECT * FROM agent_runs WHERE status NOT IN ({placeholders})",
             tuple(TERMINAL_STATUSES),
         ).fetchall()
+        # A finished orchestration (its chat already answered) is never
+        # resumed: a background helper it left running is stopped like any
+        # other run, or its chat showed agents working for good (B396).
         orchestration_run_ids = {
             str(row["run_id"])
             for row in conn.execute(
-                "SELECT run_id FROM agent_orchestration_members"
+                "SELECT m.run_id FROM agent_orchestration_members m "
+                "JOIN agent_orchestrations o ON o.id = m.orchestration_id "
+                "WHERE o.status NOT IN ('completed', 'completed_partial', 'failed', 'stopped')"
             ).fetchall()
         }
         for row in rows:

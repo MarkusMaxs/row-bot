@@ -476,13 +476,23 @@ export function PlanProgress({
     plan.pause === 'sign_in' ||
     plan.pause === 'resume' ||
     plan.pause === 'digest_changed';
+  // Saving access isn't a setup: no steps, just that it is saving; the page
+  // reads the item again when it is done (B346).
+  const saving = plan.intent === 'access';
   return (
     <section
       className="plan-progress"
       aria-live="polite"
       aria-busy={plan.state === 'running'}
     >
-      <Stepper steps={plan.steps} />
+      {!saving ? (
+        <Stepper steps={plan.steps} />
+      ) : plan.state === 'running' ? (
+        <div className="app-banner" role="status">
+          <LoaderCircle size={16} aria-hidden />
+          <span>Saving…</span>
+        </div>
+      ) : null}
       {plan.message && (
         <p role={plan.state === 'failed' ? 'alert' : 'status'}>
           {plan.message}

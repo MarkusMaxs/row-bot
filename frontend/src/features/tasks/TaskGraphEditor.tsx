@@ -36,7 +36,7 @@ import {
   Select,
   Skeleton,
 } from '../../ui/primitives';
-import StepApps, { type StepApp } from './StepApps';
+import StepApps, { StepAppChips, type StepApp } from './StepApps';
 import WorkflowFlowchart from './WorkflowFlowchart';
 import { stepIssues } from './workflow-flowchart';
 import { readStepView, saveStepView, type StepView } from './step-view';
@@ -168,6 +168,22 @@ export default function TaskGraphEditor({
   session: injectedSession,
 }: TaskGraphEditorProps) {
   const session = useTaskEditSession(injectedSession, 'graph', taskId);
+  // Set-up apps, so a step that names some shows them by icon and name.
+  const [knownApps, setKnownApps] = useState<readonly StepApp[]>([]);
+  useEffect(() => {
+    if (!loadApps) return;
+    const abort = new AbortController();
+    loadApps(abort.signal).then(
+      (found) => !abort.signal.aborted && setKnownApps(found),
+      () => undefined,
+    );
+    return () => abort.abort();
+  }, [loadApps]);
+  const stepApps = (item: TaskGraphStepEdit): StepApp[] =>
+    (item.type === 'prompt' ? (item.fields.apps ?? []) : []).map(
+      (id) =>
+        knownApps.find((app) => app.id === id) ?? { id, name: id, icon: '' },
+    );
   const meta = useSyncExternalStore(session.subscribe, session.getMeta);
   const [snapshot, setSnapshot] = useTaskEditValue<TaskGraphSnapshot | null>(
     session,
@@ -589,6 +605,7 @@ export default function TaskGraphEditor({
                 issues={issues}
                 kindLabel={kindLabel}
                 summary={stepSummary}
+                apps={stepApps}
               />
             )}
             {(view === 'list' || !steps.length) && (
@@ -643,6 +660,7 @@ export default function TaskGraphEditor({
                     <span className="task-graph-step-summary">
                       {stepSummary(item)}
                     </span>
+                    <StepAppChips apps={stepApps(item)} />
                     {issues.has(position) && (
                       <span className="task-graph-step-issue">
                         {issues.get(position)?.message}
