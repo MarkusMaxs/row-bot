@@ -224,7 +224,7 @@ def test_advanced_starts_at_the_recommended_values(data_dir):
     found = advanced.view(recipe, data_dir)
 
     assert found["values"] == found["recommended"] == {
-        "starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002, "epochs": 1, "context": 16384,
+        "starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384,
         "method": "standard"}
     assert found["changed"] is False and found["choices"]["context"] == [16384]  # 32K didn't fit 8 GB
     assert [item["available"] for item in found["data_mix"]] == [True, False, False, False]

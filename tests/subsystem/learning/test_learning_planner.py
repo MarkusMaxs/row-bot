@@ -56,7 +56,7 @@ def test_enough_examples_plan_a_run_with_its_rows_already_leased(work, setup, mo
 
     job = outcome.job
     assert job is not None and job.state == "planned" and job.version == 1
-    assert job.steps_total == recipe.steps_for(4) == 1
+    assert job.steps_total == recipe.steps_for(4) == 3  # one step a pass, three passes (O114)
     plan = jobs.plan_of(job)
     assert plan["recipe"]["name"] == "8gb-v1" and plan["recipe"]["settings"]["max_seq_length"] == 16_384
     assert plan["dataset"]["examples"] == 4 and plan["dataset"]["id"].startswith("ds_")
