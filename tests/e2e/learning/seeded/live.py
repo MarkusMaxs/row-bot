@@ -936,6 +936,7 @@ class PersonRun:
         check: dict[str, Any] = {"job": job.id, "version": job.version, "steps_before": job.steps_done}
         self.state.data["survival"]["pause_on_use"] = check
         self.note(f"pause on use: asking while v{job.version} trains (step {job.steps_done})")
+        asked_at = time.time()
         record = self.ask(request, label="night")
         self.state.data["requests"].append(record)
         asked = time.monotonic()
@@ -945,6 +946,11 @@ class PersonRun:
             time.sleep(1.0)
             paused = supervisor.jobs.get(job.id)
         check["seconds_to_pause"] = round(time.monotonic() - asked, 1)  # after the request's turn ended
+        # From the person's message to the run's pause (the job's own record of it, the real clock).
+        moved = [item for item in (getattr(paused, "transitions", None) or ())
+                 if getattr(item, "state", None) == "paused" and float(getattr(item, "at", 0)) >= asked_at]
+        if moved:
+            check["seconds_from_message_to_pause"] = round(float(moved[0].at) - asked_at, 1)
         check.update({"state_after_use": paused.state if paused else None,
                       "pause_reason": paused.pause_reason if paused else None,
                       "paused_at_step": paused.steps_done if paused else None})
