@@ -64,7 +64,7 @@ export const panelRegistry = {
     compact: 'tab',
   },
   'browser.live': {
-    title: 'Managed browser',
+    title: 'Browser',
     resourceKinds: [],
     requiresResource: false,
     capabilities: ['browser_navigate'],

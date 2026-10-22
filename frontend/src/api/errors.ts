@@ -57,11 +57,6 @@ const UPDATES = open('updates', 'Updates', 'updates.channel');
 const TUNNEL = open('access', 'Tunnel', 'tunnel');
 const REMOTE_ACCESS = open('access', 'Devices & remote access');
 
-const CANT_DO_FROM_HERE: Entry = [
-  "Row-Bot can't do that from here yet. Ask for it in the conversation instead.",
-  'none',
-];
-
 const CATALOG: Record<string, Entry> = {
   plan_changed: [
     'Something changed since you agreed. Review it again before continuing.',
@@ -2010,59 +2005,25 @@ const CATALOG: Record<string, Entry> = {
     'none',
   ],
 
-  // Managed browser
-  browser_action_denied: [
-    "The managed browser isn't allowed to do that.",
+  // Row-Bot's browser (the Browser pane)
+  browser_disabled: [
+    "Row-Bot's browser is turned off. Turn it on in Settings › System › Browser and computer use.",
     'none',
-  ],
-  browser_action_failed: [
-    "The browser action didn't work. Try again.",
-    'retry',
-    RETRY,
+    open('system', 'System', 'browser-computer-use'),
   ],
   browser_navigation_denied: [
     "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
     'review',
   ],
-  browser_outcome_uncertain: [
-    "Row-Bot couldn't confirm whether the browser action finished. Check the browser before trying again.",
-    'review',
-    RETRY,
-  ],
-  browser_receipt_unavailable: [
-    "Row-Bot can't find the earlier browser action. Check the browser's current page.",
-    'review',
-  ],
-  browser_revision_conflict: [
-    'The page changed. Look at it again, then try again.',
+  browser_unavailable: [
+    "Row-Bot's browser didn't respond. Try again, or restart it from the browser's menu.",
     'retry',
     RETRY,
   ],
-  browser_session_inactive: [
-    "The managed browser isn't running. Open it from the conversation, then try again.",
-    'review',
-  ],
-  browser_status_unavailable: [
-    "The browser's status couldn't be read. Try again.",
-    'retry',
-    RETRY,
-  ],
-  browser_window_unavailable: [
-    'The browser window is closed. Open it again, then try.',
-    'review',
-  ],
-  exact_page_target_and_hidden_text_contract_required: CANT_DO_FROM_HERE,
-  exact_page_target_contract_required: CANT_DO_FROM_HERE,
   invalid_browser_command: ["That browser action isn't valid.", 'review'],
   invalid_browser_url: [
     "That web address isn't valid. Check it and try again.",
     'review',
-  ],
-  owned_tab_identity_contract_required: CANT_DO_FROM_HERE,
-  semantic_page_observation_contract_required: CANT_DO_FROM_HERE,
-  use_computer_use_for_external_browser: [
-    "Row-Bot can't control your own browser from here. Ask it to use Computer Use instead.",
-    'none',
   ],
 
   // Computer use (the card in the conversation)

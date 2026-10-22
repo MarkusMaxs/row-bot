@@ -124,6 +124,7 @@ import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
 import { ComputerUseCard, useComputerUse } from './ComputerUseCard';
+import { BrowserStep } from '../browser/BrowserThumbnail';
 import { registerPromptSender } from './composer-bridge';
 import ConversationHeader from './ConversationHeader';
 import ErrorFix from './ErrorFix';
@@ -855,6 +856,26 @@ export default function Conversation({
         record.event.type === 'approval.required' &&
         record.event.payload.approval_id === generation?.approval_id,
     );
+  // Row-Bot's browser shows as a live step while the turn uses it, on every
+  // signed-in device; tapping it opens the Browser pane (N12-A).
+  // The turn's tool steps settle into the transcript as they're saved, so this
+  // follows the turn's own steps (settled or live), not only steps in flight.
+  const turnStart = rows.map((row) => row.role).lastIndexOf('user');
+  const browserLive =
+    Boolean(
+      generation &&
+      (!generation.quiesced || generation.status === 'waiting_approval'),
+    ) &&
+    (liveTraceGroups.some((group) => group.kind === 'browser') ||
+      rows
+        .slice(turnStart + 1)
+        .some((row) => row.traces?.some((group) => group.kind === 'browser')) ||
+      state.activity.some(
+        (record) =>
+          record.event.type === 'tool.activity' &&
+          record.event.payload.group_kind === 'browser' &&
+          record.event.payload.pass_id === generation?.pass_id,
+      ));
   // Computer use shows as a card while this conversation's turn holds the
   // computer; only this computer's owner sees it (other devices keep the
   // trace). The turn using the computer, or asking to, is what to follow.
@@ -2118,7 +2139,7 @@ export default function Conversation({
     if (!id) return;
     onPanel({
       panel_kind: 'browser.live',
-      title: 'Managed browser',
+      title: 'Browser',
       required_capabilities: ['browser_navigate'],
     });
     // Below 1024px Context is a sheet; the panel must not open behind it.
@@ -3321,6 +3342,7 @@ export default function Conversation({
                   pendingMedia.length > 0 ||
                   pendingCards.length > 0 ||
                   computer.visible ||
+                  browserLive ||
                   (generation?.approval_id &&
                     generation.status === 'waiting_approval')) && (
                   <div className="message message-assistant message-live">
@@ -3344,6 +3366,12 @@ export default function Conversation({
                           answering,
                         }}
                       >
+                        {browserLive && (
+                          <BrowserStep
+                            conversationId={id}
+                            onOpen={manageBrowser}
+                          />
+                        )}
                         {computer.visible && (
                           <ComputerUseCard
                             conversationId={id}

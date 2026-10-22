@@ -99,20 +99,30 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  browserControls(conversation: string, signal?: AbortSignal) {
-    return wire.getBrowserControls(
+  browserPane(conversation: string, signal?: AbortSignal) {
+    return wire.getBrowserPane(this.base, this.session(), conversation, signal);
+  }
+  browserLive(
+    conversation: string,
+    view: 'pane' | 'thumb',
+    size: { width: number; height?: number; scale?: number },
+    signal: AbortSignal,
+  ) {
+    return wire.observeBrowserLive(
       this.base,
       this.session(),
       conversation,
+      view,
+      size,
       signal,
     );
   }
-  reviewBrowserControl(
+  browserInput(
     conversation: string,
-    body: wire.BrowserReviewRequest,
+    body: wire.BrowserInput,
     signal?: AbortSignal,
   ) {
-    return wire.reviewBrowserControl(
+    return wire.sendBrowserInput(
       this.base,
       this.session(),
       conversation,
@@ -120,31 +130,24 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  browserControlReceipt(
+  browserAction(
     conversation: string,
-    command: string,
+    body: wire.BrowserPaneAction,
     signal?: AbortSignal,
   ) {
-    return wire.getBrowserControlReceipt(
+    return wire.sendBrowserAction(
       this.base,
       this.session(),
       conversation,
-      command,
+      body,
       signal,
     );
   }
-  executeBrowserControl(
-    conversation: string,
-    command: wire.Command,
-    signal?: AbortSignal,
-  ) {
-    return wire.sendBrowserControl(
-      this.base,
-      this.session(),
-      conversation,
-      command,
-      signal,
-    );
+  browserSites(signal?: AbortSignal) {
+    return wire.getBrowserSites(this.base, this.session(), signal);
+  }
+  clearBrowserSites(body: wire.BrowserSitesClear, signal?: AbortSignal) {
+    return wire.clearBrowserSites(this.base, this.session(), body, signal);
   }
   computerUse(conversation: string, signal?: AbortSignal) {
     return wire.getComputerUse(this.base, this.session(), conversation, signal);
@@ -475,15 +478,6 @@ export class HttpTransport implements ClientTransport {
   }
   checkProviderKey(body: wire.ProviderKeyCheckRequest, signal?: AbortSignal) {
     return wire.checkProviderKey(this.base, this.session(), body, signal);
-  }
-  browserPreview(conversation: string, revision: string, signal?: AbortSignal) {
-    return wire.getBrowserPreview(
-      this.base,
-      this.session(),
-      conversation,
-      revision,
-      signal,
-    );
   }
   reviewDreamRun(body: wire.DreamRunRequest, signal?: AbortSignal) {
     return wire.reviewDreamRun(this.base, this.session(), body, signal);

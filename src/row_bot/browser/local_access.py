@@ -8,6 +8,8 @@ Grants expire after an hour and the person can remove them sooner.
 
 Every other private-network address (another computer on the network, a
 router page, cloud metadata) stays blocked: no grant ever covers one.
+``browser.guard`` enforces both on every page's requests, not only on the
+addresses the agent opens.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import ipaddress
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from row_bot.browser.network_security import is_loopback_name
+from row_bot.browser.addresses import is_loopback_name
 
 GrantSource = Literal["you", "reviewer", "hands_off", "row_bot_server"]
 GRANT_SOURCES: tuple[GrantSource, ...] = ("you", "reviewer", "hands_off", "row_bot_server")
@@ -36,7 +38,6 @@ class LocalAddressGrant:
     source: GrantSource
     granted_at: float
     expires_at: float
-    network_grant_ids: tuple[str, ...] = ()
 
     def view(self) -> dict[str, Any]:
         from datetime import datetime, timezone
@@ -113,21 +114,16 @@ def is_row_bot_origin(origin: str) -> bool:
 
 
 def private_network_target(url: str) -> bool:
-    """Whether the address is a literal private-network IP that isn't this computer.
+    """Whether the address is on the local network but isn't this computer.
 
-    Names that resolve to one (``router.lan``) are refused by the network
-    layer when the page loads; this catches the literal ones up front, so the
-    refusal says why in plain words.
+    Private, link-local and metadata IPs, and ``.local``/``.internal`` names,
+    never open. A public name that resolves to one (DNS rebinding) isn't
+    caught here; Chromium's own local-network protection covers that.
     """
 
-    try:
-        host = (urlsplit(str(url or "").strip()).hostname or "").strip("[]")
-        address = ipaddress.ip_address(host)
-    except (TypeError, ValueError):
-        return False
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-        address = address.ipv4_mapped
-    return not address.is_loopback and not address.is_global
+    from row_bot.browser.addresses import url_host_kind
+
+    return url_host_kind(str(url or "").strip()) == "local_network"
 
 
 def unspecified_refusal(url: str) -> str:
