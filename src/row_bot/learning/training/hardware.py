@@ -107,7 +107,7 @@ TIERS: tuple[Tier, ...] = (
     # else on it).
     _tier("16gb", "16 GB", 15_000, "Can train models up to about 9B on your tasks.", QWEN35_9B),
     _tier("24gb", "24 GB", 23_000, "Can train models up to about 9B on your tasks.", QWEN35_9B),
-    _tier("32gb", "32 GB", 30_000, "Can train models up to about 9B on your tasks, at full precision.", QWEN35_9B),
+    _tier("32gb", "32 GB", 30_000, "Can train models up to about 9B on your tasks.", QWEN35_9B),
 )
 
 

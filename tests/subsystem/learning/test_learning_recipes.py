@@ -21,14 +21,14 @@ def test_every_shipped_recipe_reads_and_the_measured_tiers_are_certified():
     found = {recipe.id: recipe for recipe in recipes.all_recipes()}
 
     assert list(found) == ["8gb", "16gb", "24gb", "32gb"]
-    assert {"8gb", "16gb", "24gb"} <= {recipe.id for recipe in found.values() if recipe.certified}  # L2x, O111
+    assert {recipe.id for recipe in found.values() if recipe.certified} == {"8gb", "16gb", "24gb", "32gb"}  # L2x
     eight = found["8gb"]
     assert eight.name == "8gb-v1" and eight.starting_model == "qwen3.5-2b"
     assert eight.max_seq_length == 16_384 and eight.serve_context == 32_768  # O23, O30
     assert (eight.quantization, eight.reasoning) == ("Q8_0", "off")  # O26, O24
-    # The 16 and 24 GB tiers train the 9B as QLoRA (O111); a 9B Q8_0 serves comfortably on those cards (O26).
+    # The 16, 24 and 32 GB tiers train the 9B as QLoRA (O111, O121); a 9B Q8_0 serves comfortably there (O26).
     assert all((recipe.starting_model, recipe.settings["bits"], recipe.quantization) == ("qwen3.5-9b", 4, "Q8_0")
-               for recipe in (found["16gb"], found["24gb"]))
+               for recipe in (found["16gb"], found["24gb"], found["32gb"]))
     for recipe in found.values():
         if recipe.certified:  # measured with a gradient-norm and loss check (O111), its words say so
             assert "gradient norms" in recipe.evidence and "measured on an RTX" in recipe.evidence
@@ -153,7 +153,7 @@ def test_a_model_trains_with_the_largest_recipe_whose_need_fits_the_cards_free_m
     if len(nine) < 2:
         pytest.skip("one certified recipe trains the 9B")
     small = min(nine, key=lambda recipe: recipe.memory_mib)
-    large = max(nine, key=lambda recipe: recipe.memory_mib)
+    large = max(nine, key=lambda recipe: (recipe.memory_mib, recipes.ORDER.index(recipe.tier)))  # the largest tier
     card = lambda used: hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", used)])  # noqa: E731
 
     assert recipes.for_model("qwen3.5-9b", card(1_000)) == large
