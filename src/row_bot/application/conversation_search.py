@@ -32,7 +32,7 @@ def _decode(value: str) -> list:
 
 def _library_revision(conn: sqlite3.Connection) -> str:
     digest = hashlib.sha256()
-    for row in conn.execute("SELECT thread_id,name,client_revision,updated_at,pinned_at FROM thread_meta ORDER BY thread_id"):
+    for row in conn.execute("SELECT thread_id,name,client_revision,updated_at,pinned_at,deleted_at FROM thread_meta ORDER BY thread_id"):
         digest.update(json.dumps(tuple(row), separators=(",", ":")).encode())
     return digest.hexdigest()
 

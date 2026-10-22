@@ -632,6 +632,15 @@ class DocumentVectorStoreFacade:
         from row_bot.documents import get_embedding_model_for_recall
 
         k = max(1, int(k))
+        corpus = read_corpus_manifest(self.index_root)
+        visible_entries: list[dict[str, Any]] = []
+        for entry in corpus["documents"]:
+            if isinstance(entry, dict) and entry.get("document_id"):
+                visible_entries.append(entry)
+        if not visible_entries and not self.legacy_root.exists():
+            # An empty library has nothing to search: no embedding model is loaded, or needed (where it isn't
+            # downloaded, its error made small models call the tool again and again, L2v).
+            return []
         config = get_embedding_config()
         embedding = (
             self.embedding_factory()
@@ -639,11 +648,6 @@ class DocumentVectorStoreFacade:
             else get_embedding_model_for_recall(config)
         )
         active = active_embedding_metadata() if self.embedding_factory is not None else active_embedding_metadata(config)
-        corpus = read_corpus_manifest(self.index_root)
-        visible_entries: list[dict[str, Any]] = []
-        for entry in corpus["documents"]:
-            if isinstance(entry, dict) and entry.get("document_id"):
-                visible_entries.append(entry)
         name_counts: dict[str, int] = {}
         for entry in visible_entries:
             name = str(entry.get("original_name") or "")

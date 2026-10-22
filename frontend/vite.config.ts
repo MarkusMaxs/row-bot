@@ -32,6 +32,10 @@ const GRAPH_MODULES =
 // when the desktop terminal dock first opens.
 const TERMINAL_MODULES = /\/node_modules\/@xterm\//;
 
+// KaTeX and its stylesheet and fonts: a lazy `math` chunk loaded the first
+// time a message has maths, never at startup.
+const MATH_MODULES = /\/node_modules\/katex\//;
+
 // Dev-only same-loopback proxy. Production access policy is untouched.
 const loopbackProxy: ProxyOptions = {
   target: backend.origin,
@@ -47,6 +51,21 @@ export default defineConfig({
   base: '/app-v2/',
   plugins: [
     react(),
+    {
+      // KaTeX's fonts as WOFF2 only, which every supported browser and
+      // webview reads: its stylesheet also lists WOFF and TrueType copies,
+      // which would ship unused and are not served as client assets.
+      name: 'row-bot-katex-woff2',
+      enforce: 'pre',
+      transform(code, id) {
+        if (!/\/node_modules\/katex\/dist\/katex(?:\.min)?\.css$/.test(id))
+          return null;
+        return code.replace(
+          /,\s*url\(fonts\/[\w-]+\.(?:woff|ttf)\)\s*format\("(?:woff|truetype)"\)/g,
+          '',
+        );
+      },
+    },
     {
       // Dev only: serve the desktop Buddy document at the route the native
       // host opens (/app-v2/buddy-overlay), as the backend does when built.
@@ -110,6 +129,7 @@ export default defineConfig({
           if (SYNTAX_MODULES.test(id)) return 'syntax';
           if (GRAPH_MODULES.test(id)) return 'graph';
           if (TERMINAL_MODULES.test(id)) return 'terminal';
+          if (MATH_MODULES.test(id)) return 'math';
           if (id.includes('/node_modules/')) return 'vendor';
           if (id.includes('/contracts/client-platform/')) return 'protocol';
         },

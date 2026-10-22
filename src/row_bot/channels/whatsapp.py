@@ -385,6 +385,15 @@ def is_configured() -> bool:
     return (BRIDGE_DIR / "bridge.js").exists()
 
 
+def has_linked_phone() -> bool:
+    """A phone was linked and its session saved: WhatsApp is set up, not only installed (B345)."""
+    try:
+        creds = json.loads((SESSION_DIR / "creds.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(creds, dict) and bool(creds.get("me"))
+
+
 def is_running() -> bool:
     return _running and _authenticated
 
@@ -1646,6 +1655,9 @@ class WhatsAppChannel(Channel):
 
     def is_configured(self) -> bool:
         return is_configured()
+
+    def is_set_up(self) -> bool:
+        return is_configured() and has_linked_phone()
 
     def is_running(self) -> bool:
         return is_running()
