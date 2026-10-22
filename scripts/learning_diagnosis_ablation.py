@@ -172,13 +172,22 @@ def draft(person: Person, arm: str, cut: float, budget: int) -> dict[str, Any]:
             "refusals": dict(__import__("collections").Counter(code for item in report.outcomes for code in item.refused))}
 
 
-def later_tasks(person: str, cutoff_day: int) -> list[tuple[str, Any]]:
-    """The person's live requests after the cut (kind, PackTask), in order."""
+def later_tasks(person: str, cutoff_day: int, s1_out: Path | None = None) -> list[tuple[str, Any]]:
+    """The person's live requests after the cut (kind, PackTask): first those the main model got wrong at
+    first try in S1's run (``s1_out``: its per-person state), where a change can show a gain; then the rest,
+    in order."""
 
     from tests.e2e.learning.seeded import generator
 
     history = generator.generate(person.split("@")[0], seed=SEED, days=30)
-    return [(request.intended, request.task) for request in history.stream if request.day > cutoff_day]
+    missed: set[str] = set()
+    state = (s1_out / person / "state.json") if s1_out is not None else None
+    if state is not None and state.is_file():
+        missed = {str(item.get("id")) for item in json.loads(state.read_text(encoding="utf-8")).get("requests") or ()
+                  if not item.get("passed_first")}
+    later = [request for request in history.stream if request.day > cutoff_day]
+    later.sort(key=lambda request: (request.id not in missed, request.day, request.order))
+    return [(request.intended, request.task) for request in later]
 
 
 def test_sets(item: dict[str, Any], later: list[tuple[str, Any]], args: argparse.Namespace) -> dict[str, tuple]:
@@ -273,7 +282,7 @@ def run_person(args: argparse.Namespace, name: str) -> None:
     ref, sign_in = boot(person.data, Path(args.eval_profile))
     entry.setdefault("model", ref)
     cut = cutoff_time(args.cutoff_day)
-    later = later_tasks(name, args.cutoff_day)
+    later = later_tasks(name, args.cutoff_day, Path(args.s1_out) if args.s1_out else None)
     entry["later_requests"] = len(later)
 
     def save() -> None:
@@ -297,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--people", default="idris,wren,mara")
     parser.add_argument("--s1-scratch", required=True)
+    parser.add_argument("--s1-out", default="", help="S1's per-person output folder (its state.json): later requests the "
+                        "main model missed at first try are tested first")
     parser.add_argument("--work", required=True)
     parser.add_argument("--eval-profile", required=True)
     parser.add_argument("--out", required=True, help="a folder: one JSON per person and summary.json")
