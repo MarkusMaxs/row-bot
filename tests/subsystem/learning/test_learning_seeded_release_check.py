@@ -133,13 +133,9 @@ def test_a_lane_that_wrote_it_waits_books_first_and_a_late_one_doesnt_hold_the_c
     assert len(waits) == int(scratch.YIELD_SECONDS / scratch.WAIT_SECONDS)
     gate.release()
     # When we wrote that we wait and the other lane then yields (its END, then its own waiting note), it's our turn.
-    booking.write_text(booking.read_text(encoding="utf-8") + "15:00 lane-A START L2x 24 GB training
-"
-                       "15:05 lane-B note: S1 waits for the card
-15:06 lane-A END L2x (yielding: Lane B waits)
-"
-                       "15:06 lane-A note: L2x waiting for the card; I book in Lane B's next gap
-", encoding="utf-8")
+    booking.write_text(booking.read_text(encoding="utf-8") + "15:00 lane-A START L2x 24 GB training\n"
+                       "15:05 lane-B note: S1 waits for the card\n15:06 lane-A END L2x (yielding: Lane B waits)\n"
+                       "15:06 lane-A note: L2x waiting for the card; I book in Lane B's next gap\n", encoding="utf-8")
     waits.clear()
     gate.acquire("comparison")
     assert waits == []
