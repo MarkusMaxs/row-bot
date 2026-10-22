@@ -163,6 +163,9 @@ class QuietHours:
         return (self.now() - began).total_seconds() >= DREAM_GRACE_SECONDS
 
 
+MORNING_KEY = "changes.morning"
+
+
 class NightLook:
     """The night's look for things to improve (L3a) and its tests (L3b): after Dream, while nobody uses
     Row-Bot, before training. ``client`` and ``check_model`` are the diagnosis call's, ``tester`` makes the
@@ -236,6 +239,47 @@ class NightLook:
 
     def _stop(self) -> bool:
         return not gate.is_enabled(self._root) or not self.lease.read().free
+
+    def morning(self, notify: Callable[[str], None] | None = None) -> str | None:
+        """The morning summary (UX "Notifications: at most once a morning"): once quiet hours are over, last
+        night's changes ready to review and those put into use by themselves, in one quiet notice. Nothing
+        when there is nothing to say; never twice for one night. Returns what it said."""
+
+        if self.hours.inside() or not gate.is_enabled(self._root) or not gate.store_exists(self._root):
+            return None
+        from row_bot.learning import changes
+
+        store = self._store()
+        tests = changes.last_tests(store) or {}
+        night = str(tests.get("night") or "")
+        if not night or store.meta_value(MORNING_KEY, "") == night:
+            return None
+        from datetime import date
+
+        try:
+            if (self.hours.now().date() - date.fromisoformat(night)).days > 1:
+                return None
+        except ValueError:
+            return None
+        ready, used = int(tests.get("ready") or 0) - int(tests.get("used") or 0), int(tests.get("used") or 0)
+        parts = []
+        if ready > 0:
+            parts.append(f"{ready} change{'s' if ready != 1 else ''} ready to review")
+        if used > 0:
+            parts.append(f"{used} change{'s' if used != 1 else ''} put into use by "
+                         f"{'themselves' if used != 1 else 'itself'} (Undo in Learning)")
+        store.set_meta_values({MORNING_KEY: night})
+        if not parts:
+            return None
+        text = "Overnight: " + " · ".join(parts)
+        if notify is not None:
+            notify(text)
+        else:
+            from row_bot import notifications
+
+            notifications.notify("Learning", text, sound="none", toast_type="info", source="learning",
+                                 requested=True)
+        return text
 
     def _look(self, night: str) -> Any:
         from row_bot.learning import diagnosis, holdout
@@ -462,7 +506,8 @@ class LearningRunner:
         with self._lock:
             if self.look is not None:
                 try:
-                    self.look.tick()  # Dream → the night's look → training
+                    self.look.tick()  # Dream → the night's look and its tests → training
+                    self.look.morning()
                 except Exception:
                     logger.exception("Learning's look for things to improve failed")
             try:
