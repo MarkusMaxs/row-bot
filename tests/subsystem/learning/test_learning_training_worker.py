@@ -33,6 +33,7 @@ from tests.fixtures.learning import (
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 BASE_PYTHON = getattr(sys, "_base_executable", "") or sys.executable
+CHECKPOINT_EVERY = 5
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +67,7 @@ class Training:
         self.dataset = FakeDataset()
         self.supervisor = TrainingSupervisor(root=root, clock=clock, monotonic=self.ticks, engine=self.engine,
                                              dataset=self.dataset, lease=self.lease, start_threads=False)
-        self.job = self.supervisor.jobs.plan(steps_total=20, checkpoint_every=5)
+        self.job = self.supervisor.jobs.plan(steps_total=20, checkpoint_every=CHECKPOINT_EVERY)
 
     def current(self):
         return self.supervisor.jobs.get(self.job.id)
@@ -75,11 +76,17 @@ class Training:
         return self.supervisor.wait_for(predicate, timeout=timeout, job_id=self.job.id)
 
     def advance(self, steps: int):
+        """The worker takes ``steps`` more steps. A step that saves a checkpoint reports the step first and
+        the checkpoint after it, so landing on one waits for the checkpoint too (and its pruning, recorded
+        with it)."""
+
         worker = self.supervisor.live_worker()
         assert worker is not None, "no live worker"
         target = self.current().steps_done + steps
+        saves = target % CHECKPOINT_EVERY == 0
         worker.advance(steps)
-        return self.until(lambda job: job.steps_done >= target or job.state not in ("preparing", "running"))
+        return self.until(lambda job: job.state not in ("preparing", "running") or (
+            job.steps_done >= target and (not saves or (job.checkpoint_step or 0) >= target)))
 
     def start(self):
         self.supervisor.train_now(self.job.id)
