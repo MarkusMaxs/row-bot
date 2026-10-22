@@ -174,12 +174,7 @@ class ChatOllamaCloud(BaseChatModel):
         client = self.http_client or _new_http_client(self.timeout)
         owns_client = self.http_client is None
         scope = current_cancellation_scope()
-        unregister_callbacks: list[Any] = []
         try:
-            if scope is not None and owns_client:
-                close_client = getattr(client, "close", None)
-                if callable(close_client):
-                    unregister_callbacks.append(scope.register(close_client, "ollama_cloud_client.close"))
             context = client.stream(
                 "POST",
                 _chat_url(self.base_url),
@@ -194,12 +189,8 @@ class ChatOllamaCloud(BaseChatModel):
             ))
             with context as response:
                 _raise_for_status(response)
-                if scope is not None:
-                    close_response = getattr(response, "close", None)
-                    if callable(close_response):
-                        unregister_callbacks.append(scope.register(close_response, "ollama_cloud_response.close"))
-                    if scope.is_cancelled():
-                        return
+                if scope is not None and scope.is_cancelled():
+                    return
                 for line in response.iter_lines():
                     if scope is not None and scope.is_cancelled():
                         return
@@ -219,11 +210,6 @@ class ChatOllamaCloud(BaseChatModel):
                 return
             raise
         finally:
-            for unregister in reversed(unregister_callbacks):
-                try:
-                    unregister()
-                except Exception:
-                    logger.debug("ollama_cloud_stream: unregister cancellation callback failed", exc_info=True)
             if owns_client:
                 client.close()
 
@@ -237,9 +223,10 @@ class ChatOllamaCloud(BaseChatModel):
 
 
 def _new_http_client(timeout: float) -> Any:
-    import httpx
+    # Its requests register with Stop as they start; Stop shuts their sockets down (``cancellable_http``).
+    from row_bot.providers.transports.cancellable_http import cancellable_http_client
 
-    return httpx.Client(timeout=timeout)
+    return cancellable_http_client(timeout=timeout)
 
 
 def _chat_url(base_url: str) -> str:

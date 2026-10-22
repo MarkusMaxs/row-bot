@@ -262,20 +262,11 @@ class ChatCodexResponses(BaseChatModel):
         client = self.http_client or _new_http_client(self.timeout)
         owns_client = self.http_client is None
         scope = current_cancellation_scope()
-        unregister_callbacks: list[Any] = []
         try:
-            if scope is not None and owns_client:
-                close_client = getattr(client, "close", None)
-                if callable(close_client):
-                    unregister_callbacks.append(scope.register(close_client, "codex_responses_client.close"))
             retry_after_refresh = False
             with self._stream_once(client, body) as response:
-                if scope is not None:
-                    close_response = getattr(response, "close", None)
-                    if callable(close_response):
-                        unregister_callbacks.append(scope.register(close_response, "codex_responses_response.close"))
-                    if scope.is_cancelled():
-                        return
+                if scope is not None and scope.is_cancelled():
+                    return
                 if int(getattr(response, "status_code", 0) or 0) == 401:
                     if scope is not None and scope.is_cancelled():
                         return
@@ -289,12 +280,8 @@ class ChatCodexResponses(BaseChatModel):
                 return
             if retry_after_refresh:
                 with self._stream_once(client, body) as response:
-                    if scope is not None:
-                        close_response = getattr(response, "close", None)
-                        if callable(close_response):
-                            unregister_callbacks.append(scope.register(close_response, "codex_responses_retry_response.close"))
-                        if scope.is_cancelled():
-                            return
+                    if scope is not None and scope.is_cancelled():
+                        return
                     self._raise_for_status(response)
                     yield from _iter_sse_events(response, scope=scope)
         except Exception as exc:
@@ -304,11 +291,6 @@ class ChatCodexResponses(BaseChatModel):
             logger.warning("codex_sse: stream failed: %s", exc)
             raise
         finally:
-            for unregister in reversed(unregister_callbacks):
-                try:
-                    unregister()
-                except Exception:
-                    logger.debug("codex_sse: unregister cancellation callback failed", exc_info=True)
             if owns_client:
                 client.close()
 
@@ -375,9 +357,10 @@ class ChatCodexResponses(BaseChatModel):
 
 
 def _new_http_client(timeout: float) -> Any:
-    import httpx
+    # Its requests register with Stop as they start; Stop shuts their sockets down (``cancellable_http``).
+    from row_bot.providers.transports.cancellable_http import cancellable_http_client
 
-    return httpx.Client(timeout=timeout)
+    return cancellable_http_client(timeout=timeout)
 
 
 def _responses_url(base_url: str) -> str:

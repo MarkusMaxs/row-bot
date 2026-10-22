@@ -32,6 +32,7 @@ import functools
 import logging
 from typing import Any, AsyncIterator, Iterator
 
+import openai
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
@@ -39,6 +40,7 @@ from pydantic import model_validator
 from typing_extensions import Self
 
 from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.transports.cancellable_http import RequestStopped
 from row_bot.providers.transports.responses_reasoning import (
     ENCRYPTED_REASONING_INCLUDE,
     is_encrypted_reasoning_rejection,
@@ -47,6 +49,11 @@ from row_bot.providers.transports.responses_reasoning import (
 logger = logging.getLogger(__name__)
 
 OPENAI_DIRECT_SCOPE = "openai"
+
+
+class OpenAIRequestStopped(RequestStopped, openai.OpenAIError):
+    """Stop ended the request. The OpenAI SDK (also behind xAI and OpenCode) passes its own errors on without
+    retrying them."""
 
 
 def stateless_responses_kwargs(model_name: str) -> dict[str, Any]:
