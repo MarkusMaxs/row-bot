@@ -1235,9 +1235,14 @@ class PersonRun:
                        if request.day > int(self.args.days) and request.id not in used)
         left.pop("other", None)
         assigned = [kind for kind in sorted(use.read(self.data).assignments) if left.get(kind)]
+        offered = {item.get("kind") for item in events if item.get("event") == "trial" and not item.get("asked_for")}
         if assigned:
             kind = assigned[0]
-            asked_for = False
+            # In trial without the product offering it: this check started it before it was interrupted.
+            asked_for = kind not in offered
+            if asked_for and not any(item.get("event") == "trial" and item.get("kind") == kind for item in events):
+                events.append({"event": "trial", "version": version, "kind": kind, "day": self.clock.day,
+                               "asked_for": True})
         else:
             if not left:
                 return {"state": "not_run", "why": "no request left that is routed to a kind of work"}
