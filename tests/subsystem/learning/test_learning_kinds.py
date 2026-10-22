@@ -47,6 +47,48 @@ def test_requests_get_their_kind_or_other_when_unsure(text, expected):
     assert kinds.classify(kinds.Request(text)).kind == expected
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    # L3a: the ways people ask that S1's seeded streams showed going to "other" (lookups 6 of 55, tool
+    # workflows 4 of 56 before).
+    ("From the donations log, what's the total from school donors from 2026-11-10 to 2026-11-16?",
+     "document_lookups"),
+    ("How much did business donors give between 2026-10-01 and 2026-10-03? It's in records/donations.csv.",
+     "document_lookups"),
+    ("How many volunteers do we need on a weekday lunch shift under the current rota policy?", "document_lookups"),
+    ("When does the dairy come? Check the supplier agreements.", "document_lookups"),
+    ("Min Python for the tools? Check BUILDING.md.", "document_lookups"),
+    ("Email Hartwell Produce (orders@hartwell-produce.example) to confirm Friday's order.", "tool_workflows"),
+    ("Send a quick email to accounts@coldharbour-dairy.example - say we're returning the butter.", "tool_workflows"),
+    ("Put Grace on the weekday lunch shift on 2026-11-26 in the kitchen calendar.", "tool_workflows"),
+    ("Book a code review with Ash on 2026-10-21.", "tool_workflows"),
+    ("Calendar: playtest with Dee, 2026-10-22.", "tool_workflows"),
+    ("Cancel my 1:1 with Priya on 2026-03-06.", "tool_workflows"),
+    ("Close maintenance ticket #17 (Extractor fan is noisy) and add a comment that it's fixed.", "tool_workflows"),
+    ("Label #232 as needs-repro and assign it to eli.", "tool_workflows"),
+    ("Turn inbox/receipts-2026-11-07.txt into receipts/receipts-2026-11-07.csv (CSV: supplier, amount).",
+     "structured_transforms"),
+    ("Write donations-2026-11-12.json: a JSON object of total donations per donor_type, using records/donations.csv.",
+     "structured_transforms"),
+    ("Read notes.txt and write dates.txt with every date in it, one per line.", "structured_transforms"),
+    # A data file moved, not transformed; a question with nothing that says where the answer lives.
+    ("Move levels/incoming/level-2026-10-16.json to levels/archive/, it's been converted.", "other"),
+    ("A 10 kg sack of rice makes about 8 portions per kg. How many portions from 3 sacks?", "other"),
+])
+def test_the_seeded_ways_of_asking_get_their_kind(text, expected):
+    assert kinds.classify(kinds.Request(text)).kind == expected
+
+
+@pytest.mark.parametrize("text", [
+    "Write a short poem about autumn.", "What's the capital of France?", "Plan a 3-day trip to Rome.",
+    "Explain how TLS works.", "How many ounces are in a pound?", "Draft a thank-you note to my team.",
+    "Translate 'good morning' into Spanish.", "What should we do this weekend?", "What time is it in Tokyo now?",
+    "Help me write a cover letter.", "What is 15% of 240?", "Add a review section to my essay outline.",
+    "Make a list of things to pack for camping.",
+])
+def test_everyday_requests_stay_other(text):
+    assert kinds.classify(kinds.Request(text)).kind == "other"
+
+
 def test_attachments_apps_and_a_code_folder_are_signals():
     assert kinds.classify(kinds.Request("What does it say about refunds?", attachments=["terms.pdf"])).kind == \
         "document_lookups"
