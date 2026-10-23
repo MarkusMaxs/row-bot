@@ -239,7 +239,10 @@ def _credential_status(name: str) -> dict[str, Any]:
 def _tool_documents(
     root: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    raw = _mapping(_read_json(root / "tools_config.json", default={}))
+    from row_bot import tool_configuration
+
+    with tool_configuration.transaction():  # Never in the middle of a save, when it is briefly away (B408).
+        raw = _mapping(_read_json(root / "tools_config.json", default={}))
     tools = (
         _mapping(raw.get("tools"))
         if isinstance(raw.get("tools"), Mapping)

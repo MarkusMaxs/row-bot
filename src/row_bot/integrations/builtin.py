@@ -56,9 +56,11 @@ def _tool_on(tool: str) -> bool:
     registry = sys.modules.get("row_bot.tools.registry")
     if registry is not None and registry.get_tool(tool) is not None:
         return bool(registry.is_enabled(tool))
+    from row_bot import tool_configuration
     from row_bot.data_paths import get_row_bot_data_dir
     try:
-        saved = json.loads((get_row_bot_data_dir(create=False) / "tools_config.json").read_text(encoding="utf-8"))
+        with tool_configuration.transaction():  # Never in the middle of a save (B408).
+            saved = json.loads((get_row_bot_data_dir(create=False) / "tools_config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         saved = {}
     saved = saved if isinstance(saved, dict) else {}

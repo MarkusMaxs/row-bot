@@ -309,8 +309,10 @@ def google_client(own_file: str | None = None) -> dict | None:
     root = get_row_bot_data_dir(create=False)
     configured = own_file
     if configured is None:
+        from row_bot import tool_configuration
         try:
-            raw = json.loads((root / "tools_config.json").read_text(encoding="utf-8"))
+            with tool_configuration.transaction():  # Never in the middle of a save (B408).
+                raw = json.loads((root / "tools_config.json").read_text(encoding="utf-8"))
             configured = raw.get("tool_configs", {}).get("gmail", {}).get("credentials_path")
         except (OSError, ValueError, AttributeError, TypeError):
             return None
