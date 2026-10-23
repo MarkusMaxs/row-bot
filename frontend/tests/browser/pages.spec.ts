@@ -1,5 +1,6 @@
 import type { FrameLocator, Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
+import { fixtureHeaders } from './surface-helpers';
 import { composer, newConversation } from './unified-helpers';
 
 /*
@@ -17,6 +18,14 @@ const CHECKLIST = 'Make a launch day checklist for the beta';
 const PROBE = 'Make a page that checks its own sandbox';
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
+
+// Each journey starts with no pages: the Library and the sidebar show only its own.
+test.beforeEach(async ({ page }) => {
+  const done = await page.request.post('/__n5_fixture/reset', {
+    headers: fixtureHeaders(),
+  });
+  expect(done.ok()).toBe(true);
+});
 
 /** An open page is loaded and has saved what the person did. */
 async function settled(page: Page) {
@@ -37,6 +46,7 @@ async function resize(page: Page, size: { width: number; height: number }) {
 
 async function views(page: Page, info: TestInfo, name: string) {
   await settled(page);
+  await expect(page.getByText('Buddy is loading…')).toHaveCount(0);
   const notices = page.getByRole('button', { name: 'Dismiss notification' });
   while (await notices.count()) await notices.first().click();
   for (const appearance of ['light', 'dark'] as const) {
@@ -197,6 +207,10 @@ test('a page on a phone is full screen, with Back to the chat', async ({
   await decide(frame, 'Draft the announcement', 'Approve');
   const back = page.getByRole('button', { name: 'Back to conversation' });
   await expect(back).toBeVisible();
+  // Back and × are the ways out: no panel strip under the page too.
+  await expect(
+    page.getByRole('complementary', { name: 'Panel rail' }),
+  ).toHaveCount(0);
   await views(page, info, 'full-screen-page-phone');
   await back.click();
   await expect(composer(page)).toBeVisible();
@@ -252,14 +266,20 @@ test('Library › Pages lists every page with its chat and opens it there', asyn
   await page.setViewportSize(DESKTOP);
   const plan = await newConversation(page);
   await ask(page, PLAN, 'Beta launch plan');
+  const frame = await open(page, 'Beta launch plan');
+  await decide(frame, 'Draft the announcement', 'Approve');
+  await settled(page);
   await newConversation(page);
   await ask(page, DASHBOARD, 'Sales by week');
+  await newConversation(page);
+  await ask(page, CHECKLIST, 'Launch day checklist');
   await page.goto('/app-v2/library?show=pages');
   const library = page.getByRole('region', { name: 'Pages' });
-  const row = library.getByRole('link', { name: /Beta launch plan/ }).first();
-  await expect(row).toBeVisible();
+  await expect(library.getByRole('link')).toHaveCount(3);
+  const row = library.getByRole('link', { name: /Beta launch plan/ });
+  await expect(row).toContainText('1 not sent');
   await expect(
-    library.getByRole('link', { name: /Sales by week/ }).first(),
+    library.getByRole('link', { name: /Sales by week/ }),
   ).toBeVisible();
   await everywhere(page, info, 'library-pages');
   await row.click();

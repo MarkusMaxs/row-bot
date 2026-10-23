@@ -2196,8 +2196,10 @@ _N5_DASHBOARD = {
     "metrics": [{"label": "Revenue, last 8 weeks", "value": "£48,210"}, {"label": "Orders", "value": "1,284"},
                 {"label": "Average order", "value": "£37.55"}, {"label": "Refunds", "value": "1.8%"}],
     "chart": {"labels": ["4 Sep", "11 Sep", "18 Sep", "25 Sep", "2 Oct", "9 Oct", "16 Oct", "23 Oct"],
-              "series": [{"label": "Online", "values": [3900, 4120, 4380, 4010, 4720, 5050, 5310, 5480]},
-                         {"label": "Shops", "values": [1450, 1380, 1520, 1610, 1490, 1570, 1640, 1580]}]},
+              # £48,210 in all, about £6k a week, split between online and the shops.
+              "series": [{"label": "Online", "values": [4060, 4190, 4290, 4150, 4400, 4560, 4640, 4750]},
+                         {"label": "Shops", "values": [1580, 1630, 1620, 1630, 1650, 1680, 1690, 1690]}],
+              "stacked": True},
     "columns": [{"key": "product", "label": "Product"}, {"key": "units", "label": "Units", "number": True},
                 {"key": "revenue", "label": "Revenue (£)", "number": True},
                 {"key": "change", "label": "vs last week", "number": True}],
@@ -2206,7 +2208,7 @@ _N5_DASHBOARD = {
              {"product": "Rain shell", "units": 96, "revenue": 8640, "change": "+18%"},
              {"product": "Merino socks", "units": 410, "revenue": 4920, "change": "−2%"},
              {"product": "Day pack", "units": 74, "revenue": 4440, "change": "+6%"},
-             {"product": "Water bottle", "units": 281, "revenue": 2390, "change": "+1%"}],
+             {"product": "Water bottle", "units": 281, "revenue": 2395, "change": "+1%"}],
 }
 _N5_CHECKLIST = {
     "title": "Launch day checklist",
@@ -2248,6 +2250,19 @@ _N5_PROMPTS = {
     "Make a launch day checklist for the beta": "checklist",
     "Make a page that checks its own sandbox": "probe",
 }
+
+
+@app.post("/__n5_fixture/reset")
+def n5_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Delete the chats with pages (and so their pages): each journey starts with only its own."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import pages
+    from row_bot.thread_cleanup import delete_thread
+
+    chats = {page.conversation_id for page in pages.list_pages()}
+    for chat in chats:
+        delete_thread(chat)
+    return {"deleted": len(chats)}
 
 
 def _n5_template(heading: str) -> str:
