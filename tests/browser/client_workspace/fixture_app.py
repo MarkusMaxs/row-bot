@@ -2025,6 +2025,16 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
 # The answer's result is scripted: nothing is written to memory here.
 _N11_PENDING: dict[str, tuple[str, dict]] = {}
 _N11_COFFEE = {"category": "preference", "subject": "Coffee", "content": "I take it black, no sugar.", "tags": ""}
+_N11_REMEMBER = "Remember that I take my coffee black, no sugar"
+# The person's requests these chats script, and Row-Bot's replies (the save request asks first).
+_N11_REPLIES = {
+    "Find me somewhere quiet for a weekend away":
+        "Here are three quiet places for a weekend away: Hay-on-Wye, Whitby and the Lake District.",
+    "Plan a weekend in Leeds":
+        "Here's a weekend in Leeds: Saturday at the Royal Armouries and Kirkgate Market, "
+        "Sunday in Roundhay Park.",
+    _N11_REMEMBER: "",
+}
 
 
 def _n11_card(thread: str) -> dict | None:
@@ -2061,9 +2071,10 @@ def _n11_stream(text: str, config: dict):
     try:
         append_checkpoint_messages(thread, [HumanMessage(
             content=text, id=call["submission_id"] or fixture_id(identity + ":user"))])
-        card = _n11_card(thread) if "remember" in text else None
+        card = _n11_card(thread) if text.strip() == _N11_REMEMBER else None
         if card is None:
-            yield from _natural_final(call, thread, "Here are three quiet places for a weekend away.", "n11")
+            reply = _N11_REPLIES.get(text.strip()) or "This request saves to memory only in an incognito chat."
+            yield from _natural_final(call, thread, reply, "n11")
             return
         tool_id = fixture_id(identity + ":tool")
         append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
@@ -2107,7 +2118,7 @@ def _n11_resume(enabled_tools: list[str], config: dict, approved: bool, *, inter
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
-    if text.startswith("n11 ") and text.rstrip().endswith("fixture"):
+    if text.strip() in _N11_REPLIES:
         # Incognito chats (N11): a plain reply, or the real save_memory card in an incognito chat.
         yield from _n11_stream(text, config)
         return

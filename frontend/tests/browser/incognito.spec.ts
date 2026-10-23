@@ -124,6 +124,17 @@ async function newIncognitoChat(page: Page, title: string) {
   await rename(page, title);
 }
 
+/** The composer's hint stays on one line: as tall empty as with one typed letter. */
+async function placeholderOnOneLine(page: Page) {
+  const field = composer(page);
+  const height = () =>
+    field.evaluate((element) => element.getBoundingClientRect().height);
+  await field.fill('x');
+  const oneLine = await height();
+  await field.fill('');
+  await expect.poll(height).toBe(oneLine);
+}
+
 async function send(page: Page, text: string, reply: string) {
   await composer(page).fill(text);
   await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -141,8 +152,8 @@ test('New chat ▾ starts an incognito chat that says so in its header, composer
   await newIncognitoChat(page, 'Weekend away');
   await send(
     page,
-    'n11 weekend fixture',
-    'Here are three quiet places for a weekend away.',
+    'Find me somewhere quiet for a weekend away',
+    'Here are three quiet places for a weekend away: Hay-on-Wye, Whitby and the Lake District.',
   );
 
   await everywhere(page, info, 'new-chat-menu', async () => {
@@ -162,6 +173,7 @@ test('New chat ▾ starts an incognito chat that says so in its header, composer
       'placeholder',
       phone ? /\(incognito\)$/ : 'Message Row-Bot (incognito)',
     );
+    await placeholderOnOneLine(page);
   });
 
   await everywhere(page, info, 'sidebar-row', async () => {
@@ -199,8 +211,8 @@ test('turning incognito on for an existing chat says what stays and links to Kno
   await newConversation(page);
   await send(
     page,
-    'n11 plan fixture',
-    'Here are three quiet places for a weekend away.',
+    'Plan a weekend in Leeds',
+    "Here's a weekend in Leeds: Saturday at the Royal Armouries and Kirkgate Market, Sunday in Roundhay Park.",
   );
   await rename(page, 'Leeds trip');
   await expect(page.getByRole('img', { name: HINT })).toHaveCount(0);
@@ -242,6 +254,20 @@ test('turning incognito on for an existing chat says what stays and links to Kno
         hasText: 'Memories already saved from this chat stay.',
       });
       await expect(toast).toBeVisible();
+      // Its action stays on one line, its full name a hover away.
+      const review = toast.getByRole('button', { name: 'Review in Knowledge' });
+      await expect(review).toHaveText('Review');
+      expect(
+        await review.evaluate((button) => {
+          // One line of text: the words' boxes all sit on one line.
+          const range = document.createRange();
+          range.selectNodeContents(button);
+          const tops = new Set(
+            [...range.getClientRects()].map((box) => Math.round(box.top)),
+          );
+          return tops.size;
+        }),
+      ).toBe(1);
       // Held open while the pointer is on it.
       await toast.hover();
     },
@@ -265,7 +291,7 @@ test('in an incognito chat Row-Bot asks before it saves to memory, with the exac
 }, info) => {
   await page.setViewportSize(DESKTOP);
   await newIncognitoChat(page, 'Coffee order');
-  await composer(page).fill('n11 remember fixture');
+  await composer(page).fill('Remember that I take my coffee black, no sugar');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   const card = page.getByRole('complementary', { name: SAVE_CARD });
   await expect(card.getByRole('button', { name: /^Save/ })).toBeEnabled();
@@ -280,7 +306,15 @@ test('in an incognito chat Row-Bot asks before it saves to memory, with the exac
     await expect(
       card.getByRole('button', { name: 'Don’t save' }),
     ).toBeVisible();
+    await placeholderOnOneLine(page);
   });
+  // The narrowest phones too: the hint is cut short, never wrapped.
+  await page.setViewportSize({ width: 360, height: 780 });
+  await hideNavigation(page);
+  await placeholderOnOneLine(page);
+  await assertNoOverflow(page);
+  await screenshot(page, info, 'narrow-save-card-360');
+  await page.setViewportSize(DESKTOP);
 
   await card.getByRole('button', { name: /^Save/ }).click();
   await expect(
