@@ -59,7 +59,8 @@ export function InstallCountFacts({
         <dt>Your IP address</dt>
         <dd>
           Cloudflare sees it, as it does for any connection. Row-Bot doesn’t
-          store it.
+          store it; the stats service only adds one to its country’s count for
+          the day, never next to the ID.
         </dd>
       </div>
       <div>
