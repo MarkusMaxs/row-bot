@@ -478,11 +478,17 @@ export default function TranscriptTrace({
   conversation,
   groups,
   live,
+  computer = '',
   children,
 }: {
   conversation: string;
   groups: TranscriptTraceGroup[];
   live?: LiveActivity;
+  /**
+   * What computer use is doing now ("Using Microsoft Edge", "Waiting for your
+   * OK"): a computer step in progress says it, as the browser's step names its action.
+   */
+  computer?: string;
   /** Always-visible content anchored below the row, such as an approval. */
   children?: ReactNode;
 }) {
@@ -553,48 +559,59 @@ export default function TranscriptTrace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, signature]);
   const current = summary.current;
+  // A computer step names no argument: its action or typed text says nothing plain.
+  const computing = Boolean(
+    current && /^computer(?:[ _]activity)?$/i.test(current.canonical_name),
+  );
+  // Between its steps, the live row of a turn using the computer still says so.
+  const computerLine =
+    computing || (live && running && !current) ? computer : '';
   const text = live?.stopping
     ? 'Stopping…'
-    : live?.paused
-      ? 'Paused while you use the computer'
-      : live?.waiting
-        ? 'Waiting for your approval'
-        : current
-          ? [
-              current.app?.tool
-                ? `${current.app.name} · ${current.app.tool}`
-                : stepVerb(current.canonical_name, 'pending'),
-              keyArgument(current.safe_input),
-            ]
-              .filter(Boolean)
-              .join(' ')
-          : running && live?.writing
-            ? `${live.writing}…`
-            : running && (live?.thinking || !steps.length)
-              ? 'Thinking…'
-              : running
-                ? `Working · ${summary.total} ${summary.total === 1 ? 'tool' : 'tools'} so far`
-                : activityLabel(summary);
+    : computerLine
+      ? computerLine
+      : live?.paused
+        ? 'Paused while you use the computer'
+        : live?.waiting
+          ? 'Waiting for your approval'
+          : current
+            ? [
+                current.app?.tool
+                  ? `${current.app.name} · ${current.app.tool}`
+                  : stepVerb(current.canonical_name, 'pending'),
+                computing ? '' : keyArgument(current.safe_input),
+              ]
+                .filter(Boolean)
+                .join(' ')
+            : running && live?.writing
+              ? `${live.writing}…`
+              : running && (live?.thinking || !steps.length)
+                ? 'Thinking…'
+                : running
+                  ? `Working · ${summary.total} ${summary.total === 1 ? 'tool' : 'tools'} so far`
+                  : activityLabel(summary);
   // Screen readers hear the state change, never the ticking seconds.
   const announcement = !live
     ? ''
     : live.stopping
       ? 'Stopping'
-      : live.paused
-        ? 'Paused while you use the computer'
-        : live.waiting
-          ? 'Waiting for your approval'
-          : current
-            ? current.app?.tool
-              ? `${current.app.name} · ${current.app.tool}`
-              : stepVerb(current.canonical_name, 'pending')
-            : answering
-              ? 'Answering'
-              : running
-                ? live.thinking || !steps.length
-                  ? 'Thinking'
-                  : 'Working'
-                : '';
+      : computerLine
+        ? computerLine
+        : live.paused
+          ? 'Paused while you use the computer'
+          : live.waiting
+            ? 'Waiting for your approval'
+            : current
+              ? current.app?.tool
+                ? `${current.app.name} · ${current.app.tool}`
+                : stepVerb(current.canonical_name, 'pending')
+              : answering
+                ? 'Answering'
+                : running
+                  ? live.thinking || !steps.length
+                    ? 'Thinking'
+                    : 'Working'
+                  : '';
   if (!steps.length && !running && thought === null && !children) return null;
   return (
     <div

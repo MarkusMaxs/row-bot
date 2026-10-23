@@ -12,6 +12,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from row_bot.application.live_updates import publish as _publish_live
+
+# What a conversation's own events change in the app-wide lists (B407): it
+# started, waits on the person or settled, so the sidebar and Home show it.
+_LISTED_CHANGES = {
+    "generation.state": ("conversations",),
+    "approval.required": ("conversations", "approvals"),
+}
+
 
 def public_message(message: Any) -> dict | None:
     from row_bot.turn_context import is_turn_context_message
@@ -53,6 +62,9 @@ class _Conversation:
     checkpoint_revision: str = ""
     generation: dict | None = None
     live_rows: dict[str, dict] = field(default_factory=dict)
+    # Live rows dropped to stay within the content bound while their turn still runs: reads recreate these
+    # from their live text (``ClientPlatformService.snapshot``), and only these.
+    evicted_live: set[str] = field(default_factory=set)
     events: deque = field(default_factory=deque)
     event_bytes: int = 0
     content_bytes: int = 0
@@ -125,6 +137,7 @@ class ConversationProjection:
                     continue
                 content_size -= state.content_bytes
                 state.rows.clear()
+                state.evicted_live.update(state.live_rows)
                 state.live_rows.clear()
                 state.content_bytes = 0
                 state.checkpoint_revision = ""
@@ -210,6 +223,8 @@ class ConversationProjection:
                 state.event_bytes -= size
             self._trim_global(conversation_id)
             result = copy.deepcopy(event)
+        if event_type in _LISTED_CHANGES:
+            _publish_live(*_LISTED_CHANGES[event_type])
         if _notify_observers:
             self._notify(conversation_id, result["projection_revision"])
         return result
@@ -270,6 +285,12 @@ class ConversationProjection:
                                   "checkpoint_revision": state.checkpoint_revision,
                                   "rows": [*state.rows, *state.live_rows.values()], "generation": state.generation})
 
+    def evicted_live_rows(self, conversation_id: str) -> set[str]:
+        """The live rows dropped to stay within the content bound that a read should recreate."""
+        with self._lock:
+            state = self._states.get(conversation_id)
+            return set(state.evicted_live) if state else set()
+
     def settle_live(self, conversation_id: str, row_id: str, *, adopted: bool) -> None:
         with self._lock:
             state = self._states.setdefault(conversation_id, _Conversation())
@@ -304,6 +325,7 @@ class ConversationProjection:
 
     def _settle_live_locked(self, state: _Conversation, conversation_id: str, row_id: str,
                             adopted: bool) -> dict | None:
+        state.evicted_live.discard(row_id)
         if state.live_rows.pop(row_id, None) is None:
             return None
         state.content_bytes = self._content_size(state.rows, state.live_rows)

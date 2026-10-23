@@ -107,7 +107,7 @@ def _chart(text: str) -> tuple[dict[str, Any] | None, str]:
     return {"figure_json": canonical, "text": fallback[:4096]}, ""
 
 
-def _segments(text: str) -> list[tuple[str, dict[str, Any] | str]]:
+def _segments(text: str, *, links: bool = True) -> list[tuple[str, dict[str, Any] | str]]:
     matches: list[tuple[int, int, str, Any]] = []
     for match in _MERMAID_FENCE_RE.finditer(text):
         source = match.group(1).strip()
@@ -129,6 +129,7 @@ def _segments(text: str) -> list[tuple[str, dict[str, Any] | str]]:
             )
         )
     matches.sort(key=lambda value: value[0])
+    link = autolink_urls if links else (lambda value: value)
     output: list[tuple[str, dict[str, Any] | str]] = []
     cursor = 0
     for start, end, kind, value in matches:
@@ -136,13 +137,13 @@ def _segments(text: str) -> list[tuple[str, dict[str, Any] | str]]:
             continue
         before = text[cursor:start]
         if before.strip():
-            output.append(("markdown", autolink_urls(sanitize_remote_images(before, allow_safe_images=False))))
+            output.append(("markdown", link(sanitize_remote_images(before, allow_safe_images=False))))
         output.append((kind, value))
         cursor = end
     tail = text[cursor:]
     if tail.strip():
-        output.append(("markdown", autolink_urls(sanitize_remote_images(tail, allow_safe_images=False))))
-    return output or [("markdown", autolink_urls(sanitize_remote_images(text, allow_safe_images=False)))]
+        output.append(("markdown", link(sanitize_remote_images(tail, allow_safe_images=False))))
+    return output or [("markdown", link(sanitize_remote_images(text, allow_safe_images=False)))]
 
 
 def canonical_transcript_blocks(row: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +169,9 @@ def canonical_transcript_blocks(row: dict[str, Any]) -> dict[str, Any]:
         if chart is not None:
             candidates = [("chart", chart)]
         else:
-            candidates = _segments(auto_fence_mermaid(remaining))
+            # A tool's result is shown as it was given (the step's Result box, never Markdown), so a URL
+            # in it stays a plain URL, not "[url](url)".
+            candidates = _segments(auto_fence_mermaid(remaining), links=row.get("role") != "tool")
         for kind, value in candidates:
             if len(projected) >= MAX_BLOCKS:
                 break

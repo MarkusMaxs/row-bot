@@ -30,7 +30,7 @@ _READ_OPERATIONS = {
         "developer_preview_patch",
         "developer_list_agent_changes",
     },
-    "browser": {"browser_snapshot"},
+    "browser": {"browser_extract", "browser_wait_for"},
     "row_bot_status": {"row_bot_status"},
     "conversation_search": {"search_conversations", "list_conversations"},
     "calculator": {"calculate"},
@@ -40,6 +40,8 @@ _READ_OPERATIONS = {
     "url_reader": {"read_url"},
     "agents": {"agent_status", "agent_wait", "agent_profiles"},
     "weather": {"get_current_weather", "get_weather_forecast"},
+    "pages": {"page_read"},
+    "x": {"x_accounts"},
 }
 _RETRIEVAL_PARENTS = {
     "arxiv",
@@ -95,7 +97,7 @@ def action_effect(
         return "unknown"
     if parent in _RETRIEVAL_PARENTS and name == parent:
         return "read_only"
-    if parent == "browser" and name == "browser_tab":
+    if parent == "browser" and name == "browser_tabs":
         return (
             "read_only" if arguments.get("action", "list") == "list" else "interaction"
         )

@@ -9,6 +9,7 @@ import threading
 import time
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Any, Iterator
 
 from row_bot.models import get_llm, get_llm_for, get_context_policy, get_context_size, get_current_model, is_model_local, is_cloud_model, get_cloud_provider, set_active_model_override, _active_model_override
@@ -4213,6 +4214,9 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             _emit_context_event("platform_segment", {"segment_id": segment_id})
     llm_messages, created, inputs, prepared = _prepare_agent_request(state, config)
     _remember_request_estimate(config, getattr(prepared, "raw_estimated_input_tokens", 0))
+    # A model that sees images gets the browser page's picture right after the action that took it.
+    from row_bot.browser.model_view import with_page_picture
+    llm_messages = with_page_picture(llm_messages, str(((config or {}).get("configurable") or {}).get("thread_id") or ""))
     if execution is not None:
         generation_registry.check_dispatch(execution)
         from row_bot.application.client_queue import acknowledge_consumed
@@ -4506,6 +4510,17 @@ _current_external_discovery_active_var: _contextvars.ContextVar[bool] = _context
 _current_app_scope_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
     "current_app_scope", default=None
 )
+# A workflow run's "Always ask me" rules (N9): {"step": bool, "items": [app or tool ids]}. An
+# action they cover waits for the person under every approval level (see _person_rule_refusal).
+_current_person_rules_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
+    "current_person_rules", default=None
+)
+
+
+def current_person_rules() -> dict | None:
+    """The running workflow's "Always ask me" rules (N9), for an agent it starts: they go with it."""
+    rules = _current_person_rules_var.get(None)
+    return dict(rules) if rules else None
 
 
 def current_app_scope() -> dict | None:
@@ -4637,6 +4652,7 @@ def _set_active_runtime_context(
     agent_run_id: str = "",
     external_discovery_active: bool = False,
     app_scope: dict | None = None,
+    person_rules: dict | None = None,
 ) -> None:
     _current_thread_id_var.set(thread_id or "")
     _current_runtime_surface_var.set(runtime_surface or "")
@@ -4660,6 +4676,7 @@ def _set_active_runtime_context(
     _current_agent_run_id_var.set(agent_run_id or "")
     _current_external_discovery_active_var.set(bool(external_discovery_active))
     _current_app_scope_var.set(dict(app_scope) if isinstance(app_scope, dict) else None)
+    _current_person_rules_var.set(dict(person_rules) if isinstance(person_rules, dict) else None)
     _current_authorized_skill_records_var.set(None)
     _current_effective_tool_parent_names_var.set(())
     _current_bound_tool_schema_tokens_var.set(0)
@@ -4825,6 +4842,12 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "delete_calendar_event": "Delete calendar event",
     "move_calendar_event": "Move calendar event",
     "send_gmail_message": "Send email",
+    "outlook_send_mail": "Send email",
+    "outlook_reply_mail": "Reply to email",
+    "outlook_forward_mail": "Forward email",
+    "outlook_delete_mail": "Delete email",
+    "outlook_cancel_event": "Cancel event",
+    "outlook_respond_event": "Answer invitation",
     "delete_memory": "Delete memory",
     "tracker_delete": "Delete tracker / entry",
     "task_delete": "Delete task",
@@ -4895,6 +4918,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                     "and move on."), ""
         # What the person reads names what was given: an option left unset (None) is not part of the action.
         given = {key: value for key, value in kwargs.items() if value is not None}
+        question = ""
         if tool.name.startswith("mcp_"):
             # An app's tool: its card names the app and the tool's own title, so this says only what is sent,
             # as labelled fields with their own line breaks; never its internal name or an escaped dump (B332).
@@ -4912,6 +4936,14 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 if given:
                     args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
             description = _enrich_description(tool.name, label, args_str, kwargs)
+        if tool.name.startswith("outlook_"):
+            # Outlook's card names who it goes to and what it says, or the event's time, attendees and place.
+            try:
+                from row_bot.tools.outlook_tool import approval_card
+
+                question, description = approval_card(tool.name, given)
+            except Exception:
+                logger.warning("Outlook's approval card couldn't be written; it asks with the call itself", exc_info=True)
         try:
             from row_bot.tools.discovery import is_external_discovery_invocation
             external_discovery_active = is_external_discovery_invocation()
@@ -4922,6 +4954,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 "tool": tool.name, "label": label, "description": description,
                 "args": kwargs or (args[0] if args else {}),
                 "external_discovery_active": external_discovery_active,
+                **({"question": question} if question else {}),
             },
             approval_mode=mode,
             risks=risks,
@@ -5251,7 +5284,7 @@ def _collect_agent_tool_candidates(
 # without one each of them fails, and their 22 schemas and guide went with every call of every chat.
 SMALL_CONTEXT_TOKENS = 65_536
 ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder", "video_editing",
-                                   "file_delivery"})
+                                   "file_delivery", "pages"})
 _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
     "current_on_demand_tools", default={}
 )
@@ -5502,7 +5535,13 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
         except Exception:
             return 'BLOCKED: The selected Agent Profile policy is unavailable.'
 
-    from row_bot.tools.approval_gate import collect_decisions, with_decisions
+    from contextlib import nullcontext
+
+    from row_bot.tools.approval_gate import approved_by_person, collect_decisions, with_decisions
+
+    def person_rule(function, args, kwargs) -> tuple[str | None, str]:
+        arguments = call_arguments(argument_function or function, args, kwargs)
+        return _person_rule_refusal(tool.name, arguments, source=source, parent=parent)
 
     def sync(function):
         @wraps(function)
@@ -5512,7 +5551,11 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
                 return blocked
             # Every approval decided while it runs is recorded on its result (the activity shows it).
             with collect_decisions() as decisions:
-                result = function(*args, **kwargs)
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = function(*args, **kwargs)
             return with_decisions(decisions, result)
         return guarded
 
@@ -5523,7 +5566,11 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
             if blocked is not None:
                 return blocked
             with collect_decisions() as decisions:
-                result = await function(*args, **kwargs)
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = await function(*args, **kwargs)
             return with_decisions(decisions, result)
         return guarded
 
@@ -5537,6 +5584,62 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
     else:
         updates['_arun'] = asynchronous(tool._arun)
     return tool.model_copy(update=updates)
+
+
+PERSON_RULE_REFUSAL = (
+    "The person didn't approve this action, so it did not run. Don't try to do it another way; "
+    "say what you would have done."
+)
+
+
+def _person_rule_covers(rules: dict, name: str, *, source: str, parent: str) -> bool:
+    """Whether a workflow's "Always ask me" rules name this tool: its step's rule, the tool or
+    tool group, or the app it belongs to."""
+    if rules.get("step"):
+        return True
+    items = {str(item) for item in rules.get("items") or []}
+    if not items:
+        return False
+    if name in items or parent in items:
+        return True
+    try:
+        from row_bot.integrations.scope import app_for_tool
+
+        app = app_for_tool(name)
+    except Exception:
+        logger.debug("The app of %s can't be told", name, exc_info=True)
+        app = None
+    return bool(app and app.get("item_id") in items)
+
+
+def _person_rule_refusal(name: str, arguments: dict | None, *, source: str, parent: str) -> tuple[str | None, str]:
+    """(refusal, binding) for one call under a workflow's "Always ask me" rules (N9).
+
+    An action the rules cover (anything but a read) waits for the person under every level, on a
+    card that says exactly what will happen; it runs only with the arguments they approved. The
+    binding is returned when they approved, so what the tool asks inside counts as approved.
+    """
+    rules = _current_person_rules_var.get(None)
+    if not rules:
+        return None, ""
+    from row_bot.tools.profile_policy import action_effect
+
+    if action_effect(name, arguments, source=source, parent=parent) == "read_only":
+        return None, ""
+    if not _person_rule_covers(rules, name, source=source, parent=parent):
+        return None, ""
+    from row_bot.approval_messages import plain_tool_call
+    from row_bot.tools.action_card import describe_action
+    from row_bot.tools.approval_gate import call_binding, person_approval, with_approval
+
+    card = describe_action(name, arguments, source=source, parent=parent)
+    binding = call_binding(name, arguments, (item["fingerprint"] for item in card["media"]))
+    payload = {"tool": name, "label": card["action"][:120], "description": plain_tool_call(name, arguments or {}),
+               "args": arguments or {}, "card": card}
+    approved, line = person_approval(payload, binding=binding)
+    if approved:
+        return None, binding
+    return with_approval(line, PERSON_RULE_REFUSAL), ""
 
 
 def _tool_left_out(name: str, source: str, parent: str, servers: set[str], parents: set[str]) -> bool:
@@ -5790,13 +5893,14 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             # Workflows and chats gate alike: block=strip destructive tools; every other level wraps them,
             # and the gate resolves each call by the level (the person under Ask, the reviewer first under
             # Auto, the level itself under Hands-off). A workflow run pauses when the person is asked.
-            # run_command self-gates at runtime via classify_command.
+            # run_command self-gates at runtime via classify_command, and a tool marked
+            # row_bot_gates_itself (x_post) asks with its own card, bound to exactly what it sends.
             if approval_mode == "block":
                 lc_tools = [t for t in lc_tools
                             if t.name not in destructive_names]
             else:
                 for t in lc_tools:
-                    if t.name in destructive_names:
+                    if t.name in destructive_names and not (t.metadata or {}).get("row_bot_gates_itself"):
                         _wrap_with_interrupt_gate(t, always_ask=t.name in app_asks)
 
             lc_tools = _apply_provider_tool_schema_compatibility(
@@ -5979,6 +6083,16 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     )
                     _install_custom_tool_validation_repair(reader, readiness.provider_id)
                     lc_tools.extend(reader)
+                # Asking the person a question with options (N4): every agent can, under every approval level;
+                # a question is never an action to approve, so no level or profile takes it away.
+                from row_bot.questions import QUESTION_TOOL, build_tool as build_question_tool
+
+                if QUESTION_TOOL not in {str(getattr(tool, "name", "") or "") for tool in lc_tools}:
+                    asker = _apply_provider_tool_schema_compatibility(
+                        [build_question_tool()], readiness, has_explicit_allowlist=False
+                    )
+                    _install_custom_tool_validation_repair(asker, readiness.provider_id)
+                    lc_tools.extend(asker)
 
             from row_bot.tools.discovery import estimate_bound_tool_schema_tokens
 
@@ -6047,13 +6161,18 @@ def _paused_at_a_question(state: Any) -> bool:
     return any(getattr(task, "interrupts", None) for task in getattr(state, "tasks", ()) or ())
 
 
-def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
-    """Return normalized interrupt data from a paused LangGraph state."""
+def _waiting_interrupts(state: Any) -> list[dict[str, Any]]:
+    """The questions a paused state waits on, each with its ``__interrupt_id``.
 
-    if not _paused_at_a_question(state):
-        return None
-    all_interrupts: list[dict[str, Any]] = []
+    A tool call that went on with its own answer while a call beside it still
+    waits (Row-Bot's question, N4) keeps its old question in the saved writes:
+    a call with a result is finished, so it waits on nothing.
+    """
+
+    waiting: list[dict[str, Any]] = []
     for task in getattr(state, "tasks", ()) or ():
+        if getattr(task, "result", None):
+            continue
         for intr in getattr(task, "interrupts", ()) or ():
             value = getattr(intr, "value", None)
             item = (
@@ -6062,7 +6181,16 @@ def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
                 else {"description": str(value)}
             )
             item["__interrupt_id"] = str(getattr(intr, "id", "") or "")
-            all_interrupts.append(item)
+            waiting.append(item)
+    return waiting
+
+
+def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
+    """Return normalized interrupt data from a paused LangGraph state."""
+
+    if not _paused_at_a_question(state):
+        return None
+    all_interrupts = _waiting_interrupts(state)
     if not all_interrupts:
         return None
     return {"type": "interrupt", "interrupts": all_interrupts}
@@ -6177,6 +6305,7 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _log_runtime_decision(
@@ -6904,6 +7033,7 @@ def stream_chat_only(
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(model_label)
     _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for(configurable))
@@ -7312,6 +7442,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     # A chat on another of the owner's devices runs like one on this computer.
     auto_allowed = runtime_mode == "auto" and runtime_surface in {"normal_chat", "remote_client", "channel"}
@@ -7414,6 +7545,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _graph_build_started = time.perf_counter()
@@ -7532,10 +7664,47 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None,
         return None
 
 
+def _resume_value(approved: bool, interrupt_ids: list[str] | None,
+                  resume_values: Mapping[str, Any] | None) -> Any:
+    """What ``Command(resume=...)`` carries: an approval for each waiting id, or a question's answer by its id."""
+    if resume_values:
+        return dict(resume_values)
+    if interrupt_ids:
+        return {iid: approved for iid in interrupt_ids}
+    return approved
+
+
+def _person_answers(state: Any, resume_val: Any) -> Any:
+    """The person's own approval, from a conversation (the app, Buddy, a channel), of a card only they answer.
+
+    A person-only card (``person_approval``) counts only an answer bound to what it showed, never a plain
+    True. A conversation's approval is always the person's (no level answers for them there), so their
+    approval of such a card is bound to the details its waiting interrupt holds; anything else is kept.
+    """
+    waiting = _waiting_interrupts(state)
+    held = {str(item["__interrupt_id"]): str(item["binding"]) for item in waiting
+            if item.get("person_only") and item.get("binding") and item.get("__interrupt_id")}
+    if not held:
+        return resume_val
+    from row_bot.tools.approval_gate import bound_answer
+
+    if isinstance(resume_val, Mapping):
+        return {key: bound_answer(True, held[key]) if value is True and key in held else value
+                for key, value in resume_val.items()}
+    if resume_val is True and len(waiting) == 1:
+        [(key, binding)] = held.items()
+        return {key: bound_answer(True, binding)}
+    return resume_val
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None):
     """Resume an interrupted agent graph after user approval/denial.
+
+    ``resume_values`` (a question's answer, by its interrupt id) resumes only
+    those interrupts, in place of ``approved``: anything else waiting asks again.
 
     Yields the same ``(event_type, payload)`` tuples as ``stream_agent``.
     """
@@ -7563,6 +7732,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7581,10 +7751,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _person_answers(agent.get_state(config), _resume_value(approved, interrupt_ids, resume_values))
     try:
         for event in _stream_graph(
             agent,
@@ -7616,6 +7783,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
 
 def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, approved: bool,
                                *, interrupt_ids: list[str] | None = None,
+                               resume_values: Mapping[str, Any] | None = None,
                                stop_event: threading.Event | None = None) -> str | dict:
     """Resume an interrupted agent graph (non-streaming, for tasks).
 
@@ -7652,6 +7820,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7671,10 +7840,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
             f"This paused agent run cannot be resumed safely: {exc}"
         ) from exc
 
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _resume_value(approved, interrupt_ids, resume_values)
 
     try:
         for _event in agent.stream(
@@ -7706,13 +7872,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
     # Check for another interrupt (agent may call a second dangerous tool)
     state = agent.get_state(config)
     if _paused_at_a_question(state):
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             return {"type": "interrupt", "interrupts": all_interrupts}
 
@@ -7728,6 +7888,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
 
 def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None) -> str | dict:
     """Resume the shared graph and apply the durable orchestration guard."""
 
@@ -7736,6 +7897,7 @@ def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: b
         config,
         approved,
         interrupt_ids=interrupt_ids,
+        resume_values=resume_values,
         stop_event=stop_event,
     )
     _complete_unified_parent_pass(result, enabled_tool_names, config)
@@ -8201,9 +8363,11 @@ def _stream_graph(agent, input_data, config: dict,
         _current_provider_call = None
 
     # Domain-specific Browser protection remains separate from the global
-    # exact-repeat guard enforced at the tool invocation boundary.
+    # exact-repeat guard enforced at the tool invocation boundary. A real task
+    # (a multi-step form) takes dozens of page actions; this only stops a
+    # runaway loop.
     _loop_detected = False
-    _BROWSER_TOOL_LIMIT = 14
+    _BROWSER_TOOL_LIMIT = 80
     _browser_tool_count = 0
     _recent_browser_actions: list[str] = []
     _browser_budget_exceeded = False
@@ -8365,9 +8529,10 @@ def _stream_graph(agent, input_data, config: dict,
                                 _browser_tool_count += 1
                                 _recent_browser_actions.append(_browser_action_name(runtime_tool_name))
                                 _recent_browser_actions = _recent_browser_actions[-8:]
-                                _snapshot_heavy = len(_recent_browser_actions) >= 6 and all(
-                                    action in {"snapshot", "take_screenshot", "navigate", "navigate_back", "back"}
-                                    for action in _recent_browser_actions[-6:]
+                                # Only looking, never acting, many times in a row: stuck.
+                                _snapshot_heavy = len(_recent_browser_actions) >= 8 and all(
+                                    action in {"snapshot", "take_screenshot", "screenshot", "wait_for"}
+                                    for action in _recent_browser_actions[-8:]
                                 )
                                 if _browser_tool_count >= _BROWSER_TOOL_LIMIT or _snapshot_heavy:
                                     _browser_budget_exceeded = True
@@ -8672,13 +8837,7 @@ def _stream_graph(agent, input_data, config: dict,
             latest_ai_message=_latest_ai_message_from_state(agent, config),
             phase_timings=phase_timings,
         )
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             yield ("interrupt", all_interrupts)
             return

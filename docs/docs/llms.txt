@@ -41,7 +41,7 @@ Public documentation index for Row-Bot.
 - [Knowledge Provenance And Repair](/docs/knowledge/provenance-repair)
   Route: /docs/knowledge/provenance-repair. Trace where knowledge came from, correct records, repair relations, and rebuild derived outputs safely.
 - [Computer Use](/docs/computer-use/)
-  Route: /docs/computer-use/. Set up and safely use Row-Bot's opt-in native Windows and macOS application control.
+  Route: /docs/computer-use/. Let Row-Bot work in apps on your Windows or macOS computer with your mouse and keyboard while you watch.
 - [Monitor](/docs/monitor/)
   Route: /docs/monitor/. See Row-Bot's latest health checks, fix problems in one click, and read activity, maintenance, history and logs.
 - [Home: Insights](/docs/home/insights)
@@ -73,7 +73,7 @@ Public documentation index for Row-Bot.
 - [Settings: Voice](/docs/settings/voice)
   Route: /docs/settings/voice. Configure dictation, realtime talk, read-aloud, voice models, devices, and diagnostics.
 - [Settings: System](/docs/settings/system)
-  Route: /docs/settings/system. Choose Row-Bot's workspace folder and what it may do on this computer (commands, files, browser and computer use), and manage logs.
+  Route: /docs/settings/system. Choose Row-Bot's workspace folder and what it may do on this computer (commands, files, browser and computer use), manage logs, and see what Row-Bot sends and contacts.
 - [Settings: Tracker](/docs/settings/tracker)
   Route: /docs/settings/tracker. Turn tracking on or off, open a tracker to see its entries, start one in chat, and delete trackers.
 - [Settings: Documents](/docs/settings/documents)

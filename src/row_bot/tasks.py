@@ -47,6 +47,7 @@ from row_bot.approval_policy import (
     normalize_approval_mode,
 )
 from row_bot.data_paths import get_tasks_db_path, get_row_bot_data_dir
+from row_bot.application.live_updates import publish as _publish_live, publishes as _publishes_live
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -73,12 +74,16 @@ _WORKFLOW_READ_ONLY_DEFAULT_DENY_TOOLS = {
     "gmail",
     "goal",
     "image_gen",
+    "outlook_calendar",
+    "outlook_mail",
     "row_bot_updater",
     "task",
     "tracker",
     "video_gen",
     "x",
 }
+# What a scheduled time that fell while Row-Bot was closed does (N9): skipped, or run once on start.
+MISSED_RUN_RULES = ("skip", "run_once")
 _SCHEMA_LOCK = threading.RLock()
 _APPROVAL_CHANNEL_PUSH_LOCK = threading.RLock()
 _SCHEMA_READY_PATH: str | None = None
@@ -119,7 +124,12 @@ _CREATE_TABLE_SQL = {
             agent_profile_id    TEXT DEFAULT '',
             profile_migration_status TEXT DEFAULT '',
             profile_migration_note TEXT DEFAULT '',
-            profile_migration_snapshot_json TEXT DEFAULT '{}'
+            profile_migration_snapshot_json TEXT DEFAULT '{}',
+            workspace_id        TEXT DEFAULT '',
+            workspace_name      TEXT DEFAULT '',
+            timezone            TEXT DEFAULT '',
+            missed_runs         TEXT DEFAULT 'skip',
+            always_ask          TEXT DEFAULT '[]'
         )
     """,
     "task_runs": """
@@ -136,6 +146,11 @@ _CREATE_TABLE_SQL = {
             pipeline_state_id TEXT,
             task_name       TEXT DEFAULT '',
             task_icon       TEXT DEFAULT '',
+            workspace_id    TEXT DEFAULT '',
+            workspace_name  TEXT DEFAULT '',
+            late_for        TEXT DEFAULT '',
+            notice          TEXT DEFAULT '',
+            fix             TEXT DEFAULT '',
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         )
     """,
@@ -231,6 +246,13 @@ _CREATE_TABLE_SQL = {
             PRIMARY KEY (channel, conversation_key)
         )
     """,
+    # When the scheduler last ran, so a start can tell which runs fell while Row-Bot was closed.
+    "scheduler_state": """
+        CREATE TABLE IF NOT EXISTS scheduler_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """,
 }
 
 _COLUMN_MIGRATIONS = {
@@ -265,6 +287,15 @@ _COLUMN_MIGRATIONS = {
         ("profile_migration_status", "TEXT DEFAULT ''"),
         ("profile_migration_note", "TEXT DEFAULT ''"),
         ("profile_migration_snapshot_json", "TEXT DEFAULT '{}'"),
+        # A workflow's own code folder (N9); none keeps the conversation's.
+        ("workspace_id", "TEXT DEFAULT ''"),
+        ("workspace_name", "TEXT DEFAULT ''"),
+        # The IANA zone its schedule keeps its times in; given the computer's on first start.
+        ("timezone", "TEXT DEFAULT ''"),
+        # A scheduled time while Row-Bot was closed: 'skip' it or 'run_once' on start.
+        ("missed_runs", "TEXT DEFAULT 'skip'"),
+        # Apps and tools whose actions always wait for the person ("Always ask me").
+        ("always_ask", "TEXT DEFAULT '[]'"),
     ],
     "task_runs": [
         ("finished_at", "TEXT"),
@@ -275,6 +306,13 @@ _COLUMN_MIGRATIONS = {
         ("task_name", "TEXT DEFAULT ''"),
         ("task_icon", "TEXT DEFAULT ''"),
         ("pipeline_state_id", "TEXT"),
+        ("workspace_id", "TEXT DEFAULT ''"),
+        ("workspace_name", "TEXT DEFAULT ''"),
+        ("late_for", "TEXT DEFAULT ''"),
+        # A plain sentence for the person about how the run ended (N9), e.g. "Not approved in time".
+        ("notice", "TEXT DEFAULT ''"),
+        # The one thing the person can do about how it ended: "choose_folder" (its folder was removed).
+        ("fix", "TEXT DEFAULT ''"),
     ],
     "pipeline_state": [
         ("current_step_index", "INTEGER DEFAULT 0"),
@@ -314,11 +352,12 @@ _REQUIRED_COLUMNS = {
         "concurrency_group", "trigger", "tools_override", "channels",
         "advanced_mode", "agent_profile_id", "profile_migration_status",
         "profile_migration_note", "profile_migration_snapshot_json",
+        "workspace_id", "workspace_name", "timezone", "missed_runs", "always_ask",
     },
     "task_runs": {
         "id", "task_id", "thread_id", "started_at", "finished_at", "status",
         "status_message", "steps_total", "steps_done", "pipeline_state_id",
-        "task_name", "task_icon",
+        "task_name", "task_icon", "workspace_id", "workspace_name", "late_for", "notice", "fix",
     },
     "pipeline_state": {
         "run_id", "task_id", "thread_id", "current_step_index",
@@ -341,6 +380,7 @@ _REQUIRED_COLUMNS = {
         "status", "attempts", "last_error", "created_at", "updated_at", "delivered_at",
     },
     "channel_conversations": {"channel", "conversation_key", "thread_id", "updated_at"},
+    "scheduler_state": {"key", "value"},
 }
 
 
@@ -451,6 +491,14 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE tasks SET safety_mode = 'auto' WHERE safety_mode IS NULL "
         "OR safety_mode IN ('allow_all', 'allow-all', 'auto_edit', 'agent_run')"
+    )
+    # Schedules saved before they kept a zone (5.3) keep the computer's zone, so nothing moves.
+    from row_bot.schedule_zones import local_zone_name
+
+    conn.execute(
+        "UPDATE tasks SET timezone = ? WHERE COALESCE(timezone, '') = '' "
+        "AND (COALESCE(schedule, '') != '' OR COALESCE(at, '') != '')",
+        (local_zone_name(),),
     )
     conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -1065,6 +1113,8 @@ def _infer_migrated_profile_capability(tools: Sequence[str], skills: Sequence[st
         "gmail",
         "goal",
         "image_gen",
+        "outlook_calendar",
+        "outlook_mail",
         "row_bot_updater",
         "task",
         "tracker",
@@ -1786,6 +1836,11 @@ def create_task(
     task_id: str | None = None,
     validate: Callable[[], None] | None = None,
     record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
+    timezone: str | None = None,
+    workspace_id: str = "",
+    workspace_name: str = "",
+    missed_runs: str = "skip",
+    always_ask: list[str] | None = None,
 ) -> str:
     """Create a new task and return its ID.
 
@@ -1802,6 +1857,12 @@ def create_task(
             "Only one of schedule, at, or delay_minutes may be set."
         )
     validate_workflow_steps(steps)
+    from row_bot import schedule_zones
+
+    if timezone and not schedule_zones.is_zone(timezone):
+        raise ValueError("timezone must be an IANA zone such as Europe/London.")
+    if missed_runs not in MISSED_RUN_RULES:
+        raise ValueError("missed_runs must be 'skip' or 'run_once'.")
 
     # ── delay_minutes → at conversion ────────────────────────────────
     if delay_minutes is not None:
@@ -1809,6 +1870,9 @@ def create_task(
             raise ValueError("delay_minutes must be positive.")
         at = (datetime.now() + timedelta(minutes=delay_minutes)).isoformat()
         delete_after_run = True  # one-shot timers auto-delete
+        timezone = None  # ``at`` is the computer's own time
+    # A schedule keeps its times in a zone: the one chosen, else the computer's (N9).
+    timezone = (timezone or schedule_zones.local_zone_name()) if (schedule or at) else (timezone or "")
 
     # ── Validate delivery settings ────────────────────────────────────
     _validate_delivery(delivery_channel, delivery_target)
@@ -1869,8 +1933,10 @@ def create_task(
             "persistent_thread_id, delete_after_run, created_at, enabled, skills_override, "
             "steps, safety_mode, concurrency_group, trigger, tools_override, channels, "
             "advanced_mode, agent_profile_id, profile_migration_status, "
-            "profile_migration_note, profile_migration_snapshot_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "profile_migration_note, profile_migration_snapshot_json, timezone, "
+            "workspace_id, workspace_name, missed_runs, always_ask) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?)",
             (
                 task_id, name, description, icon, json.dumps(prompts),
                 schedule, at, int(notify_only), notify_label,
@@ -1888,6 +1954,11 @@ def create_task(
                 profile_migration_status,
                 profile_migration_note,
                 json.dumps(profile_migration_snapshot, sort_keys=True),
+                timezone,
+                str(workspace_id or ""),
+                str(workspace_name or ""),
+                missed_runs,
+                json.dumps(list(always_ask or [])),
             ),
         )
         if validate is not None:
@@ -2129,7 +2200,8 @@ def update_task_settings(
 ) -> None:
     """Publish reviewed settings in their existing task row; never execute."""
     allowed = {"concurrency_group", "trigger", "model_override", "agent_profile_id",
-               "safety_mode", "persistent_thread_id"}
+               "safety_mode", "persistent_thread_id", "workspace_id", "workspace_name",
+               "missed_runs", "always_ask"}
     if set(values) - allowed:
         raise TaskMutationError("invalid_task_settings", task_id)
     conn = _get_conn()
@@ -2184,8 +2256,9 @@ def update_task_settings(
                 dependency_trigger = _row_to_dict(dependency).get("trigger")
                 target = dependency_trigger.get("target_task") if isinstance(dependency_trigger, dict) and dependency_trigger.get("type") == "task_complete" else None
         for key, value in values.items():
-            conn.execute(f"UPDATE tasks SET {key} = ? WHERE id = ?",
-                         (json.dumps(value) if key == "trigger" and value is not None else value, task_id))
+            if key in ("trigger", "always_ask") and value is not None:
+                value = json.dumps(value)
+            conn.execute(f"UPDATE tasks SET {key} = ? WHERE id = ?", (value, task_id))
         _task_editor_row(conn, task_id)
         if record_commit is not None:
             record_commit(conn, task_id)
@@ -2219,10 +2292,11 @@ def update_task(
         "tools_override", "channels", "advanced_mode", "agent_profile_id",
         "profile_migration_status", "profile_migration_note",
         "profile_migration_snapshot_json",
+        "timezone", "workspace_id", "workspace_name", "missed_runs", "always_ask",
     }
     if expected_revision is not None and set(kwargs) - {
         "name", "description", "icon", "prompts", "schedule", "at", "enabled",
-        "notify_only", "notify_label", "channels",
+        "notify_only", "notify_label", "channels", "timezone",
     }:
         # The reviewed editor does not run legacy profile conversion or graph
         # rewrites before CAS. Existing unreviewed callers retain their API.
@@ -2287,8 +2361,18 @@ def update_task(
             if key == "steps" and isinstance(value, list):
                 assign_step_ids(value)
                 _canonicalize_workflow_steps(value)
+            if key == "timezone":
+                from row_bot import schedule_zones
+
+                if value and not schedule_zones.is_zone(value):
+                    raise TaskMutationError("invalid_task_schedule", task_id)
+                value = value or ""
+            if key == "missed_runs" and value not in MISSED_RUN_RULES:
+                raise TaskMutationError("invalid_task_settings", task_id)
+            if key == "always_ask":
+                value = list(value or [])
             if key in ("prompts", "allowed_commands", "allowed_recipients",
-                       "skills_override", "steps", "trigger",
+                       "skills_override", "steps", "trigger", "always_ask",
                        "tools_override", "channels", "profile_migration_snapshot_json"):
                 value = json.dumps(value, sort_keys=True) if value is not None else None
             if key in ("notify_only", "delete_after_run", "advanced_mode"):
@@ -2296,6 +2380,15 @@ def update_task(
             conn.execute(
                 f"UPDATE tasks SET {key} = ? WHERE id = ?",
                 (value, task_id),
+            )
+        if {"schedule", "at"} & set(kwargs):
+            # A schedule keeps its times in a zone: the computer's unless one was chosen (N9).
+            from row_bot import schedule_zones
+
+            conn.execute(
+                "UPDATE tasks SET timezone = ? WHERE id = ? AND COALESCE(timezone, '') = '' "
+                "AND (COALESCE(schedule, '') != '' OR COALESCE(at, '') != '')",
+                (schedule_zones.local_zone_name(), task_id),
             )
         if validate is not None:
             validate()
@@ -2306,7 +2399,7 @@ def update_task(
         conn.close()
 
     # Re-sync APScheduler job if schedule-related fields changed
-    _SCHEDULE_KEYS = {"schedule", "at", "enabled", "notify_only", "delete_after_run"}
+    _SCHEDULE_KEYS = {"schedule", "at", "enabled", "notify_only", "delete_after_run", "timezone"}
     if _scheduler is not None and _SCHEDULE_KEYS & set(kwargs):
         sync_task_schedule(task_id, validate=validate)
 
@@ -2345,6 +2438,7 @@ def sync_task_schedule(task_id: str, *, validate: Callable[[], None] | None = No
 
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def delete_task(task_id: str, *, expected_revision: str | None = None,
                 validate: Callable[[], None] | None = None,
@@ -2508,6 +2602,15 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         d["profile_migration_snapshot_json"] = {}
     if d.get("safety_mode"):
         d["safety_mode"] = legacy_safety_mode_to_approval_mode(d.get("safety_mode"))
+    d["workspace_id"] = str(d.get("workspace_id") or "")
+    d["workspace_name"] = str(d.get("workspace_name") or "")
+    d["timezone"] = str(d.get("timezone") or "")
+    d["missed_runs"] = d.get("missed_runs") if d.get("missed_runs") in MISSED_RUN_RULES else "skip"
+    try:
+        raw_ask = json.loads(d.get("always_ask") or "[]")
+    except (TypeError, ValueError):
+        raw_ask = []
+    d["always_ask"] = [str(item) for item in raw_ask if isinstance(item, str)] if isinstance(raw_ask, list) else []
     # Auto-convert: if steps is empty but prompts exist, synthesize steps
     if not d["steps"] and d["prompts"]:
         d["steps"] = _prompts_to_steps(d["prompts"])
@@ -2672,6 +2775,7 @@ def capture_task_run_review(task_id: str, enabled_tool_names: Sequence[str]) -> 
         conn.close()
 
 
+@_publishes_live("runs", "conversations")
 def claim_reviewed_task_run(
     task_id: str, thread_id: str, run_id: str, *, expected_task_revision: str,
     expected_policy_revision: str, enabled_tool_names: Sequence[str],
@@ -2737,20 +2841,42 @@ def claim_reviewed_task_run(
         conn.close()
 
 
+# A run's bounded status, as run lists and headers show it: never prompts, traces or delivery payloads.
+_RUN_SUMMARY_COLUMNS = (
+    "id,task_id,thread_id,substr(status,1,80) AS status,"
+    "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done,"
+    "substr(COALESCE(workspace_id,''),1,128) AS workspace_id,substr(COALESCE(workspace_name,''),1,256) AS workspace_name,"
+    "substr(COALESCE(late_for,''),1,80) AS late_for,substr(COALESCE(notice,''),1,512) AS notice,"
+    "substr(COALESCE(fix,''),1,32) AS fix"
+)
+
+
+def newest_run_fix(task_id: str) -> str:
+    """What the person can do about how a workflow's newest run ended: "choose_folder" (N9), or ""."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT substr(COALESCE(fix,''),1,32) FROM task_runs WHERE task_id=? "
+            "ORDER BY started_at DESC, id DESC LIMIT 1", (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row[0]) if row else ""
+
+
 def read_task_run(run_id: str) -> dict | None:
     """Read bounded status without exposing prompt, trace or delivery payloads."""
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT id,task_id,thread_id,substr(status,1,80) AS status,"
-            "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done "
-            "FROM task_runs WHERE id=?", (run_id,),
+            f"SELECT {_RUN_SUMMARY_COLUMNS} FROM task_runs WHERE id=?", (run_id,),
         ).fetchone()
         return dict(row) if row is not None else None
     finally:
         conn.close()
 
 
+@_publishes_live("runs", "conversations")
 def _reviewed_run_enter(
     run_id: str, task_id: str, thread_id: str, captured: dict,
     validate: Callable[[], None] | None,
@@ -2789,9 +2915,8 @@ def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
     try:
         conn.execute("BEGIN")
         rows = conn.execute(
-            "SELECT id,task_id,thread_id,substr(status,1,80) AS status,"
-            "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done "
-            "FROM task_runs WHERE task_id=? ORDER BY started_at DESC,id DESC", (task_id,),
+            f"SELECT {_RUN_SUMMARY_COLUMNS} FROM task_runs WHERE task_id=? ORDER BY started_at DESC,id DESC",
+            (task_id,),
         )
         while batch := rows.fetchmany(128):
             for row in batch:
@@ -2800,6 +2925,7 @@ def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
         conn.close()
 
 
+@_publishes_live("runs", "approvals", "conversations")
 def stop_reviewed_task_run(task_id: str, run_id: str, *, validate: Callable[[], None]) -> tuple[bool, bool]:
     """Request cancellation only for this durable run and its exact producers."""
     from row_bot.runtime.executions import generation_registry
@@ -2902,17 +3028,18 @@ def _mirror_workflow_agent_run_finish(
         logger.debug("Workflow agent-run mirror finish failed for %s", run_id, exc_info=True)
 
 
+@_publishes_live("runs", "conversations")
 @_schema_retry
 def _record_run_start(task_id: str, thread_id: str, steps_total: int,
-                      task_name: str = "", task_icon: str = "") -> str:
+                      task_name: str = "", task_icon: str = "", late_for: str = "") -> str:
     run_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
     conn = _get_conn()
     conn.execute(
         "INSERT INTO task_runs (id, task_id, thread_id, started_at, "
-        "status, steps_total, steps_done, task_name, task_icon) "
-        "VALUES (?, ?, ?, ?, 'running', ?, 0, ?, ?)",
-        (run_id, task_id, thread_id, now, steps_total, task_name, task_icon),
+        "status, steps_total, steps_done, task_name, task_icon, late_for) "
+        "VALUES (?, ?, ?, ?, 'running', ?, 0, ?, ?, ?)",
+        (run_id, task_id, thread_id, now, steps_total, task_name, task_icon, late_for),
     )
     conn.commit()
     conn.close()
@@ -2985,9 +3112,11 @@ def _record_run_recall_notices(run_id: str, generation_id: str) -> None:
     conn.close()
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def _finish_run(run_id: str, status: str = "completed",
-                status_message: str = "", terminal_reason: str = "") -> None:
+                status_message: str = "", terminal_reason: str = "", notice: str = "",
+                fix: str = "") -> None:
     conn = _get_conn()
     row = conn.execute(
         "SELECT status, status_message FROM task_runs WHERE id = ?",
@@ -3012,6 +3141,10 @@ def _finish_run(run_id: str, status: str = "completed",
         "WHERE id = ?",
         (status, status_message, datetime.now().isoformat(), run_id),
     )
+    if notice:
+        conn.execute("UPDATE task_runs SET notice = ? WHERE id = ?", (notice, run_id))
+    if fix:
+        conn.execute("UPDATE task_runs SET fix = ? WHERE id = ?", (fix, run_id))
     if status in ("completed", "completed_delivery_failed"):
         # A finished run is done, however it got there: a last notify step, "next": "end", a condition that
         # ended early or a resumed approval all used to leave it at "2 of 3 steps" (B313).
@@ -3021,6 +3154,8 @@ def _finish_run(run_id: str, status: str = "completed",
         conn.execute("DELETE FROM pipeline_state WHERE run_id = ?", (run_id,))
     conn.commit()
     conn.close()
+    if status in ("failed", "blocked", "completed_delivery_failed"):
+        _publish_live("monitor")  # A run that went wrong is one of Monitor's problems.
     _mirror_workflow_agent_run_finish(run_id, status, status_message, terminal_reason)
 
 
@@ -3185,6 +3320,7 @@ def stop_task(thread_id: str) -> bool:
     return registered
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def cleanup_thread_state(thread_id: str) -> dict[str, int]:
     """Remove queued/thread-owned workflow state while retaining run audits."""
@@ -3549,7 +3685,8 @@ def _workflow_final_status_for_delivery(delivery_status: str) -> str:
 
 def _push_approval_to_channels(task: dict, approval_id: str,
                                resume_token: str,
-                               approval_msg: str, *, validate: Callable[[], None] | None = None) -> None:
+                               approval_msg: str, *, validate: Callable[[], None] | None = None,
+                               question: dict | None = None) -> None:
     """Push a task approval request to all configured channels.
 
     Uses the unified ``channels`` field (null = workflow default).
@@ -3574,7 +3711,8 @@ def _push_approval_to_channels(task: dict, approval_id: str,
                 "message": approval_msg,
             }
             _check_workflow_effect(validate)
-            msg_ref = ch.send_approval_request(target, {}, config)
+            # Row-Bot's question (N4) goes as the question itself: each channel asks it its own way.
+            msg_ref = ch.send_approval_request(target, question or {}, config)
             if msg_ref:
                 _store_approval_channel_ref(approval_id, ch.name, msg_ref)
         except _WorkflowEffectDenied:
@@ -3909,9 +4047,12 @@ def push_approval_to_parent_channel(approval_id: str) -> bool:
             if not ch or not ch.is_running():
                 return False
             payload = payload_from_row(approval)
+            from row_bot.questions import stored_question
+
             msg_ref = ch.send_approval_request(
                 target,
-                {},
+                # A helper's question (N4) goes as the question, answered in the chat app.
+                stored_question(approval.get("approval_payload_json")) or {},
                 {
                     "approval_kind": "agent_run",
                     "task_name": str(
@@ -3978,6 +4119,55 @@ def _resolve_approval_on_channels(approval_id: str, status: str,
             )
 
 
+def code_folder_state(workspace_id: str) -> tuple[str, bool]:
+    """A code folder's name and whether a workflow can run in it (N9): saved, not removed from
+    Row-Bot's code folders, and still on disk. ("", False) when it isn't saved at all."""
+    from row_bot.developer.storage import get_workspace
+
+    workspace = get_workspace(str(workspace_id or ""))
+    if workspace is None:
+        return "", False
+    try:
+        on_disk = pathlib.Path(workspace.path).is_dir()
+    except OSError:
+        on_disk = False
+    return workspace.name, bool(on_disk and not workspace.hidden)
+
+
+def _open_workflow_folder(task: Mapping[str, Any], thread_id: str) -> tuple[str, str, str]:
+    """(folder id, its name, why the run can't use it) for a run of *task* in its own code folder.
+
+    The folder is bound to the run's conversation as its one code folder, replacing another a
+    kept conversation had, so every step (and a child agent that doesn't pick its own) works in it.
+    """
+    workspace_id = str(task.get("workspace_id") or "")
+    name, available = code_folder_state(workspace_id)
+    name = name or str(task.get("workspace_name") or "") or "The workflow's code folder"
+    if not available:
+        return workspace_id, name, f"{name} isn't a code folder any more. Choose another in this workflow's settings."
+    from row_bot import conversation_resources as resources
+
+    snapshot = resources.list_bindings(thread_id)
+    current = [binding for binding in snapshot.bindings if binding.kind == "workspace"]
+    if [binding.resource_id for binding in current] == [workspace_id]:
+        return workspace_id, name, ""
+    for binding in current:
+        snapshot = resources.unbind(thread_id, binding.binding_id, expected_revision=snapshot.revision)
+    resources.bind(thread_id, "workspace", workspace_id, expected_revision=snapshot.revision, role="primary")
+    return workspace_id, name, ""
+
+
+@_schema_retry
+def _note_run_folder(run_id: str, workspace_id: str, workspace_name: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE task_runs SET workspace_id = ?, workspace_name = ? WHERE id = ?",
+                     (workspace_id, workspace_name, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def run_task_background(
     task_id: str,
     thread_id: str,
@@ -3987,8 +4177,12 @@ def run_task_background(
     resume_step_outputs: dict[str, str] | None = None,
     resume_run_id: str | None = None,
     *, reviewed_capture: dict | None = None, validate: Callable[[], None] | None = None,
+    late_for: str = "",
 ) -> None:
     """Execute a task in a background thread.
+
+    *late_for* is the scheduled time a run missed while Row-Bot was closed, when
+    it runs once on start instead (N9).
 
     If *resume_run_id* is provided the existing run record is reused
     instead of creating a new one (avoids duplicate Activity entries
@@ -4038,7 +4232,7 @@ def run_task_background(
                 _reviewed_run_enter(run_id, task_id, thread_id, reviewed_capture, validate)
             else:
                 run_id = _record_run_start(task_id, thread_id, 0,
-                                          task_name=task["name"], task_icon=task["icon"])
+                                          task_name=task["name"], task_icon=task["icon"], late_for=late_for)
             label = task.get("notify_label") or task["name"]
             from row_bot.notifications import notify
             _validate_effect()
@@ -4125,7 +4319,25 @@ def run_task_background(
         _update_run_progress(run_id, start_step)
     else:
         run_id = _record_run_start(task_id, thread_id, total,
-                                   task_name=task["name"], task_icon=task["icon"])
+                                   task_name=task["name"], task_icon=task["icon"], late_for=late_for)
+
+    if not resume_run_id and start_step == 0 and task.get("workspace_id"):
+        # The workflow's own code folder (N9): bound to the run's conversation before the run's
+        # resources are captured, so every step works in it. A removed folder stops the run here.
+        try:
+            folder_id, folder_name, refusal = _open_workflow_folder(task, thread_id)
+        except Exception:
+            logger.warning("Could not open the code folder of workflow %s", task_id, exc_info=True)
+            folder_id, folder_name = str(task["workspace_id"]), str(task.get("workspace_name") or "")
+            refusal = f"Row-Bot couldn't open {folder_name or 'the code folder'} for this run. Try again."
+        _note_run_folder(run_id, folder_id, folder_name)
+        if refusal:
+            _update_pipeline_status(run_id, "blocked")
+            _finish_run(run_id, "blocked", status_message=refusal, terminal_reason="code_folder_unavailable",
+                        notice=refusal, fix="choose_folder")
+            _emit_buddy_workflow_event("error", task_id=task_id, thread_id=thread_id,
+                                       label="Workflow needs attention", error=refusal)
+            return
 
     def _run():
         if reviewed_capture:
@@ -4235,10 +4447,11 @@ def run_task_background(
             def _format_interrupt_details(interrupts: list[dict]) -> list[str]:
                 return [_approval_detail(intr) for intr in interrupts]
 
-            def _create_graph_interrupt_approval(step_id: str, approval_msg: str) -> tuple[str, str]:
+            def _create_graph_interrupt_approval(step_id: str, approval_msg: str,
+                                                 terms: dict | None = None) -> tuple[str, str]:
                 return create_approval_request(
                     run_id=run_id, task_id=task_id,
-                    step_id=step_id, message=approval_msg,
+                    step_id=step_id, message=approval_msg, **(terms or {}),
                 )
 
             def _save_graph_interrupt_state(
@@ -4364,6 +4577,7 @@ def run_task_background(
                             config["configurable"]["generation_id"] = generation_id
                             config["configurable"]["root_objective"] = prompt
                             _use_step_apps(config, step)
+                            _use_person_rules(config, task, step)
                             try:
                                 result = invoke_agent(
                                     prompt,
@@ -4441,6 +4655,21 @@ def run_task_background(
                                     break
 
                                 interrupts = result.get("interrupts", [])
+                                from row_bot.questions import question_item
+
+                                asked = question_item(interrupts)
+                                if asked is not None:
+                                    # Row-Bot asks the person; no approval level answers for them (N4).
+                                    _pause_for_question(
+                                        task=task, run_id=run_id, thread_id=thread_id, step=step,
+                                        step_id=step_id, step_index=step_index, total=total,
+                                        step_outputs=step_outputs, config=config, interrupts=interrupts,
+                                        asked=asked, validate=effect_kwargs.get("validate"),
+                                    )
+                                    paused = True
+                                    paused_message = "Row-Bot has a question"
+                                    _task_log(f"⏸ Step {step_index + 1}: Row-Bot has a question")
+                                    break
                                 if not interrupts:
                                     # Empty interrupt list — auto-continue
                                     logger.warning(
@@ -4462,7 +4691,9 @@ def run_task_background(
                                 # it; Hands-off approves it (an approval never asks under Hands-off;
                                 # anything else that waits, such as a setup card, goes on); under Ask,
                                 # and under Auto when the reviewer asked, the run pauses and notifies.
-                                if approval_mode == "block":
+                                # The person's own "Always ask me" card always waits for them (N9).
+                                person_held = _person_only_interrupt(interrupts)
+                                if approval_mode == "block" and not person_held:
                                     logger.info(
                                         "Task '%s' step %d: interrupt in block mode — refusing",
                                         task["name"], step_index + 1,
@@ -4478,7 +4709,7 @@ def run_task_background(
                                     step_succeeded = True
                                     break
 
-                                if approval_mode == "full":
+                                if approval_mode == "full" and not person_held:
                                     logger.info(
                                         "Task '%s' step %d: interrupt under Hands-off — approving",
                                         task["name"], step_index + 1,
@@ -4501,7 +4732,7 @@ def run_task_background(
                                     + "; ".join(details)
                                 )
                                 resume_token, approval_req_id = _create_graph_interrupt_approval(
-                                    step_id, approval_msg,
+                                    step_id, approval_msg, _person_approval_terms(person_held, step),
                                 )
                                 _save_graph_interrupt_state(
                                     step_index, step_outputs, config, resume_token,
@@ -4809,6 +5040,10 @@ def run_task_background(
                                 orchestration_id=str(orchestration.get("id") or ""),
                                 orchestration_required=wait_for_result,
                                 wait=False,
+                                # "Always ask me" goes with the agent this step starts (N9).
+                                person_rules={"step": bool(step.get("always_ask")),
+                                              "items": [str(item) for item in task.get("always_ask") or []]}
+                                if step.get("always_ask") or task.get("always_ask") else {},
                             )
                             child_run_id = str((child_run or {}).get("id") or "")
                             if wait_for_result:
@@ -5036,6 +5271,30 @@ def run_task_background(
                         step_outputs=step_outputs,
                     )
                     notify_channel = step.get("channel", "desktop")
+                    if step.get("always_ask") or f"builtin:channel:{notify_channel}" in (task.get("always_ask") or []):
+                        # "Always ask me" (N9): the message goes out only once the person approved
+                        # exactly this text to this destination.
+                        card = _delivery_card(task, notify_channel, notify_msg)
+                        from row_bot.tools.approval_gate import call_binding
+
+                        binding = call_binding("notify", {"channel": notify_channel,
+                                                          "destination": card["destination"], "text": notify_msg})
+                        if not _claim_person_approval(run_id, step_id, binding):
+                            approval_msg = f"Step {step_index + 1}/{total}: Send to {card['destination']}"
+                            resume_token, approval_req_id = create_approval_request(
+                                run_id=run_id, task_id=task_id, step_id=step_id, message=approval_msg,
+                                timeout_minutes=int(step.get("timeout_minutes") or PERSON_APPROVAL_TIMEOUT_MINUTES),
+                                approval_payload_json=_person_payload(binding, card),
+                            )
+                            _save_pipeline_state(
+                                run_id=run_id, task_id=task_id, thread_id=thread_id,
+                                current_step_index=step_index, step_outputs=step_outputs,
+                                config=config, resume_token=resume_token, status="paused",
+                            )
+                            paused = True
+                            _task_log(f"⏸ Step {step_index + 1}: Waiting for your approval")
+                            _notify_approval_channels(approval_req_id, resume_token, approval_msg)
+                            break
                     if notify_channel == "desktop":
                         from row_bot.notifications import notify as _notify
                         _validate_effect()
@@ -5337,53 +5596,79 @@ _DAY_MAP = {
 _DAY_TO_AP = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
 
 
-def _build_trigger(task: dict):
-    """Build an APScheduler trigger from a task's schedule/at fields.
+def _schedule_trigger(sched: Mapping[str, Any], tz):
+    """The wall-clock trigger of a daily, weekly or cron schedule in its zone (None for others)."""
+    from row_bot import schedule_zones
+
+    kind = sched["kind"]
+    if kind == "daily":
+        cron = schedule_zones.cron_trigger(hour=sched["hour"], minute=sched["minute"])
+    elif kind == "weekly":
+        day_int = _DAY_MAP.get(sched["day"])
+        if day_int is None:
+            return None
+        cron = schedule_zones.cron_trigger(
+            day_of_week=_DAY_TO_AP[day_int], hour=sched["hour"], minute=sched["minute"]
+        )
+    elif kind == "cron":
+        try:
+            cron = schedule_zones.crontab_trigger(sched["expr"])
+        except Exception:
+            logger.warning("Invalid cron expression: %s", sched["expr"])
+            return None
+    else:
+        return None
+    return schedule_zones.WallClockTrigger(cron, tz)
+
+
+def _saved_instant(value: object, tz=None) -> datetime | None:
+    """A saved time as an instant: a wall-clock time in *tz* (a one-time ``at``), else the
+    computer's local time (``last_run``, written by ``datetime.now()``)."""
+    try:
+        parsed = datetime.fromisoformat(str(value or "").strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed
+    if tz is not None:
+        from row_bot import schedule_zones
+
+        return schedule_zones.resolve(parsed, tz)
+    return parsed.astimezone()
+
+
+def _build_trigger(task: dict, *, now: datetime | None = None):
+    """Build an APScheduler trigger from a task's schedule/at fields, in its zone.
 
     Returns a trigger object or *None* if the task has no valid schedule.
     """
-    # One-shot ``at`` tasks — fire once at a specific datetime
+    from row_bot import schedule_zones
+
+    tz = schedule_zones.zone(task.get("timezone"))
+    now = (now or datetime.now()).astimezone()
+    # One-shot ``at`` tasks — fire once at a specific wall-clock time in the zone
     at_str = task.get("at")
     if at_str:
-        try:
-            from apscheduler.triggers.date import DateTrigger
-            at_dt = datetime.fromisoformat(at_str)
-            # Only schedule if in the future
-            if at_dt > datetime.now():
-                return DateTrigger(run_date=at_dt)
-            # Already past — check if it already fired
-            lr = task.get("last_run")
-            if lr:
-                try:
-                    if datetime.fromisoformat(lr) >= at_dt:
-                        return None  # Already fired
-                except (ValueError, TypeError):
-                    pass
-            # Past but never fired — fire immediately
-            return DateTrigger(run_date=datetime.now() + timedelta(seconds=2))
-        except (ValueError, TypeError):
-            pass
-        return None
+        from apscheduler.triggers.date import DateTrigger
+        at_dt = _saved_instant(at_str, tz)
+        if at_dt is None:
+            return None
+        # Only schedule if in the future
+        if at_dt > now:
+            return DateTrigger(run_date=at_dt)
+        # Already past — check if it already fired
+        last = _saved_instant(task.get("last_run"))
+        if last and last >= at_dt:
+            return None  # Already fired
+        # Past but never fired — fire immediately
+        return DateTrigger(run_date=now + timedelta(seconds=2))
 
     sched = _parse_schedule(task.get("schedule"))
     if not sched:
         return None
 
     kind = sched["kind"]
-
-    if kind == "daily":
-        from apscheduler.triggers.cron import CronTrigger
-        return CronTrigger(hour=sched["hour"], minute=sched["minute"])
-
-    elif kind == "weekly":
-        from apscheduler.triggers.cron import CronTrigger
-        day_int = _DAY_MAP.get(sched["day"])
-        if day_int is None:
-            return None
-        ap_day = _DAY_TO_AP[day_int]
-        return CronTrigger(day_of_week=ap_day, hour=sched["hour"], minute=sched["minute"])
-
-    elif kind == "interval":
+    if kind == "interval":
         from apscheduler.triggers.interval import IntervalTrigger
         hours = sched["hours"]
         if hours <= 0:
@@ -5396,47 +5681,41 @@ def _build_trigger(task: dict):
         if minutes <= 0:
             return None
         return IntervalTrigger(minutes=int(minutes))
-
-    elif kind == "cron":
-        try:
-            from apscheduler.triggers.cron import CronTrigger
-            return CronTrigger.from_crontab(sched["expr"])
-        except Exception:
-            logger.warning("Invalid cron expression: %s", sched["expr"])
-            return None
-
-    return None
+    return _schedule_trigger(sched, tz)
 
 
 def estimate_next_run(task: Mapping[str, Any], now: datetime | None = None) -> str | None:
-    """Next fire time implied by a saved schedule, as a local ISO timestamp.
+    """Next fire time implied by a saved schedule, as an ISO timestamp.
 
-    This reads saved metadata only and never asks the scheduler, so list views
-    stay free of runtime probes. Daily, weekly, cron and one-time schedules are
-    exact; interval schedules are estimated from the last run. Disabled,
-    unscheduled, finished or unreadable schedules return None.
+    In the schedule's zone with its offset when it keeps one; a schedule saved
+    without a zone reads as local time with no offset. This reads saved
+    metadata only and never asks the scheduler, so list views stay free of
+    runtime probes. Daily, weekly, cron and one-time schedules are exact;
+    interval schedules are estimated from the last run. Disabled, unscheduled,
+    finished or unreadable schedules return None.
     """
     if not task.get("enabled"):
         return None
-    now = (now or datetime.now()).replace(microsecond=0)
+    from row_bot import schedule_zones
 
-    def local(value: object) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(str(value or "").strip())
-        except ValueError:
-            return None
-        return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+    named = str(task.get("timezone") or "")
+    tz = schedule_zones.zone(named)
+    now = (now or datetime.now()).astimezone().replace(microsecond=0)
+
+    def shown(value: datetime) -> str:
+        value = value.astimezone(tz) if named else value.astimezone().replace(tzinfo=None)
+        return value.isoformat(timespec="seconds")
 
     at = str(task.get("at") or "").strip()
     if at:
-        at_dt = local(at)
+        at_dt = _saved_instant(at, tz)
         if at_dt is None:
             return None
         if at_dt > now:
-            return at_dt.isoformat(timespec="seconds")
-        last = local(task.get("last_run"))
+            return shown(at_dt)
+        last = _saved_instant(task.get("last_run"))
         # A past one-time task that never ran is scheduled immediately.
-        return None if last and last >= at_dt else now.isoformat(timespec="seconds")
+        return None if last and last >= at_dt else shown(now)
     sched = _parse_schedule(task.get("schedule"))
     if not sched:
         return None
@@ -5447,31 +5726,19 @@ def estimate_next_run(task: Mapping[str, Any], now: datetime | None = None) -> s
             if kind == "interval"
             else timedelta(minutes=int(sched["minutes"]))
         )
-        last = local(task.get("last_run"))
+        last = _saved_instant(task.get("last_run"))
         if delta <= timedelta(0) or last is None:
             return None
         upcoming = last + delta
         if upcoming <= now:
             upcoming = last + delta * (int((now - last) / delta) + 1)
-        return upcoming.isoformat(timespec="seconds")
+        return shown(upcoming)
     try:
-        from apscheduler.triggers.cron import CronTrigger
-
-        if kind == "daily":
-            trigger = CronTrigger(hour=sched["hour"], minute=sched["minute"])
-        elif kind == "weekly":
-            day = _DAY_MAP.get(sched["day"])
-            if day is None:
-                return None
-            trigger = CronTrigger(
-                day_of_week=_DAY_TO_AP[day], hour=sched["hour"], minute=sched["minute"]
-            )
-        else:
-            trigger = CronTrigger.from_crontab(sched["expr"])
-        fire = trigger.get_next_fire_time(None, now.astimezone())
+        trigger = _schedule_trigger(sched, tz)
+        fire = trigger.get_next_fire_time(None, now) if trigger else None
     except Exception:
         return None
-    return fire.astimezone().replace(tzinfo=None).isoformat(timespec="seconds") if fire else None
+    return shown(fire) if fire else None
 
 
 def _job_id(task_id: str) -> str:
@@ -5528,6 +5795,7 @@ def _run_waiting_for_approval(task_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+@_publishes_live("runs", "conversations")
 def _skip_scheduled_run(task: dict, waiting: dict) -> None:
     """Record and announce a scheduled run skipped behind a waiting one (B255).
 
@@ -5561,11 +5829,12 @@ def _skip_scheduled_run(task: dict, waiting: dict) -> None:
     notify(title=task["name"], message=message, sound="none", toast_type="warning", source="workflow")
 
 
-def _on_task_fire(task_id: str) -> None:
+def _on_task_fire(task_id: str, late_for: str = "") -> None:
     """Callback invoked by APScheduler when a task's trigger fires.
 
     A recurring run never starts while the workflow's last run still waits
     for an approval: it is recorded as skipped instead, so runs don't pile up.
+    *late_for*: the scheduled time this run missed while Row-Bot was closed (N9).
     """
     from row_bot.tools import registry as tool_registry
 
@@ -5585,7 +5854,7 @@ def _on_task_fire(task_id: str) -> None:
     thread_id = _prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
 
-    run_task_background(task_id, thread_id, enabled, notification=True)
+    run_task_background(task_id, thread_id, enabled, notification=True, late_for=late_for)
 
     # Auto-remove one-shot `at` tasks after firing
     if task.get("at") and task.get("delete_after_run"):
@@ -5644,6 +5913,101 @@ def sync_all_jobs() -> None:
     logger.info("Synced %d task(s) to APScheduler", len(tasks))
 
 
+# ── Runs missed while Row-Bot was closed (N9) ─────────────────────────────────
+# The scheduler notes the time every minute while it runs. On start, a time a schedule had
+# between that note and now fell while Row-Bot was closed: a workflow set to "Run once when
+# Row-Bot starts" runs once for the latest such time; the others are skipped, as before.
+
+_SCHEDULER_SEEN_KEY = "seen_at"
+
+
+@_schema_retry
+def scheduler_seen_at() -> datetime | None:
+    """When the scheduler last noted it was running, or None (never, before 5.3)."""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT value FROM scheduler_state WHERE key = ?", (_SCHEDULER_SEEN_KEY,)).fetchone()
+    finally:
+        conn.close()
+    return _saved_instant(row["value"]) if row else None
+
+
+@_schema_retry
+def note_scheduler_alive(now: datetime | None = None) -> None:
+    """Note that the scheduler is running now."""
+    stamp = (now or datetime.now()).astimezone().isoformat(timespec="seconds")
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO scheduler_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_SCHEDULER_SEEN_KEY, stamp),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def missed_run_time(task: Mapping[str, Any], since: datetime, now: datetime) -> datetime | None:
+    """The latest time *task*'s repeating schedule had in (since, now] that it hasn't run for."""
+    sched = _parse_schedule(task.get("schedule"))
+    if not sched or task.get("at"):
+        return None
+    last = _saved_instant(task.get("last_run"))
+    after = max(since, last) if last else since
+    kind = sched["kind"]
+    if kind in ("interval", "interval_minutes"):
+        delta = timedelta(hours=sched["hours"]) if kind == "interval" else timedelta(minutes=int(sched["minutes"]))
+        if last is None or delta <= timedelta(0) or now - last < delta:
+            return None
+        due = last + delta * int((now - last) / delta)
+        return due if due > after else None
+    from row_bot import schedule_zones
+
+    trigger = _schedule_trigger(sched, schedule_zones.zone(task.get("timezone")))
+    return schedule_zones.latest_fire_time(trigger, after, now) if trigger else None
+
+
+def _fire_late(task_id: str, late_for: str) -> None:
+    """Start a missed run shortly after start-up, off the start-up path."""
+    from apscheduler.triggers.date import DateTrigger
+
+    _get_scheduler().add_job(
+        _on_task_fire, trigger=DateTrigger(run_date=datetime.now().astimezone() + timedelta(seconds=2)),
+        args=[task_id], kwargs={"late_for": late_for}, id=f"late_{task_id}", replace_existing=True,
+    )
+
+
+def run_missed_runs(
+    since: datetime | None, now: datetime | None = None, *,
+    fire: Callable[[str, str], None] | None = None,
+) -> list[tuple[str, str]]:
+    """Run once, for its latest missed time, each workflow set to "Run once when Row-Bot starts".
+
+    *since*: when the scheduler last noted it was running; None runs nothing (it can't be told
+    what was missed). Returns (task id, missed time) for each run started.
+    """
+    if since is None:
+        return []
+    now = (now or datetime.now()).astimezone()
+    started: list[tuple[str, str]] = []
+    for task in list_tasks():
+        if not task.get("enabled") or task.get("missed_runs") != "run_once":
+            continue
+        try:
+            missed = missed_run_time(task, since, now)
+        except Exception:
+            logger.warning("Could not tell what workflow %s missed", task.get("id"), exc_info=True)
+            continue
+        if missed is None:
+            continue
+        late_for = missed.isoformat(timespec="seconds")
+        logger.info("Workflow '%s' missed %s while Row-Bot was closed: running it once", task["name"], late_for)
+        (fire or _fire_late)(task["id"], late_for)
+        started.append((task["id"], late_for))
+    return started
+
+
 _PROCESS_STARTED_AT = datetime.now()
 _interrupted_runs_settled = False
 _INTERRUPTED_RUN_STATUSES = ("starting", "running", "resuming", "stopping")
@@ -5685,7 +6049,9 @@ def settle_interrupted_runs(before: datetime | None = None) -> list[str]:
 def start_task_scheduler() -> None:
     """Start the APScheduler and sync all task jobs (idempotent)."""
     global _interrupted_runs_settled
-    if not _interrupted_runs_settled:
+    first_start = not _interrupted_runs_settled
+    closed_since = None
+    if first_start:
         _interrupted_runs_settled = True
         try:
             settle_interrupted_runs()
@@ -5696,8 +6062,18 @@ def start_task_scheduler() -> None:
             settle_interrupted_goals()
         except Exception:
             logger.warning("Could not pause goals left working", exc_info=True)
+        try:
+            closed_since = scheduler_seen_at()
+            note_scheduler_alive()
+        except Exception:
+            logger.warning("Could not read when the scheduler last ran", exc_info=True)
     _get_scheduler()
     sync_all_jobs()
+    if first_start:
+        try:
+            run_missed_runs(closed_since)
+        except Exception:
+            logger.warning("Could not run workflows missed while Row-Bot was closed", exc_info=True)
     start_approval_monitor()
 
 
@@ -5965,6 +6341,7 @@ def _load_pipeline_state(resume_token: str) -> dict | None:
     return d
 
 
+@_publishes_live("runs", "conversations")
 @_schema_retry
 def _update_pipeline_status(run_id: str, status: str) -> None:
     """Update the status of a pipeline state entry."""
@@ -6340,6 +6717,117 @@ def resume_workflows_waiting_for_child_agent(child_run_id: str) -> int:
 
 # ── Approval Request Management ─────────────────────────────────────────────
 
+# ── "Always ask me" (N9) ─────────────────────────────────────────────────────
+# An approval the person's own rule asks for: only they can give it, it is bound to exactly what
+# its card shows, and it expires at the step's timeout (24 hours unless the step sets one).
+
+PERSON_APPROVAL_TIMEOUT_MINUTES = 24 * 60
+NOT_APPROVED_IN_TIME = "Not approved in time"
+NOT_APPROVED = "You didn't approve it, so it didn't happen."
+
+
+def _person_only_interrupt(interrupts: Sequence[Any]) -> dict | None:
+    """The person-only card among a step's paused questions, if any."""
+    return next((item for item in interrupts or ()
+                 if isinstance(item, Mapping) and item.get("person_only") and item.get("binding")), None)
+
+
+def _person_payload(binding: str, card: Mapping[str, Any]) -> dict[str, Any]:
+    from row_bot.tools.approval_gate import PERSON_RULE_REASON
+
+    return {"person_only": True, "binding": str(binding), "card": dict(card), "reason": PERSON_RULE_REASON}
+
+
+def _person_approval_terms(held: Mapping[str, Any] | None, step: Mapping[str, Any]) -> dict[str, Any]:
+    """create_approval_request terms for a person-only card: its details, binding and expiry."""
+    if not held:
+        return {}
+    return {"timeout_minutes": int(step.get("timeout_minutes") or PERSON_APPROVAL_TIMEOUT_MINUTES),
+            "approval_payload_json": _person_payload(str(held["binding"]), held.get("card") or {})}
+
+
+def _person_payload_of(approval: Mapping[str, Any] | None) -> dict | None:
+    """The person-only terms an approval request was made with, or None."""
+    if not approval:
+        return None
+    try:
+        payload = json.loads(approval.get("approval_payload_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and payload.get("person_only") and payload.get("binding") else None
+
+
+@_schema_retry
+def _approval_for_token(resume_token: str) -> dict | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM approval_requests WHERE resume_token = ?", (resume_token,)).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+@_publishes_live("approvals", "conversations")
+@_schema_retry
+def _claim_person_approval(run_id: str, step_id: str, binding: str) -> bool:
+    """Use, once, the person's approval of exactly *binding* for this step of this run."""
+    conn = _get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT id, approval_payload_json FROM approval_requests WHERE run_id = ? AND step_id = ? "
+            "AND status = 'approved' AND COALESCE(response_note, '') != 'used' ORDER BY responded_at DESC",
+            (run_id, step_id),
+        ).fetchall()
+        for row in rows:
+            held = _person_payload_of(dict(row))
+            if held and held["binding"] == binding:
+                conn.execute("UPDATE approval_requests SET response_note = 'used' WHERE id = ?", (row["id"],))
+                conn.commit()
+                return True
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+def _delivery_card(task: Mapping[str, Any], channel: str, text: str) -> dict:
+    from row_bot.tools.action_card import describe_delivery
+
+    if channel == "desktop":
+        return describe_delivery("This computer", "", text, account="Row-Bot")
+    target = ""
+    try:
+        from row_bot.channels import registry as channel_registry
+
+        adapter = channel_registry.get(channel)
+        label = str(getattr(adapter, "display_name", "") or getattr(adapter, "name", "") or channel)
+    except Exception:
+        label = channel
+    if task.get("delivery_channel") == channel:
+        target = str(task.get("delivery_target") or "")
+    return describe_delivery(label, target, text, account=label)
+
+
+def _stop_unapproved_run(state: Mapping[str, Any], task: Mapping[str, Any], enabled_tool_names: list[str],
+                         *, timed_out: bool) -> None:
+    """Stop a run whose person-only approval was denied or not given in time."""
+    run_id = str(state["run_id"])
+    if state.get("graph_interrupted") == "true":
+        try:  # The tool call that waited is settled, so the conversation can go on later.
+            from row_bot.agent import repair_orphaned_tool_calls
+
+            repair_orphaned_tool_calls(enabled_tool_names, state.get("config") or {})
+        except Exception:
+            logger.debug("Could not settle the tool call of run %s", run_id, exc_info=True)
+    notice = NOT_APPROVED_IN_TIME if timed_out else NOT_APPROVED
+    _update_pipeline_status(run_id, "stopped")
+    _finish_run(run_id, "stopped", status_message=notice, terminal_reason="not_approved", notice=notice)
+    _emit_buddy_workflow_event("cancelled", task_id=str(state.get("task_id") or ""),
+                               thread_id=str(state.get("thread_id") or ""), label=notice)
+
+
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def create_approval_request(
     run_id: str,
@@ -6385,6 +6873,8 @@ def create_approval_request(
     )
     conn.commit()
     conn.close()
+    from row_bot.questions import stored_question
+
     _emit_buddy_approval_event(
         "needed",
         run_id=run_id,
@@ -6392,8 +6882,9 @@ def create_approval_request(
         step_id=step_id,
         approval_id=req_id,
         resume_token=resume_token,
-        label="Approval pending",
+        label="Row-Bot has a question" if stored_question(payload_text) is not None else "Approval pending",
         message=message,
+        question=stored_question(payload_text) is not None,
     )
     return resume_token, req_id
 
@@ -6408,6 +6899,7 @@ def _emit_buddy_approval_event(
     resume_token: str = "",
     label: str = "",
     message: str = "",
+    question: bool = False,
 ) -> None:
     try:
         from row_bot.buddy.events import BuddyEventType, emit_buddy_event
@@ -6430,6 +6922,8 @@ def _emit_buddy_approval_event(
                 "resume_token": resume_token,
                 "label": label or message or status.replace("_", " ").title(),
                 "message": message,
+                # Row-Bot's question (N4): Buddy says so, in its own fixed words.
+                **({"question": True} if question else {}),
             },
         )
     except Exception:
@@ -6469,6 +6963,7 @@ def get_pending_approvals(
     return [dict(r) for r in rows]
 
 
+@_publishes_live("approvals", "conversations")
 def cancel_agent_run_approvals(agent_run_id: str) -> int:
     """Withdraw a stopped Agent's pending approvals; its question no longer applies.
 
@@ -6501,11 +6996,17 @@ def cancel_agent_run_approvals(agent_run_id: str) -> int:
     return len(ids)
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def respond_to_approval(resume_token: str, approved: bool,
                          note: str = "",
-                         source: str = "web") -> bool:
-    """Approve or deny a pending request. Returns True if found and processed."""
+                         source: str = "web",
+                         answer: dict | None = None) -> bool:
+    """Approve or deny a pending request. Returns True if found and processed.
+
+    Row-Bot's question (N4) takes ``answer`` instead (``questions.answer`` or ``questions.skipped``); a denial
+    skips it. An approval never answers a question and an answer never approves an action: either is refused.
+    """
     resume_pipeline = _resume_pipeline
     conn = _get_conn()
     row = conn.execute(
@@ -6517,11 +7018,32 @@ def respond_to_approval(resume_token: str, approved: bool,
         return False
 
     r = dict(row)
+    from row_bot import questions
+
+    asked = questions.stored_question(r.get("approval_payload_json"))
+    if asked is None and answer is not None:
+        conn.close()
+        return False
+    if asked is not None:
+        if answer is None and approved:
+            conn.close()
+            return False
+        answer = answer if answer is not None else questions.skipped()
+        if questions.outcome(answer) == "answered":
+            try:
+                answer = questions.answer(asked, answer.get("answers"))
+            except questions.QuestionError:
+                conn.close()
+                return False
+        approved = questions.outcome(answer) == "answered"
     if str(r.get("resume_kind") or "") == "conversation":
         conn.close()
         from row_bot.application.client_platform import client_platform_service, ClientPlatformError
+        decision = {"decision": "approve" if approved else "reject"}
+        if asked is not None and approved:
+            decision["answers"] = answer["answers"]
         try:
-            client_platform_service._resolve_approval(str(r["id"]), {"decision": "approve" if approved else "reject"})
+            client_platform_service._resolve_approval(str(r["id"]), decision)
             return True
         except ClientPlatformError:
             return False
@@ -6552,6 +7074,10 @@ def respond_to_approval(resume_token: str, approved: bool,
         conn.commit()
         conn.close()
         logger.info("Approval %s was already expired when user responded", r["id"])
+        if asked is not None:
+            # Too late for the answer: the question goes on as nobody answered in time (N4).
+            _apply_approval_timeout(r)
+            return False
         _emit_buddy_approval_event(
             "timed_out",
             run_id=str(r.get("run_id") or ""),
@@ -6586,12 +7112,18 @@ def respond_to_approval(resume_token: str, approved: bool,
         step_id=str(r.get("step_id") or ""),
         approval_id=approval_id,
         resume_token=resume_token,
-        label="Approved" if approved else "Denied",
+        label=("Answered" if approved else "Skipped") if asked is not None else ("Approved" if approved else "Denied"),
         message=str(r.get("message") or ""),
     )
 
     # Update all channel messages (cross-channel resolution)
-    _resolve_approval_on_channels(approval_id, new_status, source_channel=source)
+    _resolve_approval_on_channels(approval_id, questions.outcome(answer) if asked is not None else new_status,
+                                  source_channel=source)
+
+    if asked is not None:
+        # The question's own interrupt goes on with the answer; anything asked beside it asks again (N4).
+        _answer_question(r, answer)
+        return True
 
     # Resume the pipeline — for graph-interrupted steps, denial resumes
     # the graph with approved=False so the tool returns "cancelled" and
@@ -6624,6 +7156,7 @@ def respond_to_approval(resume_token: str, approved: bool,
     return True
 
 
+@_publishes_live("approvals", "conversations")
 def claim_conversation_approval(approval_id: str, approved: bool, *, expected_payload: str,
                                 expected_timeout: str | None) -> dict | None:
     """CAS the existing approval owner without dispatching a second worker."""
@@ -6716,6 +7249,7 @@ def iter_task_approval_snapshot(task_id: str, run_id: str) -> Iterator[tuple[dic
         conn.close()
 
 
+@_publishes_live("approvals", "conversations")
 def claim_reviewed_task_approval(
     task_id: str, run_id: str, approval_id: str, *, expected_revision: str,
     approved: bool, validate: Callable[[], None],
@@ -6730,6 +7264,10 @@ def claim_reviewed_task_approval(
             raise TaskMutationError("task_approval_revision_conflict", task_id)
         capture = state["config"].get("_reviewed_task_run")
         if not capture or approval.get("resume_kind") not in {None, "", "workflow"}:
+            raise TaskMutationError("task_approval_owner_required", task_id)
+        from row_bot.questions import stored_question
+        if stored_question(approval.get("approval_payload_json")) is not None:
+            # Row-Bot's question is answered on its card; Approve and Reject never answer it (N4).
             raise TaskMutationError("task_approval_owner_required", task_id)
         from row_bot.runtime.executions import generation_registry
         if any(h.domain == "workflow" and h.domain_id == run_id
@@ -6793,6 +7331,8 @@ def _check_approval_timeouts() -> None:
         conn.commit()
     finally:
         conn.close()
+    if claimed:
+        _publish_live("approvals", "conversations")
     for r in claimed:
         try:
             _apply_approval_timeout(r)
@@ -6806,6 +7346,9 @@ def _apply_approval_timeout(r: dict) -> None:
     # this lets the tool return "cancelled" and the pipeline
     # continues to subsequent steps.  For explicit approval steps
     # this stops the pipeline.
+    from row_bot import questions
+
+    asked = questions.stored_question(r.get("approval_payload_json"))
     _resolve_approval_on_channels(r["id"], "timed_out",
                                   source_channel="system")
     _emit_buddy_approval_event(
@@ -6815,9 +7358,17 @@ def _apply_approval_timeout(r: dict) -> None:
         step_id=str(r.get("step_id") or ""),
         approval_id=str(r.get("id") or ""),
         resume_token=str(r.get("resume_token") or ""),
-        label="Approval timed out",
+        label=questions.NO_ANSWER_IN_TIME if asked is not None else "Approval timed out",
         message=str(r.get("message") or ""),
     )
+    if asked is not None:
+        # Nobody answered Row-Bot's question (N4): it goes on with its recommendation; with none, the run stops.
+        if questions.has_recommendation(asked):
+            _answer_question(r, questions.timed_out())
+        elif str(r.get("resume_kind") or "") in {"", "workflow"}:
+            _stop_unanswered_run(r)
+        logger.info("Question %s timed out for task %s", r["id"], r["task_id"])
+        return
     if str(r.get("resume_kind") or "") == "agent_run":
         from row_bot.agent_runner import resume_agent_run
 
@@ -6844,6 +7395,98 @@ def _apply_approval_timeout(r: dict) -> None:
                  r["id"], r["task_id"])
 
 
+def _answer_question(r: dict, answer: dict) -> None:
+    """Go on from Row-Bot's question (N4) with the person's answer, a skip or no answer in time.
+
+    Only the question's own interrupt is resumed with it; never an approval of anything.
+    """
+    from row_bot import questions
+
+    try:
+        context = json.loads(str(r.get("approval_payload_json") or "{}"))
+    except (TypeError, ValueError):
+        context = {}
+    group = (context.get("interrupt") or context.get("interrupts")) if isinstance(context, dict) else None
+    try:
+        values = questions.resume_values(group, answer)
+    except questions.QuestionError:
+        logger.warning("Question %s can no longer be answered", r.get("id"))
+        return
+    kind = str(r.get("resume_kind") or "")
+    if kind == "agent_run":
+        from row_bot.agent_runner import resume_agent_run
+
+        resume_agent_run(str(r.get("agent_run_id") or r.get("run_id") or ""),
+                         resume_token=str(r.get("resume_token") or ""), approved=True, resume_values=values)
+    elif kind == "parent_orchestration":
+        from row_bot.agent_orchestrator import resume_parent_orchestration
+
+        resume_parent_orchestration(str(r.get("step_id") or "").removeprefix("orchestration:"),
+                                    resume_token=str(r.get("resume_token") or ""), approved=True, answer=answer)
+    elif kind in {"", "workflow"}:
+        _resume_pipeline(str(r["resume_token"]), approved=True, resume_values=values)
+
+
+def _stop_unanswered_run(r: dict) -> None:
+    """A workflow's question had no recommended option and nobody answered in time: the run stops."""
+    from row_bot import questions
+
+    run_id = str(r.get("run_id") or "")
+    state = _load_pipeline_state(str(r.get("resume_token") or "")) or {}
+    _update_pipeline_status(run_id, "stopped")
+    _finish_run(run_id, "stopped", status_message=questions.NO_ANSWER_IN_TIME)
+    _emit_buddy_workflow_event(
+        "cancelled",
+        task_id=str(r.get("task_id") or ""),
+        thread_id=str(state.get("thread_id") or ""),
+        label=questions.NO_ANSWER_IN_TIME,
+    )
+
+
+def _pause_for_question(
+    *,
+    task: dict,
+    run_id: str,
+    thread_id: str,
+    step: dict,
+    step_id: str,
+    step_index: int,
+    total: int,
+    step_outputs: dict,
+    config: dict,
+    interrupts: list,
+    asked: dict,
+    validate: Callable[[], None] | None = None,
+) -> None:
+    """An unattended run waits on Row-Bot's question like an approval step (N4).
+
+    Every approval level asks: a question is not a permission, so neither Hands-off nor Block decides it. It
+    shows in Needs you, goes to the run's channels and waits until the step's timeout (24 hours by default).
+    """
+    from row_bot import questions
+
+    question = asked["questions"][0]["question"]
+    message = f"Step {step_index + 1}/{total}: Row-Bot has a question: {question}"
+    resume_token, approval_id = create_approval_request(
+        run_id=run_id, task_id=str(task.get("id") or ""), step_id=step_id, message=message,
+        timeout_minutes=int(step.get("timeout_minutes") or 0) or questions.DEFAULT_TIMEOUT_MINUTES,
+        approval_payload_json={"interrupt": interrupts},
+    )
+    _save_pipeline_state(
+        run_id=run_id, task_id=str(task.get("id") or ""), thread_id=thread_id,
+        current_step_index=step_index, step_outputs=step_outputs, config=config,
+        resume_token=resume_token, status="paused", graph_interrupted=True,
+    )
+    logger.info("Task '%s' paused at step %d/%d for a question", task.get("name", ""), step_index + 1, total)
+    _push_approval_to_channels(task, approval_id, resume_token, message, question=asked,
+                               **({"validate": validate} if validate is not None else {}))
+    from row_bot.notifications import notify
+
+    _check_workflow_effect(validate)
+    notify(title="Row-Bot has a question", message=f"{task.get('name', '')}: {question}", sound="workflow",
+           toast_type="warning", source="workflow", in_app=False)
+
+
 def _resume_graph_interrupted(
     state: dict,
     task: dict,
@@ -6852,6 +7495,7 @@ def _resume_graph_interrupted(
     paused_step_index: int,
     approved: bool = True,
     validate: Callable[[], None] | None = None,
+    resume_values: dict | None = None,
 ) -> None:
     """Resume a graph-interrupted pipeline step in a background thread.
 
@@ -6911,8 +7555,9 @@ def _resume_graph_interrupted(
         _stop_event = scope.stop_event if scope else threading.Event()
         try:
             result = resume_invoke_agent(
-                effective_tool_names, config, approved=approved,
-                stop_event=_stop_event,
+                effective_tool_names, config, approved=approved, stop_event=_stop_event,
+                # A question's answer goes to its own interrupt only (N4).
+                **({"resume_values": resume_values} if resume_values else {}),
             )
         except TaskStoppedError:
             _update_pipeline_status(run_id, "stopped")
@@ -6967,6 +7612,18 @@ def _resume_graph_interrupted(
             return
         if isinstance(result, dict) and result.get("type") == "interrupt":
             interrupts = result.get("interrupts", [])
+            from row_bot.questions import question_item
+
+            asked = question_item(interrupts)
+            if asked is not None:
+                # Row-Bot asks the person; no approval level answers for them (N4).
+                _pause_for_question(
+                    task=task, run_id=run_id, thread_id=thread_id, step=paused_step, step_id=step_id,
+                    step_index=paused_step_index, total=total, step_outputs=step_outputs, config=config,
+                    interrupts=interrupts, asked=asked, validate=validate,
+                )
+                return
+            person_held = _person_only_interrupt(interrupts)
 
             # Empty interrupts — auto-continue
             if not interrupts:
@@ -6976,7 +7633,7 @@ def _resume_graph_interrupted(
                 )
                 # Treat as success — result is empty, keep going
                 pass  # fall through to success path below
-            elif approval_mode == "block":
+            elif approval_mode == "block" and not person_held:
                 # Block mode — refuse the chained interrupt
                 logger.info(
                     "Task '%s' graph resume: chained interrupt in block mode — refusing",
@@ -6990,8 +7647,9 @@ def _resume_graph_interrupted(
                 except Exception as exc2:
                     logger.error("Block-mode resume denial failed: %s", exc2)
                 # Fall through to success path
-            elif approval_mode == "full":
+            elif approval_mode == "full" and not person_held:
                 # Hands-off approves the chained interrupt; under Auto it waits for the person.
+                # The person's own "Always ask me" card always waits for them (N9).
                 logger.info(
                     "Task '%s' graph resume: chained interrupt under Hands-off — approving",
                     task["name"],
@@ -7016,6 +7674,7 @@ def _resume_graph_interrupted(
                     task_id=task_id,
                     step_id=step_id,
                     message=approval_msg,
+                    **_person_approval_terms(person_held, paused_step),
                 )
                 _save_pipeline_state(
                     run_id=run_id,
@@ -7120,7 +7779,8 @@ def _resume_graph_interrupted(
 
 
 def _resume_pipeline(resume_token: str, approved: bool = True, *,
-                     reviewed_state: dict | None = None, validate: Callable[[], None] | None = None) -> None:
+                     reviewed_state: dict | None = None, validate: Callable[[], None] | None = None,
+                     resume_values: dict | None = None) -> None:
     """Resume a paused pipeline from saved state.
 
     *approved* is ``False`` when the user denied the approval.  For
@@ -7153,6 +7813,19 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
     paused_step = steps[paused_step_index] if paused_step_index < len(steps) else {}
     paused_step_type = paused_step.get("type", "prompt")
 
+    asked = _approval_for_token(resume_token)
+    held = _person_payload_of(asked)
+    timed_out = bool(asked and asked.get("status") == "timed_out")
+    if held and not approved and (timed_out or state.get("graph_interrupted") != "true"):
+        # The person's own approval (N9) not given: the action never runs and the run stops here.
+        _stop_unapproved_run(state, task, enabled, timed_out=timed_out)
+        return
+    if held:
+        # The answer is bound to exactly what the card showed; the tool runs only with that.
+        from row_bot.tools.approval_gate import bound_answer
+
+        approved = bound_answer(approved, held["binding"])
+
     if state.get("graph_interrupted") == "true":
         _update_pipeline_status(state["run_id"], "running")
         _resume_graph_interrupted(
@@ -7163,6 +7836,7 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
             paused_step_index=paused_step_index,
             approved=approved,
             validate=validate,
+            resume_values=resume_values,
         )
         return
 
@@ -7193,7 +7867,8 @@ def _resume_pipeline(resume_token: str, approved: bool = True, *,
         # No target or "end" — stop the pipeline
         _update_pipeline_status(state["run_id"], "stopped")
         _finish_run(state["run_id"], "stopped",
-                    status_message="Approval denied by user")
+                    status_message="Approval timed out" if timed_out else "Approval denied by user",
+                    **({"notice": NOT_APPROVED_IN_TIME} if timed_out else {}))
         _emit_buddy_workflow_event(
             "cancelled",
             task_id=state["task_id"],
@@ -7294,6 +7969,10 @@ def start_approval_monitor() -> None:
                 _check_approval_timeouts()
             except Exception as exc:
                 logger.error("Approval monitor error: %s", exc)
+            try:
+                note_scheduler_alive()  # So a later start can tell which runs fell while closed (N9).
+            except Exception:
+                logger.debug("Could not note the scheduler running", exc_info=True)
             time.sleep(60)  # check every 60 seconds
 
     t = threading.Thread(target=_monitor, daemon=True, name="approval-monitor")
@@ -7804,6 +8483,16 @@ def _use_step_apps(config: dict, step: dict) -> None:
         config["configurable"]["app_scope"] = scope
     else:
         config["configurable"].pop("app_scope", None)
+
+
+def _use_person_rules(config: dict, task: Mapping[str, Any], step: Mapping[str, Any]) -> None:
+    """A step's "Always ask me", and the workflow's apps and tools that always ask (N9): an
+    action they cover waits for the person under every approval level."""
+    rules = {"step": bool(step.get("always_ask")), "items": [str(item) for item in task.get("always_ask") or []]}
+    if rules["step"] or rules["items"]:
+        config["configurable"]["person_rules"] = rules
+    else:
+        config["configurable"].pop("person_rules", None)
 
 
 def _resolve_step_index(steps: list[dict], target: str) -> int | None:

@@ -19,6 +19,7 @@ import {
   Globe,
   Image,
   Mail,
+  MessageCircleQuestion,
   MessagesSquare,
   Monitor,
   MousePointerClick,
@@ -34,6 +35,8 @@ import {
   Zap,
   type LucideIcon,
   PackageOpen,
+  Upload,
+  Download,
 } from 'lucide-react';
 import type {
   TranscriptTraceGroup,
@@ -77,10 +80,18 @@ const EXACT: Record<string, Verb> = {
   browser_navigate: verb('Opened page', 'Opening page', Globe),
   browser_click: verb('Clicked in the browser', 'Clicking', MousePointerClick),
   browser_type: verb('Typed in the browser', 'Typing', MousePointerClick),
+  browser_select: verb(
+    'Chose an option',
+    'Choosing an option',
+    MousePointerClick,
+  ),
+  browser_press: verb('Pressed a key', 'Pressing a key', MousePointerClick),
   browser_scroll: verb('Scrolled the page', 'Scrolling', MousePointerClick),
-  browser_snapshot: verb('Read the browser', 'Reading the browser', Globe),
-  browser_back: verb('Went back', 'Going back', Globe),
-  browser_tab: verb('Switched tab', 'Switching tab', Globe),
+  browser_wait_for: verb('Read the page', 'Reading the page', Globe),
+  browser_extract: verb('Read the page', 'Reading the page', Globe),
+  browser_tabs: verb('Used the tabs', 'Using the tabs', Globe),
+  browser_upload: verb('Uploaded a file', 'Uploading a file', Upload),
+  browser_download: verb('Downloaded a file', 'Downloading a file', Download),
   browser_screenshot: verb('Took a screenshot', 'Taking a screenshot', Camera),
   browser_viewport: verb(
     'Changed the page size',
@@ -88,6 +99,11 @@ const EXACT: Record<string, Verb> = {
     Smartphone,
   ),
   browser_record: verb('Recorded the browser', 'Recording the browser', Video),
+  computer: verb('Used the computer', 'Using the computer', Monitor),
+  // A turn's computer steps, grouped ("Computer activity").
+  computer_activity: verb('Used the computer', 'Using the computer', Monitor),
+  computer_record: verb('Recorded the screen', 'Recording the screen', Video),
+  // Conversations from before 5.3.
   computer_use: verb('Used the computer', 'Using the computer', Monitor),
   wikipedia: verb('Searched Wikipedia', 'Searching Wikipedia', BookOpen),
   arxiv: verb('Searched arXiv', 'Searching arXiv', BookOpen),
@@ -147,6 +163,11 @@ const EXACT: Record<string, Verb> = {
   ),
   request_connection: verb('Asked to connect', 'Asking to connect', Plug),
   suggest_apps: verb('Suggested apps', 'Looking for apps', Plug),
+  ask_person: verb(
+    'Asked you a question',
+    'Waiting for your answer',
+    MessageCircleQuestion,
+  ),
   export_to_pdf: verb('Exported a PDF', 'Exporting a PDF', FileText),
   save_memory: verb('Saved a memory', 'Saving a memory', Brain),
   search_memory: verb('Searched memory', 'Searching memory', Brain),
@@ -172,6 +193,36 @@ const EXACT: Record<string, Verb> = {
   send_gmail_message: verb('Sent an email', 'Sending an email', Mail),
   create_gmail_draft: verb('Drafted an email', 'Drafting an email', Mail),
   search_gmail: verb('Searched email', 'Searching email', Mail),
+  outlook_search_mail: verb('Searched email', 'Searching email', Mail),
+  outlook_read_mail: verb('Read an email', 'Reading an email', Mail),
+  outlook_draft_mail: verb('Drafted an email', 'Drafting an email', Mail),
+  outlook_send_mail: verb('Sent an email', 'Sending an email', Mail),
+  outlook_reply_mail: verb('Replied to an email', 'Replying to an email', Mail),
+  outlook_forward_mail: verb('Forwarded an email', 'Forwarding an email', Mail),
+  outlook_update_mail: verb('Filed an email', 'Filing an email', Mail),
+  outlook_delete_mail: verb('Deleted an email', 'Deleting an email', Mail),
+  outlook_list_events: verb(
+    'Checked the calendar',
+    'Checking the calendar',
+    Calendar,
+  ),
+  outlook_find_free_times: verb(
+    'Found free times',
+    'Finding free times',
+    Calendar,
+  ),
+  outlook_create_event: verb('Added an event', 'Adding an event', Calendar),
+  outlook_update_event: verb('Changed an event', 'Changing an event', Calendar),
+  outlook_cancel_event: verb(
+    'Cancelled an event',
+    'Cancelling an event',
+    Calendar,
+  ),
+  outlook_respond_event: verb(
+    'Answered an invitation',
+    'Answering an invitation',
+    Calendar,
+  ),
   delegate_work: verb('Delegated work', 'Delegating work', Bot),
   run_command: verb('Ran a command', 'Running a command', Terminal),
   shell: verb('Ran a command', 'Running a command', Terminal),
@@ -471,6 +522,8 @@ export type ActivitySummary = {
   icons: LucideIcon[];
   /** The step that is running now, if any. */
   current: TranscriptTraceItem | null;
+  /** Row-Bot's questions to the person among the steps (N4). */
+  questions?: number;
 };
 
 export function orderedSteps(groups: TranscriptTraceGroup[]) {
@@ -515,6 +568,8 @@ export function summarizeActivity(
     icons,
     current:
       [...steps].reverse().find((step) => step.status === 'pending') ?? null,
+    questions: steps.filter((step) => step.canonical_name === 'ask_person')
+      .length,
   };
 }
 
@@ -524,6 +579,15 @@ export function activityLabel(summary: ActivitySummary): string {
   // Nothing ran: every step was denied, blocked or cancelled.
   if (summary.total && summary.skipped === summary.total)
     return `${summary.total} ${noun} skipped`;
+  // A turn that only asked the person reads as what it did (N4).
+  if (
+    summary.total &&
+    summary.questions === summary.total &&
+    !summary.failed &&
+    !summary.skipped &&
+    !summary.pending
+  )
+    return summary.total === 1 ? 'Asked you a question' : 'Asked you questions';
   return [
     `Used ${summary.total} ${noun}`,
     summary.failed ? `${summary.failed} failed` : '',

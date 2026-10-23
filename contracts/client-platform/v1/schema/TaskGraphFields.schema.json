@@ -1,6 +1,18 @@
 {
   "additionalProperties": false,
   "properties": {
+    "always_ask": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Always Ask"
+    },
     "apps": {
       "anyOf": [
         {

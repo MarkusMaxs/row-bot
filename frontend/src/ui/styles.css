@@ -1444,6 +1444,10 @@ body:has(.pwa-status:not([hidden])) .composer {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.toast-action {
+  flex: none;
+  white-space: nowrap;
+}
 /* Background warnings and errors: a coloured edge plus their own words. */
 .toast[data-tone='warning'] {
   border-inline-start: 3px solid var(--status-warning-border);

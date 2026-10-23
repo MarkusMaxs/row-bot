@@ -331,3 +331,46 @@ it('shows the new link after publishing', async () => {
     await screen.findByRole('region', { name: 'Published link' }),
   ).toHaveTextContent(completed.url!);
 });
+
+it('asks which X account to post as when several are connected, and links the post (N7)', async () => {
+  const current = props({
+    xAccounts: [
+      { id: '111', username: 'rowbot_ai', name: 'Row-Bot' },
+      { id: '222', username: 'sidd', name: 'Sidd' },
+    ],
+    prepare: vi.fn(async (): Promise<ArtifactShareReview> => ({
+      ...review,
+      action: 'x',
+      recipient: '@sidd',
+    })),
+    execute: vi.fn(async (): Promise<ArtifactShareOutcome> => ({
+      ...completed,
+      status: 'submitted',
+      url: 'https://x.com/sidd/status/42',
+      link_kind: null,
+      submitted_count: 1,
+      total_count: 1,
+    })),
+  });
+  render(<ArtifactSharing {...current} />);
+  fireEvent.change(screen.getByLabelText('Share action'), {
+    target: { value: 'x' },
+  });
+  const prepare = screen.getByRole('button', { name: 'Prepare X post' });
+  expect(prepare).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Post as'), {
+    target: { value: '@sidd' },
+  });
+  await act(async () => fireEvent.click(prepare));
+  expect(current.prepare).toHaveBeenCalledWith(
+    expect.objectContaining({ action: 'x', target: '@sidd' }),
+  );
+  expect(screen.getByText('Posts as @sidd')).toBeInTheDocument();
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm post to X' })),
+  );
+  expect(screen.getByRole('link', { name: 'Open the post' })).toHaveAttribute(
+    'href',
+    'https://x.com/sidd/status/42',
+  );
+});

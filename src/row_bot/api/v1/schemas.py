@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from row_bot.application.live_updates import Topic as LiveTopic
+
 OpaqueId = Annotated[
     str, StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:_-]+$")
 ]
@@ -154,6 +156,8 @@ class SubmitPayload(WireModel):
     write_targets: list[WriteTarget] | None = Field(default=None, max_length=2)
     # Retry: the last turn is set aside first when it is this same message, so it runs again in place.
     retry: bool = False
+    # Send a page's decisions (N5): the person's click; Row-Bot writes the message from the page itself.
+    page_id: str | None = Field(default=None, pattern=r"^page-[0-9a-f]{8}$")
 
 
 class RenamePayload(WireModel):
@@ -165,10 +169,18 @@ class CreatePayload(WireModel):
         "New conversation"
     )
     agent_profile_id: str = Field(default="", max_length=256)
+    # Incognito from the start (N11): nothing in it is read for memory.
+    incognito: bool = False
 
 
 class PinPayload(WireModel):
     pinned: bool
+
+
+class IncognitoPayload(WireModel):
+    """Turn incognito on or off for a conversation (N11)."""
+
+    incognito: bool
 
 
 class EmptyPayload(WireModel):
@@ -345,144 +357,136 @@ class ConversationActionReceipt(WireModel):
     export: ConversationActionExport | None = None
 
 
-BrowserAction = Literal[
-    "browser.navigate",
-    "browser.take_over",
-    "browser.check",
-    "browser.back",
-    "browser.end",
-]
-BrowserRevision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
-
-
-class BrowserAvailability(WireModel):
-    state: Literal["available", "check_on_use", "unavailable"]
-    code: str | None = Field(max_length=128)
-
-
-class BrowserControlSnapshot(WireModel):
-    schema_version: Literal[1]
-    conversation_id: OpaqueId
-    revision: BrowserRevision
-    active: bool
-    paused: bool
-    state: Literal[
-        "idle",
-        "acting",
-        "observing",
-        "waiting_user",
-        "waiting_approval",
-        "needs_attention",
-    ]
-    site: str = Field(max_length=120)
+class BrowserTab(WireModel):
+    """One of a conversation's tabs in Row-Bot's browser."""
+    id: str = Field(pattern=r"^t[0-9]{1,6}$")
+    title: str = Field(max_length=160)
     url: str = Field(max_length=2048)
-    last_action: str = Field(max_length=160)
-    availability: dict[str, BrowserAvailability] = Field(max_length=12)
+    active: bool
 
 
-class BrowserPreview(WireModel):
+class BrowserPaneState(WireModel):
+    """What the Browser pane shows for one conversation: never page content or field values."""
     schema_version: Literal[1]
     conversation_id: OpaqueId
-    revision: BrowserRevision
-    state: Literal["available", "waiting", "shielded", "inactive"]
-    image_base64: str | None = Field(default=None, max_length=2_000_000)
+    status: Literal["stopped", "starting", "running", "crashed"]
+    # Who drives the page: Row-Bot, or the person (Take control / Give back).
+    control: Literal["agent", "person"]
+    # What Row-Bot is doing on the page now ("Clicking button \"Next\""), and what it waits on.
+    acting: str = Field(max_length=160)
+    waiting: str = Field(max_length=160)
+    url: str = Field(max_length=2048)
+    title: str = Field(max_length=160)
+    site: str = Field(max_length=253)
+    loading: bool
+    # The page asks for something only the person types: a password, a one-time code or card details.
+    sign_in: Literal["", "password", "code", "card"]
+    recording: bool
+    tabs: list[BrowserTab] = Field(max_length=32)
+    revision: int = Field(ge=0)
 
 
-class BrowserRevisionInput(WireModel):
-    revision: BrowserRevision
+class BrowserFrame(WireModel):
+    """One live picture of the page (a JPEG) and the page's size in CSS pixels."""
+    seq: int = Field(ge=0)
+    css_width: float = Field(ge=0, le=100_000)
+    css_height: float = Field(ge=0, le=100_000)
+    image_base64: str = Field(min_length=1, max_length=8_000_000)
 
 
-class BrowserNavigateInput(BrowserRevisionInput):
-    url: str = Field(min_length=1, max_length=8192)
-
-
-BROWSER_REVIEW_PAYLOADS = {
-    "browser.navigate": BrowserNavigateInput,
-    "browser.take_over": BrowserRevisionInput,
-    "browser.check": BrowserRevisionInput,
-    "browser.back": BrowserRevisionInput,
-    "browser.end": BrowserRevisionInput,
-}
-
-
-class BrowserReviewRequest(WireModel):
-    action: BrowserAction
-    type: BrowserAction
-    payload: dict
+class BrowserInputEvent(WireModel):
+    """The person's mouse, wheel or key in the pane, in the page's CSS pixels."""
+    type: Literal["mouse", "key", "text"]
+    action: Literal["move", "down", "up", "wheel", ""] = ""
+    x: float = Field(default=0, ge=-10_000, le=100_000)
+    y: float = Field(default=0, ge=-10_000, le=100_000)
+    dx: float = Field(default=0, ge=-100_000, le=100_000)
+    dy: float = Field(default=0, ge=-100_000, le=100_000)
+    button: Literal["left", "right", "middle"] = "left"
+    clicks: int = Field(default=1, ge=1, le=3)
+    key: str = Field(default="", max_length=32)
+    text: str = Field(default="", max_length=4096)
 
     @model_validator(mode="after")
-    def typed_payload(self) -> BrowserReviewRequest:
-        if self.type != self.action:
-            raise ValueError("Browser review type must match action.")
-        self.payload = (
-            BROWSER_REVIEW_PAYLOADS[self.action]
-            .model_validate(self.payload)
-            .model_dump(mode="json")
-        )
+    def complete(self) -> BrowserInputEvent:
+        if self.type == "mouse" and self.action not in {"move", "down", "up", "wheel"}:
+            raise ValueError("A mouse event moves, presses, releases or turns the wheel.")
+        if self.type == "key" and (self.action not in {"down", "up"} or not self.key):
+            raise ValueError("A key event presses or releases one named key.")
+        if self.type == "text" and not self.text:
+            raise ValueError("A text event has text.")
+        if any(ord(character) < 32 and character not in "\t\n" for character in self.key + self.text):
+            raise ValueError("Control characters aren't keys or text.")
         return self
 
-    @classmethod
-    def model_json_schema(cls, **kwargs: Any) -> dict:
-        return _variant_schema(cls, BROWSER_REVIEW_PAYLOADS, **kwargs)
+
+class BrowserInput(WireModel):
+    events: list[BrowserInputEvent] = Field(min_length=1, max_length=64)
 
 
-class BrowserReview(WireModel):
-    schema_version: Literal[1]
-    action: BrowserAction
-    conversation_id: OpaqueId
-    revision: BrowserRevision
-    policy_action: str = Field(min_length=1, max_length=128)
-    policy_decision: Literal["allow", "ask"]
-    policy_reason: str = Field(max_length=512)
-    approval_required: Literal[True]
-    origin_and_path: str = Field(max_length=2048)
-    query_present: bool
-    disclosures: list[str] = Field(min_length=1, max_length=8)
-    action_digest: BrowserRevision
-    nonce: str = Field(min_length=1, max_length=128)
+class BrowserInputResult(WireModel):
+    status: Literal["ok", "agent_acting", "no_page"]
+    control: Literal["agent", "person"]
 
 
-class BrowserCommandRevisionPayload(BrowserRevisionInput):
-    nonce: str = Field(min_length=1, max_length=128)
+class BrowserPaneAction(WireModel):
+    """The pane's own controls: the address bar, Back, Forward, Reload, tabs, control and Restart."""
+    action: Literal[
+        "navigate", "back", "forward", "reload", "stop_loading", "take_control", "give_back",
+        "new_tab", "switch_tab", "close_tab", "restart",
+    ]
+    url: str = Field(default="", max_length=8192)
+    tab: str = Field(default="", pattern=r"^(t[0-9]{1,6})?$")
 
 
-class BrowserCommandNavigatePayload(BrowserNavigateInput):
-    nonce: str = Field(min_length=1, max_length=128)
+class BrowserSite(WireModel):
+    """A site with saved sign-ins (cookies) in Row-Bot's browser."""
+    site: str = Field(min_length=1, max_length=253)
+    cookies: int = Field(ge=0)
 
 
-class BrowserReceipt(WireModel):
-    schema_version: Literal[1]
-    command_id: UUID
-    action: BrowserAction
-    conversation_id: OpaqueId
-    status: Literal["completed", "partial", "rejected"]
-    code: str | None = Field(max_length=128)
-    revision: BrowserRevision | None
-    browser_control: BrowserControlSnapshot | None
+class BrowserSitePage(WireModel):
+    items: list[BrowserSite] = Field(max_length=2000)
 
 
-ComputerUseAction = Literal[
-    "computer_use.stop",
-    "computer_use.pause",
-    "computer_use.resume",
-]
+class BrowserSitesClear(WireModel):
+    """Sign out of one site, or every site (no site)."""
+    site: str | None = Field(default=None, min_length=1, max_length=253)
+
+
+class BrowserSitesCleared(WireModel):
+    cleared: int = Field(ge=0)
+    items: list[BrowserSite] = Field(max_length=2000)
+
+
+# A 64-hex revision (computer use's card state).
+BrowserRevision = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+ComputerUseAction = Literal["computer_use.stop"]
+
+
+class ComputerUseProblem(WireModel):
+    """Why computer use couldn't start in this conversation, and how to fix it."""
+
+    message: str = Field(max_length=240)
+    fix: str = Field(max_length=240)
 
 
 class ComputerUseSnapshot(WireModel):
-    """The conversation's computer-use card: plain state and what it can do."""
+    """The conversation's computer use step: the app, what Row-Bot is doing, Stop."""
 
     schema_version: Literal[1]
     conversation_id: OpaqueId
     revision: BrowserRevision
-    # A session belongs to this conversation (it may be paused).
+    # A session belongs to this conversation.
     active: bool
-    state: Literal["working", "paused", "waiting_approval", "needs_attention", "stopped"]
+    # Paused: the person used the computer, and Row-Bot asks "Carry on?" in the chat.
+    state: Literal["working", "paused", "waiting_approval", "stopped"]
     app: str = Field(max_length=120)
+    window: str = Field(max_length=200)
+    doing: str = Field(max_length=200)
     has_picture: bool
-    # The approval the paused turn waits on; Resume answers it.
-    approval_id: OpaqueId | None
-    can_pause: bool
-    can_resume: bool
+    problem: ComputerUseProblem | None
     can_stop: bool
 
 
@@ -1012,8 +1016,20 @@ class ToolSettingsSnapshot(WireModel):
     items: list[ToolSettingsItem] = Field(max_length=32)
 
 
+class XAccountSummary(WireModel):
+    """One connected X account (N7): its numeric ID, handle and display name, and its sign-in's state.
+
+    The sign-in kept before 5.3, until X names it at the next check, has no ID or handle yet.
+    """
+
+    id: str = Field(pattern=r"^[0-9]{0,20}$")
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{0,50}$")
+    name: str = Field(default="", max_length=80)
+    state: Literal["not_authenticated", "connected", "invalid", "saved_unchecked", "expired", "unavailable"]
+
+
 class AccountSettingsItem(WireModel):
-    account_id: Literal["github", "gmail", "calendar", "x"]
+    account_id: Literal["github", "gmail", "calendar", "x", "outlook_mail", "outlook_calendar"]
     enabled: bool | None
     configured: bool
     authentication_state: Literal[
@@ -1044,6 +1060,10 @@ class AccountSettingsItem(WireModel):
     # fixed loopback callback, or Row-Bot's public callback for X or a Google
     # Web application client when this device signs in through it.
     callback_url: str | None = Field(default=None, max_length=512)
+    # Who is signed in ("you@yourdomain.com"), when the account says (Outlook's).
+    address: str | None = Field(default=None, max_length=256)
+    # X only (N7): each connected account, first added first. Never a token.
+    x_accounts: list[XAccountSummary] = Field(default_factory=list, max_length=17)
 
 
 class AccountSettingsSnapshot(WireModel):
@@ -1052,6 +1072,9 @@ class AccountSettingsSnapshot(WireModel):
     gmail: AccountSettingsItem
     calendar: AccountSettingsItem
     x: AccountSettingsItem
+    # Outlook's mail and calendar: one Microsoft sign-in through the person's own app registration.
+    outlook_mail: AccountSettingsItem
+    outlook_calendar: AccountSettingsItem
 
 
 class GitHubAccessSnapshot(WireModel):
@@ -1092,7 +1115,7 @@ class GitHubAccessReceipt(WireModel):
 
 class AccountAuthSnapshot(WireModel):
     schema_version: Literal[1]
-    account: Literal["google", "x"]
+    account: Literal["google", "x", "microsoft"]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     configured: bool
     # From the last check while the token files are as it left them (B263).
@@ -1106,31 +1129,36 @@ class AccountAuthSnapshot(WireModel):
         "expired",
         "unavailable",
     ]
-    token_files: int = Field(ge=0, le=2)
+    token_files: int = Field(ge=0, le=17)
     # How a sign-in started from this device works; it differs by device, so
     # the revision leaves it out. The desktop app on the host signs in through
     # that computer's browser and a loopback address; another device opens the
     # provider's page itself, which returns to Row-Bot's one public HTTPS address.
-    sign_in: Literal["this_computer", "link", "unavailable"]
+    # Microsoft signs in from another device with a code entered on its own page.
+    sign_in: Literal["this_computer", "link", "device", "unavailable"]
     sign_in_blocker: (
         Literal["public_address_required", "desktop_client", "redirect_not_listed"]
         | None
     ) = None
+    # Who is signed in ("you@yourdomain.com"), when the account says (Microsoft's).
+    address: str | None = Field(default=None, max_length=256)
 
 
 class AccountAuthCommand(WireModel):
     command_id: UUID
-    account: Literal["google", "x"]
+    account: Literal["google", "x", "microsoft"]
     expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     action: Literal["import_credentials", "check", "start", "disconnect"]
     confirmed: bool = False
     credentials_json: str = Field(default="", max_length=65536)
+    # X's disconnect removes one account (N7): its numeric ID ("" is the sign-in from before 5.3 not yet named).
+    x_account: str = Field(default="", pattern=r"^[0-9]{0,20}$")
 
 
 class AccountAuthReceipt(WireModel):
     schema_version: Literal[1]
     command_id: UUID
-    account: Literal["google", "x"]
+    account: Literal["google", "x", "microsoft"]
     action: Literal["import_credentials", "check", "start", "disconnect"]
     phase: Literal["running", "cancel_requested", "cancelled", "completed", "failed"]
     message: str = Field(max_length=256)
@@ -1138,6 +1166,10 @@ class AccountAuthReceipt(WireModel):
     # The provider's sign-in page for this device's browser, while a sign-in
     # through Row-Bot's public address waits for its callback.
     authorization_url: str | None = Field(default=None, max_length=8192)
+    # While a Microsoft sign-in from another device waits: the code to enter on Microsoft's page, and
+    # the seconds it still works.
+    device_code: PlanDeviceCode | None = None
+    expires_in: int | None = Field(default=None, ge=0, le=3600)
 
 
 class UtilitySettingsItem(WireModel):
@@ -2066,7 +2098,7 @@ class ProblemFix(WireModel):
     """The one fix offered with a problem (Phase 18). The client words it and
     runs it through the owner that does it in Settings: a channel restart or
     an account sign-in reviewed as there, or opening the exact setting."""
-    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again"]
+    kind: Literal["restart_channel", "reconnect_account", "choose_model", "open", "check_again", "choose_folder"]
     # Where it is fixed by hand, an in-app path ("/settings/access#tunnel").
     href: str | None = Field(max_length=160, pattern=r"^/[A-Za-z0-9/?=&#._:-]{0,159}$")
     # restart_channel: the channel's id; reconnect_account: "google" or "x".
@@ -2100,6 +2132,34 @@ class SystemDiagnosis(WireModel):
 
 class SystemDiagnosisSettings(WireModel):
     hourly_network_checks: bool
+
+
+class InstallCountSnapshot(WireModel):
+    """Install stats (N6), for Settings › System › Privacy: never the install ID or its deletion secret."""
+    # A collector is set and ROW_BOT_INSTALL_COUNT allows it; false while dormant.
+    available: bool
+    # ROW_BOT_INSTALL_COUNT=0 turns it off on this installation.
+    turned_off_here: bool
+    enabled: bool
+    # Where the count goes ("row-bot-count.<account>.workers.dev").
+    service: str = Field(max_length=256)
+    # What a count says besides its random ID.
+    version: str = Field(max_length=64)
+    os: Literal["windows", "macos", "linux", "docker"]
+    # The UTC day of the last count the service accepted.
+    last_sent_on: str | None = Field(max_length=10)
+    # Something may have been sent: "Delete what was sent…" applies.
+    can_delete: bool
+
+
+class InstallCountChoice(WireModel):
+    enabled: bool
+
+
+class InstallCountDeletion(WireModel):
+    # failed: counting is off, but the service couldn't be reached to delete.
+    outcome: Literal["deleted", "failed"]
+    snapshot: InstallCountSnapshot
 
 
 class UpdateRelease(WireModel):
@@ -4159,6 +4219,8 @@ class PendingApproval(WireModel):
     ids to answer it (``/approvals/{id}``) or open where it was raised."""
     id: OpaqueId
     source: Literal["workflow", "conversation", "agent"]
+    # "question": Row-Bot asks the person to choose (N4), answered on its card rather than approved.
+    kind: Literal["approval", "question"] = "approval"
     title: str = Field(max_length=160)
     what: str = Field(max_length=512)
     requested_at: str = Field(max_length=80)
@@ -4439,6 +4501,76 @@ class DeliveryView(WireModel):
 class DeliveryPage(WireModel):
     """A conversation's deliveries, or every one, newest first."""
     items: list[DeliveryView] = Field(max_length=200)
+
+
+PageId = Annotated[str, StringConstraints(pattern=r"^page-[0-9a-f]{8}$")]
+PageColour = Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")]
+
+
+class PageDecisionView(WireModel):
+    """One decision on a page, as the person made it there; ``sent`` once they sent it to the chat."""
+    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")]
+    choice: str = Field(min_length=1, max_length=40)
+    note: str = Field(default="", max_length=2000)
+    label: str = Field(default="", max_length=200)
+    sent: bool = False
+
+
+class PageView(WireModel):
+    """A page the agent made in a chat (N5): what its card, panel and the Library show."""
+    page_id: PageId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    conversation_title: str = Field(default="", max_length=256)
+    title: str = Field(min_length=1, max_length=120)
+    version: int = Field(ge=1)
+    libraries: list[Literal["charts", "rowbot-style"]] = Field(default_factory=list, max_length=2)
+    created_at: str = Field(max_length=64)
+    updated_at: str = Field(max_length=64)
+    state_revision: int = Field(ge=0)
+    # Decisions not yet sent: the footer's "3 decisions · Send to Row-Bot".
+    pending: int = Field(ge=0, le=200)
+    decisions: list[PageDecisionView] = Field(default_factory=list, max_length=200)
+
+
+class PagePage(WireModel):
+    """Library › Pages, or one chat's pages: most recently changed first."""
+    items: list[PageView] = Field(max_length=500)
+
+
+class PageTheme(WireModel):
+    """Row-Bot's colours for both themes (token name to colour) and the one in use."""
+    mode: Literal["light", "dark"]
+    light: dict[str, PageColour] = Field(default_factory=dict, max_length=64)
+    dark: dict[str, PageColour] = Field(default_factory=dict, max_length=64)
+
+
+class PageFrameRequest(WireModel):
+    theme: PageTheme
+
+
+class PageFrame(WireModel):
+    """The page's frame address, served once to a frame with ``sandbox="allow-scripts"``."""
+    frame_url: Annotated[str, StringConstraints(pattern=r"^/page-frames/[0-9a-f]{32}$")]
+    page: PageView
+
+
+class PageStateWrite(WireModel):
+    """The page's whole new state (an object, up to 256 KB), from its bridge."""
+    state: dict[str, Any]
+
+
+class PageDecisionWrite(WireModel):
+    """One decision recorded by the page's bridge; a null choice clears it. Nothing is sent."""
+    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")]
+    choice: str | None = Field(default=None, min_length=1, max_length=40)
+    note: str = Field(default="", max_length=2000)
+    label: str = Field(default="", max_length=200)
+
+
+class PageDownload(WireModel):
+    """The page as one HTML file that works on its own (it saves nothing)."""
+    file_name: str = Field(min_length=1, max_length=96)
+    html: str = Field(min_length=1, max_length=8 * 1024 * 1024)
 
 
 class LocalAddressGrantView(WireModel):
@@ -4993,12 +5125,22 @@ class AgentStartPayload(WireModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=16000)]
 
 
+class ApprovalAnswer(WireModel):
+    """The person's answer to one of Row-Bot's questions (N4): the options picked, by position, or their own words."""
+
+    choices: list[Annotated[int, Field(ge=0, le=3)]] = Field(default_factory=list, max_length=4)
+    other: str = Field(default="", max_length=500)
+
+
 class ApprovalPayload(WireModel):
     decision: Literal["approve", "reject"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
     # "turn" also approves later actions of the same kind until the turn ends (F21); only kinds the view marks
     # repeatable take it, others are approved once.
     scope: Literal["once", "turn"] = "once"
+    # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
+    # person's input, never an approval of an action.
+    answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
 
 
 class DeckSetupPayload(WireModel):
@@ -5179,6 +5321,8 @@ class TaskEditableFields(WireModel):
     notify_only: bool
     notify_label: str = Field(max_length=4096)
     channels: list[OpaqueId] | None = Field(max_length=32)
+    # The IANA zone the schedule keeps its times in; None means the computer's.
+    timezone: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def prompt_budget(self) -> TaskEditableFields:
@@ -5227,6 +5371,15 @@ class TaskRunSummary(WireModel):
     finished_at: str | None = Field(max_length=80)
     steps_total: int = Field(ge=0)
     steps_done: int = Field(ge=0)
+    # The code folder the run worked in, by id and by name as it was then.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    workspace_name: str | None = Field(default=None, max_length=256)
+    # The scheduled time it missed while Row-Bot was closed, when it ran once on start instead.
+    late_for: str | None = Field(default=None, max_length=80)
+    # A plain sentence about how it ended, e.g. "Not approved in time".
+    notice: str | None = Field(default=None, max_length=512)
+    # The one thing the person can do about it: choose another code folder (it was removed).
+    fix: Literal["choose_folder"] | None = None
 
 
 class TaskRunPage(WireModel):
@@ -5242,6 +5395,24 @@ class TaskRunResult(WireModel):
     replayed: bool
 
 
+class TaskApprovalMedia(WireModel):
+    name: str = Field(max_length=256)
+    size: int = Field(ge=0)
+    # The first hex digits of the SHA-256 of its contents.
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{6,64}$")
+    kind: Literal["image", "video", "audio", "file"]
+
+
+class TaskApprovalCard(WireModel):
+    """Exactly what a person-only ("Always ask me") approval lets happen."""
+
+    action: str = Field(max_length=1024)
+    destination: str | None = Field(default=None, max_length=1024)
+    account: str | None = Field(default=None, max_length=256)
+    text: str | None = Field(default=None, max_length=16384)
+    media: list[TaskApprovalMedia] = Field(default_factory=list, max_length=16)
+
+
 class TaskApprovalReview(WireModel):
     id: OpaqueId
     task_id: OpaqueId
@@ -5254,6 +5425,11 @@ class TaskApprovalReview(WireModel):
     message_truncated: bool
     response_available: bool
     nonce: str | None = Field(default=None, max_length=128)
+    # "question": Row-Bot's question (N4), answered on its own card (/approvals/{id}), never approved here.
+    kind: Literal["approval", "question"] = "approval"
+    # The person's own "Always ask me" approval: no approval level answers it for them.
+    person_only: bool = False
+    card: TaskApprovalCard | None = None
 
 
 class TaskApprovalPage(WireModel):
@@ -5560,6 +5736,8 @@ class TaskGraphFields(WireModel):
     apps: list[Annotated[str, StringConstraints(min_length=3, max_length=512)]] | None = Field(
         default=None, max_length=8
     )
+    # "Always ask me": what the step does waits for the person's own approval under every level.
+    always_ask: bool | None = None
 
 
 class TaskGraphStepEdit(WireModel):
@@ -5594,6 +5772,14 @@ class TaskSettingsFields(WireModel):
     agent_profile_id: str = Field(min_length=1, max_length=128)
     approval_mode: ApprovalLevel
     persistent_enabled: bool
+    # The workflow's own code folder: every step runs in it. None: the conversation's.
+    workspace_id: str | None = Field(default=None, max_length=128)
+    # A scheduled time while Row-Bot was closed: skip it, or run once when Row-Bot starts.
+    missed_runs: Literal["skip", "run_once"] = "skip"
+    # Apps and tools whose actions always wait for the person ("Always ask me").
+    always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
+        default_factory=list, max_length=16
+    )
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -5607,6 +5793,9 @@ class TaskSettingsSnapshot(WireModel):
     conversation_id: OpaqueId | None
     # The person turned Hands-off on once on this install: choosing it needs no dialog again.
     full_autonomy_confirmed: bool = False
+    # The saved folder's name (kept when it is removed) and whether it is still a code folder.
+    workspace_name: str | None = Field(default=None, max_length=256)
+    workspace_available: bool = True
 
 
 class TaskSettingsUpdatePayload(WireModel):
@@ -5915,10 +6104,18 @@ class ArtifactShareChannel(WireModel):
     available: bool
 
 
+class ArtifactShareXAccount(WireModel):
+    id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{1,50}$")
+    name: str = Field(default="", max_length=80)
+
+
 class ArtifactShareChannels(WireModel):
     items: list[ArtifactShareChannel] = Field(max_length=50)
     revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     next_cursor: str | None = Field(max_length=256)
+    # The X accounts a post can go out as (N7); with several, the person picks one.
+    x_accounts: list[ArtifactShareXAccount] = Field(default_factory=list, max_length=16)
 
 
 class ArtifactShareReview(WireModel):
@@ -6200,6 +6397,7 @@ class Command(WireModel):
         "conversation.create",
         "conversation.rename",
         "conversation.pin",
+        "conversation.incognito",
         "conversation.delete",
         "conversation.restore",
         "conversation.submit",
@@ -6297,11 +6495,6 @@ class Command(WireModel):
         "developer.repository.sandbox.configure",
         "developer.repository.sandbox.rebuild",
         "developer.repository.sandbox.cleanup",
-        "browser.navigate",
-        "browser.take_over",
-        "browser.check",
-        "browser.back",
-        "browser.end",
         "mcp.facade.control",
         "knowledge.create",
         "knowledge.edit",
@@ -6359,6 +6552,8 @@ class Command(WireModel):
             self.payload.pop(
                 "write_targets", None
             )  # Preserve existing durable v1 command verifiers.
+        if self.type == "conversation.submit" and "page_id" not in supplied:
+            self.payload.pop("page_id", None)
         if self.type == "conversation.controls" and "reasoning" not in supplied:
             self.payload.pop("reasoning", None)
         if (self.type in {"conversation.controls", "task.settings.update"}
@@ -6388,6 +6583,7 @@ COMMAND_PAYLOADS = {
     "conversation.create": CreatePayload,
     "conversation.rename": RenamePayload,
     "conversation.pin": PinPayload,
+    "conversation.incognito": IncognitoPayload,
     "conversation.delete": DeletePayload,
     "conversation.restore": EmptyPayload,
     "conversation.submit": SubmitPayload,
@@ -6487,11 +6683,6 @@ COMMAND_PAYLOADS = {
     "developer.repository.sandbox.configure": DeveloperRepositorySandboxPayload,
     "developer.repository.sandbox.rebuild": DeveloperRepositoryRevisionPayload,
     "developer.repository.sandbox.cleanup": DeveloperRepositoryRevisionPayload,
-    "browser.navigate": BrowserCommandNavigatePayload,
-    "browser.take_over": BrowserCommandRevisionPayload,
-    "browser.check": BrowserCommandRevisionPayload,
-    "browser.back": BrowserCommandRevisionPayload,
-    "browser.end": BrowserCommandRevisionPayload,
     "mcp.facade.control": McpChatPayload,
     "knowledge.create": KnowledgeWritePayload,
     "knowledge.edit": KnowledgeWritePayload,
@@ -6616,6 +6807,23 @@ class ApprovalSetup(WireModel):
     folders: list[ApprovalFolderChoice] = Field(default_factory=list, max_length=8)
 
 
+class ApprovalQuestionOption(WireModel):
+    """One option of a question card; the recommended one carries its own tag."""
+
+    label: str = Field(min_length=1, max_length=60)
+    description: str = Field(default="", max_length=160)
+    recommended: bool = False
+
+
+class ApprovalQuestion(WireModel):
+    """One of Row-Bot's questions (N4): a header chip, the question and 2 to 4 options; "Other" is always offered."""
+
+    header: str = Field(min_length=1, max_length=12)
+    question: str = Field(min_length=1, max_length=300)
+    multi_select: bool = False
+    options: list[ApprovalQuestionOption] = Field(min_length=2, max_length=4)
+
+
 class ToolActivity(WireModel):
     state: Literal["tool_call", "tool_done"]
     tool_name: str = Field(default="", max_length=128)
@@ -6668,6 +6876,10 @@ class ApprovalRequired(WireModel):
     # The card's question in Row-Bot's own words, when the action has one ("Allow Row-Bot's browser to open
     # localhost:5173 in this chat?"); otherwise the card asks from the action's name.
     question: str = Field(default="", max_length=240)
+    # Row-Bot's questions with options (N4): a question card, answered rather than approved.
+    questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
 
 
 class GenerationError(WireModel):
@@ -7045,6 +7257,8 @@ class ConversationView(WireModel):
     revision: Revision
     title: str = Field(max_length=256)
     pinned: bool
+    # Incognito (N11): nothing in it is read for memory, and memory is saved only when the person says so.
+    incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
@@ -7193,10 +7407,18 @@ class AppViewAppSetting(WireModel):
     enabled: bool
 
 
+class TraceQuestionAnswer(WireModel):
+    """One answered question, as its collapsed card says it ("Beta timing: Beta.1 now")."""
+
+    header: str = Field(min_length=1, max_length=12)
+    answer: str = Field(min_length=1, max_length=600)
+
+
 class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
         "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
+        "question_answered", "page",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7229,6 +7451,11 @@ class TraceSpecialization(WireModel):
     # sandbox_unprepared (a test run that lacked its tools) says which in error_code:
     # "pytest_missing" or "packages_missing".
     job_id: str = Field(default="", max_length=64, pattern=r"^(prep-[0-9a-f]{8})?$")
+    # question_answered (N4): how Row-Bot's question ended and, when answered, what the person chose.
+    outcome: Literal["", "answered", "skipped", "timed_out"] = ""
+    answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
+    # page (N5): the page a step made or changed; the card re-reads its title and opens it by id.
+    page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -7284,7 +7511,7 @@ class TranscriptRow(WireModel):
     # A server-started follow-up (a goal step, work continuing in a resource
     # the assistant created), a delegated agent's task or its parent's
     # messages to it: the row's text is a short public note.
-    note: Literal["continuation", "agent_task", "agent_guidance"] | None = None
+    note: Literal["continuation", "agent_task", "agent_guidance", "page"] | None = None
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
@@ -7374,6 +7601,19 @@ class NoticeFrame(WireModel):
 
     notices_epoch: OpaqueId
     notice: Notice
+
+
+class LiveFrame(WireModel):
+    """Which background state changed (B407): topic names and revisions only, never content.
+
+    Data of an app-wide live stream `live` frame, and a long poll's answer. A
+    client reads a topic again through its own API when its revision moves
+    on, and every topic when the epoch (the server process) changes.
+    """
+
+    epoch: OpaqueId
+    revision: int = Field(ge=0, le=9007199254740991)
+    topics: dict[LiveTopic, Annotated[int, Field(ge=0, le=9007199254740991)]] = Field(max_length=16)
 
 
 class EventPage(WireModel):
@@ -7545,8 +7785,35 @@ class HandshakeView(Choices):
     session_ttl_seconds: int = Field(ge=0, le=43200)
     # The server's current UTC offset: times it sends without an offset are its wall clock (B341).
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
+    # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
+    server_timezone: str | None = Field(default=None, max_length=64)
     native_adapter: NativeAdapter
     limits: Limits
+
+
+class XPostMedia(WireModel):
+    """A photo or video on an X post's card: its name, size, the start of its SHA-256 and a small picture."""
+
+    name: str = Field(min_length=1, max_length=256)
+    size: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{12}$")
+    kind: Literal["image", "gif", "video"]
+    thumbnail: str = Field(default="", max_length=32768, pattern=r"^(data:image/jpeg;base64,[A-Za-z0-9+/=]+)?$")
+
+
+class XPostApproval(WireModel):
+    """What an X post's approval lets happen (N7); the approval is bound to every field of it."""
+
+    account_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{1,50}$")
+    name: str = Field(default="", max_length=80)
+    action: Literal["post", "reply", "quote", "delete"]
+    text: str = Field(default="", max_length=25000)
+    target_id: str = Field(default="", pattern=r"^[0-9]{0,20}$")
+    target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
+    # The text of the post a delete removes, when X said it.
+    target_text: str = Field(default="", max_length=25000)
+    media: list[XPostMedia] = Field(default_factory=list, max_length=4)
 
 
 class ApprovalView(WireModel):
@@ -7571,6 +7838,12 @@ class ApprovalView(WireModel):
     reviewer_reason: str = Field(default="", max_length=240)
     # The card's question in Row-Bot's own words, when the action has one.
     question: str = Field(default="", max_length=240)
+    # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
+    questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
+    # A post, reply, quote or delete on X (N7): exactly what goes out, and as which account.
+    x_post: XPostApproval | None = None
     policy_revision: Revision
     nonce: str = Field(min_length=32, max_length=256)
 
@@ -8391,6 +8664,9 @@ class AppView(AppRef):
     docs_url: str = Field(max_length=512)
     key_url: str = Field(max_length=512)
     icon_license: IconLicense | None
+    # What to know before setting it up, and another app it points to for that.
+    note: str = Field(default="", max_length=256)
+    see_also: str = Field(default="", pattern=r"^([a-z0-9][a-z0-9-]{0,63})?$")
 
 
 class AppList(WireModel):

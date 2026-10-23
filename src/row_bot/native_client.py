@@ -22,6 +22,10 @@ from urllib.parse import urlsplit
 
 _REFERENCE = re.compile(r"[A-Za-z0-9:_-]{1,256}")
 _SCOPE_VALUE = re.compile(r"[A-Za-z0-9:_.-]{1,256}")
+# The app's own pages. Home and its tabs are "/app-v2" with no trailing slash
+# (React Router writes "/" under its basename that way), and a conversation's
+# address carries its id percent-encoded (B406).
+_SHELL_PATH = re.compile(r"/app-v2(?:/(?:[A-Za-z0-9_-]|%[0-9A-Fa-f]{2})+)*/?")
 _OPERATIONS = frozenset({"discover", "select_file", "select_folder", "clipboard_read",
                          "clipboard_write", "open_external", "managed_window", "save",
                          "terminal_open", "terminal_external", "buddy_placement", "buddy_follow",
@@ -345,7 +349,7 @@ class NativeClientBridge:
                 return False
             if self._shell_path is not None:
                 return parsed.path.rstrip("/") == self._shell_path.rstrip("/")
-            return bool(re.fullmatch(r"/app-v2/(?:[A-Za-z0-9_-]+/?)*", parsed.path))
+            return bool(_SHELL_PATH.fullmatch(parsed.path))
         except Exception:
             return False
 

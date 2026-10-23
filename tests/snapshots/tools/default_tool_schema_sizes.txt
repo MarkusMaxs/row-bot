@@ -8,6 +8,7 @@ agent_stop: 355
 agent_wait: 725
 analyze_image: 1500
 arxiv: 607
+ask_person: 1021
 calculate: 1020
 check_process: 638
 clone_repository: 608
@@ -53,6 +54,9 @@ goal_update: 1053
 link_memories: 578
 list_conversations: 280
 list_memories: 453
+page_create: 986
+page_read: 560
+page_update: 918
 read_terminal: 411
 read_tool_output: 456
 read_url: 678
@@ -98,4 +102,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (100 tools): 71217
+TOTAL (104 tools): 74702

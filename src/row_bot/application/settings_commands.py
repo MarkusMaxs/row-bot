@@ -19,6 +19,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import time
 from typing import Any
 from uuid import UUID
 
@@ -138,6 +139,8 @@ _BOOL_FIELDS = {
     ("accounts", "gmail.enabled"),
     ("accounts", "calendar.enabled"),
     ("accounts", "x.enabled"),
+    ("accounts", "outlook_mail.enabled"),
+    ("accounts", "outlook_calendar.enabled"),
     ("preferences", "identity.self_improvement_enabled"),
     ("preferences", "dream_cycle.enabled"),
 }
@@ -455,11 +458,11 @@ def review_settings_update(
     elif (page, field) == ("system", "computer_use.check"):
         summary = "Run local Cua Driver diagnostics and check required permissions"
     elif (page, field) == ("system", "computer_use.test"):
-        summary = "Open Calculator briefly and verify local Computer Use access"
+        summary = "Open Calculator and take a picture of it, to show computer use works"
     elif (page, field) == ("system", "computer_use.use_managed_runtime"):
         summary = "Use Row-Bot's reviewed managed Cua Driver runtime"
     elif (page, field) == ("system", "computer_use.remove"):
-        summary = "Remove Row-Bot's managed Cua Driver runtime and disable Computer Use"
+        summary = "Remove Row-Bot's Cua Driver and turn computer use off"
     elif (page, field) == ("system", "computer_use.open_accessibility"):
         summary = "Open macOS Accessibility permission settings"
     elif (page, field) == ("system", "computer_use.open_screen_recording"):
@@ -531,7 +534,16 @@ def _write_document(path: Path, document: Mapping[str, Any]) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        # Windows refuses to replace a file another program (antivirus, an indexer) is reading (5 or 32);
+        # it lets go within moments (B408).
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                break
+            except OSError as exc:
+                if getattr(exc, "winerror", None) not in (5, 32) or attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     except (OSError, TypeError, ValueError, RecursionError):
         try:
             temporary.unlink(missing_ok=True)
@@ -596,9 +608,12 @@ def _write_json_setting(root: Path, page: str, field: str, value: Any) -> None:
 
 def _write_tool_setting(root: Path, page: str, field: str, value: Any) -> None:
     path = root / "tools_config.json"
+    from row_bot import tool_configuration
     from row_bot.providers.config import provider_config_transaction
 
-    with provider_config_transaction(path):
+    # The tool registry saves this file too: read and replace it between its saves, never in the middle of
+    # one, when the file is briefly away and this read would start from nothing (B408).
+    with provider_config_transaction(path), tool_configuration.transaction():
         document = _read_document(path)
         tools = document.get("tools")
         if tools is None:
@@ -802,7 +817,7 @@ def _run_system_action(field: str) -> dict[str, str] | None:
         test_local_computer_use()
         return {
             "code": "ready",
-            "message": "Computer Use test passed.",
+            "message": "Computer use works: Row-Bot opened Calculator and saw its window.",
             "remediation": "",
         }
     if field == "computer_use.use_managed_runtime":
@@ -826,7 +841,7 @@ def _run_system_action(field: str) -> dict[str, str] | None:
         return {
             "code": "opened",
             "message": f"Opened macOS {'Accessibility' if permission == 'accessibility' else 'Screen Recording'} settings.",
-            "remediation": "Switch on Row-Bot, then run Check Computer Use setup again.",
+            "remediation": "Switch on Row-Bot, then run Check setup again.",
         }
     if field in {"tunnel.check", "tunnel.start_main", "tunnel.stop_main"}:
         from row_bot.app_port import get_app_port
@@ -971,10 +986,10 @@ def _apply(
         _write_tool_setting(root, "system", "computer_use.enabled", False)
         action_result = {
             "code": "removed" if removed else "not_installed",
-            "message": "Computer Use runtime removed."
+            "message": "Cua Driver removed."
             if removed
-            else "Computer Use runtime was not installed.",
-            "remediation": "Install the reviewed runtime to use Computer Use again.",
+            else "Cua Driver wasn't installed.",
+            "remediation": "Install Cua Driver to use computer use again.",
         }
     elif (page, field) == ("system", "workspace.folder_grant"):
         if resolve_folder_grant is None:

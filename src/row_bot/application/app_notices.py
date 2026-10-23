@@ -20,6 +20,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Literal
+from row_bot.application.live_updates import publish as _publish_live
 
 Level = Literal["info", "warning", "error"]
 
@@ -106,8 +107,10 @@ class NoticeJournal:
             return notice
 
     def startup_warning(self, message: str, *, source: str = "startup") -> Notice:
-        return self.post(title="Start-up warning", message=message, level="warning", source=source,
-                         startup=True)
+        notice = self.post(title="Start-up warning", message=message, level="warning", source=source,
+                           startup=True)
+        _publish_live("monitor")  # Monitor lists start-up warnings (B407).
+        return notice
 
     def since(self, after: int = 0) -> list[Notice]:
         with self._lock:

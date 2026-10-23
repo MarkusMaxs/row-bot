@@ -1,0 +1,428 @@
+/*
+ * Row-Bot's browser (N12-A): the Browser pane (docked, popped out, full
+ * screen on a phone), its live step in the chat and the thumbnail on an
+ * approval card. Existing tokens only. The page itself is a picture; the
+ * chrome around it is as quiet as a browser's.
+ */
+
+.browser-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.browser-chrome {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.browser-nav,
+.browser-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+.browser-nav svg,
+.browser-tools svg,
+.browser-tab svg,
+.browser-status svg {
+  width: 16px;
+  height: 16px;
+}
+
+.browser-address {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+.browser-address-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.browser-address input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--space-3) 0 30px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font-size: var(--text-13);
+  text-overflow: ellipsis;
+}
+.browser-address input:hover {
+  border-color: var(--border-subtle);
+}
+.browser-address input:focus-visible {
+  border-color: var(--border-control);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  background: var(--surface);
+}
+
+.browser-tabs {
+  display: flex;
+  gap: 2px;
+  padding: var(--space-1) var(--space-2) 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-hairline);
+  scrollbar-width: thin;
+}
+.browser-tab {
+  display: flex;
+  flex: 0 1 200px;
+  align-items: center;
+  min-width: 96px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  color: var(--text-secondary);
+}
+.browser-tab[data-active='true'] {
+  border-color: var(--border-hairline);
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.browser-tab-title {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px 6px 10px;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-12);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.browser-tab-title:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* One line: who's driving, and the one thing to do about it. */
+.browser-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.browser-status[data-tone='accent'],
+.browser-status[data-tone='info'] {
+  background: var(--accent-subtle);
+}
+.browser-status-icon {
+  flex: none;
+  color: var(--accent-solid);
+}
+.browser-status-text {
+  flex: 1;
+  min-width: 0;
+}
+.browser-status-text strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.browser-status .button {
+  flex: none;
+}
+/* The composer's Stop at the status line's size (touch keeps its larger target). */
+@media (pointer: fine) {
+  .browser-status .browser-stop.button {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+  }
+}
+
+.browser-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  touch-action: none;
+  user-select: none;
+}
+/* While Row-Bot acts, the page is outlined in the accent: it's Row-Bot's turn. */
+.browser-viewport[data-driving='agent']::after,
+.browser-viewport[data-driving='person']::after {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent-solid);
+  content: '';
+  pointer-events: none;
+}
+.browser-viewport[data-driving='person']::after {
+  border-color: var(--status-success-text);
+}
+.browser-picture {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: top center;
+  cursor: default;
+}
+.browser-keys {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+}
+.browser-viewport:has(.browser-keys:focus-visible)::before {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+  content: '';
+  pointer-events: none;
+}
+.browser-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 40%;
+  height: 2px;
+  background: var(--accent-solid);
+  animation: browser-loading 1.2s var(--ease-standard) infinite;
+}
+@keyframes browser-loading {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .browser-loading {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
+}
+.browser-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: var(--space-2);
+  height: 100%;
+  min-height: 220px;
+  padding: var(--space-6);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.browser-state strong {
+  color: var(--text-primary);
+  font-size: var(--text-15);
+  font-weight: var(--weight-semibold);
+}
+.browser-state p {
+  max-width: 34ch;
+  margin: 0;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.browser-state-icon {
+  color: var(--text-muted);
+}
+.browser-state .skeleton {
+  width: min(320px, 80%);
+}
+.browser-reconnecting {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  z-index: 2;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  transform: translateX(-50%);
+}
+
+/* Popped out to its own window, or a new tab. */
+.browser-window {
+  height: 100vh;
+  height: 100dvh;
+  background: var(--surface);
+}
+
+/* The live step in the chat and an approval's picture. */
+.browser-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding: 10px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+.browser-step-words {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  justify-items: start;
+}
+.browser-step-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  font-weight: var(--weight-semibold);
+  line-height: 20px;
+}
+.browser-step-site {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-weight: var(--weight-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-step-doing {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-step-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-link);
+  font: inherit;
+  font-size: var(--text-13);
+  cursor: pointer;
+}
+.browser-step-open:hover {
+  text-decoration: underline;
+}
+.browser-step-open:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.browser-thumb {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 128px;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+.browser-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+.browser-thumb:hover {
+  border-color: var(--border-strong);
+}
+.browser-thumb:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.browser-thumb-empty {
+  color: var(--text-muted);
+}
+.approval-card-context .browser-thumb {
+  width: min(240px, 100%);
+  margin: var(--space-1) 0;
+}
+/* A window's picture is shown whole: Row-Bot's ring may be anywhere in it. */
+.computer-thumb img {
+  object-fit: contain;
+  object-position: center;
+}
+
+/* Signed-in sites (Settings › Browser and the pane's menu). */
+.browser-sites {
+  display: grid;
+  gap: var(--space-3);
+}
+.browser-sites-all {
+  justify-self: start;
+}
+.browser-sites-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+}
+.browser-sites-error {
+  margin: 0;
+  color: var(--status-danger-text);
+  font-size: var(--text-13);
+}
+
+@media (max-width: 640px) {
+  /* A phone shows the pane full screen already. */
+  .browser-pop-out {
+    display: none;
+  }
+  .browser-chrome {
+    flex-wrap: wrap;
+  }
+  .browser-address {
+    flex-basis: 100%;
+    order: 3;
+  }
+  .browser-tools {
+    margin-left: auto;
+  }
+  .browser-status {
+    flex-wrap: wrap;
+  }
+  .browser-thumb {
+    width: 96px;
+  }
+}

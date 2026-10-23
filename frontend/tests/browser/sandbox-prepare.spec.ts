@@ -34,13 +34,13 @@ async function everywhere(
   name: string,
   settle: () => Promise<void> = async () => {},
 ) {
-  await settle();
+  await expect(settle).toPass();
   await views(page, info, name);
   await page.setViewportSize(PHONE);
-  await settle();
+  await expect(settle).toPass();
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
-  await settle();
+  await expect(settle).toPass();
 }
 
 /** A new chat with a new draft code folder, made a Docker-sandbox Python project by the fixture. */

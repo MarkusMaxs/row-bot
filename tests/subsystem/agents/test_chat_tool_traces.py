@@ -10,8 +10,7 @@ from row_bot.application.conversation_traces import (
     classify_tool_result,
     is_browser_tool_name,
 )
-from row_bot.computer_use.service import ComputerUseError
-from row_bot.tools.computer_use_tool import _computer_error_payload
+from row_bot.computer_use.service import ComputerError
 
 
 @pytest.mark.parametrize(
@@ -79,22 +78,14 @@ def test_browser_group_labels_are_activity_summaries():
     assert is_browser_tool_name("Browser Click")
 
 
-def test_protected_computer_surface_is_terminal_and_never_a_driver_failure() -> None:
-    content = _computer_error_payload(
-        "list_windows",
-        ComputerUseError(
-            "Row-Bot and its Computer control surfaces cannot be targeted.",
-            code="hard_blocked",
-        ),
-    )
-    payload = json.loads(content)
+def test_computer_refusals_show_as_blocked_and_failures_as_failed_with_their_fix() -> None:
+    refused = ComputerError("Row-Bot can't control its own window.", code="not_allowed").text()
+    failed = ComputerError("Cua Driver isn't installed.", fix="Install it.", code="setup_not_installed").text()
 
-    assert payload["error_code"] == "hard_blocked"
-    assert payload["retryable"] is False
-    assert payload["terminal"] is True
-    assert "protected" in payload["display_summary"].casefold()
-    assert "driver" not in payload["display_summary"].casefold()
-    assert classify_tool_result(content) in {"failed", "blocked", "cancelled", "uncertain"}
+    assert refused == "Blocked: Row-Bot can't control its own window."
+    assert classify_tool_result(refused) == "blocked"
+    assert failed == "Error: Cua Driver isn't installed.\nFix: Install it."
+    assert classify_tool_result(failed) == "failed"
 
 
 def test_tool_invoke_trace_uses_underlying_name_without_nested_arguments(monkeypatch):

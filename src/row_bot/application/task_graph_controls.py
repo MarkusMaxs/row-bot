@@ -45,6 +45,8 @@ class TaskGraphFields:
     pass_output: bool | None = None
     run_ids: tuple[str, ...] | None = None
     apps: tuple[str, ...] | None = None  # A prompt step's apps (item ids): it uses only those, as an @mention would.
+    # "Always ask me" (N9): what the step does waits for the person's own approval under every level.
+    always_ask: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -69,11 +71,12 @@ class TaskGraphSnapshot:
 
 
 _FIELDS = {
-    "prompt": {"prompt", "next", "on_error", "max_retries", "retry_delay_seconds", "apps"},
+    "prompt": {"prompt", "next", "on_error", "max_retries", "retry_delay_seconds", "apps",
+               "always_ask", "timeout_minutes"},
     "condition": {"condition", "if_true", "if_false"},
     "approval": {"message", "timeout_minutes", "if_approved", "if_denied"},
     "subtask": {"task_id", "pass_output", "on_error", "next"},
-    "notify": {"message", "channel", "next"},
+    "notify": {"message", "channel", "next", "always_ask", "timeout_minutes"},
     "delegate_agent": {"objective", "profile", "developer_workspace_id", "editing_safety",
                        "return_mode", "context", "timeout_seconds", "on_error", "next"},
     "wait_for_agents": {"run_ids", "timeout_seconds", "on_error", "next"},
@@ -171,7 +174,7 @@ def _validate_fields(kind: str, fields: TaskGraphFields, *, semantic: bool) -> N
             low, high = _NUMBERS[name]
             if type(value) is not int or not low <= value <= high:
                 _fail()
-        elif name == "pass_output":
+        elif name in {"pass_output", "always_ask"}:
             if type(value) is not bool:
                 _fail()
         elif name == "run_ids":

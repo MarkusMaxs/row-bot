@@ -11,12 +11,16 @@ import type {
   BackgroundProcessView,
 } from '../../api/types';
 import type { Tone } from '../../ui/primitives';
+import { LIVE_FALLBACK_MS, type LiveUpdates } from '../../api/live-updates';
+import { useLive } from '../../live';
 
 /**
  * Background processes (F1, F6): a server or watcher the agent started, or a
  * long command that carried on in the background. The card in the
  * conversation and the Monitor list read them from one feed per scope (a
- * conversation, or every one), so a page with many cards polls once.
+ * conversation, or every one), so a page with many cards polls once. A feed
+ * reads at once when a process starts, stops or ends (live updates, B407);
+ * its own pace is the fallback while the live stream is down.
  */
 
 export type ProcessIo = {
@@ -72,6 +76,8 @@ function live(view: BackgroundProcessView) {
 class ProcessFeed {
   state: ProcessFeedState = EMPTY;
   load: ProcessIo['load'];
+  live: LiveUpdates | undefined;
+  private stopLive: (() => void) | undefined;
   private readonly listeners = new Set<() => void>();
   private readonly wanted = new Map<string, number>();
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -91,6 +97,7 @@ class ProcessFeed {
     this.listeners.add(listener);
     if (this.listeners.size === 1) {
       document.addEventListener('visibilitychange', this.onVisibility);
+      this.stopLive = this.live?.subscribe('processes', () => this.schedule(0));
       this.schedule(0);
     }
     return () => {
@@ -123,7 +130,12 @@ class ProcessFeed {
         )
       : [view, ...this.state.items];
     this.publish({ ...this.state, items, readAt: Date.now() });
-    this.schedule(PROCESS_POLL_MS);
+    this.schedule(this.pace(PROCESS_POLL_MS));
+  }
+
+  /** Its own pace while the live stream is down, else a minute's fallback. */
+  private pace(fast: number) {
+    return this.live?.connected ? LIVE_FALLBACK_MS : fast;
   }
 
   refresh() {
@@ -165,11 +177,14 @@ class ProcessFeed {
       else this.wanted.set(processId, tries - 1);
     const busy = this.state.items.some(live) || this.wanted.size > 0;
     // A conversation's cards stop reading once everything there has ended.
-    if (busy) this.schedule(PROCESS_POLL_MS);
-    else if (this.scope === undefined) this.schedule(PROCESS_IDLE_POLL_MS);
+    if (busy) this.schedule(this.pace(PROCESS_POLL_MS));
+    else if (this.scope === undefined)
+      this.schedule(this.pace(PROCESS_IDLE_POLL_MS));
   }
 
   private dispose() {
+    this.stopLive?.();
+    this.stopLive = undefined;
     clearTimeout(this.timer);
     this.reading?.abort();
     document.removeEventListener('visibilitychange', this.onVisibility);
@@ -180,13 +195,18 @@ class ProcessFeed {
 const feeds = new Map<string, ProcessFeed>();
 const key = (scope: string | undefined) => scope ?? '*';
 
-function feedFor(load: ProcessIo['load'], scope: string | undefined) {
+function feedFor(
+  load: ProcessIo['load'],
+  scope: string | undefined,
+  live: LiveUpdates | undefined,
+) {
   let feed = feeds.get(key(scope));
   if (!feed) {
     feed = new ProcessFeed(scope, load);
     feeds.set(key(scope), feed);
   }
   feed.load = load;
+  feed.live = live;
   return feed;
 }
 
@@ -201,7 +221,8 @@ export function useBackgroundProcesses(
   io: ProcessIo | null | undefined,
   conversationId?: string,
 ) {
-  const feed = io ? feedFor(io.load, conversationId) : null;
+  const live = useLive();
+  const feed = io ? feedFor(io.load, conversationId, live) : null;
   const state = useSyncExternalStore(
     feed?.subscribe ?? idleSubscribe,
     feed?.getSnapshot ?? idleSnapshot,

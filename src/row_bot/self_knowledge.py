@@ -116,16 +116,25 @@ FEATURE_MANIFEST: list[dict[str, str]] = [
         "configure": "Settings → System → Browser and Computer Use to enable Browser and explicitly install its runtime if needed.",
     },
     {
-        "feature": "Computer Use (Beta)",
-        "keywords": "computer use, desktop, native app, calculator, notepad, textedit, os dialog, take over",
-        "description": "Opt-in native desktop automation using a separate task-scoped Cua Driver session with local Stop, Take over, approvals, and ephemeral target-window screenshots.",
-        "configure": "Settings → System → Browser and Computer Use. Accept the Cua telemetry warning, then explicitly install the pinned driver.",
+        "feature": "Computer use",
+        "keywords": "computer use, desktop, native app, calculator, notepad, textedit, os dialog, stop bar",
+        "description": "Opt-in: Row-Bot works in an app on this computer with the real mouse and keyboard while you watch, through Cua Driver. A bar on screen shows it; Esc or Stop ends it, and using the mouse yourself pauses it. It asks before the first use of each app in a chat and before paying, sending, deleting or changing settings, and never types passwords.",
+        "configure": "Settings → System → Browser and computer use. Review the Cua Driver notice, then install the reviewed driver.",
     },
     {
         "feature": "Gmail & Calendar",
         "keywords": "email, gmail, calendar, google, events, send email, draft",
         "description": "Read, draft, and send emails. Create and manage Google Calendar events.",
         "configure": "Settings → Accounts to connect your Google account.",
+    },
+    {
+        "feature": "Outlook mail & calendar",
+        "keywords": "outlook, microsoft, office 365, microsoft 365, exchange, hotmail, email, calendar, invitations",
+        "description": "Search, read, draft, file and send Outlook email, and manage the Outlook calendar, through the "
+                       "person's own Microsoft app (no client secret). Sending, replying, forwarding, deleting and "
+                       "invitations always ask first. Sign in on this computer, or from a phone with a code.",
+        "configure": "Settings → Apps → Outlook: register an app in Microsoft Entra as the guide shows, paste its "
+                     "client ID, then sign in.",
     },
     {
         "feature": "Shell Access",

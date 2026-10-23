@@ -129,6 +129,27 @@ def test_navigation_reload_close_and_expiry_invalidate_proof(native, change: str
     assert driver.calls == []
 
 
+@pytest.mark.parametrize("path", ["/app-v2", "/app-v2?tab=monitor", "/app-v2/?tab=workflows",
+                                  "/app-v2/conversations/tg%3A42", "/app-v2/settings/providers/"])
+def test_home_its_tabs_and_encoded_conversations_keep_the_bridge(native, path: str) -> None:
+    # Home is "/app-v2" with no trailing slash once the app navigates to it;
+    # the bridge used to drop there, so the window kept reconnecting (B406).
+    bridge, proof, driver, state, _ = native
+    state["url"] = "http://localhost:8080" + path
+    assert bridge.native_client_dispatch(proof, "clipboard_read", {})["status"] == "ok"
+    assert bridge._bind_loaded_document() is not None
+
+
+@pytest.mark.parametrize("path", ["/app-v2x", "/app-v2.html", "/app-v2/assets/index.js", "/api/v1/files",
+                                  "/app-v2//x", "/app-v2/%zz"])
+def test_other_pages_on_the_origin_never_get_the_bridge(native, path: str) -> None:
+    bridge, proof, driver, state, _ = native
+    state["url"] = "http://localhost:8080" + path
+    assert bridge.native_client_dispatch(proof, "clipboard_read", {})["status"] == "unavailable"
+    assert bridge._bind_loaded_document() is None
+    assert driver.calls == []
+
+
 def test_late_picker_and_save_do_not_register_or_write_after_navigation(native) -> None:
     bridge, proof, driver, _, registered = native
     driver.on_select = bridge._invalidate
