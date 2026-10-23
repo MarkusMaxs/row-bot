@@ -91,6 +91,7 @@ import { clientError } from '../../api/errors';
 import Navigation, { NavigationRail } from './Navigation';
 import { ContextHostContext, useContextHostOwner } from './context-host';
 import Home from './Home';
+import InstallCountCard from './InstallCountCard';
 import useNewChat from './useNewChat';
 import { reconcilePanelPresentation } from '../panels/presentation';
 import Conversation from './Conversation';
@@ -1706,6 +1707,7 @@ export default function Workspace() {
           </a>
         )}
         <div className="context-parking" ref={contextParking} hidden />
+        <InstallCountCard />
         {!desktop && !conversationVisible && !compact && !settingsOpen && (
           // Home and routed views: one 48px bar. A conversation and Settings
           // carry these controls in their own header (B119); a panel sheet

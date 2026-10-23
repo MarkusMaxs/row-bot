@@ -4878,3 +4878,69 @@ button.settings-mcp-server-name:hover {
     padding-inline-start: 16px;
   }
 }
+
+/* N6: what an installation count sends (the card and Settings › System › Privacy). */
+.install-count-facts {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+.install-count-facts > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 30%) 1fr;
+  gap: 4px 12px;
+}
+.install-count-facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-13);
+}
+.install-count-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-13);
+}
+.install-count-service {
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+}
+.install-count-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-hairline);
+  font-weight: var(--weight-medium);
+}
+.install-count-actions {
+  justify-content: flex-end;
+}
+.privacy-contacts {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.privacy-contacts li {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-13);
+}
+.privacy-contacts span {
+  color: var(--text-secondary);
+}
+.privacy-contacts a {
+  color: var(--text-link);
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .install-count-facts > div {
+    grid-template-columns: 1fr;
+  }
+  .install-count-actions .button {
+    flex: 1;
+    min-height: 44px;
+  }
+}
