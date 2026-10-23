@@ -214,7 +214,9 @@ render();
 
 ### A dashboard (charts, a table with sort and filter, Refresh)
 
-data: `{"title", "updated", "metrics": [{"label", "value"}], "chart": {"labels": [], "series": [{"label", "values": []}]}, "columns": [{"key", "label", "number": true}], "rows": [{}]}`.
+data: `{"title", "updated", "metrics": [{"label", "value"}], "chart": {"labels": [], "series": [{"label", "values": []}], "stacked": true}, "columns": [{"key", "label", "number": true}], "rows": [{}]}`.
+`stacked` shows parts of one total (online and shops) as one bar; leave it out to compare series side by side.
+Check the numbers agree: the metrics, the chart and the table come from the same data.
 Use `libraries: ["charts", "rowbot-style"]`. Refresh records a choice; when
 it arrives, gather the numbers again and `page_update(page, data=…)`.
 
@@ -241,9 +243,9 @@ function drawChart() {
   chart = new Chart(document.getElementById('chart'), { type: 'bar',
     data: { labels: d.chart.labels, datasets: d.chart.series.map((s, i) => ({ label: s.label, data: s.values,
       backgroundColor: t[`chart-series-${(i % 6) + 1}`], borderRadius: 4 })) },
-    options: { maintainAspectRatio: false, plugins: { legend: { labels: { color: t['text-muted'] } } },
-      scales: { x: { ticks: { color: t['chart-axis'], autoSkip: true, maxRotation: 0 }, grid: { display: false } },
-                y: { ticks: { color: t['chart-axis'] }, grid: { color: t['border-subtle'] } } } } });
+    options: { maintainAspectRatio: false, animation: false, plugins: { legend: { labels: { color: t['text-muted'] } } },
+      scales: { x: { stacked: Boolean(d.chart.stacked), ticks: { color: t['chart-axis'], autoSkip: true, maxRotation: 0 }, grid: { display: false } },
+                y: { stacked: Boolean(d.chart.stacked), ticks: { color: t['chart-axis'] }, grid: { color: t['border-subtle'] } } } } });
   document.getElementById('chart').setAttribute('aria-label', d.chart.series.map((s) => s.label).join(', '));
 }
 function drawTable() {
