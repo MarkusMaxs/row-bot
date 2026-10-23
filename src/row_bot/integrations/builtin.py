@@ -17,6 +17,7 @@ import threading
 import time
 
 from row_bot import secret_store
+from row_bot.application.live_updates import publish as _publish_live
 from row_bot.integrations import apps, facts
 
 logger = logging.getLogger(__name__)
@@ -163,9 +164,11 @@ def _now_generation() -> tuple[int, int]:
 
 def changed(*_: object) -> None:
     """An owner changed something a way reads (a key, a sign-in, a channel, a tool switch): the next
-    read builds the snapshot again."""
+    read builds the snapshot again, and Monitor reads its problems again (a channel stopped, an account
+    signed out)."""
     global _generation
     _generation += 1
+    _publish_live("monitor")
 
 
 def _key() -> str:

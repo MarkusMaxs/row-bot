@@ -307,6 +307,9 @@ async def _auto_start_channel_background(channel) -> None:
         )
         logger.warning("Channel auto-start failed for %s: %s", channel_name, exc)
     finally:
+        from row_bot.integrations import builtin
+
+        builtin.changed()  # Apps and Monitor show the channel as it is now: running, or stopped.
         logger.info(
             "startup.channel.auto_start channel=%s duration_ms=%.1f ok=%s",
             channel_name,
