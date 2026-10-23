@@ -1,5 +1,6 @@
 import {
   Code2,
+  HatGlasses,
   MessageSquare,
   Palette,
   Workflow,
@@ -26,15 +27,22 @@ const NAMES: Record<ConversationKind, string> = {
 /**
  * A monochrome glyph for what the thread contains; the title keeps any
  * emoji. A thread with a design and a code folder shows the first as the
- * glyph and the second as a small badge.
+ * glyph and the second as a small badge. An incognito chat (N11) shows the
+ * incognito hat and glasses wherever it is listed.
  */
 export function ConversationGlyph({
   row,
   size = 16,
 }: {
-  row: Pick<ConversationView, 'category' | 'resource_bindings'>;
+  row: Pick<ConversationView, 'category' | 'resource_bindings' | 'incognito'>;
   size?: number;
 }) {
+  if (row.incognito)
+    return (
+      <span className="conversation-glyph" title="Incognito" aria-hidden>
+        <HatGlasses size={size} />
+      </span>
+    );
   const kinds = conversationKinds(row);
   const Primary = kinds.length ? ICONS[kinds[0]] : MessageSquare;
   if (kinds.length < 2) return <Primary size={size} aria-hidden />;

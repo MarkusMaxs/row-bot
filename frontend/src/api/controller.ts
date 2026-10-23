@@ -16,6 +16,8 @@ import { isPanelDescriptor } from './types';
 import { sha256Hex } from '../platform/crypto';
 import type {
   ClientState,
+  PageDecisionWrite,
+  PageTheme,
   DictationScope,
   DictationHandle,
   DictationResult,
@@ -2716,6 +2718,46 @@ export class ClientController {
       if (!this.transport.sendDeliveryToDevices)
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.sendDeliveryToDevices(deliveryId, signal);
+    });
+  /** Pages the agent made (N5): every one (Library › Pages), or one chat's. */
+  pages = (conversationId?: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.pages?.(conversationId, signal));
+  page = (pageId: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.page?.(pageId, signal));
+  /** One frame address for a page, served once to its sandboxed frame. */
+  pageFrame = (pageId: string, theme: PageTheme, signal?: AbortSignal) =>
+    this.authenticatedResult((current) => {
+      if (!this.transport.pageFrame)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.pageFrame(pageId, theme, current);
+    }, signal);
+  /** A page's state from its bridge (checked again by Row-Bot). */
+  savePageState = (pageId: string, state: Record<string, unknown>) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.savePageState)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.savePageState(pageId, state, signal);
+    });
+  /** One decision from a page's bridge; only the person's Send posts them. */
+  savePageDecision = (pageId: string, decision: PageDecisionWrite) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.savePageDecision)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.savePageDecision(pageId, decision, signal);
+    });
+  /** Download as HTML: one file that works on its own. */
+  downloadPage = (pageId: string, theme: PageTheme) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.downloadPage)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.downloadPage(pageId, theme, signal);
+    });
+  /** Desktop window: save a page into Exports on this computer. */
+  savePageToExports = (pageId: string, theme: PageTheme) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.savePageToExports)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.savePageToExports(pageId, theme, signal);
     });
   /** The local addresses a conversation's browser may open now (F4). */
   browserLocalAddresses = (conversation: string, signal?: AbortSignal) =>

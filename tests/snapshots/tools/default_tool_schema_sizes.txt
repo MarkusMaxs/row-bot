@@ -54,6 +54,9 @@ goal_update: 1053
 link_memories: 578
 list_conversations: 280
 list_memories: 453
+page_create: 986
+page_read: 560
+page_update: 918
 read_terminal: 411
 read_tool_output: 456
 read_url: 678
@@ -99,4 +102,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (101 tools): 72238
+TOTAL (104 tools): 74702

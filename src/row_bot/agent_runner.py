@@ -820,7 +820,7 @@ def spawn_agent_run(
         get_agent_run,
     )
     from row_bot.agent_settings import load_agent_runtime_settings
-    from row_bot.threads import create_thread, set_thread_skills_override
+    from row_bot.threads import create_thread, incognito_state, set_thread_skills_override
 
     run_id = uuid.uuid4().hex[:12]
     parent_run = get_agent_run(parent_run_id) if parent_run_id else None
@@ -904,6 +904,8 @@ def spawn_agent_run(
         agent_profile_id=str(profile_snapshot.get("id") or ""),
         agent_profile_slug=str(profile_snapshot.get("slug") or ""),
         seed_default_skills=False,
+        # A helper started from an incognito chat is incognito too (N11).
+        incognito=bool(parent_thread_id) and incognito_state(parent_thread_id).incognito,
     )
     if child_model_ref and not thinking.selection.is_default:
         from row_bot.threads import set_thread_reasoning_selection

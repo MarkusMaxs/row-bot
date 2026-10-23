@@ -325,6 +325,69 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
+  pages(conversationId?: string, signal?: AbortSignal) {
+    return wire.getPages(this.base, this.session(), conversationId, signal);
+  }
+  page(pageId: string, signal?: AbortSignal) {
+    return wire.getPage(this.base, this.session(), pageId, signal);
+  }
+  pageFrame(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
+    return wire.createPageFrame(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  savePageState(
+    pageId: string,
+    state: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageState(
+      this.base,
+      this.session(),
+      pageId,
+      { state },
+      signal,
+    );
+  }
+  savePageDecision(
+    pageId: string,
+    decision: wire.PageDecisionWrite,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageDecision(
+      this.base,
+      this.session(),
+      pageId,
+      decision,
+      signal,
+    );
+  }
+  downloadPage(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
+    return wire.downloadPage(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  savePageToExports(
+    pageId: string,
+    theme: wire.PageTheme,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageToExports(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
   browserLocalAddresses(conversation: string, signal?: AbortSignal) {
     return wire.getBrowserLocalAddresses(
       this.base,

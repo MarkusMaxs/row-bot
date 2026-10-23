@@ -2168,11 +2168,280 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         call["quiesced"] = True
 
 
+# ── N5: pages Row-Bot makes for the person ─────────────────────────────────
+# The real page tools on the Making a page skill's own templates; the model's
+# calls and finals are scripted. The person's Send arrives as a real message.
+_N5_SKILL = Path(__file__).resolve().parents[3] / "bundled_skills" / "making_pages" / "SKILL.md"
+_N5_PLAN = {
+    "title": "Beta launch plan",
+    "summary": "Six steps to open the beta to 200 testers on 14 November.",
+    "steps": [
+        {"id": "freeze", "title": "Freeze the release branch",
+         "detail": "Cut beta.1 from main once the two open fixes land.", "status": "done"},
+        {"id": "announce", "title": "Draft the announcement",
+         "detail": "A short blog post and an email to the waitlist.", "status": "doing"},
+        {"id": "invites", "title": "Send invites to the waitlist",
+         "detail": "200 people, in two batches a day apart.", "status": "todo"},
+        {"id": "call", "title": "Book the launch call",
+         "detail": "30 minutes with the first testers on Thursday at 5pm.", "status": "todo"},
+        {"id": "feedback", "title": "Set up the feedback form",
+         "detail": "Five questions, linked from the app's Help menu.", "status": "todo"},
+        {"id": "stickers", "title": "Order stickers for testers",
+         "detail": "Optional: 250 stickers, about £120.", "status": "todo"},
+    ],
+}
+_N5_DASHBOARD = {
+    "title": "Sales by week",
+    "updated": "today at 9:00",
+    "metrics": [{"label": "Revenue, last 8 weeks", "value": "£48,210"}, {"label": "Orders", "value": "1,284"},
+                {"label": "Average order", "value": "£37.55"}, {"label": "Refunds", "value": "1.8%"}],
+    "chart": {"labels": ["4 Sep", "11 Sep", "18 Sep", "25 Sep", "2 Oct", "9 Oct", "16 Oct", "23 Oct"],
+              # £48,210 in all, about £6k a week, split between online and the shops.
+              "series": [{"label": "Online", "values": [4060, 4190, 4290, 4150, 4400, 4560, 4640, 4750]},
+                         {"label": "Shops", "values": [1580, 1630, 1620, 1630, 1650, 1680, 1690, 1690]}],
+              "stacked": True},
+    "columns": [{"key": "product", "label": "Product"}, {"key": "units", "label": "Units", "number": True},
+                {"key": "revenue", "label": "Revenue (£)", "number": True},
+                {"key": "change", "label": "vs last week", "number": True}],
+    "rows": [{"product": "Trail runner", "units": 182, "revenue": 14560, "change": "+9%"},
+             {"product": "City sneaker", "units": 241, "revenue": 13255, "change": "+4%"},
+             {"product": "Rain shell", "units": 96, "revenue": 8640, "change": "+18%"},
+             {"product": "Merino socks", "units": 410, "revenue": 4920, "change": "−2%"},
+             {"product": "Day pack", "units": 74, "revenue": 4440, "change": "+6%"},
+             {"product": "Water bottle", "units": 281, "revenue": 2395, "change": "+1%"}],
+}
+_N5_CHECKLIST = {
+    "title": "Launch day checklist",
+    "sections": [
+        {"title": "The day before", "items": [
+            {"id": "notes", "text": "Write the release notes"},
+            {"id": "status", "text": "Check the status page is green"},
+            {"id": "support", "text": "Brief support on the known issues"}]},
+        {"title": "On the day", "items": [
+            {"id": "publish", "text": "Publish the beta build"},
+            {"id": "email", "text": "Send the waitlist email"},
+            {"id": "social", "text": "Post the announcement"},
+            {"id": "watch", "text": "Watch sign-ups for the first hour"}]},
+    ],
+}
+# Each way a page might try to leave its sandbox, and what it found.
+_N5_PROBE = """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+</head><body><h1>Sandbox check</h1><ul id="results" class="rb-list"></ul><script>
+const said = (name, value) => { const li = document.createElement('li'); li.textContent = name + ': ' + value;
+  results.append(li); };
+async function probe() {
+  try { await fetch('/api/v1/handshake'); said('fetch', 'reached'); } catch { said('fetch', 'blocked'); }
+  try { said('parent', window.parent.document.title ? 'reached' : 'reached'); } catch { said('parent', 'blocked'); }
+  try { said('cookies', document.cookie === undefined ? 'blocked' : 'reached'); } catch { said('cookies', 'blocked'); }
+  try { const opened = window.open('https://example.com/'); said('popup', opened ? 'reached' : 'blocked'); }
+  catch { said('popup', 'blocked'); }
+  try { window.top.location.href = '/app-v2/'; said('top', 'asked'); } catch { said('top', 'blocked'); }
+  said('rowbot', typeof rowbot.decide === 'function' && typeof rowbot.send === 'undefined' ? 'bridge only' : 'more');
+  document.body.dataset.done = 'yes';
+}
+probe();
+</script></body></html>"""
+
+
+# What the person asks for, as they'd write it: each makes one kind of page.
+_N5_PROMPTS = {
+    "Make me a beta launch plan I can approve step by step": "plan",
+    "Show me sales by week as a dashboard": "dashboard",
+    "Make a launch day checklist for the beta": "checklist",
+    "Make a page that checks its own sandbox": "probe",
+}
+
+
+@app.post("/__n5_fixture/reset")
+def n5_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Delete the chats with pages (and so their pages): each journey starts with only its own."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import pages
+    from row_bot.thread_cleanup import delete_thread
+
+    chats = {page.conversation_id for page in pages.list_pages()}
+    for chat in chats:
+        delete_thread(chat)
+    return {"deleted": len(chats)}
+
+
+def _n5_template(heading: str) -> str:
+    """One template from the Making a page skill, exactly as the model reads it."""
+    text = _N5_SKILL.read_text(encoding="utf-8")
+    start = text.index("```html\n", text.index(heading)) + len("```html\n")
+    return text[start:text.index("\n```", start)]
+
+
+def _n5_page(thread: str, identity: str, name: str, args: dict):
+    from row_bot.tools import pages_tool
+
+    run = pages_tool._page_create if name == "page_create" else pages_tool._page_update
+    yield from _s3_steps(thread, identity, [(name, args, lambda: (_s4_in_thread(thread, lambda: run(**args)), []))])
+
+
+def _n5_stream(text: str, config: dict):
+    call = predecessor._record("submit", config, "n5-page")
+    thread = call["conversation_id"]
+    identity = f"n5:{call['generation_id']}"
+    try:
+        kind = _N5_PROMPTS[text.strip()]
+        if kind == "dashboard":
+            args = {"title": "Sales by week", "html": _n5_template("### A dashboard"), "data": _N5_DASHBOARD,
+                    "libraries": ["charts", "rowbot-style"]}
+            final = "Here's the sales dashboard: revenue by week for online and shops, and every product below."
+        elif kind == "checklist":
+            args = {"title": "Launch day checklist", "html": _n5_template("### A checklist"),
+                    "data": _N5_CHECKLIST, "libraries": ["rowbot-style"]}
+            final = "Here's the launch day checklist. Tick things off as you go; it remembers on every device."
+        elif kind == "probe":
+            args = {"title": "Sandbox check", "html": _N5_PROBE, "libraries": ["rowbot-style"]}
+            final = "Here's the sandbox check."
+        else:
+            args = {"title": "Beta launch plan", "html": _n5_template("### A plan with approvals"),
+                    "data": _N5_PLAN, "libraries": ["rowbot-style"]}
+            final = ("Here's the beta launch plan. Approve, change or skip each step, then send me your "
+                     "decisions and I'll get going.")
+        yield from _n5_page(thread, identity, "page_create", args)
+        yield from _natural_final(call, thread, final, "n5")
+    finally:
+        call["quiesced"] = True
+
+
+# ── N11: incognito chats ───────────────────────────────────────────────────
+# The model's save_memory call is scripted; its card is the real tool's own in
+# an incognito chat (run in a small graph, so it asks as it does in a turn).
+# The answer's result is scripted: nothing is written to memory here.
+_N11_PENDING: dict[str, tuple[str, dict]] = {}
+_N11_COFFEE = {"category": "preference", "subject": "Coffee", "content": "I take it black, no sugar.", "tags": ""}
+_N11_REMEMBER = "Remember that I take my coffee black, no sugar"
+# The person's requests these chats script, and Row-Bot's replies (the save request asks first).
+_N11_REPLIES = {
+    "Find me somewhere quiet for a weekend away":
+        "Here are three quiet places for a weekend away: Hay-on-Wye, Whitby and the Lake District.",
+    "Plan a weekend in Leeds":
+        "Here's a weekend in Leeds: Saturday at the Royal Armouries and Kirkgate Market, "
+        "Sunday in Roundhay Park.",
+    _N11_REMEMBER: "",
+}
+
+
+def _n11_card(thread: str) -> dict | None:
+    """The real save_memory card for *thread*, or None when the chat is not incognito (it would save)."""
+    from typing import TypedDict
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from row_bot.threads import incognito_state
+    from row_bot.tools import memory_tool
+
+    if not incognito_state(thread).incognito:
+        return None
+
+    class State(TypedDict):
+        result: str
+
+    builder = StateGraph(State)
+    builder.add_node("save", lambda _state: {"result": memory_tool._save_memory(**_N11_COFFEE)})
+    builder.add_edge(START, "save")
+    builder.add_edge("save", END)
+    paused = builder.compile(checkpointer=InMemorySaver()).invoke(
+        {"result": ""}, {"configurable": {"thread_id": thread}})
+    [asked] = paused["__interrupt__"]
+    return dict(asked.value)
+
+
+def _n11_stream(text: str, config: dict):
+    from row_bot.threads import append_checkpoint_messages
+
+    call = predecessor._record("submit", config, "n11")
+    thread = call["conversation_id"]
+    identity = f"n11:{call['generation_id']}"
+    try:
+        append_checkpoint_messages(thread, [HumanMessage(
+            content=text, id=call["submission_id"] or fixture_id(identity + ":user"))])
+        card = _n11_card(thread) if text.strip() == _N11_REMEMBER else None
+        if card is None:
+            reply = _N11_REPLIES.get(text.strip()) or "This request saves to memory only in an incognito chat."
+            yield from _natural_final(call, thread, reply, "n11")
+            return
+        tool_id = fixture_id(identity + ":tool")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "save_memory", "args": _N11_COFFEE}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": "save_memory", "args": _N11_COFFEE}
+        _N11_PENDING[thread] = (tool_id, _N11_COFFEE)
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **card}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n5_sent(text: str, config: dict):
+    """The person's Send under the plan: Row-Bot answers and moves the plan on with page_update."""
+    from row_bot import pages
+
+    call = predecessor._record("submit", config, "n5-sent")
+    thread = call["conversation_id"]
+    identity = f"n5-sent:{call['generation_id']}"
+    try:
+        page = next((item for item in pages.list_pages(thread) if item.page_id in text.split("\n", 1)[0]), None)
+        if page is not None and page.title == _N5_PLAN["title"]:
+            moved = {"announce": "done", "invites": "doing"}
+            data = {**_N5_PLAN, "steps": [{**step, "status": moved.get(step["id"], step["status"])}
+                                          for step in _N5_PLAN["steps"]]}
+            yield from _n5_page(thread, identity, "page_update", {"page": page.page_id, "data": data})
+        final = ("Thanks. The announcement is ready and the first batch of invites is going out now. I'll move the "
+                 "launch call to Friday at 4pm and update the plan as I go.")
+        yield from _natural_final(call, thread, final, "n5-sent")
+    finally:
+        call["quiesced"] = True
+
+
+def _n11_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                stop_event=None):
+    """Save or Don't save on the incognito card: the call's result, and a short reply."""
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools.memory_tool import INCOGNITO_NOT_SAVED
+
+    thread = str(config["configurable"]["thread_id"])
+    pending = _N11_PENDING.pop(thread, None)
+    if pending is None:
+        yield from _n12b_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                                resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n11-answer")
+    identity = f"n11-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        tool_id, args = pending
+        content = ("Approval: asked; approved by you\nMemory saved successfully.\nSubject: Coffee\n"
+                   "Content: I take it black, no sugar." if approved
+                   else f"Approval: asked; denied by you — did not run\n{INCOGNITO_NOT_SAVED}")
+        result_id = fixture_id(identity + ":result")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="save_memory",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "save_memory",
+                            "args": args, "content": content}
+        final = "Saved: you take your coffee black, no sugar." if approved else "Okay, I won't save that."
+        yield from _natural_final(call, thread, final, "n11-answer")
+    finally:
+        call["quiesced"] = True
+
+
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.strip() in _N11_REPLIES:
+        # Incognito chats (N11): a plain reply, or the real save_memory card in an incognito chat.
+        yield from _n11_stream(text, config)
+        return
     if text.startswith("n7 ") and text.rstrip().endswith("fixture"):
         # Several X accounts, named on every post (N7): the real card and sender, a fake X API.
         yield from _n7_stream(text, config)
+        return
+    if text.strip() in _N5_PROMPTS:
+        # Pages (N5): the real page tools on the skill's templates.
+        yield from _n5_stream(text, config)
+        return
+    if text.startswith("[") and "from the page" in text.split("\n", 1)[0]:
+        # The person's Send under a page (N5), as the real message Row-Bot wrote from it.
+        yield from _n5_sent(text, config)
         return
     if text.startswith("n12b ") and text.rstrip().endswith("fixture"):
         # Computer use, rebuilt (N12-B): the real computer tool on a fake desktop.
@@ -4221,7 +4490,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _n12b_resume
+    agent.resume_stream_agent = _n11_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -4232,7 +4501,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _n12b_resume
+    client_platform_service.resume_factory = _n11_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier

@@ -1084,6 +1084,16 @@ async def _app_view_handler(request: Request) -> Response:
     return Response(html, media_type="text/html; charset=utf-8", headers=headers)
 
 
+async def _page_frame_handler(request: Request) -> Response:
+    """A page (N5), served once to the sandboxed frame it was made for, under its own CSP (sandboxed again)."""
+    from row_bot import pages
+    try:
+        html, headers = pages.frame(str(request.path_params.get("token") or ""))
+    except pages.PageError:
+        return Response("Not found", status_code=404, media_type="text/plain", headers={"Cache-Control": "no-store"})
+    return Response(html, media_type="text/html; charset=utf-8", headers=headers)
+
+
 async def _health_handler(request: Request) -> JSONResponse:  # noqa: ARG001
     """Expose process liveness without provider, route, or user details."""
     return JSONResponse(
@@ -1268,6 +1278,7 @@ app.add_route("/api/launcher-shutdown", _launcher_shutdown_handler, methods=["PO
 app.add_route("/api/launcher-apply-update", _launcher_apply_update_handler, methods=["POST"])
 app.add_route("/api/webhook/{task_id}", _webhook_handler, methods=["POST"])
 app.add_route("/app-views/{render_id}", _app_view_handler, methods=["GET"])
+app.add_route("/page-frames/{token}", _page_frame_handler, methods=["GET"])
 app.add_route("/", _root_handler, methods=["GET"])
 app.add_route("/favicon.ico", _favicon_handler, methods=["GET"])
 app.add_route("/healthz", _health_handler, methods=["GET"])
