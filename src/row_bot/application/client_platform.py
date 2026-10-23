@@ -316,11 +316,12 @@ class ClientPlatformService:
                         cancel_scope: Any = None, queued_pass_id: str = "", queue_context: dict | None = None,
                         resume_pending: bool = False,
                         attachments: list[dict[str, Any]] | None = None,
-                        note: str = "", retry: bool = False) -> Any:
+                        note: str = "", retry: bool = False, shown: dict[str, str] | None = None) -> Any:
         """Single admission path for every conversation turn.
 
         ``retry`` runs the person's last message again in place: the turn it replaces goes in the same write that
-        admits the new one, after every check has passed (``threads.append_checkpoint_messages``)."""
+        admits the new one, after every check has passed (``threads.append_checkpoint_messages``). ``shown``: what
+        the transcript shows instead of the text, and its note (the person's message sent from a page)."""
         from langchain_core.messages import HumanMessage
         from row_bot import threads
         from row_bot.models import get_current_model
@@ -362,8 +363,16 @@ class ClientPlatformService:
                 # A server-started follow-up: the transcript shows the note,
                 # the model reads the prompt.
                 public_metadata = {"platform_public_content": note, "platform_note": "continuation"}
+            elif shown:
+                # The person's message from a page (N5): the chat shows its decisions in words, the model reads
+                # them with their structured list. Its note keeps it from counting as the person's request when
+                # the Auto reviewer decides an approval: a page's decision never approves a tool call.
+                public_metadata = {"platform_public_content": shown["text"], "platform_note": shown["note"]}
             first_message = text is not None and not note and not threads.get_latest_checkpoint_revision(conversation_id)
-            retry_text = text if retry and text is not None and not note and not self._approval_waiting(conversation_id) else ""
+            # A retry finds the turn it replaces by what the chat shows of the person's message.
+            retry_text = ((shown["text"] if shown else text)
+                          if retry and text is not None and not note and not self._approval_waiting(conversation_id)
+                          else "")
             if text is not None and not threads.append_checkpoint_messages(
                     conversation_id, [HumanMessage(content=text, id=submission_id, additional_kwargs=public_metadata)],
                     retry_text=retry_text):
@@ -610,6 +619,7 @@ class ClientPlatformService:
                 orchestration_activity = {"state": "attention", "phase": "goal_needs_you"}
         return {"id": conversation_id, "revision": str(row["client_revision"]),
                 "title": row["name"], "pinned": bool(row["pinned_at"]),
+                "incognito": bool(row.get("incognito")),
                 "updated_at": str(row.get("updated_at") or ""),
                 "parent_conversation_id": parent_conversation_id or None,
                 "activity_state": orchestration_activity.get("state"),
@@ -1003,6 +1013,7 @@ class ClientPlatformService:
                 thread_id=conversation_id,
                 agent_profile_id=str(profile["id"]) if profile else "",
                 agent_profile_slug=str(profile["slug"]) if profile else "",
+                incognito=bool(payload.get("incognito")),
             )
             if profile:
                 skills = profile.get("skill_policy_json") or {}
@@ -1067,6 +1078,17 @@ class ClientPlatformService:
                 raise ClientPlatformError(str(exc)) from exc
             return {"conversation_id": target, "revision": str(row["client_revision"]),
                     "saved_name": name, "status": "completed"}
+        if kind == "conversation.incognito":
+            incognito = bool(payload.get("incognito"))
+            if bool(row.get("incognito")) == incognito:
+                return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed"}
+            if not incognito and self.registry.active(target):
+                # The reply under way answers what was said incognito: it ends first (N11).
+                raise ClientPlatformError("generation_active")
+            threads.set_thread_incognito(target, incognito)
+            revision = str(self._metadata(target)["client_revision"])
+            self.projection.publish(target, "resource.changed", {"revision": revision})
+            return {"conversation_id": target, "revision": revision, "status": "completed"}
         if kind in {"conversation.rename", "conversation.pin"}:
             with closing(sqlite3.connect(threads.DB_PATH)) as conn, conn:
                 if kind.endswith("rename"):
@@ -1211,6 +1233,21 @@ class ClientPlatformService:
         raise ClientPlatformError("invalid_command")
 
     @staticmethod
+    def _retried_page_message(conversation_id: str, text: str) -> tuple[str, dict[str, str]] | None:
+        """The person's last message, when it was sent from a page and the chat shows it as ``text``: what the
+        agent read, and what the chat shows with its note."""
+        from row_bot import threads
+        from row_bot.turn_context import is_person_message
+        messages = threads.get_latest_checkpoint_messages(conversation_id)
+        last = next((message for message in reversed(messages) if is_person_message(message)), None)
+        extra = getattr(last, "additional_kwargs", None) or {}
+        shown = extra.get("platform_public_content")
+        if (last is None or extra.get("platform_note") != "page" or not isinstance(shown, str)
+                or shown.strip() != text.strip() or not isinstance(last.content, str)):
+            return None
+        return last.content, {"text": shown, "note": "page"}
+
+    @staticmethod
     def _approval_waiting(conversation_id: str) -> bool:
         """An approval of any kind waits in this conversation: a retry then never replaces its turn."""
         from row_bot.tasks import _get_conn
@@ -1333,6 +1370,17 @@ class ClientPlatformService:
         if followup is not None:
             text = followup.prompt
         attachment_refs = list(payload.get("attachment_refs") or ())
+        page_id = str(payload.get("page_id") or "")
+        if page_id and (resume or followup is not None or queue_record is not None or frozen_context is not None
+                        or attachment_refs or payload.get("retry")):
+            raise ClientPlatformError("invalid_command")
+        # Retry on the reply to a message sent from a page runs that message again: the same decisions, as the
+        # page wrote them, still marked as from the page (never the words the chat shows, as the person's own).
+        retried_page = (self._retried_page_message(conversation_id, text)
+                        if not resume and followup is None and queue_record is None and frozen_context is None
+                        and not page_id and not attachment_refs and payload.get("retry") is True else None)
+        if retried_page is not None:
+            text = retried_page[0]
         if len(attachment_refs) > 32:
             raise ClientPlatformError("payload_too_large")
         attachment_views: list[dict[str, Any]] = []
@@ -1407,11 +1455,28 @@ class ClientPlatformService:
         if frozen_context is not None:  # Remembered for a resume: this turn's own apps, not those it was queued behind.
             kept = {key: value for key, value in queue_context["configurable"].items() if key != "app_scope"}
             queue_context = {**queue_context, "configurable": {**kept, **({"app_scope": deepcopy(narrowed)} if narrowed else {})}}
-        handle = self.admit_execution(conversation_id, config, text=None if resume else text,
-            queued_pass_id=str(queue_record["pass_id"]) if queue_record else "", queue_context=queue_context,
-            resume_pending=resume, attachments=None if resume else attachment_views,
-            note=followup.note if followup is not None else "",
-            retry=not resume and queue_record is None and followup is None and payload.get("retry") is True)
+        shown = retried_page[1] if retried_page is not None else None
+        if page_id:
+            # The person's Send to Row-Bot under a page (N5): its decisions, written by Row-Bot from the page
+            # (never the client's words), move to sent now and come back if the message isn't admitted.
+            from row_bot import pages
+            try:
+                text, shown_text = pages.claim(page_id, conversation_id, submission_id)
+            except pages.PageError as exc:
+                raise ClientPlatformError(exc.code) from None
+            shown = {"text": shown_text, "note": "page"}
+        try:
+            handle = self.admit_execution(conversation_id, config, text=None if resume else text,
+                queued_pass_id=str(queue_record["pass_id"]) if queue_record else "", queue_context=queue_context,
+                resume_pending=resume, attachments=None if resume else attachment_views,
+                note=followup.note if followup is not None else "",
+                retry=not resume and queue_record is None and followup is None and payload.get("retry") is True,
+                shown=shown)
+        except BaseException:
+            if page_id:
+                from row_bot import pages
+                pages.release(page_id, submission_id)
+            raise
         handle.followups = True
         if not resume and frozen_context is None and queue_record is None and followup is None and command_id:
             from row_bot.application.conversation_drafts import consume_admitted_draft

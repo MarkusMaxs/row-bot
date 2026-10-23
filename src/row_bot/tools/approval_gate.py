@@ -46,6 +46,9 @@ APPROVAL_CHANGED = "Approval: asked; what you approved has changed since — did
 _APPROVAL_PREFIX = "Approval: "
 # Why a person-only card asks: the person's own rule, set on purpose.
 PERSON_RULE_REASON = "You asked to approve this yourself."
+# An incognito chat's memory write (N11): only the person saves from it, under every level.
+INCOGNITO_MEMORY_QUESTION = "Save to memory? This chat is incognito."
+INCOGNITO_MEMORY_REASON = "This chat is incognito: only you can save from it to memory."
 
 
 

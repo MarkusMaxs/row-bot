@@ -154,6 +154,8 @@ class SubmitPayload(WireModel):
     write_targets: list[WriteTarget] | None = Field(default=None, max_length=2)
     # Retry: the last turn is set aside first when it is this same message, so it runs again in place.
     retry: bool = False
+    # Send a page's decisions (N5): the person's click; Row-Bot writes the message from the page itself.
+    page_id: str | None = Field(default=None, pattern=r"^page-[0-9a-f]{8}$")
 
 
 class RenamePayload(WireModel):
@@ -165,10 +167,18 @@ class CreatePayload(WireModel):
         "New conversation"
     )
     agent_profile_id: str = Field(default="", max_length=256)
+    # Incognito from the start (N11): nothing in it is read for memory.
+    incognito: bool = False
 
 
 class PinPayload(WireModel):
     pinned: bool
+
+
+class IncognitoPayload(WireModel):
+    """Turn incognito on or off for a conversation (N11)."""
+
+    incognito: bool
 
 
 class EmptyPayload(WireModel):
@@ -4491,6 +4501,76 @@ class DeliveryPage(WireModel):
     items: list[DeliveryView] = Field(max_length=200)
 
 
+PageId = Annotated[str, StringConstraints(pattern=r"^page-[0-9a-f]{8}$")]
+PageColour = Annotated[str, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")]
+
+
+class PageDecisionView(WireModel):
+    """One decision on a page, as the person made it there; ``sent`` once they sent it to the chat."""
+    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")]
+    choice: str = Field(min_length=1, max_length=40)
+    note: str = Field(default="", max_length=2000)
+    label: str = Field(default="", max_length=200)
+    sent: bool = False
+
+
+class PageView(WireModel):
+    """A page the agent made in a chat (N5): what its card, panel and the Library show."""
+    page_id: PageId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    conversation_title: str = Field(default="", max_length=256)
+    title: str = Field(min_length=1, max_length=120)
+    version: int = Field(ge=1)
+    libraries: list[Literal["charts", "rowbot-style"]] = Field(default_factory=list, max_length=2)
+    created_at: str = Field(max_length=64)
+    updated_at: str = Field(max_length=64)
+    state_revision: int = Field(ge=0)
+    # Decisions not yet sent: the footer's "3 decisions · Send to Row-Bot".
+    pending: int = Field(ge=0, le=200)
+    decisions: list[PageDecisionView] = Field(default_factory=list, max_length=200)
+
+
+class PagePage(WireModel):
+    """Library › Pages, or one chat's pages: most recently changed first."""
+    items: list[PageView] = Field(max_length=500)
+
+
+class PageTheme(WireModel):
+    """Row-Bot's colours for both themes (token name to colour) and the one in use."""
+    mode: Literal["light", "dark"]
+    light: dict[str, PageColour] = Field(default_factory=dict, max_length=64)
+    dark: dict[str, PageColour] = Field(default_factory=dict, max_length=64)
+
+
+class PageFrameRequest(WireModel):
+    theme: PageTheme
+
+
+class PageFrame(WireModel):
+    """The page's frame address, served once to a frame with ``sandbox="allow-scripts"``."""
+    frame_url: Annotated[str, StringConstraints(pattern=r"^/page-frames/[0-9a-f]{32}$")]
+    page: PageView
+
+
+class PageStateWrite(WireModel):
+    """The page's whole new state (an object, up to 256 KB), from its bridge."""
+    state: dict[str, Any]
+
+
+class PageDecisionWrite(WireModel):
+    """One decision recorded by the page's bridge; a null choice clears it. Nothing is sent."""
+    id: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")]
+    choice: str | None = Field(default=None, min_length=1, max_length=40)
+    note: str = Field(default="", max_length=2000)
+    label: str = Field(default="", max_length=200)
+
+
+class PageDownload(WireModel):
+    """The page as one HTML file that works on its own (it saves nothing)."""
+    file_name: str = Field(min_length=1, max_length=96)
+    html: str = Field(min_length=1, max_length=8 * 1024 * 1024)
+
+
 class LocalAddressGrantView(WireModel):
     """An address on this computer one conversation's browser may open (F4): one origin, for an hour."""
     grant_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
@@ -6315,6 +6395,7 @@ class Command(WireModel):
         "conversation.create",
         "conversation.rename",
         "conversation.pin",
+        "conversation.incognito",
         "conversation.delete",
         "conversation.restore",
         "conversation.submit",
@@ -6469,6 +6550,8 @@ class Command(WireModel):
             self.payload.pop(
                 "write_targets", None
             )  # Preserve existing durable v1 command verifiers.
+        if self.type == "conversation.submit" and "page_id" not in supplied:
+            self.payload.pop("page_id", None)
         if self.type == "conversation.controls" and "reasoning" not in supplied:
             self.payload.pop("reasoning", None)
         if (self.type in {"conversation.controls", "task.settings.update"}
@@ -6498,6 +6581,7 @@ COMMAND_PAYLOADS = {
     "conversation.create": CreatePayload,
     "conversation.rename": RenamePayload,
     "conversation.pin": PinPayload,
+    "conversation.incognito": IncognitoPayload,
     "conversation.delete": DeletePayload,
     "conversation.restore": EmptyPayload,
     "conversation.submit": SubmitPayload,
@@ -6792,6 +6876,8 @@ class ApprovalRequired(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered rather than approved.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
 
 
 class GenerationError(WireModel):
@@ -7169,6 +7255,8 @@ class ConversationView(WireModel):
     revision: Revision
     title: str = Field(max_length=256)
     pinned: bool
+    # Incognito (N11): nothing in it is read for memory, and memory is saved only when the person says so.
+    incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
@@ -7328,7 +7416,7 @@ class TraceSpecialization(WireModel):
     kind: Literal[
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
         "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
-        "question_answered",
+        "question_answered", "page",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7364,6 +7452,8 @@ class TraceSpecialization(WireModel):
     # question_answered (N4): how Row-Bot's question ended and, when answered, what the person chose.
     outcome: Literal["", "answered", "skipped", "timed_out"] = ""
     answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
+    # page (N5): the page a step made or changed; the card re-reads its title and opens it by id.
+    page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -7419,7 +7509,7 @@ class TranscriptRow(WireModel):
     # A server-started follow-up (a goal step, work continuing in a resource
     # the assistant created), a delegated agent's task or its parent's
     # messages to it: the row's text is a short public note.
-    note: Literal["continuation", "agent_task", "agent_guidance"] | None = None
+    note: Literal["continuation", "agent_task", "agent_guidance", "page"] | None = None
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
@@ -7735,6 +7825,8 @@ class ApprovalView(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
     # A post, reply, quote or delete on X (N7): exactly what goes out, and as which account.
     x_post: XPostApproval | None = None
     policy_revision: Revision

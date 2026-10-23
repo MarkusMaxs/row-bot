@@ -345,10 +345,10 @@ it('makes New chat the one primary button, with a ▾ for a chat with an agent (
   await user.click(newChat);
   expect(onNewChat).toHaveBeenCalledTimes(1);
   await user.click(
-    within(nav).getByRole('button', { name: 'New chat with an agent…' }),
+    within(nav).getByRole('button', { name: 'New chat options' }),
   );
   const menu = await screen.findByRole('menu', {
-    name: 'New chat with an agent…',
+    name: 'New chat options',
   });
   // Until a profile is pinned, the library's first five stand in; the
   // Default profile is plain New chat and a disabled one can't start.
@@ -377,7 +377,7 @@ it('makes New chat the one primary button, with a ▾ for a chat with an agent (
   expect(onStartProfileChat).toHaveBeenCalledWith(AGENTS[2]);
   expect(onNewChat).toHaveBeenCalledTimes(1);
   await user.click(
-    within(nav).getByRole('button', { name: 'New chat with an agent…' }),
+    within(nav).getByRole('button', { name: 'New chat options' }),
   );
   await user.click(
     await screen.findByRole('menuitem', { name: 'All agents…' }),
@@ -512,7 +512,7 @@ it('shows pinned profiles as the favourites once one is pinned in the library (B
       .map((button) => button.getAttribute('aria-label')),
   ).toEqual(['New chat with Analyst', 'New chat with Writer']);
   await user.click(
-    within(nav).getByRole('button', { name: 'New chat with an agent…' }),
+    within(nav).getByRole('button', { name: 'New chat options' }),
   );
   const menu = await screen.findByRole('menu');
   expect(menuNames(menu)).toEqual(['Analyst', 'Writer', 'All agents…']);

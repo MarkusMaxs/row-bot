@@ -277,6 +277,12 @@
           "default": null,
           "title": "Approval Id"
         },
+        "memory_text": {
+          "default": "",
+          "maxLength": 4096,
+          "title": "Memory Text",
+          "type": "string"
+        },
         "question": {
           "default": "",
           "maxLength": 240,
@@ -3204,7 +3210,8 @@
             "delivery",
             "sandbox_job",
             "sandbox_unprepared",
-            "question_answered"
+            "question_answered",
+            "page"
           ],
           "title": "Kind",
           "type": "string"
@@ -3244,6 +3251,13 @@
             "timed_out"
           ],
           "title": "Outcome",
+          "type": "string"
+        },
+        "page_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(page-[0-9a-f]{8})?$",
+          "title": "Page Id",
           "type": "string"
         },
         "process_id": {
@@ -3687,7 +3701,8 @@
               "enum": [
                 "continuation",
                 "agent_task",
-                "agent_guidance"
+                "agent_guidance",
+                "page"
               ],
               "type": "string"
             },

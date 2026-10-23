@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { AppLink } from '../../ui/app-link';
 import { IconButton, Menu, type MenuAction } from '../../ui/primitives';
+import { IncognitoMark } from './incognito';
 
 /** The server keeps at most 120 characters of a title (B135). */
 export const TITLE_LIMIT = 120;
@@ -34,6 +35,7 @@ export default function ConversationHeader({
   contextDisabled = false,
   actions,
   leading,
+  incognito = false,
   menuActions,
   breadcrumb,
   children,
@@ -53,6 +55,8 @@ export default function ConversationHeader({
   actions?: ReactNode;
   /** Shown before the title on compact layouts (the navigation button). */
   leading?: ReactNode;
+  /** An incognito chat (N11): its mark beside the title, its words in the tooltip. */
+  incognito?: boolean;
   /**
    * Phone layout: fold the actions into one ⋯ menu. The workspace's own
    * entries (search, panels) come first.
@@ -205,6 +209,7 @@ export default function ConversationHeader({
             {title}
           </h1>
         )}
+        {incognito && !editing && <IncognitoMark />}
         {canRename && !editing && !phone && (
           <IconButton
             size="sm"

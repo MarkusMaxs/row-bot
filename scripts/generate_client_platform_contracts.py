@@ -73,7 +73,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -223,6 +223,13 @@ OPERATIONS = (
     ("get", "/deliveries/{delivery_id}/files/{index}", None, "bytes"),
     ("post", "/deliveries/{delivery_id}/files/{index}/save", None, "ExportSaved"),
     ("post", "/deliveries/{delivery_id}/to-devices", None, "DeliveryView"),
+    ("get", "/pages", None, "PagePage"),
+    ("get", "/pages/{page_id}", None, "PageView"),
+    ("post", "/pages/{page_id}/frame", "PageFrameRequest", "PageFrame"),
+    ("put", "/pages/{page_id}/state", "PageStateWrite", "PageView"),
+    ("post", "/pages/{page_id}/decisions", "PageDecisionWrite", "PageView"),
+    ("post", "/pages/{page_id}/download", "PageFrameRequest", "PageDownload"),
+    ("post", "/pages/{page_id}/save", "PageFrameRequest", "ExportSaved"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
@@ -794,6 +801,26 @@ export const saveDeliveryFile = (base: string, proof: SessionProof, delivery: st
 /** The person's "Send to your devices instead" for files that didn't go to a chat app. No approval. */
 export const sendDeliveryToDevices = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
   jsonRequest(base, `/deliveries/${id(delivery)}/to-devices`, 'DeliveryView', proof, 'POST', {}, undefined, signal);
+/** Pages the agent made (N5), or one conversation's: most recently changed first. */
+export const getPages = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<PagePage> =>
+  jsonRequest(base, '/pages' + query({conversation_id}), 'PagePage', proof, 'GET', undefined, undefined, signal);
+export const getPage = (base: string, proof: SessionProof, page: string, signal?: AbortSignal): Promise<PageView> =>
+  jsonRequest(base, `/pages/${id(page)}`, 'PageView', proof, 'GET', undefined, undefined, signal);
+/** One frame address for a page in this theme, served once to a frame with sandbox="allow-scripts" only. */
+export const createPageFrame = (base: string, proof: SessionProof, page: string, body: PageFrameRequest, signal?: AbortSignal): Promise<PageFrame> =>
+  jsonRequest(base, `/pages/${id(page)}/frame`, 'PageFrame', proof, 'POST', validateWire('PageFrameRequest', body), undefined, signal);
+/** A page's own state, from its bridge (an object, up to 256 KB). */
+export const savePageState = (base: string, proof: SessionProof, page: string, body: PageStateWrite, signal?: AbortSignal): Promise<PageView> =>
+  jsonRequest(base, `/pages/${id(page)}/state`, 'PageView', proof, 'PUT', validateWire('PageStateWrite', body), undefined, signal);
+/** One decision from a page's bridge; it only gathers until the person sends them. */
+export const savePageDecision = (base: string, proof: SessionProof, page: string, body: PageDecisionWrite, signal?: AbortSignal): Promise<PageView> =>
+  jsonRequest(base, `/pages/${id(page)}/decisions`, 'PageView', proof, 'POST', validateWire('PageDecisionWrite', body), undefined, signal);
+/** Download as HTML: one file that works on its own. */
+export const downloadPage = (base: string, proof: SessionProof, page: string, body: PageFrameRequest, signal?: AbortSignal): Promise<PageDownload> =>
+  jsonRequest(base, `/pages/${id(page)}/download`, 'PageDownload', proof, 'POST', validateWire('PageFrameRequest', body), undefined, signal);
+/** Desktop window: the page is saved into Exports on this computer (it can't download). */
+export const savePageToExports = (base: string, proof: SessionProof, page: string, body: PageFrameRequest, signal?: AbortSignal): Promise<ExportSaved> =>
+  jsonRequest(base, `/pages/${id(page)}/save`, 'ExportSaved', proof, 'POST', validateWire('PageFrameRequest', body), undefined, signal);
 export const getAttention = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AttentionSnapshot> =>
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>
