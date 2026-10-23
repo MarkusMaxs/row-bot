@@ -165,9 +165,11 @@ def test_failed_progress_commit_after_send_is_uncertain_without_repeat(project, 
 
 
 @pytest.fixture
-def x_api(isolated, monkeypatch):
+def x_api(isolated, monkeypatch, tmp_path):
     """X's API, faked in-process, with one connected account (or more, added by the test)."""
     from tests.helpers.fake_x_api import ROWBOT, FakeXApi, install
+    # The accounts list is the test's own: one another test (or an earlier run) saved never answers here.
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
     fake = FakeXApi()
     install(monkeypatch, fake, ROWBOT)
     return fake
