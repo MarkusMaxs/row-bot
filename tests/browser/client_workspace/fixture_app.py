@@ -2019,8 +2019,161 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         call["quiesced"] = True
 
 
+# ── N5: pages Row-Bot makes for the person ─────────────────────────────────
+# The real page tools on the Making a page skill's own templates; the model's
+# calls and finals are scripted. The person's Send arrives as a real message.
+_N5_SKILL = Path(__file__).resolve().parents[3] / "bundled_skills" / "making_pages" / "SKILL.md"
+_N5_PLAN = {
+    "title": "Beta launch plan",
+    "summary": "Six steps to open the beta to 200 testers on 14 November.",
+    "steps": [
+        {"id": "freeze", "title": "Freeze the release branch",
+         "detail": "Cut beta.1 from main once the two open fixes land.", "status": "done"},
+        {"id": "announce", "title": "Draft the announcement",
+         "detail": "A short blog post and an email to the waitlist.", "status": "doing"},
+        {"id": "invites", "title": "Send invites to the waitlist",
+         "detail": "200 people, in two batches a day apart.", "status": "todo"},
+        {"id": "call", "title": "Book the launch call",
+         "detail": "30 minutes with the first testers on Thursday at 5pm.", "status": "todo"},
+        {"id": "feedback", "title": "Set up the feedback form",
+         "detail": "Five questions, linked from the app's Help menu.", "status": "todo"},
+        {"id": "stickers", "title": "Order stickers for testers",
+         "detail": "Optional: 250 stickers, about £120.", "status": "todo"},
+    ],
+}
+_N5_DASHBOARD = {
+    "title": "Sales by week",
+    "updated": "today at 9:00",
+    "metrics": [{"label": "Revenue, last 8 weeks", "value": "£48,210"}, {"label": "Orders", "value": "1,284"},
+                {"label": "Average order", "value": "£37.55"}, {"label": "Refunds", "value": "1.8%"}],
+    "chart": {"labels": ["4 Sep", "11 Sep", "18 Sep", "25 Sep", "2 Oct", "9 Oct", "16 Oct", "23 Oct"],
+              "series": [{"label": "Online", "values": [3900, 4120, 4380, 4010, 4720, 5050, 5310, 5480]},
+                         {"label": "Shops", "values": [1450, 1380, 1520, 1610, 1490, 1570, 1640, 1580]}]},
+    "columns": [{"key": "product", "label": "Product"}, {"key": "units", "label": "Units", "number": True},
+                {"key": "revenue", "label": "Revenue (£)", "number": True},
+                {"key": "change", "label": "vs last week", "number": True}],
+    "rows": [{"product": "Trail runner", "units": 182, "revenue": 14560, "change": "+9%"},
+             {"product": "City sneaker", "units": 241, "revenue": 13255, "change": "+4%"},
+             {"product": "Rain shell", "units": 96, "revenue": 8640, "change": "+18%"},
+             {"product": "Merino socks", "units": 410, "revenue": 4920, "change": "−2%"},
+             {"product": "Day pack", "units": 74, "revenue": 4440, "change": "+6%"},
+             {"product": "Water bottle", "units": 281, "revenue": 2390, "change": "+1%"}],
+}
+_N5_CHECKLIST = {
+    "title": "Launch day checklist",
+    "sections": [
+        {"title": "The day before", "items": [
+            {"id": "notes", "text": "Write the release notes"},
+            {"id": "status", "text": "Check the status page is green"},
+            {"id": "support", "text": "Brief support on the known issues"}]},
+        {"title": "On the day", "items": [
+            {"id": "publish", "text": "Publish the beta build"},
+            {"id": "email", "text": "Send the waitlist email"},
+            {"id": "social", "text": "Post the announcement"},
+            {"id": "watch", "text": "Watch sign-ups for the first hour"}]},
+    ],
+}
+# Each way a page might try to leave its sandbox, and what it found.
+_N5_PROBE = """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+</head><body><h1>Sandbox check</h1><ul id="results" class="rb-list"></ul><script>
+const said = (name, value) => { const li = document.createElement('li'); li.textContent = name + ': ' + value;
+  results.append(li); };
+async function probe() {
+  try { await fetch('/api/v1/handshake'); said('fetch', 'reached'); } catch { said('fetch', 'blocked'); }
+  try { said('parent', window.parent.document.title ? 'reached' : 'reached'); } catch { said('parent', 'blocked'); }
+  try { said('cookies', document.cookie === undefined ? 'blocked' : 'reached'); } catch { said('cookies', 'blocked'); }
+  try { const opened = window.open('https://example.com/'); said('popup', opened ? 'reached' : 'blocked'); }
+  catch { said('popup', 'blocked'); }
+  try { window.top.location.href = '/app-v2/'; said('top', 'asked'); } catch { said('top', 'blocked'); }
+  said('rowbot', typeof rowbot.decide === 'function' && typeof rowbot.send === 'undefined' ? 'bridge only' : 'more');
+  document.body.dataset.done = 'yes';
+}
+probe();
+</script></body></html>"""
+
+
+# What the person asks for, as they'd write it: each makes one kind of page.
+_N5_PROMPTS = {
+    "Make me a beta launch plan I can approve step by step": "plan",
+    "Show me sales by week as a dashboard": "dashboard",
+    "Make a launch day checklist for the beta": "checklist",
+    "Make a page that checks its own sandbox": "probe",
+}
+
+
+def _n5_template(heading: str) -> str:
+    """One template from the Making a page skill, exactly as the model reads it."""
+    text = _N5_SKILL.read_text(encoding="utf-8")
+    start = text.index("```html\n", text.index(heading)) + len("```html\n")
+    return text[start:text.index("\n```", start)]
+
+
+def _n5_page(thread: str, identity: str, name: str, args: dict):
+    from row_bot.tools import pages_tool
+
+    run = pages_tool._page_create if name == "page_create" else pages_tool._page_update
+    yield from _s3_steps(thread, identity, [(name, args, lambda: (_s4_in_thread(thread, lambda: run(**args)), []))])
+
+
+def _n5_stream(text: str, config: dict):
+    call = predecessor._record("submit", config, "n5-page")
+    thread = call["conversation_id"]
+    identity = f"n5:{call['generation_id']}"
+    try:
+        kind = _N5_PROMPTS[text.strip()]
+        if kind == "dashboard":
+            args = {"title": "Sales by week", "html": _n5_template("### A dashboard"), "data": _N5_DASHBOARD,
+                    "libraries": ["charts", "rowbot-style"]}
+            final = "Here's the sales dashboard: revenue by week for online and shops, and every product below."
+        elif kind == "checklist":
+            args = {"title": "Launch day checklist", "html": _n5_template("### A checklist"),
+                    "data": _N5_CHECKLIST, "libraries": ["rowbot-style"]}
+            final = "Here's the launch day checklist. Tick things off as you go; it remembers on every device."
+        elif kind == "probe":
+            args = {"title": "Sandbox check", "html": _N5_PROBE, "libraries": ["rowbot-style"]}
+            final = "Here's the sandbox check."
+        else:
+            args = {"title": "Beta launch plan", "html": _n5_template("### A plan with approvals"),
+                    "data": _N5_PLAN, "libraries": ["rowbot-style"]}
+            final = ("Here's the beta launch plan. Approve, change or skip each step, then send me your "
+                     "decisions and I'll get going.")
+        yield from _n5_page(thread, identity, "page_create", args)
+        yield from _natural_final(call, thread, final, "n5")
+    finally:
+        call["quiesced"] = True
+
+
+def _n5_sent(text: str, config: dict):
+    """The person's Send under the plan: Row-Bot answers and moves the plan on with page_update."""
+    from row_bot import pages
+
+    call = predecessor._record("submit", config, "n5-sent")
+    thread = call["conversation_id"]
+    identity = f"n5-sent:{call['generation_id']}"
+    try:
+        page = next((item for item in pages.list_pages(thread) if item.page_id in text.split("\n", 1)[0]), None)
+        if page is not None and page.title == _N5_PLAN["title"]:
+            moved = {"announce": "done", "invites": "doing"}
+            data = {**_N5_PLAN, "steps": [{**step, "status": moved.get(step["id"], step["status"])}
+                                          for step in _N5_PLAN["steps"]]}
+            yield from _n5_page(thread, identity, "page_update", {"page": page.page_id, "data": data})
+        final = ("Thanks. The announcement is ready and the first batch of invites is going out now. I'll move the "
+                 "launch call to Friday at 4pm and update the plan as I go.")
+        yield from _natural_final(call, thread, final, "n5-sent")
+    finally:
+        call["quiesced"] = True
+
+
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.strip() in _N5_PROMPTS:
+        # Pages (N5): the real page tools on the skill's templates.
+        yield from _n5_stream(text, config)
+        return
+    if text.startswith("[") and "from the page" in text.split("\n", 1)[0]:
+        # The person's Send under a page (N5), as the real message Row-Bot wrote from it.
+        yield from _n5_sent(text, config)
+        return
     if text.startswith("n12b ") and text.rstrip().endswith("fixture"):
         # Computer use, rebuilt (N12-B): the real computer tool on a fake desktop.
         yield from _n12b_stream(text, config)

@@ -59,7 +59,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
 # favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
 # Row-Bot's questions with options (asked, answered, collapsed; a helper's and a workflow's),
-# and a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards.
+# a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
+# and pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -87,6 +88,7 @@ BROWSER_SMOKE_SPECS = (
     "model-visibility",
     "question-cards",
     "workflow-review",
+    "pages",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
