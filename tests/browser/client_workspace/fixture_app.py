@@ -5269,6 +5269,8 @@ def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
 from row_bot import install_count as _install_count  # noqa: E402
 
 _install_count.COLLECTOR_URL = ""
+# The test matrix turns install stats off for every app it starts; the N6 specs turn it back on here.
+_N6_ENV = os.environ.get(_install_count.ENV)
 _N6_SERVICE = "https://row-bot-count.row-bot.workers.dev"
 _n6_sent: list[dict] = []
 _n6_real_post = _install_count._post
@@ -5303,10 +5305,13 @@ def n6_install_count(state: str, x_fixture_token: str = Header(default="")) -> d
     if state == "restore":
         _install_count.COLLECTOR_URL = ""
         _install_count._post = _n6_real_post
+        if _N6_ENV is not None:
+            os.environ[_install_count.ENV] = _N6_ENV
         _n6_name_conversations(False)
         return {"state": state}
     if state not in {"fresh", "on", "off"}:
         raise HTTPException(status_code=404, detail="Unknown install stats state")
+    os.environ.pop(_install_count.ENV, None)
     _install_count.COLLECTOR_URL = _N6_SERVICE
     _install_count._post = _n6_post
     _n6_name_conversations(True)

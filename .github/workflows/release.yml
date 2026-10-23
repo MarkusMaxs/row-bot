@@ -95,6 +95,8 @@ env:
   # python-build-standalone in installer/build_mac_app.sh and build_linux_app.sh;
   # the wheel check plans for it and checksums-and-manifest checks the builds agree.
   UNIX_PYTHON_VERSION: "3.12.13"
+  # Every Row-Bot the smokes start keeps install stats off: nothing reaches the real stats service.
+  ROW_BOT_INSTALL_COUNT: "0"
 
 jobs:
   # ---------------------------------------------------------------------------
