@@ -14,6 +14,21 @@ import { protect, unavailable } from './types';
  */
 export const REBIND_RETRY_MS = 2000;
 const REBIND_RETRY_MAX_MS = 15_000;
+/**
+ * How long something the person asked for waits for the window to bind
+ * again before it says to try again. Binding takes well under a second.
+ */
+export const NATIVE_ACTION_WAIT_MS = 10_000;
+
+/**
+ * How a call meets a bridge that is binding again (B406):
+ * - `background`: answers "reconnecting" at once (status reads, lease
+ *   renewal, the Buddy's target); it never shows the notice.
+ * - `quiet`: waits for the binding without a notice (capability checks).
+ * - `person`: something the person asked for. It waits for the binding,
+ *   and only while it waits does the window say it is reconnecting.
+ */
+type Wait = 'background' | 'quiet' | 'person';
 
 export type DesktopHost = Window & {
   __ROW_BOT_NATIVE_CLIENT__?: NativeEndpoint;
@@ -34,14 +49,16 @@ const NOT_STARTED = new Set([
 ]);
 
 /**
- * A desktop window's platform (B231, B238). It runs the native versions
- * while its bridge is bound. When a call finds the bridge gone, or it never
- * arrived, the window asks the host to bind it again (exactly what loading
- * the page does; a fresh attestation then grants its authority), without
- * reloading and losing its state. Meanwhile it says "reconnecting" instead of
- * silently running the browser versions, except where those do the same job:
- * attaching files (the drop path), the clipboard and external links. A save
- * that cannot show the Save dialog is written into Exports by the server.
+ * A desktop window's platform (B231, B238, B406). It runs the native
+ * versions while its bridge is bound. When a call finds the bridge gone, or
+ * it never arrived, the window asks the host to bind it again at once and
+ * silently (exactly what loading the page does; a fresh attestation then
+ * grants its authority), without reloading and losing its state. What the
+ * person asked for waits for that and then runs; only a wait of a moment or
+ * more says "reconnecting". It never silently runs the browser versions,
+ * except where those do the same job: attaching files (the drop path), the
+ * clipboard and external links. A save that still cannot show the Save
+ * dialog is written into Exports by the server.
  */
 export function createDesktopPlatform(
   media: MediaTransport,
@@ -50,25 +67,52 @@ export function createDesktopPlatform(
   instanceId: string,
   reattest: () => Promise<string | null>,
   retryMs = REBIND_RETRY_MS,
+  actionWaitMs = NATIVE_ACTION_WAIT_MS,
 ): ClientPlatform & {
   /** Bind the endpoint the page has, or wait for it up to `waitMs`. */
   connect(attestation: string, waitMs: number): Promise<void>;
 } {
   let native: ClientPlatform | null = null;
-  let connection: NativeConnection = 'reconnecting';
+  let bound = false;
+  // The person's own calls waiting for the bridge right now.
+  let waiting = 0;
+  let shown: NativeConnection = 'ready';
   // The handshake's attestation, used by the first binding only.
   let first: string | null = null;
   let binding: { endpoint: NativeEndpoint; done: Promise<boolean> } | null =
     null;
   let rebinding = false;
+  // The notice's listeners, and the calls waiting for a binding.
   const listeners = new Set<() => void>();
+  const whenBound = new Set<() => void>();
   // Read afresh: a binding can finish while the loop below waits.
-  const ready = () => connection === 'ready';
-  const become = (next: NativeConnection) => {
-    if (connection === next) return;
-    connection = next;
+  const ready = () => bound;
+  const publish = () => {
+    const next = !bound && waiting > 0 ? 'reconnecting' : 'ready';
+    if (shown === next) return;
+    shown = next;
     listeners.forEach((listener) => listener());
   };
+  const become = (next: NativeConnection) => {
+    if (bound === (next === 'ready')) return;
+    bound = next === 'ready';
+    if (bound) [...whenBound].forEach((resume) => resume());
+    publish();
+  };
+  // Resolves once bound, after `actionWaitMs`, or when the caller gives up.
+  const bindingFinished = (signal?: AbortSignal) =>
+    new Promise<void>((resolve) => {
+      if (bound || signal?.aborted) return resolve();
+      const finish = () => {
+        whenBound.delete(finish);
+        host.clearTimeout(timer);
+        signal?.removeEventListener('abort', finish);
+        resolve();
+      };
+      whenBound.add(finish);
+      signal?.addEventListener('abort', finish);
+      const timer = host.setTimeout(finish, actionWaitMs);
+    });
 
   const bind = (endpoint: NativeEndpoint): Promise<boolean> => {
     if (binding?.endpoint === endpoint) return binding.done;
@@ -113,12 +157,12 @@ export function createDesktopPlatform(
   let wait = retryMs;
   // Ends the current wait between attempts early.
   let wake: (() => void) | null = null;
-  const rebind = () => {
+  const rebind = (now = false) => {
     native = null;
     become('reconnecting');
     if (rebinding) {
-      // A native operation is wanted now: try now.
-      wake?.();
+      // A native operation is waiting: try now.
+      if (now) wake?.();
       return;
     }
     rebinding = true;
@@ -159,18 +203,39 @@ export function createDesktopPlatform(
 
   async function run<T>(
     operation: (platform: ClientPlatform) => Promise<CapabilityResult<T>>,
+    wait: Wait = 'person',
+    signal?: AbortSignal,
   ): Promise<CapabilityResult<T>> {
-    const current = native;
-    if (!current) {
-      rebind();
-      return unavailable('native_reconnecting');
+    for (let attempt = 0; ; attempt += 1) {
+      let current = native;
+      if (!current) {
+        rebind(wait !== 'background');
+        if (wait === 'background') return unavailable('native_reconnecting');
+        if (wait === 'person') waiting += 1;
+        publish();
+        try {
+          await bindingFinished(signal);
+        } finally {
+          if (wait === 'person') waiting -= 1;
+          publish();
+        }
+        current = native;
+        if (signal?.aborted) return { status: 'cancelled' };
+        if (!current) return unavailable('native_reconnecting');
+      }
+      const result = await operation(current);
+      if (result.status !== 'unavailable' || !LOST.has(result.reason))
+        return result;
+      if (native === current) rebind(wait !== 'background');
+      // A lapsed proof refused the call before it ran: once the window is
+      // bound again, it runs (once).
+      if (
+        wait === 'background' ||
+        attempt > 0 ||
+        result.reason !== 'native_proof_required'
+      )
+        return unavailable('native_reconnecting');
     }
-    const result = await operation(current);
-    if (result.status === 'unavailable' && LOST.has(result.reason)) {
-      if (native === current) rebind();
-      return unavailable('native_reconnecting');
-    }
-    return result;
   }
   const notStarted = (result: CapabilityResult<unknown>) =>
     result.status === 'unavailable' && NOT_STARTED.has(result.reason);
@@ -193,14 +258,14 @@ export function createDesktopPlatform(
       // often after a cold start's handshake (B95).
       return new Promise<void>((resolve) => {
         const finish = () => {
-          listeners.delete(settle);
+          whenBound.delete(settle);
           host.clearTimeout(timer);
           resolve();
         };
         const settle = () => {
           if (ready()) finish();
         };
-        listeners.add(settle);
+        whenBound.add(settle);
         const timer = host.setTimeout(() => {
           finish();
           if (!ready()) rebind();
@@ -208,52 +273,77 @@ export function createDesktopPlatform(
       });
     },
     nativeConnection: {
-      get: () => connection,
+      get: () => shown,
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
     },
-    discover: () => run((platform) => platform.discover()),
+    discover: () => run((platform) => platform.discover(), 'quiet'),
     renewNative: (attestation) =>
-      run((platform) =>
-        platform.renewNative
-          ? platform.renewNative(attestation)
-          : Promise.resolve(unavailable()),
+      run(
+        (platform) =>
+          platform.renewNative
+            ? platform.renewNative(attestation)
+            : Promise.resolve(unavailable()),
+        'background',
       ),
     selectFile: async (signal, intent) => {
-      const result = await run((platform) =>
-        platform.selectFile(signal, intent),
-      );
       // Attaching needs no native path grant: the browser's own file input
-      // uploads like a drop does.
-      return intent?.intent === 'attachment'
-        ? orBrowser(result, () => browser.selectFile(signal, intent))
-        : result;
+      // uploads like a drop does, so it never waits for the bridge.
+      if (intent?.intent === 'attachment')
+        return orBrowser(
+          await run(
+            (platform) => platform.selectFile(signal, intent),
+            'background',
+          ),
+          () => browser.selectFile(signal, intent),
+        );
+      return run(
+        (platform) => platform.selectFile(signal, intent),
+        'person',
+        signal,
+      );
     },
     selectFolder: (signal, intent) =>
-      run((platform) => platform.selectFolder(signal, intent)),
+      run(
+        (platform) => platform.selectFolder(signal, intent),
+        'person',
+        signal,
+      ),
     upload: (conversationId, file, signal) =>
       browser.upload(conversationId, file, signal),
+    // The browser versions do the same job at once while the bridge binds.
     readClipboard: async () =>
       orBrowser(
-        await run((platform) => platform.readClipboard()),
+        await run((platform) => platform.readClipboard(), 'background'),
         browser.readClipboard,
       ),
     writeClipboard: async (text) =>
-      orBrowser(await run((platform) => platform.writeClipboard(text)), () =>
-        browser.writeClipboard(text),
+      orBrowser(
+        await run((platform) => platform.writeClipboard(text), 'background'),
+        () => browser.writeClipboard(text),
       ),
     openExternal: async (url) =>
-      orBrowser(await run((platform) => platform.openExternal(url)), () =>
-        browser.openExternal(url),
+      orBrowser(
+        await run((platform) => platform.openExternal(url), 'background'),
+        () => browser.openExternal(url),
       ),
     managedWindow: (route) => run((platform) => platform.managedWindow(route)),
+    // Reading Buddy's status (polled while it is on the desktop) is not
+    // something the person asked for; docking and tearing off are.
     buddyPlacement: (action, point) =>
-      run((platform) => platform.buddyPlacement(action, point)),
+      run(
+        (platform) => platform.buddyPlacement(action, point),
+        action === 'status' || action === 'ready' ? 'background' : 'person',
+      ),
     publishBuddyTarget: (conversationId) =>
-      run((platform) => platform.publishBuddyTarget(conversationId)),
-    readBuddyTarget: () => run((platform) => platform.readBuddyTarget()),
+      run(
+        (platform) => platform.publishBuddyTarget(conversationId),
+        'background',
+      ),
+    readBuddyTarget: () =>
+      run((platform) => platform.readBuddyTarget(), 'background'),
     showMainWindow: (conversationId) =>
       run((platform) => platform.showMainWindow(conversationId)),
     moveWindow: (x, y) => native?.moveWindow(x, y) ?? false,
@@ -262,8 +352,10 @@ export function createDesktopPlatform(
     openExternalTerminal: (conversationId) =>
       run((platform) => platform.openExternalTerminal(conversationId)),
     save: async (reference, name, signal) => {
-      const result = await run((platform) =>
-        platform.save(reference, name, signal),
+      const result = await run(
+        (platform) => platform.save(reference, name, signal),
+        'person',
+        signal,
       );
       if (!notStarted(result)) return result;
       // No Save dialog while the bridge reconnects: the server writes the
