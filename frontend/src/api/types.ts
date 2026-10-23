@@ -1690,6 +1690,13 @@ export interface ClientTransport {
     signal?: AbortSignal,
     notices?: Wire.NoticePosition,
   ): Promise<Wire.EventPage>;
+  /** App-wide live updates (B407): topic revisions only. */
+  observeLive?(signal: AbortSignal): AsyncIterable<Wire.LiveFrame>;
+  /** The same, long-polled where a proxy holds the stream back. */
+  pollLive?(
+    position: { after: number; epoch: string } | undefined,
+    signal: AbortSignal,
+  ): Promise<Wire.LiveFrame>;
   /** Background notices and start-up warnings (no conversation stream). */
   notices?(
     position?: Wire.NoticePosition,

@@ -39,6 +39,7 @@ import {
   type Tone,
 } from '../../ui/primitives';
 import { clientError } from '../../api/errors';
+import { useLiveUpdate } from '../../live';
 import { absoluteTime, parseTimestamp, relativeTime } from '../../ui/format';
 import { FAILED_RUN_STATUSES, When, plural, runStatus } from './home-format';
 import { Sparkline, Swimlane, type Lane } from './monitor-charts';
@@ -931,6 +932,9 @@ export default function MonitorHome({
   const [range, setRange] = useState<'24h' | '7d'>('24h');
   const [history, setHistory] = useState<'dream' | 'extraction'>('dream');
   const [tasks, setTasks] = useState<TaskSummaryPage | null>(null);
+  // A workflow run started, finished or waits (B407): its lane shows it at once.
+  const [tasksReload, setTasksReload] = useState(0);
+  useLiveUpdate(['runs'], () => setTasksReload((value) => value + 1));
   const [health, setHealth] = useState<SystemDiagnosis | null>(null);
   const [clock, setClock] = useState(() => new Date());
   const now = suppliedNow ?? clock;
@@ -940,7 +944,7 @@ export default function MonitorHome({
     setClock(new Date());
     const timer = window.setInterval(() => setClock(new Date()), 60_000);
     return () => window.clearInterval(timer);
-  }, [suppliedNow, snapshot, health]);
+  }, [suppliedNow, snapshot, health, tasks]);
 
   useEffect(() => {
     if (!loadTasks) return;
@@ -952,7 +956,7 @@ export default function MonitorHome({
     return () => {
       active = false;
     };
-  }, [loadTasks]);
+  }, [loadTasks, tasksReload]);
 
   // The server checks by itself and keeps every result (B252); the page
   // reads them, never runs a check. Soon again while the first run is on.

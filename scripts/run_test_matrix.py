@@ -91,6 +91,7 @@ BROWSER_SMOKE_SPECS = (
     "workflow-review",
     "x-accounts",
     "outlook",
+    "live-updates",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (

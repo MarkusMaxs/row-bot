@@ -5196,5 +5196,75 @@ def _n10_stream(text: str, config: dict):
         call["quiesced"] = True
 
 
+
+# B407: a workflow run the scheduler starts in the background, with a step that
+# waits for the person's approval, so a spec sees it reach the sidebar, Home and
+# Monitor without a reload. Synthetic data only; nothing calls a model.
+_B407_TASK = "Morning digest"
+# The seeded conversations, titled as a person's own for screenshots, and back.
+_B407_TITLES = {"p1-browser-a": ("Phase 1 conversation A", "Plan the Lisbon trip"),
+                "p1-browser-b": ("Phase 1 conversation B", "Draft the Q3 board update")}
+
+
+def _b407_titles(realistic: bool) -> None:
+    import sqlite3
+    from row_bot import threads
+    from row_bot.application.live_updates import publish
+
+    with sqlite3.connect(threads.DB_PATH) as conn:
+        for thread_id, (seeded, realistic_title) in _B407_TITLES.items():
+            conn.execute("UPDATE thread_meta SET name=? WHERE thread_id=?",
+                         (realistic_title if realistic else seeded, thread_id))
+    publish("conversations")
+
+
+def _b407_clear() -> None:
+    from row_bot import tasks
+    from row_bot.thread_cleanup import delete_thread
+
+    if not Path(tasks._DB_PATH).resolve().is_relative_to(predecessor.DATA.resolve()):
+        raise HTTPException(status_code=403, detail="Synthetic data scope required")
+    for task in tasks.list_tasks():
+        if task["name"] != _B407_TASK:
+            continue
+        conversations = {run.get("thread_id") for run in tasks.get_run_history(task["id"])}
+        tasks.delete_task(task["id"])
+        for conversation in conversations - {None, ""}:
+            delete_thread(conversation)
+
+
+@app.post("/__b407_fixture/background-run")
+def b407_background_run(x_fixture_token: str = Header(default="")) -> dict:
+    """Start the workflow exactly as its schedule would, in the background."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+
+    _b407_clear()
+    task_id = tasks.create_task(
+        _B407_TASK, description="Gathers the morning's news and asks before it goes to the team.", icon="📰",
+        steps=[{"id": "send", "type": "approval", "message": "Send this morning's digest to the team?"}],
+        channels=[], enabled=False, apply_default_skills=False,
+    )
+    task = tasks.get_task(task_id)
+    thread_id = tasks._prepare_task_thread(task)
+    tasks.run_task_background(task_id, thread_id, [], notification=False)
+    return {"task_id": task_id, "conversation_id": thread_id}
+
+
+@app.post("/__b407_fixture/titles")
+def b407_realistic_titles(x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    _b407_titles(True)
+    return {"ok": True}
+
+
+@app.post("/__b407_fixture/reset")
+def b407_reset(x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    _b407_clear()
+    _b407_titles(False)
+    return {"ok": True}
+
+
 if __name__ == "__main__":
     main()
