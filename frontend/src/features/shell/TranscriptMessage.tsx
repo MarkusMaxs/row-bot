@@ -9,6 +9,7 @@ import {
   TriangleAlert,
   Volume2,
   VolumeX,
+  LayoutTemplate,
 } from 'lucide-react';
 import type { TranscriptRow, TranscriptTraceGroup } from '../../api/types';
 import { clientError } from '../../api/errors';
@@ -266,6 +267,13 @@ export const TranscriptMessage = memo(function TranscriptMessage({
     >
       {turnStart && row.role !== 'tool' && <TurnMarker role={row.role} />}
       <div className="transcript-content">
+        {row.note === 'page' && (
+          // The person's Send under a page (N5): their decisions there, in words.
+          <small className="message-source">
+            <LayoutTemplate size={14} aria-hidden />
+            Sent from a page
+          </small>
+        )}
         {row.content_status && row.content_status !== 'inline' && (
           <small className="message-delivery-state">
             {row.content_status === 'lazy'

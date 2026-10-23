@@ -24,6 +24,7 @@ import {
   Compass,
   Copy,
   Globe,
+  LayoutTemplate,
   Home as HomeIcon,
   Library,
   Lightbulb,
@@ -110,6 +111,13 @@ import {
 import { designCommandSets } from '../panels/design-commands';
 import BrowserPane from '../browser/BrowserPane';
 import { BROWSER_PANEL, onBrowserPaneRequest } from '../browser/open-pane';
+import PagePanel from '../pages/PagePanel';
+import {
+  PAGE_PANEL_KIND,
+  onPageRequest,
+  takeWaitingPage,
+  type PageRequest,
+} from '../pages/open-page';
 import {
   TERMINAL_MIN_HEIGHT,
   TerminalSlot,
@@ -135,7 +143,9 @@ function panelIcon(descriptor: PanelDescriptor): LucideIcon {
       ? Code2
       : descriptor.panel_kind === 'browser.live'
         ? Globe
-        : BookOpen;
+        : descriptor.panel_kind === PAGE_PANEL_KIND
+          ? LayoutTemplate
+          : BookOpen;
 }
 
 /** The sheet header names the kind; the panel itself shows the resource. */
@@ -147,6 +157,28 @@ function panelKindLabel(descriptor: PanelDescriptor): string {
       : descriptor.panel_kind === 'browser.live'
         ? 'Browser'
         : descriptor.title;
+}
+
+/** A page beside its chat (N5); its id is the panel's subresource key. */
+function PagePanelContent({
+  panel,
+  visible,
+}: {
+  panel: PanelInstance;
+  visible: boolean;
+}) {
+  const conversationId = useClientSelector(
+    (value) => value.selectedConversationId,
+  );
+  const pageId = panel.descriptor.subresource_key ?? '';
+  if (!conversationId || !pageId) return null;
+  return (
+    <PagePanel
+      conversationId={conversationId}
+      pageId={pageId}
+      visible={visible}
+    />
+  );
 }
 
 /** Ctrl+` toggles the terminal: Control on every platform, as in VS Code. */
@@ -262,6 +294,8 @@ function PanelContent({
     <ResourcePanel panel={panel} visible={visible} />
   ) : panel.descriptor.panel_kind === 'browser.live' ? (
     <BrowserPanel visible={visible} />
+  ) : panel.descriptor.panel_kind === PAGE_PANEL_KIND ? (
+    <PagePanelContent panel={panel} visible={visible} />
   ) : import.meta.env.VITE_ENABLE_FIXTURES === '1' ? (
     <SamplePanel panel={panel} visible={visible} />
   ) : (
@@ -446,6 +480,26 @@ export default function Workspace() {
       });
   });
   useEffect(() => onBrowserPaneRequest(openBrowserPane), []);
+  // A page card's Open, or Library › Pages, opens the page beside its chat (N5).
+  const openPage = useEffectEvent((request: PageRequest) => {
+    if (request.conversationId !== conversationId) return false;
+    showPanel(
+      {
+        panel_kind: PAGE_PANEL_KIND,
+        title: request.title,
+        subresource_key: request.pageId,
+      },
+      undefined,
+      undefined,
+      { wide: true },
+    );
+    return true;
+  });
+  useEffect(() => onPageRequest(openPage), []);
+  useEffect(() => {
+    const waiting = conversationId ? takeWaitingPage(conversationId) : null;
+    if (waiting) openPage(waiting);
+  }, [conversationId]);
   const presentationScope = useRef({
     conversationId,
     routeKey: location.key,

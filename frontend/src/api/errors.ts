@@ -1742,6 +1742,28 @@ const CATALOG: Record<string, Entry> = {
     "Those files can't be found any more, so they weren't sent. Ask Row-Bot to send them again.",
     'none',
   ],
+  chat_page_unavailable: [
+    "This page isn't here any more. Ask Row-Bot to make it again.",
+    'none',
+  ],
+  chat_page_invalid: [
+    "The page couldn't save that. Try again.",
+    'retry',
+    RETRY,
+  ],
+  chat_page_too_large: [
+    'This page is saving more than it can hold, so the last change was not saved.',
+    'none',
+  ],
+  chat_page_rate_limited: [
+    'This page is saving too often. Wait a moment and try again.',
+    'retry',
+    RETRY,
+  ],
+  chat_page_nothing_to_send: [
+    'There are no decisions on this page to send.',
+    'none',
+  ],
   local_address_unavailable: [
     'That address was already removed or ran out.',
     'none',

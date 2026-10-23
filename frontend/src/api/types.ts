@@ -900,6 +900,39 @@ export interface ClientTransport {
     deliveryId: string,
     signal?: AbortSignal,
   ): Promise<Wire.DeliveryView>;
+  /** Pages the agent made (N5): every one, or one conversation's. */
+  pages?(conversationId?: string, signal?: AbortSignal): Promise<Wire.PagePage>;
+  page?(pageId: string, signal?: AbortSignal): Promise<Wire.PageView>;
+  /** One frame address for a page in this theme, loaded once in a sandbox. */
+  pageFrame?(
+    pageId: string,
+    theme: Wire.PageTheme,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageFrame>;
+  /** A page's own state, from its bridge. */
+  savePageState?(
+    pageId: string,
+    state: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageView>;
+  /** One decision from a page's bridge; nothing is sent. */
+  savePageDecision?(
+    pageId: string,
+    decision: Wire.PageDecisionWrite,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageView>;
+  /** Download as HTML. */
+  downloadPage?(
+    pageId: string,
+    theme: Wire.PageTheme,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageDownload>;
+  /** Desktop window: the page saved into Exports on this computer. */
+  savePageToExports?(
+    pageId: string,
+    theme: Wire.PageTheme,
+    signal?: AbortSignal,
+  ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
