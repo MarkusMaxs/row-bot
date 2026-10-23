@@ -24,6 +24,7 @@ import {
   Compass,
   Copy,
   Globe,
+  LayoutTemplate,
   Home as HomeIcon,
   Library,
   Lightbulb,
@@ -110,6 +111,13 @@ import {
 import { designCommandSets } from '../panels/design-commands';
 import BrowserPane from '../browser/BrowserPane';
 import { BROWSER_PANEL, onBrowserPaneRequest } from '../browser/open-pane';
+import PagePanel from '../pages/PagePanel';
+import {
+  PAGE_PANEL_KIND,
+  onPageRequest,
+  takeWaitingPage,
+  type PageRequest,
+} from '../pages/open-page';
 import {
   TERMINAL_MIN_HEIGHT,
   TerminalSlot,
@@ -135,7 +143,9 @@ function panelIcon(descriptor: PanelDescriptor): LucideIcon {
       ? Code2
       : descriptor.panel_kind === 'browser.live'
         ? Globe
-        : BookOpen;
+        : descriptor.panel_kind === PAGE_PANEL_KIND
+          ? LayoutTemplate
+          : BookOpen;
 }
 
 /** The sheet header names the kind; the panel itself shows the resource. */
@@ -147,6 +157,28 @@ function panelKindLabel(descriptor: PanelDescriptor): string {
       : descriptor.panel_kind === 'browser.live'
         ? 'Browser'
         : descriptor.title;
+}
+
+/** A page beside its chat (N5); its id is the panel's subresource key. */
+function PagePanelContent({
+  panel,
+  visible,
+}: {
+  panel: PanelInstance;
+  visible: boolean;
+}) {
+  const conversationId = useClientSelector(
+    (value) => value.selectedConversationId,
+  );
+  const pageId = panel.descriptor.subresource_key ?? '';
+  if (!conversationId || !pageId) return null;
+  return (
+    <PagePanel
+      conversationId={conversationId}
+      pageId={pageId}
+      visible={visible}
+    />
+  );
 }
 
 /** Ctrl+` toggles the terminal: Control on every platform, as in VS Code. */
@@ -262,6 +294,8 @@ function PanelContent({
     <ResourcePanel panel={panel} visible={visible} />
   ) : panel.descriptor.panel_kind === 'browser.live' ? (
     <BrowserPanel visible={visible} />
+  ) : panel.descriptor.panel_kind === PAGE_PANEL_KIND ? (
+    <PagePanelContent panel={panel} visible={visible} />
   ) : import.meta.env.VITE_ENABLE_FIXTURES === '1' ? (
     <SamplePanel panel={panel} visible={visible} />
   ) : (
@@ -446,6 +480,26 @@ export default function Workspace() {
       });
   });
   useEffect(() => onBrowserPaneRequest(openBrowserPane), []);
+  // A page card's Open, or Library › Pages, opens the page beside its chat (N5).
+  const openPage = useEffectEvent((request: PageRequest) => {
+    if (request.conversationId !== conversationId) return false;
+    showPanel(
+      {
+        panel_kind: PAGE_PANEL_KIND,
+        title: request.title,
+        subresource_key: request.pageId,
+      },
+      undefined,
+      undefined,
+      { wide: true },
+    );
+    return true;
+  });
+  useEffect(() => onPageRequest(openPage), []);
+  useEffect(() => {
+    const waiting = conversationId ? takeWaitingPage(conversationId) : null;
+    if (waiting) openPage(waiting);
+  }, [conversationId]);
   const presentationScope = useRef({
     conversationId,
     routeKey: location.key,
@@ -2092,51 +2146,58 @@ export default function Workspace() {
             {sideVisible && dock(sidePanels, 'side')}
           </Panel>
         </Group>
-        {conversationId && railPanels.length > 0 && (
-          <aside
-            className={`panel-rail ${desktop ? 'panel-rail-docked' : ''}`}
-            aria-label="Panel rail"
-          >
-            {railPanels.map((panel) => {
-              const Icon = panelIcon(panel.descriptor);
-              return (
-                <Button
-                  key={panel.instance_id}
-                  variant="ghost"
-                  className="panel-rail-item"
-                  title={panel.descriptor.title}
-                  onClick={() => {
-                    if (!desktop) {
-                      if (panelPresentation(layout, panel) === 'sheet')
-                        overlay.open({
-                          kind: 'sheet',
-                          key: 'workspace-panel',
-                          title: panel.descriptor.title,
-                          description:
-                            panelRegistry[
-                              panel.descriptor
-                                .panel_kind as keyof typeof panelRegistry
-                            ]?.title ?? 'Resource panel',
-                          content: <PanelContent panel={panel} visible />,
-                        });
-                      else
+        {conversationId &&
+          railPanels.length > 0 &&
+          // A page full screen on a phone has Back and × at the top: no third way out (N5).
+          compact?.descriptor.panel_kind !== PAGE_PANEL_KIND && (
+            <aside
+              className={`panel-rail ${desktop ? 'panel-rail-docked' : ''}`}
+              aria-label="Panel rail"
+            >
+              {railPanels.map((panel) => {
+                const Icon = panelIcon(panel.descriptor);
+                return (
+                  <Button
+                    key={panel.instance_id}
+                    variant="ghost"
+                    className="panel-rail-item"
+                    title={panel.descriptor.title}
+                    onClick={() => {
+                      if (!desktop) {
+                        if (panelPresentation(layout, panel) === 'sheet')
+                          overlay.open({
+                            kind: 'sheet',
+                            key: 'workspace-panel',
+                            title: panel.descriptor.title,
+                            description:
+                              panelRegistry[
+                                panel.descriptor
+                                  .panel_kind as keyof typeof panelRegistry
+                              ]?.title ?? 'Resource panel',
+                            content: <PanelContent panel={panel} visible />,
+                          });
+                        else
+                          update((previous) =>
+                            focusPanel(previous, panel.instance_id),
+                          );
+                      } else
                         update((previous) =>
-                          focusPanel(previous, panel.instance_id),
+                          openPanel(
+                            previous,
+                            panel.descriptor,
+                            panel.placement,
+                          ),
                         );
-                    } else
-                      update((previous) =>
-                        openPanel(previous, panel.descriptor, panel.placement),
-                      );
-                  }}
-                >
-                  <Icon size={16} aria-hidden />
-                  <span>{panel.descriptor.title}</span>
-                </Button>
-              );
-            })}
-            {(!desktop || closeAllHost === 'rail') && closeAll}
-          </aside>
-        )}
+                    }}
+                  >
+                    <Icon size={16} aria-hidden />
+                    <span>{panel.descriptor.title}</span>
+                  </Button>
+                );
+              })}
+              {(!desktop || closeAllHost === 'rail') && closeAll}
+            </aside>
+          )}
       </div>
     </ContextHostContext.Provider>
   );

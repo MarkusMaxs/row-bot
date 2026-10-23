@@ -8736,6 +8736,19 @@
         "model_selection": {
           "$ref": "#/$defs/ModelSelection"
         },
+        "page_id": {
+          "anyOf": [
+            {
+              "pattern": "^page-[0-9a-f]{8}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page Id"
+        },
         "retry": {
           "default": false,
           "title": "Retry",

@@ -23,6 +23,7 @@ import { VideoEditCard } from './VideoEditCard';
 import { DeliveryCard } from './DeliveryCard';
 import { SandboxJobCard } from './SandboxJobCard';
 import { SandboxPrepareOffer } from './SandboxPrepare';
+import { PageCard } from '../pages/PageCard';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
@@ -65,6 +66,8 @@ export type TranscriptCard =
   | { kind: 'sandbox_job'; jobId: string }
   /** A sandbox test run that couldn't start for want of its tools: Prepare sandbox (F18). */
   | { kind: 'sandbox_offer'; reason: string }
+  /** A page a step made or changed, with Open (N5). */
+  | { kind: 'page'; pageId: string }
   /** Row-Bot's question, answered (or skipped), collapsed to what was chosen (N4). */
   | {
       kind: 'answer';
@@ -131,6 +134,8 @@ export function cardOf(value: Specialization | null | undefined, callId = '') {
       kind: 'sandbox_offer',
       reason: value.error_code ?? '',
     } satisfies TranscriptCard;
+  if (value.kind === 'page' && value.page_id)
+    return { kind: 'page', pageId: value.page_id } satisfies TranscriptCard;
   if (value.kind === 'video_edit' && value.edit_id)
     return {
       kind: 'video_edit',
@@ -166,11 +171,13 @@ export function cardKey(card: TranscriptCard) {
                 ? `delivery:${card.deliveryId}`
                 : card.kind === 'answer'
                   ? `answer:${card.callId}`
-                  : card.kind === 'sandbox_job'
-                    ? `sandbox_job:${card.jobId}`
-                    : card.kind === 'sandbox_offer'
-                      ? 'sandbox_offer'
-                      : `connect:${card.target}`;
+                  : card.kind === 'page'
+                    ? `page:${card.pageId}`
+                    : card.kind === 'sandbox_job'
+                      ? `sandbox_job:${card.jobId}`
+                      : card.kind === 'sandbox_offer'
+                        ? 'sandbox_offer'
+                        : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -524,6 +531,12 @@ export function TranscriptCards({
           />
         ) : card.kind === 'answer' ? (
           <AnsweredCard key={cardKey(card)} card={card} />
+        ) : card.kind === 'page' ? (
+          <PageCard
+            key={cardKey(card)}
+            pageId={card.pageId}
+            conversationId={conversation}
+          />
         ) : card.kind === 'video_edit' ? (
           <VideoEditCard
             key={cardKey(card)}

@@ -186,6 +186,9 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.file_deliveries import delete_conversation as delete_deliveries
 
     removed += delete_deliveries(thread_id)  # Files it sent to the devices, and the records of its sends.
+    from row_bot.pages import delete_conversation as delete_pages
+
+    removed += delete_pages(thread_id)  # Its pages, their versions, state and decisions (N5).
     return removed
 
 

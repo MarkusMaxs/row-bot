@@ -60,8 +60,9 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
 # Row-Bot's questions with options (asked, answered, collapsed; a helper's and a workflow's),
 # a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
-# and Outlook through your own Microsoft app (its guide, a code from another device, its states and
-# cards) with Microsoft 365's tenant step and a failed step in words.
+# Outlook through your own Microsoft app (its guide, a code from another device, its states and
+# cards) with Microsoft 365's tenant step and a failed step in words,
+# and pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -89,6 +90,7 @@ BROWSER_SMOKE_SPECS = (
     "model-visibility",
     "question-cards",
     "workflow-review",
+    "pages",
     "x-accounts",
     "outlook",
     "incognito",
