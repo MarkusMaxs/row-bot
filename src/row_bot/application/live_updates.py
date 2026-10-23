@@ -26,7 +26,7 @@ Topics (add one here, then publish it where its state changes):
 - ``processes``: background processes started, stopped or ended, or a local
   address they opened.
 - ``monitor``: what Monitor lists as needing the person (a failed run, a
-  background notice or start-up warning).
+  start-up warning).
 - ``learning``: reserved for Row-Bot Learning, which publishes it.
 """
 from __future__ import annotations

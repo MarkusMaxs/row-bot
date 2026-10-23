@@ -23,10 +23,11 @@ import type { LiveFrame } from './types';
  * Subscribe with `controller.live.subscribe(topic, onChange)`, which returns
  * an unsubscribe, or in a component with `useLiveUpdate(topics, onChange)`
  * from `src/live.ts`. `onChange` carries nothing: read the state again.
- * Every time the stream connects (the window opening or coming back into
- * view, a reconnect, a new server) every topic fires once, so nothing that
- * changed before or meanwhile stays missed. Keep a slow timer (a minute) only
- * as a fallback for when the stream is unavailable (`fallbackDue`).
+ * The window's first connection is where things stand (its screens read as
+ * they open); every later one (a reconnect, the window coming back into view,
+ * a new server) fires every topic once, so nothing that changed meanwhile
+ * stays missed. Keep a slow timer (a minute) only as a fallback for when the
+ * stream is unavailable (`fallbackDue`).
  */
 export type LiveTopic =
   | 'conversations'
@@ -69,8 +70,8 @@ const aborted = (error: unknown) =>
 export class LiveUpdates {
   private listeners = new Map<LiveTopic, Set<() => void>>();
   private seen: LiveFrame | null = null;
-  // The next frame starts a connection: every topic reads again.
-  private resync = true;
+  // The next frame starts a later connection: every topic reads again.
+  private resync = false;
   private receiving = false;
   private run: AbortController | null = null;
   private failures = 0;
@@ -114,7 +115,7 @@ export class LiveUpdates {
     return this.receiving;
   }
 
-  /** Open the stream (once); its first frame resyncs every topic. */
+  /** Open the stream (once); a later connection resyncs every topic. */
   start(): void {
     if (this.run || (!this.transport.observeLive && !this.transport.pollLive))
       return;
@@ -173,9 +174,11 @@ export class LiveUpdates {
     this.seen = frame;
     this.failures = 0;
     this.receiving = true;
-    const everything =
-      this.resync || !previous || previous.epoch !== frame.epoch;
+    const everything = this.resync || previous?.epoch !== frame.epoch;
     this.resync = false;
+    // The window's first frame is where things stand: its screens read as
+    // they open.
+    if (!previous) return;
     for (const [topic, listeners] of this.listeners) {
       if (
         !everything &&

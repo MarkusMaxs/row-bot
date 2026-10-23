@@ -71,7 +71,7 @@ const noWait = () => Promise.resolve();
 afterEach(() => vi.useRealTimers());
 
 describe('live updates (B407)', () => {
-  it('reads everything once it connects, then a topic whenever its revision moves on', async () => {
+  it('calls a topic’s subscribers when its revision moves on, and only then', async () => {
     const live = stream();
     const updates = new LiveUpdates(live.transport, noWait);
     const conversations = vi.fn();
@@ -80,21 +80,21 @@ describe('live updates (B407)', () => {
     updates.subscribe('approvals', approvals);
     updates.start();
     expect(updates.connected).toBe(false);
-    // Connected: whatever changed before the window was listening is read.
+    // The window's first frame is where things stand: its screens read as
+    // they open, so nothing reads again yet.
     live.send(frame(4, { conversations: 2, approvals: 1 }));
     await flush();
     expect(updates.connected).toBe(true);
-    expect(conversations).toHaveBeenCalledTimes(1);
-    expect(approvals).toHaveBeenCalledTimes(1);
+    expect(conversations).not.toHaveBeenCalled();
     live.send(frame(5, { conversations: 3, approvals: 1 }));
     await flush();
-    expect(conversations).toHaveBeenCalledTimes(2);
-    expect(approvals).toHaveBeenCalledTimes(1);
+    expect(conversations).toHaveBeenCalledTimes(1);
+    expect(approvals).not.toHaveBeenCalled();
     stop();
     live.send(frame(6, { conversations: 4, approvals: 2 }));
     await flush();
-    expect(conversations).toHaveBeenCalledTimes(2);
-    expect(approvals).toHaveBeenCalledTimes(2);
+    expect(conversations).toHaveBeenCalledTimes(1);
+    expect(approvals).toHaveBeenCalledTimes(1);
     updates.stop();
   });
 
@@ -108,10 +108,9 @@ describe('live updates (B407)', () => {
     updates.start();
     live.send(frame(1));
     await flush();
-    expect(runs).toHaveBeenCalledTimes(1);
     live.send(frame(2, { learning: 1 }));
     await flush();
-    expect(runs).toHaveBeenCalledTimes(1);
+    expect(runs).not.toHaveBeenCalled();
     // The connection drops; nothing moved as far as the revisions say, but
     // whatever happened meanwhile is read again.
     live.drop();
@@ -120,19 +119,19 @@ describe('live updates (B407)', () => {
     live.send(frame(2, { learning: 1 }));
     await flush();
     expect(live.opened).toBe(2);
-    expect(runs).toHaveBeenCalledTimes(2);
-    expect(monitor).toHaveBeenCalledTimes(2);
+    expect(runs).toHaveBeenCalledTimes(1);
+    expect(monitor).toHaveBeenCalledTimes(1);
     // Hidden, then shown again.
     updates.stop();
     updates.start();
     live.send(frame(2, { learning: 1 }));
     await flush();
-    expect(runs).toHaveBeenCalledTimes(3);
+    expect(runs).toHaveBeenCalledTimes(2);
     // A restarted server numbers from its own epoch: everything again.
     live.send(frame(0, {}, 'server-b'));
     await flush();
-    expect(runs).toHaveBeenCalledTimes(4);
-    expect(monitor).toHaveBeenCalledTimes(4);
+    expect(runs).toHaveBeenCalledTimes(3);
+    expect(monitor).toHaveBeenCalledTimes(3);
     updates.stop();
   });
 
@@ -167,7 +166,7 @@ describe('live updates (B407)', () => {
       { after: 7, epoch: 'server-a' },
       { after: 8, epoch: 'server-a' },
     ]);
-    expect(approvals).toHaveBeenCalledTimes(2);
+    expect(approvals).toHaveBeenCalledTimes(1);
     updates.stop();
   });
 

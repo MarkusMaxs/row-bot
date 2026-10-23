@@ -20,7 +20,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Literal
-from row_bot.application.live_updates import publishes as _publishes_live
+from row_bot.application.live_updates import publish as _publish_live
 
 Level = Literal["info", "warning", "error"]
 
@@ -73,7 +73,6 @@ class NoticeJournal:
         self._next = 1
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
-    @_publishes_live("monitor")
     def post(self, *, title: str, message: str, level: Level = "info", source: str = "app",
              requested: bool = False, startup: bool = False, conversation_id: str = "") -> Notice:
         if level not in ("info", "warning", "error"):
@@ -108,8 +107,10 @@ class NoticeJournal:
             return notice
 
     def startup_warning(self, message: str, *, source: str = "startup") -> Notice:
-        return self.post(title="Start-up warning", message=message, level="warning", source=source,
-                         startup=True)
+        notice = self.post(title="Start-up warning", message=message, level="warning", source=source,
+                           startup=True)
+        _publish_live("monitor")  # Monitor lists start-up warnings (B407).
+        return notice
 
     def since(self, after: int = 0) -> list[Notice]:
         with self._lock:
