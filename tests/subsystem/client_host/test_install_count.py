@@ -288,6 +288,12 @@ def test_the_id_and_the_secret_never_reach_the_log(profile, monkeypatch, caplog)
     assert deletion["install"] not in caplog.text and deletion["secret"] not in caplog.text
 
 
+def test_the_id_is_derived_from_the_secret_as_the_collector_checks_it():
+    # The same vectors are checked in services/install-count/test/worker.test.js.
+    assert install_count.install_id("0" * 63 + "1") == "2271477d6128edbe27a9239e54f22a90"
+    assert install_count.install_id("ab" * 32) == "1144938174f096fa7ad56132be06b552"
+
+
 def test_a_damaged_file_asks_again_before_counting(profile, collector):
     install_count.choose(False)
     (profile / install_count.STATE_FILE).write_text("{not json", encoding="utf-8")
