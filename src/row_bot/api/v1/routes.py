@@ -516,6 +516,8 @@ _STATUS.update(
         "recipient_unavailable": 409,
         "delivery_unavailable": 409,
         "sharing_media_limit": 413,
+        "x_account_required": 409,
+        "x_account_unavailable": 409,
         "interactive_publish_requires_all_pages": 422,
     }
 )
@@ -5730,6 +5732,7 @@ def create_router(
             credentials_json=body.credentials_json,
             validate=dispatch_validation(request, current),
             device=await account_device(request),
+            x_account=body.x_account,
         )
         return await respond(request, dto.AccountAuthReceipt, result)
 
@@ -10327,6 +10330,7 @@ def create_router(
                 "reviewer_reason",
                 "question",
                 "questions",
+                "x_post",
                 "policy_revision",
             )
             if k in view

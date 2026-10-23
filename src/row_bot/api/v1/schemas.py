@@ -1004,6 +1004,18 @@ class ToolSettingsSnapshot(WireModel):
     items: list[ToolSettingsItem] = Field(max_length=32)
 
 
+class XAccountSummary(WireModel):
+    """One connected X account (N7): its numeric ID, handle and display name, and its sign-in's state.
+
+    The sign-in kept before 5.3, until X names it at the next check, has no ID or handle yet.
+    """
+
+    id: str = Field(pattern=r"^[0-9]{0,20}$")
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{0,50}$")
+    name: str = Field(default="", max_length=80)
+    state: Literal["not_authenticated", "connected", "invalid", "saved_unchecked", "expired", "unavailable"]
+
+
 class AccountSettingsItem(WireModel):
     account_id: Literal["github", "gmail", "calendar", "x"]
     enabled: bool | None
@@ -1036,6 +1048,8 @@ class AccountSettingsItem(WireModel):
     # fixed loopback callback, or Row-Bot's public callback for X or a Google
     # Web application client when this device signs in through it.
     callback_url: str | None = Field(default=None, max_length=512)
+    # X only (N7): each connected account, first added first. Never a token.
+    x_accounts: list[XAccountSummary] = Field(default_factory=list, max_length=17)
 
 
 class AccountSettingsSnapshot(WireModel):
@@ -1098,7 +1112,7 @@ class AccountAuthSnapshot(WireModel):
         "expired",
         "unavailable",
     ]
-    token_files: int = Field(ge=0, le=2)
+    token_files: int = Field(ge=0, le=17)
     # How a sign-in started from this device works; it differs by device, so
     # the revision leaves it out. The desktop app on the host signs in through
     # that computer's browser and a loopback address; another device opens the
@@ -1117,6 +1131,8 @@ class AccountAuthCommand(WireModel):
     action: Literal["import_credentials", "check", "start", "disconnect"]
     confirmed: bool = False
     credentials_json: str = Field(default="", max_length=65536)
+    # X's disconnect removes one account (N7): its numeric ID ("" is the sign-in from before 5.3 not yet named).
+    x_account: str = Field(default="", pattern=r"^[0-9]{0,20}$")
 
 
 class AccountAuthReceipt(WireModel):
@@ -5966,10 +5982,18 @@ class ArtifactShareChannel(WireModel):
     available: bool
 
 
+class ArtifactShareXAccount(WireModel):
+    id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{1,50}$")
+    name: str = Field(default="", max_length=80)
+
+
 class ArtifactShareChannels(WireModel):
     items: list[ArtifactShareChannel] = Field(max_length=50)
     revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     next_cursor: str | None = Field(max_length=256)
+    # The X accounts a post can go out as (N7); with several, the person picks one.
+    x_accounts: list[ArtifactShareXAccount] = Field(default_factory=list, max_length=16)
 
 
 class ArtifactShareReview(WireModel):
@@ -7622,6 +7646,31 @@ class HandshakeView(Choices):
     limits: Limits
 
 
+class XPostMedia(WireModel):
+    """A photo or video on an X post's card: its name, size, the start of its SHA-256 and a small picture."""
+
+    name: str = Field(min_length=1, max_length=256)
+    size: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{12}$")
+    kind: Literal["image", "gif", "video"]
+    thumbnail: str = Field(default="", max_length=32768, pattern=r"^(data:image/jpeg;base64,[A-Za-z0-9+/=]+)?$")
+
+
+class XPostApproval(WireModel):
+    """What an X post's approval lets happen (N7); the approval is bound to every field of it."""
+
+    account_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{1,50}$")
+    name: str = Field(default="", max_length=80)
+    action: Literal["post", "reply", "quote", "delete"]
+    text: str = Field(default="", max_length=25000)
+    target_id: str = Field(default="", pattern=r"^[0-9]{0,20}$")
+    target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
+    # The text of the post a delete removes, when X said it.
+    target_text: str = Field(default="", max_length=25000)
+    media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+
+
 class ApprovalView(WireModel):
     id: OpaqueId
     status: Literal["pending"]
@@ -7646,6 +7695,8 @@ class ApprovalView(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A post, reply, quote or delete on X (N7): exactly what goes out, and as which account.
+    x_post: XPostApproval | None = None
     policy_revision: Revision
     nonce: str = Field(min_length=32, max_length=256)
 
