@@ -1,0 +1,16 @@
+{
+  "additionalProperties": false,
+  "description": "The page's whole new state (an object, up to 256 KB), from its bridge.",
+  "properties": {
+    "state": {
+      "additionalProperties": true,
+      "title": "State",
+      "type": "object"
+    }
+  },
+  "required": [
+    "state"
+  ],
+  "title": "PageStateWrite",
+  "type": "object"
+}

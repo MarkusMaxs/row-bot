@@ -2780,7 +2780,8 @@
             "delivery",
             "sandbox_job",
             "sandbox_unprepared",
-            "question_answered"
+            "question_answered",
+            "page"
           ],
           "title": "Kind",
           "type": "string"
@@ -2820,6 +2821,13 @@
             "timed_out"
           ],
           "title": "Outcome",
+          "type": "string"
+        },
+        "page_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(page-[0-9a-f]{8})?$",
+          "title": "Page Id",
           "type": "string"
         },
         "process_id": {
