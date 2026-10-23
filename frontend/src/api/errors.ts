@@ -2977,6 +2977,9 @@ const resourceDenials = new Set([
   'workspace_folder_refused',
   'clone_blocked',
   'sandbox_prepare_blocked',
+  // Row-Bot's browser refusing an address the person typed, or switched off.
+  'browser_navigation_denied',
+  'browser_disabled',
 ]);
 
 function describe(code: string): ClientError | null {

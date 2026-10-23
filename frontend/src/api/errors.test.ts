@@ -75,6 +75,29 @@ it('offers fixes that lead somewhere real', () => {
   });
 });
 
+it('says why Row-Bot’s browser refused, not that this device isn’t allowed', () => {
+  const refused = clientError({
+    code: 'browser_navigation_denied',
+    status: 403,
+  });
+  expect(refused.message).toBe(
+    "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
+  );
+  const off = clientError({ code: 'browser_disabled', status: 403 });
+  expect(off.message).toBe(
+    "Row-Bot's browser is turned off. Turn it on in Settings › System › Browser and computer use.",
+  );
+  expect(off.action).toEqual({
+    kind: 'open_setting',
+    label: 'Open System',
+    href: '/settings/system#browser-computer-use',
+  });
+  // Any other refusal still says only that this device can't do it.
+  expect(clientError({ code: 'origin_rejected', status: 403 }).message).toBe(
+    "This device isn't allowed to do that.",
+  );
+});
+
 it('names an unknown code in a Details line instead of hiding it', () => {
   const error = clientError({ code: 'brand_new_server_code', status: 409 });
   expect(error.message).toBe(
