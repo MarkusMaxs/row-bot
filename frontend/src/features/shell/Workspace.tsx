@@ -2143,51 +2143,58 @@ export default function Workspace() {
             {sideVisible && dock(sidePanels, 'side')}
           </Panel>
         </Group>
-        {conversationId && railPanels.length > 0 && (
-          <aside
-            className={`panel-rail ${desktop ? 'panel-rail-docked' : ''}`}
-            aria-label="Panel rail"
-          >
-            {railPanels.map((panel) => {
-              const Icon = panelIcon(panel.descriptor);
-              return (
-                <Button
-                  key={panel.instance_id}
-                  variant="ghost"
-                  className="panel-rail-item"
-                  title={panel.descriptor.title}
-                  onClick={() => {
-                    if (!desktop) {
-                      if (panelPresentation(layout, panel) === 'sheet')
-                        overlay.open({
-                          kind: 'sheet',
-                          key: 'workspace-panel',
-                          title: panel.descriptor.title,
-                          description:
-                            panelRegistry[
-                              panel.descriptor
-                                .panel_kind as keyof typeof panelRegistry
-                            ]?.title ?? 'Resource panel',
-                          content: <PanelContent panel={panel} visible />,
-                        });
-                      else
+        {conversationId &&
+          railPanels.length > 0 &&
+          // A page full screen on a phone has Back and × at the top: no third way out (N5).
+          compact?.descriptor.panel_kind !== PAGE_PANEL_KIND && (
+            <aside
+              className={`panel-rail ${desktop ? 'panel-rail-docked' : ''}`}
+              aria-label="Panel rail"
+            >
+              {railPanels.map((panel) => {
+                const Icon = panelIcon(panel.descriptor);
+                return (
+                  <Button
+                    key={panel.instance_id}
+                    variant="ghost"
+                    className="panel-rail-item"
+                    title={panel.descriptor.title}
+                    onClick={() => {
+                      if (!desktop) {
+                        if (panelPresentation(layout, panel) === 'sheet')
+                          overlay.open({
+                            kind: 'sheet',
+                            key: 'workspace-panel',
+                            title: panel.descriptor.title,
+                            description:
+                              panelRegistry[
+                                panel.descriptor
+                                  .panel_kind as keyof typeof panelRegistry
+                              ]?.title ?? 'Resource panel',
+                            content: <PanelContent panel={panel} visible />,
+                          });
+                        else
+                          update((previous) =>
+                            focusPanel(previous, panel.instance_id),
+                          );
+                      } else
                         update((previous) =>
-                          focusPanel(previous, panel.instance_id),
+                          openPanel(
+                            previous,
+                            panel.descriptor,
+                            panel.placement,
+                          ),
                         );
-                    } else
-                      update((previous) =>
-                        openPanel(previous, panel.descriptor, panel.placement),
-                      );
-                  }}
-                >
-                  <Icon size={16} aria-hidden />
-                  <span>{panel.descriptor.title}</span>
-                </Button>
-              );
-            })}
-            {(!desktop || closeAllHost === 'rail') && closeAll}
-          </aside>
-        )}
+                    }}
+                  >
+                    <Icon size={16} aria-hidden />
+                    <span>{panel.descriptor.title}</span>
+                  </Button>
+                );
+              })}
+              {(!desktop || closeAllHost === 'rail') && closeAll}
+            </aside>
+          )}
       </div>
     </ContextHostContext.Provider>
   );
