@@ -2140,6 +2140,17 @@ it.each<SettingsLeafId>([
       getSnapshot: () => state,
       subscribe: () => () => {},
       settingsSnapshot: async () => everyRow,
+      // System › Privacy reads install stats (N6) on its own.
+      installCount: async () => ({
+        available: true,
+        turned_off_here: false,
+        enabled: true,
+        service: 'row-bot-count.row-bot.workers.dev',
+        version: '5.3.0',
+        os: 'windows',
+        last_sent_on: null,
+        can_delete: false,
+      }),
     };
     // Any other read stays pending: only the page's own rows matter here.
     const pending = (values: Record<string, unknown>) =>

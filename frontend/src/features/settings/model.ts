@@ -75,7 +75,7 @@ export const settingsKeywords: Record<SettingsLeafId, string> = {
   skills: 'skill library slash commands instructions clawhub create import',
   apps: 'integrations mcp plugins packages connectors servers marketplace discover connect catalogs runtimes accounts github google gmail calendar x twitter outlook microsoft office 365 oauth channels telegram discord slack sms whatsapp messaging',
   system:
-    'shell commands browser computer use workspace folder logging logs files blocked',
+    'shell commands browser computer use workspace folder logging logs files blocked privacy telemetry',
   access:
     'access remote tunnel invitations sessions tailscale mobile phone qr pair wifi public',
   updates: 'version upgrade release channel beta',
@@ -591,6 +591,20 @@ export const settingsRows: SettingsRow[] = [
     anchor: 'logging.level',
     label: 'Log detail',
     keywords: 'log level logging logs diagnostics debug',
+  },
+  {
+    leaf: 'system',
+    anchor: 'install-stats',
+    label: 'Install stats',
+    keywords:
+      'share install stats privacy telemetry statistics analytics install count delete what was sent',
+  },
+  {
+    leaf: 'system',
+    anchor: 'contacts',
+    label: 'What else Row-Bot contacts',
+    keywords:
+      'privacy network internet connections phone home updates catalogs',
   },
   {
     leaf: 'system',

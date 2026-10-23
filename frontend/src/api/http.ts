@@ -432,6 +432,20 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
+  installCount(signal?: AbortSignal) {
+    return wire.getInstallCount(this.base, this.session(), signal);
+  }
+  chooseInstallCount(enabled: boolean, signal?: AbortSignal) {
+    return wire.chooseInstallCount(
+      this.base,
+      this.session(),
+      { enabled },
+      signal,
+    );
+  }
+  deleteCountedData(signal?: AbortSignal) {
+    return wire.deleteCountedData(this.base, this.session(), signal);
+  }
   updates(signal?: AbortSignal) {
     return wire.getUpdates(this.base, this.session(), signal);
   }

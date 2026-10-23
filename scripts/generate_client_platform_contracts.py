@@ -73,7 +73,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -238,6 +238,9 @@ OPERATIONS = (
     ("post", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("get", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("post", "/monitor/diagnosis/settings", "SystemDiagnosisSettings", "SystemDiagnosis"),
+    ("get", "/system/install-count", None, "InstallCountSnapshot"),
+    ("put", "/system/install-count", "InstallCountChoice", "InstallCountSnapshot"),
+    ("post", "/system/install-count/delete", None, "InstallCountDeletion"),
     ("get", "/system/updates", None, "UpdateSnapshot"),
     ("post", "/system/updates/commands", "UpdateCommand", "UpdateReceipt"),
     ("get", "/system/migration/sources", None, "MigrationSources"),
@@ -832,6 +835,12 @@ export const getSystemDiagnosis = (base: string, proof: SessionProof, signal?: A
   jsonRequest(base, '/monitor/diagnosis', 'SystemDiagnosis', proof, 'GET', undefined, undefined, signal);
 export const saveSystemDiagnosisSettings = (base: string, proof: SessionProof, body: SystemDiagnosisSettings, signal?: AbortSignal): Promise<SystemDiagnosis> =>
   jsonRequest(base, '/monitor/diagnosis/settings', 'SystemDiagnosis', proof, 'POST', validateWire('SystemDiagnosisSettings', body), undefined, signal);
+export const getInstallCount = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<InstallCountSnapshot> =>
+  jsonRequest(base, '/system/install-count', 'InstallCountSnapshot', proof, 'GET', undefined, undefined, signal);
+export const chooseInstallCount = (base: string, proof: SessionProof, body: InstallCountChoice, signal?: AbortSignal): Promise<InstallCountSnapshot> =>
+  jsonRequest(base, '/system/install-count', 'InstallCountSnapshot', proof, 'PUT', validateWire('InstallCountChoice', body), undefined, signal);
+export const deleteCountedData = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<InstallCountDeletion> =>
+  jsonRequest(base, '/system/install-count/delete', 'InstallCountDeletion', proof, 'POST', undefined, undefined, signal);
 export const getUpdates = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<UpdateSnapshot> =>
   jsonRequest(base, '/system/updates', 'UpdateSnapshot', proof, 'GET', undefined, undefined, signal);
 export const sendUpdateCommand = (base: string, proof: SessionProof, command: UpdateCommand, signal?: AbortSignal): Promise<UpdateReceipt> =>

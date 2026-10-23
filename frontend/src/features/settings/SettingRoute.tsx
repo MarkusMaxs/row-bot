@@ -65,6 +65,7 @@ import AccessConnect from './AccessConnect';
 import AccessDevices from './AccessDevices';
 import AccessNetwork from './AccessNetwork';
 import AccessTailscale from './AccessTailscale';
+import ConnectedPrivacy from './InstallCount';
 import { pickSettingsFolder } from './settings-folder';
 import {
   AccountsSnapshotPanel,
@@ -851,6 +852,9 @@ export default function SettingRoute() {
                   pickSettingsFolder(platform, controller, signal)
                 }
                 writeClipboard={platform.writeClipboard}
+                privacy={
+                  leaf.id === 'system' ? <ConnectedPrivacy /> : undefined
+                }
                 accessNetwork={
                   leaf.id === 'access' ? (
                     <>

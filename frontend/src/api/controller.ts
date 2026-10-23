@@ -2794,6 +2794,21 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.setHourlyConnectionChecks(enabled, signal);
     });
+  /** Install stats (N6): Settings › System › Privacy, the only place they show. */
+  installCount = (signal?: AbortSignal) =>
+    this.query(() => this.transport.installCount?.(signal));
+  chooseInstallCount = (enabled: boolean) =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.chooseInstallCount)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.chooseInstallCount(enabled, signal);
+    });
+  deleteCountedData = () =>
+    this.authenticatedResult((signal) => {
+      if (!this.transport.deleteCountedData)
+        throw clientError({ code: 'capability_unavailable' });
+      return this.transport.deleteCountedData(signal);
+    });
   updates = (signal?: AbortSignal) =>
     this.query(() => this.transport.updates?.(signal));
   updateCommand = (command: UpdateCommand, signal?: AbortSignal) =>

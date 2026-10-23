@@ -5720,6 +5720,29 @@ def create_router(
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
 
+    # Install stats (N6): Settings › System › Privacy.
+    @router.get("/system/install-count")
+    async def install_count_snapshot(request: Request) -> JSONResponse:
+        await session(request)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.view))
+
+    @router.put("/system/install-count")
+    async def install_count_choice(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.InstallCountChoice, 256)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.choose, body.enabled))
+
+    @router.post("/system/install-count/delete")
+    async def install_count_delete(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountDeletion, await call(install_count.delete_counted))
+
     @router.get("/system/updates")
     async def update_snapshot(request: Request) -> JSONResponse:
         await session(request)
