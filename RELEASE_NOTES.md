@@ -2,15 +2,95 @@
 
 ---
 
-## v5.3.0-beta.1 - Reviewed Approvals, Work In The Background & A Calmer Home
+## v5.3.0-beta.1 - A Browser In The App, Pages, Outlook & Reviewed Approvals
 
 The first 5.3 beta, and the first release to arrive through 5.2's background
 updates: on the Beta channel, Row-Bot 5.2.1 downloads it while you work and
-Settings › Updates offers **Restart now**. Auto approvals are now reviewed, a
-new Hands-off level asks nothing, and Row-Bot can run servers and long jobs in
-the background, edit video, send you files and work on code from any of your
-devices. Claude works with your Claude plan again, through your own Claude
-Code. Read **Upgrade Notes** below before upgrading.
+Settings › Updates offers **Restart now**. Row-Bot's browser now lives inside
+the app and computer use is rebuilt; Row-Bot can make pages you work in beside
+the chat, ask you questions with options, and connect Outlook and several X
+accounts. Chats can be incognito, background work shows up at once, Auto
+approvals are reviewed and a new Hands-off level asks nothing. Row-Bot can run
+servers and long jobs in the background, edit video, send you files and work
+on code from any of your devices, and Claude works with your Claude plan again,
+through your own Claude Code. Read **Upgrade Notes** below before upgrading.
+
+### Row-Bot's Browser And Computer Use
+
+- **The browser is inside the app** - a Browser pane beside the chat shows the
+  page live as Row-Bot works, with tabs, an address bar, Back, Forward, Reload,
+  Take control / Give back and Stop. Pop it out to its own window, or use it full
+  screen on a phone. It works from any signed-in device.
+- **Sign in once** - Row-Bot's browser keeps you signed in to sites across
+  restarts. When a page asks for a password, code or card number, the pane says
+  "Sign in here" and you type it; Row-Bot never does. Settings › System ›
+  Browser and computer use lists the sites you're signed in to, with Sign out.
+- **Normal sites just work** - sign-in pages with redirects, embedded sign-in
+  frames, pop-ups, uploads, downloads and slow pages.
+- **Asks at the right moments** - Row-Bot asks before paying, buying, booking
+  with a charge, sending, posting, deleting, changing account settings or
+  uploading a file, with a card that shows the page.
+- **Computer use, rebuilt** - Row-Bot works in an app on your computer with the
+  real mouse and keyboard while you watch, looks at the window after every step
+  and carries on by itself. A Stop bar on your screen ("Row-Bot is using …")
+  ends it at once with Esc; the chat's Stop works from any device. Use the mouse
+  yourself and Row-Bot pauses and asks "Carry on?". It asks the first time it
+  uses each app in a chat, and never types passwords, codes or card numbers.
+- **In the chat** - "Using the browser" or "Using Microsoft Edge" with a live
+  picture; tap it to watch. Models that see images look at the page or window
+  after each step.
+
+### Pages And Questions
+
+- **Pages** - ask for a plan you can approve step by step, a checklist, a
+  dashboard, options to compare, a form or a small calculator, and Row-Bot makes
+  an interactive page beside the chat (full screen on a phone). Approve, change
+  or skip steps, then send your decisions in one go; nothing is sent until you
+  click. Pages remember what you tick on every device, follow light and dark,
+  download as HTML and are all in Library › Pages. A page runs apart from
+  Row-Bot, with no internet and no access to your chats, files or tools.
+- **Questions with options** - Row-Bot can ask you a question in a card: tap an
+  option, write your own answer or skip. It works in the app, from helpers and
+  workflows, and in Telegram, Discord, Slack and WhatsApp. An answer is never
+  taken as an approval.
+
+### Outlook And X
+
+- **Outlook, through your own Microsoft app** - connect an Outlook or Microsoft
+  365 mailbox (outlook.com too) with an app you register in Microsoft Entra; no
+  client secret. Sign in on this computer, or from a phone with a code. Row-Bot
+  can search, read, draft, file and send mail and manage your calendar;
+  sending, replying, forwarding, deleting and invitations always ask first.
+- **Microsoft 365 setup asks for your tenant** - connecting a Microsoft 365
+  (Work IQ) server asks for your Microsoft Entra tenant ID instead of failing,
+  and says it needs an admin and Copilot Credits. A setup step that fails says
+  what went wrong.
+- **Several X accounts** - connect more than one X account in Settings › Apps ›
+  X and remove any one on its own. Every post, reply, quote or delete names the
+  account it goes out as; its card shows that account, the whole text and each
+  picture or video, and only you can approve it, even under Auto. If X doesn't
+  confirm a post, Row-Bot checks the account's latest posts instead of sending
+  it again.
+
+### Privacy
+
+- **Incognito chats** - start one from New chat ▾ › New incognito chat, or turn
+  any chat incognito from its ⋯ menu (in a channel chat, `/incognito on`).
+  Row-Bot and its helpers work as usual and can still use what they remember,
+  but nothing in an incognito chat is read for memory. Row-Bot saves to memory
+  from it only when you tap Save on its card, under every approval level.
+  Turning incognito off never reaches back: memory reads the chat only from
+  that moment.
+- **Install stats** - once a day, Row-Bot can send its maker a random ID, its
+  version and your system (Windows, macOS, Linux or Docker), nothing else, so
+  its maker can see how many installations are in use. It is on by default and
+  goes to Row-Bot's stats service on Cloudflare, which sees your IP address as
+  for any connection; Row-Bot doesn't store it. Records are deleted after 35
+  days; only totals without IDs are kept. Turn it off in Settings › System ›
+  Privacy ("Share install stats") or with `ROW_BOT_INSTALL_COUNT=0` on a server
+  or in Docker; the same page can delete what was sent and lists everything
+  else Row-Bot contacts. In this beta it sends nothing yet: it starts once its
+  service is live, in a later 5.3 build.
 
 ### Approvals
 
@@ -72,6 +152,13 @@ Code. Read **Upgrade Notes** below before upgrading.
   problem shows on its step. The list is one tap away.
 - **Workflow details** - a Monthly schedule preset, each step shows the apps it
   uses, and Delivery lists only the channels you've set up.
+- **A workflow's own folder, timezone and missed runs** - a workflow can work in
+  its own code folder, keep its schedule in a timezone you choose (daylight
+  saving keeps the time), and run once when Row-Bot starts if it was closed at a
+  scheduled time.
+- **Always ask me** - makes a workflow step or an app wait for your own
+  approval, even under Auto or Hands-off, on a card that shows exactly what
+  will be sent.
 - **Your Git identity** - Row-Bot no longer sets a Git name or email by
   itself; only you choose who your commits are from.
 
@@ -109,6 +196,21 @@ Code. Read **Upgrade Notes** below before upgrading.
   window during Undo no longer brings the chat back.
 - **Documents** - asking about an empty library answers "No results" instead
   of an error about the embedding model.
+- **Background work shows at once** - a workflow run started on its schedule, a
+  helper, or an approval raised in another chat appears in the sidebar, Home and
+  Monitor straight away, without reloading. Monitor and Needs you also update
+  at once when a channel, app or plugin starts or stops needing you.
+- **No "reconnecting" notice for nothing** - "Desktop features are
+  reconnecting…" no longer appears after a reload or on Home; it shows only when
+  something you asked for is waiting on it. Reloading a Home tab stays on it.
+- **Fixes** - the sidebar stops spinning when a reply has finished; Row-Bot no
+  longer says an app isn't connected while your apps are still connecting; a
+  conversation is never left blocked when a reply's end couldn't be recorded; a
+  reply no longer leaves an empty "Paged content" row; Conversation details
+  open with one tap after resizing between desktop and phone; a Settings switch
+  made while another tool setting was saving no longer loses your other
+  settings, and switching a tool no longer makes a window fail to connect for a
+  moment or gets stuck "finishing your last change" on Windows.
 
 ### Windows And macOS
 
@@ -136,6 +238,17 @@ Code. Read **Upgrade Notes** below before upgrading.
 - **Auto may ask a little more** - Auto now asks about anything that doesn't
   clearly match your request, and each review is a small call to the chat's
   model. Choose Hands-off for a chat or workflow that should never ask.
+- **Workflow schedules** - existing schedules keep their times: on first start
+  they are given the computer's current timezone. Existing workflows keep no
+  code folder and keep skipping runs missed while Row-Bot was closed; a
+  one-time run missed while closed still runs once on start, as before.
+- **Your X account** - your existing X sign-in becomes your first account the
+  next time Row-Bot reaches X (at start-up when X is on, when you press Check,
+  or on the first X action); until then it shows as "Your X account · Signed in
+  before Row-Bot 5.3". Nothing needs re-entering. To add another account,
+  switch to it on x.com in your browser, then choose Add another account.
+- **Computer use** - it now uses your real mouse and keyboard while you watch,
+  with a Stop bar on screen; you can stop it with Esc at any time.
 - **Background commands** - a job started with `&` inside a command now stops
   when that command finishes; an app a command opens keeps running as before.
   Ask Row-Bot to start a server instead.
