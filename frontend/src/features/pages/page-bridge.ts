@@ -37,6 +37,15 @@ type Call = {
   params: Record<string, unknown>;
 };
 
+/** A save cancelled because the page is going away (it closed, or the app is leaving): nothing to tell it. */
+function cancelled(cause: unknown): boolean {
+  return (
+    typeof cause === 'object' &&
+    cause !== null &&
+    (cause as { name?: unknown }).name === 'AbortError'
+  );
+}
+
 function byteLength(value: unknown): number {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length;
@@ -168,6 +177,7 @@ export class PageBridge {
         try {
           await this.host.saveState(state);
         } catch (cause) {
+          if (cancelled(cause)) return;
           error =
             cause instanceof Error && cause.message
               ? cause.message
@@ -185,6 +195,7 @@ export class PageBridge {
       await operation();
       this.reply(id);
     } catch (cause) {
+      if (cancelled(cause)) return;
       this.reply(
         id,
         cause instanceof Error && cause.message

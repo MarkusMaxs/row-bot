@@ -127,6 +127,28 @@ describe('the page bridge', () => {
     });
   });
 
+  it('tells the page nothing about a save cancelled because it is going away', async () => {
+    const abort = () =>
+      Promise.reject(new DOMException('Cancelled', 'AbortError'));
+    const page = setup({ decide: vi.fn(abort), saveState: vi.fn(abort) });
+    page.send({
+      rowbot: 1,
+      id: 1,
+      method: 'decide',
+      params: { id: 'a', choice: 'approve' },
+    });
+    page.send({
+      rowbot: 1,
+      id: 2,
+      method: 'state.set',
+      params: { state: { ticked: 1 } },
+    });
+    await page.flush();
+    expect(page.host.decide).toHaveBeenCalledTimes(1);
+    expect(page.host.saveState).toHaveBeenCalledTimes(1);
+    expect(page.posted).toEqual([]);
+  });
+
   it('is rate-limited', async () => {
     const page = setup();
     for (let id = 1; id <= 121; id += 1)

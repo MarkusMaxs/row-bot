@@ -42,10 +42,13 @@
   function call(method, params) {
     if (!host) return Promise.resolve(null);
     var id = next++;
-    return new Promise(function (resolve, reject) {
+    var sent = new Promise(function (resolve, reject) {
       waiting[id] = { resolve: resolve, reject: reject };
       host.postMessage({ rowbot: 1, id: id, method: method, params: params }, '*');
     });
+    // A page that doesn't wait for a save never sees an unhandled rejection; one that awaits it still can.
+    sent.catch(function () {});
+    return sent;
   }
   function theme() {
     return { mode: mode, tokens: copy(tokens[mode] || {}) };
