@@ -4838,6 +4838,24 @@ button.settings-mcp-server-name:hover {
 .settings-account-confirm > p {
   margin: 0;
 }
+/* X's connected accounts (N7), indented under the row like its switches. */
+.settings-x-accounts {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 12px 62px;
+}
+.settings-x-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: var(--text-12);
+}
+@container settings-page (max-width: 560px) {
+  .settings-x-accounts {
+    padding-inline-start: 16px;
+  }
+}
 .settings-page-content
   .settings-account-guide.settings-group-disclosure
   > .disclosure-summary {

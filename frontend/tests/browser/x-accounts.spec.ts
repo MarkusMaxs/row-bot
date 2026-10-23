@@ -1,0 +1,201 @@
+import type { Locator, Page, TestInfo } from '@playwright/test';
+import { assertNoOverflow, expect, screenshot, test } from './evidence';
+import { fixtureHeaders } from './surface-helpers';
+import {
+  blockFixtureServiceWorkers,
+  composer,
+  newConversation,
+} from './unified-helpers';
+
+/*
+ * N7 · Several X accounts, named on every post. Two accounts (@rowbot_ai and
+ * @sidd) are signed in through a fake X API; nothing reaches X. The model's
+ * x_post calls are scripted; the card is the real one for the call, and once
+ * approved the real sender posts to the fake API, or loses X's answer and
+ * finds the post among the account's latest instead of sending it again.
+ */
+
+const PHONE = { width: 390, height: 844 };
+const DESKTOP = { width: 1280, height: 900 };
+
+async function views(page: Page, info: TestInfo, name: string, focus: Locator) {
+  const notices = page.getByRole('button', { name: 'Dismiss notification' });
+  while (await notices.count()) await notices.first().click();
+  for (const appearance of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: appearance });
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-theme',
+      appearance,
+    );
+    await focus.scrollIntoViewIfNeeded();
+    await assertNoOverflow(page);
+    await screenshot(page, info, `${name}-${appearance}`);
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+}
+
+/** Evidence at desktop and phone size, light and dark. */
+async function everywhere(
+  page: Page,
+  info: TestInfo,
+  name: string,
+  focus: Locator,
+) {
+  await views(page, info, name, focus);
+  await page.setViewportSize(PHONE);
+  await views(page, info, `${name}-phone`, focus);
+  await page.setViewportSize(DESKTOP);
+}
+
+async function seed(page: Page, path: string) {
+  const response = await page.request.post(path, {
+    headers: fixtureHeaders(),
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  return response.json();
+}
+
+async function send(page: Page, text: string) {
+  await composer(page).fill(text);
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+}
+
+function transcript(page: Page) {
+  return page.getByRole('log', { name: 'Conversation', exact: true });
+}
+
+/** Open the turn's steps and the x_post step itself, to show the tool's own result. */
+async function openResult(page: Page, text: RegExp) {
+  const log = transcript(page);
+  await log.locator('summary.activity-summary').last().click();
+  await log
+    .locator('details summary')
+    .filter({ hasText: /on X/ })
+    .last()
+    .click();
+  const result = log.getByText(text);
+  await expect(result).toBeVisible();
+  return result;
+}
+
+test.beforeEach(async ({ context, page }) => {
+  await blockFixtureServiceWorkers(context);
+  await page.setViewportSize(DESKTOP);
+  expect(await seed(page, '/__n7_fixture/accounts')).toEqual({
+    accounts: ['@rowbot_ai', '@sidd'],
+  });
+});
+test.afterEach(async ({ page }) => {
+  await seed(page, '/__n7_fixture/reset');
+});
+
+test('Settings › Apps › X lists each account with its handle, name and ID, and adds another', async ({
+  page,
+}, info) => {
+  await page.goto('/app-v2/settings/apps/x');
+  const article = page.getByRole('article', { name: 'X account' });
+  await article.getByRole('link', { name: 'Open', exact: true }).click();
+  const list = page.getByRole('list', { name: 'X accounts' });
+  await expect(list.getByRole('listitem')).toHaveCount(2);
+  await expect(list.getByRole('listitem').first()).toContainText(
+    '@rowbot_ai · Row-Bot',
+  );
+  await expect(list.getByRole('listitem').first()).toContainText('ID 111');
+  await expect(list.getByRole('listitem').last()).toContainText('@sidd · Sidd');
+  await expect(
+    list.getByRole('button', { name: 'Remove @sidd' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Add another account' }),
+  ).toBeVisible();
+  await everywhere(page, info, 'x-accounts-settings', list);
+});
+
+test('the post card names the account and shows the whole text and the picture; the result links the post', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'n7 post fixture');
+  const card = page.getByRole('complementary', {
+    name: 'Approval required: Post to X as @rowbot_ai?',
+  });
+  await expect(card.getByText('Post to X as @rowbot_ai?')).toBeVisible();
+  await expect(card.getByText('ID 111')).toBeVisible();
+  await expect(card.getByText(/Row-Bot 5\.3 is out\./)).toBeVisible();
+  await expect(card.getByText(/row-bot\.ai\/5\.3/)).toBeVisible();
+  await expect(
+    card.getByRole('img', { name: 'Preview of launch-card.png' }),
+  ).toBeVisible();
+  await expect(card.getByText('launch-card.png')).toBeVisible();
+  await expect(card.getByText(/^[0-9a-f]{12}$/)).toBeVisible();
+  await everywhere(page, info, 'x-post-card', card);
+
+  await card.getByRole('button', { name: 'Approve', exact: true }).click();
+  const reply = transcript(page).getByText(
+    /^Done\. It's live on @rowbot_ai: https:\/\/x\.com\/rowbot_ai\/status\/\d+$/,
+  );
+  await expect(reply).toBeVisible();
+  await expect(card).toHaveCount(0);
+  const result = await openResult(
+    page,
+    /Post ID: \d+ · Account: @rowbot_ai \(ID 111\) · Time: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/,
+  );
+  await everywhere(page, info, 'x-post-result', result);
+});
+
+test('a reply card links the post it answers', async ({ page }, info) => {
+  await newConversation(page);
+  await send(page, 'n7 reply fixture');
+  const card = page.getByRole('complementary', {
+    name: 'Approval required: Reply on X as @rowbot_ai?',
+  });
+  await expect(
+    card.getByRole('link', { name: /^x\.com\/i\/status\/\d+$/ }),
+  ).toBeVisible();
+  await expect(card.getByText(/^Thanks! It keeps everything/)).toBeVisible();
+  await everywhere(page, info, 'x-reply-card', card);
+  await card.getByRole('button', { name: 'Deny', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  await expect(
+    transcript(page).getByText('The requested action was denied.', {
+      exact: false,
+    }),
+  ).toBeVisible();
+});
+
+test('when X does not confirm a post, Row-Bot finds it among the account’s latest instead of sending it again', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'n7 unsure fixture');
+  const card = page.getByRole('complementary', {
+    name: 'Approval required: Post to X as @rowbot_ai?',
+  });
+  await card.getByRole('button', { name: 'Approve', exact: true }).click();
+  const reply = transcript(page).getByText(
+    /^X didn't confirm it at first, so I checked @rowbot_ai's latest posts: it went out once\./,
+  );
+  await expect(reply).toBeVisible();
+  const result = await openResult(
+    page,
+    /Row-Bot read @rowbot_ai's latest posts and found it\./,
+  );
+  await everywhere(page, info, 'x-post-unsure-found', result);
+});
+
+test('with two accounts, a post that names none is refused with both handles', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'n7 which fixture');
+  const reply = transcript(page).getByText(
+    /^Which X account should I post this from: @rowbot_ai \(Row-Bot\) or @sidd \(Sidd\)\?/,
+  );
+  await expect(reply).toBeVisible();
+  const refusal = await openResult(
+    page,
+    /^Which X account\? @rowbot_ai or @sidd\./,
+  );
+  await expect(refusal).toContainText('Nothing was sent');
+  await everywhere(page, info, 'x-which-account', reply);
+});

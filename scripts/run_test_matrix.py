@@ -87,6 +87,7 @@ BROWSER_SMOKE_SPECS = (
     "model-visibility",
     "question-cards",
     "workflow-review",
+    "x-accounts",
     "incognito",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).

@@ -49,6 +49,8 @@ export type ArtifactSharingProps = {
   resourceRevision: string;
   visible: boolean;
   channels: { name: string; label: string; available: boolean }[];
+  /** The X accounts a post can go out as (N7); with several, the person picks one. */
+  xAccounts?: { id: string; username: string; name?: string }[];
   prepare: (options: ArtifactShareOptions) => Promise<ArtifactShareReview>;
   execute: (
     options: ArtifactShareOptions,
@@ -117,6 +119,7 @@ export default function ArtifactSharing(props: ArtifactSharingProps) {
     setNotice('');
   }, [props.resourceId]);
   const { loadPublication, visible, resourceId, resourceRevision } = props;
+  const xAccounts = props.xAccounts ?? [];
   useEffect(() => {
     if (!visible || !loadPublication) return;
     const abort = new AbortController();
@@ -401,6 +404,29 @@ export default function ArtifactSharing(props: ArtifactSharingProps) {
           </Field>
         </>
       )}
+      {options.action === 'x' && xAccounts.length > 1 && (
+        <Field label="Post as">
+          <Select
+            aria-label="Post as"
+            value={options.target ?? ''}
+            disabled={busy}
+            onChange={(event) =>
+              change({ target: event.target.value || undefined })
+            }
+          >
+            <option value="">Choose an X account</option>
+            {xAccounts.map((account) => (
+              <option key={account.id} value={`@${account.username}`}>
+                @{account.username}
+                {account.name ? ` · ${account.name}` : ''}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
+      {options.action === 'x' && xAccounts.length === 1 && (
+        <p>Posts as @{xAccounts[0].username}.</p>
+      )}
       {(options.action === 'publish' ||
         (options.action === 'channel' && options.delivery === 'link')) && (
         <>
@@ -468,6 +494,9 @@ export default function ArtifactSharing(props: ArtifactSharingProps) {
           disabled={
             busy ||
             (options.action === 'channel' && !options.channel_name) ||
+            (options.action === 'x' &&
+              xAccounts.length > 1 &&
+              !options.target) ||
             !options.pages.trim()
           }
           onClick={() => void run()}
@@ -488,7 +517,12 @@ export default function ArtifactSharing(props: ArtifactSharingProps) {
               <p>
                 {review.page_count} pages · {review.delivery}
               </p>
-              {review.recipient && <p>Recipient: {review.recipient}</p>}
+              {review.recipient && (
+                <p>
+                  {review.action === 'x' ? 'Posts as' : 'Recipient:'}{' '}
+                  {review.recipient}
+                </p>
+              )}
             </>
           )}
           <div className="action-cluster">
@@ -523,6 +557,19 @@ export default function ArtifactSharing(props: ArtifactSharingProps) {
               {outcome.link_kind === 'remote_access'
                 ? 'Remote access link ready. Sign-in or pairing is required.'
                 : 'Local link ready.'}
+            </p>
+          ) : outcome.status === 'submitted' &&
+            options.action === 'x' &&
+            safeUrl(outcome.url) ? (
+            <p>
+              Posted on X.{' '}
+              <a
+                href={safeUrl(outcome.url)!}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open the post
+              </a>
             </p>
           ) : outcome.status === 'submitted' ? (
             <p>

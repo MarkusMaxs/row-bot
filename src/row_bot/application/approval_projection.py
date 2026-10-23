@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -90,6 +91,11 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
         projected_setup = _setup_card(setup)
         if projected_setup:
             projected["setup"] = projected_setup
+    post = item.get("x_post")
+    if isinstance(post, Mapping) and len(items) == 1 and tool_name == "x_post":
+        card = _x_post_card(post)
+        if card:  # Exactly what goes out on X, and as whom (N7): the text is never cut.
+            projected["x_post"] = card
     # Row-Bot's question with options (N4): its card asks it, answered by the person alone. An action asked
     # beside it in the same step is never answered with it; it asks again for itself once this is answered.
     from row_bot.questions import question_item
@@ -107,6 +113,41 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
         projected.pop("app", None)
         projected.pop("reviewer_reason", None)
     return projected
+
+
+_DIGITS = re.compile(r"^[0-9]{1,20}$")
+_HANDLE = re.compile(r"^[A-Za-z0-9_]{1,50}$")
+_TARGET_URL = re.compile(r"^https://x\.com/[A-Za-z0-9_]+/status/[0-9]+$")
+_THUMBNAIL = re.compile(r"^data:image/jpeg;base64,[A-Za-z0-9+/=]+$")
+
+
+def _x_post_card(post: Mapping[str, Any]) -> dict[str, Any] | None:
+    """An X post's card as the tool wrote it, checked field by field; None if any key fact is off."""
+    account_id, username = str(post.get("account_id") or ""), str(post.get("username") or "")
+    action = post.get("action")
+    target_id = str(post.get("target_id") or "")
+    target_url = str(post.get("target_url") or "")
+    if (not _DIGITS.fullmatch(account_id) or not _HANDLE.fullmatch(username)
+            or action not in {"post", "reply", "quote", "delete"}
+            or (target_id and not _DIGITS.fullmatch(target_id)) or (target_url and not _TARGET_URL.fullmatch(target_url))
+            or not isinstance(post.get("text"), str) or len(post["text"]) > 25000):
+        return None
+    media = []
+    for entry in post.get("media") if isinstance(post.get("media"), list) else []:
+        if not isinstance(entry, Mapping) or len(media) == 4:
+            return None  # A card that can't show every file it sends isn't shown at all.
+        thumbnail = str(entry.get("thumbnail") or "")
+        size = entry.get("size")
+        if (not _text(entry.get("name"), 256) or not isinstance(size, int) or isinstance(size, bool) or size < 0
+                or not re.fullmatch(r"[0-9a-f]{12}", str(entry.get("sha256") or ""))
+                or entry.get("kind") not in {"image", "gif", "video"}):
+            return None
+        media.append({"name": _text(entry.get("name"), 256), "size": size, "sha256": entry["sha256"],
+                      "kind": entry["kind"],
+                      "thumbnail": thumbnail if len(thumbnail) <= 32768 and _THUMBNAIL.fullmatch(thumbnail) else ""})
+    return {"account_id": account_id, "username": username, "name": _text(post.get("name"), 80), "action": action,
+            "text": post["text"], "target_id": target_id, "target_url": target_url,
+            "target_text": str(post.get("target_text") or "")[:25000], "media": media}
 
 
 def _setup_card(setup: Mapping[str, Any]) -> dict[str, Any] | None:
