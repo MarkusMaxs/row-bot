@@ -22,11 +22,8 @@ it('describes every error code the server can send (B131)', () => {
       code,
       status: contract.codes[code as keyof typeof contract.codes],
     });
-    // 401 and 403 statuses resolve to their connection sentence on purpose.
-    if (
-      code !== 'action_denied' &&
-      ![401, 403].includes(contract.codes[code as keyof typeof contract.codes])
-    )
+    // A 401 status resolves to its sign-in sentence on purpose.
+    if (contract.codes[code as keyof typeof contract.codes] !== 401)
       expect(error.code).toBe(code);
     expect(error.message).not.toMatch(/could not complete this request/);
   }
@@ -75,27 +72,27 @@ it('offers fixes that lead somewhere real', () => {
   });
 });
 
-it('says why Row-Bot’s browser refused, not that this device isn’t allowed', () => {
-  const refused = clientError({
-    code: 'browser_navigation_denied',
-    status: 403,
-  });
-  expect(refused.message).toBe(
-    "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
-  );
-  const off = clientError({ code: 'browser_disabled', status: 403 });
-  expect(off.message).toBe(
-    "Row-Bot's browser is turned off. Turn it on in Settings › System › Browser and computer use.",
-  );
-  expect(off.action).toEqual({
-    kind: 'open_setting',
-    label: 'Open System',
-    href: '/settings/system#browser-computer-use',
-  });
-  // Any other refusal still says only that this device can't do it.
-  expect(clientError({ code: 'origin_rejected', status: 403 }).message).toBe(
-    "This device isn't allowed to do that.",
-  );
+const refusals = serverCodes.filter(
+  (code) =>
+    contract.codes[code as keyof typeof contract.codes] === 403 &&
+    code !== 'action_denied',
+);
+
+it.each(refusals)(
+  'a %s refusal says why, not that this device isn’t allowed',
+  (code) => {
+    const refused = clientError({ code, status: 403 });
+    expect(refused).toEqual(clientError({ code }));
+    expect(refused.message).not.toBe("This device isn't allowed to do that.");
+  },
+);
+
+it('says only that this device isn’t allowed when a refusal has no sentence of its own', () => {
+  expect(refusals.length).toBeGreaterThan(20);
+  for (const code of ['action_denied', 'brand_new_refusal', ''])
+    expect(clientError({ code, status: 403 }).message).toBe(
+      "This device isn't allowed to do that.",
+    );
 });
 
 it('names an unknown code in a Details line instead of hiding it', () => {
