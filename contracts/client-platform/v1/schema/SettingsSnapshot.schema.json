@@ -8,10 +8,25 @@
             "github",
             "gmail",
             "calendar",
-            "x"
+            "x",
+            "outlook_mail",
+            "outlook_calendar"
           ],
           "title": "Account Id",
           "type": "string"
+        },
+        "address": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
         },
         "authentication_state": {
           "enum": [
@@ -144,6 +159,12 @@
         "gmail": {
           "$ref": "#/$defs/AccountSettingsItem"
         },
+        "outlook_calendar": {
+          "$ref": "#/$defs/AccountSettingsItem"
+        },
+        "outlook_mail": {
+          "$ref": "#/$defs/AccountSettingsItem"
+        },
         "x": {
           "$ref": "#/$defs/AccountSettingsItem"
         }
@@ -153,7 +174,9 @@
         "github",
         "gmail",
         "calendar",
-        "x"
+        "x",
+        "outlook_mail",
+        "outlook_calendar"
       ],
       "title": "AccountSettingsSnapshot",
       "type": "object"

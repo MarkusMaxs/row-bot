@@ -188,6 +188,8 @@ it('copies the X callback address from its connect sheet', async () => {
             account_id: 'x',
             callback_url: 'http://127.0.0.1:17638/callback',
           },
+          outlook_mail: { ...account, account_id: 'outlook_mail' },
+          outlook_calendar: { ...account, account_id: 'outlook_calendar' },
         }}
       />
     </MemoryRouter>,

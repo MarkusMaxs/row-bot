@@ -363,7 +363,7 @@ export default function SettingRoute() {
           snapshot={settingsSnapshot!.accounts}
           mutation={mutationFor('accounts')!}
           showActions
-          only={builtIn[2] as 'github' | 'google' | 'x'}
+          only={builtIn[2] as 'github' | 'google' | 'x' | 'microsoft'}
         />
       );
     if (builtIn?.[1] === 'tool')

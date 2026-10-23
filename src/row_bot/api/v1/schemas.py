@@ -1025,7 +1025,7 @@ class XAccountSummary(WireModel):
 
 
 class AccountSettingsItem(WireModel):
-    account_id: Literal["github", "gmail", "calendar", "x"]
+    account_id: Literal["github", "gmail", "calendar", "x", "outlook_mail", "outlook_calendar"]
     enabled: bool | None
     configured: bool
     authentication_state: Literal[
@@ -1056,6 +1056,8 @@ class AccountSettingsItem(WireModel):
     # fixed loopback callback, or Row-Bot's public callback for X or a Google
     # Web application client when this device signs in through it.
     callback_url: str | None = Field(default=None, max_length=512)
+    # Who is signed in ("you@yourdomain.com"), when the account says (Outlook's).
+    address: str | None = Field(default=None, max_length=256)
     # X only (N7): each connected account, first added first. Never a token.
     x_accounts: list[XAccountSummary] = Field(default_factory=list, max_length=17)
 
@@ -1066,6 +1068,9 @@ class AccountSettingsSnapshot(WireModel):
     gmail: AccountSettingsItem
     calendar: AccountSettingsItem
     x: AccountSettingsItem
+    # Outlook's mail and calendar: one Microsoft sign-in through the person's own app registration.
+    outlook_mail: AccountSettingsItem
+    outlook_calendar: AccountSettingsItem
 
 
 class GitHubAccessSnapshot(WireModel):
@@ -1106,7 +1111,7 @@ class GitHubAccessReceipt(WireModel):
 
 class AccountAuthSnapshot(WireModel):
     schema_version: Literal[1]
-    account: Literal["google", "x"]
+    account: Literal["google", "x", "microsoft"]
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     configured: bool
     # From the last check while the token files are as it left them (B263).
@@ -1125,16 +1130,19 @@ class AccountAuthSnapshot(WireModel):
     # the revision leaves it out. The desktop app on the host signs in through
     # that computer's browser and a loopback address; another device opens the
     # provider's page itself, which returns to Row-Bot's one public HTTPS address.
-    sign_in: Literal["this_computer", "link", "unavailable"]
+    # Microsoft signs in from another device with a code entered on its own page.
+    sign_in: Literal["this_computer", "link", "device", "unavailable"]
     sign_in_blocker: (
         Literal["public_address_required", "desktop_client", "redirect_not_listed"]
         | None
     ) = None
+    # Who is signed in ("you@yourdomain.com"), when the account says (Microsoft's).
+    address: str | None = Field(default=None, max_length=256)
 
 
 class AccountAuthCommand(WireModel):
     command_id: UUID
-    account: Literal["google", "x"]
+    account: Literal["google", "x", "microsoft"]
     expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     action: Literal["import_credentials", "check", "start", "disconnect"]
     confirmed: bool = False
@@ -1146,7 +1154,7 @@ class AccountAuthCommand(WireModel):
 class AccountAuthReceipt(WireModel):
     schema_version: Literal[1]
     command_id: UUID
-    account: Literal["google", "x"]
+    account: Literal["google", "x", "microsoft"]
     action: Literal["import_credentials", "check", "start", "disconnect"]
     phase: Literal["running", "cancel_requested", "cancelled", "completed", "failed"]
     message: str = Field(max_length=256)
@@ -1154,6 +1162,10 @@ class AccountAuthReceipt(WireModel):
     # The provider's sign-in page for this device's browser, while a sign-in
     # through Row-Bot's public address waits for its callback.
     authorization_url: str | None = Field(default=None, max_length=8192)
+    # While a Microsoft sign-in from another device waits: the code to enter on Microsoft's page, and
+    # the seconds it still works.
+    device_code: PlanDeviceCode | None = None
+    expires_in: int | None = Field(default=None, ge=0, le=3600)
 
 
 class UtilitySettingsItem(WireModel):
@@ -8533,6 +8545,9 @@ class AppView(AppRef):
     docs_url: str = Field(max_length=512)
     key_url: str = Field(max_length=512)
     icon_license: IconLicense | None
+    # What to know before setting it up, and another app it points to for that.
+    note: str = Field(default="", max_length=256)
+    see_also: str = Field(default="", pattern=r"^([a-z0-9][a-z0-9-]{0,63})?$")
 
 
 class AppList(WireModel):

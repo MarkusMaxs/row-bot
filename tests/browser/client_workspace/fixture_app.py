@@ -2283,6 +2283,10 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         # Row-Bot's browser in the app (N12-A): a turn that uses the browser, then asks to pay.
         yield from _n12_stream(text, config)
         return
+    if text.startswith("n10 ") and text.rstrip().endswith("fixture"):
+        # Outlook's own cards (N10): an email to send, or an event that invites people.
+        yield from _n10_stream(text, config)
+        return
     if text.startswith("n4 ") and text.rstrip().endswith("fixture"):
         # Row-Bot asks questions with options (N4): one question, or two as steps.
         yield from _n4_stream(text, config)
@@ -5088,6 +5092,209 @@ def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
         conn.close()
     _N4_APPROVALS.clear()
     return {"ok": True}
+
+
+# --- N10: Outlook through your own Microsoft app, and Microsoft 365's tenant (B398) ----------------------
+# The Outlook account's states are seeded in an in-memory keychain (this run's own, restored by reset); a
+# sign-in from another device gets a fixed code and never an answer, so its wait stays on screen. The
+# approval cards come from the real Outlook card writer. Microsoft 365's Registry check answers with the
+# record the catalog lists (or, for the error, as removed); nothing reaches Microsoft or the Registry.
+_N10_CLIENT = "11111111-2222-3333-4444-555555555555"
+_N10_ADDRESS = "you@yourdomain.com"
+_N10_SAVED: dict = {}
+_N10_REGISTRY = {"mode": "same"}
+_N10_WORK_IQ = {"server": {
+    "name": "com.microsoft/workiq-admintools", "title": "Admin MCP Server", "version": "1.0.0",
+    "description": "MCP Server containing tools relating to Microsoft Admin Center",
+    "remotes": [{"type": "streamable-http",
+                 "url": "https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_AdminTools",
+                 "variables": {"tenant_id": {"description": "Microsoft Entra tenant ID", "isRequired": True}}}]},
+    "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active"}}}
+
+
+def _n10_keychain() -> None:
+    """This run's keychain in memory, readable during capture; reset puts back what was there."""
+    from row_bot import secret_store
+    if "backend" not in _N10_SAVED:
+        _N10_SAVED.update(backend=secret_store._backend_override, capture=secret_store._docs_capture_active)
+    if not isinstance(getattr(secret_store._backend_override, "values", None), dict):
+        class SyntheticSecrets:
+            def __init__(self): self.values = {}
+            def get_password(self, service, account): return self.values.get((service, account))
+            def set_password(self, service, account, value): self.values[service, account] = value
+            def delete_password(self, service, account): self.values.pop((service, account), None)
+        secret_store._backend_override = SyntheticSecrets()
+    secret_store._docs_capture_active = lambda: False
+
+
+def _n10_route(device: bool) -> None:
+    """How this browser signs in: here (the desktop app) or from another device, with a code."""
+    from row_bot import microsoft_account
+    from row_bot.application import client_account_oauth as owner
+    if "route" not in _N10_SAVED:
+        _N10_SAVED.update(route=owner.sign_in_route, start=microsoft_account.device_start,
+                          poll=microsoft_account.device_poll)
+    original = _N10_SAVED["route"]
+
+    def route(account, device_info):
+        if account == "microsoft" and device:
+            return {"sign_in": "device", "sign_in_blocker": None, "callback_url": None}
+        return original(account, device_info)
+    owner.sign_in_route = route
+    microsoft_account.device_start = lambda found, http: microsoft_account.DeviceCode(
+        "fixture-device-code", "ABCD-EFGH", "https://microsoft.com/devicelogin", 900, 5)
+    microsoft_account.device_poll = lambda found, code, http: "authorization_pending"
+
+
+@app.post("/__n10_fixture/outlook/{state}")
+def n10_outlook(state: str, route: str = "desktop", x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    from row_bot import account_tokens, microsoft_account
+    from row_bot.integrations import builtin
+    from row_bot.tools import registry
+    if state not in {"none", "registered", "signed_in", "signed_out"} or route not in {"desktop", "device"}:
+        raise HTTPException(status_code=404, detail="Unknown Outlook state")
+    _n10_keychain()
+    _n10_route(route == "device")
+    for name in ("microsoft", "microsoft_client"):
+        account_tokens.delete(name)
+    if state != "none":
+        microsoft_account.save_client(_N10_CLIENT)
+    if state in {"signed_in", "signed_out"}:
+        account_tokens.write("microsoft", {"refresh_token": "fixture-refresh", "client_id": _N10_CLIENT,
+                                           "tenant": "common", "address": _N10_ADDRESS, "name": "You"})
+        # As the last check left it: working, or turned down by Microsoft.
+        account_tokens._CHECKS["microsoft"] = (account_tokens.digest("microsoft"), state == "signed_in")
+        for tool in ("outlook_mail", "outlook_calendar"):
+            registry.set_enabled(tool, True)
+    builtin.changed()
+    builtin.rows()  # Apps and Needs you read the new state at once.
+    return {"state": microsoft_account.state()}
+
+
+@app.post("/__n10_fixture/registry/{mode}")
+def n10_registry(mode: str, x_fixture_token: str = Header(default="")) -> dict:
+    """What the MCP Registry answers when Microsoft 365's record is checked again: the same record, or removed."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.mcp_client import marketplace
+    if mode not in {"same", "removed"}:
+        raise HTTPException(status_code=404, detail="Unknown Registry answer")
+    if "fetch" not in _N10_SAVED:
+        _N10_SAVED["fetch"] = marketplace._fetch_json
+        original = marketplace._fetch_json
+
+        def fetch(url, timeout=0):
+            if "workiq-admintools" not in url:
+                return original(url, timeout=timeout)
+            record = json.loads(json.dumps(_N10_WORK_IQ))
+            if _N10_REGISTRY["mode"] == "removed":
+                record["_meta"]["io.modelcontextprotocol.registry/official"]["status"] = "deleted"
+            return record
+        marketplace._fetch_json = fetch
+    if "index" not in _N10_SAVED:
+        # The catalog has no Registry mirror here: one with only this record, removed again by reset.
+        import tempfile
+        from row_bot.integrations import facts, index
+        from row_bot.mcp_client import registry_snapshot
+        _N10_SAVED["index"] = (registry_snapshot.SHIPPED, index.pointer() is not None)
+        if index.pointer() is None:
+            shipped = Path(tempfile.mkdtemp(prefix="row-bot-n10-")) / "registry_snapshot.jsonl.xz"
+            shipped.write_bytes(registry_snapshot.build_snapshot(
+                marketplace.registry_entries({"servers": [_N10_WORK_IQ]}), captured_at=1790800000.0,
+                watermark="2026-10-01T00:00:00Z"))
+            registry_snapshot.SHIPPED = shipped
+            index.ensure()
+            facts.invalidate()
+    _N10_REGISTRY["mode"] = mode
+    return {"mode": mode}
+
+
+@app.post("/__n10_fixture/reset")
+def n10_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Forget Outlook, any Microsoft 365 connection the spec saved, and put back what the fixture replaced."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import account_tokens, microsoft_account, secret_store
+    from row_bot.application import client_account_oauth as owner
+    from row_bot.integrations import builtin, facts
+    from row_bot.mcp_client import config, marketplace
+    from row_bot.tools import registry
+    with owner._LOCK:
+        for key in [key for key, job in owner._JOBS.items() if job["account"] == "microsoft"]:
+            owner._JOBS[key]["stop"].set()
+            owner._JOBS.pop(key)
+        owner._ACTIVE.discard("microsoft")
+    if "backend" in _N10_SAVED:
+        for name in ("microsoft", "microsoft_client"):
+            account_tokens.delete(name)
+        account_tokens._CHECKS.pop("microsoft", None)
+        for tool in ("outlook_mail", "outlook_calendar"):
+            registry.set_enabled(tool, False)
+        secret_store._backend_override = _N10_SAVED.pop("backend")
+        secret_store._docs_capture_active = _N10_SAVED.pop("capture")
+    if "route" in _N10_SAVED:
+        owner.sign_in_route = _N10_SAVED.pop("route")
+        microsoft_account.device_start = _N10_SAVED.pop("start")
+        microsoft_account.device_poll = _N10_SAVED.pop("poll")
+    if "fetch" in _N10_SAVED:
+        marketplace._fetch_json = _N10_SAVED.pop("fetch")
+    if "index" in _N10_SAVED:
+        from row_bot.integrations import index
+        from row_bot.mcp_client import registry_snapshot
+        registry_snapshot.SHIPPED, had_index = _N10_SAVED.pop("index")
+        if not had_index:
+            (index.folder() / "registry.json").unlink(missing_ok=True)
+            index._READY.clear()
+    saved = config.load_config()
+    servers = saved.get("servers") or {}
+    for name in [name for name, cfg in servers.items()
+                 if str((cfg.get("source") or {}).get("registry_name") or "").startswith("com.microsoft/workiq")]:
+        servers.pop(name)
+    config.save_config(saved)
+    builtin.changed()
+    facts.invalidate()
+    return {"ok": True}
+
+
+_N10_CARDS = {
+    "mail": ("outlook_send_mail", "outlook_mail", {
+        "to": ["amy@contoso.com"], "cc": ["ben@contoso.com"], "subject": "Q3 numbers",
+        "body": "Hi Amy,\n\nThe Q3 numbers are attached. Revenue is up 12% on Q2, mostly from the new plans.\n\n"
+                "Shall we go through them on Thursday?\n\nThanks", "attachments": []}),
+    "event": ("outlook_create_event", "outlook_calendar", {
+        "subject": "Q3 review", "start": "2026-10-29 14:00", "end": "2026-10-29 14:45",
+        "timezone_name": "Europe/London", "location": "Room 4", "attendees": ["amy@contoso.com", "ben@contoso.com"],
+        "online_meeting": True, "body": "Go through the Q3 numbers before the board pack."}),
+}
+
+
+def _n10_stream(text: str, config: dict):
+    """A turn that asks to send an Outlook email or to invite people to an event: the real card's words."""
+    import tempfile
+    from row_bot.integrations import builtin
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools import outlook_tool
+
+    name, parent, args = _N10_CARDS["event" if "event" in text else "mail"]
+    args = json.loads(json.dumps(args))
+    if name == "outlook_send_mail":
+        report = Path(tempfile.mkdtemp(prefix="row-bot-n10-")) / "q3-report.pdf"
+        report.write_bytes(b"%PDF-1.7 Q3 numbers\n" + b"0" * 245_000)
+        args["attachments"] = [str(report)]
+    builtin.remember_tools({name: parent})
+    call = predecessor._record("submit", config, "n10-outlook")
+    thread = call["conversation_id"]
+    identity = f"n10:{call['generation_id']}"
+    tool_id = fixture_id(identity + ":tool")
+    try:
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": name, "args": args}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": name, "args": args}
+        question, description = outlook_tool.approval_card(name, args)
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), "tool": name,
+                             "label": outlook_tool.TITLES[name], "question": question, "description": description,
+                             "args": args}]
+    finally:
+        call["quiesced"] = True
 
 
 if __name__ == "__main__":

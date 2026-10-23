@@ -138,6 +138,8 @@ _BOOL_FIELDS = {
     ("accounts", "gmail.enabled"),
     ("accounts", "calendar.enabled"),
     ("accounts", "x.enabled"),
+    ("accounts", "outlook_mail.enabled"),
+    ("accounts", "outlook_calendar.enabled"),
     ("preferences", "identity.self_improvement_enabled"),
     ("preferences", "dream_cycle.enabled"),
 }

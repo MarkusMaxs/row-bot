@@ -24,7 +24,7 @@ MAX_AGE = 60.0  # A snapshot older than this is still served, and refreshed in t
 
 # Account id -> (name, the chat tools it powers).
 ACCOUNTS = {"github": ("GitHub account", ()), "google": ("Google account", ("gmail", "calendar")),
-            "x": ("X account", ("x",))}
+            "x": ("X account", ("x",)), "microsoft": ("Outlook account", ("outlook_mail", "outlook_calendar"))}
 # Key-based tools: tool id -> (name, keychain key names, what it does). Named as in Settings › Tools, where the
 # same switch and key are: "Tavily web search" is Row-Bot's own search with a Tavily key, not Tavily's server.
 TOOLS = {"web_search": ("Tavily web search", ("TAVILY_API_KEY",),
@@ -97,7 +97,9 @@ def _accounts(only: str = "") -> list[dict]:
         found.append(_row("account:" + account, name, app_ref="account:" + account, lifecycle=lifecycle, blockers=blockers,
                           tools=tools, description={"github": "Lets Row-Bot work with GitHub for skills and Developer.",
                                                     "google": "Gmail and Calendar through your own Google sign-in.",
-                                                    "x": "Read and post on X through your own app."}[account]))
+                                                    "x": "Read and post on X through your own app.",
+                                                    "microsoft": "Outlook mail and calendar through your own Microsoft "
+                                                                 "app."}[account]))
     return found
 
 
@@ -253,6 +255,13 @@ def remember_tools(bound: Mapping[str, str]) -> None:
     its tools. Building a tool can sign in or check a token over the network, so a read never does."""
     parents = set(_parents())
     _PARENTS.update({str(name): str(parent) for name, parent in bound.items() if parent in parents and name})
+
+
+def tool_title(name: str) -> str:
+    """A built-in chat tool's own title for its app's cards ("Send an email"); "" for one shown by its name.
+    Outlook's tools name themselves (the module is loaded whenever they were bound; a read never loads it)."""
+    module = sys.modules.get("row_bot.tools.outlook_tool")
+    return module.TITLES.get(name, "") if module is not None else ""
 
 
 def tool_parent(name: str) -> str | None:
