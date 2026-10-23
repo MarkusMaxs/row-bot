@@ -41,6 +41,9 @@ TEST_ENV = {
         )
     ),
     "ROW_BOT_TEST_MODE": "1",
+    # Install stats off: an app a lane starts must never reach the real stats service. Tests of
+    # install stats clear this and point it at a fake service.
+    "ROW_BOT_INSTALL_COUNT": "0",
 }
 COVERAGE_ENV = {**TEST_ENV, "COVERAGE_FILE": str(REPO_ROOT / ".tmp" / "coverage" / ".coverage")}
 
