@@ -1,6 +1,6 @@
 {
   "additionalProperties": false,
-  "description": "The installation count (N6): never the install ID or its deletion secret.",
+  "description": "Install stats (N6), for Settings \u203a System \u203a Privacy: never the install ID or its deletion secret.",
   "properties": {
     "available": {
       "title": "Available",
@@ -25,10 +25,6 @@
         }
       ],
       "title": "Last Sent On"
-    },
-    "needs_disclosure": {
-      "title": "Needs Disclosure",
-      "type": "boolean"
     },
     "os": {
       "enum": [
@@ -59,7 +55,6 @@
     "available",
     "turned_off_here",
     "enabled",
-    "needs_disclosure",
     "service",
     "version",
     "os",

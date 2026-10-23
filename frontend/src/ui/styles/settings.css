@@ -4879,16 +4879,17 @@ button.settings-mcp-server-name:hover {
   }
 }
 
-/* N6: what an installation count sends (the card and Settings › System › Privacy). */
+/* N6: install stats in Settings › System › Privacy. What is sent sits behind
+   "Details", closed until asked for. */
 .install-count-facts {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   margin: 0;
 }
 .install-count-facts > div {
   display: grid;
-  grid-template-columns: minmax(120px, 30%) 1fr;
-  gap: 4px 12px;
+  grid-template-columns: minmax(110px, 28%) 1fr;
+  gap: 2px 12px;
 }
 .install-count-facts dt {
   color: var(--text-muted);
@@ -4904,46 +4905,38 @@ button.settings-mcp-server-name:hover {
   font-family: var(--font-mono);
   font-size: var(--text-12);
 }
-.install-count-choice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-hairline);
-  font-weight: var(--weight-medium);
+.install-count-details .disclosure-body {
+  display: grid;
+  gap: 10px;
+  padding-top: 6px;
 }
-.install-count-actions {
-  justify-content: flex-end;
+.install-count-delete {
+  justify-self: start;
 }
 .privacy-contacts {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   margin: 0;
-  padding: 0;
+  padding: 0 16px;
   list-style: none;
-}
-.privacy-contacts li {
-  display: grid;
-  gap: 2px;
   font-size: var(--text-13);
+  color: var(--text-secondary);
 }
 .privacy-contacts strong {
+  margin-inline-end: 4px;
+  color: var(--text-primary);
   font-weight: var(--weight-medium);
-}
-.privacy-contacts span {
-  color: var(--text-secondary);
 }
 .privacy-contacts a {
   color: var(--text-link);
   white-space: nowrap;
 }
+.privacy-contacts-row .disclosure-body > .settings-help {
+  margin: 0;
+  padding: 8px 16px 14px;
+}
 @media (max-width: 560px) {
   .install-count-facts > div {
     grid-template-columns: 1fr;
-  }
-  .install-count-actions .button {
-    flex: 1;
-    min-height: 44px;
   }
 }

@@ -1,8 +1,8 @@
-# Row-Bot installation count collector
+# Row-Bot install stats collector
 
 A Cloudflare Worker with a D1 database that counts the Row-Bot installations reporting in the
-last 7 and 15 days (N6). Row-Bot sends nothing to it until the person has seen the "Count this
-installation" card, and never once they turn counting off (Settings › System › Privacy) or set
+last 7 and 15 days (N6; "Install stats" in Row-Bot). It is on by default; Row-Bot sends nothing
+once the person turns "Share install stats" off (Settings › System › Privacy) or sets
 `ROW_BOT_INSTALL_COUNT=0`. The client side is `src/row_bot/install_count.py`; it stays dormant
 until its `COLLECTOR_URL` is set.
 
@@ -15,12 +15,12 @@ until its `COLLECTOR_URL` is set.
 {"schema": 1, "install": "<32 hex: a random 128-bit ID>", "version": "5.3.0", "os": "windows"}
 ```
 
-`os` is `windows`, `macos`, `linux` or `docker`. Row-Bot sends it on the first allowed start,
-then at most once every 24 hours while it runs (0-60 minutes late, on purpose), from its server
+`os` is `windows`, `macos`, `linux` or `docker`. Row-Bot sends it shortly after it starts (a
+minute plus up to an hour of jitter), then at most once every 24 hours while it runs (0-60 minutes late, on purpose), from its server
 process over HTTPS with the User-Agent `Row-Bot`.
 
 `POST /v1/delete` with `{"schema": 1, "install": "<32 hex>", "secret": "<64 hex>"}` deletes every
-row of that installation ("Delete counted data" in Row-Bot). The install ID is the first 128 bits
+row of that installation ("Delete what was sent…" in Row-Bot). The install ID is the first 128 bits
 of SHA-256 over `row-bot-install-count:` and the secret's bytes, so the Worker checks a deletion
 without storing any secret, and a ping carries nothing more than the four fields above.
 

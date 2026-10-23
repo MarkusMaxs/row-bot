@@ -736,13 +736,12 @@ async def _run_startup_sequence():
     except Exception as exc:
         logger.warning("Updater scheduler failed to start (non-fatal): %s", exc)
 
-    # The installation count (N6): its own thread, which sends nothing before the person has seen
-    # what it sends.
+    # Install stats (N6): its own thread, after a start-up delay; dormant without a collector.
     try:
         from row_bot import install_count
         install_count.start()
     except Exception as exc:
-        logger.warning("The installation count didn't start (non-fatal): %s", exc)
+        logger.warning("Install stats didn't start (non-fatal): %s", exc)
 
     _set("⚡ Loading workflows…")
     try:

@@ -585,9 +585,10 @@ export const settingsRows: SettingsRow[] = [
   },
   {
     leaf: 'system',
-    anchor: 'install-count',
-    label: 'Count this installation',
-    keywords: 'privacy telemetry statistics analytics usage data install count',
+    anchor: 'install-stats',
+    label: 'Install stats',
+    keywords:
+      'share install stats privacy telemetry statistics analytics install count delete what was sent',
   },
   {
     leaf: 'system',

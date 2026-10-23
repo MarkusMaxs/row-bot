@@ -1,4 +1,4 @@
-"""The installation count's API (N6): the card before the first chat and Settings › System › Privacy."""
+"""Install stats' API (N6): Settings › System › Privacy, the only place they show."""
 from __future__ import annotations
 
 import json
@@ -24,7 +24,7 @@ def collector(tmp_path, monkeypatch):
         install_count.stop()
 
 
-def test_any_signed_in_device_sees_the_card_once_and_its_choice_is_kept(collector):
+def test_on_by_default_and_any_signed_in_device_turns_it_off(collector):
     local, _, _ = client_app()
     remote, _, _ = client_app(remote=True)
     with local, remote:
@@ -32,17 +32,14 @@ def test_any_signed_in_device_sees_the_card_once_and_its_choice_is_kept(collecto
         _, remote_headers = bootstrap(remote)
         first = remote.get("/api/v1/system/install-count", headers=remote_headers)
         assert first.status_code == 200, first.text
-        card = first.json()
-        assert card["available"] is True and card["needs_disclosure"] is True and card["enabled"] is True
-        assert card["service"] == collector.url.removeprefix("http://")
-        # The person leaves it on from a phone: no other device shows the card again.
-        chosen = remote.put("/api/v1/system/install-count", headers=remote_headers, json={"enabled": True})
-        assert chosen.status_code == 200, chosen.text
-        assert chosen.json()["needs_disclosure"] is False
-        assert local.get("/api/v1/system/install-count", headers=local_headers).json()["needs_disclosure"] is False
-        # Settings › System › Privacy turns it off.
-        off = local.put("/api/v1/system/install-count", headers=local_headers, json={"enabled": False})
+        view = first.json()
+        assert view["available"] is True and view["enabled"] is True
+        assert view["service"] == collector.url.removeprefix("http://")
+        # "Share install stats" off from a phone is off everywhere.
+        off = remote.put("/api/v1/system/install-count", headers=remote_headers, json={"enabled": False})
+        assert off.status_code == 200, off.text
         assert off.json()["enabled"] is False
+        assert local.get("/api/v1/system/install-count", headers=local_headers).json()["enabled"] is False
         invalid = local.put("/api/v1/system/install-count", headers=local_headers, json={"enabled": "no"})
         assert invalid.status_code == 422
         extra = local.put("/api/v1/system/install-count", headers=local_headers,
@@ -77,6 +74,6 @@ def test_dormant_reads_as_unavailable_and_saves_nothing(tmp_path, monkeypatch):
         _, headers = bootstrap(client)
         read = client.get("/api/v1/system/install-count", headers=headers).json()
         chosen = client.put("/api/v1/system/install-count", headers=headers, json={"enabled": True}).json()
-    assert read["available"] is False and read["needs_disclosure"] is False
+    assert read["available"] is False
     assert chosen == read
     assert not (tmp_path / "profile" / install_count.STATE_FILE).exists()

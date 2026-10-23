@@ -360,7 +360,7 @@ def test_features_inventory_is_evergreen_and_documented() -> None:
     assert "Cua Driver 0.20.0" in features
     assert "xAI image options discovered from live model capability metadata" in features
     assert "consent-gated third-party telemetry" in features
-    assert "Its only first-party telemetry is the install count" in features
+    assert "Its only first-party telemetry is install stats" in features
     assert "off in one click" in features
 
 

@@ -31,7 +31,7 @@ export default function Phase4RetainedSettings({
   writeClipboard?: ClientPlatform['writeClipboard'];
   /** Access › Advanced › Network: the live network controls. */
   accessNetwork?: ReactNode;
-  /** System › Privacy: the installation count and what else Row-Bot contacts. */
+  /** System › Privacy: install stats and what else Row-Bot contacts. */
   privacy?: ReactNode;
 }) {
   if (setting === 'voice')

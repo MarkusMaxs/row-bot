@@ -7,10 +7,10 @@ import {
   test,
 } from './evidence';
 
-// N6: counting active installations, disclosed first and off in one click.
-// The fixture keeps the count dormant unless a spec turns it on
-// (/__n6_fixture/install-count/{state}); its counting service only records
-// what would have been sent, so nothing leaves this computer.
+// N6: install stats, on by default and shown only in Settings › System ›
+// Privacy. The fixture keeps them dormant unless a spec turns them on
+// (/__n6_fixture/install-count/{state}); its stats service only records what
+// would have been sent, so nothing leaves this computer.
 
 function control() {
   const token = process.env.ROW_BOT_BROWSER_CONTROL_TOKEN;
@@ -34,7 +34,6 @@ async function sent(page: Page): Promise<{ path: string; body: object }[]> {
 
 test.afterEach(async ({ page }) => {
   await fixture(page, '/__n6_fixture/install-count/restore');
-  await fixture(page, '/__p10_fixture/first-run/restore');
 });
 
 const phone = (info: TestInfo) =>
@@ -52,126 +51,82 @@ async function shoot(page: Page, info: TestInfo, name: string) {
   await page.emulateMedia({ colorScheme: 'light' });
 }
 
-const card = (page: Page) =>
-  page.getByRole('dialog', { name: 'Count this installation' });
-
-async function expectDisclosure(page: Page) {
-  const dialog = card(page);
-  await expect(dialog).toContainText(
-    'installations reporting in the last 7 and 15 days',
-  );
-  await expect(dialog).toContainText(
-    'A random ID made for this count, the Row-Bot version',
-  );
-  await expect(dialog).toContainText('Once a day while Row-Bot is running.');
-  await expect(dialog).toContainText('row-bot-count.row-bot.workers.dev');
-  await expect(dialog).toContainText('deleted after 35 days');
-  await expect(dialog).toContainText('Row-Bot doesn’t store it.');
-  await expect(
-    dialog.getByRole('switch', { name: 'Count this installation' }),
-  ).toBeChecked();
-}
-
-test('first run: the card follows Setup, before the first chat', async ({
-  page,
-}, info) => {
-  await fixture(page, '/__n6_fixture/install-count/fresh');
-  await fixture(
-    page,
-    '/__p10_fixture/first-run/fresh?runtime=running&models=qwen3:8b,gemma3:12b',
-  );
-  await page.goto('/app-v2/');
-  await expect(page).toHaveURL(/\/app-v2\/setup$/);
-  // Setup comes first: the card never covers it.
-  await page
-    .getByRole('group', { name: 'How should Row-Bot think?' })
-    .getByRole('button', { name: /On this computer/ })
-    .click();
-  await expect(card(page)).toHaveCount(0);
-  await page
-    .getByRole('list', { name: 'Recommended' })
-    .getByRole('button', { name: /qwen3:8b/ })
-    .click();
-  await expect(card(page)).toBeVisible({ timeout: 15_000 });
-  await expectDisclosure(page);
-  expect(await sent(page)).toEqual([]);
-  await shoot(page, info, 'install-count-first-run');
-
-  await card(page).getByRole('button', { name: 'Continue' }).click();
-  await expect(card(page)).toHaveCount(0);
-  await page.goto('/app-v2/settings/system#privacy');
-  await expect(
-    page
-      .getByRole('region', { name: 'Privacy' })
-      .getByRole('switch', { name: 'Count this installation' }),
-  ).toBeChecked();
-});
-
-test('an updating installation sees the same card once, and off stays off', async ({
-  page,
-}, info) => {
+test('nothing about install stats shows outside Settings', async ({ page }) => {
   await fixture(page, '/__n6_fixture/install-count/fresh');
   await page.goto('/app-v2/');
-  await expect(card(page)).toBeVisible({ timeout: 15_000 });
-  await expectDisclosure(page);
-  await shoot(page, info, 'install-count-update');
-
-  await card(page)
-    .getByRole('switch', { name: 'Count this installation' })
-    .click();
-  await card(page).getByRole('button', { name: 'Continue' }).click();
-  await expect(card(page)).toHaveCount(0);
-  await page.reload();
   await expect(
     page.getByRole('tablist', { name: 'Home capabilities' }),
   ).toBeVisible({ timeout: 15_000 });
-  await expect(card(page)).toHaveCount(0);
-  await page.goto('/app-v2/settings/system#privacy');
-  await expect(
-    page
-      .getByRole('region', { name: 'Privacy' })
-      .getByRole('switch', { name: 'Count this installation' }),
-  ).not.toBeChecked();
-  // Nothing was ever sent: it was off before its first count.
-  expect(await sent(page)).toEqual([]);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText(/install stats/i)).toHaveCount(0);
 });
 
-test('Settings › System › Privacy: on, off and deleting what was counted', async ({
+test('Settings › System › Privacy: one row, details on request, and deleting what was sent', async ({
   page,
 }, info) => {
   await fixture(page, '/__n6_fixture/install-count/on');
   await page.goto('/app-v2/settings/system#privacy');
   const privacy = page.getByRole('region', { name: 'Privacy' });
-  const toggle = privacy.getByRole('switch', {
-    name: 'Count this installation',
-  });
+  const toggle = privacy.getByRole('switch', { name: 'Share install stats' });
   await expect(toggle).toBeChecked();
-  await expect(privacy).toContainText('Last sent today');
-  await expect(privacy).toContainText('What else Row-Bot contacts');
-  for (const words of ['Update checks', 'Connection checks', 'Catalogs'])
-    await expect(privacy).toContainText(words);
-  await privacy.locator('summary', { hasText: 'Details' }).click();
-  await expect(privacy).toContainText('Cloudflare sees it');
+  await expect(privacy).toContainText('Install stats');
+  await expect(privacy).toContainText('last sent today');
+  const disclosure = (name: string) =>
+    privacy.locator('details', {
+      has: page.locator('summary', { hasText: name }),
+    });
+  // Closed: a few lines, the details and the contacts behind their disclosures.
+  for (const name of ['Details', 'What else Row-Bot contacts'])
+    await expect(disclosure(name)).not.toHaveAttribute('open');
+  await expect(privacy.getByText(/Cloudflare sees it/)).toBeHidden();
   await privacy.scrollIntoViewIfNeeded();
   await shoot(page, info, 'privacy-on');
 
+  await privacy.locator('summary', { hasText: 'Details' }).click();
+  await privacy
+    .locator('summary', { hasText: 'What else Row-Bot contacts' })
+    .click();
+  for (const words of [
+    'A random ID made just for this, the Row-Bot version',
+    'Once a day while Row-Bot is running.',
+    'row-bot-count.row-bot.workers.dev',
+    'deleted after 35 days',
+    'Cloudflare sees it, as it does for any connection. Row-Bot doesn’t store it.',
+    'ROW_BOT_INSTALL_COUNT=0',
+    'Update checks',
+    'Connection checks',
+    'Catalogs',
+  ])
+    await expect(privacy).toContainText(words);
+  await privacy.scrollIntoViewIfNeeded();
+  await shoot(page, info, 'privacy-details');
+
   await toggle.click();
   await expect(toggle).not.toBeChecked();
-  await expect(page.getByText('Counting turned off').first()).toBeVisible();
+  await expect(
+    page.getByText('Install stats turned off').first(),
+  ).toBeVisible();
+  await privacy.locator('summary', { hasText: 'Details' }).click();
+  await privacy
+    .locator('summary', { hasText: 'What else Row-Bot contacts' })
+    .click();
   await privacy.scrollIntoViewIfNeeded();
   await shoot(page, info, 'privacy-off');
 
-  await privacy.getByRole('button', { name: 'Delete…' }).click();
+  await privacy.locator('summary', { hasText: 'Details' }).click();
+  await privacy.getByRole('button', { name: 'Delete what was sent…' }).click();
   const confirm = page.getByRole('alertdialog', {
-    name: 'Delete counted data?',
+    name: 'Delete what was sent?',
   });
-  await expect(confirm).toContainText('turns counting off');
-  await shoot(page, info, 'delete-counted-data');
+  await expect(confirm).toContainText('turns install stats off');
+  await shoot(page, info, 'delete-what-was-sent');
   await confirm.getByRole('button', { name: 'Delete' }).click();
   await expect(
-    page.getByText('Counted data deleted. Counting is off.').first(),
+    page.getByText('Deleted what was sent. Install stats are off.').first(),
   ).toBeVisible();
-  await expect(privacy.getByRole('button', { name: 'Delete…' })).toHaveCount(0);
+  await expect(
+    privacy.getByRole('button', { name: 'Delete what was sent…' }),
+  ).toHaveCount(0);
   const requests = await sent(page);
   expect(requests.map((request) => request.path)).toEqual([
     '/v1/ping',

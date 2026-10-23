@@ -2681,7 +2681,7 @@ export class ClientController {
         throw clientError({ code: 'capability_unavailable' });
       return this.transport.setHourlyConnectionChecks(enabled, signal);
     });
-  /** The installation count (N6): the card before the first chat and Settings › System › Privacy. */
+  /** Install stats (N6): Settings › System › Privacy, the only place they show. */
   installCount = (signal?: AbortSignal) =>
     this.query(() => this.transport.installCount?.(signal));
   chooseInstallCount = (enabled: boolean) =>

@@ -1,4 +1,4 @@
-"""The installation count (N6) against a loopback fake collector: disclosed first, off in one click.
+"""Install stats (N6) against a loopback fake collector: on by default, off in one click.
 
 Each test runs in its own data folder; the clock is passed to ``tick`` so a "day" never waits. The collector
 answers each request with the next reply in its script (the last one repeats), as the Worker does: 204 for
@@ -68,44 +68,32 @@ def _pings(server) -> list[dict]:
     return _sent(server, "/v1/ping")
 
 
-def test_nothing_is_sent_before_the_disclosure(profile, collector):
-    view = install_count.view()
-    assert view["available"] and view["needs_disclosure"] and view["enabled"]
-    for day in range(30):
-        install_count.tick(T0 + day * DAY)
-    assert collector.seen == []
-    # The ID is made only once counting is allowed: a server nobody opened has none.
-    assert not (profile / install_count.STATE_FILE).exists()
-    assert install_count.view()["can_delete"] is False
-
-
-def test_a_headless_server_nobody_opened_never_sends(profile, collector, monkeypatch):
-    """The real scheduler on a server whose card no device has shown: it runs and sends nothing."""
-    rounds = threading.Event()
-    real_tick = install_count.tick
-
-    def counted_tick(now=None):
-        try:
-            return real_tick(now)
-        finally:
-            rounds.set()
-
-    monkeypatch.setattr(install_count, "tick", counted_tick)
-    monkeypatch.setattr(install_count, "_START_DELAY_SEC", 0)
-    install_count.start()
-    assert rounds.wait(PROMPTLY)
-    thread = install_count._thread
-    install_count.stop()
-    thread.join(PROMPTLY)
-    assert not thread.is_alive()
-    assert collector.seen == []
-    assert not (profile / install_count.STATE_FILE).exists()
+def test_on_by_default_it_sends_after_the_start_delay(profile, monkeypatch):
+    """The real scheduler on a fresh installation, a headless server included: nothing to answer first."""
+    with _collector(monkeypatch, HOLD) as collector:
+        view = install_count.view()
+        assert view["available"] and view["enabled"] and view["can_delete"] is False
+        # Before the start delay is over nothing is sent, and there is no ID yet.
+        assert collector.seen == [] and not (profile / install_count.STATE_FILE).exists()
+        monkeypatch.setattr(install_count, "_START_DELAY_SEC", 0)
+        monkeypatch.setattr(install_count, "_START_JITTER_SEC", 0)
+        install_count.start()
+        # start() came back while the first count waits for its answer: start-up never waits.
+        held = collector.held(0)
+        assert held.path == "/v1/ping"
+        thread = install_count._thread
+        assert thread is not None and thread.daemon
+        # Row-Bot stopping cuts the count on its way.
+        install_count.stop()
+        assert held.hung_up.wait(PROMPTLY)
+        thread.join(PROMPTLY)
+        assert not thread.is_alive()
+        assert _saved(profile)["install"] == json.loads(held.body)["install"]
 
 
 def test_a_count_says_exactly_the_allowlist(profile, collector):
     from row_bot.version import __version__
 
-    install_count.choose(True)
     install_count.tick(T0)
     assert [(item.method, item.path) for item in collector.seen] == [("POST", "/v1/ping")]
     ping = json.loads(collector.seen[0].body)
@@ -151,8 +139,7 @@ def test_off_sends_nothing(profile, collector):
     for day in range(10):
         install_count.tick(T0 + day * DAY)
     assert collector.seen == []
-    view = install_count.view()
-    assert view["enabled"] is False and view["needs_disclosure"] is False
+    assert install_count.view()["enabled"] is False
 
 
 def test_off_cuts_a_count_on_its_way(profile, monkeypatch):
@@ -198,22 +185,6 @@ def test_a_failure_waits_for_the_next_daily_slot(profile, monkeypatch):
         assert install_count.view()["last_sent_on"] is not None
 
 
-def test_start_up_never_waits_for_the_count(profile, monkeypatch):
-    """The scheduler is its own thread; Row-Bot stopping cuts a count on its way."""
-    with _collector(monkeypatch, HOLD) as collector:
-        install_count.choose(True)
-        monkeypatch.setattr(install_count, "_START_DELAY_SEC", 0)
-        install_count.start()
-        # start() came back while the count waits for its answer.
-        held = collector.held(0)
-        thread = install_count._thread
-        assert thread is not None and thread.daemon
-        install_count.stop()
-        assert held.hung_up.wait(PROMPTLY)
-        thread.join(PROMPTLY)
-        assert not thread.is_alive()
-
-
 def test_an_existing_off_survives_an_upgrade_and_a_restore(profile, collector, monkeypatch, tmp_path):
     install_count.choose(True)
     install_count.tick(T0)
@@ -224,7 +195,7 @@ def test_an_existing_off_survives_an_upgrade_and_a_restore(profile, collector, m
     monkeypatch.setattr("row_bot.version.__version__", "9.9.0")
     view = install_count.view()
     assert view["version"] == "9.9.0"
-    assert view["enabled"] is False and view["needs_disclosure"] is False and view["can_delete"] is True
+    assert view["enabled"] is False and view["can_delete"] is True
     install_count.tick(T0 + 5 * DAY)
     assert len(_pings(collector)) == 1
 
@@ -278,7 +249,6 @@ def test_the_environment_switch_turns_it_off(profile, collector, monkeypatch):
     monkeypatch.setenv(install_count.ENV, "0")
     view = install_count.view()
     assert view["available"] is False and view["turned_off_here"] is True
-    assert view["needs_disclosure"] is False
     install_count.choose(True)
     install_count.tick(T0)
     install_count.start()
@@ -287,10 +257,19 @@ def test_the_environment_switch_turns_it_off(profile, collector, monkeypatch):
     assert not (profile / install_count.STATE_FILE).exists()
 
 
+def test_the_environment_switch_stops_an_installation_that_was_sending(profile, collector, monkeypatch):
+    install_count.tick(T0)
+    assert len(_pings(collector)) == 1
+    monkeypatch.setenv(install_count.ENV, "off")
+    for day in range(1, 5):
+        install_count.tick(T0 + day * DAY)
+    assert len(_pings(collector)) == 1
+
+
 def test_dormant_while_no_collector_is_set(profile, monkeypatch):
     monkeypatch.setattr(install_count, "COLLECTOR_URL", "")
     view = install_count.view()
-    assert view["available"] is False and view["needs_disclosure"] is False
+    assert view["available"] is False
     assert view["turned_off_here"] is False and view["service"] == ""
     install_count.choose(True)
     install_count.tick(T0)
@@ -317,10 +296,13 @@ def test_the_id_is_derived_from_the_secret_as_the_collector_checks_it():
     assert install_count.install_id("ab" * 32) == "1144938174f096fa7ad56132be06b552"
 
 
-def test_a_damaged_file_asks_again_before_counting(profile, collector):
+def test_a_damaged_file_sends_nothing_because_it_may_hold_an_off(profile, collector):
     install_count.choose(False)
     (profile / install_count.STATE_FILE).write_text("{not json", encoding="utf-8")
-    view = install_count.view()
-    assert view["needs_disclosure"] is True
+    assert install_count.view()["enabled"] is False
     install_count.tick(T0)
     assert collector.seen == []
+    # Setting the switch again starts from a clean file.
+    install_count.choose(True)
+    install_count.tick(T0 + 60)
+    assert len(_pings(collector)) == 1

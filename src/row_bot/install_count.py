@@ -1,29 +1,30 @@
-"""Counting active installations (N6): disclosed first, on by default, off in one click.
+"""Install stats (N6): counting active installations. On by default, documented, off in one click.
 
-Row-Bot's maker counts the installations reporting in the last 7 and 15 days. Once the person has
-seen what is sent (the card before the first chat, or the same card once after updating) and left
-counting on, Row-Bot's server process sends ``POST <collector>/v1/ping`` with exactly::
+Row-Bot's maker counts the installations reporting in the last 7 and 15 days. With a collector set,
+Row-Bot's server process sends ``POST <collector>/v1/ping`` with exactly::
 
     {"schema": 1, "install": "<random 128-bit id>", "version": "5.3.0", "os": "windows|macos|linux|docker"}
 
-on the first allowed start, then at most once every 24 hours while it runs, 0-60 minutes after the
-24 hours. Nothing else is sent: no IP field, location, account, machine name, prompts, files, tools,
-models or usage. The collector is ``services/install-count`` (a Cloudflare Worker with D1).
+on the first start (after the start-up delay and up to an hour of jitter), then at most once every 24
+hours while it runs, 0-60 minutes after the 24 hours. Nothing else is sent: no IP field, location,
+account, machine name, prompts, files, tools or models. The collector is ``services/install-count``
+(a Cloudflare Worker with D1). The owner's decision (N6): on by default, shown only in Settings ›
+System › Privacy, and explained on the docs' privacy page and in the release notes.
 
-- Dormant while ``COLLECTOR_URL`` is empty: no card, no ID, nothing sent. The owner fills it in once
-  the collector is deployed.
-- ``ROW_BOT_INSTALL_COUNT=0`` turns it off (Docker, servers): no card, no ID, nothing sent.
-- Nothing is sent before the disclosure has been seen, so a headless server nobody opened never sends.
-- The ID and its deletion secret are made only once counting is allowed, from random bytes, never from
-  the machine. The ID is the first 128 bits of SHA-256 over the secret: a ping carries nothing more,
-  and the collector can check a deletion without keeping any secret.
+- Dormant while ``COLLECTOR_URL`` is empty: no ID, nothing sent, nothing shown. The owner fills it in
+  once the collector is deployed.
+- ``ROW_BOT_INSTALL_COUNT=0`` (or ``false``, ``off``, ``no``) turns it off: no ID, nothing sent.
+- The ID and its deletion secret are made at the first send, from random bytes, never from the
+  machine. The ID is the first 128 bits of SHA-256 over the secret: a ping carries nothing more, and
+  the collector can check a deletion without keeping any secret.
 - Both live in ``install_count.json`` in the data folder (a backup never holds it and a restore never
   touches it, ``profile_restore.SECRET_ENTRIES``). They are never logged, and never in diagnostics or
-  exports.
-- Off stops at once: a request on its way is cut (the cancellable HTTP client), and nothing pending is
-  kept. On again reuses the same ID; nothing is backfilled.
-- "Delete counted data" turns counting off, then asks the collector to delete this installation's
-  rows with the ID and the secret; once it has, the ID and the secret are forgotten.
+  exports. A file that can't be read sends nothing: it may hold an off.
+- Off ("Share install stats" in Settings) stops at once: a request on its way is cut (the cancellable
+  HTTP client), and nothing pending is kept. Off is kept across restarts, updates and repairs. On again
+  reuses the same ID; nothing is backfilled.
+- "Delete what was sent…" turns it off, then asks the collector to delete this installation's rows
+  with the ID and the secret; once it has, the ID and the secret are forgotten.
 - It never blocks or slows anything: the scheduler is its own thread, and a failure waits for the
   next daily slot.
 """
@@ -54,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 #: Where the count goes, ``https://row-bot-count.<account>.workers.dev``. Empty: the feature is dormant.
 COLLECTOR_URL = ""
-#: ``0`` (or ``false``, ``off``, ``no``) turns counting off for this installation.
+#: ``0`` (or ``false``, ``off``, ``no``) turns install stats off for this installation.
 ENV = "ROW_BOT_INSTALL_COUNT"
 SCHEMA = 1
 STATE_FILE = "install_count.json"
@@ -62,6 +63,7 @@ STATE_FILE = "install_count.json"
 _START_DELAY_SEC = 60
 _DAY_SEC = 24 * 60 * 60
 _JITTER_SEC = 60 * 60
+_START_JITTER_SEC = 60 * 60
 _IDLE_SEC = 6 * 60 * 60
 _TIMEOUT_SEC = 10.0
 _ID_PREFIX = b"row-bot-install-count:"
@@ -78,7 +80,6 @@ _sending: CancellationScope | None = None
 @dataclass
 class _State:
     enabled: bool = True
-    seen: bool = False
     install: str = ""
     secret: str = ""
     # The next daily slot (epoch seconds); None until the first attempt.
@@ -162,19 +163,18 @@ def _hex(value: object, length: int) -> str:
 
 
 def _load() -> _State:
-    """The saved state; one that can't be read asks again before anything is sent."""
+    """The saved state: on by default; a file that can't be read sends nothing (it may hold an off)."""
     try:
         raw = json.loads(_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return _State()
     except (OSError, ValueError):
-        logger.warning("The installation count's settings couldn't be read; Row-Bot asks again before counting")
-        return _State()
+        raw = None
     if not isinstance(raw, dict):
-        return _State()
+        logger.warning("Install stats settings couldn't be read; nothing is sent until the switch is set again")
+        return _State(enabled=False)
     state = _State(
         enabled=raw.get("enabled") is not False,
-        seen=raw.get("seen") is True,
         last_sent=raw["last_sent"] if isinstance(raw.get("last_sent"), str) else "",
     )
     due = raw.get("next_due")
@@ -209,7 +209,7 @@ def _today(now: float) -> str:
 
 
 def view() -> dict[str, Any]:
-    """Settings and the card: whether counting can happen, the switch, and the disclosure's facts."""
+    """Settings › System › Privacy: whether install stats can be sent here, the switch, and the facts."""
     url = collector()
     with _lock:
         state = _load()
@@ -217,7 +217,6 @@ def view() -> dict[str, Any]:
         "available": url is not None and not turned_off_here(),
         "turned_off_here": url is not None and turned_off_here(),
         "enabled": state.enabled,
-        "needs_disclosure": url is not None and not turned_off_here() and not state.seen,
         "service": urllib.parse.urlsplit(url).netloc if url else "",
         "version": _version(),
         "os": os_name(),
@@ -227,12 +226,12 @@ def view() -> dict[str, Any]:
 
 
 def choose(enabled: bool) -> dict[str, Any]:
-    """The person's choice, from the card's Continue or the Privacy switch (either shows what is sent)."""
+    """The "Share install stats" switch."""
     if not active():
         return view()
     with _lock:
         state = _load()
-        state.seen, state.enabled = True, bool(enabled)
+        state.enabled = bool(enabled)
         _save(state)
         if not enabled:
             _cut()
@@ -247,7 +246,7 @@ def delete_counted() -> dict[str, Any]:
         state = _load()
         if url is None or not state.install:
             return {"outcome": "deleted", "snapshot": view()}
-        state.seen, state.enabled = True, False
+        state.enabled = False
         _save(state)
         _cut()
         body = {"schema": SCHEMA, "install": state.install, "secret": state.secret}
@@ -287,11 +286,11 @@ def _post(url: str, body: dict[str, Any], scope: CancellationScope) -> bool:
             response = client.post(url, json=body)
     except (httpx.HTTPError, RequestStopped, OSError) as exc:
         # The address and the error's kind only: never the body, the ID or the secret.
-        logger.debug("The installation count didn't reach %s (%s)", urllib.parse.urlsplit(url).netloc,
+        logger.debug("Install stats didn't reach %s (%s)", urllib.parse.urlsplit(url).netloc,
                      type(exc).__name__)
         return False
     if not 200 <= response.status_code < 300:
-        logger.debug("The installation count was refused (HTTP %s)", response.status_code)
+        logger.debug("Install stats were refused (HTTP %s)", response.status_code)
         return False
     return True
 
@@ -303,7 +302,7 @@ def tick(now: float | None = None) -> float:
     url = collector()
     with _lock:
         state = _load()
-        if url is None or turned_off_here() or not state.seen or not state.enabled:
+        if url is None or turned_off_here() or not state.enabled:
             return _IDLE_SEC
         if state.next_due is not None and now < state.next_due:
             return min(state.next_due - now, _IDLE_SEC)
@@ -331,13 +330,14 @@ def tick(now: float | None = None) -> float:
 
 
 def _loop() -> None:
-    if _stop.wait(_START_DELAY_SEC):
+    # Off the start-up path, and up to an hour later so installations don't all send at once.
+    if _stop.wait(_START_DELAY_SEC + random.uniform(0, _START_JITTER_SEC)):
         return
     while not _stop.is_set():
         try:
             wait = tick()
         except Exception:
-            logger.debug("The installation count round failed", exc_info=True)
+            logger.debug("The install stats round failed", exc_info=True)
             wait = _IDLE_SEC
         _wake.wait(wait)
         _wake.clear()

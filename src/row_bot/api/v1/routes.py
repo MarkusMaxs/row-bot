@@ -5619,7 +5619,7 @@ def create_router(
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
 
-    # The installation count (N6): the card before the first chat and Settings › System › Privacy.
+    # Install stats (N6): Settings › System › Privacy.
     @router.get("/system/install-count")
     async def install_count_snapshot(request: Request) -> JSONResponse:
         await session(request)

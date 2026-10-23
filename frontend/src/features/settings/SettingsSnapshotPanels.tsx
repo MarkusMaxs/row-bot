@@ -2271,7 +2271,7 @@ export function SystemSnapshotPanel({
   part?: 'system' | 'access';
   /** Access › Advanced › Network: listen mode, addresses, Tailscale. */
   network?: ReactNode;
-  /** System › Privacy: the installation count and what else Row-Bot contacts (N6). */
+  /** System › Privacy: install stats and what else Row-Bot contacts (N6). */
   privacy?: ReactNode;
 }) {
   const appAvailability = useSyncExternalStore(

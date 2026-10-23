@@ -2127,12 +2127,11 @@ it.each<SettingsLeafId>([
       getSnapshot: () => state,
       subscribe: () => () => {},
       settingsSnapshot: async () => everyRow,
-      // System › Privacy reads the installation count (N6) on its own.
+      // System › Privacy reads install stats (N6) on its own.
       installCount: async () => ({
         available: true,
         turned_off_here: false,
         enabled: true,
-        needs_disclosure: false,
         service: 'row-bot-count.row-bot.workers.dev',
         version: '5.3.0',
         os: 'windows',

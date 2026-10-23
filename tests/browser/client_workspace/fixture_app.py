@@ -4989,10 +4989,10 @@ def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
     return {"ok": True}
 
 
-# ── N6: counting active installations ──
-# Dormant here unless a spec turns it on, so no other spec ever meets the card. On, it names a
-# realistic service address and a fake send that only records what would have gone: nothing
-# leaves this computer.
+# ── N6: install stats ──
+# Dormant here unless a spec turns it on, so no other spec ever meets it. On, it names a realistic
+# service address and a fake send that only records what would have gone: nothing leaves this
+# computer.
 from row_bot import install_count as _install_count  # noqa: E402
 
 _install_count.COLLECTOR_URL = ""
@@ -5006,7 +5006,7 @@ def _n6_post(url: str, body: dict, _scope) -> bool:
     return True
 
 
-# The card's screenshots show the workspace behind it: realistic conversation names while N6 runs.
+# The Privacy screenshots show the sidebar: realistic conversation names while N6 runs.
 _N6_NAMES = {"p1-browser-a": ("Phase 1 conversation A", "Plan the Lisbon offsite"),
              "p1-browser-b": ("Phase 1 conversation B", "Draft the Q4 board update")}
 
@@ -5022,7 +5022,7 @@ def _n6_name_conversations(realistic: bool) -> None:
 
 @app.post("/__n6_fixture/install-count/{state}")
 def n6_install_count(state: str, x_fixture_token: str = Header(default="")) -> dict:
-    """fresh: the card shows (nothing chosen yet); on/off: chosen, with one count already sent;
+    """fresh: on by default, nothing sent yet; on/off: one count already sent, then the switch;
     restore: dormant again."""
     predecessor._authorize(x_fixture_token)
     (predecessor.DATA / _install_count.STATE_FILE).unlink(missing_ok=True)
@@ -5033,12 +5033,11 @@ def n6_install_count(state: str, x_fixture_token: str = Header(default="")) -> d
         _n6_name_conversations(False)
         return {"state": state}
     if state not in {"fresh", "on", "off"}:
-        raise HTTPException(status_code=404, detail="Unknown installation count state")
+        raise HTTPException(status_code=404, detail="Unknown install stats state")
     _install_count.COLLECTOR_URL = _N6_SERVICE
     _install_count._post = _n6_post
     _n6_name_conversations(True)
     if state != "fresh":
-        _install_count.choose(True)
         _install_count.tick()
         if state == "off":
             _install_count.choose(False)

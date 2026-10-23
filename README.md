@@ -263,11 +263,11 @@ npm --prefix frontend run check                     # client lint, types, tests,
 
 Row-Bot has no account system and no hosted inference; conversations, memory
 and settings stay on your machine, and provider calls go only to the provider
-or endpoint you choose. Its only first-party telemetry is the installation
-count: once a day, a random ID, the Row-Bot version and the system, so its
-maker can count the installations reporting in the last 7 and 15 days. Row-Bot
-shows exactly what it sends before the first send; turn it off in one click in
-Settings › System › Privacy, or with `ROW_BOT_INSTALL_COUNT=0` on a server. The opt-in Computer Use beta relies on Cua
+or endpoint you choose. Its only first-party telemetry is install stats, on
+by default: once a day, a random ID, the Row-Bot version and the system,
+nothing else, so its maker can see how many installations are in use. Turn
+**Share install stats** off in one click in Settings › System › Privacy, or set
+`ROW_BOT_INSTALL_COUNT=0` on a server or in Docker. The opt-in Computer Use beta relies on Cua
 Driver, whose upstream telemetry is disclosed and must be accepted first; see
 [privacy and safety](https://row-bot.ai/docs/privacy-safety).
 
