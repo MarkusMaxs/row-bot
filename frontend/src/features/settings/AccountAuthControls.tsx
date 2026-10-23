@@ -9,13 +9,15 @@ import type {
   AccountAuthCommand,
   AccountAuthReceipt,
   AccountAuthSnapshot,
+  PlanSignIn,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { safeExternalUrl } from '../../platform/types';
 import { useRuntime } from '../../runtime';
 import { Button } from '../../ui/primitives';
+import SignInWait from '../apps/SignInWait';
 
-type Account = 'google' | 'x';
+type Account = 'google' | 'x' | 'microsoft';
 type Owner = {
   load: (account: Account) => Promise<AccountAuthSnapshot>;
   send: (
@@ -35,12 +37,45 @@ function saved(account: Account): string {
   const value = sessionStorage.getItem(pendingKey(account)) ?? '';
   return /^[0-9a-f-]{36}$/.test(value) ? value : '';
 }
-const NAMES: Record<Account, string> = { google: 'Google', x: 'X' };
+const NAMES: Record<Account, string> = {
+  google: 'Google',
+  x: 'X',
+  microsoft: 'Microsoft',
+};
 
 /** The provider's sign-in page from a receipt: an https address, or ''. */
 function signInPage(receipt: AccountAuthReceipt): string {
   const url = safeExternalUrl(receipt.authorization_url ?? '');
   return receipt.phase === 'running' && url?.startsWith('https://') ? url : '';
+}
+
+/**
+ * Microsoft's code while a sign-in from another device waits for it (F27):
+ * the code, its page and how long it still works, as an app's sign-in shows
+ * it. null for any other receipt.
+ */
+function signInCode(receipt: AccountAuthReceipt): PlanSignIn | null {
+  if (receipt.phase !== 'running' || !receipt.device_code) return null;
+  const page = safeExternalUrl(receipt.device_code.verification_uri);
+  if (!page?.startsWith('https://')) return null;
+  return {
+    method: 'oauth_client',
+    delivery: 'device',
+    device: { ...receipt.device_code, verification_uri: page },
+    expires_in: receipt.expires_in ?? null,
+  };
+}
+
+/**
+ * Microsoft's code, brought into view as it appears: it shows with the
+ * account's row, and the person may have started it from the guide below.
+ */
+function CodeWait({ children }: { children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
+  return <div ref={box}>{children}</div>;
 }
 
 /**
@@ -75,7 +110,7 @@ export type AccountAuth = {
   /** An action is running or its outcome is still being checked. */
   locked: boolean;
   check: () => void;
-  /** Sign in (again) in the browser. */
+  /** Sign in (again): in the browser here, or with a code from another device. */
   start: () => void;
   /** Asks to remove the local tokens (confirmed in `feedback`). */
   disconnect: () => void;
@@ -85,6 +120,8 @@ export type AccountAuth = {
    */
   removeX: (account: { id: string; handle: string }) => void;
   importFile: (file: File | undefined) => void;
+  /** Saves the person's own Microsoft app: its client ID and, optionally, its tenant. */
+  saveApp: (clientId: string, tenant: string) => void;
   /** Confirmations, progress and outcomes, for under the row. */
   feedback: ReactNode;
 };
@@ -110,6 +147,8 @@ export function useAccountAuth(
   const [phase, setPhase] = useState<AccountAuthReceipt['phase'] | ''>('');
   /** The provider's page while a sign-in through Row-Bot's public address waits. */
   const [page, setPage] = useState('');
+  /** Microsoft's code while a sign-in from another device waits. */
+  const [code, setCode] = useState<PlanSignIn | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -147,6 +186,7 @@ export function useAccountAuth(
         setSnapshot(result.snapshot);
         setPhase(result.phase);
         setPage(signInPage(result));
+        setCode(signInCode(result));
         setNotice(result.message);
         setError('');
         if (result.phase === 'running' || result.phase === 'cancel_requested') {
@@ -203,6 +243,7 @@ export function useAccountAuth(
       setPhase(result.phase);
       const url = signInPage(result);
       setPage(url);
+      setCode(signInCode(result));
       // Its link below stays for a browser that blocks the page opening.
       if (url) owner.open?.(url);
       setNotice(result.message);
@@ -222,6 +263,8 @@ export function useAccountAuth(
           'account_confirmation_required',
           'account_callback_unavailable',
           'account_redirect_mismatch',
+          'account_microsoft_app_invalid',
+          'account_device_code_unavailable',
         ].includes(issue.code)
       ) {
         sessionStorage.removeItem(pendingKey(account));
@@ -254,6 +297,7 @@ export function useAccountAuth(
       const result = await owner.cancel(account, pending);
       setPhase(result.phase);
       setPage(signInPage(result));
+      setCode(signInCode(result));
       setNotice(result.message);
     } catch (cause) {
       setError(clientError(cause).message);
@@ -309,7 +353,22 @@ export function useAccountAuth(
           </div>
         </div>
       )}
-      {pending && (
+      {pending && code && (
+        <CodeWait>
+          <SignInWait
+            name={name}
+            signIn={code}
+            busy={busy}
+            stop={
+              <Button disabled={busy} onClick={() => void cancel()}>
+                Stop
+              </Button>
+            }
+            onFinish={async () => undefined}
+          />
+        </CodeWait>
+      )}
+      {pending && !code && (
         <div role="status" className="action-cluster">
           <span>
             {phase === 'running' && page
@@ -349,6 +408,7 @@ export function useAccountAuth(
                   setSnapshot(result.snapshot);
                   setPhase(result.phase);
                   setPage(signInPage(result));
+                  setCode(signInCode(result));
                   setNotice(result.message);
                   setMissingReceipt(false);
                   if (!['running', 'cancel_requested'].includes(result.phase)) {
@@ -384,13 +444,15 @@ export function useAccountAuth(
         </div>
       )}
       {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
+      {notice && !code && <p role="status">{notice}</p>}
     </>
   );
   return {
     snapshot,
     canSignIn:
-      snapshot?.sign_in === 'this_computer' || snapshot?.sign_in === 'link',
+      snapshot?.sign_in === 'this_computer' ||
+      snapshot?.sign_in === 'link' ||
+      snapshot?.sign_in === 'device',
     blocked: signInBlocked(snapshot),
     locked: busy || Boolean(pending),
     check: () => void send('check'),
@@ -404,6 +466,11 @@ export function useAccountAuth(
       setConfirmDisconnect(true);
     },
     importFile: (file) => void importFile(file),
+    saveApp: (clientId, tenant) =>
+      void send(
+        'import_credentials',
+        JSON.stringify({ client_id: clientId.trim(), tenant: tenant.trim() }),
+      ),
     feedback,
   };
 }

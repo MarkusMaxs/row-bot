@@ -42,6 +42,7 @@ const VOICE = open('voice', 'Voice settings', 'dictation');
 const ACCOUNTS = open('apps', 'Apps');
 const GITHUB = open('apps/github', 'GitHub');
 const GOOGLE = open('apps/google', 'Google');
+const OUTLOOK = open('apps/outlook', 'Outlook');
 const CHANNELS = open('apps?category=communication', 'Apps');
 const PLUGINS = open('apps', 'Apps');
 const MCP = open('apps', 'Apps');
@@ -405,6 +406,17 @@ const CATALOG: Record<string, Entry> = {
     'Signing in from here needs Row-Bot’s public HTTPS address. Add it in Devices & remote access, or sign in from the Row-Bot desktop app on the computer it runs on.',
     'review',
     REMOTE_ACCESS,
+  ],
+  // Outlook: the person's own Microsoft app.
+  account_microsoft_app_invalid: [
+    'Check the Application (client) ID: it looks like 1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f, on your app’s Overview in Microsoft Entra. A tenant is a Directory (tenant) ID or a domain.',
+    'review',
+    OUTLOOK,
+  ],
+  account_device_code_unavailable: [
+    'Microsoft didn’t give a sign-in code. In your app’s Authentication settings, turn on Allow public client flows, then try again.',
+    'review',
+    OUTLOOK,
   ],
   account_redirect_mismatch: [
     'This Google client doesn’t list Row-Bot’s sign-in address. Create a Web application client with the redirect address Google’s guide shows, then choose its file.',

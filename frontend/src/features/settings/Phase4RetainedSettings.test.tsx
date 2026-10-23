@@ -289,6 +289,12 @@ const snapshot = {
       post_operations: ['x_post_tweet'],
       engage_operations: ['x_like'],
     },
+    outlook_mail: { ...account, account_id: 'outlook_mail', enabled: false },
+    outlook_calendar: {
+      ...account,
+      account_id: 'outlook_calendar',
+      enabled: false,
+    },
   },
   utilities: {
     availability: 'available',
@@ -1528,7 +1534,7 @@ it('renders System, Tracker, Accounts, and Utilities controls from one snapshot'
   const accounts = renderSetting('accounts');
   // One row per account with one status (B263); each setup guide folds.
   expect(accounts.container.querySelectorAll('.settings-account')).toHaveLength(
-    3,
+    4,
   );
   expect(screen.getByText('Not checked yet')).toBeVisible();
   fireEvent.click(screen.getByText('How to set up GitHub'));
@@ -1581,7 +1587,9 @@ it('updates the Accounts header after Check without reloading the page (B263)', 
     revision: 'settings-checked',
     accounts: google('connected'),
   };
-  const auth = (account: 'google' | 'x'): AccountAuthSnapshot => ({
+  const auth = (
+    account: AccountAuthSnapshot['account'],
+  ): AccountAuthSnapshot => ({
     schema_version: 1,
     account,
     revision: 'a'.repeat(64),
@@ -1594,9 +1602,14 @@ it('updates the Accounts header after Check without reloading the page (B263)', 
   const controller = {
     subscribe: () => () => undefined,
     getSnapshot: () => state,
-    accountAuth: vi.fn(async (account: 'google' | 'x') => auth(account)),
+    accountAuth: vi.fn(async (account: AccountAuthSnapshot['account']) =>
+      auth(account),
+    ),
     accountAuthCommand: vi.fn(
-      async (_account: 'google' | 'x', command: AccountAuthCommand) => ({
+      async (
+        _account: AccountAuthSnapshot['account'],
+        command: AccountAuthCommand,
+      ) => ({
         schema_version: 1,
         command_id: command.command_id,
         account: command.account,
