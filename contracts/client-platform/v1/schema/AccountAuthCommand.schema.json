@@ -4,7 +4,8 @@
     "account": {
       "enum": [
         "google",
-        "x"
+        "x",
+        "microsoft"
       ],
       "title": "Account",
       "type": "string"

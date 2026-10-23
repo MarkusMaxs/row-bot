@@ -283,6 +283,8 @@ _READ_ONLY_DEFAULT_DENY_TOOLS = {
     "gmail",
     "goal",
     "image_gen",
+    "outlook_calendar",
+    "outlook_mail",
     "row_bot_updater",
     "task",
     "tracker",

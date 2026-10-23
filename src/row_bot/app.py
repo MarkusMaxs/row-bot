@@ -444,7 +444,8 @@ def _check_oauth_tokens(at_startup: bool = False) -> list[str]:
     from row_bot.tools import registry as _reg
     warnings: list[str] = []
 
-    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)")]:
+    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)"),
+                               ("outlook_mail", "Outlook"), ("outlook_calendar", "Outlook calendar")]:
         if not _reg.is_enabled(tool_name):
             continue
         tool = _reg.get_tool(tool_name)

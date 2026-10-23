@@ -59,7 +59,9 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
 # favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
 # Row-Bot's questions with options (asked, answered, collapsed; a helper's and a workflow's),
-# and a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards.
+# a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
+# and Outlook through your own Microsoft app (its guide, a code from another device, its states and
+# cards) with Microsoft 365's tenant step and a failed step in words.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -88,6 +90,7 @@ BROWSER_SMOKE_SPECS = (
     "question-cards",
     "workflow-review",
     "x-accounts",
+    "outlook",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (

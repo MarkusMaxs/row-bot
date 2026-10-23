@@ -425,6 +425,8 @@ function Detail({
   if (!detail || !entry) return <Skeleton label="Opening details" />;
   const about = detail.about;
   const app = entry.app ? catalog.get(entry.app.id) : undefined;
+  // The app its note points to ("For one mailbox, use Outlook").
+  const seeAlso = app?.see_also ? catalog.get(app.see_also) : undefined;
   const status = statusOf(entry);
   const action = entry.next_action;
   const recovering = entry.blockers.some((b) => RECOVERING.includes(b.code));
@@ -592,6 +594,22 @@ function Detail({
       <SettingsGroup title="Overview">
         <div className="app-section">
           <p>{(asApp(entry) && app?.summary) || entry.description}</p>
+          {asApp(entry) && app?.note && (
+            <p className="settings-help">
+              {app.note}
+              {seeAlso && (
+                <>
+                  {' '}
+                  <Link
+                    className="settings-link"
+                    to={`/settings/apps/${seeAlso.id}`}
+                  >
+                    Open {seeAlso.name}
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
           {entry.kind === 'skill' ? (
             <p>
               Use it in chat with <code>{slashOf(entry.name)}</code>

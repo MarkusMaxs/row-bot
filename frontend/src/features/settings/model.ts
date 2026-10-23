@@ -73,7 +73,7 @@ export const settingsKeywords: Record<SettingsLeafId, string> = {
   tools:
     'utilities built-in search web research custom tools api key tavily wolfram',
   skills: 'skill library slash commands instructions clawhub create import',
-  apps: 'integrations mcp plugins packages connectors servers marketplace discover connect catalogs runtimes accounts github google gmail calendar x twitter oauth channels telegram discord slack sms whatsapp messaging',
+  apps: 'integrations mcp plugins packages connectors servers marketplace discover connect catalogs runtimes accounts github google gmail calendar x twitter outlook microsoft office 365 oauth channels telegram discord slack sms whatsapp messaging',
   system:
     'shell commands browser computer use workspace folder logging logs files blocked privacy telemetry',
   access:
@@ -169,6 +169,8 @@ const CONNECTION_APPS: Record<string, string> = {
   calendar: 'google',
   github: 'github',
   x: 'x',
+  outlook: 'outlook',
+  microsoft: 'outlook',
   telegram: 'telegram',
   whatsapp: 'whatsapp',
   discord: 'discord',
@@ -518,6 +520,13 @@ export const settingsRows: SettingsRow[] = [
     label: 'X account',
     keywords: 'twitter',
     href: '/settings/apps/x',
+  },
+  {
+    leaf: 'apps',
+    anchor: 'outlook',
+    label: 'Outlook account',
+    keywords: 'microsoft email mail calendar office 365 exchange',
+    href: '/settings/apps/outlook',
   },
   {
     leaf: 'apps',

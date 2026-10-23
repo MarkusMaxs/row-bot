@@ -179,3 +179,26 @@ def test_default_workflow_profile_uses_task_default_skills_without_task_snapshot
         tasks.DEFAULT_WORKFLOW_AGENT_PROFILE_ID
     )
     assert threads.get_thread_skills_override(thread_id) == ["proactive_agent"]
+
+
+@pytest.mark.parametrize(("capability", "expected"), [
+    ("read_only", ["filesystem"]),  # Outlook can send mail and invitations: a read-only workflow never gets it.
+    ("write_capable", ["filesystem", "outlook_mail", "outlook_calendar"]),
+])
+def test_a_workflow_step_can_use_outlook_only_when_its_profile_can_make_changes(
+    tmp_path, monkeypatch, reload_for_data_dir, capability, expected,
+) -> None:
+    tasks, threads, agent_profiles, _agent_runs, _skills = _fresh_modules(tmp_path, reload_for_data_dir)
+    calls: list[dict] = []
+    _install_fake_agent(monkeypatch, calls)
+    _run_workflow_synchronously(monkeypatch, tasks)
+    profile = agent_profiles.save_agent_profile(
+        slug="workflow_mail", display_name="Workflow mail", description="Mail in workflow runs.",
+        instructions="Summarise the inbox.", tool_policy_json={"capability": capability},
+    )
+    task_id = tasks.create_task("Inbox summary", prompts=["Summarise my unread Outlook email"],
+                                model_override="model:openai:gpt-4o-mini", channels=[],
+                                agent_profile_id=profile["id"], apply_default_skills=False)
+    thread_id = threads.create_thread("Workflow run", thread_id="workflow-outlook-run", seed_default_skills=False)
+    tasks.run_task_background(task_id, thread_id, ["filesystem", "outlook_mail", "outlook_calendar"], notification=False)
+    assert calls[0]["tools"] == expected

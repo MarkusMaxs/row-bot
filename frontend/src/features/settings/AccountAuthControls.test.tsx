@@ -70,6 +70,8 @@ const accounts: Accounts = {
     engage_operations: [],
     callback_url: 'http://127.0.0.1:9/callback',
   }),
+  outlook_mail: item({ account_id: 'outlook_mail' }),
+  outlook_calendar: item({ account_id: 'outlook_calendar' }),
 };
 const github: GitHubAccessSnapshot = {
   schema_version: 1,
@@ -219,7 +221,7 @@ it('shows each account as one row with one status and labelled actions', async (
   // Google counts once, and needs reconnecting because Gmail's sign-in expired.
   expect(screen.getByText('1 connected')).toBeVisible();
   expect(screen.getByText('1 needs reconnecting')).toBeVisible();
-  expect(screen.getByText('1 not connected')).toBeVisible();
+  expect(screen.getByText('2 not connected')).toBeVisible(); // X and Outlook.
   expect(within(row('GitHub')).getByText('Connected')).toBeVisible();
   expect(within(row('Google')).getByText('Needs reconnecting')).toBeVisible();
   expect(within(row('X')).getByText('Not connected')).toBeVisible();

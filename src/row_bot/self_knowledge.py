@@ -128,6 +128,15 @@ FEATURE_MANIFEST: list[dict[str, str]] = [
         "configure": "Settings → Accounts to connect your Google account.",
     },
     {
+        "feature": "Outlook mail & calendar",
+        "keywords": "outlook, microsoft, office 365, microsoft 365, exchange, hotmail, email, calendar, invitations",
+        "description": "Search, read, draft, file and send Outlook email, and manage the Outlook calendar, through the "
+                       "person's own Microsoft app (no client secret). Sending, replying, forwarding, deleting and "
+                       "invitations always ask first. Sign in on this computer, or from a phone with a code.",
+        "configure": "Settings → Apps → Outlook: register an app in Microsoft Entra as the guide shows, paste its "
+                     "client ID, then sign in.",
+    },
+    {
         "feature": "Shell Access",
         "keywords": "shell, terminal, command, script, run, execute, pip, git",
         "description": "Run shell commands on the user's machine. Dangerous commands require approval.",
