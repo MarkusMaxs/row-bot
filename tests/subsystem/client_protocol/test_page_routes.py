@@ -8,6 +8,7 @@ approval is reviewed.
 
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 import pytest
@@ -145,7 +146,17 @@ def test_download_as_html_works_on_its_own_and_the_desktop_window_saves_it(servi
         assert download.status_code == 200, download.text
         body = download.json()
         assert body["file_name"] == "Launch-plan.html"
-        assert '<meta charset="utf-8">' in body["html"] and '"standalone":true' in body["html"]
+        assert '"standalone":true' in body["html"]
+        # Opened from disk there are no headers: the frame's policy comes first, before any of the page.
+        opening = re.match(r'<!doctype html>\n<html><head>\n<meta charset="utf-8">\n'
+                           r'<meta http-equiv="Content-Security-Policy" content="([^"]+)">\n', body["html"])
+        assert opening is not None, body["html"][:300]
+        policy = [part.strip() for part in opening.group(1).split(";")]
+        for directive in ("default-src 'none'", "script-src 'unsafe-inline'", "img-src data: blob:",
+                          "connect-src 'none'", "form-action 'none'", "base-uri 'none'"):
+            assert directive in policy, directive
+        assert not any(part.startswith(("sandbox", "frame-ancestors")) for part in policy)  # A meta can't carry them.
+        assert body["html"].count("<!doctype") == 1 and "<h1>Launch plan</h1>" in body["html"][opening.end():]
         saved = client.post(f"/api/v1/pages/{page}/save", headers=headers, json={"theme": THEME})
         assert saved.status_code == 200, saved.text
         assert (plan["exports"] / "Exports" / "Launch-plan.html").read_text(encoding="utf-8").startswith("<!doctype")

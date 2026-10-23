@@ -73,7 +73,7 @@ THEME_TOKENS = (
     "chart-grid", "chart-axis",
 )
 _COLOUR = re.compile(r"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?")
-CONTENT_SECURITY_POLICY = "; ".join([
+_POLICY = (
     "default-src 'none'",
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
@@ -87,7 +87,10 @@ CONTENT_SECURITY_POLICY = "; ".join([
     "form-action 'none'",
     "frame-ancestors 'self'",
     "sandbox allow-scripts",
-])
+)
+CONTENT_SECURITY_POLICY = "; ".join(_POLICY)
+# A downloaded copy has no headers: the same policy as a meta tag, less what a meta can't carry.
+STANDALONE_POLICY = "; ".join(item for item in _POLICY if not item.startswith(("frame-ancestors", "sandbox")))
 FRAME_HEADERS = {
     "Content-Security-Policy": CONTENT_SECURITY_POLICY,
     "Cache-Control": "no-store",
@@ -573,8 +576,7 @@ def document(page: Page, theme: Any, *, standalone: bool = False) -> str:
         "decisions": decisions_view(page),
         "tokens": {"light": tokens["light"], "dark": tokens["dark"]},
     }
-    parts = ['<meta charset="utf-8">'] if standalone else []
-    parts.append(f'<style id="rowbot-tokens">{_token_css(tokens)}</style>')
+    parts = [f'<style id="rowbot-tokens">{_token_css(tokens)}</style>']
     if "rowbot-style" in page.libraries:
         parts.append(f'<style id="rowbot-style">{_static("rowbot-style.css").decode("utf-8")}</style>')
     shim = _static("rowbot-page.js").decode("utf-8").strip()
@@ -583,6 +585,13 @@ def document(page: Page, theme: Any, *, standalone: bool = False) -> str:
         parts.append(f'<script id="rowbot-charts">{chart_library()}</script>')
     injected = "\n".join(parts)
     html = read_html(page)
+    if standalone:
+        # Opened from disk there are no headers: the policy comes first, before any of the page, so no
+        # script of the page runs without it. The page's own doctype, html and head tags then merge in.
+        html = re.sub(r"\A\s*<!doctype[^>]*>", "", html, flags=re.IGNORECASE)
+        return ('<!doctype html>\n<html><head>\n<meta charset="utf-8">\n'
+                f'<meta http-equiv="Content-Security-Policy" content="{STANDALONE_POLICY}">\n'
+                f"{injected}\n{html}")
     for pattern in (r"<head(?:\s[^>]*)?>", r"<html(?:\s[^>]*)?>"):
         match = re.search(pattern, html, re.IGNORECASE)
         if match:
