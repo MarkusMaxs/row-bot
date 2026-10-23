@@ -35,7 +35,8 @@ CARD_SPECIALIZATIONS = frozenset({
 })
 # A recording of Row-Bot's browser or of the screen a step started or stopped (F2): the result's
 # first line after its approval line names it, and the card follows it by that id.
-_RECORDING_TOOLS = frozenset({"Browser Record", "Computer activity"})  # browser_record, computer_use
+# browser_record, computer_record (and computer_use in conversations from before 5.3).
+_RECORDING_TOOLS = frozenset({"Browser Record", "Screen Record", "Computer activity"})
 _RECORDING_LINE = re.compile(r"Recording (rec-[0-9a-f]{8}): ")
 # A video edit a step started or followed (F3): the result's first line after its approval line names it.
 _VIDEO_EDIT_LINE = re.compile(r"Video edit (edit-[0-9a-f]{8}): ")
@@ -277,8 +278,10 @@ def canonical_tool_name(name: Any) -> str:
     clean = _clean_text(name, MAX_TOOL_NAME_CHARS, fallback="tool")
     if clean.startswith("browser_"):
         return clean.replace("browser_", "Browser ").replace("_", " ").title()
-    if clean == "computer_use":
+    if clean in {"computer", "computer_use"}:  # computer_use: the tool's name before 5.3
         return "Computer activity"
+    if clean == "computer_record":
+        return "Screen Record"
     return clean
 
 
@@ -289,7 +292,7 @@ def is_browser_tool_name(name: Any) -> bool:
 
 def is_computer_tool_name(name: Any) -> bool:
     clean = str(name or "").strip().lower()
-    return clean in {"computer_use", "computer activity"} or clean.startswith(
+    return clean in {"computer", "computer_use", "computer activity"} or clean.startswith(
         "computer ·"
     )
 
@@ -653,7 +656,7 @@ def _process_specialization(name: str, content: Any) -> TraceSpecialization | No
 
 
 def _recording_specialization(name: str, content: Any) -> TraceSpecialization | None:
-    """The recording a browser_record or computer_use step started or stopped, by its handle line."""
+    """The recording a browser_record or computer_record step started or stopped, by its handle line."""
     if canonical_tool_name(name) not in _RECORDING_TOOLS or not isinstance(content, str):
         return None
     first, _newline, rest = content.partition("\n")

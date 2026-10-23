@@ -165,6 +165,66 @@ it('shows live shimmer text for the running step and an approval hold', () => {
   );
 });
 
+it('says in plain words what a computer step in progress is doing', () => {
+  const computing: TranscriptTraceGroup[] = [
+    {
+      ...groups[0],
+      status: 'pending',
+      items: [
+        {
+          ...groups[0].items[0],
+          canonical_name: 'Computer activity',
+          safe_input: '{"action": "type", "text": "Leak under the sink"}',
+          status: 'pending',
+          content_ref: '',
+        },
+      ],
+    },
+  ];
+  const line = () => row().querySelector('.activity-summary-text');
+  // Another device knows only that the computer is in use.
+  const { rerender } = render(
+    <TranscriptTrace conversation="conversation-a" groups={computing} />,
+  );
+  expect(line()).toHaveTextContent(/^Using the computer$/);
+  // The computer's owner sees the app, and the card waiting on them.
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={computing}
+      computer="Using Microsoft Edge"
+    />,
+  );
+  expect(line()).toHaveTextContent(/^Using Microsoft Edge$/);
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={computing}
+      computer="Waiting for your OK"
+      live={{ running: true, waiting: true }}
+    />,
+  );
+  expect(line()).toHaveTextContent(/^Waiting for your OK$/);
+  expect(line()).toHaveAttribute('data-live', 'true');
+  expect(screen.getByRole('status')).toHaveTextContent('Waiting for your OK');
+  // Between steps the turn is still using the app.
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={[
+        {
+          ...computing[0],
+          status: 'succeeded',
+          items: [{ ...computing[0].items[0], status: 'succeeded' }],
+        },
+      ]}
+      computer="Using Microsoft Edge"
+      live={{ running: true }}
+    />,
+  );
+  expect(line()).toHaveTextContent(/^Using Microsoft Edge$/);
+});
+
 it('loads the first public page on step expansion and copies the visible result', async () => {
   render(<TranscriptTrace conversation="conversation-a" groups={groups} />);
   openRow();

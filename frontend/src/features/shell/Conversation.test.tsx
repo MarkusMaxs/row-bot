@@ -535,7 +535,7 @@ it('anchors bounded approval context inline with canonical resolve controls', as
   );
 });
 
-function computerPaused() {
+function computerAsking() {
   activeConversation();
   mock.state.projection = {
     ...mock.state.projection!,
@@ -551,7 +551,7 @@ function computerPaused() {
     {
       cursor: '4',
       event: {
-        event_id: 'event-pause',
+        event_id: 'event-ask',
         type: 'approval.required',
         conversation_id: 'conversation-a',
         projection_revision: '4',
@@ -566,34 +566,38 @@ function computerPaused() {
           status: 'waiting_approval',
           approval_id: 'approval-a',
           action_label: 'Computer activity',
-          reason:
-            'Computer control is paused. Use Resume or Stop in the live panel.',
+          reason: 'Let Row-Bot use Microsoft Edge in this chat?',
         },
       },
     },
   ] as never[];
+}
+
+function computerWorking(patch: Record<string, unknown> = {}) {
   mock.computerUse.mockResolvedValue({
     schema_version: 1,
     conversation_id: 'conversation-a',
     revision: 'c'.repeat(64),
     active: true,
-    state: 'paused',
-    app: 'Calculator',
+    state: 'working',
+    app: 'Microsoft Edge',
+    window: 'HomeServe – Make a claim',
+    doing: 'Clicked "Leak"',
     has_picture: false,
-    approval_id: 'approval-a',
-    can_pause: false,
-    can_resume: true,
+    problem: null,
     can_stop: true,
+    ...patch,
   });
 }
 
-it('shows a paused computer as the computer card in place of the approval card', async () => {
-  computerPaused();
+it('shows what Row-Bot is doing on the computer, with Stop, in the conversation', async () => {
+  activeConversation();
+  computerWorking();
   mock.state.handshake.application_capabilities = ['computer:interactive'];
   mock.computerUseCommand.mockResolvedValue({
     schema_version: 1,
     command_id: crypto.randomUUID(),
-    action: 'computer_use.resume',
+    action: 'computer_use.stop',
     conversation_id: 'conversation-a',
     status: 'completed',
     code: null,
@@ -601,33 +605,67 @@ it('shows a paused computer as the computer card in place of the approval card',
   });
 
   await act(async () => conversation());
-  const card = await screen.findByRole('region', { name: 'Computer use' });
-  expect(card).toHaveTextContent('Using your computer · Calculator');
-  expect(within(card).getByRole('button', { name: 'Stop' })).toBeVisible();
-  // Never both: Resume answers the pause, so no approval card asks again.
-  expect(
-    screen.queryByRole('complementary', { name: /Approval required/ }),
-  ).toBeNull();
-  expect(mock.approval).not.toHaveBeenCalled();
+  const step = await screen.findByRole('region', {
+    name: 'Using Microsoft Edge',
+  });
+  expect(step).toHaveTextContent('Using Microsoft Edge');
+  expect(step).toHaveTextContent('HomeServe – Make a claim');
+  expect(within(step).getByRole('status')).toHaveTextContent('Clicked "Leak"');
   await act(async () =>
-    fireEvent.click(within(card).getByRole('button', { name: 'Resume' })),
+    fireEvent.click(
+      within(step).getByRole('button', { name: 'Stop using the computer' }),
+    ),
   );
   expect(mock.computerUseCommand).toHaveBeenCalledWith(
     'conversation-a',
-    'computer_use.resume',
+    'computer_use.stop',
   );
 });
 
-it('keeps the approval card on another device and never asks about the computer', async () => {
-  computerPaused();
+it('keeps the approval card beside the step while computer use waits for an OK', async () => {
+  computerAsking();
+  computerWorking({ state: 'waiting_approval', doing: '' });
+  mock.state.handshake.application_capabilities = ['computer:interactive'];
   mock.approval.mockResolvedValue({
     id: 'approval-a',
     status: 'pending',
     revision: '0',
     expires_at: '2030-01-01T00:00:00Z',
-    summary: 'Computer control is paused.',
+    summary: 'Pay in Microsoft Edge?',
     action_label: 'Computer activity',
-    reason: 'Computer control is paused. Use Resume or Stop in the live panel.',
+    question: 'Pay in Microsoft Edge?',
+    reason:
+      'Row-Bot will click "Confirm and pay £60" in Microsoft Edge. This can charge you.',
+    risk_class: 'high',
+    scope: 'Only this requested action will be resolved.',
+    safe_argument_summary: '',
+    requesting_trace_id: '',
+    policy_revision: '1',
+    nonce: 'n'.repeat(32),
+  } satisfies ApprovalView);
+
+  await act(async () => conversation());
+  const step = await screen.findByRole('region', {
+    name: 'Using Microsoft Edge',
+  });
+  expect(within(step).getByRole('status')).toHaveTextContent(
+    'Waiting for your OK',
+  );
+  expect(
+    await screen.findByRole('complementary', { name: /Approval required/ }),
+  ).toBeVisible();
+});
+
+it('keeps the approval card on another device and never asks about the computer', async () => {
+  computerAsking();
+  mock.approval.mockResolvedValue({
+    id: 'approval-a',
+    status: 'pending',
+    revision: '0',
+    expires_at: '2030-01-01T00:00:00Z',
+    summary: 'Let Row-Bot use Microsoft Edge in this chat?',
+    action_label: 'Computer activity',
+    reason: 'Let Row-Bot use Microsoft Edge in this chat?',
     risk_class: 'unknown',
     scope: 'Only this requested action will be resolved.',
     safe_argument_summary: '',
@@ -641,7 +679,7 @@ it('keeps the approval card on another device and never asks about the computer'
     await screen.findByRole('complementary', { name: /Approval required/ }),
   ).toBeVisible();
   expect(mock.computerUse).not.toHaveBeenCalled();
-  expect(screen.queryByRole('region', { name: 'Computer use' })).toBeNull();
+  expect(screen.queryByRole('region', { name: /^Using / })).toBeNull();
 });
 
 it('renders assistant Markdown safely and copies only the visible canonical text', async () => {

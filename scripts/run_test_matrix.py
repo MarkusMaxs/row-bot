@@ -52,7 +52,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # providers, restart recovery, the desktop Buddy window, the UI primitives and the
 # approval levels (Hands-off's one-time dialog, the reviewer's notes), background
 # processes (start, view output, stop), Row-Bot's browser (a local address asked
-# for once per chat, screenshots, page sizes, recordings) and video edits and many
+# for once per chat, screenshots, page sizes, recordings), computer use on a fake desktop
+# (its step and live picture, asking first, "Carry on?", a setup problem) and video edits and many
 # images at once (the ffmpeg download asked for once, edits with Stop, contact sheets),
 # files sent to the person's devices (the download on another device, its notice) or a chat app,
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
@@ -75,6 +76,7 @@ BROWSER_SMOKE_SPECS = (
     "conversation-processes",
     "conversation-browser",
     "browser-pane",
+    "computer-use",
     "conversation-media",
     "conversation-delivery",
     "workspace-folders",

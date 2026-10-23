@@ -13,6 +13,7 @@ import { Button, Hint, Kbd, Skeleton } from '../../ui/primitives';
 import { absoluteTime, humanizeToken, relativeTime } from '../../ui/format';
 import FolderSetupCard from './FolderSetupCard';
 import { BrowserThumbnail } from '../browser/BrowserThumbnail';
+import { ComputerThumbnail } from './ComputerStep';
 import { requestBrowserPane } from '../browser/open-pane';
 import QuestionCard from './QuestionCard';
 import XPostDetails from './XPostDetails';
@@ -465,6 +466,9 @@ export default function ApprovalCard({
                 conversationId={conversationId}
                 onOpen={() => requestBrowserPane(conversationId)}
               />
+            )}
+            {conversationId && view.action_label === 'Computer activity' && (
+              <ComputerThumbnail conversationId={conversationId} />
             )}
             {post ? (
               <XPostDetails post={post} />

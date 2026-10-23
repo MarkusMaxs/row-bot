@@ -957,7 +957,7 @@ function ReviewedSettingsAction({
       if (computerRecovery) {
         const computer = snapshot.system.computer_use;
         setMessage(
-          `Computer Use: ${computer.status_message} ${computer.remediation} ` +
+          `Computer use: ${computer.status_message} ${computer.remediation} ` +
             'You can start a new action after inspecting this state.',
         );
       } else {
@@ -1043,7 +1043,7 @@ function ReviewedSettingsAction({
         (tunnelRecovery || computerRecovery) &&
         mutation.refreshSnapshot && (
           <Button disabled={busy} onClick={() => void inspectPartial()}>
-            Inspect current {computerRecovery ? 'Computer Use' : 'tunnel'} state
+            Inspect current {computerRecovery ? 'computer use' : 'tunnel'} state
           </Button>
         )}
       {pendingCommand && inspectedPartial && (
@@ -1059,7 +1059,7 @@ function ReviewedSettingsAction({
         >
           {tunnelRecovery
             ? 'Try another tunnel action'
-            : 'Try another Computer Use action'}
+            : 'Try another computer use action'}
         </Button>
       )}
       {error && <p role="alert">{error}</p>}
@@ -2473,7 +2473,7 @@ export function SystemSnapshotPanel({
                   ? cu.enabled
                     ? 'Computer use on'
                     : 'Computer use off'
-                  : 'Computer Use unavailable',
+                  : "Computer use isn't available here",
               ]}
             >
               {browserAvailable
@@ -2567,16 +2567,16 @@ export function SystemSnapshotPanel({
       {cu.available && cu.disclosure_acknowledged && (
         <SettingsDangerZone>
           <DangerAction
-            title="Remove the managed Computer Use runtime"
-            description="Deletes Row-Bot's managed Cua Driver and turns Computer Use off. You can install it again later."
+            title="Remove Cua Driver"
+            description="Deletes Row-Bot's copy of Cua Driver and turns computer use off. You can install it again later."
           >
             <ReviewedSettingsAction
               mutation={mutation}
               field="computer_use.remove"
-              label="Remove managed Cua runtime"
+              label="Remove Cua Driver"
               description=""
               variant="danger"
-              confirm="This deletes the managed runtime files. You can install the reviewed runtime again later."
+              confirm="This deletes Row-Bot's copy of Cua Driver. You can install it again later."
             />
           </DangerAction>
         </SettingsDangerZone>
@@ -2609,7 +2609,7 @@ function BrowserComputerSetup({
         open={open}
         onOpenChange={setOpen}
         title="Browser and computer use"
-        description="Web and native-app automation keep separate setup and authority."
+        description="Row-Bot's browser works on websites. Computer use works in apps on this computer, with your mouse and keyboard, while you watch."
       >
         <div className="settings-dialog-rows">
           <SettingsGroup title="Browser">
@@ -2658,7 +2658,7 @@ function BrowserComputerSetup({
           <SettingsGroup title="Desktop apps">
             {computerAvailable ? (
               <SettingsItem
-                label="Computer Use (Beta)"
+                label="Computer use"
                 help={cu.status_message}
                 layout="inline"
                 bind={false}
@@ -2667,23 +2667,23 @@ function BrowserComputerSetup({
                     <SwitchSetting
                       mutation={mutation}
                       field="computer_use.enabled"
-                      label="Computer Use (Beta)"
+                      label="Computer use"
                       value={cu.enabled === true}
                       bare
                     />
                   ) : (
                     <StatusLine tone="warning">
-                      Telemetry notice required
+                      Review the notice below first
                     </StatusLine>
                   )
                 }
               />
             ) : (
               <SettingsItem
-                label="Computer Use (Beta)"
+                label="Computer use"
                 status={
                   <StatusLine tone="warning">
-                    Computer Use unavailable
+                    Computer use isn't available here
                   </StatusLine>
                 }
               />
@@ -2705,8 +2705,8 @@ function BrowserComputerSetup({
                 <ReviewedSettingsAction
                   mutation={mutation}
                   field="computer_use.check"
-                  label="Check Computer Use setup"
-                  description="Run the reviewed local driver diagnostics and report missing access."
+                  label="Check setup"
+                  description="Checks Cua Driver and the permissions it needs."
                 />
                 {!cu.screen_actions_available && (
                   <p className="settings-help">
@@ -2743,17 +2743,17 @@ function BrowserComputerSetup({
                       mutation={mutation}
                       field="computer_use.test"
                       label="Test with Calculator"
-                      description="Open Calculator briefly and verify a local target window."
+                      description="Opens Calculator and takes a picture of it, to show computer use works."
                     />
                   )}
                 <ReviewedSettingsAction
                   mutation={mutation}
                   field="computer_use.install"
-                  label="Install Computer Use runtime"
-                  description="Downloads the pinned Cua Driver artifact for this platform."
+                  label="Install Cua Driver"
+                  description="Downloads the reviewed version of Cua Driver for this computer."
                 />
                 <details>
-                  <summary>Advanced system Cua executable</summary>
+                  <summary>Use your own Cua Driver</summary>
                   <p className="settings-help">
                     Verifying starts the executable you select on this host. Use
                     only a separately reviewed Cua Driver binary.
@@ -2769,8 +2769,8 @@ function BrowserComputerSetup({
                     <ReviewedSettingsAction
                       mutation={mutation}
                       field="computer_use.use_managed_runtime"
-                      label="Use managed Cua runtime"
-                      description="Return to Row-Bot's reviewed managed component."
+                      label="Use Row-Bot's Cua Driver"
+                      description="Go back to the reviewed copy Row-Bot installs."
                     />
                   )}
                 </details>
@@ -2778,7 +2778,7 @@ function BrowserComputerSetup({
             )}
             {cu.available && (
               <details className="settings-divided settings-system-detail">
-                <summary>Computer Use setup details</summary>
+                <summary>Setup details</summary>
                 <Facts>
                   <Fact
                     label="Disclosure"

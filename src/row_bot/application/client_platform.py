@@ -145,10 +145,7 @@ def _buddy_follows(conversation_id: str, event: tuple, handle: Any = None) -> No
     elif kind == "tool_done":
         _buddy(conversation_id, "tool.finished", "Tool finished")
     elif kind == "interrupt":
-        from row_bot.application.client_computer_controls import pause_item
-        if pause_item(payload) is not None:
-            _buddy(conversation_id, "generation.interrupted", "Waiting for you")
-        elif not getattr(handle, "approval_granted", False):
+        if not getattr(handle, "approval_granted", False):
             # An action the person already approved for this turn asks
             # nobody, so Buddy never says "Needs approval" for it (B333).
             from row_bot.questions import question_item
@@ -191,7 +188,7 @@ def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: 
     Closing it before LangGraph saves the tool step leaves the results unsaved,
     so they are recorded before the reply (B234).
     """
-    message = ("Computer Use access was denied. No action was taken." if computer
+    message = ("You said no, so Row-Bot didn't use the computer for that." if computer
                else "The requested action was denied. No action was taken.")
     iterator = iter(events)
     settled = 0
@@ -1852,21 +1849,10 @@ class ClientPlatformService:
             approved = payload.get("decision") == "approve"
             from row_bot.application import client_computer_controls as computer
             stored = computer.approval_context(row["approval_payload_json"])
-            if computer.pause_item(stored.get("interrupt")) is not None and not approved:
-                # A computer-use pause has no "deny": its alternative is Stop.
-                # Replaying the paused turn could start the computer again.
-                self.stop_conversation(conversation_id)
-                return {"approval_id": approval_id, "status": "completed"}
-            # A paused computer runs again, from a fresh capture, before the
-            # turn goes on (Resume).
+            # A computer the turn was using keeps its session when the turn goes on.
             lease_generation = computer.prepare_approval_resume(
                 self, conversation_id, stored, approved=approved, runtime_surface=runtime_surface)
-            try:
-                context = self.claim_legacy_approval(approval_id, conversation_id, approved)
-            except ClientPlatformError:
-                if lease_generation and computer.pause_item(stored.get("interrupt")) is not None:
-                    computer.stop_computer_use(conversation_id, generation_id=lease_generation)
-                raise
+            context = self.claim_legacy_approval(approval_id, conversation_id, approved)
             from row_bot.application.conversation_followups import after_approval
             after_approval(conversation_id, approved=approved)
             # Answered, by the person or by what they approved for this turn:
@@ -1885,7 +1871,7 @@ class ClientPlatformService:
                                                    "pass_id": context.get("pass_id"),
                                                    "generation_id": lease_generation,
                                                    "computer": any(
-                                                       isinstance(item, dict) and item.get("tool") == "computer_use"
+                                                       isinstance(item, dict) and item.get("tool") == "computer"
                                                        for item in (interrupt if isinstance(interrupt, list) else [interrupt]))})
             return {**result, "approval_id": approval_id}
         if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve", answer=answer):
