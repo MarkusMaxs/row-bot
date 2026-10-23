@@ -2974,6 +2974,11 @@
 }
 .composer .message-composer::placeholder {
   color: var(--text-muted);
+  /* One line however narrow the field: a long hint ("Message Row-Bot
+     (incognito)") is cut short, never wrapped to a second line. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .composer .message-composer:focus-visible {
   outline: none;

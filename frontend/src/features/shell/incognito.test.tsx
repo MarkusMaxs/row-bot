@@ -117,10 +117,11 @@ it('turning incognito on for an existing chat says what stays and links to Knowl
     'Incognito is on: nothing from now is saved to memory. Memories already saved from this chat stay.',
   );
   const toast = within(message.closest<HTMLElement>('.toast')!);
+  // A short action, its full name for screen readers and its tooltip.
+  const review = toast.getByRole('button', { name: 'Review in Knowledge' });
+  expect(review).toHaveTextContent(/^Review$/);
   // Radix toasts handle pointer capture, which jsdom lacks: a plain click.
-  await act(async () =>
-    toast.getByRole('button', { name: 'Review in Knowledge' }).click(),
-  );
+  await act(async () => review.click());
   expect(screen.getByLabelText('Current route')).toHaveTextContent(
     '/settings/knowledge',
   );

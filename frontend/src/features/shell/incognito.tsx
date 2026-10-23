@@ -39,7 +39,8 @@ export function useIncognitoSwitch() {
         'Incognito is on: nothing from now is saved to memory. Memories already saved from this chat stay.',
         undefined,
         {
-          label: 'Review in Knowledge',
+          label: 'Review',
+          title: 'Review in Knowledge',
           onAction: () => navigate('/settings/knowledge'),
         },
       );
