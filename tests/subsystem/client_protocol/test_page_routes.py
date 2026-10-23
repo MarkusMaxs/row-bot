@@ -213,6 +213,44 @@ def test_send_posts_the_decisions_as_one_message_from_the_page(service, plan):
                                         "sent": False}  # What isn't sent yet comes first.
 
 
+def test_retry_runs_the_message_from_the_page_again_as_it_was(service, plan):
+    from langchain_core.messages import AIMessage
+    from row_bot import approval_review, threads
+
+    pages, page, conversation = plan["pages"], plan["page"], plan["conversation"]
+    pages.decide(page, "venue", "change", "Smaller rooms near the station", "Book the venue")
+    fake = ScriptedAgentStream(
+        (CheckpointCommit((AIMessage(id="first", content="The provider cut out."),), "first"), ("done", None)),
+        (CheckpointCommit((AIMessage(id="again", content="Looking for smaller rooms."),), "again"), ("done", None)))
+    service.stream_factory = fake.stream
+    with _client(service) as client:
+        _, headers = bootstrap(client)
+        sent = _command(client, headers, "conversation.submit", {
+            "submission_id": str(uuid4()), "text": "1 decision from Launch plan", "attachment_refs": [],
+            "model_selection": MODEL, "page_id": page}, target=conversation,
+            revision=service.get_conversation(conversation)["revision"])
+        assert service.registry.get(sent.json()["execution_id"]).producer_done.wait(5)
+        first = next(message for message in threads.get_latest_checkpoint_messages(conversation)
+                     if message.type == "human")
+        shown = first.additional_kwargs["platform_public_content"]
+
+        # Retry sends what the chat shows; Row-Bot runs the page's own message again in its place.
+        again = _command(client, headers, "conversation.submit", {
+            "submission_id": str(uuid4()), "text": shown, "attachment_refs": [], "model_selection": MODEL,
+            "retry": True}, target=conversation, revision=service.get_conversation(conversation)["revision"])
+        assert again.status_code == 202, again.text
+        assert service.registry.get(again.json()["execution_id"]).producer_done.wait(5)
+
+    messages = threads.get_latest_checkpoint_messages(conversation)
+    [human] = [message for message in messages if message.type == "human"]
+    assert human.content == first.content and "Change: Book the venue" in human.content
+    assert human.additional_kwargs["platform_note"] == "page"
+    assert human.additional_kwargs["platform_public_content"] == shown
+    assert approval_review.person_messages([human]) == ()  # Still never the person's request.
+    assert [message.content for message in messages if message.type == "ai"] == ["Looking for smaller rooms."]
+    assert len(fake.calls) == 2 and pages.get(page).decisions == {}  # Nothing sent twice from the page.
+
+
 def test_a_page_is_sent_only_to_its_own_chat(service, plan):
     from row_bot import threads
 

@@ -369,7 +369,10 @@ class ClientPlatformService:
                 # the Auto reviewer decides an approval: a page's decision never approves a tool call.
                 public_metadata = {"platform_public_content": shown["text"], "platform_note": shown["note"]}
             first_message = text is not None and not note and not threads.get_latest_checkpoint_revision(conversation_id)
-            retry_text = text if retry and text is not None and not note and not self._approval_waiting(conversation_id) else ""
+            # A retry finds the turn it replaces by what the chat shows of the person's message.
+            retry_text = ((shown["text"] if shown else text)
+                          if retry and text is not None and not note and not self._approval_waiting(conversation_id)
+                          else "")
             if text is not None and not threads.append_checkpoint_messages(
                     conversation_id, [HumanMessage(content=text, id=submission_id, additional_kwargs=public_metadata)],
                     retry_text=retry_text):
@@ -1217,6 +1220,21 @@ class ClientPlatformService:
         raise ClientPlatformError("invalid_command")
 
     @staticmethod
+    def _retried_page_message(conversation_id: str, text: str) -> tuple[str, dict[str, str]] | None:
+        """The person's last message, when it was sent from a page and the chat shows it as ``text``: what the
+        agent read, and what the chat shows with its note."""
+        from row_bot import threads
+        from row_bot.turn_context import is_person_message
+        messages = threads.get_latest_checkpoint_messages(conversation_id)
+        last = next((message for message in reversed(messages) if is_person_message(message)), None)
+        extra = getattr(last, "additional_kwargs", None) or {}
+        shown = extra.get("platform_public_content")
+        if (last is None or extra.get("platform_note") != "page" or not isinstance(shown, str)
+                or shown.strip() != text.strip() or not isinstance(last.content, str)):
+            return None
+        return last.content, {"text": shown, "note": "page"}
+
+    @staticmethod
     def _approval_waiting(conversation_id: str) -> bool:
         """An approval of any kind waits in this conversation: a retry then never replaces its turn."""
         from row_bot.tasks import _get_conn
@@ -1343,6 +1361,13 @@ class ClientPlatformService:
         if page_id and (resume or followup is not None or queue_record is not None or frozen_context is not None
                         or attachment_refs or payload.get("retry")):
             raise ClientPlatformError("invalid_command")
+        # Retry on the reply to a message sent from a page runs that message again: the same decisions, as the
+        # page wrote them, still marked as from the page (never the words the chat shows, as the person's own).
+        retried_page = (self._retried_page_message(conversation_id, text)
+                        if not resume and followup is None and queue_record is None and frozen_context is None
+                        and not page_id and not attachment_refs and payload.get("retry") is True else None)
+        if retried_page is not None:
+            text = retried_page[0]
         if len(attachment_refs) > 32:
             raise ClientPlatformError("payload_too_large")
         attachment_views: list[dict[str, Any]] = []
@@ -1417,7 +1442,7 @@ class ClientPlatformService:
         if frozen_context is not None:  # Remembered for a resume: this turn's own apps, not those it was queued behind.
             kept = {key: value for key, value in queue_context["configurable"].items() if key != "app_scope"}
             queue_context = {**queue_context, "configurable": {**kept, **({"app_scope": deepcopy(narrowed)} if narrowed else {})}}
-        shown = None
+        shown = retried_page[1] if retried_page is not None else None
         if page_id:
             # The person's Send to Row-Bot under a page (N5): its decisions, written by Row-Bot from the page
             # (never the client's words), move to sent now and come back if the message isn't admitted.

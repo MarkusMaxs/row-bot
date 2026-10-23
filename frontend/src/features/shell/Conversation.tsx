@@ -2489,12 +2489,17 @@ export default function Conversation({
   };
   // Retry and Send again resend the last message as it was (its words and
   // its files, never the files' names as text, B136), marked a retry so the server runs it again in place. A follow-up note is
-  // the server continuing, not something the person sent.
+  // the server continuing, not something the person sent. A message sent from a page is the person's: the server runs
+  // it again as it was, from the page (N5).
   const lastUser = useMemo(() => {
     for (let index = items.length - 1; index >= 0; index -= 1)
-      if (items[index].row.role === 'user' && !items[index].row.note) {
+      if (
+        items[index].row.role === 'user' &&
+        (!items[index].row.note || items[index].row.note === 'page')
+      ) {
         const blocks = items[index].row.blocks;
         return {
+          fromPage: items[index].row.note === 'page',
           text: blocks
             .filter((block) => block.type !== 'attachment')
             .map(publicBlockText)
@@ -2515,7 +2520,11 @@ export default function Conversation({
           ),
         };
       }
-    return { text: '', attachments: [] as AttachmentView[] };
+    return {
+      fromPage: false,
+      text: '',
+      attachments: [] as AttachmentView[],
+    };
   }, [items]);
   const lastUserText = lastUser.text;
   let lastAssistant = -1;
@@ -2646,7 +2655,7 @@ export default function Conversation({
     !state.history &&
     generation?.status === 'stopped' &&
     items.at(-1)?.row.role === 'user' &&
-    !items.at(-1)?.row.note &&
+    (!items.at(-1)?.row.note || items.at(-1)?.row.note === 'page') &&
     Boolean(lastUserText) &&
     pending?.conversation !== id;
   // A delegated agent's own conversation: its icon, its replies, and the
@@ -3783,9 +3792,10 @@ export default function Conversation({
                     !e.altKey &&
                     !e.metaKey &&
                     !e.ctrlKey &&
-                    lastUserText
+                    lastUserText &&
+                    !lastUser.fromPage
                   ) {
-                    // ↑ in an empty composer brings back the last message.
+                    // ↑ in an empty composer brings back the last message (one typed, not sent from a page).
                     e.preventDefault();
                     editMessage(lastUserText);
                     return;
