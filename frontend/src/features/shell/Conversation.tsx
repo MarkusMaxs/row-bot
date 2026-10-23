@@ -539,6 +539,17 @@ export default function Conversation({
     ? floatingContext
     : compactPlacement || narrowChat;
   useEffect(() => setFloatingOpen(false), [id]);
+  // Open details belong to the layout they were opened in (B402). Leaving a
+  // phone's layout closes its sheet: the desktop card shows the details, and
+  // a sheet kept open came back empty on the phone, so the first tap only
+  // closed it. Either way the floating card starts closed again.
+  const placedCompact = useRef(compactPlacement);
+  useEffect(() => {
+    if (placedCompact.current === compactPlacement) return;
+    placedCompact.current = compactPlacement;
+    setFloatingOpen(false);
+    if (!compactPlacement) overlay.dismiss('conversation-context');
+  }, [compactPlacement, overlay]);
   useEffect(() => {
     if (!floatingContext || !floatingOpen) return;
     const close = () => setFloatingOpen(false);

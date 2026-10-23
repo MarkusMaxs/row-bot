@@ -946,6 +946,58 @@ it('uses one persistent Conversation details entry point for the compact sheet',
   });
 });
 
+function PlacedConversation({
+  placement,
+}: {
+  placement: 'inline' | 'compact';
+}) {
+  const { host, parking } = useContextHostOwner();
+  return (
+    <ContextHostContext.Provider value={host}>
+      <ConversationView onPanel={vi.fn()} contextPlacement={placement} />
+      <div ref={parking} hidden />
+    </ContextHostContext.Provider>
+  );
+}
+
+it('opens Conversation details with one tap after moving between a desktop and a phone layout (B402)', async () => {
+  idleConversation();
+  localStorage.removeItem('row-bot.context-hidden.v1');
+  let rendered!: ReturnType<typeof render>;
+  await act(async () => {
+    rendered = render(<PlacedConversation placement="inline" />);
+  });
+  const details = () =>
+    screen.getByRole('complementary', {
+      name: 'Conversation details',
+      hidden: true,
+    });
+  const toggle = () =>
+    screen.getByRole('button', { name: 'Conversation details' });
+  const sheets = () =>
+    mock.open.mock.calls.filter(
+      ([overlay]) => overlay.key === 'conversation-context',
+    ).length;
+  // A desktop pins the details open beside the chat.
+  expect(details()).toBeVisible();
+
+  // The window narrows to a phone: the chat shows, and one tap opens the sheet.
+  rendered.rerender(<PlacedConversation placement="compact" />);
+  expect(details()).not.toBeVisible();
+  fireEvent.click(toggle());
+  expect(sheets()).toBe(1);
+
+  // Wide again, the card shows the details: the sheet closes rather than sit
+  // empty over the chat, to come back empty on the phone.
+  rendered.rerender(<PlacedConversation placement="inline" />);
+  expect(mock.dismiss).toHaveBeenCalledWith('conversation-context');
+  expect(details()).toBeVisible();
+
+  rendered.rerender(<PlacedConversation placement="compact" />);
+  fireEvent.click(toggle());
+  expect(sheets()).toBe(2);
+});
+
 function transcriptGeometry(initialHeight = 900) {
   let height = initialHeight;
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(
