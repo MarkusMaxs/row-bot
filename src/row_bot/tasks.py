@@ -47,6 +47,7 @@ from row_bot.approval_policy import (
     normalize_approval_mode,
 )
 from row_bot.data_paths import get_tasks_db_path, get_row_bot_data_dir
+from row_bot.application.live_updates import publish as _publish_live, publishes as _publishes_live
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -2437,6 +2438,7 @@ def sync_task_schedule(task_id: str, *, validate: Callable[[], None] | None = No
 
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def delete_task(task_id: str, *, expected_revision: str | None = None,
                 validate: Callable[[], None] | None = None,
@@ -2773,6 +2775,7 @@ def capture_task_run_review(task_id: str, enabled_tool_names: Sequence[str]) -> 
         conn.close()
 
 
+@_publishes_live("runs", "conversations")
 def claim_reviewed_task_run(
     task_id: str, thread_id: str, run_id: str, *, expected_task_revision: str,
     expected_policy_revision: str, enabled_tool_names: Sequence[str],
@@ -2873,6 +2876,7 @@ def read_task_run(run_id: str) -> dict | None:
         conn.close()
 
 
+@_publishes_live("runs", "conversations")
 def _reviewed_run_enter(
     run_id: str, task_id: str, thread_id: str, captured: dict,
     validate: Callable[[], None] | None,
@@ -2921,6 +2925,7 @@ def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
         conn.close()
 
 
+@_publishes_live("runs", "approvals", "conversations")
 def stop_reviewed_task_run(task_id: str, run_id: str, *, validate: Callable[[], None]) -> tuple[bool, bool]:
     """Request cancellation only for this durable run and its exact producers."""
     from row_bot.runtime.executions import generation_registry
@@ -3023,6 +3028,7 @@ def _mirror_workflow_agent_run_finish(
         logger.debug("Workflow agent-run mirror finish failed for %s", run_id, exc_info=True)
 
 
+@_publishes_live("runs", "conversations")
 @_schema_retry
 def _record_run_start(task_id: str, thread_id: str, steps_total: int,
                       task_name: str = "", task_icon: str = "", late_for: str = "") -> str:
@@ -3106,6 +3112,7 @@ def _record_run_recall_notices(run_id: str, generation_id: str) -> None:
     conn.close()
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def _finish_run(run_id: str, status: str = "completed",
                 status_message: str = "", terminal_reason: str = "", notice: str = "",
@@ -3147,6 +3154,8 @@ def _finish_run(run_id: str, status: str = "completed",
         conn.execute("DELETE FROM pipeline_state WHERE run_id = ?", (run_id,))
     conn.commit()
     conn.close()
+    if status in ("failed", "blocked", "completed_delivery_failed"):
+        _publish_live("monitor")  # A run that went wrong is one of Monitor's problems.
     _mirror_workflow_agent_run_finish(run_id, status, status_message, terminal_reason)
 
 
@@ -3311,6 +3320,7 @@ def stop_task(thread_id: str) -> bool:
     return registered
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def cleanup_thread_state(thread_id: str) -> dict[str, int]:
     """Remove queued/thread-owned workflow state while retaining run audits."""
@@ -5785,6 +5795,7 @@ def _run_waiting_for_approval(task_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+@_publishes_live("runs", "conversations")
 def _skip_scheduled_run(task: dict, waiting: dict) -> None:
     """Record and announce a scheduled run skipped behind a waiting one (B255).
 
@@ -6330,6 +6341,7 @@ def _load_pipeline_state(resume_token: str) -> dict | None:
     return d
 
 
+@_publishes_live("runs", "conversations")
 @_schema_retry
 def _update_pipeline_status(run_id: str, status: str) -> None:
     """Update the status of a pipeline state entry."""
@@ -6755,6 +6767,7 @@ def _approval_for_token(resume_token: str) -> dict | None:
     return dict(row) if row else None
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def _claim_person_approval(run_id: str, step_id: str, binding: str) -> bool:
     """Use, once, the person's approval of exactly *binding* for this step of this run."""
@@ -6814,6 +6827,7 @@ def _stop_unapproved_run(state: Mapping[str, Any], task: Mapping[str, Any], enab
                                thread_id=str(state.get("thread_id") or ""), label=notice)
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def create_approval_request(
     run_id: str,
@@ -6949,6 +6963,7 @@ def get_pending_approvals(
     return [dict(r) for r in rows]
 
 
+@_publishes_live("approvals", "conversations")
 def cancel_agent_run_approvals(agent_run_id: str) -> int:
     """Withdraw a stopped Agent's pending approvals; its question no longer applies.
 
@@ -6981,6 +6996,7 @@ def cancel_agent_run_approvals(agent_run_id: str) -> int:
     return len(ids)
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def respond_to_approval(resume_token: str, approved: bool,
                          note: str = "",
@@ -7140,6 +7156,7 @@ def respond_to_approval(resume_token: str, approved: bool,
     return True
 
 
+@_publishes_live("approvals", "conversations")
 def claim_conversation_approval(approval_id: str, approved: bool, *, expected_payload: str,
                                 expected_timeout: str | None) -> dict | None:
     """CAS the existing approval owner without dispatching a second worker."""
@@ -7232,6 +7249,7 @@ def iter_task_approval_snapshot(task_id: str, run_id: str) -> Iterator[tuple[dic
         conn.close()
 
 
+@_publishes_live("approvals", "conversations")
 def claim_reviewed_task_approval(
     task_id: str, run_id: str, approval_id: str, *, expected_revision: str,
     approved: bool, validate: Callable[[], None],
@@ -7313,6 +7331,8 @@ def _check_approval_timeouts() -> None:
         conn.commit()
     finally:
         conn.close()
+    if claimed:
+        _publish_live("approvals", "conversations")
     for r in claimed:
         try:
             _apply_approval_timeout(r)

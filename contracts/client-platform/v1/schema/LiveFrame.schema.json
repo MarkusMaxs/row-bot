@@ -1,0 +1,47 @@
+{
+  "additionalProperties": false,
+  "description": "Which background state changed (B407): topic names and revisions only, never content.\n\nData of an app-wide live stream `live` frame, and a long poll's answer. A\nclient reads a topic again through its own API when its revision moves\non, and every topic when the epoch (the server process) changes.",
+  "properties": {
+    "epoch": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9:_-]+$",
+      "title": "Epoch",
+      "type": "string"
+    },
+    "revision": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "topics": {
+      "additionalProperties": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxProperties": 16,
+      "propertyNames": {
+        "enum": [
+          "conversations",
+          "runs",
+          "approvals",
+          "helpers",
+          "processes",
+          "monitor",
+          "learning"
+        ]
+      },
+      "title": "Topics",
+      "type": "object"
+    }
+  },
+  "required": [
+    "epoch",
+    "revision",
+    "topics"
+  ],
+  "title": "LiveFrame",
+  "type": "object"
+}

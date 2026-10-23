@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.approval_policy import DEFAULT_APPROVAL_MODE, normalize_approval_mode
+from row_bot.application.live_updates import publishes as _publishes_live
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,7 @@ def _get_thread_project_id(thread_id: str) -> str:
     return row[0] if row else ""
 
 
+@_publishes_live("conversations")
 def _set_thread_type(thread_id: str, thread_type: str) -> None:
     """Set a high-level thread type such as ``code``."""
     _ensure_thread_db()
@@ -502,6 +504,7 @@ def _normalize_thread_name_source(source: str | None) -> str:
     return value if value in _THREAD_NAME_SOURCES else THREAD_NAME_SOURCE_AUTO
 
 
+@_publishes_live("conversations")
 def create_thread(
     name: str,
     *,
@@ -580,6 +583,7 @@ def create_thread(
     return tid
 
 
+@_publishes_live("conversations")
 def touch_thread(thread_id: str) -> None:
     """Bump a thread's recency without changing its title."""
     if not thread_id:
@@ -594,6 +598,7 @@ def touch_thread(thread_id: str) -> None:
         conn.commit()
 
 
+@_publishes_live("conversations")
 def set_thread_pinned(thread_id: str, pinned: bool) -> str:
     """Set a thread's pin state without changing its recency timestamp."""
 
@@ -657,6 +662,7 @@ def _seed_thread_default_skills_safe(thread_id: str, *, surface: str = "chat") -
         )
 
 
+@_publishes_live("conversations")
 def _save_thread_meta(
     thread_id: str,
     name: str,
@@ -833,6 +839,7 @@ def _list_project_thread_ids(project_id: str) -> list[str]:
     return [str(row[0]) for row in rows if str(row[0] or "")]
 
 
+@_publishes_live("conversations")
 def _purge_thread_rows(thread_id: str) -> int:
     """Idempotently remove core metadata, events, checkpoints, and writes."""
 
@@ -1169,6 +1176,7 @@ def set_thread_skills_override(thread_id: str, skill_names: list[str] | None) ->
         conn.commit()
 
 
+@_publishes_live("conversations")
 def bump_thread_client_revision(thread_id: str) -> int:
     """Advance and return the client revision for an external thread-state write."""
 

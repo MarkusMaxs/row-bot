@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from row_bot.application.live_updates import publishes as _publishes_live
 
 logger = logging.getLogger(__name__)
 
@@ -2406,6 +2407,7 @@ def _approval_payload_from_db_row(row: Mapping[str, Any] | None) -> dict[str, An
     return _parse_object(row.get("approval_payload_json"))
 
 
+@_publishes_live("approvals", "conversations")
 def _persist_parent_approval(
     orchestration: Mapping[str, Any],
     result: Mapping[str, Any],
