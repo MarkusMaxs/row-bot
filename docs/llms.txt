@@ -73,7 +73,7 @@ Public documentation index for Row-Bot.
 - [Settings: Voice](/docs/settings/voice)
   Route: /docs/settings/voice. Configure dictation, realtime talk, read-aloud, voice models, devices, and diagnostics.
 - [Settings: System](/docs/settings/system)
-  Route: /docs/settings/system. Choose Row-Bot's workspace folder and what it may do on this computer (commands, files, browser and computer use), and manage logs.
+  Route: /docs/settings/system. Choose Row-Bot's workspace folder and what it may do on this computer (commands, files, browser and computer use), manage logs, and see what Row-Bot sends and contacts.
 - [Settings: Tracker](/docs/settings/tracker)
   Route: /docs/settings/tracker. Turn tracking on or off, open a tracker to see its entries, start one in chat, and delete trackers.
 - [Settings: Documents](/docs/settings/documents)

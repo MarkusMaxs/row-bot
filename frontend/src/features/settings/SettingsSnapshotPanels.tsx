@@ -2262,6 +2262,7 @@ export function SystemSnapshotPanel({
   writeClipboard,
   part = 'system',
   network,
+  privacy,
 }: {
   snapshot: SettingsSnapshot['system'];
   mutation: SettingsMutationIO;
@@ -2271,6 +2272,8 @@ export function SystemSnapshotPanel({
   part?: 'system' | 'access';
   /** Access › Advanced › Network: listen mode, addresses, Tailscale. */
   network?: ReactNode;
+  /** System › Privacy: install stats and what else Row-Bot contacts (N6). */
+  privacy?: ReactNode;
 }) {
   const appAvailability = useSyncExternalStore(
     appPwaClient.subscribe,
@@ -2525,6 +2528,7 @@ export function SystemSnapshotPanel({
           }}
         />
       </SettingsGroup>
+      {privacy}
       <SettingsAdvanced meta="Blocked commands, offline support">
         <SettingsGroup label="Advanced system settings">
           {shellAvailable && (

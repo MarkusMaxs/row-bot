@@ -942,6 +942,12 @@ export interface ClientTransport {
     enabled: boolean,
     signal?: AbortSignal,
   ): Promise<Wire.SystemDiagnosis>;
+  installCount?(signal?: AbortSignal): Promise<Wire.InstallCountSnapshot>;
+  chooseInstallCount?(
+    enabled: boolean,
+    signal?: AbortSignal,
+  ): Promise<Wire.InstallCountSnapshot>;
+  deleteCountedData?(signal?: AbortSignal): Promise<Wire.InstallCountDeletion>;
   updates?(signal?: AbortSignal): Promise<Wire.UpdateSnapshot>;
   updateCommand?(
     command: Wire.UpdateCommand,

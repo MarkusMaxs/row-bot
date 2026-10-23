@@ -97,7 +97,7 @@ BROWSER_SMOKE_SPECS = (
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
-    "capability-surfaces", "conversation-layout", "ledger-fixes", "media", "message-content",
+    "capability-surfaces", "conversation-layout", "install-count", "ledger-fixes", "media", "message-content",
     "navigation", "panels", "persistence", "polish-visual", "resources",
     "settings-claude-plan", "settings-models", "settings-routes", "settings", "sidebar", "suggestions",
     "terminal", "theme", "visual-alignment", "voice", "workflows",
@@ -119,7 +119,7 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility", "settings-claude-plan",
+    "model-visibility", "settings-claude-plan", "install-count",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")
@@ -213,6 +213,13 @@ COMMANDS: dict[str, CommandSpec] = {
     "subsystem": _pytest("subsystem", "tests/subsystem", *PARALLEL),
     "installer-contracts": _pytest("installer-contracts", "tests/subsystem/installer", "tests/contracts/installers"),
     "docs": _pytest("docs", "tests/docs", "tests/marketing"),
+    # The installation count's collector (services/install-count, N6): its Worker in workerd with a local
+    # D1 and rate limiter. Install it first (npm ci --ignore-scripts --prefix services/install-count);
+    # Wrangler's own usage metrics stay off.
+    "install-count-worker": _cmd(
+        "install-count-worker", "node", "services/install-count/node_modules/vitest/vitest.mjs", "run",
+        "--root", "services/install-count", env={"WRANGLER_SEND_METRICS": "false"},
+    ),
     "browser-smoke": _browser(
         "browser-smoke", "--project=chromium-desktop", "--project=chromium-buddy-overlay", *_specs(*BROWSER_SMOKE_SPECS),
     ),
@@ -267,6 +274,7 @@ TIER_COMMANDS: dict[str, tuple[str, ...]] = {
     "subsystem": ("subsystem",),
     "installer-contracts": ("installer-contracts",),
     "docs": ("docs",),
+    "install-count": ("install-count-worker",),
 }
 
 
@@ -338,6 +346,8 @@ def changed_commands(changed_files: list[str]) -> list[CommandSpec]:
     if any(path in {"pyproject.toml", "uv.lock", "requirements.txt", "scripts/dependency_requirements.py"}
            for path in changed_files):
         commands.append(COMMANDS["dependency-requirements"])
+    if any(path.replace("\\", "/").startswith("services/install-count/") for path in changed_files):
+        commands.append(COMMANDS["install-count-worker"])
     if paths := changed_test_paths(changed_files):
         commands.append(_pytest("changed-tests", *paths))
     return commands

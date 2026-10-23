@@ -5262,6 +5262,68 @@ def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
     return {"ok": True}
 
 
+# ── N6: install stats ──
+# Dormant here unless a spec turns it on, so no other spec ever meets it. On, it names a realistic
+# service address and a fake send that only records what would have gone: nothing leaves this
+# computer.
+from row_bot import install_count as _install_count  # noqa: E402
+
+_install_count.COLLECTOR_URL = ""
+_N6_SERVICE = "https://row-bot-count.row-bot.workers.dev"
+_n6_sent: list[dict] = []
+_n6_real_post = _install_count._post
+
+
+def _n6_post(url: str, body: dict, _scope) -> bool:
+    _n6_sent.append({"path": url.removeprefix(_N6_SERVICE), "body": dict(body)})
+    return True
+
+
+# The Privacy screenshots show the sidebar: realistic conversation names while N6 runs.
+_N6_NAMES = {"p1-browser-a": ("Phase 1 conversation A", "Plan the Lisbon offsite"),
+             "p1-browser-b": ("Phase 1 conversation B", "Draft the Q4 board update")}
+
+
+def _n6_name_conversations(realistic: bool) -> None:
+    import sqlite3
+    from row_bot import threads
+
+    with sqlite3.connect(threads.DB_PATH) as conn:
+        for thread_id, names in _N6_NAMES.items():
+            conn.execute("UPDATE thread_meta SET name = ? WHERE thread_id = ?", (names[realistic], thread_id))
+
+
+@app.post("/__n6_fixture/install-count/{state}")
+def n6_install_count(state: str, x_fixture_token: str = Header(default="")) -> dict:
+    """fresh: on by default, nothing sent yet; on/off: one count already sent, then the switch;
+    restore: dormant again."""
+    predecessor._authorize(x_fixture_token)
+    (predecessor.DATA / _install_count.STATE_FILE).unlink(missing_ok=True)
+    _n6_sent.clear()
+    if state == "restore":
+        _install_count.COLLECTOR_URL = ""
+        _install_count._post = _n6_real_post
+        _n6_name_conversations(False)
+        return {"state": state}
+    if state not in {"fresh", "on", "off"}:
+        raise HTTPException(status_code=404, detail="Unknown install stats state")
+    _install_count.COLLECTOR_URL = _N6_SERVICE
+    _install_count._post = _n6_post
+    _n6_name_conversations(True)
+    if state != "fresh":
+        _install_count.tick()
+        if state == "off":
+            _install_count.choose(False)
+    return {"state": state, "view": _install_count.view()}
+
+
+@app.get("/__n6_fixture/install-count/sent")
+def n6_install_count_sent(x_fixture_token: str = Header(default="")) -> dict:
+    """What the fake service received, in order (path and body)."""
+    predecessor._authorize(x_fixture_token)
+    return {"sent": list(_n6_sent)}
+
+
 # --- N10: Outlook through your own Microsoft app, and Microsoft 365's tenant (B398) ----------------------
 # The Outlook account's states are seeded in an in-memory keychain (this run's own, restored by reset); a
 # sign-in from another device gets a fixed code and never an answer, so its wait stays on screen. The
