@@ -9,7 +9,7 @@
       "type": "string"
     },
     "html": {
-      "maxLength": 4194304,
+      "maxLength": 8388608,
       "minLength": 1,
       "title": "Html",
       "type": "string"

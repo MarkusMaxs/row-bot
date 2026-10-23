@@ -4504,7 +4504,7 @@ class PageDecisionWrite(WireModel):
 class PageDownload(WireModel):
     """The page as one HTML file that works on its own (it saves nothing)."""
     file_name: str = Field(min_length=1, max_length=96)
-    html: str = Field(min_length=1, max_length=4 * 1024 * 1024)
+    html: str = Field(min_length=1, max_length=8 * 1024 * 1024)
 
 
 class LocalAddressGrantView(WireModel):

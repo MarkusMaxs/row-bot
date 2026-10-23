@@ -655,7 +655,9 @@ def view(page: Page, conversation_title: str | None = None) -> dict[str, Any]:
         "updated_at": _iso(page.updated_at),
         "state_revision": page.state_revision,
         "pending": len(page.decisions),
-        "decisions": [{"id": key, **value} for key, value in decisions_view(page).items()][:MAX_DECISIONS],
+        # Those not sent yet first: the footer lists them, whatever was sent before.
+        "decisions": sorted(({"id": key, **value} for key, value in decisions_view(page).items()),
+                            key=lambda item: item["sent"])[:MAX_DECISIONS],
     }
 
 

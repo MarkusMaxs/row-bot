@@ -196,6 +196,10 @@ def test_send_posts_the_decisions_as_one_message_from_the_page(service, plan):
             "submission_id": str(uuid4()), "text": "Again", "attachment_refs": [], "model_selection": MODEL,
             "page_id": page}, target=conversation, revision=service.get_conversation(conversation)["revision"])
         assert again.status_code == 409 and again.json()["code"] == "chat_page_nothing_to_send"
+        pages.decide(page, "stickers", "skip", "", "Order stickers")
+        view = client.get(f"/api/v1/pages/{page}", headers=headers).json()
+        assert view["decisions"][0] == {"id": "stickers", "choice": "skip", "note": "", "label": "Order stickers",
+                                        "sent": False}  # What isn't sent yet comes first.
 
 
 def test_a_page_is_sent_only_to_its_own_chat(service, plan):
