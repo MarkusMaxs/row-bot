@@ -54,7 +54,7 @@ it('turns counting off in one click and says what is sent behind one tap', async
   expect(toggle).toBeChecked();
   expect(privacy).toHaveTextContent('Last sent today');
   fireEvent.click(
-    within(privacy).getByText('What is sent', { selector: 'summary' }),
+    within(privacy).getByText('Details', { selector: 'summary' }),
   );
   expect(privacy).toHaveTextContent(
     'the Row-Bot version (5.3.0) and the system (macOS)',

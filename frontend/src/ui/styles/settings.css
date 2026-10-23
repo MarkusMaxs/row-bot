@@ -4928,6 +4928,9 @@ button.settings-mcp-server-name:hover {
   gap: 2px;
   font-size: var(--text-13);
 }
+.privacy-contacts strong {
+  font-weight: var(--weight-medium);
+}
 .privacy-contacts span {
   color: var(--text-secondary);
 }

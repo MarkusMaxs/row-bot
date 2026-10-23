@@ -194,7 +194,7 @@ export function Privacy({ io }: { io: PrivacyIo }) {
             )
           }
         >
-          <Disclosure summary="What is sent">
+          <Disclosure summary="Details">
             <InstallCountFacts snapshot={snapshot} place="settings" />
           </Disclosure>
         </SettingsItem>

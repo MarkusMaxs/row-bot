@@ -79,6 +79,29 @@ def test_nothing_is_sent_before_the_disclosure(profile, collector):
     assert install_count.view()["can_delete"] is False
 
 
+def test_a_headless_server_nobody_opened_never_sends(profile, collector, monkeypatch):
+    """The real scheduler on a server whose card no device has shown: it runs and sends nothing."""
+    rounds = threading.Event()
+    real_tick = install_count.tick
+
+    def counted_tick(now=None):
+        try:
+            return real_tick(now)
+        finally:
+            rounds.set()
+
+    monkeypatch.setattr(install_count, "tick", counted_tick)
+    monkeypatch.setattr(install_count, "_START_DELAY_SEC", 0)
+    install_count.start()
+    assert rounds.wait(PROMPTLY)
+    thread = install_count._thread
+    install_count.stop()
+    thread.join(PROMPTLY)
+    assert not thread.is_alive()
+    assert collector.seen == []
+    assert not (profile / install_count.STATE_FILE).exists()
+
+
 def test_a_count_says_exactly_the_allowlist(profile, collector):
     from row_bot.version import __version__
 
