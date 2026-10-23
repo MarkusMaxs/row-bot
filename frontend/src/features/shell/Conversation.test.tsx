@@ -36,6 +36,7 @@ const mock = vi.hoisted(() => ({
       title: string;
       revision: string;
       pinned: boolean;
+      incognito?: boolean;
     } | null,
     projection: null as Snapshot | null,
     workspace: null as ConversationWorkspace | null,
@@ -3538,4 +3539,30 @@ it('re-reads its sidebar row when its agents report in (B302)', async () => {
     'conversation-a',
     expect.any(AbortSignal),
   );
+});
+
+it('says an incognito chat is incognito in its header and its composer, and nowhere else (N11)', async () => {
+  idleConversation();
+  mock.state.conversation = { ...mock.state.conversation!, incognito: true };
+  const view = await act(async () => conversation());
+
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+    'placeholder',
+    'Message Row-Bot (incognito)',
+  );
+  expect(
+    screen.getByRole('img', {
+      name: 'Incognito: nothing here is saved to memory',
+    }),
+  ).toBeVisible();
+  // No banner: the chat reads as any other.
+  expect(screen.queryByRole('alert')).toBeNull();
+
+  mock.state.conversation = { ...mock.state.conversation!, incognito: false };
+  view.rerender(<Conversation onPanel={vi.fn()} />);
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+    'placeholder',
+    'Message Row-Bot…',
+  );
+  expect(screen.queryByRole('img', { name: /Incognito/ })).toBeNull();
 });

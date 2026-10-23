@@ -562,3 +562,61 @@ it('an approval for a browser action shows the page and opens the Browser pane (
   expect(opened).toEqual(['conversation-a']);
   stop();
 });
+
+it('asks to save to memory from an incognito chat with the exact text, Save or Don’t save (N11)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'Save Memory',
+    question: 'Save to memory? This chat is incognito.',
+    reason: 'Coffee: I take it black, no sugar.',
+    memory_text: 'Coffee: I take it black, no sugar.',
+  });
+  const onAllowInChat = vi.fn(async () => undefined);
+  render(<ApprovalCard id="approval-a" onAllowInChat={onAllowInChat} />);
+
+  const card = await screen.findByRole('complementary', {
+    name: 'Approval required: Save to memory? This chat is incognito.',
+  });
+  const save = within(card).getByRole('button', { name: /^Save/ });
+  await waitFor(() => expect(save).toBeEnabled());
+  expect(card).toHaveTextContent('Coffee: I take it black, no sugar.');
+  // Only the person answers it: no Auto for this chat, nothing for the rest of the reply.
+  expect(
+    within(card).queryByRole('button', { name: 'Use Auto in this chat' }),
+  ).toBeNull();
+  expect(
+    within(card).queryByRole('button', { name: 'Approve the rest' }),
+  ).toBeNull();
+
+  await act(async () => fireEvent.click(save));
+  expect(intent).toHaveBeenCalledWith(
+    'approval-a',
+    'approval.resolve',
+    { decision: 'approve', nonce: 'nonce-a' },
+    '3',
+  );
+  expect(within(card).getByRole('status')).toHaveTextContent(
+    'Saving to memory…',
+  );
+});
+
+it('keeps an incognito chat’s memory unsaved with Don’t save (N11)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    question: 'Save to memory? This chat is incognito.',
+    memory_text: 'Coffee: I take it black, no sugar.',
+  });
+  render(<ApprovalCard id="approval-a" />);
+  const dont = await screen.findByRole('button', { name: 'Don’t save' });
+  await waitFor(() => expect(dont).toBeEnabled());
+
+  await act(async () => fireEvent.click(dont));
+
+  expect(intent).toHaveBeenCalledWith(
+    'approval-a',
+    'approval.resolve',
+    { decision: 'reject', nonce: 'nonce-a' },
+    '3',
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Not saved to memory.');
+});

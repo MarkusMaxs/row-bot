@@ -991,6 +991,9 @@ export default function ConversationLibrary({
                             }}
                           >
                             <span className="library-row-title">{title}</span>
+                            {row.incognito && (
+                              <span className="sr-only"> (incognito)</span>
+                            )}
                             {date && (
                               <time
                                 className="library-row-date"

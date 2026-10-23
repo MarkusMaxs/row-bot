@@ -878,6 +878,11 @@
           "title": "Id",
           "type": "string"
         },
+        "incognito": {
+          "default": false,
+          "title": "Incognito",
+          "type": "boolean"
+        },
         "parent_conversation_id": {
           "anyOf": [
             {

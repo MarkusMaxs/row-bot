@@ -116,6 +116,21 @@
 .conversation-rename:focus-visible {
   opacity: 1;
 }
+/* An incognito chat's mark beside its title (N11): quiet, never a warning. */
+.conversation-incognito {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+}
+.conversation-incognito:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
 .conversation-title-input {
   flex: 1 1 auto;
   min-width: 160px;
@@ -1293,13 +1308,24 @@
 }
 /* Row-Bot's question with options (N4): header chips, the question, and the
    options as large rows to tap. A calm accent like a setup card, never a
-   warning: a question is not a risk. */
-.approval-card[data-kind='question'] {
+   warning: a question is not a risk. A memory write in an incognito chat
+   (N11) is the same calm card, with the exact text quoted. */
+.approval-card[data-kind='question'],
+.approval-card[data-kind='memory'] {
   border-color: color-mix(in srgb, var(--accent-solid) 30%, transparent);
   background: color-mix(in srgb, var(--accent-subtle) 60%, var(--surface));
 }
-.approval-card[data-kind='question'] .approval-card-icon {
+.approval-card[data-kind='question'] .approval-card-icon,
+.approval-card[data-kind='memory'] .approval-card-icon {
   color: var(--accent-solid);
+}
+.approval-card-memory {
+  margin: 4px 0 0;
+  padding: 2px 0 2px 12px;
+  border-inline-start: 3px solid var(--border-subtle);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .question-card-chips {
   display: flex;
@@ -3034,6 +3060,11 @@
 }
 .composer .message-composer::placeholder {
   color: var(--text-muted);
+  /* One line however narrow the field: a long hint ("Message Row-Bot
+     (incognito)") is cut short, never wrapped to a second line. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .composer .message-composer:focus-visible {
   outline: none;

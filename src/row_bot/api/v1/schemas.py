@@ -165,10 +165,18 @@ class CreatePayload(WireModel):
         "New conversation"
     )
     agent_profile_id: str = Field(default="", max_length=256)
+    # Incognito from the start (N11): nothing in it is read for memory.
+    incognito: bool = False
 
 
 class PinPayload(WireModel):
     pinned: bool
+
+
+class IncognitoPayload(WireModel):
+    """Turn incognito on or off for a conversation (N11)."""
+
+    incognito: bool
 
 
 class EmptyPayload(WireModel):
@@ -6287,6 +6295,7 @@ class Command(WireModel):
         "conversation.create",
         "conversation.rename",
         "conversation.pin",
+        "conversation.incognito",
         "conversation.delete",
         "conversation.restore",
         "conversation.submit",
@@ -6470,6 +6479,7 @@ COMMAND_PAYLOADS = {
     "conversation.create": CreatePayload,
     "conversation.rename": RenamePayload,
     "conversation.pin": PinPayload,
+    "conversation.incognito": IncognitoPayload,
     "conversation.delete": DeletePayload,
     "conversation.restore": EmptyPayload,
     "conversation.submit": SubmitPayload,
@@ -6764,6 +6774,8 @@ class ApprovalRequired(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered rather than approved.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
 
 
 class GenerationError(WireModel):
@@ -7141,6 +7153,8 @@ class ConversationView(WireModel):
     revision: Revision
     title: str = Field(max_length=256)
     pinned: bool
+    # Incognito (N11): nothing in it is read for memory, and memory is saved only when the person says so.
+    incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
@@ -7707,6 +7721,8 @@ class ApprovalView(WireModel):
     question: str = Field(default="", max_length=240)
     # Row-Bot's questions with options (N4): a question card, answered (approval.resolve with answers) or skipped.
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
+    # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
+    memory_text: str = Field(default="", max_length=4096)
     # A post, reply, quote or delete on X (N7): exactly what goes out, and as which account.
     x_post: XPostApproval | None = None
     policy_revision: Revision

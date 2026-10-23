@@ -10334,6 +10334,7 @@ def create_router(
                 "reviewer_reason",
                 "question",
                 "questions",
+                "memory_text",
                 "x_post",
                 "policy_revision",
             )
