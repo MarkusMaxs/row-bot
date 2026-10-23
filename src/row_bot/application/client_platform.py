@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from row_bot.runtime import admissions
 from row_bot.runtime.executions import generation_registry
 from row_bot.projection.conversation import conversation_projection
+from row_bot.application.live_updates import publish as _publish_live, publishes as _publishes_live
 
 
 class ClientPlatformError(ValueError):
@@ -228,6 +229,7 @@ def _accepted_app_scope(conversation_id: str) -> dict | None:
     return scope if isinstance(scope, dict) else None
 
 
+@_publishes_live("approvals", "conversations")
 def _withdraw_turn_approvals(conversation_id: str, generation_id: str = "") -> list[str]:
     """Withdraw the conversation's waiting approvals (only one turn's, with ``generation_id``)."""
     from row_bot.tasks import _get_conn
@@ -1103,6 +1105,7 @@ class ClientPlatformService:
                     raise ClientPlatformError("revision_conflict")
                 if kind.endswith("rename"):
                     conn.execute("UPDATE thread_meta SET name_source='manual' WHERE thread_id=?", (target,))
+            _publish_live("conversations")
             return {"conversation_id": target, "revision": str(row["client_revision"] + 1), "status": "completed"}
         if kind == "conversation.controls":
             if self.registry.active(target):

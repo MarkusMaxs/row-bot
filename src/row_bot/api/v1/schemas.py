@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from row_bot.application.live_updates import Topic as LiveTopic
+
 OpaqueId = Annotated[
     str, StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9:_-]+$")
 ]
@@ -7599,6 +7601,19 @@ class NoticeFrame(WireModel):
 
     notices_epoch: OpaqueId
     notice: Notice
+
+
+class LiveFrame(WireModel):
+    """Which background state changed (B407): topic names and revisions only, never content.
+
+    Data of an app-wide live stream `live` frame, and a long poll's answer. A
+    client reads a topic again through its own API when its revision moves
+    on, and every topic when the epoch (the server process) changes.
+    """
+
+    epoch: OpaqueId
+    revision: int = Field(ge=0, le=9007199254740991)
+    topics: dict[LiveTopic, Annotated[int, Field(ge=0, le=9007199254740991)]] = Field(max_length=16)
 
 
 class EventPage(WireModel):

@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from typing import Any
+from row_bot.application.live_updates import publishes as _publishes_live
 
 
 logger = logging.getLogger(__name__)
@@ -446,6 +447,7 @@ def _deferred_finish(thread_id: str, token: str) -> None:
         time.sleep(0.25)
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def delete_thread(thread_id: str) -> ThreadDeletionResult:
     clean = normalize_thread_id(thread_id)
     from row_bot import threads
@@ -563,6 +565,7 @@ def delete_thread(thread_id: str) -> ThreadDeletionResult:
     )
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def delete_threads(thread_ids: Iterable[str]) -> BulkThreadDeletionResult:
     results: list[ThreadDeletionResult] = []
     failures: list[tuple[str, str]] = []
@@ -655,6 +658,7 @@ def _start_purge_timer(delay: float) -> None:
     timer.start()
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def hold_thread_deletion(thread_id: str) -> None:
     """Delete a conversation now with Undo on offer (the caller has stopped its work)."""
 
@@ -670,6 +674,7 @@ def hold_thread_deletion(thread_id: str) -> None:
     _start_purge_timer(UNDO_DELETE_SECONDS + 1)
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def restore_held_thread(thread_id: str) -> bool:
     """Undo a held delete; False once its removal has begun or it was never held."""
 

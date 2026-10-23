@@ -103,7 +103,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "TalkStart", "TalkSnapshot", "TalkResult", "TalkOutputRequest", "RealtimeSnapshot", "RealtimeStart", "RealtimeEvent", "RealtimeEventRequest", "RealtimeEventResult", "DefaultModelSnapshot", "VoiceRunView",
     "FolderGrantClaim", "FolderGrantView", "DeckSetupOptions", "ArtifactSetupOptions", "ArtifactPreview", "ArtifactEditingState", "ArtifactLifecycleState", "WorkspaceInspector", "WorkspaceChanges",
     "WorkspaceDirectory", "WorkspaceFile", "WorkspaceDiff", "WorkspaceChangeSetPage", "WorkspaceChangeSetFiles", "DraftView", "DraftSave", "ParentSteeringView", "ClientQueueView",
-    "Notice", "NoticePage", "NoticeFrame")}
+    "Notice", "NoticePage", "NoticeFrame", "LiveFrame")}
 
 # Method, path, request DTO (binary uses bytes), response DTO. This table also
 # drives OpenAPI and is checked against the actual router in the contract tests.
@@ -166,6 +166,8 @@ OPERATIONS = (
     ("get", "/events/poll", None, "EventPage"),
     ("get", "/notices", None, "NoticePage"),
     ("get", "/events", None, "Event"),
+    ("get", "/live", None, "LiveFrame"),
+    ("get", "/live/poll", None, "LiveFrame"),
     ("put", "/subscriptions/{subscription_id}/ack", "Acknowledgement", "Acknowledged"),
     ("delete", "/subscriptions/{subscription_id}", None, "Unsubscribed"),
     ("get", "/choices", None, "Choices"),
@@ -612,7 +614,7 @@ async function pace(proof: SessionProof | undefined, path: string, method: strin
   if (!proof) return;
   const view = /^\/conversations\/[^/?]+(?:\/(?:open|workspace|delegated))?(?:\?|$)/.test(path);
   // Following a computer-use session (about once a second) is observation.
-  const observation = path.startsWith('/events') || /^\/conversations\/[^/]+\/subscriptions$/.test(path) || /^\/subscriptions\/[^/]+$/.test(path)
+  const observation = path.startsWith('/events') || path.startsWith('/live') || /^\/conversations\/[^/]+\/subscriptions$/.test(path) || /^\/subscriptions\/[^/]+$/.test(path)
     || method === 'GET' && /^\/conversations\/[^/]+\/computer(?:\/preview)?(?:\?|$)/.test(path);
   const voiceEvent = /\/voice\/realtime\/[^/]+\/event$/.test(path);
   const eventType = body && typeof body === 'object' && 'event' in body && body.event && typeof body.event === 'object' && 'type' in body.event ? body.event.type : undefined;
@@ -1536,6 +1538,9 @@ export const poll = (base: string, proof: SessionProof, subscription_id: string,
   jsonRequest(base, '/events/poll' + query({subscription_id,cursor,notices_after:notices?.after,notices_epoch:notices?.epoch}), 'EventPage', proof, 'GET', undefined, undefined, signal);
 export const getNotices = (base: string, proof: SessionProof, notices?: NoticePosition, signal?: AbortSignal): Promise<NoticePage> =>
   jsonRequest(base, '/notices' + query({after:notices?.after,epoch:notices?.epoch}), 'NoticePage', proof, 'GET', undefined, undefined, signal);
+/** App-wide live updates (B407), long-polled: the frame once its revision passes `after` (or after 25 s). */
+export const pollLive = (base: string, proof: SessionProof, position?: {after: number; epoch: string}, signal?: AbortSignal): Promise<LiveFrame> =>
+  jsonRequest(base, '/live/poll' + query({after:position?.after,epoch:position?.epoch}), 'LiveFrame', proof, 'GET', undefined, undefined, signal);
 export const acknowledge = (base: string, proof: SessionProof, subscription: string, cursor: string, signal?: AbortSignal): Promise<Acknowledged> =>
   jsonRequest(base, `/subscriptions/${id(subscription)}/ack`, 'Acknowledged', proof, 'PUT', {cursor}, undefined, signal);
 export const unsubscribe = (base: string, proof: SessionProof, subscription: string, signal?: AbortSignal, keepalive = false): Promise<Unsubscribed> =>
@@ -1678,6 +1683,39 @@ export async function* observeEvents(base: string, proof: SessionProof, subscrip
   } finally {
     // Cancellation is cleanup; a failed transport must not mask the read or
     // protocol error, prevent lock release, or reject a consumer's return.
+    try { await reader.cancel(); } catch { /* The stream is already retired. */ }
+    finally { reader.releaseLock(); }
+  }
+}
+/** App-wide live updates (B407): which background state changed, as topic revisions only. */
+export async function* observeLive(base: string, proof: SessionProof, signal?: AbortSignal): AsyncGenerator<LiveFrame> {
+  signal?.throwIfAborted();
+  const response = await fetch(`${base}/api/v1/live`, {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  if (!response.body) throw new Error('protocol_incompatible');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', {fatal: true});
+  let buffer = '';
+  try {
+    while (true) {
+      const part = await reader.read();
+      buffer += decoder.decode(part.value, {stream: !part.done});
+      let cut: number;
+      while ((cut = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0,cut); buffer = buffer.slice(cut+2);
+        if (frame.length > 4096) throw new Error('protocol_incompatible');
+        const fields = Object.fromEntries(frame.split('\n').filter(l => l && !l.startsWith(':')).map(l => {
+          const at = l.indexOf(':'); return [l.slice(0,at),l.slice(at+1).trimStart()];
+        }));
+        if (fields.event === 'live') yield validateWire<LiveFrame>('LiveFrame', JSON.parse(fields.data));
+        else if (fields.event) throw new Error('protocol_incompatible');
+      }
+      if (buffer.length > 4096) throw new Error('protocol_incompatible');
+      if (part.done) return;
+    }
+  } finally {
     try { await reader.cancel(); } catch { /* The stream is already retired. */ }
     finally { reader.releaseLock(); }
   }
@@ -1912,7 +1950,7 @@ def outputs() -> dict[Path, str]:
                                 for name in ("subscription_id", "cursor")]
             query_parameters += [("notices_after", False, {"type": "integer", "minimum": 0}),
                                  ("notices_epoch", False, {"type": "string", "maxLength": 128})]
-        elif suffix == "/notices":
+        elif suffix in {"/notices", "/live/poll"}:
             query_parameters = [("after", False, {"type": "integer", "minimum": 0}),
                                 ("epoch", False, {"type": "string", "maxLength": 128})]
         elif suffix.endswith("/chunks"):
@@ -1943,7 +1981,7 @@ def outputs() -> dict[Path, str]:
                             8388608 if suffix.endswith(SPEECH_OUTPUTS) else
                             1048576 if suffix.endswith("/voice/realtime/{lease_id}/exchange") else 26214400} if response == "bytes"
                            else {"$ref": f"./{response}.schema.json"})
-        mime = "text/event-stream" if suffix in {"/events", "/conversations/{conversation_id}/browser/live"} else "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "audio/wav" if suffix.endswith(SPEECH_OUTPUTS) else "application/octet-stream" if response == "bytes" else "application/json"
+        mime = "text/event-stream" if suffix in {"/events", "/live", "/conversations/{conversation_id}/browser/live"} else "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "audio/wav" if suffix.endswith(SPEECH_OUTPUTS) else "application/octet-stream" if response == "bytes" else "application/json"
         operation = {"parameters": parameters, "responses": {
             "200": {"description": "Authenticated result", "content": {mime: {"schema": response_schema}}},
             "default": {"description": "Safe problem", "content": {"application/problem+json": {
@@ -1962,6 +2000,12 @@ def outputs() -> dict[Path, str]:
                                         "(the latest JPEG only; frames are dropped, never queued).")
         if suffix == "/events":
             operation["description"] = "SSE domain data validates Event; snapshot_required data validates StreamReset; notice data validates NoticeFrame. IDs are signed cursors; notice frames carry none."
+        if suffix == "/live":
+            operation["description"] = ("SSE live data validates LiveFrame: topic names and revisions only, never content. "
+                                        "The first frame is sent at once; later frames when a revision moves on (bursts coalesce).")
+        if suffix == "/live/poll":
+            operation["description"] = ("Long poll: answers with the LiveFrame once its revision passes `after` (at once for "
+                                        "another epoch), or after 25 seconds.")
         if suffix == "/documents/uploads/commands":
             operation["requestBody"] = {"required": True, "content": {
                 "application/vnd.row-bot.document-upload-v1": {"schema": {"type": "string", "format": "binary",

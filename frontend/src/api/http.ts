@@ -3111,6 +3111,15 @@ export class HttpTransport implements ClientTransport {
   notices(position?: wire.NoticePosition, signal?: AbortSignal) {
     return wire.getNotices(this.base, this.session(), position, signal);
   }
+  observeLive(signal: AbortSignal) {
+    return wire.observeLive(this.base, this.session(), signal);
+  }
+  pollLive(
+    position: { after: number; epoch: string } | undefined,
+    signal: AbortSignal,
+  ) {
+    return wire.pollLive(this.base, this.session(), position, signal);
+  }
   acknowledge(subscription: string, cursor: string, signal?: AbortSignal) {
     return wire.acknowledge(
       this.base,

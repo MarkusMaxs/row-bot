@@ -10667,6 +10667,65 @@ def create_router(
             stream(), media_type="text/event-stream", headers=HEADERS
         )
 
+    # App-wide live updates (B407): which background state changed, as topic
+    # names and revisions only; clients read the state itself through the
+    # APIs above. One stream per window, a long poll where a proxy holds the
+    # stream back. Bursts within a tick reach a client as one frame.
+    @router.get("/live")
+    async def live(request: Request) -> StreamingResponse:
+        current = await session(request, lane="observation")
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        async def stream() -> Any:
+            sent: tuple[str, int] | None = None
+            heartbeat = security.clock()
+            try:
+                yield ": connected\n\n"
+                while not await request.is_disconnected():
+                    security.session(await _context(request), current.id, current.csrf)
+                    frame = live_updates.live_updates.frame()
+                    if sent != (frame["epoch"], frame["revision"]):
+                        sent = (frame["epoch"], frame["revision"])
+                        yield "event: live\ndata: " + dto.LiveFrame.model_validate(frame).model_dump_json() + "\n\n"
+                        heartbeat = security.clock()
+                    elif security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+                    await asyncio.sleep(0.25)
+            except ProtocolError:
+                return
+            finally:
+                security.leave_live(current)
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream", headers=HEADERS
+        )
+
+    @router.get("/live/poll")
+    async def live_poll(request: Request, after: int = 0, epoch: str = "") -> JSONResponse:
+        current = await session(request, lane="observation")
+        if after < 0 or len(epoch) > 128:
+            raise ProtocolError("invalid_command", 422)
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        try:
+            # Answer as soon as anything moved on since the client's revision
+            # (at once for another server process), or after 25 s regardless.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 25
+            while True:
+                frame = live_updates.live_updates.frame()
+                if (frame["epoch"] != epoch or frame["revision"] > after or loop.time() >= deadline
+                        or await request.is_disconnected()):
+                    break
+                await asyncio.sleep(0.25)
+            security.session(await _context(request), current.id, current.csrf)
+        finally:
+            security.leave_live(current)
+        return await respond(request, dto.LiveFrame, frame)
+
     @router.get("/choices")
     async def model_choices(request: Request) -> JSONResponse:
         await session(request)

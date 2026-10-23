@@ -34,6 +34,8 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useClientState, useRuntime } from '../../runtime';
+import { useLive } from '../../live';
+import { fallbackDue } from '../../api/live-updates';
 import AttentionIndicator from './AttentionIndicator';
 import { useShellSettled } from '../../shell-settled';
 import { useOverlay } from '../../ui/overlays';
@@ -456,6 +458,7 @@ export default function Navigation({
     );
   // Rows are rechecked while they show activity, the open one included: a
   // reply whose end never reached it settles from the recheck (B396).
+  const live = useLive();
   const activeRowKey = rows
     .filter((row) => observedActivity(row))
     .map((row) => row.id)
@@ -494,13 +497,20 @@ export default function Navigation({
         inFlight = false;
       }
     };
-    const timer = window.setInterval(() => void poll(), 15000);
+    // The list itself follows live updates (B407): this recheck is the
+    // fallback for when the live stream is down.
+    let readAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (!fallbackDue(live, readAt)) return;
+      readAt = Date.now();
+      void poll();
+    }, 15000);
     return () => {
       alive = false;
       request?.abort();
       window.clearInterval(timer);
     };
-  }, [activeRowKey, controller, state.status]);
+  }, [activeRowKey, controller, live, state.status]);
   function openActions(
     conversation: ConversationView,
     initialExport: false | 'markdown' | 'pdf' = false,
