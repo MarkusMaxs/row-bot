@@ -81,16 +81,17 @@ through your own Claude Code. Read **Upgrade Notes** below before upgrading.
   from it only when you tap Save on its card, under every approval level.
   Turning incognito off never reaches back: memory reads the chat only from
   that moment.
-- **Install stats** - once a day, Row-Bot can send its maker a random ID, its
+- **Install stats** - once a day, Row-Bot sends its maker a random ID, its
   version and your system (Windows, macOS, Linux or Docker), nothing else, so
   its maker can see how many installations are in use. It is on by default and
-  goes to Row-Bot's stats service on Cloudflare, which sees your IP address as
-  for any connection; Row-Bot doesn't store it. Records are deleted after 35
-  days; only totals without IDs are kept. Turn it off in Settings › System ›
-  Privacy ("Share install stats") or with `ROW_BOT_INSTALL_COUNT=0` on a server
-  or in Docker; the same page can delete what was sent and lists everything
-  else Row-Bot contacts. In this beta it sends nothing yet: it starts once its
-  service is live, in a later 5.3 build.
+  goes to Row-Bot's stats service on Cloudflare. Cloudflare sees your IP
+  address, as for any connection, and the service counts how many
+  installations reported from each country each day; it never stores the
+  address, and never keeps the country with your installation's ID. Records
+  are deleted after 35 days; only totals without IDs are kept. Turn it off in
+  Settings › System › Privacy ("Share install stats") or with
+  `ROW_BOT_INSTALL_COUNT=0` on a server or in Docker; the same page can delete
+  what was sent and lists everything else Row-Bot contacts.
 
 ### Approvals
 
