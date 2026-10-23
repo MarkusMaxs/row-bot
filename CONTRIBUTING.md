@@ -6,8 +6,10 @@ pull request merged.
 
 Row-Bot is a personal-AI-sovereignty project. The priorities, in order, are:
 
-1. **Privacy** â€” local-first defaults, no Row-Bot first-party telemetry, no
-   surprise network calls. A telemetry-bearing third-party dependency is
+1. **Privacy** â€” local-first defaults and no surprise network calls. The only
+   Row-Bot first-party telemetry is the install count (N6): its fixed payload,
+   disclosed before the first send, off in one click; anything more needs the
+   owner's review. A telemetry-bearing third-party dependency is
    permitted only after a specific review, documentation, pre-install or
    pre-execution disclosure, and user acceptance; it must never receive
    Row-Bot prompts, files, memories, secrets, screenshots, tool arguments, or
@@ -159,9 +161,10 @@ Keep commits focused. If a PR ends up with cleanup noise, squash on merge.
 ### What gets a PR rejected fast
 
 - New behavior with no test coverage
-- Adds Row-Bot first-party telemetry, analytics, or hidden "phone home" logic,
-  or adds third-party telemetry without the narrow review and disclosure bar
-  above
+- Adds Row-Bot first-party telemetry beyond the install count, analytics, or
+  hidden "phone home" logic; widens the install count's payload without the
+  owner's review; or adds third-party telemetry without the narrow review and
+  disclosure bar above
 - Adds a third-party network dependency without an opt-out
 - Touches `docs/index.html` (the marketing site is hand-curated)
 - Breaks the test suite on any platform
