@@ -91,7 +91,7 @@ test('Settings › System › Privacy: one row, details on request, and deleting
     'Once a day while Row-Bot is running.',
     'row-bot-count.row-bot.workers.dev',
     'deleted after 35 days',
-    'Cloudflare sees it, as it does for any connection. Row-Bot doesn’t store it.',
+    'Cloudflare sees it, as it does for any connection. Row-Bot doesn’t store it; the stats service only adds one to its country’s count for the day, never next to the ID.',
     'ROW_BOT_INSTALL_COUNT=0',
     'Update checks',
     'Connection checks',
