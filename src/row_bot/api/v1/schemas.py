@@ -2110,6 +2110,36 @@ class SystemDiagnosisSettings(WireModel):
     hourly_network_checks: bool
 
 
+class InstallCountSnapshot(WireModel):
+    """The installation count (N6): never the install ID or its deletion secret."""
+    # A collector is set and ROW_BOT_INSTALL_COUNT allows it; false while dormant.
+    available: bool
+    # ROW_BOT_INSTALL_COUNT=0 turns it off on this installation.
+    turned_off_here: bool
+    enabled: bool
+    # The card shows until the person has seen what is sent.
+    needs_disclosure: bool
+    # Where the count goes ("row-bot-count.<account>.workers.dev").
+    service: str = Field(max_length=256)
+    # What a count says besides its random ID.
+    version: str = Field(max_length=64)
+    os: Literal["windows", "macos", "linux", "docker"]
+    # The UTC day of the last count the service accepted.
+    last_sent_on: str | None = Field(max_length=10)
+    # Something may have been counted: "Delete counted data" applies.
+    can_delete: bool
+
+
+class InstallCountChoice(WireModel):
+    enabled: bool
+
+
+class InstallCountDeletion(WireModel):
+    # failed: counting is off, but the service couldn't be reached to delete.
+    outcome: Literal["deleted", "failed"]
+    snapshot: InstallCountSnapshot
+
+
 class UpdateRelease(WireModel):
     version: str = Field(max_length=64)
     channel: Literal["stable", "beta"]

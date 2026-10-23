@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "InstallCountSnapshot": {
+      "additionalProperties": false,
+      "description": "The installation count (N6): never the install ID or its deletion secret.",
+      "properties": {
+        "available": {
+          "title": "Available",
+          "type": "boolean"
+        },
+        "can_delete": {
+          "title": "Can Delete",
+          "type": "boolean"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "last_sent_on": {
+          "anyOf": [
+            {
+              "maxLength": 10,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Sent On"
+        },
+        "needs_disclosure": {
+          "title": "Needs Disclosure",
+          "type": "boolean"
+        },
+        "os": {
+          "enum": [
+            "windows",
+            "macos",
+            "linux",
+            "docker"
+          ],
+          "title": "Os",
+          "type": "string"
+        },
+        "service": {
+          "maxLength": 256,
+          "title": "Service",
+          "type": "string"
+        },
+        "turned_off_here": {
+          "title": "Turned Off Here",
+          "type": "boolean"
+        },
+        "version": {
+          "maxLength": 64,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "available",
+        "turned_off_here",
+        "enabled",
+        "needs_disclosure",
+        "service",
+        "version",
+        "os",
+        "last_sent_on",
+        "can_delete"
+      ],
+      "title": "InstallCountSnapshot",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "enum": [
+        "deleted",
+        "failed"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/InstallCountSnapshot"
+    }
+  },
+  "required": [
+    "outcome",
+    "snapshot"
+  ],
+  "title": "InstallCountDeletion",
+  "type": "object"
+}

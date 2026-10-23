@@ -736,6 +736,14 @@ async def _run_startup_sequence():
     except Exception as exc:
         logger.warning("Updater scheduler failed to start (non-fatal): %s", exc)
 
+    # The installation count (N6): its own thread, which sends nothing before the person has seen
+    # what it sends.
+    try:
+        from row_bot import install_count
+        install_count.start()
+    except Exception as exc:
+        logger.warning("The installation count didn't start (non-fatal): %s", exc)
+
     _set("⚡ Loading workflows…")
     try:
         with _startup_phase("workflow_scheduler"):
@@ -1154,6 +1162,9 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             await asyncio.to_thread(_updater.shutdown_background_update, 15.0)
         except Exception:
             logger.debug("Stopping the background updater failed", exc_info=True)
+    _install_count = sys.modules.get("row_bot.install_count")
+    if _install_count is not None:
+        _install_count.stop()
     from row_bot.application.lifecycle import application_lifecycle
     runtime_shutdown = await application_lifecycle.shutdown()
     if runtime_shutdown["status"] != "quiesced":
