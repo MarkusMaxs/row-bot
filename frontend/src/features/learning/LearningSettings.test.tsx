@@ -279,9 +279,23 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
     screen.getByRole('button', { name: 'Delete learning data…' }),
   ).toBeVisible();
   expect(screen.getAllByText('Not downloaded')).toHaveLength(2);
+  const limit = screen.getByRole('combobox', { name: 'Monthly limit' });
+  expect(limit).toHaveDisplayValue('2M tokens');
+  // A large subscription can give Learning up to 50M tokens a month.
   expect(
-    screen.getByRole('combobox', { name: 'Monthly limit' }),
-  ).toHaveDisplayValue('2M tokens');
+    within(limit)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual([
+    '500K tokens',
+    '1M tokens',
+    '2M tokens',
+    '5M tokens',
+    '10M tokens',
+    '20M tokens',
+    '50M tokens',
+    'No model calls',
+  ]);
 
   fireEvent.click(screen.getByRole('switch', { name: 'Learning' }));
   const confirm = await screen.findByRole('dialog', {
