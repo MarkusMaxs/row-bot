@@ -2966,17 +2966,35 @@ const MAY_HAVE_RUN = new Set([
   'session_expired',
 ]);
 
-const resourceDenials = new Set([
-  'workspace_read_hooks_unavailable',
-  'resource_binding_revoked',
-  'workspace_path_denied',
-  'folder_selection_denied',
-  'path_denied',
+/**
+ * Refusals (403) that say exactly why: a folder outside the workspace, an
+ * address Row-Bot's browser never opens, computer use from another device.
+ * Any other 403 says only that this device isn't allowed.
+ */
+const refusals = new Set([
+  'browser_disabled',
+  'browser_navigation_denied',
   'capability_unavailable',
-  // Refusals that say exactly why (F19, F18), not "this device isn't allowed".
-  'workspace_folder_refused',
   'clone_blocked',
+  'computer_use_local_only',
+  'developer_repository_action_denied',
+  'document_processing_denied',
+  'folder_selection_denied',
+  'git_read_hooks_unavailable',
+  'media_scope_conflict',
+  'migration_path_escaped',
+  'path_denied',
+  'process_policy_denied',
+  'resource_binding_revoked',
   'sandbox_prepare_blocked',
+  'view_tool_denied',
+  'view_tool_refused',
+  'views_off',
+  'wiki_scope_unavailable',
+  'workspace_creation_denied',
+  'workspace_folder_refused',
+  'workspace_path_denied',
+  'workspace_read_hooks_unavailable',
 ]);
 
 function describe(code: string): ClientError | null {
@@ -3013,16 +3031,8 @@ export function clientError(value: unknown): ClientError {
       : {};
   const code = typeof candidate.code === 'string' ? candidate.code : '';
   if (candidate.status === 401) return describe('session_expired')!;
-  if (code && resourceDenials.has(code))
-    return (
-      describe(code) ?? {
-        code,
-        message:
-          "That design or code folder can't be used right now. Refresh it and check its permissions.",
-        recovery: 'review',
-        action: RETRY,
-      }
-    );
+  const refusal = refusals.has(code) ? describe(code) : null;
+  if (refusal) return refusal;
   if (candidate.status === 403) return describe('action_denied')!;
   if (candidate.status === 426) return describe('protocol_incompatible')!;
   const known = code ? describe(code) : null;
