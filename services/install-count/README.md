@@ -28,8 +28,12 @@ without storing any secret, and a ping carries nothing more than the four fields
 
 ```json
 {"active_7d": 0, "active_15d": 0, "by_version": {"5.3.0": {"active_7d": 0, "active_15d": 0}},
- "by_os": {"windows": {"active_7d": 0, "active_15d": 0}}, "as_of": "2026-11-20"}
+ "by_os": {"windows": {"active_7d": 0, "active_15d": 0}}, "as_of": "2026-11-20",
+ "by_country": {"GB": {"today": 0, "yesterday": 0}}}
 ```
+
+`by_country` is the installations reporting on that day (today so far, and yesterday) from each
+country, as Cloudflare works it out from the connection (`request.cf.country`; `XX` when unknown).
 
 Each installation counts once, under the version and OS of its latest day in the window. Show
 these numbers as "installations reporting in the last 7/15 days", apart from GitHub downloads,
@@ -41,6 +45,9 @@ never as users, all installs or consenting installs.
   the `ID_HMAC_KEY` secret), the day, the version and the OS. Never the ID itself, an IP address,
   headers or the request body. Rows older than 35 days are deleted by the daily cron (03:17 UTC).
 - `totals`: each day's numbers, overall, by version and by OS, with no IDs. Kept.
+- `countries`: how many installations reported from each country each day (D22). The first ping of
+  an installation on a day adds one to its country's count; the country is never written next to the
+  ID or into `pings`, and "Delete what was sent" leaves these counts, which hold no IDs. Kept.
 
 ## Hardening
 

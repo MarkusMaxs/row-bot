@@ -2,11 +2,12 @@
  * Row-Bot's installation count (N6): a Cloudflare Worker with D1.
  *
  * - POST /v1/ping   {schema: 1, install, version, os}: one row per installation per UTC day,
- *   keyed by an HMAC of the install ID. 204, nothing echoed back.
+ *   keyed by an HMAC of the install ID, and the day's count for the country Cloudflare saw (never
+ *   kept with the installation). 204, nothing echoed back.
  * - POST /v1/delete {schema: 1, install, secret}: deletes every row of that installation once
  *   the secret matches the ID (the ID is the first 128 bits of SHA-256 over the secret).
  * - GET  /v1/stats  (Authorization: Bearer <STATS_TOKEN>): installations reporting in the last
- *   7 and 15 days, by version and by OS.
+ *   7 and 15 days, by version and by OS, and today's and yesterday's by country.
  * - Daily (cron): the day before's totals are kept; rows older than 35 days are deleted.
  *
  * Hardening: a 1 KB body cap, a strict schema, Cloudflare's rate limiter per address, nothing
@@ -20,6 +21,8 @@ const SYSTEMS = new Set(['windows', 'macos', 'linux', 'docker']);
 const INSTALL = /^[0-9a-f]{32}$/;
 const SECRET = /^[0-9a-f]{64}$/;
 const VERSION = /^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:[-.+]?[0-9A-Za-z][0-9A-Za-z.-]{0,23})?$/;
+// Cloudflare's two-letter code for the connection's country ("T1" for Tor); anything else is "XX".
+const COUNTRY = /^[A-Z][A-Z0-9]$/;
 const ID_PREFIX = new TextEncoder().encode('row-bot-install-count:');
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -107,12 +110,23 @@ async function ping(request, env) {
   )
     return answer(400);
   if (!env.ID_HMAC_KEY) return answer(503);
-  await env.DB.prepare(
-    `INSERT INTO pings (id_hash, day, version, os) VALUES (?1, ?2, ?3, ?4)
-     ON CONFLICT (id_hash, day) DO UPDATE SET version = excluded.version, os = excluded.os`,
-  )
-    .bind(await idHash(env, body.install), dayOf(Date.now()), body.version, body.os)
-    .run();
+  const hash = await idHash(env, body.install);
+  const day = dayOf(Date.now());
+  const seen = request.cf?.country;
+  const country = typeof seen === 'string' && COUNTRY.test(seen) ? seen : 'XX';
+  await env.DB.batch([
+    // The country counts once per installation per day, before its row exists, and is never
+    // written next to the installation.
+    env.DB.prepare(
+      `INSERT INTO countries (day, country, installs)
+       SELECT ?1, ?2, 1 WHERE NOT EXISTS (SELECT 1 FROM pings WHERE id_hash = ?3 AND day = ?1)
+       ON CONFLICT (day, country) DO UPDATE SET installs = installs + 1`,
+    ).bind(day, country, hash),
+    env.DB.prepare(
+      `INSERT INTO pings (id_hash, day, version, os) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (id_hash, day) DO UPDATE SET version = excluded.version, os = excluded.os`,
+    ).bind(hash, day, body.version, body.os),
+  ]);
   return answer(204);
 }
 
@@ -157,12 +171,27 @@ export async function totals(db, day) {
   return view;
 }
 
+/** Installations reporting on `day` and the day before, by country: `{GB: {today, yesterday}}`. */
+export async function countries(db, day) {
+  const yesterday = daysBefore(day, 1);
+  const { results } = await db.prepare('SELECT day, country, installs FROM countries WHERE day IN (?1, ?2)')
+    .bind(day, yesterday)
+    .all();
+  const view = {};
+  for (const row of results) {
+    view[row.country] ??= { today: 0, yesterday: 0 };
+    view[row.country][row.day === day ? 'today' : 'yesterday'] = row.installs;
+  }
+  return view;
+}
+
 async function stats(request, env) {
   if (request.method !== 'GET') return answer(405);
   const header = request.headers.get('authorization') ?? '';
   const given = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
   if (!env.STATS_TOKEN || !given || !(await same(given, env.STATS_TOKEN))) return answer(401);
-  return answer(200, await totals(env.DB, dayOf(Date.now())));
+  const today = dayOf(Date.now());
+  return answer(200, { ...(await totals(env.DB, today)), by_country: await countries(env.DB, today) });
 }
 
 /** The daily run on `today`: keep the day before's totals, then delete rows older than 35 days. */
