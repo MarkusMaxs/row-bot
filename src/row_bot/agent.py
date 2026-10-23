@@ -4842,6 +4842,12 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "delete_calendar_event": "Delete calendar event",
     "move_calendar_event": "Move calendar event",
     "send_gmail_message": "Send email",
+    "outlook_send_mail": "Send email",
+    "outlook_reply_mail": "Reply to email",
+    "outlook_forward_mail": "Forward email",
+    "outlook_delete_mail": "Delete email",
+    "outlook_cancel_event": "Cancel event",
+    "outlook_respond_event": "Answer invitation",
     "delete_memory": "Delete memory",
     "tracker_delete": "Delete tracker / entry",
     "task_delete": "Delete task",
@@ -4912,6 +4918,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                     "and move on."), ""
         # What the person reads names what was given: an option left unset (None) is not part of the action.
         given = {key: value for key, value in kwargs.items() if value is not None}
+        question = ""
         if tool.name.startswith("mcp_"):
             # An app's tool: its card names the app and the tool's own title, so this says only what is sent,
             # as labelled fields with their own line breaks; never its internal name or an escaped dump (B332).
@@ -4929,6 +4936,14 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 if given:
                     args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
             description = _enrich_description(tool.name, label, args_str, kwargs)
+        if tool.name.startswith("outlook_"):
+            # Outlook's card names who it goes to and what it says, or the event's time, attendees and place.
+            try:
+                from row_bot.tools.outlook_tool import approval_card
+
+                question, description = approval_card(tool.name, given)
+            except Exception:
+                logger.warning("Outlook's approval card couldn't be written; it asks with the call itself", exc_info=True)
         try:
             from row_bot.tools.discovery import is_external_discovery_invocation
             external_discovery_active = is_external_discovery_invocation()
@@ -4939,6 +4954,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 "tool": tool.name, "label": label, "description": description,
                 "args": kwargs or (args[0] if args else {}),
                 "external_discovery_active": external_discovery_active,
+                **({"question": question} if question else {}),
             },
             approval_mode=mode,
             risks=risks,
@@ -7658,6 +7674,29 @@ def _resume_value(approved: bool, interrupt_ids: list[str] | None,
     return approved
 
 
+def _person_answers(state: Any, resume_val: Any) -> Any:
+    """The person's own approval, from a conversation (the app, Buddy, a channel), of a card only they answer.
+
+    A person-only card (``person_approval``) counts only an answer bound to what it showed, never a plain
+    True. A conversation's approval is always the person's (no level answers for them there), so their
+    approval of such a card is bound to the details its waiting interrupt holds; anything else is kept.
+    """
+    waiting = _waiting_interrupts(state)
+    held = {str(item["__interrupt_id"]): str(item["binding"]) for item in waiting
+            if item.get("person_only") and item.get("binding") and item.get("__interrupt_id")}
+    if not held:
+        return resume_val
+    from row_bot.tools.approval_gate import bound_answer
+
+    if isinstance(resume_val, Mapping):
+        return {key: bound_answer(True, held[key]) if value is True and key in held else value
+                for key, value in resume_val.items()}
+    if resume_val is True and len(waiting) == 1:
+        [(key, binding)] = held.items()
+        return {key: bound_answer(True, binding)}
+    return resume_val
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
                         resume_values: Mapping[str, Any] | None = None,
@@ -7712,7 +7751,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    resume_val = _resume_value(approved, interrupt_ids, resume_values)
+    resume_val = _person_answers(agent.get_state(config), _resume_value(approved, interrupt_ids, resume_values))
     try:
         for event in _stream_graph(
             agent,

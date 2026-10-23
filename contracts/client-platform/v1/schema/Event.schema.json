@@ -277,6 +277,12 @@
           "default": null,
           "title": "Approval Id"
         },
+        "memory_text": {
+          "default": "",
+          "maxLength": 4096,
+          "title": "Memory Text",
+          "type": "string"
+        },
         "question": {
           "default": "",
           "maxLength": 240,

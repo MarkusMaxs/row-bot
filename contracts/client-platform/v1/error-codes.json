@@ -7,6 +7,8 @@
     "account_confirmation_required": 409,
     "account_credentials_invalid": 422,
     "account_credentials_required": 409,
+    "account_device_code_unavailable": 409,
+    "account_microsoft_app_invalid": 422,
     "account_receipt_missing": 404,
     "account_redirect_mismatch": 422,
     "action_denied": 403,

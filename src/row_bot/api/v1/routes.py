@@ -198,6 +198,10 @@ _STATUS.update(
         # or the Google client doesn't list its callback.
         "account_callback_unavailable": 409,
         "account_redirect_mismatch": 422,
+        # Outlook: an Application (client) ID or tenant Microsoft can't have issued; no sign-in code from
+        # Microsoft (the app doesn't allow public client flows).
+        "account_microsoft_app_invalid": 422,
+        "account_device_code_unavailable": 409,
     }
 )
 
@@ -10427,6 +10431,7 @@ def create_router(
                 "reviewer_reason",
                 "question",
                 "questions",
+                "memory_text",
                 "x_post",
                 "policy_revision",
             )

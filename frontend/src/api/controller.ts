@@ -2745,10 +2745,10 @@ export class ClientController {
     this.query(() => this.transport.githubAccessCommand?.(command, signal));
   githubAccessReceipt = (commandId: string, signal?: AbortSignal) =>
     this.query(() => this.transport.githubAccessReceipt?.(commandId, signal));
-  accountAuth = (account: 'google' | 'x', signal?: AbortSignal) =>
+  accountAuth = (account: 'google' | 'x' | 'microsoft', signal?: AbortSignal) =>
     this.query(() => this.transport.accountAuth?.(account, signal));
   accountAuthCommand = (
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     command: AccountAuthCommand,
     signal?: AbortSignal,
   ) =>
@@ -2756,7 +2756,7 @@ export class ClientController {
       this.transport.accountAuthCommand?.(account, command, signal),
     );
   accountAuthReceipt = (
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) =>
@@ -2764,7 +2764,7 @@ export class ClientController {
       this.transport.accountAuthReceipt?.(account, commandId, signal),
     );
   cancelAccountAuth = (
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) =>

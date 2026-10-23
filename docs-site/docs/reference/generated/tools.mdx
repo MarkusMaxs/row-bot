@@ -8,7 +8,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 # Tools
 
 <!-- generated-from: scripts/docs/collect_inventory.py -->
-<!-- inventory-hash: 5729e1754676227a -->
+<!-- inventory-hash: b6af42bda1387577 -->
 
 <GeneratedNotice source="scripts/docs/collect_inventory.py" />
 
@@ -20,7 +20,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 | arxiv | Arxiv | Arxiv retrieval tool - uses the ``arxiv`` package directly (no LangChain ArxivRetriever) for reliable rate-limiting and newest-first sorting. | No tool-wide destructive classification |  | `src/row_bot/tools/arxiv_tool.py` |
 | browser | browser_guide | Guidance for browser automation workflows. | Operation-dependent approval | `tool_guides/browser_guide/SKILL.md` | `src/row_bot/tools/browser_tool.py` |
 | calculator | Calculator | Calculator tool - safe math, date and text-length evaluation via simpleeval. | No tool-wide destructive classification |  | `src/row_bot/tools/calculator_tool.py` |
-| calendar | calendar_guide | Guidance for Google Calendar event creation and management. | Approval-gated: delete_calendar_event, move_calendar_event | `tool_guides/calendar_guide/SKILL.md` | `src/row_bot/tools/calendar_tool.py` |
+| calendar | calendar_guide | Guidance for Google Calendar and Outlook calendar events. | Approval-gated: delete_calendar_event, move_calendar_event | `tool_guides/calendar_guide/SKILL.md` | `src/row_bot/tools/calendar_tool.py` |
 | chart | chart_guide | Guidance for data visualisation and chart creation. | No tool-wide destructive classification | `tool_guides/chart_guide/SKILL.md` | `src/row_bot/tools/chart_tool.py` |
 | computer_use | computer_use_guide | Computer use as tools: ``computer`` (look at and work in an app) and ``computer_record`` (a video) | Operation-dependent approval | `tool_guides/computer_use_guide/SKILL.md` | `src/row_bot/tools/computer_use_tool.py` |
 | conversation_search | Conversation Search | Conversation Search tool - search past conversations by keyword | No tool-wide destructive classification |  | `src/row_bot/tools/conversation_search_tool.py` |
@@ -36,6 +36,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 | image_gen | Image Gen | Image generation tool - generate and edit images via OpenAI / Google | No tool-wide destructive classification |  | `src/row_bot/tools/image_gen_tool.py` |
 | mcp | mcp_guide | Guidance for using external MCP tools safely. | Approval-gated: MCP destructive tool lookup failed: %s | `tool_guides/mcp_guide/SKILL.md` | `src/row_bot/tools/mcp_tool.py` |
 | memory | Memory | Memory tool - save, search, list, update, delete, link, and explore memories | Approval-gated: delete_memory |  | `src/row_bot/tools/memory_tool.py` |
+| outlook | Outlook | Outlook mail and calendar through Microsoft Graph v1.0, signed in with the person's own Microsoft app | Operation-dependent approval |  | `src/row_bot/tools/outlook_tool.py` |
 | pages | pages_guide | Guidance for making interactive pages beside the chat with page_create, page_update and page_read. | Operation-dependent approval | `tool_guides/pages_guide/SKILL.md` | `src/row_bot/tools/pages_tool.py` |
 | row_bot_status | row_bot_status_guide | Guidance for querying and managing Row-Bot's own configuration and logs. | Operation-dependent approval | `tool_guides/row_bot_status_guide/SKILL.md` | `src/row_bot/tools/row_bot_status_tool.py` |
 | shell | shell_guide | Guidance for shell commands and system info queries. | Operation-dependent approval | `tool_guides/shell_guide/SKILL.md` | `src/row_bot/tools/shell_tool.py` |

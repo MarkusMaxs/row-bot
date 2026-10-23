@@ -619,6 +619,7 @@ class ClientPlatformService:
                 orchestration_activity = {"state": "attention", "phase": "goal_needs_you"}
         return {"id": conversation_id, "revision": str(row["client_revision"]),
                 "title": row["name"], "pinned": bool(row["pinned_at"]),
+                "incognito": bool(row.get("incognito")),
                 "updated_at": str(row.get("updated_at") or ""),
                 "parent_conversation_id": parent_conversation_id or None,
                 "activity_state": orchestration_activity.get("state"),
@@ -1012,6 +1013,7 @@ class ClientPlatformService:
                 thread_id=conversation_id,
                 agent_profile_id=str(profile["id"]) if profile else "",
                 agent_profile_slug=str(profile["slug"]) if profile else "",
+                incognito=bool(payload.get("incognito")),
             )
             if profile:
                 skills = profile.get("skill_policy_json") or {}
@@ -1076,6 +1078,17 @@ class ClientPlatformService:
                 raise ClientPlatformError(str(exc)) from exc
             return {"conversation_id": target, "revision": str(row["client_revision"]),
                     "saved_name": name, "status": "completed"}
+        if kind == "conversation.incognito":
+            incognito = bool(payload.get("incognito"))
+            if bool(row.get("incognito")) == incognito:
+                return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed"}
+            if not incognito and self.registry.active(target):
+                # The reply under way answers what was said incognito: it ends first (N11).
+                raise ClientPlatformError("generation_active")
+            threads.set_thread_incognito(target, incognito)
+            revision = str(self._metadata(target)["client_revision"])
+            self.projection.publish(target, "resource.changed", {"revision": revision})
+            return {"conversation_id": target, "revision": revision, "status": "completed"}
         if kind in {"conversation.rename", "conversation.pin"}:
             with closing(sqlite3.connect(threads.DB_PATH)) as conn, conn:
                 if kind.endswith("rename"):

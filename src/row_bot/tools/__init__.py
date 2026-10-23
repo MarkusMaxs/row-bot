@@ -48,6 +48,7 @@ _CORE_TOOL_MODULES = (
     "row_bot.tools.filesystem_tool",
     "row_bot.tools.gmail_tool",
     "row_bot.tools.calendar_tool",
+    "row_bot.tools.outlook_tool",
     "row_bot.tools.url_reader_tool",
     "row_bot.tools.youtube_tool",
     "row_bot.tools.calculator_tool",

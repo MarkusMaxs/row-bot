@@ -2108,6 +2108,43 @@
       "title": "ConversationDeleteCommand",
       "type": "object"
     },
+    "ConversationIncognitoCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/IncognitoPayload"
+        },
+        "type": {
+          "const": "conversation.incognito",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationIncognitoCommand",
+      "type": "object"
+    },
     "ConversationPinCommand": {
       "additionalProperties": false,
       "properties": {
@@ -2599,6 +2636,11 @@
           "maxLength": 256,
           "title": "Agent Profile Id",
           "type": "string"
+        },
+        "incognito": {
+          "default": false,
+          "title": "Incognito",
+          "type": "boolean"
         },
         "title": {
           "default": "New conversation",
@@ -4053,6 +4095,21 @@
         "payload"
       ],
       "title": "GoalControlCommand",
+      "type": "object"
+    },
+    "IncognitoPayload": {
+      "additionalProperties": false,
+      "description": "Turn incognito on or off for a conversation (N11).",
+      "properties": {
+        "incognito": {
+          "title": "Incognito",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "incognito"
+      ],
+      "title": "IncognitoPayload",
       "type": "object"
     },
     "KnowledgeArchiveCommand": {
@@ -11228,6 +11285,7 @@
       "conversation.controls": "#/$defs/ConversationControlsCommand",
       "conversation.create": "#/$defs/ConversationCreateCommand",
       "conversation.delete": "#/$defs/ConversationDeleteCommand",
+      "conversation.incognito": "#/$defs/ConversationIncognitoCommand",
       "conversation.pin": "#/$defs/ConversationPinCommand",
       "conversation.queue.dispatch": "#/$defs/ConversationQueueDispatchCommand",
       "conversation.queue.edit": "#/$defs/ConversationQueueEditCommand",
@@ -11367,6 +11425,9 @@
     },
     {
       "$ref": "#/$defs/ConversationPinCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationIncognitoCommand"
     },
     {
       "$ref": "#/$defs/ConversationDeleteCommand"
