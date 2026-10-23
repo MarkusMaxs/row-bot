@@ -100,6 +100,14 @@
           "maxItems": 128,
           "title": "Read Operations",
           "type": "array"
+        },
+        "x_accounts": {
+          "items": {
+            "$ref": "#/$defs/XAccountSummary"
+          },
+          "maxItems": 17,
+          "title": "X Accounts",
+          "type": "array"
         }
       },
       "required": [
@@ -2057,6 +2065,47 @@
         "folder"
       ],
       "title": "WikiTidySummary",
+      "type": "object"
+    },
+    "XAccountSummary": {
+      "additionalProperties": false,
+      "description": "One connected X account (N7): its numeric ID, handle and display name, and its sign-in's state.\n\nThe sign-in kept before 5.3, until X names it at the next check, has no ID or handle yet.",
+      "properties": {
+        "id": {
+          "pattern": "^[0-9]{0,20}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "maxLength": 80,
+          "title": "Name",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "not_authenticated",
+            "connected",
+            "invalid",
+            "saved_unchecked",
+            "expired",
+            "unavailable"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "username": {
+          "pattern": "^[A-Za-z0-9_]{0,50}$",
+          "title": "Username",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "state"
+      ],
+      "title": "XAccountSummary",
       "type": "object"
     }
   },

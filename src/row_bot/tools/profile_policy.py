@@ -41,6 +41,7 @@ _READ_OPERATIONS = {
     "agents": {"agent_status", "agent_wait", "agent_profiles"},
     "weather": {"get_current_weather", "get_weather_forecast"},
     "pages": {"page_read"},
+    "x": {"x_accounts"},
 }
 _RETRIEVAL_PARENTS = {
     "arxiv",

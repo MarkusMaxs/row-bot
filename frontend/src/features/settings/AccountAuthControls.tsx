@@ -79,6 +79,11 @@ export type AccountAuth = {
   start: () => void;
   /** Asks to remove the local tokens (confirmed in `feedback`). */
   disconnect: () => void;
+  /**
+   * Asks to remove one X account (N7), confirmed in `feedback`: its numeric
+   * ID ('' for the sign-in from before 5.3 not yet named) and its handle.
+   */
+  removeX: (account: { id: string; handle: string }) => void;
   importFile: (file: File | undefined) => void;
   /** Confirmations, progress and outcomes, for under the row. */
   feedback: ReactNode;
@@ -109,6 +114,11 @@ export function useAccountAuth(
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  /** The X account a confirmed disconnect removes (N7); the others stay. */
+  const [removing, setRemoving] = useState<{
+    id: string;
+    handle: string;
+  } | null>(null);
   const [missingReceipt, setMissingReceipt] = useState(false);
   const active = useRef(false);
 
@@ -166,6 +176,7 @@ export function useAccountAuth(
   async function send(
     action: AccountAuthCommand['action'],
     credentials_json = '',
+    x_account = '',
   ) {
     if (!snapshot || pending || busy || active.current) return;
     active.current = true;
@@ -180,6 +191,7 @@ export function useAccountAuth(
       action,
       confirmed: action === 'disconnect',
       credentials_json,
+      ...(x_account ? { x_account } : {}),
     };
     sessionStorage.setItem(pendingKey(account), command.command_id);
     setPending(command.command_id);
@@ -260,25 +272,37 @@ export function useAccountAuth(
           aria-label="Confirm local account disconnect"
           className="settings-account-confirm"
         >
-          <p>
-            Remove {name}’s sign-in from this computer? You’ll need to sign in
-            again. This doesn’t revoke access at {name}.
-          </p>
+          {removing ? (
+            <p>
+              Remove {removing.handle} from Row-Bot? Its sign-in is deleted from
+              this computer; your other X accounts stay. This doesn’t revoke
+              access at X.
+            </p>
+          ) : (
+            <p>
+              Remove {name}’s sign-in from this computer? You’ll need to sign in
+              again. This doesn’t revoke access at {name}.
+            </p>
+          )}
           <div className="action-cluster">
             <Button
               variant="danger"
               className="small"
               onClick={() => {
                 setConfirmDisconnect(false);
-                void send('disconnect');
+                setRemoving(null);
+                void send('disconnect', '', removing?.id ?? '');
               }}
             >
-              Remove local tokens
+              {removing ? `Remove ${removing.handle}` : 'Remove local tokens'}
             </Button>
             <Button
               variant="ghost"
               className="small"
-              onClick={() => setConfirmDisconnect(false)}
+              onClick={() => {
+                setConfirmDisconnect(false);
+                setRemoving(null);
+              }}
             >
               Cancel
             </Button>
@@ -371,7 +395,14 @@ export function useAccountAuth(
     locked: busy || Boolean(pending),
     check: () => void send('check'),
     start: () => void send('start'),
-    disconnect: () => setConfirmDisconnect(true),
+    disconnect: () => {
+      setRemoving(null);
+      setConfirmDisconnect(true);
+    },
+    removeX: (x) => {
+      setRemoving(x);
+      setConfirmDisconnect(true);
+    },
     importFile: (file) => void importFile(file),
     feedback,
   };

@@ -471,6 +471,72 @@ it('asks to download ffmpeg in plain words: how big, from where, and its licence
   expect(document.body).not.toHaveTextContent(/edit_video|\{"/);
 });
 
+it('asks to post on X as the named account with the full text, the reply link and each file (N7)', async () => {
+  const text = `Row-Bot 5.3 is out. ${'Every post names its account. '.repeat(50)}`;
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'x_post',
+    reason: 'Reply as @rowbot_ai to https://x.com/i/status/42.',
+    question: 'Reply on X as @rowbot_ai?',
+    reviewer_reason: 'Only you can approve what goes out on X in your name.',
+    x_post: {
+      account_id: '111',
+      username: 'rowbot_ai',
+      name: 'Row-Bot',
+      action: 'reply',
+      text,
+      target_id: '42',
+      target_url: 'https://x.com/i/status/42',
+      target_text: '',
+      media: [
+        {
+          name: 'launch.png',
+          size: 204800,
+          sha256: '0123456789ab',
+          kind: 'image',
+          thumbnail: 'data:image/jpeg;base64,AAAA',
+        },
+        {
+          name: 'demo.mp4',
+          size: 3145728,
+          sha256: 'ba9876543210',
+          kind: 'video',
+          thumbnail: '',
+        },
+      ],
+    },
+  });
+  await renderCard();
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required: Reply on X as @rowbot_ai?',
+  });
+  expect(within(card).getByText('Reply on X as @rowbot_ai?')).toBeVisible();
+  expect(within(card).getByText('@rowbot_ai')).toBeVisible();
+  expect(within(card).getByText('Row-Bot')).toBeVisible();
+  expect(within(card).getByText('ID 111')).toBeVisible();
+  // The whole text, never cut.
+  expect(
+    within(card).getByText(text.trim(), {
+      normalizer: (value) => value.trim(),
+    }),
+  ).toBeVisible();
+  expect(
+    within(card).getByRole('link', { name: 'x.com/i/status/42' }),
+  ).toHaveAttribute('href', 'https://x.com/i/status/42');
+  const files = within(card).getByRole('list', { name: '2 attached files' });
+  expect(
+    within(files).getByRole('img', { name: 'Preview of launch.png' }),
+  ).toBeVisible();
+  expect(within(files).getByText('launch.png')).toBeVisible();
+  expect(within(files).getByText('0123456789ab')).toBeVisible();
+  expect(within(files).getByText('ba9876543210')).toBeVisible();
+  expect(
+    within(card).getByText(/The reviewer asked you: Only you can approve/),
+  ).toBeVisible();
+  // The reason's sentence isn't repeated beside the card's own facts.
+  expect(within(card).queryByText(/^Reply as @rowbot_ai to/)).toBeNull();
+});
+
 it('an approval for a browser action shows the page and opens the Browser pane (N12-A)', async () => {
   const { onBrowserPaneRequest } = await import('../browser/open-pane');
   const opened: string[] = [];
