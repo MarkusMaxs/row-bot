@@ -11,8 +11,7 @@ account, machine name, prompts, files, tools or models. The collector is ``servi
 (a Cloudflare Worker with D1). The owner's decision (N6): on by default, shown only in Settings ›
 System › Privacy, and explained on the docs' privacy page and in the release notes.
 
-- Dormant while ``COLLECTOR_URL`` is empty: no ID, nothing sent, nothing shown. The owner fills it in
-  once the collector is deployed.
+- Dormant while ``COLLECTOR_URL`` is empty: no ID, nothing sent, nothing shown.
 - ``ROW_BOT_INSTALL_COUNT=0`` (or ``false``, ``off``, ``no``) turns it off: no ID, nothing sent.
 - The ID and its deletion secret are made at the first send, from random bytes, never from the
   machine. The ID is the first 128 bits of SHA-256 over the secret: a ping carries nothing more, and
@@ -53,8 +52,8 @@ from row_bot.data_paths import get_row_bot_data_dir
 
 logger = logging.getLogger(__name__)
 
-#: Where the count goes, ``https://row-bot-count.<account>.workers.dev``. Empty: the feature is dormant.
-COLLECTOR_URL = ""
+#: Where the count goes: the owner's collector on Cloudflare. Empty: the feature is dormant.
+COLLECTOR_URL = "https://row-bot-count.row-bot.workers.dev"
 #: ``0`` (or ``false``, ``off``, ``no``) turns install stats off for this installation.
 ENV = "ROW_BOT_INSTALL_COUNT"
 SCHEMA = 1

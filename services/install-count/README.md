@@ -3,8 +3,8 @@
 A Cloudflare Worker with a D1 database that counts the Row-Bot installations reporting in the
 last 7 and 15 days (N6; "Install stats" in Row-Bot). It is on by default; Row-Bot sends nothing
 once the person turns "Share install stats" off (Settings › System › Privacy) or sets
-`ROW_BOT_INSTALL_COUNT=0`. The client side is `src/row_bot/install_count.py`; it stays dormant
-until its `COLLECTOR_URL` is set.
+`ROW_BOT_INSTALL_COUNT=0`. The client side is `src/row_bot/install_count.py`; its `COLLECTOR_URL`
+is the deployed collector, `https://row-bot-count.row-bot.workers.dev` (empty would make it dormant).
 
 ## What it receives
 
@@ -86,9 +86,9 @@ turn them off; the steps do that first.
    openssl rand -hex 32 | npx wrangler secret put STATS_TOKEN
    ```
 
-   In PowerShell, make each value with
-   `-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })` and paste it when
-   Wrangler asks.
+   In PowerShell, `Get-Random` isn't a cryptographic source: make each value with
+   `$b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString('x2') })`
+   and paste it when Wrangler asks.
 
 4. Deploy, then check the Worker in the Cloudflare dashboard: Workers Logs (observability) off,
    and no Logpush job sending its events anywhere.
@@ -108,9 +108,10 @@ turn them off; the steps do that first.
      -H "Authorization: Bearer $STATS_TOKEN"                           # {"active_7d":0,...}
    ```
 
-6. Put the address into Row-Bot in a follow-up pull request: `COLLECTOR_URL` in
-   `src/row_bot/install_count.py` (`https://row-bot-count.<your-subdomain>.workers.dev`, no
-   trailing slash).
+6. Put the address into Row-Bot: `COLLECTOR_URL` in `src/row_bot/install_count.py`
+   (`https://row-bot-count.<your-subdomain>.workers.dev`, no trailing slash). Choose the account's
+   `workers.dev` subdomain before that (Workers & Pages › Account details › Subdomain): released
+   installations keep the address they shipped with.
 
 History, from the kept totals:
 
