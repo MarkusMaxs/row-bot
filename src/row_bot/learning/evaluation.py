@@ -1577,7 +1577,9 @@ def _vault(store: Any | None = None) -> Any:
 def _eligible_for_audit(store: Any, horizon: float) -> list[audit.ReplayCandidate]:
     newer = [decision for decision in store.find("decision", subkind="model_call", newest_first=True, limit=100_000)
              if decision.created_at > horizon]
-    found = collect_replay(store, refresh=False, decisions=newer, limit=100_000)
+    # Amendment A7: untrusted input doesn't make a decision ineligible for the vault. Replay runs no tools, and each
+    # task keeps its untrusted mark for the trusted-only sensitivity analysis. Visible tests still leave them out (E9).
+    found = collect_replay(store, refresh=False, decisions=newer, limit=100_000, include_untrusted=True)
     return [audit.ReplayCandidate(case.decision_id, case.created_at, case.thread_id,
                                   case.conversation_id or case.thread_id, case.kind_of_work, case.to_content())
             for case in found.cases if case.reference_source == "captured" and case.check == "exact_action"]
