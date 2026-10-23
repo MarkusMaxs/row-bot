@@ -126,16 +126,21 @@ def read_account_auth(*, account: str, device: Device = Device()) -> dict[str, A
     _account(account)
     if account == "google":
         configured = account_tokens.google_client() is not None
+        signed_in = account_tokens.digest(account)
+        state = "not_configured" if not configured else account_tokens.state(account)
+        saved = int(bool(signed_in))
     elif account == "microsoft":
         configured = microsoft_account.client() is not None
+        signed_in = account_tokens.digest(account)
+        state = microsoft_account.state()  # A sign-in made with another app registration needs a new one.
+        saved = int(bool(signed_in))
     else:
+        from row_bot import x_accounts
         from row_bot.api_keys import get_key
         configured = bool(get_key("X_CLIENT_ID") and get_key("X_CLIENT_SECRET"))
-    signed_in = account_tokens.digest(account)
-    if account == "microsoft":
-        state = microsoft_account.state()  # A sign-in made with another app registration needs a new one.
-    else:
-        state = "not_configured" if not configured else account_tokens.state(account)
+        signed_in = x_accounts.digest()  # Every connected X account's sign-in, and the list.
+        state = "not_configured" if not configured else x_accounts.overall_state()
+        saved = len(x_accounts.summaries())
     revision = hashlib.sha256(json.dumps({
         "account": account, "configured": configured, "token": signed_in,
         "client": account_tokens.digest(account + "_client") if account in {"google", "microsoft"} else None,
@@ -144,7 +149,7 @@ def read_account_auth(*, account: str, device: Device = Device()) -> dict[str, A
     return {
         "schema_version": 1, "account": account, "revision": revision,
         "configured": configured, "state": state,
-        "token_files": int(bool(signed_in)),  # Saved sign-ins (in the keychain); the name predates that.
+        "token_files": saved,  # Saved sign-ins (in the keychain); the name predates that.
         "sign_in": route["sign_in"], "sign_in_blocker": route["sign_in_blocker"],
         # Who is signed in, for the account's row ("you@yourdomain.com"); Microsoft's only.
         "address": (microsoft_account.address() or None) if account == "microsoft" and signed_in else None,
@@ -377,6 +382,13 @@ def _x_tokens(link: dict[str, Any], code: str, http: Any) -> dict[str, Any]:
                           link["verifier"], http=http)
 
 
+def _x_listed(account_id: str) -> bool:
+    """Whether an X account (its ID; "" for the sign-in from before 5.3) is there to remove."""
+    from row_bot import x_accounts
+
+    return any(row["id"] == account_id for row in x_accounts.summaries())
+
+
 def _receipt(command_id: str, account: str, action: str, phase: str, message: str, *,
              device: Device = Device(), authorization_url: str | None = None,
              code: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -434,18 +446,24 @@ def _failed_message(account: str, error: BaseException | None) -> str:
     return "Authentication failed. Existing tokens were kept. Retry from this account."
 
 
-def _save_sign_in(account: str, token: dict) -> None:
+def _save_sign_in(account: str, token: dict) -> str:
+    """Keep a new sign-in (keychain only; a failure keeps the old one) and say what was saved."""
+    if account == "x":
+        from row_bot import x_accounts
+
+        # Its own account, named by X (``/2/users/me``): a new one is added, one already there is replaced.
+        return f"Connected {x_accounts.add(token).handle} on X."
     first = account_tokens.read(account) is None
     account_tokens.write(account, token)  # Keychain only; a failure keeps the old sign-in.
     account_tokens.record_check(account, "valid")  # The provider has just issued it.
-    if not first:
-        return
-    from row_bot.tools import registry
-    for tool in _REVIEWED_ACCESS.get(account, ()):
-        try:
-            registry.set_enabled(tool, True)
-        except Exception:
-            logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
+    if first:
+        from row_bot.tools import registry
+        for tool in _REVIEWED_ACCESS.get(account, ()):
+            try:
+                registry.set_enabled(tool, True)
+            except Exception:
+                logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
+    return "Account authorization saved."
 
 
 def _finish_auth(job_key: str) -> None:
@@ -464,9 +482,9 @@ def _finish_auth(job_key: str) -> None:
             cancelled = job["cancelled"]
             if not cancelled:
                 job["validate"]()
-                _save_sign_in(account, token)
+                saved = _save_sign_in(account, token)
         phase = "cancelled" if cancelled else "completed"
-        message = "Authentication cancelled." if cancelled else "Account authorization saved."
+        message = "Authentication cancelled." if cancelled else saved
     except Exception as error:
         with _LOCK:
             cancelled = job["cancelled"]
@@ -532,9 +550,14 @@ def _finish_device(job_key: str) -> None:
 def execute_account_auth(
     *, owner_id: str, command_id: str, account: str, action: str,
     expected_revision: str, confirmed: bool = False, credentials_json: str = "",
-    validate: Callable[[], None] = lambda: None, device: Device = Device(),
+    validate: Callable[[], None] = lambda: None, device: Device = Device(), x_account: str = "",
 ) -> dict[str, Any]:
-    """Accept an exact one-shot account action; OAuth runs in a background job or waits for its callback."""
+    """Accept an exact one-shot account action; OAuth runs in a background job or waits for its callback.
+
+    X has several accounts: ``start`` adds one (or signs one in again), ``disconnect`` removes the one
+    ``x_account`` names (its numeric ID; "" for the sign-in from before 5.3 not yet named) and leaves
+    the others, and ``check`` checks them all.
+    """
     try:
         if str(UUID(command_id)) != command_id:
             raise ValueError
@@ -547,7 +570,8 @@ def execute_account_auth(
         _expire()
         prior = _JOBS.get(key)
         if prior:
-            if prior["account"] != account or prior["action"] != action or prior["expected_revision"] != expected_revision:
+            if (prior["account"] != account or prior["action"] != action
+                    or prior["expected_revision"] != expected_revision or prior.get("x_account", "") != x_account):
                 raise ClientPlatformError("account_command_conflict")
             return prior["receipt"]
         if account in _ACTIVE:
@@ -564,13 +588,17 @@ def execute_account_auth(
             raise ClientPlatformError("account_confirmation_required")
         if action == "import_credentials" and account not in {"google", "microsoft"}:
             raise ClientPlatformError("invalid_account_command")
+        if x_account and (account != "x" or action != "disconnect" or not x_account.isdigit()):
+            raise ClientPlatformError("invalid_account_command")
+        if account == "x" and action == "disconnect" and not _x_listed(x_account):
+            raise ClientPlatformError("account_changed")
         _ACTIVE.add(account)
         if len(_JOBS) >= 64:
             finished = next((item for item, value in _JOBS.items() if value["receipt"] and value["receipt"]["phase"] not in {"running", "cancel_requested"}), None)
             if finished:
                 _JOBS.pop(finished)
         job = {"owner_id": owner_id, "command_id": command_id, "account": account, "action": action,
-               "expected_revision": expected_revision, "cancelled": False, "receipt": None,
+               "expected_revision": expected_revision, "x_account": x_account, "cancelled": False, "receipt": None,
                "validate": validate, "device": device, "stop": Event()}
         _JOBS[key] = job
     try:
@@ -610,6 +638,14 @@ def execute_account_auth(
             validate()
             _install_google_credentials(credentials_json, device)
             phase, message = "completed", "Google credentials saved locally."
+        elif action == "disconnect" and account == "x":
+            validate()
+            from row_bot import x_accounts
+            handle = next((f"@{row['username']}" for row in x_accounts.summaries()
+                           if row["id"] == x_account and row["username"]), "The X account")
+            x_accounts.remove(x_account)  # Only this one; the others stay signed in.
+            phase, message = "completed", (f"{handle} was removed from this computer. X may still list Row-Bot "
+                                           "as allowed; you can revoke it there.")
         elif action == "disconnect":
             validate()
             if account == "microsoft":
@@ -684,8 +720,8 @@ def accept_callback(*, account: str, state: str, code: str = "", error: str = ""
             if _client(account) != link["client"]:
                 raise ValueError("the client changed during the sign-in")
             job["validate"]()
-            _save_sign_in(account, token)
-        phase, message = "completed", "Account authorization saved."
+            message = _save_sign_in(account, token)
+        phase = "completed"
     except Exception as exc:
         logger.info("A %s sign-in through Row-Bot's public address did not finish (%s)", name, type(exc).__name__)
     with _LOCK:

@@ -164,15 +164,31 @@ def test_failed_progress_commit_after_send_is_uncertain_without_repeat(project, 
     assert len(channels['calls']) == 1 and result.submitted_count == 1
 
 
-@pytest.mark.parametrize('media_count', [0, 1])
-def test_strict_x_upload_incomplete_never_posts_tweet(project, monkeypatch, media_count):
-    from row_bot.tools.x_tool import XTool
-    monkeypatch.setattr(XTool, '_get_valid_token', lambda _: 'synthetic-token')
-    monkeypatch.setattr(XTool, '_is_op_enabled', lambda *_args: True)
-    monkeypatch.setattr(XTool, '_upload_media_files', lambda *_args: ['synthetic-media'] * media_count)
-    monkeypatch.setattr(XTool, '_api_request', lambda *_args, **_kwargs: pytest.fail('tweet POST must not occur'))
-    result = XTool()._x_post('post', text='Synthetic post', media_paths=['a.png', 'b.png'], require_all_media=True)
-    assert result == 'Media upload incomplete; no tweet was posted. Uploaded media may remain.'
+@pytest.fixture
+def x_api(isolated, monkeypatch):
+    """X's API, faked in-process, with one connected account (or more, added by the test)."""
+    from tests.helpers.fake_x_api import ROWBOT, FakeXApi, install
+    fake = FakeXApi()
+    install(monkeypatch, fake, ROWBOT)
+    return fake
+
+
+@pytest.mark.parametrize('uploaded', [0, 1])
+def test_strict_x_upload_incomplete_never_posts_tweet(project, renderer, x_api, monkeypatch, uploaded):
+    import httpx
+    from row_bot import x_accounts
+    from tests.helpers.fake_x_api import UPLOAD
+    starts = []
+    def x_api_failing_upload(request):
+        if str(request.url) == UPLOAD and b'INIT' in request.content:
+            starts.append(1)
+            if len(starts) > uploaded:
+                return httpx.Response(500, json={'errors': [{'message': 'synthetic upload failure'}]})
+        return x_api.handle(request)
+    monkeypatch.setattr(x_accounts, 'transport', httpx.MockTransport(x_api_failing_upload))
+    result = execute(project, {'action': 'x'})
+    assert result.status == 'uncertain'
+    assert ('POST', '/2/tweets') not in x_api.requests and x_api.posts == []
 
 
 def test_strict_x_limit_rejected_at_review_without_render(project, monkeypatch):
@@ -234,22 +250,27 @@ def test_channel_link_sends_only_after_own_saved_publication(project, channels):
 
 
 @pytest.mark.parametrize('succeeds', [True, False])
-def test_x_service_preserves_complete_or_unknown_outcome_without_real_requests(project, renderer, monkeypatch, succeeds):
-    from row_bot.tools.x_tool import XTool
-    monkeypatch.setattr(XTool, 'get_config', lambda *_args: ['x_post_tweet'])
-    monkeypatch.setattr(XTool, '_get_valid_token', lambda _: 'synthetic-token')
-    monkeypatch.setattr(XTool, '_is_op_enabled', lambda *_args: True)
-    monkeypatch.setattr(XTool, '_upload_media_files', lambda *_args: ['first', 'second'])
-    calls = []
-    def request(*_args, **_kwargs):
-        calls.append(1)
-        if not succeeds:
-            raise RuntimeError('Synthetic ambiguous transport')
-        return {'data': {'id': 'synthetic-tweet'}}
-    monkeypatch.setattr(XTool, '_api_request', request)
+def test_x_service_preserves_complete_or_unknown_outcome_without_real_requests(project, renderer, x_api, succeeds):
+    if not succeeds:
+        x_api.after_send, x_api.fail_reads = 'timeout', True  # Sent, unconfirmed, and X can't be read to check.
     result = execute(project, {'action': 'x'})
     assert result.status == ('submitted' if succeeds else 'uncertain')
-    assert calls == [1]
+    assert x_api.requests.count(('POST', '/2/tweets')) == 1
+    [post] = x_api.posted_by('111')
+    assert len(post['media_ids']) == 2
+    assert result.url == (f'https://x.com/rowbot_ai/status/{post["id"]}' if succeeds else None)
+
+
+def test_x_share_names_the_account_and_needs_one_when_several_are_connected(project, renderer, x_api):
+    from row_bot import x_accounts
+    from tests.helpers.fake_x_api import PERSONAL
+    x_accounts.add(x_api.sign_in(*PERSONAL))
+    with pytest.raises(client_service.ArtifactError, match='x_account_required'):
+        client.prepare_share(project.id, action='x')
+    review = client.prepare_share(project.id, action='x', target='@sidd')
+    assert review.recipient == '@sidd'
+    result = execute(project, {'action': 'x', 'target': '@sidd'}, review=review)
+    assert result.status == 'submitted' and len(x_api.posted_by('222')) == 1 and x_api.posted_by('111') == []
 
 
 @pytest.mark.parametrize('destination', ['link', 'pdf', 'x'])

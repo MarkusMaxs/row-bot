@@ -449,3 +449,68 @@ it('recovers a retained sign-in without starting another one', async () => {
   );
   expect(controller.accountAuthCommand).not.toHaveBeenCalled();
 });
+
+it('lists each X account with its handle, name and ID, adds another and removes only the one chosen (N7)', async () => {
+  const twoAccounts: Accounts = {
+    ...accounts,
+    x: {
+      ...accounts.x,
+      authentication_state: 'connected',
+      x_accounts: [
+        {
+          id: '111',
+          username: 'rowbot_ai',
+          name: 'Row-Bot',
+          state: 'connected',
+        },
+        { id: '222', username: 'sidd', name: 'Sidd', state: 'expired' },
+      ],
+    },
+  };
+  const { controller } = page(twoAccounts);
+  const list = screen.getByRole('list', { name: 'X accounts' });
+  const items = within(list).getAllByRole('listitem');
+  expect(items.map((item) => item.textContent)).toEqual([
+    expect.stringContaining('@rowbot_ai · Row-Bot'),
+    expect.stringContaining('@sidd · Sidd'),
+  ]);
+  expect(within(items[0]).getByText('ID 111')).toBeVisible();
+  expect(within(items[0]).getByText('Connected')).toBeVisible();
+  expect(within(items[1]).getByText('Needs reconnecting')).toBeVisible();
+  // No row-wide Disconnect: an account is removed on its own.
+  expect(screen.queryByRole('button', { name: 'Disconnect X' })).toBeNull();
+
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Add another account' }),
+  );
+  expect(controller.accountAuthCommand).toHaveBeenCalledWith(
+    'x',
+    expect.objectContaining({ action: 'start' }),
+  );
+  await screen.findByText('Synthetic sign-in complete');
+
+  fireEvent.click(
+    within(items[1]).getByRole('button', { name: 'Remove @sidd' }),
+  );
+  const confirm = screen.getByRole('alertdialog', {
+    name: 'Confirm local account disconnect',
+  });
+  expect(within(confirm).getByText(/your other X accounts stay/)).toBeVisible();
+  expect(controller.accountAuthCommand).not.toHaveBeenCalledWith(
+    'x',
+    expect.objectContaining({ action: 'disconnect' }),
+  );
+  fireEvent.click(
+    within(confirm).getByRole('button', { name: 'Remove @sidd' }),
+  );
+  await waitFor(() =>
+    expect(controller.accountAuthCommand).toHaveBeenCalledWith(
+      'x',
+      expect.objectContaining({
+        action: 'disconnect',
+        confirmed: true,
+        x_account: '222',
+      }),
+    ),
+  );
+});

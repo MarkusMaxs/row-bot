@@ -61,3 +61,14 @@ def test_invalid_chart_remains_understandable_without_raw_payload():
     assert [block["type"] for block in projected["blocks"]] == ["markdown"]
     assert projected["blocks"][0]["text"] == "Useful summary\n\nChart data is unavailable."
     assert "{bad}" not in projected["blocks"][0]["text"]
+
+
+def test_a_tool_result_keeps_its_urls_plain_while_a_reply_links_them():
+    """A tool's result shows as it was given in its step (N7): "Posted as @rowbot_ai: https://…", never
+    "[https://…](https://…)". A reply still links a bare URL."""
+    text = "Posted as @rowbot_ai: https://x.com/rowbot_ai/status/1\nPost ID: 1"
+    tool = canonical_transcript_blocks({**_row(text), "id": "tool:checkpoint:fixture", "role": "tool",
+                                        "tool_call_id": "call-1"})
+    reply = canonical_transcript_blocks(_row(text))
+    assert tool["blocks"][0]["text"] == text
+    assert "[https://x.com/rowbot_ai/status/1](https://x.com/rowbot_ai/status/1)" in reply["blocks"][0]["text"]

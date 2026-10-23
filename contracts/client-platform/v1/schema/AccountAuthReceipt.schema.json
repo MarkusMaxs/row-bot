@@ -81,7 +81,7 @@
           "type": "string"
         },
         "token_files": {
-          "maximum": 2,
+          "maximum": 17,
           "minimum": 0,
           "title": "Token Files",
           "type": "integer"

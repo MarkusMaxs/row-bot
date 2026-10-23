@@ -2,7 +2,9 @@
 
 Each account's saved sign-in is one keychain entry (namespace ``accounts``): ``google`` (Google's
 authorised-user token, shared by Gmail and Calendar), ``google_client`` (the person's own Desktop
-client), ``x``, and ``microsoft`` and ``microsoft_client`` (Outlook's, in ``microsoft_account``). Earlier versions kept them as files in the data folder. ``migrate`` copies each
+client), one per X account, ``x:<its numeric user ID>`` (``x_accounts``; before 5.3 the one X
+sign-in was ``x``, which becomes the first of them), and ``microsoft`` and ``microsoft_client`` (Outlook's,
+in ``microsoft_account``). Earlier versions kept them as files in the data folder. ``migrate`` copies each
 into the keychain, reads it back and compares, and only then deletes the files holding that grant;
 until that copy is verified (the keychain unavailable, say) the old file is still read, so a sign-in
 keeps working, but nothing writes a token file again. Gmail's and Calendar's files may hold two
@@ -19,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterable
@@ -36,6 +39,8 @@ NAMESPACE = "accounts"
 LEGACY = {"google": ("gmail/token.json", "calendar/token.json"), "google_client": ("gmail/credentials.json",),
           "x": ("x/token.json",), "microsoft": (), "microsoft_client": ()}  # Microsoft's were never files.
 MAX_BYTES = 64 * 1024
+# One X account's sign-in: ``x:`` and its numeric user ID.
+X_ACCOUNT = re.compile(r"^x:[0-9]{1,20}$")
 # What Row-Bot's one Google sign-in asks for: Gmail's and Calendar's scopes (their tools' own constants).
 GOOGLE_SCOPES = ("https://mail.google.com/", "https://www.googleapis.com/auth/calendar")
 _LOCK = threading.RLock()
@@ -49,9 +54,13 @@ class AccountTokenError(RuntimeError):
     """The keychain could not keep an account's sign-in; nothing was written to a file instead."""
 
 
+def _known(name: str) -> bool:
+    return name in LEGACY or bool(X_ACCOUNT.fullmatch(name))
+
+
 def _legacy(name: str) -> list[Path]:
     root = get_row_bot_data_dir(create=False)
-    return [root / relative for relative in LEGACY[name] if (root / relative).is_file()]
+    return [root / relative for relative in LEGACY.get(name, ()) if (root / relative).is_file()]
 
 
 def _parse(text: str | None) -> dict | None:
@@ -204,8 +213,8 @@ def _text(name: str) -> str | None:
 
 
 def read(name: str) -> dict | None:
-    """One account's saved sign-in (``google``, ``google_client``, ``x``, ``microsoft`` or ``microsoft_client``),
-    or None."""
+    """One account's saved sign-in (``google``, ``google_client``, ``x``, ``x:<user ID>``, ``microsoft`` or
+    ``microsoft_client``), or None."""
     with _LOCK:
         return _parse(_text(name))
 
@@ -213,7 +222,7 @@ def read(name: str) -> dict | None:
 def write(name: str, value: dict[str, Any]) -> None:
     """Save a sign-in in the keychain only, checked by reading it back; an old file beside it is removed."""
     text = json.dumps(value, separators=(",", ":"))
-    if name not in LEGACY or not isinstance(value, dict) or len(text.encode("utf-8")) > MAX_BYTES:
+    if not _known(name) or not isinstance(value, dict) or len(text.encode("utf-8")) > MAX_BYTES:
         raise AccountTokenError("invalid_account_token")
     with _LOCK:
         previous = _text(name)

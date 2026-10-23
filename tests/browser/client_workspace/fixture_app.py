@@ -632,8 +632,8 @@ def _n12b_resume(enabled_tools: list[str], config: dict, approved: bool, *, inte
     thread = str(config["configurable"]["thread_id"])
     state = _N12B_PENDING.pop(thread, None)
     if state is None:
-        yield from _n12_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
-                               resume_values=resume_values, stop_event=stop_event)
+        yield from _n7_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                              resume_values=resume_values, stop_event=stop_event)
         return
     call = predecessor._record("resume", config, "n12b-answer")
     answer = next(iter(resume_values.values())) if resume_values else bool(approved)
@@ -1959,6 +1959,155 @@ def _goal_verifier(goal, _context):
     return {"verdict": "continue", "reason": "Fixture goal: one more step."}
 
 
+# ── N7: Several X accounts, named on every post ────────────────────────────
+# Two X accounts signed in through a fake X API (in-process: nothing reaches X) and the in-memory
+# keychain. The model's x_post calls are scripted; the card is the real one for the call, and once
+# approved the real sender posts to the fake X API (or loses X's answer and finds the post among the
+# account's latest). A call without an account gets the real tool's refusal.
+_N7: dict = {}
+_N7_LAUNCH = ("Row-Bot 5.3 is out. Every post now names the X account it goes out as, and you approve "
+              "the exact words and pictures before anything is sent.\n\nRead what's new: row-bot.ai/5.3")
+_N7_REPLY = "Thanks! It keeps everything on your own computer, and it asks before it posts anywhere."
+
+
+def _n7_picture(path: Path) -> Path:
+    """A synthetic launch card (the post's picture)."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGB", (1200, 675), (17, 24, 39))
+    draw = ImageDraw.Draw(image)
+
+    def font(size: int):
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
+    draw.rounded_rectangle([60, 60, 1140, 615], radius=36, fill=(30, 41, 59))
+    draw.ellipse([110, 110, 230, 230], fill=(99, 102, 241))
+    draw.text((270, 120), "Row-Bot 5.3", fill=(255, 255, 255), font=font(64))
+    draw.text((270, 210), "Several X accounts, named on every post", fill=(203, 213, 225), font=font(34))
+    for index, label in enumerate(("@rowbot_ai", "@sidd")):
+        top = 330 + index * 110
+        draw.rounded_rectangle([110, top, 1090, top + 86], radius=20, fill=(51, 65, 85))
+        draw.text((150, top + 22), label, fill=(255, 255, 255), font=font(36))
+    image.save(path, format="PNG")
+    return path
+
+
+@app.post("/__n7_fixture/accounts")
+def n7_accounts(x_fixture_token: str = Header(default="")) -> dict:
+    """@rowbot_ai and @sidd signed in, X on, and a post someone else made to reply to."""
+    import tempfile
+
+    p4_provider_credentials(x_fixture_token)
+    from row_bot import account_tokens, x_accounts
+    from tests.helpers.fake_x_api import PERSONAL, ROWBOT, FakeXApi
+
+    fake = FakeXApi(now="")  # Posts carry the real time, as X's do.
+    x_accounts.transport = fake.transport()
+    os.environ.update(X_CLIENT_ID="fixture-x-client", X_CLIENT_SECRET="fixture-x-secret")
+    _N7.update(api=fake, enabled=_tool_registry.is_enabled("x"),
+               folder=Path(tempfile.mkdtemp(prefix="row-bot-n7-")))
+    _tool_registry.set_enabled("x", True)
+    for user in (ROWBOT, PERSONAL):
+        account = x_accounts.add(fake.sign_in(*user))
+        # Documentation-capture mode (this fixture) never remembers a check; a real sign-in's passes.
+        account_tokens._CHECKS[account.slot] = (account_tokens.digest(account.slot), True)
+    _N7["question"] = fake.post("999", "What does Row-Bot actually do with my data?")
+    _n7_picture(_N7["folder"] / "launch-card.png")
+    return {"accounts": [account.handle for account in x_accounts.listed()]}
+
+
+@app.post("/__n7_fixture/reset")
+def n7_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Remove the accounts, the fake X API and the X app's switch."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import x_accounts
+
+    for account in x_accounts.listed():
+        x_accounts.remove(account.id)
+    x_accounts.transport = None
+    for name in ("X_CLIENT_ID", "X_CLIENT_SECRET"):
+        os.environ.pop(name, None)
+    if "enabled" in _N7:
+        _tool_registry.set_enabled("x", _N7["enabled"])
+    _N7.clear()
+    return {"ok": True}
+
+
+def _n7_stream(text: str, config: dict):
+    from row_bot import x_accounts
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools import x_posting
+    from row_bot.tools.x_tool import XTool
+
+    call = predecessor._record("submit", config, "n7-x")
+    thread = call["conversation_id"]
+    identity = f"n7:{call['generation_id']}"
+    try:
+        if "which" in text:
+            args = {"action": "post", "text": _N7_LAUNCH}
+            steps = [("x_post", args, lambda: (XTool()._x_post(**args), []))]
+            yield from _s3_steps(thread, identity, steps)
+            yield from _natural_final(call, thread, "Which X account should I post this from: @rowbot_ai (Row-Bot) "
+                                      "or @sidd (Sidd)? Nothing has been posted.", "n7-which")
+            return
+        if "reply" in text:
+            args = {"action": "reply", "text": _N7_REPLY, "tweet_id": _N7["question"]["id"], "account": "@rowbot_ai"}
+        else:
+            args = {"action": "post", "text": _N7_LAUNCH, "account": "@rowbot_ai",
+                    "media_paths": [str(_N7["folder"] / "launch-card.png")]}
+        _N7["lose_answer"] = "unsure" in text
+        account = x_accounts.resolve(args["account"], required=True)
+        media = x_posting.media_facts(args.get("media_paths"))
+        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""), media)
+        tool_id = fixture_id(identity + ":tool")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "x_post", "args": args}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": "x_post", "args": args}
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **payload}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n7_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+               stop_event=None):
+    """After the X card: the real sender posts as approved, to the fake X API."""
+    from row_bot import x_accounts
+    from row_bot.threads import append_checkpoint_messages, get_latest_checkpoint_messages
+    from row_bot.tools import x_posting
+    from row_bot.tools.approval_gate import APPROVAL_GIVEN, with_approval
+
+    thread = str(config["configurable"]["thread_id"])
+    last = next((message for message in reversed(get_latest_checkpoint_messages(thread))
+                 if getattr(message, "tool_calls", None)), None)
+    asked = last.tool_calls[0] if last is not None else {}
+    if asked.get("name") != "x_post" or not approved:  # A denied card ends the turn without resuming it.
+        yield from _n12_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                               resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n7-sent")
+    identity = f"n7-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        args = asked.get("args") or {}
+        result_id = fixture_id(identity + ":sent")
+        account = x_accounts.resolve(args["account"], required=True)
+        if _N7.pop("lose_answer", False):
+            _N7["api"].after_send = "timeout"  # X posts it, and its answer is lost on the way back.
+        sent = x_posting.post_as(account, args["action"], args.get("text", ""), args.get("tweet_id", ""),
+                                 x_posting.media_facts(args.get("media_paths")))
+        content = with_approval(APPROVAL_GIVEN, sent.text)
+        final = (f"X didn't confirm it at first, so I checked @rowbot_ai's latest posts: it went out once. {sent.url}"
+                 if sent.text.startswith("Not sure") else f"Done. It's live on @rowbot_ai: {sent.url}")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="x_post",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "x_post",
+                            "args": args, "content": content}
+        yield from _natural_final(call, thread, final, "n7-sent")
+    finally:
+        call["quiesced"] = True
+
+
 # ── N4: Row-Bot asks questions with options, in cards ──────────────────────
 # The real ask_person card and answers: the model's call and the turn's final
 # are scripted; the question's result is the real tool's for the answer given.
@@ -2021,6 +2170,10 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith("n7 ") and text.rstrip().endswith("fixture"):
+        # Several X accounts, named on every post (N7): the real card and sender, a fake X API.
+        yield from _n7_stream(text, config)
+        return
     if text.startswith("n12b ") and text.rstrip().endswith("fixture"):
         # Computer use, rebuilt (N12-B): the real computer tool on a fake desktop.
         yield from _n12b_stream(text, config)

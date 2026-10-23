@@ -44,8 +44,9 @@ def _command(snapshot, action, **extra):
 
 
 def _no_files(profile):
-    """No sign-in, client or token is ever written to a file."""
-    return not [path for path in profile.rglob("*.json") if path.parent.name in {"gmail", "calendar", "x"}]
+    """No sign-in, client or token is ever written to a file (X's list of accounts holds handles and IDs only)."""
+    return not [path for path in profile.rglob("*.json") if path.parent.name in {"gmail", "calendar", "x"}
+                and not (path.name == "accounts.json" and "token" not in path.read_text(encoding="utf-8"))]
 
 
 def _google_ready(tmp_path, monkeypatch, *, token=None):
@@ -362,6 +363,8 @@ def test_a_phone_signs_in_to_google_through_the_public_address(tmp_path, monkeyp
 
 def test_a_phone_signs_in_to_x_through_the_public_address(tmp_path, monkeypatch, keychain):
     import httpx
+    from row_bot import x_accounts
+    from tests.helpers.fake_x_api import FakeXApi
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
     from row_bot import api_keys
@@ -369,6 +372,9 @@ def test_a_phone_signs_in_to_x_through_the_public_address(tmp_path, monkeypatch,
     monkeypatch.setattr(owner, "Thread", lambda **_kwargs: pytest.fail("no loopback listener"))
     seen = _provider(monkeypatch, lambda request: httpx.Response(200, json={
         "access_token": "fixture-x-access", "refresh_token": "fixture-x-refresh", "expires_in": 7200}))
+    fake = FakeXApi()  # X names who signed in (/2/users/me): the sign-in is that account's.
+    fake.users["fixture-x-access"] = {"id": "111", "username": "rowbot_ai", "name": "Row-Bot"}
+    monkeypatch.setattr(x_accounts, "transport", fake.transport())
     phone, browser, _ = _phone()
     with phone, browser:
         _, headers = bootstrap(phone)
@@ -388,9 +394,10 @@ def test_a_phone_signs_in_to_x_through_the_public_address(tmp_path, monkeypatch,
     form = _query("?" + exchange.content.decode())
     assert str(exchange.url) == "https://api.x.com/2/oauth2/token" and exchange.headers["authorization"].startswith("Basic ")
     assert (form["redirect_uri"], _challenge(form["code_verifier"])) == (_X_CALLBACK, page["code_challenge"])
-    assert finished["phase"] == "completed"
-    saved = account_tokens.read("x")
+    assert finished["phase"] == "completed" and finished["message"] == "Connected @rowbot_ai on X."
+    saved = account_tokens.read("x:111")
     assert saved["access_token"] == "fixture-x-access" and saved["expires_at"] > 0
+    assert account_tokens.read("x") is None
 
 
 def test_the_desktop_app_keeps_the_loopback_sign_in_and_x_callback(tmp_path, monkeypatch, keychain):
@@ -563,20 +570,59 @@ def test_account_auth_api_local_start_receipt_and_cancel(tmp_path, monkeypatch, 
 
 
 def test_x_oauth_uses_saved_credentials_and_writes_only_after_explicit_start(tmp_path, monkeypatch, keychain):
+    from row_bot import x_accounts
+    from tests.helpers.fake_x_api import FakeXApi
+
     profile = tmp_path / "profile"
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(profile))
     from row_bot import api_keys
     monkeypatch.setattr(api_keys, "get_key", lambda key: {"X_CLIENT_ID": "fixture-id", "X_CLIENT_SECRET": "fixture-secret"}.get(key, ""))
     monkeypatch.setattr(owner, "_x_flow", lambda: b'{"access_token":"fixture-token"}')
     monkeypatch.setattr(owner, "Thread", ImmediateThread)
+    fake = FakeXApi()
+    fake.users["fixture-token"] = {"id": "111", "username": "rowbot_ai", "name": "Row-Bot"}
+    monkeypatch.setattr(x_accounts, "transport", fake.transport())
     before = owner.read_account_auth(account="x")
     assert before["configured"] is True
-    assert account_tokens.read("x") is None
+    assert x_accounts.listed() == [] and fake.requests == []
     command = _command(before, "start")
     completed = owner.execute_account_auth(**command)
     assert completed["phase"] == "completed"
-    assert account_tokens.read("x") == {"access_token": "fixture-token"} and _no_files(profile)
+    assert account_tokens.read("x:111") == {"access_token": "fixture-token"} and _no_files(profile)
     assert "fixture-token" not in json.dumps(completed)
+
+
+def test_each_x_account_is_listed_and_removing_one_keeps_the_other(tmp_path, monkeypatch, keychain):
+    """N7: Settings › Apps › X lists every connected account by handle, name and ID (never a token), and
+    removes only the one asked."""
+    from row_bot import x_accounts
+    from tests.helpers.fake_x_api import PERSONAL, ROWBOT, FakeXApi
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    monkeypatch.setenv("X_CLIENT_ID", "fixture-id")
+    monkeypatch.setenv("X_CLIENT_SECRET", "fixture-secret")
+    fake = FakeXApi()
+    monkeypatch.setattr(x_accounts, "transport", fake.transport())
+    for user in (ROWBOT, PERSONAL):
+        x_accounts.add(fake.sign_in(*user))
+    local, _, _ = client_app()
+    with local:
+        _, headers = bootstrap(local)
+        listed = local.get("/api/v1/settings/snapshot", headers=headers).json()["accounts"]["x"]
+        snapshot = local.get("/api/v1/accounts/x/auth", headers=headers).json()
+        command_id = str(uuid4())
+        removed = local.post("/api/v1/accounts/x/auth/commands", headers={**headers, "idempotency-key": command_id},
+                             json={"command_id": command_id, "account": "x", "action": "disconnect", "confirmed": True,
+                                   "x_account": "111", "expected_revision": snapshot["revision"]})
+        after = local.get("/api/v1/settings/snapshot", headers=headers).json()["accounts"]["x"]
+    assert [(row["username"], row["name"], row["id"], row["state"]) for row in listed["x_accounts"]] == [
+        ("rowbot_ai", "Row-Bot", "111", "connected"), ("sidd", "Sidd", "222", "connected")]
+    assert snapshot["token_files"] == 2 and listed["authentication_state"] == "connected"
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["message"].startswith("@rowbot_ai was removed from this computer.")
+    assert [row["username"] for row in after["x_accounts"]] == ["sidd"]
+    assert account_tokens.read("x:111") is None and account_tokens.read("x:222") is not None
+    assert "access-" not in json.dumps([listed, snapshot, removed.json(), after])
 
 
 # B263: Settings › Accounts reports what Check found, not a guess from the

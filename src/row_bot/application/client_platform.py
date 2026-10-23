@@ -1758,6 +1758,8 @@ class ClientPlatformService:
             from row_bot.application import approval_grants
             handle.approval_granted = approval_grants.granted(conversation_id, payload)
             if not handle.approval_granted:
+                # An X post's card (its full text and pictures) is read with the approval, not streamed.
+                public_approval.pop("x_post", None)
                 self.projection.publish(conversation_id, "approval.required", {
                     "status": "waiting_approval", "approval_id": handle.approval_id,
                     **public_approval})
