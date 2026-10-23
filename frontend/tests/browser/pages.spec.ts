@@ -268,6 +268,11 @@ test('Library › Pages lists every page with its chat and opens it there', asyn
   await ask(page, PLAN, 'Beta launch plan');
   const frame = await open(page, 'Beta launch plan');
   await decide(frame, 'Draft the announcement', 'Approve');
+  await expect(
+    page
+      .getByRole('region', { name: 'Decisions' })
+      .getByRole('button', { name: '1 decision' }),
+  ).toBeVisible();
   await settled(page);
   await newConversation(page);
   await ask(page, DASHBOARD, 'Sales by week');
@@ -289,15 +294,22 @@ test('Library › Pages lists every page with its chat and opens it there', asyn
   ).toBeVisible();
 });
 
-/** The browser says what it refused, once each (Chromium's words). */
-function expectRefusals(frameUrl: string) {
+/**
+ * The browser says what it refused, once each (Chromium's words). The top
+ * window's navigation is named by its origin (Edge on Windows) or its address
+ * (Chromium on Linux); either way, the sandboxed page's own frame tried it.
+ */
+function expectRefusals(frameUrl: string, topUrl: string) {
   const origin = new URL(process.env.ROW_BOT_BROWSER_BASE_URL!).origin;
   const api = `${origin}/api/v1/handshake`;
+  const sandboxed =
+    "The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set.\n";
   for (const signature of [
     `Connecting to '${api}' violates the following Content Security Policy directive: "connect-src 'none'". The action has been blocked.`,
     `Fetch API cannot load ${api}. Refused to connect because it violates the document's Content Security Policy.`,
     "Blocked opening 'https://example.com/' in a new window because the request was made in a sandboxed frame whose 'allow-popups' permission is not set.",
-    `Unsafe attempt to initiate navigation for frame with origin '${origin}' from frame with URL '${frameUrl}'. The frame attempting navigation of the top-level window is sandboxed, but the flag of 'allow-top-navigation' or 'allow-top-navigation-by-user-activation' is not set.\n`,
+    `Unsafe attempt to initiate navigation for frame with origin '${origin}' from frame with URL '${frameUrl}'. ${sandboxed}`,
+    `Unsafe attempt to initiate navigation for frame with URL '${topUrl}' from frame with URL '${frameUrl}'. ${sandboxed}`,
   ])
     test.info().annotations.push({
       type: 'expected-console-error',
@@ -329,7 +341,7 @@ test("a page can't fetch, reach Row-Bot's page, navigate the top window or open 
   );
   const frame = await open(page, 'Sandbox check');
   const response = await served;
-  expectRefusals(response.url());
+  expectRefusals(response.url(), address);
   const headers = response.headers();
   expect(headers['content-security-policy']).toContain('sandbox allow-scripts');
   expect(headers['content-security-policy']).toContain("connect-src 'none'");
