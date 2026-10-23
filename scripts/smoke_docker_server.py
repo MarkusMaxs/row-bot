@@ -236,6 +236,8 @@ def container_run_args(
         "UV_CACHE_DIR=/data/cache/uv",
         "TMPDIR=/data/tmp",
         "ROW_BOT_SECRETS_DIR=/run/secrets",
+        # A smoke never sends install stats to the real service.
+        "ROW_BOT_INSTALL_COUNT=0",
     )
     command = [
         "docker",

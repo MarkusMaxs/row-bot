@@ -177,7 +177,7 @@ describe('stats', () => {
     const response = await stats(token);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      active_7d: 0, active_15d: 0, by_version: {}, by_os: {}, as_of: dayOf(Date.now()),
+      active_7d: 0, active_15d: 0, by_version: {}, by_os: {}, as_of: dayOf(Date.now()), by_country: {},
     });
   });
 
@@ -204,7 +204,75 @@ describe('stats', () => {
         docker: { active_7d: 0, active_15d: 1 },
       },
       as_of: today,
+      by_country: {},
     });
+  });
+
+  it('says how many installations reported from each country today and yesterday', async () => {
+    const today = dayOf(Date.now());
+    const count = (day, country, installs) =>
+      env.DB.prepare('INSERT INTO countries (day, country, installs) VALUES (?1, ?2, ?3)').bind(day, country, installs).run();
+    await count(today, 'GB', 3);
+    await count(before(today, 1), 'GB', 4);
+    await count(before(today, 1), 'US', 2);
+    await count(before(today, 2), 'FR', 9);
+    expect((await (await stats(token)).json()).by_country).toEqual({
+      GB: { today: 3, yesterday: 4 },
+      US: { today: 0, yesterday: 2 },
+    });
+  });
+});
+
+describe('countries', () => {
+  /** A ping as Cloudflare hands it to the Worker, with the country it worked out. */
+  const pingFrom = async (country, install) =>
+    worker.fetch(
+      new Request(`${ORIGIN}/v1/ping`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'cf-connecting-ip': address() },
+        body: JSON.stringify({ schema: 1, install, version: '5.3.0', os: 'windows' }),
+        cf: country === undefined ? undefined : { country },
+      }),
+      env,
+    );
+
+  async function counted() {
+    const { results } = await env.DB.prepare('SELECT day, country, installs FROM countries ORDER BY country').all();
+    return results;
+  }
+
+  it('counts each installation once a day under its country, and never keeps the country with it', async () => {
+    const day = dayOf(Date.now());
+    const first = await installId(secretOf(20));
+    expect((await pingFrom('GB', first)).status).toBe(204);
+    // A second count the same day, even from elsewhere, adds nothing.
+    expect((await pingFrom('FR', first)).status).toBe(204);
+    expect((await pingFrom('GB', await installId(secretOf(21)))).status).toBe(204);
+    expect((await pingFrom('US', await installId(secretOf(22)))).status).toBe(204);
+    expect(await counted()).toEqual([
+      { day, country: 'GB', installs: 2 },
+      { day, country: 'US', installs: 1 },
+    ]);
+    // The installation's own rows hold no country.
+    const stored = await rows();
+    expect(stored).toHaveLength(3);
+    expect(JSON.stringify(stored)).not.toMatch(/GB|US|FR/);
+  });
+
+  it('counts an unknown or odd country as XX', async () => {
+    for (const [n, country] of [[30, undefined], [31, 'gb'], [32, 'GBR'], [33, '<script>']]) {
+      expect((await pingFrom(country, await installId(secretOf(n)))).status, String(country)).toBe(204);
+    }
+    expect(await counted()).toEqual([{ day: dayOf(Date.now()), country: 'XX', installs: 4 }]);
+  });
+
+  it('leaves the country counts, which hold no IDs, when an installation deletes what was sent', async () => {
+    const secret = secretOf(40);
+    const install = await installId(secret);
+    await pingFrom('GB', install);
+    expect((await send('/v1/delete', { schema: 1, install, secret })).status).toBe(204);
+    expect(await rows()).toHaveLength(0);
+    expect(await counted()).toEqual([{ day: dayOf(Date.now()), country: 'GB', installs: 1 }]);
   });
 });
 

@@ -3,8 +3,8 @@
 A Cloudflare Worker with a D1 database that counts the Row-Bot installations reporting in the
 last 7 and 15 days (N6; "Install stats" in Row-Bot). It is on by default; Row-Bot sends nothing
 once the person turns "Share install stats" off (Settings › System › Privacy) or sets
-`ROW_BOT_INSTALL_COUNT=0`. The client side is `src/row_bot/install_count.py`; it stays dormant
-until its `COLLECTOR_URL` is set.
+`ROW_BOT_INSTALL_COUNT=0`. The client side is `src/row_bot/install_count.py`; its `COLLECTOR_URL`
+is the deployed collector, `https://row-bot-count.row-bot.workers.dev` (empty would make it dormant).
 
 ## What it receives
 
@@ -28,8 +28,12 @@ without storing any secret, and a ping carries nothing more than the four fields
 
 ```json
 {"active_7d": 0, "active_15d": 0, "by_version": {"5.3.0": {"active_7d": 0, "active_15d": 0}},
- "by_os": {"windows": {"active_7d": 0, "active_15d": 0}}, "as_of": "2026-11-20"}
+ "by_os": {"windows": {"active_7d": 0, "active_15d": 0}}, "as_of": "2026-11-20",
+ "by_country": {"GB": {"today": 0, "yesterday": 0}}}
 ```
+
+`by_country` is the installations reporting on that day (today so far, and yesterday) from each
+country, as Cloudflare works it out from the connection (`request.cf.country`; `XX` when unknown).
 
 Each installation counts once, under the version and OS of its latest day in the window. Show
 these numbers as "installations reporting in the last 7/15 days", apart from GitHub downloads,
@@ -41,6 +45,9 @@ never as users, all installs or consenting installs.
   the `ID_HMAC_KEY` secret), the day, the version and the OS. Never the ID itself, an IP address,
   headers or the request body. Rows older than 35 days are deleted by the daily cron (03:17 UTC).
 - `totals`: each day's numbers, overall, by version and by OS, with no IDs. Kept.
+- `countries`: how many installations reported from each country each day (D22). The first ping of
+  an installation on a day adds one to its country's count; the country is never written next to the
+  ID or into `pings`, and "Delete what was sent" leaves these counts, which hold no IDs. Kept.
 
 ## Hardening
 
@@ -86,9 +93,9 @@ turn them off; the steps do that first.
    openssl rand -hex 32 | npx wrangler secret put STATS_TOKEN
    ```
 
-   In PowerShell, make each value with
-   `-join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })` and paste it when
-   Wrangler asks.
+   In PowerShell, `Get-Random` isn't a cryptographic source: make each value with
+   `$b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString('x2') })`
+   and paste it when Wrangler asks.
 
 4. Deploy, then check the Worker in the Cloudflare dashboard: Workers Logs (observability) off,
    and no Logpush job sending its events anywhere.
@@ -108,9 +115,10 @@ turn them off; the steps do that first.
      -H "Authorization: Bearer $STATS_TOKEN"                           # {"active_7d":0,...}
    ```
 
-6. Put the address into Row-Bot in a follow-up pull request: `COLLECTOR_URL` in
-   `src/row_bot/install_count.py` (`https://row-bot-count.<your-subdomain>.workers.dev`, no
-   trailing slash).
+6. Put the address into Row-Bot: `COLLECTOR_URL` in `src/row_bot/install_count.py`
+   (`https://row-bot-count.<your-subdomain>.workers.dev`, no trailing slash). Choose the account's
+   `workers.dev` subdomain before that (Workers & Pages › Account details › Subdomain): released
+   installations keep the address they shipped with.
 
 History, from the kept totals:
 
