@@ -19,6 +19,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import time
 from typing import Any
 from uuid import UUID
 
@@ -533,7 +534,16 @@ def _write_document(path: Path, document: Mapping[str, Any]) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        # Windows refuses to replace a file another program (antivirus, an indexer) is reading (5 or 32);
+        # it lets go within moments (B408).
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                break
+            except OSError as exc:
+                if getattr(exc, "winerror", None) not in (5, 32) or attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     except (OSError, TypeError, ValueError, RecursionError):
         try:
             temporary.unlink(missing_ok=True)
@@ -598,9 +608,12 @@ def _write_json_setting(root: Path, page: str, field: str, value: Any) -> None:
 
 def _write_tool_setting(root: Path, page: str, field: str, value: Any) -> None:
     path = root / "tools_config.json"
+    from row_bot import tool_configuration
     from row_bot.providers.config import provider_config_transaction
 
-    with provider_config_transaction(path):
+    # The tool registry saves this file too: read and replace it between its saves, never in the middle of
+    # one, when the file is briefly away and this read would start from nothing (B408).
+    with provider_config_transaction(path), tool_configuration.transaction():
         document = _read_document(path)
         tools = document.get("tools")
         if tools is None:

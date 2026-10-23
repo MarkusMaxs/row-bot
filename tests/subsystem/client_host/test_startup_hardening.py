@@ -163,10 +163,13 @@ def test_preflight_handles_real_broken_optional_package_subprocess(tmp_path):
 
 def test_auto_start_channels_are_scheduled_in_background(monkeypatch):
     app_module = importlib.import_module("row_bot.app")
+    from row_bot.application import live_updates
     from row_bot.channels import registry as channel_registry
 
     invalidations: list[str] = []
     monkeypatch.setattr(channel_registry, "clear_agent_cache_if_loaded", lambda: invalidations.append("clear"))
+    live = live_updates.LiveUpdates()
+    monkeypatch.setattr(live_updates, "live_updates", live)
 
     class FakeChannel:
         name = "fake"
@@ -188,6 +191,8 @@ def test_auto_start_channels_are_scheduled_in_background(monkeypatch):
         await task
         assert channel.started is True
         assert invalidations == ["clear"]
+        # Monitor hears at once that a channel set to start with Row-Bot is running (B408).
+        assert live.frame()["topics"]["monitor"] >= 1
 
     asyncio.run(run_check())
 

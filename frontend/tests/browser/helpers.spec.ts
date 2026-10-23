@@ -40,13 +40,15 @@ async function everywhere(
   name: string,
   settle: () => Promise<void> = async () => {},
 ) {
-  await expect(settle).toPass();
+  // Each settle retries on its own (agentsList for 20 s): a failure says so
+  // then, rather than a retry around it toggling the details for 2 minutes (B402).
+  await settle();
   await views(page, info, name);
   await page.setViewportSize(PHONE);
-  await expect(settle).toPass();
+  await settle();
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
-  await expect(settle).toPass();
+  await settle();
 }
 
 /** A chat on the model with thinking levels, with three helpers. */

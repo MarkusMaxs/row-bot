@@ -17,6 +17,7 @@ import threading
 import time
 
 from row_bot import secret_store
+from row_bot.application.live_updates import publish as _publish_live
 from row_bot.integrations import apps, facts
 
 logger = logging.getLogger(__name__)
@@ -56,9 +57,11 @@ def _tool_on(tool: str) -> bool:
     registry = sys.modules.get("row_bot.tools.registry")
     if registry is not None and registry.get_tool(tool) is not None:
         return bool(registry.is_enabled(tool))
+    from row_bot import tool_configuration
     from row_bot.data_paths import get_row_bot_data_dir
     try:
-        saved = json.loads((get_row_bot_data_dir(create=False) / "tools_config.json").read_text(encoding="utf-8"))
+        with tool_configuration.transaction():  # Never in the middle of a save (B408).
+            saved = json.loads((get_row_bot_data_dir(create=False) / "tools_config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         saved = {}
     saved = saved if isinstance(saved, dict) else {}
@@ -161,9 +164,11 @@ def _now_generation() -> tuple[int, int]:
 
 def changed(*_: object) -> None:
     """An owner changed something a way reads (a key, a sign-in, a channel, a tool switch): the next
-    read builds the snapshot again."""
+    read builds the snapshot again, and Monitor reads its problems again (a channel stopped, an account
+    signed out)."""
     global _generation
     _generation += 1
+    _publish_live("monitor")
 
 
 def _key() -> str:
