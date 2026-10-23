@@ -70,7 +70,7 @@ Run the installer as you did the first time. Your data and settings stay.
 - **GitHub**: `api.github.com` to check for releases, and GitHub's release file hosts (`github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com`) to download them.
 - **Library downloads**, only when a release changes libraries: the Python Package Index's file host `files.pythonhosted.org`, and `download.pytorch.org` (which hands over to `download-r2.pytorch.org`) for PyTorch.
 
-Downloads use HTTPS to these hosts only. Every file is checked against a SHA-256 checksum before it is used: Row-Bot's own files against the list published with each release, and every library against the exact checksum recorded for that release. Libraries are only ever installed from ready-made packages, never built on your computer. Update checks and downloads send no telemetry: no account, usage or personal data.
+Downloads use HTTPS to these hosts only. Every file is checked against a SHA-256 checksum before it is used: Row-Bot's own files against the list published with each release, and every library against the exact checksum recorded for that release. Libraries are only ever installed from ready-made packages, never built on your computer. Update checks and downloads carry no account, usage or personal data. Row-Bot's only telemetry, the installation count, is separate: it is shown before anything is sent and is off in one click; see [Counting Installations](/docs/privacy-safety#counting-installations).
 
 ## Where Versions Live
 
