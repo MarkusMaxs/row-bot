@@ -62,6 +62,18 @@ const WAYS: Record<string, string> = {
   local: 'Runs on this computer',
 };
 
+/** How an account built into Row-Bot connects: none of them takes a key. */
+const BUILT_IN_ACCOUNTS: Record<string, string> = {
+  'builtin:account:google': 'your own Google sign-in',
+  'builtin:account:microsoft': 'your own Microsoft app and sign-in',
+  'builtin:account:x': 'your own X app and sign-in',
+};
+
+function builtInLine(id: string, name: string) {
+  const how = BUILT_IN_ACCOUNTS[id] ?? `your own ${name} sign-in or key`;
+  return `Part of Row-Bot: it works through ${how}.`;
+}
+
 function WayText({ way }: { way: IntegrationWay }) {
   return (
     <span className="app-way-text">
@@ -642,7 +654,7 @@ function Detail({
             {entry.kind === 'skill'
               ? 'Instructions stay on this computer.'
               : builtIn
-                ? `Part of Row-Bot: it works through your own ${entry.app?.name || name} sign-in or key.`
+                ? builtInLine(entry.id, entry.app?.name || name)
                 : about.destination
                   ? `What you ask goes to ${hostOf(about.destination)}.`
                   : about.runs_locally
