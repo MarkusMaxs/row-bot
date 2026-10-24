@@ -229,6 +229,18 @@ def person_approval(
     return outcome == "allow", line
 
 
+def asked_alone(interrupt: Any) -> dict[str, Any] | None:
+    """The card a step's waiting approvals ask first and by itself: the first only the person answers.
+
+    Such an answer is bound to exactly what its card showed, so it never shares a card with another
+    action: two memory writes of an incognito chat (N11) made in one step are two cards, one after
+    the other (B412). What waits beside it asks again, each for itself, once it is answered.
+    """
+    items = interrupt if isinstance(interrupt, list) else [interrupt]
+    return next((item for item in items
+                 if isinstance(item, dict) and item.get("person_only") and item.get("binding")), None)
+
+
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict) and _RECORD_KEY in value
 

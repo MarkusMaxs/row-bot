@@ -10,11 +10,14 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { expect, it, vi } from 'vitest';
 import type { ClientController } from '../../api/controller';
+import { LiveUpdates } from '../../api/live-updates';
 import type {
   AgentRuntimeSettingsState,
   DefaultModelSnapshot,
+  LiveFrame,
   ModelsSettingsState,
 } from '../../api/types';
+import { provideLive } from '../../live';
 import { OverlayProvider } from '../../ui/overlays';
 import { DefaultModelSession } from './DefaultModelSettings';
 import ModelsPanel from './ModelsPanel';
@@ -749,4 +752,64 @@ it('lists a pinned model without saved details with its reason and a catalog ref
     expect(controller.refreshModelsCatalog).toHaveBeenCalledTimes(1),
   );
   expect(controller.reviewDefaultModel).not.toHaveBeenCalled();
+});
+
+it('shows a newly signed-in provider’s models once its catalog refreshes, without Refresh (B411)', async () => {
+  const frames: ((frame: LiveFrame) => void)[] = [];
+  const live = new LiveUpdates(
+    {
+      async *observeLive(signal: AbortSignal) {
+        while (!signal.aborted)
+          yield await new Promise<LiveFrame>((resolve) => frames.push(resolve));
+      },
+    },
+    () => Promise.resolve(),
+  );
+  const send = (revision: number, models: number) =>
+    frames.shift()?.({
+      epoch: 'server-a',
+      revision,
+      topics: {
+        conversations: 0,
+        runs: 0,
+        approvals: 0,
+        helpers: 0,
+        processes: 0,
+        monitor: 0,
+        models,
+        learning: 0,
+      },
+    });
+  provideLive(live);
+  live.start();
+  try {
+    const controller = fixture();
+    show(controller);
+    expect(await screen.findByText('3 providers connected')).toBeVisible();
+    await waitFor(() => expect(frames).toHaveLength(1));
+    act(() => void send(1, 0));
+    await waitFor(() => expect(live.connected).toBe(true));
+    const summaries = vi.mocked(controller.modelCatalogSummary).mock.calls
+      .length;
+    // ChatGPT / Codex signed in: the server refreshed its catalog by itself.
+    const signedIn = structuredClone(baseState);
+    signedIn.brain.options.push(
+      option('model:xai_oauth:grok-5', 'Grok 5 - xAI Grok'),
+    );
+    vi.mocked(controller.modelsSettings).mockResolvedValue(signedIn);
+    await waitFor(() => expect(frames).toHaveLength(1));
+    act(() => void send(2, 1));
+
+    expect(await screen.findByText('4 providers connected')).toBeVisible();
+    expect(screen.getByText('7 models to choose from')).toBeVisible();
+    // The Catalog section reads its providers again too.
+    await waitFor(() =>
+      expect(
+        vi.mocked(controller.modelCatalogSummary).mock.calls.length,
+      ).toBeGreaterThan(summaries),
+    );
+    expect(controller.refreshModelsCatalog).not.toHaveBeenCalled();
+  } finally {
+    live.stop();
+  }
 });

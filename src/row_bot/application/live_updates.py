@@ -28,6 +28,8 @@ Topics (add one here, then publish it where its state changes):
 - ``monitor``: what Monitor lists as needing the person (a failed run, a
   start-up warning, a channel, an app or a plugin that stopped or started
   needing them).
+- ``models``: the saved model catalog: refreshed (at start-up, every six hours,
+  on Refresh, after a provider sign-in), or a provider disconnected (B411).
 - ``learning``: reserved for Row-Bot Learning, which publishes it.
 """
 from __future__ import annotations
@@ -41,7 +43,7 @@ from typing import Literal, ParamSpec, TypeVar, get_args
 P = ParamSpec("P")
 R = TypeVar("R")
 
-Topic = Literal["conversations", "runs", "approvals", "helpers", "processes", "monitor", "learning"]
+Topic = Literal["conversations", "runs", "approvals", "helpers", "processes", "monitor", "models", "learning"]
 TOPICS: tuple[str, ...] = get_args(Topic)
 
 

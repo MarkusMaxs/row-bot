@@ -18,6 +18,8 @@ import type { LiveFrame } from './types';
  * - `helpers`: helper (agent) runs started, changing state or ended.
  * - `processes`: background processes started, stopped or ended.
  * - `monitor`: what Monitor lists as needing the person.
+ * - `models`: the saved model catalog: refreshed, or a provider connected or
+ *   disconnected (B411).
  * - `learning`: reserved for Row-Bot Learning.
  *
  * Subscribe with `controller.live.subscribe(topic, onChange)`, which returns
@@ -36,6 +38,7 @@ export type LiveTopic =
   | 'helpers'
   | 'processes'
   | 'monitor'
+  | 'models'
   | 'learning';
 
 /** How often a screen re-reads anyway, for when the live stream is unavailable. */

@@ -56,6 +56,14 @@ def _provider(provider_id: str) -> None:
         raise SubscriptionError("not_found")
 
 
+def _connection_changed(provider_id: str, *, connected: bool = True) -> None:
+    """A sign-in was saved, removed or restored: runtimes forget the old one, Settings › Models shows it (B411)."""
+    from row_bot.application.provider_settings_commands import invalidate_provider_runtime
+    from row_bot.providers.model_catalog_cache import provider_connection_changed
+    invalidate_provider_runtime()
+    provider_connection_changed(provider_id, connected=connected)
+
+
 def _expiry(value: Any) -> str | None:
     try:
         if not isinstance(value, str) or len(value) > 80:
@@ -503,8 +511,7 @@ class SubscriptionFlows:
             flow.cancel.set()
             raise SubscriptionError("subscription_storage_unavailable") from None
         flow.published = True
-        from row_bot.application.provider_settings_commands import invalidate_provider_runtime
-        invalidate_provider_runtime()
+        _connection_changed(flow.provider_id)
         flow.pending_tokens = flow.authorization = flow.flow = None
         flow.state = "connected"
         # The loopback listener has already returned before Check can consume it.
@@ -654,8 +661,7 @@ class SubscriptionFlows:
             cfg = load_provider_config(strict=True)
             if cfg.get("providers", {}).get(provider_id, {}).get("oauth_bundle_command") == proof:
                 validate()
-                from row_bot.application.provider_settings_commands import invalidate_provider_runtime
-                invalidate_provider_runtime()
+                _connection_changed(provider_id)
                 if flow is not None:
                     flow.pending_tokens = flow.authorization = flow.flow = None
                     flow.state = "connected"
@@ -780,8 +786,7 @@ class SubscriptionFlows:
                     expected_revision=revision, validate=guard, command_proof=proof)
         else:
             raise SubscriptionError("invalid_command")
-        from row_bot.application.provider_settings_commands import invalidate_provider_runtime
-        invalidate_provider_runtime()
+        _connection_changed(provider_id, connected=operation == "restore")
 
 
 def read_receipt(*, provider_id: str, owner_id: str, command_id: str, validate: Callable[[], None]) -> dict | None:

@@ -1571,7 +1571,10 @@ class ClientPlatformService:
                               interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event,
                               **answered)
                               if resume else (self.stream_factory or stream_agent)(prepared_text, enabled, config, stop_event=handle.cancel_scope.stop_event))
-                    if approval_context is not None and not approval_context.get("approved"):
+                    # A denial ends the turn, but a "no" to one card asked by itself (resume_values) leaves what
+                    # waited beside it to ask again for itself (B412).
+                    if (approval_context is not None and not approval_context.get("approved")
+                            and not approval_context.get("resume_values")):
                         events = _settled_denial(
                             events, conversation_id=conversation_id,
                             identity=str(uuid.uuid5(uuid.NAMESPACE_URL, f"row-bot:denied:{handle.pass_id}")),
@@ -1920,22 +1923,29 @@ class ClientPlatformService:
             # A computer the turn was using keeps its session when the turn goes on.
             lease_generation = computer.prepare_approval_resume(
                 self, conversation_id, stored, approved=approved, runtime_surface=runtime_surface)
+            interrupt = stored.get("interrupt")
             context = self.claim_legacy_approval(approval_id, conversation_id, approved)
+            # A card only the person answers is asked by itself (B412): this answer is its own, and what waits
+            # beside it (another incognito memory write, say) asks again for itself, so it never ends the turn.
+            from row_bot.tools.approval_gate import asked_alone
+            alone = asked_alone(interrupt)
+            alone_id = str((alone or {}).get("__interrupt_id") or "")
+            asks_again = len(context["interrupt_ids"]) > 1 and alone_id in context["interrupt_ids"]
             from row_bot.application.conversation_followups import after_approval
-            after_approval(conversation_id, approved=approved)
+            after_approval(conversation_id, approved=approved or asks_again)
             # Answered, by the person or by what they approved for this turn:
             # Buddy stops saying "Needs approval" now, not when the turn ends (B333).
             _buddy(conversation_id, "approval.approved" if approved else "approval.denied",
                    "Approved" if approved else "Denied", approval_id=approval_id)
-            interrupt = stored.get("interrupt")
-            if approved and payload.get("scope") == "turn":
+            if approved and payload.get("scope") == "turn" and alone is None:
                 from row_bot.application import approval_grants
                 kinds = approval_grants.approval_kinds(interrupt)
                 if kinds:
                     approval_grants.grant(conversation_id, kinds)
+            answered = ({"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
+                        else {"interrupt_ids": context["interrupt_ids"]})
             result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,
-                                 approval_context={"approved": approved,
-                                                   "interrupt_ids": context["interrupt_ids"],
+                                 approval_context={"approved": approved, **answered,
                                                    "pass_id": context.get("pass_id"),
                                                    "generation_id": lease_generation,
                                                    "computer": any(
