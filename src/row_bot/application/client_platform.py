@@ -181,16 +181,18 @@ def _question_answer(asked: dict | None, payload: dict) -> dict | None:
 
 
 def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: str,
-                    expected_results: int, computer: bool) -> Iterator[tuple]:
+                    expected_results: int, computer: bool, memory: bool = False) -> Iterator[tuple]:
     """A denied approval ends the turn once the denied calls have their results.
 
     The model is not asked again, so it cannot retry the action or reach for
     another way to do it: the stream is closed there, and the reply says so.
     Closing it before LangGraph saves the tool step leaves the results unsaved,
-    so they are recorded before the reply (B234).
+    so they are recorded before the reply (B234). The reply never claims nothing
+    happened: earlier steps of the turn may have acted (U13).
     """
     message = ("You said no, so Row-Bot didn't use the computer for that." if computer
-               else "The requested action was denied. No action was taken.")
+               else "You chose not to save that, so Row-Bot didn't." if memory
+               else "You said no, so Row-Bot stopped there.")
     iterator = iter(events)
     settled = 0
     try:
@@ -1579,7 +1581,8 @@ class ClientPlatformService:
                             events, conversation_id=conversation_id,
                             identity=str(uuid.uuid5(uuid.NAMESPACE_URL, f"row-bot:denied:{handle.pass_id}")),
                             expected_results=len(approval_context.get("interrupt_ids") or ()),
-                            computer=bool(approval_context.get("computer")))
+                            computer=bool(approval_context.get("computer")),
+                            memory=bool(approval_context.get("memory")))
                     for event in events:
                         self.registry.check_dispatch(handle)
                         if self.stream_factory is not None and event[0] in {"token", "tool_start", "tool_done", "output_binding"}:
@@ -1711,10 +1714,17 @@ class ClientPlatformService:
                 canonical_tool_name,
             )
 
-            tool_name = canonical_tool_name(getter("name") or getter("tool_name"))
             raw_tool = str(getter("raw_name") or "")
             design_step = raw_tool if re.fullmatch(r"designer_[a-z_]{1,55}", raw_tool) else ""
             call_id = str(getter("tool_call_id") or getter("id") or "")
+            # A live step carries the tool's own name, as its saved step does, never its display name ("🌐
+            # Browser"): it reads the same before and after it settles, and the browser's steps group as the
+            # browser's, so the chat shows the live browser step (U16). Its result keeps the name its call had.
+            names = handle.__dict__.setdefault("tool_names", {})
+            own_name = names.get(call_id) or str(getter("runtime_name") or raw_tool or "")
+            if call_id and own_name:
+                names[call_id] = own_name
+            tool_name = canonical_tool_name(own_name or getter("name") or getter("tool_name"))
             if not call_id:
                 call_id = hashlib.sha256(
                     f"{handle.pass_id}:{handle.segment_id}:{getter('message_id')}:{tool_name}".encode()
@@ -1765,7 +1775,8 @@ class ClientPlatformService:
                 "content_ref": item.content_ref,
                 **({"app": dict(app)} if app else {}),
                 **({"specialization": public_specialization(item.specialization)}
-                   if item.specialization is not None and item.specialization.kind in CARD_SPECIALIZATIONS
+                   if item.specialization is not None
+                   and item.specialization.kind in CARD_SPECIALIZATIONS | {"request_corrected"}
                    else {})})
             if kind == "tool_done":
                 for metadata in getter("media", []) or []:
@@ -1790,9 +1801,11 @@ class ClientPlatformService:
         elif kind == "thinking":
             self.projection.publish(conversation_id, "generation.activity", {"state": "thinking"})
         elif kind == "tool_writing" and isinstance(payload, dict):
-            from row_bot.agent import _resolve_tool_display_name
+            from row_bot.application.conversation_traces import canonical_tool_name
+            # The tool's own name, as its step carries it: the client words it ("Writing a page"), never as
+            # the tool's display name ("📁 Pages").
             self.projection.publish(conversation_id, "generation.activity", {
-                "state": "writing", "tool": _resolve_tool_display_name(str(payload.get("name") or ""))[:120],
+                "state": "writing", "tool": canonical_tool_name(str(payload.get("name") or ""))[:120],
                 "bytes": max(0, int(payload.get("bytes") or 0))})
         elif kind in {
             "context_usage",
@@ -1950,6 +1963,10 @@ class ClientPlatformService:
                                                    "generation_id": lease_generation,
                                                    "computer": any(
                                                        isinstance(item, dict) and item.get("tool") == "computer"
+                                                       for item in (interrupt if isinstance(interrupt, list) else [interrupt])),
+                                                   # An incognito chat's memory write (N11): Don't save.
+                                                   "memory": any(
+                                                       isinstance(item, dict) and isinstance(item.get("memory_save"), dict)
                                                        for item in (interrupt if isinstance(interrupt, list) else [interrupt]))})
             return {**result, "approval_id": approval_id}
         if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve", answer=answer):

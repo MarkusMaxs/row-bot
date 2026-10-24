@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  Folder,
   HatGlasses,
   Power,
   ShieldAlert,
@@ -96,10 +97,12 @@ const RISK: Record<string, string> = {
   critical: 'Critical risk',
 };
 
-/** The server's scope sentences, in the card's words. */
-function plainScope(scope: string | null | undefined): string {
+/** What one approval lets happen, in the card's words: "This command only." (U7). */
+function plainScope(scope: string | null | undefined, action: string): string {
   if (!scope || /^Only this requested action will be resolved\.?$/.test(scope))
-    return 'Only this action.';
+    return /\bcommand\b/i.test(action)
+      ? 'This command only.'
+      : 'This action only.';
   const together =
     /^(\d+) requested actions will be resolved together\.?$/.exec(scope);
   return together ? `These ${together[1]} actions, together.` : scope;
@@ -135,6 +138,7 @@ function fieldsWritten(view: ApprovalView): boolean {
 function ApprovalDetails({ view }: { view: ApprovalView }) {
   const risk = RISK[view.risk_class ?? ''];
   const reason = reasonWords(view);
+  const action = approvalAction(view.action_label || '', view.app);
   return (
     <div className="approval-detail stack">
       <p className="approval-detail-reason">
@@ -142,7 +146,17 @@ function ApprovalDetails({ view }: { view: ApprovalView }) {
       </p>
       <dl>
         <dt>Action</dt>
-        <dd>{approvalAction(view.action_label || '', view.app)}</dd>
+        <dd>{action}</dd>
+        {view.folder && (
+          // By the folder's name, as Settings names it; never its path.
+          <>
+            <dt>Runs in</dt>
+            <dd className="approval-detail-folder">
+              <Folder size={14} aria-hidden />
+              {view.folder}
+            </dd>
+          </>
+        )}
         {rawToolName(view.action_label || '') && (
           <>
             <dt>Tool</dt>
@@ -157,8 +171,8 @@ function ApprovalDetails({ view }: { view: ApprovalView }) {
             <dd>{risk}</dd>
           </>
         )}
-        <dt>Affects</dt>
-        <dd>{plainScope(view.scope)}</dd>
+        <dt>This approval covers</dt>
+        <dd>{plainScope(view.scope, action)}</dd>
         {view.reviewer_reason && (
           <>
             <dt>Reviewer</dt>

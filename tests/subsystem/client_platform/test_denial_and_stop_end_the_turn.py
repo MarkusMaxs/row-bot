@@ -53,7 +53,28 @@ def test_a_denied_approval_ends_the_turn_before_the_model_can_try_again(platform
     assert platform.get_approval(first.approval_id)["status"] == "denied"
     last = platform.transcript("conversation-a")["rows"][-1]
     assert last["role"] == "assistant"
-    assert "The requested action was denied. No action was taken." in json.dumps(last)
+    # Plain and honest: earlier steps of the turn may have acted, so it never says nothing happened (U13).
+    assert "You said no, so Row-Bot stopped there." in json.dumps(last)
+
+
+def test_a_declined_memory_save_says_it_was_not_saved(platform):
+    """U13: after an incognito chat's turn had saved one memory, Don't save on the next read
+    "The requested action was denied. No action was taken." — cold, and false."""
+    memory = {**APPROVAL, "tool": "save_memory", "memory_save": {"text": "Tea: green, no sugar"}}
+    fake = ScriptedAgentStream(
+        (("interrupt", memory),),
+        (("tool_done", {"name": "save_memory", "tool_call_id": "call-1", "content": "Not saved."}),
+         ("token", "Saving it another way"),
+         ("done", "Saving it another way")))
+    first = _waiting(platform, fake, "memory-denial")
+
+    receipt = _resolve(platform, first.approval_id, "deny", "dont-save")
+
+    resumed = platform.registry.get(receipt["execution_id"])
+    assert resumed.producer_done.wait(10)
+    assert [event[0] for event in fake.events][-1] == "tool_done"  # still not asked again (B234)
+    last = platform.transcript("conversation-a")["rows"][-1]
+    assert "You chose not to save that, so Row-Bot didn't." in json.dumps(last)
 
 
 def test_an_approval_still_resumes_the_whole_turn(platform):

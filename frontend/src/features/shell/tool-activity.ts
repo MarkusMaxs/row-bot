@@ -18,6 +18,7 @@ import {
   GitPullRequest,
   Globe,
   Image,
+  LayoutTemplate,
   Mail,
   MessageCircleQuestion,
   MessagesSquare,
@@ -169,6 +170,9 @@ const EXACT: Record<string, Verb> = {
     MessageCircleQuestion,
   ),
   export_to_pdf: verb('Exported a PDF', 'Exporting a PDF', FileText),
+  page_create: verb('Wrote a page', 'Writing a page', LayoutTemplate),
+  page_update: verb('Changed a page', 'Changing a page', LayoutTemplate),
+  page_read: verb('Read a page', 'Reading a page', LayoutTemplate),
   save_memory: verb('Saved a memory', 'Saving a memory', Brain),
   search_memory: verb('Searched memory', 'Searching memory', Brain),
   update_memory: verb('Updated a memory', 'Updating a memory', Brain),
@@ -332,6 +336,10 @@ const PATTERNS: Array<[RegExp, Verb]> = [
     /^developer_/,
     verb('Worked in the code folder', 'Working in the code folder', GitBranch),
   ],
+  [
+    /^designer_/,
+    verb('Worked on the design', 'Working on the design', Palette),
+  ],
   [/^(wiki|tracker)_/, verb('Updated notes', 'Updating notes', BookOpen)],
   [/memor/, verb('Used memory', 'Using memory', Brain)],
   [/search$/, verb('Searched', 'Searching', Search)],
@@ -432,6 +440,15 @@ function midSentence(label: string) {
     : label;
 }
 
+/**
+ * A tool call the model is still writing (B324), in its step's own words:
+ * "Writing a page · 3 KB", never the tool's display name or its emoji.
+ */
+export function writingLabel(name: string, bytes: number): string {
+  const size = `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${describe(name)?.running ?? 'Preparing the next step'} · ${size}`;
+}
+
 export function stepIcon(name: string): LucideIcon {
   return describe(name)?.icon ?? Wrench;
 }
@@ -526,14 +543,34 @@ export type ActivitySummary = {
   questions?: number;
 };
 
+/** A call the model got wrong and was told to send again (U11): no failure of the turn's. */
+export function isCorrected(step: TranscriptTraceItem) {
+  return step.specialization?.kind === 'request_corrected';
+}
+
+/**
+ * The turn's steps in order, as a person reads them: a corrected call is left
+ * out once the model sent that tool's call again, so only the last one the
+ * model gave up on shows (one quiet line).
+ */
 export function orderedSteps(groups: TranscriptTraceGroup[]) {
-  return [...groups]
+  const steps = [...groups]
     .sort((first, second) => first.group_order - second.group_order)
     .flatMap((group) =>
       [...group.items].sort(
         (first, second) => first.call_order - second.call_order,
       ),
     );
+  return steps.filter(
+    (step, index) =>
+      !isCorrected(step) ||
+      !steps.some(
+        (other, at) =>
+          other !== step &&
+          other.canonical_name === step.canonical_name &&
+          (!isCorrected(other) || at > index),
+      ),
+  );
 }
 
 const ATTENTION = new Set<StepStatus>([
@@ -559,7 +596,9 @@ export function summarizeActivity(
   return {
     total: steps.length,
     failed: steps.filter(
-      (step) => step.status === 'failed' || step.status === 'uncertain',
+      (step) =>
+        (step.status === 'failed' && !isCorrected(step)) ||
+        step.status === 'uncertain',
     ).length,
     skipped: steps.filter(
       (step) => step.status === 'blocked' || step.status === 'cancelled',
@@ -568,8 +607,9 @@ export function summarizeActivity(
     icons,
     current:
       [...steps].reverse().find((step) => step.status === 'pending') ?? null,
-    questions: steps.filter((step) => step.canonical_name === 'ask_person')
-      .length,
+    questions: steps.filter(
+      (step) => step.canonical_name === 'ask_person' && !isCorrected(step),
+    ).length,
   };
 }
 

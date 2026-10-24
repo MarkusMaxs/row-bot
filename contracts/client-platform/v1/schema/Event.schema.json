@@ -277,6 +277,12 @@
           "default": null,
           "title": "Approval Id"
         },
+        "folder": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Folder",
+          "type": "string"
+        },
         "memory_text": {
           "default": "",
           "maxLength": 4096,
@@ -2787,7 +2793,8 @@
             "sandbox_job",
             "sandbox_unprepared",
             "question_answered",
-            "page"
+            "page",
+            "request_corrected"
           ],
           "title": "Kind",
           "type": "string"

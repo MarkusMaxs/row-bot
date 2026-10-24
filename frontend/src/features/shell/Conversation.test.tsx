@@ -1919,7 +1919,7 @@ it('shows a failed compact approval save in the conversation without changing it
   mock.drafts.set('conversation-a', { text: 'Keep my draft', attachments: [] });
   await act(async () => conversation());
   await act(async () =>
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Approvals' }), {
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Approvals: Ask' }), {
       key: 'Enter',
     }),
   );
@@ -1930,10 +1930,9 @@ it('shows a failed compact approval save in the conversation without changing it
   expect(screen.getByRole('alert')).toHaveTextContent(/review|changed|retry/i);
   expect(mock.drafts.get('conversation-a')?.text).toBe('Keep my draft');
   // The shield's glyph shows the mode; its description names it.
-  expect(screen.getByRole('button', { name: 'Approvals' })).toHaveAttribute(
-    'aria-description',
-    'Approvals: Ask',
-  );
+  expect(
+    screen.getByRole('button', { name: 'Approvals: Ask' }),
+  ).toHaveAttribute('aria-description', 'Approvals: Ask');
 });
 
 it('reserves Resume before dispatch and recovers a lost accepted response after reload without another admission', async () => {

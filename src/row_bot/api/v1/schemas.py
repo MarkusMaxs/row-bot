@@ -6882,6 +6882,8 @@ class ApprovalRequired(WireModel):
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
     # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
     memory_text: str = Field(default="", max_length=4096)
+    # The folder a command runs in, by its name only, never its path (U7).
+    folder: str = Field(default="", max_length=120)
 
 
 class GenerationError(WireModel):
@@ -7421,6 +7423,8 @@ class TraceSpecialization(WireModel):
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
         "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
         "question_answered", "page",
+        # A call the model got wrong and sent again (U11): a quiet line, never its error text.
+        "request_corrected",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7844,6 +7848,8 @@ class ApprovalView(WireModel):
     questions: list[ApprovalQuestion] = Field(default_factory=list, max_length=4)
     # A memory write in an incognito chat (N11): the exact text to save, Save or Don't save, the person's alone.
     memory_text: str = Field(default="", max_length=4096)
+    # The folder a command runs in, by its name only, never its path (U7).
+    folder: str = Field(default="", max_length=120)
     # A post, reply, quote or delete on X (N7): exactly what goes out, and as which account.
     x_post: XPostApproval | None = None
     policy_revision: Revision

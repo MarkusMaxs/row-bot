@@ -875,6 +875,7 @@ class ShellTool(BaseTool):
             risks += (_BACKGROUND_RISK,)
         if _sets_git_identity(command):
             risks += (approval_gate.GIT_IDENTITY_RISK,)
+        thread_id, session_key, session = self._session_for(runtime_config)
         refusal, approval = self._gate(
             command=command,
             classification=classification,
@@ -884,6 +885,8 @@ class ShellTool(BaseTool):
                 "description": f"Run shell command: {command}",
                 "approval_reason": approval_reason,
                 "args": {"command": command},
+                # Where it runs, by the folder's name only, as Settings names it (U7).
+                "folder": Path(session.cwd).name or session.cwd,
             },
             risks=risks,
             private_description=(
@@ -899,7 +902,6 @@ class ShellTool(BaseTool):
             return refusal
 
         # ── Execute ──────────────────────────────────────────────────────
-        thread_id, session_key, session = self._session_for(runtime_config)
         try:
             result = session.run_command(command, conversation_id=thread_id, background=background)
         except Exception as exc:
