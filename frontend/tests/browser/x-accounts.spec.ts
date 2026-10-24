@@ -67,14 +67,22 @@ function transcript(page: Page) {
 /** Open the turn's steps and the x_post step itself, to show the tool's own result. */
 async function openResult(page: Page, text: RegExp) {
   const log = transcript(page);
-  await log.locator('summary.activity-summary').last().click();
-  await log
-    .locator('details summary')
-    .filter({ hasText: /on X/ })
-    .last()
-    .click();
   const result = log.getByText(text);
-  await expect(result).toBeVisible();
+  // The steps render again once the turn settles, so a summary can be
+  // replaced mid-click (B420): open whichever is closed until the result
+  // shows, never toggling an open one shut.
+  const open = async (summary: ReturnType<Page['locator']>) => {
+    const details = summary.locator('xpath=..');
+    if ((await details.getAttribute('open', { timeout: 2_000 })) === null)
+      await summary.click({ timeout: 2_000 });
+  };
+  await expect(async () => {
+    await open(log.locator('summary.activity-summary').last());
+    await open(
+      log.locator('details summary').filter({ hasText: /on X/ }).last(),
+    );
+    await expect(result).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
   return result;
 }
 

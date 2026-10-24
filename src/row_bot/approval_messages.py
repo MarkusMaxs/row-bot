@@ -37,6 +37,9 @@ def reviewer_reason(item: object) -> str:
     review = item.get("review") if isinstance(item, Mapping) else None
     if not isinstance(review, Mapping) or review.get("decision") != "ask":
         return ""
+    if item.get("person_only"):
+        # The person's own rule (Always ask me, an incognito chat's memory), not the reviewer (U19).
+        return ""
     return sanitize_approval_reason(review.get("reason"), max_chars=200)
 
 
