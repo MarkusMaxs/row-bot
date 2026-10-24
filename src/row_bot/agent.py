@@ -4337,6 +4337,16 @@ def _request_after_overflow(exc: BaseException, config: dict | None) -> list | N
     return llm_messages
 
 
+def _is_unparsed_tool_call_error(exc: BaseException) -> bool:
+    """Ollama's parser refused the model's own tool-call text (B418): the model's mistake, not the runtime's.
+
+    It reports "error parsing tool call: …" or, for models whose tool calls are XML (qwen3.8), "XML syntax
+    error …" with status code -1. A provider that is down or refusing the request never says either.
+    """
+    text = str(exc).lower()
+    return "error parsing tool call" in text or ("xml syntax error" in text and "status code: -1" in text)
+
+
 class _AgentModelCall:
     """The Agent graph's model: it binds the tools once, then makes each provider call (WP A4b).
 
@@ -4348,6 +4358,9 @@ class _AgentModelCall:
     * a context-overflow error is followed by one compaction and one retry (F27). The provider
       refused the request before reading it, so the retry costs nothing extra; a second overflow
       stands;
+    * a tool call the local runtime couldn't parse (Ollama's own parser refusing the model's text)
+      is asked for once more, unchanged: the model usually writes it correctly the second time, and
+      a second failure stands (B418);
     * the input the provider reports calibrates the request-size estimate (F29);
     * inline ``<think>`` text is stored as the answer's reasoning (F32).
     """
@@ -4383,12 +4396,17 @@ class _AgentModelCall:
             try:
                 response = model.invoke(messages, config)
             except Exception as exc:
-                if not _is_context_overflow_error(exc):
+                if _is_unparsed_tool_call_error(exc):
+                    logger.warning("The model's tool call couldn't be parsed by its runtime; asking once more: %s",
+                                   str(exc)[:200])
+                    response = model.invoke(messages, config)
+                elif not _is_context_overflow_error(exc):
                     raise
-                retry = _request_after_overflow(exc, config)
-                if retry is None:
-                    raise
-                response = model.invoke(retry, config)
+                else:
+                    retry = _request_after_overflow(exc, config)
+                    if retry is None:
+                        raise
+                    response = model.invoke(retry, config)
             _observe_request_size(config, response)
             inputs = _last_preparation_inputs(config)
             return _with_inline_thinking_moved(response, getattr(inputs, "provider_id", None))
