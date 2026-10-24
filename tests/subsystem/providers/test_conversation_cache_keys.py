@@ -1,4 +1,4 @@
-"""Each provider gets one stable cache-routing key per conversation (WP B2).
+"""Cache-routing keys (WP B2): per conversation, and OpenAI's shared by interactive chats.
 
 Requests go through the real SDKs and Row-Bot transports; HTTP is answered in
 process, so these tests read exactly what would reach the provider.
@@ -27,12 +27,12 @@ CONVERSATION = "telegram:12345:15550001111"
 OTHER_CONVERSATION = "conversation-b"
 
 
-def in_conversation(thread_id: str, call: Callable[[], Any]) -> Any:
+def in_conversation(thread_id: str, call: Callable[[], Any], surface: str = "normal_chat") -> Any:
     """Run ``call`` as the agent does inside a conversation (or outside one for ``""``)."""
     import row_bot.agent as agent
 
     def run() -> Any:
-        agent._set_active_runtime_context(thread_id=thread_id)
+        agent._set_active_runtime_context(thread_id=thread_id, runtime_surface=surface)
         return call()
 
     return contextvars.copy_context().run(run)
@@ -67,15 +67,22 @@ def _bodies(requests: list[httpx.Request]) -> list[dict]:
     return [json.loads(request.content) for request in requests]
 
 
-def _ask_in(model: Any, *conversations: str) -> None:
+def _ask_in(model: Any, *conversations: str, surface: str = "normal_chat") -> None:
     for thread_id in conversations:
-        in_conversation(thread_id, lambda: model.invoke(PROMPT))
+        in_conversation(thread_id, lambda: model.invoke(PROMPT), surface)
 
 
 def _assert_one_key_per_conversation(keys: list[Any]) -> None:
     first, again, other, outside = keys
     assert first and first == again
     assert other and other != first
+    assert outside is None
+    assert uuid.UUID(first).version == 4
+
+
+def _assert_one_shared_key(keys: list[Any]) -> None:
+    first, again, other, outside = keys
+    assert first and first == again == other
     assert outside is None
     assert uuid.UUID(first).version == 4
     assert "12345" not in first and "15550001111" not in first
@@ -94,28 +101,53 @@ def test_the_key_is_per_conversation_per_provider_and_opaque() -> None:
     assert openai_keys[0] != xai_keys[0]
 
 
-def test_openai_responses_send_the_conversation_key_and_store_nothing(sent) -> None:
+def test_interactive_chats_share_one_openai_key_and_back_to_back_work_keeps_its_own() -> None:
+    def keys(scope: str, surface: str) -> list[str | None]:
+        return [in_conversation(thread, lambda: cache_affinity.shared_prefix_cache_key(scope), surface)
+                for thread in (CONVERSATION, CONVERSATION, OTHER_CONVERSATION, "")]
+
+    def own_keys(scope: str) -> list[str | None]:
+        return [in_conversation(thread, lambda: cache_affinity.conversation_cache_key(scope))
+                for thread in (CONVERSATION, CONVERSATION, OTHER_CONVERSATION, "")]
+
+    # A new chat starts with the same system prompt and tools, so it finds the cached prefix.
+    for surface in ("normal_chat", "channel", ""):
+        _assert_one_shared_key(keys("openai", surface))
+    # Workflows, goals and helpers make back-to-back calls: one key each, as before.
+    for surface in ("workflow", "goal", "agent", "agent_child"):
+        assert keys("openai", surface) == own_keys("openai")
+    _assert_one_key_per_conversation(keys("openai", "workflow"))
+    # The shared key is opaque, and no other provider (or conversation key) has it.
+    shared = keys("openai", "normal_chat")[0]
+    assert shared != keys("codex", "normal_chat")[0]
+    assert shared not in own_keys("openai")
+    assert "12345" not in shared
+
+
+def test_openai_responses_send_the_shared_key_and_store_nothing(sent) -> None:
     model = runtime.create_chat_model("gpt-5.4", provider_id="openai")
 
     _ask_in(model, CONVERSATION, CONVERSATION, OTHER_CONVERSATION, "")
 
     bodies = _bodies(sent)
     assert [request.url.path for request in sent] == ["/v1/responses"] * 4
-    _assert_one_key_per_conversation([body.get("prompt_cache_key") for body in bodies])
+    _assert_one_shared_key([body.get("prompt_cache_key") for body in bodies])
     assert all(body["store"] is False for body in bodies)
     assert all(body["include"] == ["reasoning.encrypted_content"] for body in bodies)
     # Retention stays at the server default.
     assert not any("prompt_cache_retention" in body for body in bodies)
 
 
-def test_openai_chat_completions_send_the_conversation_key(sent) -> None:
+def test_openai_chat_completions_send_the_shared_key_and_a_workflow_its_own(sent) -> None:
     model = runtime.create_chat_model("gpt-4.1", provider_id="openai")
 
     _ask_in(model, CONVERSATION, CONVERSATION, OTHER_CONVERSATION, "")
+    _ask_in(model, CONVERSATION, CONVERSATION, OTHER_CONVERSATION, "", surface="workflow")
 
     bodies = _bodies(sent)
-    assert [request.url.path for request in sent] == ["/v1/chat/completions"] * 4
-    _assert_one_key_per_conversation([body.get("prompt_cache_key") for body in bodies])
+    assert [request.url.path for request in sent] == ["/v1/chat/completions"] * 8
+    _assert_one_shared_key([body.get("prompt_cache_key") for body in bodies[:4]])
+    _assert_one_key_per_conversation([body.get("prompt_cache_key") for body in bodies[4:]])
     assert not any("store" in body or "include" in body for body in bodies)
 
 
@@ -168,7 +200,7 @@ def subscription_credentials(monkeypatch) -> None:
     monkeypatch.setattr(xai_oauth, "xai_oauth_runtime_credentials", lambda **kwargs: credentials)
 
 
-def test_codex_session_is_the_conversation_key_for_every_model_instance(subscription_credentials) -> None:
+def test_codex_session_is_the_conversation_key_and_chats_share_the_cache_key(subscription_credentials) -> None:
     client = _SSEClient()
 
     # Chat Only and compaction build a new instance per call.
@@ -178,12 +210,15 @@ def test_codex_session_is_the_conversation_key_for_every_model_instance(subscrip
 
     body_keys = [call["json"]["prompt_cache_key"] for call in client.calls]
     header_keys = [call["headers"]["session_id"] for call in client.calls]
-    assert body_keys == header_keys
-    first, again, other, outside = body_keys
+    first, again, other, outside = header_keys
     assert first == again != other
     assert outside not in {first, other}
     assert first == in_conversation(CONVERSATION, lambda: cache_affinity.conversation_cache_key("codex"))
     assert "12345" not in first
+    # The cache key is the same for every interactive chat, so a new one finds the cached prefix.
+    assert body_keys[0] == body_keys[1] == body_keys[2]
+    assert body_keys[0] not in header_keys
+    assert body_keys[3] == header_keys[3]  # outside a conversation: the instance's own session
 
 
 def test_codex_outside_a_conversation_keeps_one_session_per_instance(subscription_credentials) -> None:

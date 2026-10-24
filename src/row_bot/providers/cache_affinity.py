@@ -1,14 +1,18 @@
-"""One stable, opaque key per conversation, for provider cache routing.
+"""Stable, opaque keys for provider cache routing.
 
 Providers route a request to a machine (or upstream provider) that may hold
 its prompt cache. A stable per-conversation key keeps every call of one
 conversation on the same route, so the cached prefix is found again:
 
-- OpenAI and xAI Responses: ``prompt_cache_key``;
+- xAI Responses: ``prompt_cache_key``;
 - xAI Chat Completions: the ``x-grok-conv-id`` header;
 - OpenRouter: ``session_id`` (sticky provider routing);
-- Codex: ``prompt_cache_key`` and the ``session_id`` header;
+- Codex: the ``session_id`` header;
 - OpenCode: the ``x-opencode-session`` header.
+
+OpenAI's and Codex's ``prompt_cache_key`` is shared by interactive chats
+instead (``shared_prefix_cache_key``), so a new chat finds the system prompt
+and tools another chat cached.
 
 The key is an HMAC of the conversation id under a key that lives only in this
 process, so a provider never sees the conversation id itself (channel
@@ -54,6 +58,23 @@ def current_conversation_id() -> str:
         return ""
 
 
+def current_runtime_surface() -> str:
+    """The surface of the running agent call (``normal_chat``, ``workflow`` …), or ``""``."""
+    agent = sys.modules.get("row_bot.agent")
+    getter = getattr(agent, "get_current_runtime_surface", None) if agent is not None else None
+    if not callable(getter):
+        return ""
+    try:
+        return str(getter() or "")
+    except Exception:
+        return ""
+
+
+def _uuid_key(digest: str) -> str:
+    # Shaped as a version-4 UUID, the form Codex CLI and xAI's examples use.
+    return str(uuid.UUID(bytes=bytes.fromhex(digest), version=4))
+
+
 def conversation_cache_key(scope: str) -> str | None:
     """A UUID-shaped cache key for the current conversation at one provider.
 
@@ -63,8 +84,29 @@ def conversation_cache_key(scope: str) -> str | None:
     conversation_id = current_conversation_id()
     if not conversation_id:
         return None
-    # Shaped as a version-4 UUID, the form Codex CLI and xAI's examples use.
-    return str(uuid.UUID(bytes=bytes.fromhex(conversation_digest(conversation_id, scope=scope)), version=4))
+    return _uuid_key(conversation_digest(conversation_id, scope=scope))
+
+
+# Back-to-back calls (workflows, goals, helpers): each keeps its own conversation's key.
+_OWN_KEY_SURFACES = frozenset({"workflow", "goal", "agent", "agent_child"})
+
+
+def shared_prefix_cache_key(scope: str) -> str | None:
+    """The ``prompt_cache_key`` for OpenAI and Codex: shared by interactive chats.
+
+    Every interactive chat (desktop, channels, voice) starts with the same
+    system prompt and tools. OpenAI routes a key and the prompt's first tokens
+    to one cache, and asks for one key across requests that share a prefix
+    (under about 15 requests a minute each). With a key per conversation, each
+    new chat missed the prefix the last one cached. Workflows, goals and
+    helpers make back-to-back calls, so they keep their conversation's key.
+    ``None`` outside a conversation.
+    """
+    if not current_conversation_id():
+        return None
+    if current_runtime_surface() in _OWN_KEY_SURFACES:
+        return conversation_cache_key(scope)
+    return _uuid_key(conversation_digest("interactive", scope=f"shared\x00{scope}"))
 
 
 def conversation_header_hook(header: str, scope: str) -> Callable[[Any], None]:

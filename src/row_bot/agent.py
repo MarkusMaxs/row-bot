@@ -4612,6 +4612,12 @@ def get_current_thread_id() -> str:
     return _current_thread_id_var.get("")
 
 
+def get_current_runtime_surface() -> str:
+    """Return the runtime surface (``normal_chat``, ``workflow`` …) of the active invocation."""
+
+    return _current_runtime_surface_var.get("")
+
+
 def get_active_runtime_context() -> dict:
     """Return lightweight runtime facts for status/introspection tools."""
 

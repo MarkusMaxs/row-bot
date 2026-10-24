@@ -17,7 +17,7 @@ from pydantic import Field, PrivateAttr
 from row_bot.cancellation import current_cancellation_scope
 from row_bot.prompt_cache import usage_metadata_from_provider_usage
 from row_bot.providers import codex as codex_auth
-from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.cache_affinity import conversation_cache_key, shared_prefix_cache_key
 from row_bot.providers.transports.responses_reasoning import (
     ENCRYPTED_REASONING_INCLUDE,
     is_encrypted_reasoning_rejection,
@@ -71,16 +71,21 @@ class ChatCodexResponses(BaseChatModel):
         return self.bind(tools=[_responses_tool(tool) for tool in tools], tool_choice=tool_choice or "auto", **kwargs)
 
     def _session_key(self) -> str:
-        """The cache key and session of this request: one per conversation.
+        """The ``session_id`` header of this request: one per conversation.
 
         Codex CLI sends its conversation id as both ``prompt_cache_key`` and the
-        ``session_id`` header, so every call of a conversation reaches the same
-        prompt cache. Row-Bot sends a per-process digest of its conversation id
-        (``cache_affinity``), which is the same for every model instance that
-        serves the conversation, Chat Only and compaction included. Outside a
-        conversation the instance keeps one random session, as before.
+        ``session_id`` header. Row-Bot sends a per-process digest of its
+        conversation id (``cache_affinity``) as the session, the same for every
+        model instance that serves the conversation, Chat Only and compaction
+        included; the body's cache key is shared by interactive chats
+        (``_prompt_cache_key``). Outside a conversation the instance keeps one
+        random session, as before.
         """
         return self.session_id or conversation_cache_key(CODEX_TRANSPORT) or self._instance_session_id
+
+    def _prompt_cache_key(self) -> str:
+        """The body's cache key: shared by interactive chats, so a new chat finds the cached prefix."""
+        return self.session_id or shared_prefix_cache_key(CODEX_TRANSPORT) or self._instance_session_id
 
     def _generate(
         self,
@@ -237,7 +242,7 @@ class ChatCodexResponses(BaseChatModel):
             "store": False,
             "stream": True,
             "include": list(kwargs.get("include") or CODEX_INCLUDE),
-            "prompt_cache_key": self._session_key(),
+            "prompt_cache_key": self._prompt_cache_key(),
             "client_metadata": {"x-codex-installation-id": self.installation_id},
         }
         if self.reasoning_plan is not None and not self.reasoning_plan.is_default:
