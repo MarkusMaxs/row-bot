@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from typing import Callable
 
 _APP_BOOT_STARTED = time.perf_counter()
 _LAUNCH_SESSION_ID = os.environ.get("ROW_BOT_LAUNCH_SESSION_ID", "")
@@ -557,6 +558,20 @@ async def _run_startup_sequence_guarded():
         )
 
 
+async def _load_cached_model_catalog(set_status: Callable[[str], None]) -> None:
+    """The saved Brain model, once a cloud provider is set up.
+
+    Both steps read provider secrets from the system keychain, which can wait on
+    a dialog (macOS asks again after the app's signature changes). Off the event
+    loop, the server keeps answering meanwhile; on it, the launcher gave up after
+    two minutes with "failed to become ready" (B422).
+    """
+    if await asyncio.to_thread(is_cloud_available):
+        set_status("☁️ Loading cached model catalog...")
+        with _startup_phase("load_cached_model_catalog"):
+            await asyncio.to_thread(get_current_model)
+
+
 async def _run_startup_sequence():
     _app_boot_event("startup_sequence_start")
     if is_docs_read_only_real_data_capture():
@@ -701,10 +716,7 @@ async def _run_startup_sequence():
     except Exception:
         logger.warning("Could not apply the Developer tool's new default", exc_info=True)
 
-    if is_cloud_available():
-        _set("☁️ Loading cached model catalog...")
-        with _startup_phase("load_cached_model_catalog"):
-            get_current_model()
+    await _load_cached_model_catalog(_set)
 
     _set("🔄 Scheduling memory extraction…")
     with _startup_phase("memory_extraction_scheduler"):

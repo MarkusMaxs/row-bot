@@ -1122,3 +1122,30 @@ def test_windows_tray_keeps_pystray_backend_and_menu(monkeypatch):
     # Restart to Update shows only while an update is ready.
     assert items[2].kwargs["visible"](items[2]) is False
     assert events[-2:] == ["startup", ("icon_run", None)]
+
+
+def test_a_keychain_dialog_at_startup_never_stops_the_server_answering(monkeypatch):
+    """B422: reading provider secrets can wait on a keychain dialog; the event loop runs on meanwhile."""
+    import threading
+
+    app_module = importlib.import_module("row_bot.app")
+    dialog_answered = threading.Event()
+    calls: list[str] = []
+
+    def keychain_waits() -> bool:
+        # Answered by the event loop (call_soon below): only possible while the loop keeps running.
+        calls.append("cloud" if dialog_answered.wait(timeout=5) else "loop blocked")
+        return True
+
+    monkeypatch.setattr(app_module, "is_cloud_available", keychain_waits)
+    monkeypatch.setattr(app_module, "get_current_model", lambda: calls.append("model"))
+
+    async def run_check() -> None:
+        startup = asyncio.create_task(app_module._load_cached_model_catalog(lambda status: calls.append(status)))
+        await asyncio.sleep(0)
+        asyncio.get_running_loop().call_soon(dialog_answered.set)
+        await startup
+
+    asyncio.run(run_check())
+
+    assert calls == ["cloud", "☁️ Loading cached model catalog...", "model"]
