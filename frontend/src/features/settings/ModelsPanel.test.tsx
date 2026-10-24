@@ -227,12 +227,12 @@ async function notice(text: string | RegExp) {
   return within(notices.parentElement!).findByText(text);
 }
 
-it('says the Brain picker lists pinned models and where to pin more', async () => {
+it('says the Brain picker lists starred models first and where to star more (U10)', async () => {
   show();
   fireEvent.click(await screen.findByRole('button', { name: 'Brain model' }));
   expect(
     await screen.findByText(
-      'Pinned models are listed here. Pin more in the Catalog below.',
+      'Starred models come first. Star more in the Catalog below.',
     ),
   ).toBeVisible();
 });
@@ -302,13 +302,15 @@ it('gives the four jobs one row each: name, purpose, switch, picker (B229)', asy
   expect(screen.queryByTitle(/Default model:/)).toBeNull();
 });
 
-it('says who is connected and how much there is to choose in one status line (B229)', async () => {
+it('says how much there is to choose, and from how many providers, in one status line (B229, U10)', async () => {
   show();
   await screen.findByRole('button', { name: 'Brain model' });
   // ChatGPT / Codex, OpenAI and Google offer available models; the unavailable
   // xAI video model counts for neither.
-  expect(screen.getByText('3 providers connected')).toBeVisible();
-  expect(screen.getByText('6 models to choose from')).toBeVisible();
+  // It counts providers with a model to choose, so it never claims what
+  // Settings › Providers counts as connected.
+  expect(screen.getByText('6 models to choose from 3 providers')).toBeVisible();
+  expect(screen.queryByText(/connected/)).toBeNull();
 });
 
 it('offers models for this computer from the page menu only when Ollama is not running (B117)', async () => {
@@ -785,7 +787,9 @@ it('shows a newly signed-in provider’s models once its catalog refreshes, with
   try {
     const controller = fixture();
     show(controller);
-    expect(await screen.findByText('3 providers connected')).toBeVisible();
+    expect(
+      await screen.findByText('6 models to choose from 3 providers'),
+    ).toBeVisible();
     await waitFor(() => expect(frames).toHaveLength(1));
     act(() => void send(1, 0));
     await waitFor(() => expect(live.connected).toBe(true));
@@ -800,8 +804,9 @@ it('shows a newly signed-in provider’s models once its catalog refreshes, with
     await waitFor(() => expect(frames).toHaveLength(1));
     act(() => void send(2, 1));
 
-    expect(await screen.findByText('4 providers connected')).toBeVisible();
-    expect(screen.getByText('7 models to choose from')).toBeVisible();
+    expect(
+      await screen.findByText('7 models to choose from 4 providers'),
+    ).toBeVisible();
     // The Catalog section reads its providers again too.
     await waitFor(() =>
       expect(

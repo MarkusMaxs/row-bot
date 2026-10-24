@@ -92,6 +92,8 @@ def resolve_catalog_model_selection(
 
     parsed = parse_model_ref(raw)
     candidates = _strict_catalog_model_candidates(surface=surface)
+    # A favourite is listed in the pickers like a pinned model (U10).
+    favourites = _favourite_refs() if require_pinned else frozenset()
     if parsed:
         provider_id, model_id = parsed
         ref = model_ref(provider_id, model_id)
@@ -99,7 +101,7 @@ def resolve_catalog_model_selection(
             item for item in candidates if item["ref"].lower() == ref.lower()
         )
         if exact:
-            if require_pinned and not _catalog_candidate_is_pinned(exact[0]):
+            if require_pinned and not _catalog_candidate_is_pinned(exact[0], favourites):
                 raise ModelSelectionError(_pinned_model_selection_message(raw, candidates, provider_id=provider_id))
             return _catalog_resolution_from_candidate(
                 raw,
@@ -129,7 +131,7 @@ def resolve_catalog_model_selection(
         item for item in candidates if lower in item["aliases"]
     )
     if require_pinned:
-        pinned_matches = [item for item in matches if _catalog_candidate_is_pinned(item)]
+        pinned_matches = [item for item in matches if _catalog_candidate_is_pinned(item, favourites)]
         if matches and not pinned_matches:
             raise ModelSelectionError(_pinned_model_selection_message(raw, candidates))
         matches = pinned_matches
@@ -200,8 +202,14 @@ def _catalog_candidate_choice(candidate: dict[str, Any]) -> str:
     return f"{label} ({ref})" if label and label != ref else ref
 
 
-def _catalog_candidate_is_pinned(candidate: dict[str, Any]) -> bool:
-    return str(candidate.get("source") or "") == "quick_choice"
+def _favourite_refs() -> frozenset[str]:
+    from row_bot.providers.model_visibility import read_model_visibility
+
+    return frozenset(read_model_visibility().favourites)
+
+
+def _catalog_candidate_is_pinned(candidate: dict[str, Any], favourites: frozenset[str] = frozenset()) -> bool:
+    return str(candidate.get("source") or "") == "quick_choice" or str(candidate.get("ref") or "") in favourites
 
 
 def _pinned_model_suggestions(
