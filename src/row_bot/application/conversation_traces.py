@@ -27,7 +27,7 @@ TraceGroupKind = Literal["generic", "browser", "computer"]
 TraceSpecializationKind = Literal[
     "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
     "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
-    "question_answered", "page",
+    "question_answered", "page", "request_corrected",
 ]
 CARD_SPECIALIZATIONS = frozenset({
     "resource_created", "resource_bound", "setup_needed", "connect_apps", "background_process", "recording",
@@ -45,6 +45,10 @@ _DELIVERY_LINE = re.compile(r"Delivery (send-[0-9a-f]{8}): ")
 # A page a step made or changed (N5): the result's first line names it, and the card opens it by that id.
 _PAGE_TOOLS = frozenset({"page_create", "page_update"})
 _PAGE_LINE = re.compile(r"Page (page-[0-9a-f]{8}): ")
+# A call the model got wrong and is told to send again (U11): arguments that didn't fit the tool, a tool
+# that doesn't exist, or a question it worded wrongly. The model reads the whole error; a person sees a
+# quiet line instead, never the arguments or Python.
+_REQUEST_TO_FIX = re.compile(r"Error invoking tool '[^'\n]{1,180}' with kwargs |Error: \S{1,180} is not a valid tool, try one of \[")
 # Prepare sandbox (F18): the job a developer_prepare_sandbox step started or followed, by its handle line;
 # and a sandbox test run that failed for want of its tools, which the chat offers to prepare.
 _SANDBOX_JOB_LINE = re.compile(r"Sandbox job (prep-[0-9a-f]{8}): ")
@@ -719,12 +723,26 @@ def _sandbox_specialization(name: str, content: Any) -> TraceSpecialization | No
     return None
 
 
+def request_to_fix(result: Any) -> bool:
+    """Whether a result tells the model to send its call again (U11), so the step is no failure to show."""
+
+    wrapper = result if isinstance(result, dict) else {}
+    content = _content(result)
+    if isinstance(content, str) and _REQUEST_TO_FIX.match(content.lstrip()):
+        return True
+    payload = _bounded_json_object(content)
+    # ask_person answers a wrongly worded question this way, before anything is asked.
+    return wrapper.get("name") == "ask_person" and payload is not None and payload.get("ok") is False
+
+
 def specialize_tool_result(result: Any) -> TraceSpecialization | None:
     """Return only reviewed specialization metadata, never the raw payload."""
 
     wrapper = result if isinstance(result, dict) else {}
     name = _clean_text(wrapper.get("name"), MAX_TOOL_NAME_CHARS)
     payload = _bounded_json_object(_content(result))
+    if request_to_fix(result):
+        return TraceSpecialization(kind="request_corrected")
     return (
         _process_specialization(name, _content(result))
         or _recording_specialization(name, _content(result))
@@ -764,7 +782,10 @@ def build_trace_item(
         raise ValueError("group_order_invalid")
     canonical = canonical_tool_name(tool_name)
     group_name, group_kind = canonical_group(canonical)
-    summary, truncated = bounded_safe_summary(result)
+    specialization = None if pending else specialize_tool_result(result)
+    corrected = specialization is not None and specialization.kind == "request_corrected"
+    # A call sent again is one quiet line: neither its error text nor its result body is public.
+    summary, truncated = ("", False) if corrected else bounded_safe_summary(result)
     return TraceItem(
         item_id=_identifier(item_id, "item_id"),
         group_id=_identifier(group_id, "group_id"),
@@ -777,14 +798,14 @@ def build_trace_item(
         canonical_name=canonical,
         group_name=group_name,
         group_kind=group_kind,
-        status=classify_tool_result(
+        status="failed" if corrected else classify_tool_result(
             result, pending=pending, external_outcome=external_outcome
         ),
         safe_input=_clean_text(safe_input, 1024),
         safe_summary=summary,
         summary_truncated=truncated,
-        content_ref=_identifier(content_ref, "content_ref", required=False),
-        specialization=specialize_tool_result(result),
+        content_ref="" if corrected else _identifier(content_ref, "content_ref", required=False),
+        specialization=specialization,
         app=app,
     )
 

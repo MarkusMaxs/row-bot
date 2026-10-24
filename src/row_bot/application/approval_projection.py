@@ -79,6 +79,10 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
     question = _text(item.get("question"), 240) if len(items) == 1 else ""
     if question:  # Written by the tool (never the model), e.g. naming the local address it opens.
         projected["question"] = question
+    # The folder a command runs in, by its name only, never its path (U7).
+    folder = re.split(r"[\\/]", _text(item.get("folder"), 1024).rstrip("\\/"))[-1][:120] if len(items) == 1 else ""
+    if folder:
+        projected["folder"] = folder
     memory = item.get("memory_save") if len(items) == 1 else None
     memory_text = _text(memory.get("text"), 4096) if isinstance(memory, Mapping) else ""
     if memory_text:

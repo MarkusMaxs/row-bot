@@ -88,6 +88,7 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   turnStart = false,
   latest = false,
   computer,
+  offerBrowser = false,
   streaming = false,
   onRetry,
   onEdit,
@@ -114,6 +115,8 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   latest?: boolean;
   /** What computer use is doing now, for a computer step in progress. */
   computer?: string;
+  /** This turn used Row-Bot's browser: its last activity row offers the pane (U16). */
+  offerBrowser?: boolean;
   /** Text is still arriving for this row. */
   streaming?: boolean;
   onRetry?: () => void;
@@ -324,6 +327,7 @@ export const TranscriptMessage = memo(function TranscriptMessage({
             conversation={conversationId!}
             groups={traces!}
             computer={computer}
+            offerBrowser={offerBrowser}
           />
         )}
         <AgentStubs agents={agents} />

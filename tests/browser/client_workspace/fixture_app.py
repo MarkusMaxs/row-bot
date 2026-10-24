@@ -265,19 +265,22 @@ def _n12_stream(text: str, config: dict):
         result_id = fixture_id(identity + ":open-result")
         append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":open-call"), content="",
             tool_calls=[{"id": tool_id, "name": "browser_navigate", "args": args}])])
-        yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "browser_navigate", "args": args}
+        # As the agent sends them: the tool's display name, and its own name (U16).
+        yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "🌐 Browser",
+                            "raw_name": "browser_navigate", "runtime_name": "browser_navigate", "args": args}
         while not release.wait(0.1):
             pass
         content = "Opened https://homecover.example/account.\nPage: Your cover (https://homecover.example/account)"
         append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="browser_navigate",
                                                         content=content)])
-        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "browser_navigate",
-                            "args": args, "content": content}
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "🌐 Browser",
+                            "raw_name": "browser_navigate", "args": args, "content": content}
         pay = {"ref": "e31"}
         pay_id = fixture_id(identity + ":pay")
         append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":pay-call"), content="",
             tool_calls=[{"id": pay_id, "name": "browser_click", "args": pay}])])
-        yield "tool_call", {"tool_call_id": pay_id, "name": "browser_click", "args": pay}
+        yield "tool_call", {"tool_call_id": pay_id, "name": "🌐 Browser", "raw_name": "browser_click",
+                            "runtime_name": "browser_click", "args": pay}
         _N12_PENDING[thread] = (pay_id, pay)
         card = approval_request("browser_click", Consequence("pay", "homecover.example", "Confirm and pay £60"),
                                 url="https://homecover.example/claim/5")
@@ -306,8 +309,8 @@ def _n12_resume(enabled_tools: list[str], config: dict, approved: bool, *, inter
         call_id, args = pending
         append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=call_id, name="browser_click",
                                                         content=content)])
-        yield "tool_done", {"tool_call_id": call_id, "message_id": result_id, "name": "browser_click",
-                            "args": args, "content": content}
+        yield "tool_done", {"tool_call_id": call_id, "message_id": result_id, "name": "🌐 Browser",
+                            "raw_name": "browser_click", "args": args, "content": content}
         final = ("Booked: a plumber comes tomorrow between 8am and 12pm (claim HC-1042). The £60 excess is paid."
                  if approved else "I didn't pay. The claim is ready at the payment step whenever you want to finish it.")
         yield from _natural_final(call, thread, final, "n12")

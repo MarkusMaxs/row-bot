@@ -881,6 +881,19 @@
 .activity-step-details > summary::-webkit-details-marker {
   display: none;
 }
+/* A call the model sent again (U11): the step row's layout, nothing to open. */
+.activity-step-quiet {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin-inline-start: -6px;
+  padding: 5px 8px 5px 7px;
+}
+.activity-step[data-trace-status='corrected'] .activity-step-verb {
+  color: var(--text-secondary);
+  font-weight: var(--weight-regular);
+}
 .activity-step-details > summary:hover {
   background: var(--surface-hover);
 }
@@ -2156,6 +2169,15 @@
 .approval-detail dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+.approval-detail dd.approval-detail-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.approval-detail-folder svg {
+  flex: none;
+  color: var(--text-muted);
 }
 .turn-notice {
   margin: 16px 0 4px;

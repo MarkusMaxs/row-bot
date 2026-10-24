@@ -11,6 +11,7 @@ import {
   ChevronDown,
   CircleAlert,
   LoaderCircle,
+  RotateCcw,
   X,
 } from 'lucide-react';
 import type {
@@ -20,11 +21,13 @@ import type {
 import { useRuntime } from '../../runtime';
 import { Button, CopyGlyph, useCopyFeedback } from '../../ui/primitives';
 import { AppIcon } from '../apps/parts';
+import { BrowserStepDone, siteOfSteps } from '../browser/BrowserThumbnail';
 import {
   activityLabel,
   approvedWithoutYou,
   formatElapsed,
   isAttention,
+  isCorrected,
   keyArgument,
   orderedSteps,
   skipReason,
@@ -170,6 +173,27 @@ function StepNode({ item }: { item: TranscriptTraceItem }) {
     <span className="activity-node" data-state="done" aria-hidden>
       <Icon className={fresh ? 'icon-draw-settle' : undefined} />
     </span>
+  );
+}
+
+/**
+ * A call the model got wrong and was told to send again (U11): one quiet
+ * line with nothing to open. The model read the error; the person needn't.
+ */
+function CorrectedStep() {
+  return (
+    <li className="activity-step" data-trace-status="corrected">
+      <div className="activity-step-quiet">
+        <span className="activity-node" data-state="corrected" aria-hidden>
+          <RotateCcw />
+        </span>
+        <span className="activity-step-text">
+          <span className="activity-step-verb">
+            Row-Bot corrected its request
+          </span>
+        </span>
+      </div>
+    </li>
   );
 }
 
@@ -331,7 +355,11 @@ function TraceItem({
               )}
             </span>
             {argument ? (
-              <span className="activity-step-arg">{argument}</span>
+              <>
+                {/* Read as "Saving a memory · person", never run together. */}
+                <span className="visually-hidden"> · </span>
+                <span className="activity-step-arg">{argument}</span>
+              </>
             ) : (
               !open &&
               approval.body && (
@@ -407,7 +435,7 @@ export type LiveActivity = {
   running: boolean;
   /** The model signalled private reasoning. */
   thinking?: boolean;
-  /** A tool call is still being written, e.g. "Writing Designer update page · 12 KB" (B324). */
+  /** A tool call is still being written, e.g. "Writing a page · 12 KB" (B324). */
   writing?: string;
   /** An approval is holding the run. */
   waiting?: boolean;
@@ -479,11 +507,14 @@ export default function TranscriptTrace({
   groups,
   live,
   computer = '',
+  offerBrowser = false,
   children,
 }: {
   conversation: string;
   groups: TranscriptTraceGroup[];
   live?: LiveActivity;
+  /** A finished turn that used Row-Bot's browser: "Used the browser · site" opens its pane (U16). */
+  offerBrowser?: boolean;
   /**
    * What computer use is doing now ("Using Microsoft Edge", "Waiting for your
    * OK"): a computer step in progress says it, as the browser's step names its action.
@@ -582,7 +613,8 @@ export default function TranscriptTrace({
                 computing ? '' : keyArgument(current.safe_input),
               ]
                 .filter(Boolean)
-                .join(' ')
+                // "Saving a memory · person": the detail apart from the verb.
+                .join(' · ')
             : running && live?.writing
               ? `${live.writing}…`
               : running && (live?.thinking || !steps.length)
@@ -612,6 +644,11 @@ export default function TranscriptTrace({
                     ? 'Thinking'
                     : 'Working'
                   : '';
+  // A finished turn that used Row-Bot's browser offers its pane, as the live step did (U16).
+  const usedBrowser =
+    offerBrowser &&
+    !live &&
+    steps.some((step) => step.group_kind === 'browser');
   if (!steps.length && !running && thought === null && !children) return null;
   return (
     <div
@@ -655,13 +692,17 @@ export default function TranscriptTrace({
             <ChevronDown className="activity-chevron" aria-hidden />
           </summary>
           <ol className="activity-steps" aria-label="Steps">
-            {steps.map((item) => (
-              <TraceItem
-                conversation={conversation}
-                item={item}
-                key={item.item_id}
-              />
-            ))}
+            {steps.map((item) =>
+              isCorrected(item) ? (
+                <CorrectedStep key={item.item_id} />
+              ) : (
+                <TraceItem
+                  conversation={conversation}
+                  item={item}
+                  key={item.item_id}
+                />
+              ),
+            )}
           </ol>
         </details>
       ) : running ? (
@@ -689,6 +730,12 @@ export default function TranscriptTrace({
         <span className="visually-hidden" role="status">
           {announcement}
         </span>
+      )}
+      {usedBrowser && (
+        <BrowserStepDone
+          conversationId={conversation}
+          site={siteOfSteps(steps)}
+        />
       )}
       {children}
     </div>
