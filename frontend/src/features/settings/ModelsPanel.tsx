@@ -30,6 +30,7 @@ import {
 } from '../../ui/primitives';
 import { useNotify } from '../../ui/overlays';
 import { relativeTime } from '../../ui/format';
+import { useLiveUpdate } from '../../live';
 import {
   SettingsAdvanced,
   SettingsGroup,
@@ -245,6 +246,12 @@ export default function ModelsPanel({
     const updated = await controller.modelsSettings();
     setState(updated);
   }
+  // The catalog changed in the background, as when a provider was signed in
+  // to or disconnected (B411): it shows without pressing Refresh.
+  useLiveUpdate(['models'], () => {
+    void reload().catch(() => undefined);
+    setCatalogRefresh((value) => value + 1);
+  });
   function brainSaved(ref: string, previous: string) {
     const name = state ? optionName(state.brain.options, ref) : ref;
     notify(

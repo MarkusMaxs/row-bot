@@ -30,6 +30,7 @@
           "helpers",
           "processes",
           "monitor",
+          "models",
           "learning"
         ]
       },

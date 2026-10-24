@@ -79,6 +79,13 @@ _claude_plan.discover_claude_plan_models = lambda: _claude_plan.model_infos_from
 ])
 
 
+# Connecting or disconnecting a provider refreshes its model catalog (B411). Specs connect synthetic accounts
+# and keys, so that refresh would ask the real provider for its models: here it never starts.
+from row_bot.providers import model_catalog_cache as _catalog_cache  # noqa: E402
+
+_catalog_cache.provider_connection_changed = lambda _provider_id, **_how: None
+
+
 _capture_cards: list = []
 
 
