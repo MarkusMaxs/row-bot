@@ -4,6 +4,7 @@ import { fixtureHeaders } from './surface-helpers';
 import {
   blockFixtureServiceWorkers,
   composer,
+  dismissNotices,
   newConversation,
 } from './unified-helpers';
 
@@ -20,8 +21,7 @@ const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
 
 async function views(page: Page, info: TestInfo, name: string) {
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(

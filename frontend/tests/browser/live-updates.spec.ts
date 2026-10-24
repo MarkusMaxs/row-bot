@@ -7,7 +7,7 @@ import {
   writeEvidence,
 } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
-import { blockFixtureServiceWorkers } from './unified-helpers';
+import { blockFixtureServiceWorkers, dismissNotices } from './unified-helpers';
 
 /*
  * B407 · One push channel for background state. A workflow run the scheduler
@@ -75,8 +75,7 @@ async function startRun(page: Page, shown: Locator) {
 }
 
 async function views(page: Page, info: TestInfo, name: string) {
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(
