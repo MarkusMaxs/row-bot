@@ -95,13 +95,13 @@ test('a monthly workflow reads as Monthly, its step shows its app, and delivery 
     const rail = page.getByRole('complementary', {
       name: 'Schedule, delivery and policy',
     });
-    await expect(rail.getByLabel('Repeats')).toHaveValue('monthly');
+    await expect(rail.getByLabel('How often')).toHaveValue('monthly');
     await expect(rail.getByLabel('Day of the month')).toHaveValue('1');
     await expect(rail.getByText(/^Monthly on the 1st at /)).toBeVisible();
     await expect(rail.getByLabel('Cron expression')).toHaveCount(0);
     // WhatsApp ships with Row-Bot, but no phone is linked: it is not offered.
     const delivery = rail.getByRole('group', { name: 'Send results to' });
-    await expect(delivery).toContainText('In this app');
+    await expect(delivery).toContainText('Always in this app');
     await expect(delivery).not.toContainText('WhatsApp');
     await everywhere(page, info, 'monthly-preset');
     await delivery.scrollIntoViewIfNeeded();
