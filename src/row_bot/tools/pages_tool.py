@@ -147,8 +147,9 @@ class PagesTool(BaseTool):
                 name="page_create",
                 description=(
                     "Make an interactive page the person opens beside the chat: a plan with Approve / Change / "
-                    "Skip, a checklist, a dashboard, a comparison, a form or a small tool. Load the Making a "
-                    "page skill first for the templates and rules."
+                    "Skip, a checklist, a dashboard, a comparison, a form or a small tool. Use it on your own, "
+                    "unasked, whenever your answer is one of these. Load the Making a page skill first for the "
+                    "templates and rules."
                 ),
                 args_schema=_CreateInput,
             ),
