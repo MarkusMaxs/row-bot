@@ -76,7 +76,9 @@ async function agentsList(page: Page) {
     name: 'Conversation details',
   });
   const sheet = page.getByRole('dialog', { name: 'Conversation details' });
-  const panel = details.or(sheet).first();
+  // The rail and the phone sheet can both be in the page after a resize; the
+  // list is the one on screen, never the hidden one (B402).
+  const panel = details.or(sheet).filter({ visible: true }).first();
   const agents = panel.locator('summary', { hasText: /^Agents/ });
   // The rail can still be opening (or its Agents section loading) just after a
   // reload, when a check sees nothing and the toggle would close it: try again.
@@ -86,7 +88,8 @@ async function agentsList(page: Page) {
     await expect(agents).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 20_000 });
   const section = agents.locator('xpath=..');
-  if ((await section.getAttribute('open')) === null) await agents.click();
+  if ((await section.getAttribute('open', { timeout: 5_000 })) === null)
+    await agents.click();
   return panel.getByRole('region', { name: 'Delegated tasks' });
 }
 
