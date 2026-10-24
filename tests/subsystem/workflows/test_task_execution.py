@@ -315,6 +315,25 @@ def test_inline_subtask_retains_authority_through_post_provider_notification(del
     assert effects == ["provider"]
 
 
+@pytest.mark.parametrize(("delivery", "message"), [
+    (("", ""), ""),
+    (("delivered", "Delivered to Telegram"), "Delivered to Telegram"),
+])
+def test_a_finished_workflow_is_announced_by_its_name(runtime, monkeypatch, delivery, message):
+    """U17: the toast read "Task Complete: Tea haiku test finished (1 step)."."""
+    from row_bot import notifications
+    tasks, _, _, task_id, conversation_id, _ = runtime
+    notices = []
+    monkeypatch.setattr(notifications, "notify", lambda **kwargs: notices.append(kwargs))
+    monkeypatch.setattr(tasks, "_deliver_to_channels", lambda *_, **__: delivery)
+
+    # As a scheduled run or Run now runs it: with its notice.
+    tasks.run_task_background(task_id, conversation_id, [])
+
+    finished = [(notice["title"], notice["message"]) for notice in notices if notice.get("source") == "workflow"]
+    assert finished == [("Synthetic reviewed run finished", message)]
+
+
 def test_review_does_not_execute_or_create_run_and_policy_hash_is_stable(runtime):
     first = review(runtime)
     second = review(runtime)

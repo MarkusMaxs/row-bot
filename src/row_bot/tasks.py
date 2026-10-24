@@ -4278,7 +4278,7 @@ def run_task_background(
             if delivery_status == "delivery_failed":
                 _validate_effect()
                 notify(
-                    title="⚠️ Delivery Failed",
+                    title="Delivery failed",
                     message=f"{task['name']} — {delivery_detail}",
                     sound="timer",
                     toast_type="warning",
@@ -5387,8 +5387,8 @@ def run_task_background(
                     from row_bot.notifications import notify
                     _validate_effect()
                     notify(
-                        title="⏹️ Task Stopped",
-                        message=f"{task['name']} was stopped.",
+                        title=f"{task['name']} stopped",
+                        message="",
                         sound="workflow",
                         source="workflow",
                     )
@@ -5443,15 +5443,12 @@ def run_task_background(
             # Desktop + in-app notification (always)
             if notification:
                 from row_bot.notifications import notify
-                suffix = ""
-                if delivery_status == "delivered":
-                    suffix = f" → {delivery_detail}"
-                elif delivery_status == "delivery_failed":
-                    suffix = f" (⚠️ {delivery_detail})"
                 _validate_effect()
+                # "Tea haiku test finished", named as workflows are elsewhere (U17); where it went, if it
+                # was delivered. A failed delivery has its own notice below.
                 notify(
-                    title="⚡ Task Complete",
-                    message=f"{task['name']} finished ({total} step{'s' if total != 1 else ''}).{suffix}",
+                    title=f"{task['name']} finished",
+                    message=delivery_detail if delivery_status == "delivered" else "",
                     sound="workflow",
                     source="workflow",
                     requested=True,
@@ -5459,7 +5456,7 @@ def run_task_background(
                 if delivery_status == "delivery_failed":
                     _validate_effect()
                     notify(
-                        title="⚠️ Delivery Failed",
+                        title="Delivery failed",
                         message=f"{task['name']} — {delivery_detail}",
                         sound="timer",
                         toast_type="warning",
