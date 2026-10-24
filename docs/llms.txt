@@ -65,7 +65,7 @@ Public documentation index for Row-Bot.
 - [Settings: Providers](/docs/settings/providers)
   Route: /docs/settings/providers. Connect local, hosted, subscription, and custom model providers.
 - [Settings: Models](/docs/settings/models)
-  Route: /docs/settings/models. Choose which model does each job (Brain, Vision, Image, Video), set the reading limit and limits for long work, and pin models from the catalog.
+  Route: /docs/settings/models. Choose which model does each job (Brain, Vision, Image, Video), set the reading limit and limits for long work, and star the models you use from the catalog.
 - [Settings: Memory](/docs/settings/knowledge)
   Route: /docs/settings/knowledge. Turn remembering on or off, check graph health, configure the wiki vault, and delete all knowledge in Settings Memory.
 - [Settings: Buddy](/docs/settings/buddy)
