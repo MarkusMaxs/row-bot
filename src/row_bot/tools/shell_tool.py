@@ -1164,8 +1164,10 @@ class ShellTool(BaseTool):
                 args_schema=_StartProcessInput,
                 description=(
                     "Start a program that keeps running in the background, such as a "
-                    "development server or a file watcher, in any folder and with extra "
-                    "environment variables. Asks for approval like run_command. Returns its "
+                    "development server, a local file server or a file watcher, in any folder "
+                    "(the person's workspace by default) and with extra environment variables. "
+                    "Use it, not run_command, for anything that serves or watches. "
+                    "Asks for approval like run_command. Returns its "
                     "process_id, its first output and any local address it serves. Background "
                     "processes belong to this conversation, stop when Row-Bot quits, and at "
                     f"most {MAX_RUNNING_PER_CONVERSATION} run at once here."
