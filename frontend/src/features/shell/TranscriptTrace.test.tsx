@@ -7,6 +7,7 @@ import type {
   TranscriptTraceItem,
 } from '../../api/types';
 import TranscriptTrace, { type LiveActivity } from './TranscriptTrace';
+import { writingLabel } from './tool-activity';
 import { answerStreaming } from './transcript-model';
 
 const messageText = vi.fn();
@@ -133,7 +134,7 @@ it('shows live shimmer text for the running step and an approval hold', () => {
   );
   expect(row()).toHaveAttribute('data-trace-status', 'pending');
   expect(
-    within(row()).getByText('Searching the web “local embedding models”'),
+    within(row()).getByText('Searching the web · “local embedding models”'),
   ).toHaveAttribute('data-live', 'true');
   rerender(
     <TranscriptTrace
@@ -680,7 +681,7 @@ it('thinks only until the answer starts, then settles without ticking under the 
     ),
   );
   expect(
-    within(row()).getByText('Running a command New-Item notes.txt'),
+    within(row()).getByText('Running a command · New-Item notes.txt'),
   ).toHaveAttribute('data-live', 'true');
   expect(screen.getByRole('status')).toHaveTextContent(/^Running a command$/);
   expect(screen.queryByText(/Thought for/)).toBeNull();
@@ -775,13 +776,120 @@ it('says which tool call is being written while a long one streams', () => {
       live={{
         running: true,
         thinking: true,
-        writing: 'Writing Designer update page · 12 KB',
+        writing: writingLabel('page_create', 3 * 1024),
       }}
     />,
   );
+  expect(screen.getByText('Writing a page · 3 KB…')).toBeInTheDocument();
+});
+
+it.each([
+  ['delegate_work', 1024, 'Delegating work · 1 KB'],
+  ['analyze_image', 200, 'Looking at an image · 1 KB'],
+  ['designer_update_page', 12 * 1024, 'Working on the design · 12 KB'],
+  // A display name with its emoji, or a tool with no words, never shows as itself.
+  ['📁 Pages', 3 * 1024, 'Preparing the next step · 3 KB'],
+  ['mcp_linear_save_issue', 2048, 'Preparing the next step · 2 KB'],
+])('words a call %s being written as its step does', (name, bytes, words) => {
+  expect(writingLabel(name, bytes)).toBe(words);
+});
+
+function corrected(callId: string, name = 'ask_person'): TranscriptTraceItem {
+  return {
+    ...groups[0].items[0],
+    item_id: callId,
+    call_id: callId,
+    canonical_name: name,
+    status: 'failed',
+    safe_input: '',
+    safe_summary: '',
+    summary_truncated: false,
+    content_ref: '',
+    specialization: { kind: 'request_corrected' },
+  };
+}
+
+it('leaves out a call the model got wrong and sent again (U11)', () => {
+  const asked: TranscriptTraceItem = {
+    ...groups[0].items[0],
+    item_id: 'ask-4',
+    call_id: 'ask-4',
+    canonical_name: 'ask_person',
+    safe_input: '',
+    safe_summary: 'You chose: Green',
+    specialization: null,
+  };
+  render(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={[
+        {
+          ...groups[0],
+          status: 'failed',
+          items: [
+            corrected('ask-1'),
+            { ...corrected('ask-2'), call_order: 1 },
+            { ...corrected('ask-3'), call_order: 2 },
+            { ...asked, call_order: 3 },
+          ],
+        },
+      ]}
+    />,
+  );
+  // Nothing red: the question was asked and answered.
+  expect(row()).toHaveAttribute('data-trace-status', 'succeeded');
   expect(
-    screen.getByText('Writing Designer update page · 12 KB…'),
-  ).toBeInTheDocument();
+    within(row()).getByText('Asked you a question', {
+      selector: '.activity-summary-text',
+    }),
+  ).toBeVisible();
+  openRow();
+  expect(within(row()).getAllByRole('listitem')).toHaveLength(1);
+  expect(screen.queryByText("Couldn't wait for your answer")).toBeNull();
+  expect(screen.queryByText('Row-Bot corrected its request')).toBeNull();
+});
+
+it('shows a call the model gave up on as one quiet line, never its error (U11)', () => {
+  render(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={[
+        {
+          ...groups[0],
+          status: 'failed',
+          items: [corrected('ask-1'), { ...corrected('ask-2'), call_order: 1 }],
+        },
+      ]}
+    />,
+  );
+  expect(row()).toHaveAttribute('data-trace-status', 'succeeded');
+  expect(within(row()).getByText('Used 1 tool')).toBeVisible();
+  openRow();
+  const steps = within(row()).getAllByRole('listitem');
+  expect(steps).toHaveLength(1);
+  expect(steps[0]).toHaveTextContent(/^Row-Bot corrected its request$/);
+  // One line with nothing to open: no tool name, arguments or result.
+  expect(steps[0].querySelector('details')).toBeNull();
+});
+
+it('keeps a step’s detail apart from its verb for screen readers', () => {
+  const memory: TranscriptTraceGroup[] = [
+    {
+      ...groups[0],
+      items: [
+        {
+          ...groups[0].items[0],
+          canonical_name: 'save_memory',
+          safe_input: '{"category":"person"}',
+          specialization: null,
+        },
+      ],
+    },
+  ];
+  render(<TranscriptTrace conversation="conversation-a" groups={memory} />);
+  expect(
+    screen.getByText('Saved a memory').closest('summary'),
+  ).toHaveTextContent('Saved a memory · person');
 });
 
 it.each([

@@ -3211,7 +3211,8 @@
             "sandbox_job",
             "sandbox_unprepared",
             "question_answered",
-            "page"
+            "page",
+            "request_corrected"
           ],
           "title": "Kind",
           "type": "string"

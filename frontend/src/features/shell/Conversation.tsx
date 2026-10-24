@@ -79,6 +79,7 @@ import {
 } from './command-receipts';
 import SafeMarkdown from './chat-parity-markdown';
 import TranscriptTrace from './TranscriptTrace';
+import { writingLabel } from './tool-activity';
 import SlashPalette, { type SlashPaletteHandle } from './SlashPalette';
 import MentionPalette, { type MentionItem } from './MentionPalette';
 import { AppIcon } from '../apps/parts';
@@ -925,7 +926,10 @@ export default function Conversation({
     thinkingActive &&
     lastActivity?.type === 'generation.activity' &&
     lastActivity.payload.state === 'writing'
-      ? `Writing ${lastActivity.payload.tool || 'a tool call'} · ${Math.max(1, Math.round((lastActivity.payload.bytes ?? 0) / 1024))} KB`
+      ? writingLabel(
+          lastActivity.payload.tool ?? '',
+          lastActivity.payload.bytes ?? 0,
+        )
       : undefined;
   const answering = Boolean(running) && answerStreaming(rows, state.activity);
   // The sidebar row follows this conversation's agents and turn as they end,

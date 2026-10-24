@@ -445,6 +445,46 @@ def _denied_call_records(*later_roles: str) -> list[dict]:
     return records
 
 
+_INVALID_ARGUMENTS = (
+    "Error invoking tool 'ask_person' with kwargs {'questions': [{'options': ['Tea'], 'text': 'Which?'}]} "
+    "with error:\n questions.0.header: Field required\n Please fix the error and try again."
+)
+
+
+@pytest.mark.parametrize("result", [
+    _INVALID_ARGUMENTS,
+    '{"ok": false, "error": "Each question needs a header. Fix the questions and call ask_person again."}',
+    "Error: ask_persn is not a valid tool, try one of [ask_person, web_search].",
+])
+def test_a_call_the_model_must_send_again_is_public_as_a_quiet_correction_never_its_error(result):
+    """U11: the step list showed "Error invoking tool 'ask_person' with kwargs …" and red steps."""
+    rows = project_assistant_row_traces([
+        {"row": {"id": "assistant:checkpoint:ask", "message_id": "ask", "role": "assistant", "blocks": []},
+         "tool_calls": [{"id": "call-ask", "name": "ask_person", "args": {"questions": []}}]},
+        {"row": {"id": "tool:checkpoint:ask", "message_id": "ask-result", "role": "tool",
+                 "tool_call_id": "call-ask", "blocks": [{"type": "text", "text": result}]}},
+    ])
+
+    item = rows[0]["traces"][0]["items"][0]
+    assert item["specialization"]["kind"] == "request_corrected"
+    assert item["status"] == "failed"
+    # Nothing of the error reaches a person: no summary to preview, no result body to open.
+    assert item["safe_summary"] == "" and item["content_ref"] == ""
+    public = json.dumps(rows[0]["traces"])
+    assert "kwargs" not in public and "Field required" not in public and "Fix the questions" not in public
+
+
+def test_an_answered_question_and_an_ordinary_failure_are_not_corrections():
+    answered = specialize_tool_result({"name": "ask_person", "content": json.dumps(
+        {"ok": True, "kind": "question_answered", "outcome": "answered",
+         "answers": [{"header": "Colour", "answer": "Green"}]})})
+    failed = build_trace_item(item_id="call", group_id="call", call_id="call", call_order=0, group_order=0,
+                              tool_name="read_file", result={"name": "read_file", "content": "Error: no such file"})
+
+    assert answered is not None and answered.kind == "question_answered"
+    assert failed.specialization is None and failed.safe_summary == "Error: no such file"
+
+
 def test_a_call_the_conversation_moved_past_without_a_result_reads_cancelled_not_running():
     # Histories written before B234 have a denied call with no result, followed by
     # the denial reply: the step never ran, so it must not spin forever.

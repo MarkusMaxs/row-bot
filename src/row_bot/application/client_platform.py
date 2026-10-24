@@ -1765,7 +1765,8 @@ class ClientPlatformService:
                 "content_ref": item.content_ref,
                 **({"app": dict(app)} if app else {}),
                 **({"specialization": public_specialization(item.specialization)}
-                   if item.specialization is not None and item.specialization.kind in CARD_SPECIALIZATIONS
+                   if item.specialization is not None
+                   and item.specialization.kind in CARD_SPECIALIZATIONS | {"request_corrected"}
                    else {})})
             if kind == "tool_done":
                 for metadata in getter("media", []) or []:
@@ -1790,9 +1791,11 @@ class ClientPlatformService:
         elif kind == "thinking":
             self.projection.publish(conversation_id, "generation.activity", {"state": "thinking"})
         elif kind == "tool_writing" and isinstance(payload, dict):
-            from row_bot.agent import _resolve_tool_display_name
+            from row_bot.application.conversation_traces import canonical_tool_name
+            # The tool's own name, as its step carries it: the client words it ("Writing a page"), never as
+            # the tool's display name ("📁 Pages").
             self.projection.publish(conversation_id, "generation.activity", {
-                "state": "writing", "tool": _resolve_tool_display_name(str(payload.get("name") or ""))[:120],
+                "state": "writing", "tool": canonical_tool_name(str(payload.get("name") or ""))[:120],
                 "bytes": max(0, int(payload.get("bytes") or 0))})
         elif kind in {
             "context_usage",

@@ -7419,6 +7419,8 @@ class TraceSpecialization(WireModel):
         "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
         "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
         "question_answered", "page",
+        # A call the model got wrong and sent again (U11): a quiet line, never its error text.
+        "request_corrected",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
