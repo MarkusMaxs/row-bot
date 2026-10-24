@@ -4555,6 +4555,7 @@ def run_task_background(
                     step_retry_delay = step.get("retry_delay_seconds", 5)
                     step_attempt = 0
                     step_succeeded = False
+                    step_failure = ""  # Why its last attempt failed, in plain words.
 
                     while step_attempt < step_max_retries:
                         step_attempt += 1
@@ -4781,6 +4782,8 @@ def run_task_background(
                             break
                         except Exception as exc:
                             _task_log(f"✗ Step {step_index + 1} error: {str(exc)[:80]}")
+                            step_failure = (f"Step {step_index + 1} failed: "
+                                            f"{str(exc).lstrip('⚠️ ').strip() or type(exc).__name__}")
                             err_str = str(exc).lower()
                             override = config["configurable"].get("model_override")
                             if (override
@@ -4799,7 +4802,10 @@ def run_task_background(
                                 )
                             try:
                                 from row_bot.agent import repair_orphaned_tool_calls
-                                repair_orphaned_tool_calls(effective_tool_names, config)
+                                # The call it was making is settled: its chat never reads "Running a command".
+                                repair_orphaned_tool_calls(effective_tool_names, config,
+                                                           orphan_message="[Did not finish: the step failed]",
+                                                           marker_message=f"⚠️ *[{step_failure}]*")
                             except _WorkflowEffectDenied:
                                 raise
                             except Exception:
@@ -4822,6 +4828,8 @@ def run_task_background(
                                 "Task '%s' step %d: on_error=stop — halting pipeline",
                                 task["name"], step_index + 1,
                             )
+                            # A step that ended in an error fails the run (B417).
+                            failure_message = failure_message or step_failure
                             stopped = True
                             break
 
