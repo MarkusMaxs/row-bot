@@ -5913,6 +5913,20 @@ def sync_all_jobs() -> None:
     logger.info("Synced %d task(s) to APScheduler", len(tasks))
 
 
+@_schema_retry
+def count_scheduled_workflows() -> int:
+    """How many workflows are on and run on a schedule: those the scheduler holds a job for (B414).
+
+    One that runs only when started, or a one-time run that has happened, isn't scheduled.
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute("SELECT schedule, at, last_run, timezone FROM tasks WHERE enabled = 1").fetchall()
+    finally:
+        conn.close()
+    return sum(1 for row in rows if _build_trigger(dict(row)) is not None)
+
+
 # ── Runs missed while Row-Bot was closed (N9) ─────────────────────────────────
 # The scheduler notes the time every minute while it runs. On start, a time a schedule had
 # between that note and now fell while Row-Bot was closed: a workflow set to "Run once when

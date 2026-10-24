@@ -1,7 +1,7 @@
 import type { FrameLocator, Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
-import { composer, newConversation } from './unified-helpers';
+import { composer, dismissNotices, newConversation } from './unified-helpers';
 
 /*
  * N5 · Pages: plans, checklists and dashboards Row-Bot makes for the person.
@@ -47,8 +47,7 @@ async function resize(page: Page, size: { width: number; height: number }) {
 async function views(page: Page, info: TestInfo, name: string) {
   await settled(page);
   await expect(page.getByText('Buddy is loading…')).toHaveCount(0);
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(

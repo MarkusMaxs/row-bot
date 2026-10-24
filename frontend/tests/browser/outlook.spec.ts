@@ -1,7 +1,7 @@
 import type { Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
-import { composer, newConversation } from './unified-helpers';
+import { composer, dismissNotices, newConversation } from './unified-helpers';
 
 /*
  * N10 · Outlook through your own Microsoft app, and B398 · Microsoft 365
@@ -19,8 +19,7 @@ const WORK_IQ = `/app-v2/settings/apps/item?id=${encodeURIComponent('mcp:officia
 const ADDRESS = 'you@yourdomain.com';
 
 async function views(page: Page, info: TestInfo, name: string) {
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(

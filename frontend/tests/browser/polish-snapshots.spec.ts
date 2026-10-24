@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { TestInfo } from '@playwright/test';
 import { expect, test } from './evidence';
 import { openFixture } from './fixture';
+import { dismissNotices } from './unified-helpers';
 
 /*
  * Pixel baselines for surfaces whose content is fully synthetic: the
@@ -82,10 +83,7 @@ test('Setup Center pixels hold on the fixture server', async ({
   await page.evaluate(() => document.fonts.ready);
   // The fixture server is shared by the run: another spec's workflow run can
   // leave a background notice (a reminder) for new windows; close it.
-  for (const dismiss of await page
-    .getByRole('button', { name: 'Dismiss notification', exact: true })
-    .all())
-    await dismiss.click();
+  await dismissNotices(page);
   await expect(
     page.getByRole('button', { name: 'Dismiss notification', exact: true }),
   ).toHaveCount(0);

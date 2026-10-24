@@ -1,6 +1,6 @@
 import type { Locator, Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
-import { composer, newConversation } from './unified-helpers';
+import { composer, dismissNotices, newConversation } from './unified-helpers';
 
 /*
  * N11 · Incognito chats: New chat ▾ › New incognito chat, the header's mark
@@ -22,8 +22,7 @@ async function views(
   keepNotices = false,
 ) {
   if (!keepNotices) {
-    const notices = page.getByRole('button', { name: 'Dismiss notification' });
-    while (await notices.count()) await notices.first().click();
+    await dismissNotices(page);
   }
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
@@ -243,10 +242,7 @@ test('turning incognito on for an existing chat says what stays and links to Kno
         await expect(
           page.locator('.toast').filter({ hasText: 'Incognito is off' }),
         ).toBeVisible();
-        const notices = page.getByRole('button', {
-          name: 'Dismiss notification',
-        });
-        while (await notices.count()) await notices.first().click();
+        await dismissNotices(page);
       }
       await toggle(phone);
       await expect(page.getByRole('img', { name: HINT })).toBeVisible();
