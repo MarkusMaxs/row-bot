@@ -2869,12 +2869,13 @@ it('renders a folded create_chart result with its parent message (B4)', async ()
   ).toBeNull();
 });
 
-it('floats Context below 740px and docks it again only from 780px', () => {
-  expect(isNarrowChat(718, false)).toBe(true);
-  expect(isNarrowChat(760, false)).toBe(false);
-  // Hysteresis: a floating chat stays floating until it is clearly wide.
-  expect(isNarrowChat(760, true)).toBe(true);
-  expect(isNarrowChat(780, true)).toBe(false);
+it('opens details on demand below 940px and gives them a rail again only from 980px (U3)', () => {
+  // A 1024px window with the sidebar open: the transcript keeps the width.
+  expect(isNarrowChat(760, false)).toBe(true);
+  expect(isNarrowChat(960, false)).toBe(false);
+  // Hysteresis: a narrow chat stays narrow until it is clearly wide.
+  expect(isNarrowChat(960, true)).toBe(true);
+  expect(isNarrowChat(980, true)).toBe(false);
 });
 
 it('says so when an attached image cannot be seen and offers a vision model (decision 11)', async () => {
@@ -3306,7 +3307,7 @@ function HostedConversation() {
   );
 }
 
-it('pins Conversation details open in a wide chat, beside the column, until its toggle hides it (B221)', async () => {
+it('keeps Conversation details open in a wide chat, beside the column, until its toggle hides it (U3)', async () => {
   idleConversation();
   localStorage.removeItem('row-bot.context-hidden.v1');
   await act(async () => {
@@ -3316,7 +3317,7 @@ it('pins Conversation details open in a wide chat, beside the column, until its 
   const details = screen.getByRole('complementary', {
     name: 'Conversation details',
   });
-  // It floats pinned open (no column of its own) and the column moves aside.
+  // It stays open in its rail and the column moves aside for it.
   expect(details.closest('.context-card')).toHaveClass('context-card-pinned');
   expect(workspace).toHaveClass('details-wide', 'details-open');
   const toggle = screen.getByRole('button', { name: 'Conversation details' });

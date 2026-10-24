@@ -4928,6 +4928,8 @@ class CachedModelRow(WireModel):
     runtime_mode: str = Field(max_length=32)
     source: str = Field(max_length=80)
     runtime_state: Literal["unknown", "ready", "unavailable"] = "unknown"
+    favourite_rank: int | None = Field(default=None, ge=1, le=64)
+    hidden: bool = False
 
 
 class CachedModelPage(WireModel):

@@ -78,17 +78,15 @@ def test_first_pick_becomes_the_default(tmp_path, monkeypatch, fake_ollama):
 
 def test_setup_shows_the_real_state(tmp_path, monkeypatch):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(client_onboarding, "_developer_enabled", lambda: True)
     (tmp_path / "app_config.json").write_text(json.dumps({
         "setup_complete": True, "onboarding_version": 4,
         "onboarding_completed_steps": ["models", "voice"],
         "onboarding_skipped_steps": ["developer", "channels"],
     }), encoding="utf-8")
     snapshot = client_onboarding.read_onboarding()
-    # Developer tools are on by default (decision 13): done, never "skipped".
-    assert "developer" in snapshot["live_done"]
-    assert "developer" in snapshot["completed_steps"]
-    assert snapshot["skipped_steps"] == ["apps"]  # Channels joined Apps: a step skipped then reads as Apps.
+    # Developer tools being on by default (decision 13) isn't something the person set up.
+    assert "developer" not in snapshot["live_done"]
+    assert snapshot["skipped_steps"] == ["developer", "apps"]  # Channels joined Apps: a step skipped then reads as Apps.
     # "Models" is done only while a default model exists.
     assert "models" not in snapshot["completed_steps"]
     (tmp_path / "model_settings.json").write_text(json.dumps({"model": "model:codex:gpt-5.6-sol"}), encoding="utf-8")

@@ -335,6 +335,8 @@ function tileFromChecks(
   )[0];
   const view = CHECK_STATUS[worst.status];
   const ok = checks.filter((check) => check.status === 'ok').length;
+  // Name the rest, so "1 of 11 OK" under OK never reads as ten failures (U18).
+  const unused = checks.length - ok;
   return {
     ...tile,
     tone: view.tone,
@@ -344,7 +346,7 @@ function tileFromChecks(
         ? `${worst.name}: ${worst.detail}`
         : worst.status === 'inactive' && !ok
           ? 'Not set up'
-          : `${ok} of ${checks.length} OK`,
+          : `${plural(ok, 'check')} OK${unused ? ` · ${unused} not in use` : ''}`,
     checked: checkedWords(checks, now),
     checks,
     fix: worst.fix ?? null,

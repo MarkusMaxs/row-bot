@@ -159,8 +159,9 @@ const EMPTY_ROWS: readonly TranscriptRow[] = [];
 const CONTEXT_HIDDEN_KEY = 'row-bot.context-hidden.v1';
 
 /** Below 740px Context floats; a floating chat docks it again from 780px. */
+/** Too narrow for the details rail beside a comfortable reading column (U3). */
 export function isNarrowChat(width: number, narrow: boolean): boolean {
-  return narrow ? width < 780 : width < 740;
+  return narrow ? width < 980 : width < 940;
 }
 
 function readContextHidden(): boolean {
@@ -526,10 +527,10 @@ export default function Conversation({
   // Compact layouts show Context as a sheet that adopts the same mounted
   // host, so it stays live (agents, goal, resources) while it is open.
   const sheetHosted = Boolean(contextHost) && compactPlacement;
-  // Conversation details is a small floating card. A wide chat keeps it
-  // pinned open under the header's buttons (hidden only on request) and moves
-  // the reading column aside for it (B221); a narrow one floats it over the
-  // chat on demand. Panels such as Design keep the full-height right region.
+  // A wide chat keeps Conversation details open in a rail anchored to its
+  // right edge, hidden only on request (U3); a narrow one opens them on
+  // demand as a card over the chat. Panels such as Design keep the
+  // full-height right region.
   const [contextHidden, setContextHiddenState] = useState(readContextHidden);
   const [floatingOpen, setFloatingOpen] = useState(false);
   const floatingContext = hosted && narrowChat;
