@@ -150,12 +150,9 @@ test('the reviewer’s decisions are visible but quiet', async ({
   // The conversation itself: Buddy's companion can show the latest reply too.
   const transcript = page.getByRole('log', { name: 'Conversation' });
   await expect(
-    transcript.getByText(
-      'The requested action was denied. No action was taken.',
-      {
-        exact: true,
-      },
-    ),
+    transcript.getByText('You said no, so Row-Bot stopped there.', {
+      exact: true,
+    }),
   ).toBeVisible();
 
   await send(page, 'Save and commit decided without asking fixture');

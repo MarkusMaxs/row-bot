@@ -181,16 +181,18 @@ def _question_answer(asked: dict | None, payload: dict) -> dict | None:
 
 
 def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: str,
-                    expected_results: int, computer: bool) -> Iterator[tuple]:
+                    expected_results: int, computer: bool, memory: bool = False) -> Iterator[tuple]:
     """A denied approval ends the turn once the denied calls have their results.
 
     The model is not asked again, so it cannot retry the action or reach for
     another way to do it: the stream is closed there, and the reply says so.
     Closing it before LangGraph saves the tool step leaves the results unsaved,
-    so they are recorded before the reply (B234).
+    so they are recorded before the reply (B234). The reply never claims nothing
+    happened: earlier steps of the turn may have acted (U13).
     """
     message = ("You said no, so Row-Bot didn't use the computer for that." if computer
-               else "The requested action was denied. No action was taken.")
+               else "You chose not to save that, so Row-Bot didn't." if memory
+               else "You said no, so Row-Bot stopped there.")
     iterator = iter(events)
     settled = 0
     try:
@@ -1579,7 +1581,8 @@ class ClientPlatformService:
                             events, conversation_id=conversation_id,
                             identity=str(uuid.uuid5(uuid.NAMESPACE_URL, f"row-bot:denied:{handle.pass_id}")),
                             expected_results=len(approval_context.get("interrupt_ids") or ()),
-                            computer=bool(approval_context.get("computer")))
+                            computer=bool(approval_context.get("computer")),
+                            memory=bool(approval_context.get("memory")))
                     for event in events:
                         self.registry.check_dispatch(handle)
                         if self.stream_factory is not None and event[0] in {"token", "tool_start", "tool_done", "output_binding"}:
@@ -1953,6 +1956,10 @@ class ClientPlatformService:
                                                    "generation_id": lease_generation,
                                                    "computer": any(
                                                        isinstance(item, dict) and item.get("tool") == "computer"
+                                                       for item in (interrupt if isinstance(interrupt, list) else [interrupt])),
+                                                   # An incognito chat's memory write (N11): Don't save.
+                                                   "memory": any(
+                                                       isinstance(item, dict) and isinstance(item.get("memory_save"), dict)
                                                        for item in (interrupt if isinstance(interrupt, list) else [interrupt]))})
             return {**result, "approval_id": approval_id}
         if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve", answer=answer):

@@ -157,7 +157,7 @@ test('a reply card links the post it answers', async ({ page }, info) => {
   await card.getByRole('button', { name: 'Deny', exact: true }).click();
   await expect(card).toHaveCount(0);
   await expect(
-    transcript(page).getByText('The requested action was denied.', {
+    transcript(page).getByText('You said no, so Row-Bot stopped there.', {
       exact: false,
     }),
   ).toBeVisible();
