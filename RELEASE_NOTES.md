@@ -2,18 +2,59 @@
 
 ---
 
-## v5.3.0-beta.1 - A Browser In The App, Pages, Outlook & Reviewed Approvals
+## v5.3.0 - A Browser In The App, Pages, Outlook & Reviewed Approvals
 
-The first 5.3 beta, and the first release to arrive through 5.2's background
-updates: on the Beta channel, Row-Bot 5.2.1 downloads it while you work and
-Settings › Updates offers **Restart now**. Row-Bot's browser now lives inside
-the app and computer use is rebuilt; Row-Bot can make pages you work in beside
-the chat, ask you questions with options, and connect Outlook and several X
-accounts. Chats can be incognito, background work shows up at once, Auto
-approvals are reviewed and a new Hands-off level asks nothing. Row-Bot can run
-servers and long jobs in the background, edit video, send you files and work
-on code from any of your devices, and Claude works with your Claude plan again,
-through your own Claude Code. Read **Upgrade Notes** below before upgrading.
+Row-Bot 5.3 puts its browser inside the app and rebuilds computer use. Row-Bot
+can make pages you work in beside the chat, ask you questions with options, and
+connect Outlook and several X accounts. Chats can be incognito, background work
+shows up at once, Auto approvals are reviewed and a new Hands-off level asks
+nothing. Row-Bot can run servers and long jobs in the background, edit video,
+send you files and work on code from any of your devices. Claude works with your
+Claude plan again, through your own Claude Code. From 5.2.1 it arrives through
+background updates: Settings › Updates offers **Restart now**. Read **Upgrade
+Notes** below before upgrading.
+
+### New Since The Beta
+
+- **Row-Bot uses what it can do, without being asked** - you no longer have to
+  name a feature:
+  - a plan, checklist, comparison or numbers to track becomes a page;
+  - a choice only you can make comes as a question card;
+  - research on several things goes to helpers;
+  - a file server or watcher starts in the background, in your workspace;
+  - "keep me on track" gets a plan and a weekly check-in.
+- **Faster first replies, less of your plan used** - a new chat sends about 40%
+  less to the model before your first message. Tool guides and rarely used
+  tools are read when needed, not sent every time. With a ChatGPT plan, the
+  shared start of each new chat is now found in the provider's cache, about 95%
+  of a new chat's first request.
+- **Always ask me in workflows** - a workflow step set to Always ask me now
+  stops for your answer, where it used to fail. Its card says what runs, such
+  as "Run shell command: mkdir reports".
+- **Local models** - when a local model writes a tool call its runtime can't
+  read, Row-Bot asks it once more instead of stopping with "The response was
+  interrupted". First run suggests the most capable models you have installed,
+  and never an "abliterated" or "uncensored" one. qwen3.8 is recognised as a
+  model that uses tools.
+- **A Mac installer that shows the way** - the DMG opens on a window that says
+  "Drag Row-Bot to Applications", with an arrow.
+- **Fixes from beta testing:**
+  - "Add and process" in Documents no longer stops at "The documents list
+    changed";
+  - signing in to a provider refreshes its models;
+  - a refused sign-in no longer leaves its dialog stuck;
+  - every memory write in an incognito chat, including a helper's, asks you
+    with its own card;
+  - a Mac app whose keychain asks for permission at start no longer freezes;
+  - logging "5k in 31 minutes" records the minutes.
+- **Polish from beta feedback:**
+  - clearer approval wording, with tool errors in plain words;
+  - no internal tags or "(Source: Internal Knowledge)" in replies;
+  - favourites shown in every model picker;
+  - helper chats kept out of the Library;
+  - the conversation details card laid out properly at narrower windows;
+  - an easier-to-find Browser pane;
+  - named workflow controls.
 
 ### Row-Bot's Browser And Computer Use
 
@@ -229,10 +270,9 @@ through your own Claude Code. Read **Upgrade Notes** below before upgrading.
 
 ### Upgrade Notes
 
-- **From 5.2.1, in the background** - choose the Beta channel in Settings ›
-  Updates; Row-Bot downloads 5.3.0-beta.1 and says Restart to update. From 5.1
-  or 5.0, read the 5.2.0 notes below: the move to 5.2 needs the full installer
-  once.
+- **From 5.2.1 or the beta, in the background** - Row-Bot downloads 5.3.0 and
+  says Restart to update. From 5.1 or 5.0, read the 5.2.0 notes below: the move
+  to 5.2 needs the full installer once.
 - **Claude, set up again** - the old Claude sign-in is gone. On first start
   its saved tokens are deleted, and a profile that used it says once: "Claude
   now works through Claude Code. Set it up again."
@@ -264,6 +304,13 @@ through your own Claude Code. Read **Upgrade Notes** below before upgrading.
 
 - **The first time on a Mac** - when Row-Bot first works in your Documents
   folder, macOS asks for permission, and the command waits until you answer.
+
+---
+
+## v5.3.0-beta.1 - The First 5.3 Beta
+
+The first 5.3 beta, delivered through 5.2's background updates on the Beta
+channel. Everything in it is in v5.3.0 above.
 
 ---
 
