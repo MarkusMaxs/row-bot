@@ -1,17 +1,17 @@
 ---
-title: "Tools, Approvals, And Terminal"
-description: "Understand Row-Bot tools and tool steps, approvals that wait until you answer, and the interactive terminal docked under a conversation."
+title: "Tools, Approvals And Background Work"
+description: "Row-Bot's tools and tool steps, the approval levels, background processes, Row-Bot's browser, video editing, images, sending files, and the terminal."
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
 
-# Tools, Approvals, And Terminal
+# Tools, Approvals And Background Work
 
 Tools are actions Row-Bot can take beyond writing text. They can search documents, read files, use a browser, run commands, work on designs and code folders, inspect knowledge, call MCP servers, use plugins, or send through channels.
 
 ## Progressive Discovery
 
-With the recommended Auto capability-loading mode, core tools remain available under the active profile while Row-Bot searches enabled MCP, plugin, Custom Tool, and channel tools only when a request needs them. This keeps large external schema catalogs out of unrelated prompts.
+With **Only the ones a request needs (recommended)** in Settings › Tools, the tools Row-Bot uses all the time are always there, and it finds the rest when a request needs them: enabled MCP, plugin, Custom Tool and channel tools, and rarely used built-in ones such as the tracker, video editing or the updater. Each tool's guide is read when the tool is first needed. This keeps a new chat's first request small, so the first reply comes sooner.
 
 Discovery does not widen permissions. The selected provider, Agent Profile, workspace policy, approval mode, and execution budget still apply. Live and reopened traces group results under the real integration name. See [Progressive Tools And Skills](/docs/guides/progressive-tools-and-skills) for the complete flow and the eager compatibility option.
 
