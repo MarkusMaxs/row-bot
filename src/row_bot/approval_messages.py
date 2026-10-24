@@ -163,12 +163,14 @@ def normalize_interrupts(
     if asked is not None:
         # A helper's question (N4) is asked, not approved: the notice names the question.
         title, reason, raw_action = f"{source} has a question: {asked['questions'][0]['question']}", "", ""
+    # A memory write of an incognito chat (N11) goes to the person alone: no reviewer asked, as on its card.
+    note = "" if isinstance(first.get("memory_save"), Mapping) else reviewer_note(first)
     return {
         "kind": "agent_run",
         "source_label": source,
         "title": title,
         "reason": reason,
-        "reviewer_note": reviewer_note(first),
+        "reviewer_note": note,
         "tool": tool,
         "action_label": label,
         "raw_action": raw_action,

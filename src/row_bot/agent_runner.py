@@ -1135,8 +1135,15 @@ def _pause_agent_for_approval(
     configurable = config.get("configurable") or {}
     source_label = str(run.get("display_name") or "Child Agent")
     parent_thread_id = str(run.get("parent_thread_id") or "")
+    from row_bot.questions import question_item
+    from row_bot.tasks import PERSON_APPROVAL_TIMEOUT_MINUTES, _person_only_interrupt
+
+    held = _person_only_interrupt(interrupts)
+    # A card only the person answers is asked by itself, as in a chat (B412, B415): the helper's notice
+    # names that one action, and what waits beside it asks again once it is answered.
+    asked = [held] if held and question_item(interrupts) is None else interrupts
     approval_payload = normalize_interrupts(
-        interrupts,
+        asked,
         source_label=source_label,
         agent_run_id=run_id,
         parent_thread_id=parent_thread_id,
@@ -1154,9 +1161,6 @@ def _pause_agent_for_approval(
             if isinstance(item, dict)
         ),
     }
-    from row_bot.tasks import PERSON_APPROVAL_TIMEOUT_MINUTES, _person_only_interrupt
-
-    held = _person_only_interrupt(interrupts)
     if held:
         # The workflow's own "Always ask me" card (N9): only the person answers it, bound to its details.
         resume_state["person_binding"] = str(held["binding"])
@@ -1448,6 +1452,18 @@ def _run_agent_thread(
                     _conversation_changed(str((config.get("configurable") or {}).get("thread_id") or ""))
 
 
+def _resume_interrupt_ids(resume_state: Mapping[str, Any]) -> list[str]:
+    """The ids of the interrupts a paused helper waits on, once each, in order."""
+    interrupt_ids: list[str] = []
+    for intr in resume_state.get("interrupts", []):
+        if not isinstance(intr, dict):
+            continue
+        raw_id = intr.get("__interrupt_id") or intr.get("id")
+        if raw_id and str(raw_id) not in interrupt_ids:
+            interrupt_ids.append(str(raw_id))
+    return interrupt_ids
+
+
 def resume_agent_run(
     run_id: str,
     *,
@@ -1459,9 +1475,11 @@ def resume_agent_run(
 
     ``resume_values``: the helper asked a question (N4) and this is the answer (or a skip) for that question's
     own interrupt. The helper always goes on: skipping a question never stops it, and an action asked beside
-    the question asks again for itself.
+    the question asks again for itself. A card only the person answers (an incognito memory write, N11) is
+    answered for itself the same way when other actions wait beside it.
     """
     from row_bot.agent_runs import append_agent_event, finish_agent_run, get_agent_run
+    from row_bot.tools.approval_gate import asked_alone, bound_answer
 
     run = get_agent_run(run_id)
     if not run:
@@ -1506,6 +1524,16 @@ def resume_agent_run(
             )
     except Exception:
         logger.debug("Could not publish child approval resolution", exc_info=True)
+    resume_state = run.get("resume_state_json") or {}
+    interrupt_ids = _resume_interrupt_ids(resume_state)
+    binding = str(resume_state.get("person_binding") or "")
+    if binding and not resume_values:
+        # A card only the person answers was asked by itself, as in a chat (B412, B415): this answer is that
+        # card's alone, so a Don't save never stops the helper, and what waited beside it (another incognito
+        # memory write, say) asks again for itself, on its own card.
+        alone_id =str((asked_alone(resume_state.get("interrupts")) or {}).get("__interrupt_id") or "")
+        if len(interrupt_ids) > 1 and alone_id in interrupt_ids:
+            resume_values = {alone_id: bound_answer(True, binding) if approved else False}
     if not approved and not resume_values:
         append_agent_event(
             run_id,
@@ -1519,7 +1547,6 @@ def resume_agent_run(
         )
         _notify_child_agent_waiters(run_id)
         return run
-    resume_state = run.get("resume_state_json") or {}
     config = resume_state.get("config")
     enabled_tool_names = resume_state.get("enabled_tool_names")
     if not isinstance(config, dict) or not isinstance(enabled_tool_names, list):
@@ -1535,31 +1562,16 @@ def resume_agent_run(
         resume_state.get("external_discovery_active")
     )
     config["configurable"] = configurable
-    interrupt_ids: list[str] = []
-    seen_interrupt_ids: set[str] = set()
-    for intr in resume_state.get("interrupts", []):
-        if not isinstance(intr, dict):
-            continue
-        raw_id = intr.get("__interrupt_id") or intr.get("id")
-        if not raw_id:
-            continue
-        interrupt_id = str(raw_id)
-        if interrupt_id in seen_interrupt_ids:
-            continue
-        seen_interrupt_ids.add(interrupt_id)
-        interrupt_ids.append(interrupt_id)
     append_agent_event(
         run_id,
         "approval.resolved",
-        {"approved": True, "resume_token": resume_token},
+        {"approved": bool(approved), "resume_token": resume_token},
     )
     stop_event = threading.Event()
     answer: Any = True
-    if resume_state.get("person_binding"):
+    if binding:
         # The person's approval of exactly what their card showed (N9).
-        from row_bot.tools.approval_gate import bound_answer
-
-        answer = bound_answer(True, str(resume_state["person_binding"]))
+        answer = bound_answer(True, binding)
     thread = generation_registry.thread(
         target=_resume_agent_thread,
         args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event, resume_values, answer),
