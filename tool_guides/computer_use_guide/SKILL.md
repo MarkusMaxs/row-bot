@@ -3,6 +3,7 @@ name: computer_use_guide
 display_name: Computer Use Guide
 tools:
   - computer_use
+inline: true
 ---
 
 # COMPUTER USE WORKFLOW

@@ -6,6 +6,7 @@ description: Guidance for browser automation workflows.
 tools:
   - browser
 tags: []
+inline: true
 ---
 BROWSER AUTOMATION (Row-Bot's browser):
 - Your browser tools drive Row-Bot's own browser. The person watches it live
