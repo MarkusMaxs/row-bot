@@ -974,8 +974,9 @@ _S2_PROGRAMS = {
         "import time\n"
         "for step in ('Compiling 128 modules', 'Bundling', 'Minifying', 'Writing dist/'):\n"
         "    print(step + '...', flush=True)\n"
-        "    time.sleep(1.2)\n"
-        "print('Built in 4.8s', flush=True)\n"
+        # Long enough to be seen running on a busy machine before it finishes (B420).
+        "    time.sleep(3)\n"
+        "print('Built in 12s', flush=True)\n"
     ),
 }
 _S2_LOCK = threading.Lock()
