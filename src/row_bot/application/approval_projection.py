@@ -27,7 +27,15 @@ def _text(value: Any, maximum: int) -> str:
 def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[str, Any]:
     """Expose only reviewed, size-bounded interrupt metadata."""
 
+    from row_bot.questions import question_item
+    from row_bot.tools.approval_gate import asked_alone
+
     items = value if isinstance(value, list) else [value]
+    alone = asked_alone(items) if question_item(value) is None else None
+    if alone is not None:
+        # Only the person answers it, so its card is its own: an incognito chat's memory write (N11)
+        # is asked as one, whatever else the step asks (B412). The rest ask again once it is answered.
+        items = [alone]
     item = next((entry for entry in items if isinstance(entry, Mapping)), {})
     tool_name = _text(item.get("tool") or item.get("name"), 180)
     action_label = canonical_tool_name(tool_name) if tool_name else "Requested action"
@@ -98,8 +106,6 @@ def project_approval_context(value: Any, *, fallback_reason: str = "") -> dict[s
             projected["x_post"] = card
     # Row-Bot's question with options (N4): its card asks it, answered by the person alone. An action asked
     # beside it in the same step is never answered with it; it asks again for itself once this is answered.
-    from row_bot.questions import question_item
-
     asked = question_item(value)
     if asked is not None:
         projected.update({

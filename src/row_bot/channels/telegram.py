@@ -949,7 +949,9 @@ def _escape_html(text: str) -> str:
 # ──────────────────────────────────────────────────────────────────────
 def _format_interrupt(data) -> str:
     """Format interrupt data (single dict or list of dicts) as HTML."""
-    items = data if isinstance(data, list) else [data]
+    from row_bot.channels.approval import asked_now
+
+    items = asked_now(data)  # A memory write of an incognito chat is asked by itself (B412).
     parts: list[str] = []
 
     for item in items:
@@ -983,8 +985,10 @@ def _format_interrupt(data) -> str:
 
 
 def _extract_interrupt_ids(data) -> list[str] | None:
-    """Extract explicit interrupt IDs for identity-bound resume."""
-    items = data if isinstance(data, list) else [data]
+    """Extract explicit interrupt IDs for identity-bound resume: those the answer goes to."""
+    from row_bot.channels.approval import asked_now
+
+    items = asked_now(data)
     ids = [item.get("__interrupt_id") for item in items
            if isinstance(item, dict) and item.get("__interrupt_id")]
     return ids or None
