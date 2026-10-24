@@ -10455,6 +10455,7 @@ def create_router(
                 "question",
                 "questions",
                 "memory_text",
+                "folder",
                 "x_post",
                 "policy_revision",
             )

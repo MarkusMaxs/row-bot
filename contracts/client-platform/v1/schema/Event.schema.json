@@ -277,6 +277,12 @@
           "default": null,
           "title": "Approval Id"
         },
+        "folder": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Folder",
+          "type": "string"
+        },
         "memory_text": {
           "default": "",
           "maxLength": 4096,

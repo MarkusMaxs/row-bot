@@ -165,7 +165,8 @@ it('explains the action in plain words, without request ids or unrated risk', as
   );
   expect(details.title).toBe('Delete a file?');
   render(details.content);
-  expect(screen.getByText('Only this action.')).toBeVisible();
+  expect(screen.getByText('This approval covers')).toBeVisible();
+  expect(screen.getByText('This action only.')).toBeVisible();
   expect(screen.getByText('Delete a file')).toBeVisible();
   expect(screen.getByText('File path: notes.txt')).toBeVisible();
   expect(document.body).not.toHaveTextContent(/workspace_file_delete|\{"/);
@@ -173,6 +174,31 @@ it('explains the action in plain words, without request ids or unrated risk', as
     null,
   );
   expect(screen.queryByText(/No server expiry/)).toBeNull();
+});
+
+it('names the folder a command runs in and what one approval covers (U7)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'run_command',
+    reason: 'Run shell command: npm test',
+    safe_argument_summary: '',
+    folder: 'row-bot',
+  });
+  await renderCard();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  const facts = Object.fromEntries(
+    [...document.querySelectorAll('.approval-detail dt')].map((term) => [
+      term.textContent,
+      term.nextElementSibling?.textContent,
+    ]),
+  );
+  expect(facts).toMatchObject({
+    Action: 'Run a command',
+    'Runs in': 'row-bot',
+    'This approval covers': 'This command only.',
+  });
+  expect(screen.queryByText('Affects')).toBeNull();
 });
 
 it('lists structured arguments in words, never as code', async () => {

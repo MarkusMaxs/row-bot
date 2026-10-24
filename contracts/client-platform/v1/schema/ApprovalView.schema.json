@@ -334,6 +334,12 @@
       "default": null,
       "title": "Expires At"
     },
+    "folder": {
+      "default": "",
+      "maxLength": 120,
+      "title": "Folder",
+      "type": "string"
+    },
     "id": {
       "maxLength": 128,
       "minLength": 1,

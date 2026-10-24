@@ -2170,6 +2170,15 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+.approval-detail dd.approval-detail-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.approval-detail-folder svg {
+  flex: none;
+  color: var(--text-muted);
+}
 .turn-notice {
   margin: 16px 0 4px;
 }
