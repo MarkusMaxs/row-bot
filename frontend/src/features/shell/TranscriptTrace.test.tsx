@@ -924,3 +924,65 @@ it.each([
     expect(within(ran).getByText(line)).toBeVisible();
   },
 );
+
+const browserTurn: TranscriptTraceGroup[] = [
+  {
+    ...groups[0],
+    group_id: 'browser',
+    name: 'Browser activity',
+    kind: 'browser',
+    items: [
+      {
+        ...groups[0].items[0],
+        canonical_name: 'Browser Navigate',
+        group_name: 'Browser activity',
+        group_kind: 'browser',
+        safe_input: '',
+        safe_summary:
+          'Opened https://www.wikipedia.org/wiki/Tea.\nPage: Tea - Wikipedia (https://www.wikipedia.org/wiki/Tea)',
+        specialization: null,
+      },
+    ],
+  },
+];
+
+it('lets a finished turn that used the browser open its pane (U16)', async () => {
+  const { onBrowserPaneRequest } = await import('../browser/open-pane');
+  const opened: string[] = [];
+  const stop = onBrowserPaneRequest((conversation) =>
+    opened.push(conversation),
+  );
+  try {
+    render(
+      <TranscriptTrace
+        conversation="conversation-a"
+        groups={browserTurn}
+        offerBrowser
+      />,
+    );
+    const step = screen.getByRole('button', {
+      name: 'Open the browser: wikipedia.org',
+    });
+    expect(step).toHaveTextContent('Used the browser · wikipedia.org');
+    fireEvent.click(step);
+    expect(opened).toEqual(['conversation-a']);
+  } finally {
+    stop();
+  }
+});
+
+it('offers the browser only on the row the turn names, never beside the live step', () => {
+  const { rerender } = render(
+    <TranscriptTrace conversation="conversation-a" groups={browserTurn} />,
+  );
+  expect(screen.queryByRole('button', { name: /Open the browser/ })).toBeNull();
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={browserTurn}
+      offerBrowser
+      live={{ running: true }}
+    />,
+  );
+  expect(screen.queryByRole('button', { name: /Open the browser/ })).toBeNull();
+});

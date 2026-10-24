@@ -138,6 +138,7 @@ import { TranscriptMessage } from './TranscriptMessage';
 import { publicBlockText } from './TranscriptBlocks';
 import {
   answerStreaming,
+  browserOffers,
   buildTranscript,
   finishedLiveSteps,
   liveMedia,
@@ -2587,7 +2588,13 @@ export default function Conversation({
       );
       if (end) start = index + 1;
     });
-    return { starts, ends, texts };
+    return {
+      starts,
+      ends,
+      texts,
+      browser: browserOffers(items),
+      lastUser: items.map((item) => item.row.role).lastIndexOf('user'),
+    };
   }, [items]);
   const newChatRef = useRef(onNewChat);
   useLayoutEffect(() => {
@@ -3280,6 +3287,7 @@ export default function Conversation({
                             cards={item.cards}
                             agents={item.agents}
                             turnStart={turns.starts[index]}
+                            offerBrowser={turns.browser[index]}
                             toolbar={turns.ends[index]}
                             copyText={turns.texts[index]}
                             onRecover={recoverTurn}
@@ -3305,6 +3313,11 @@ export default function Conversation({
                         turnStart={turns.starts[index]}
                         latest={index === lastAssistant && !turnInFlight}
                         computer={computerLine}
+                        // The live browser step stands in for it while this turn runs.
+                        offerBrowser={
+                          turns.browser[index] &&
+                          !(browserLive && index > turns.lastUser)
+                        }
                         toolbar={turns.ends[index]}
                         copyText={turns.texts[index]}
                         onRecover={recoverTurn}

@@ -1714,10 +1714,17 @@ class ClientPlatformService:
                 canonical_tool_name,
             )
 
-            tool_name = canonical_tool_name(getter("name") or getter("tool_name"))
             raw_tool = str(getter("raw_name") or "")
             design_step = raw_tool if re.fullmatch(r"designer_[a-z_]{1,55}", raw_tool) else ""
             call_id = str(getter("tool_call_id") or getter("id") or "")
+            # A live step carries the tool's own name, as its saved step does, never its display name ("🌐
+            # Browser"): it reads the same before and after it settles, and the browser's steps group as the
+            # browser's, so the chat shows the live browser step (U16). Its result keeps the name its call had.
+            names = handle.__dict__.setdefault("tool_names", {})
+            own_name = names.get(call_id) or str(getter("runtime_name") or raw_tool or "")
+            if call_id and own_name:
+                names[call_id] = own_name
+            tool_name = canonical_tool_name(own_name or getter("name") or getter("tool_name"))
             if not call_id:
                 call_id = hashlib.sha256(
                     f"{handle.pass_id}:{handle.segment_id}:{getter('message_id')}:{tool_name}".encode()

@@ -21,6 +21,7 @@ import type {
 import { useRuntime } from '../../runtime';
 import { Button, CopyGlyph, useCopyFeedback } from '../../ui/primitives';
 import { AppIcon } from '../apps/parts';
+import { BrowserStepDone, siteOfSteps } from '../browser/BrowserThumbnail';
 import {
   activityLabel,
   approvedWithoutYou,
@@ -506,11 +507,14 @@ export default function TranscriptTrace({
   groups,
   live,
   computer = '',
+  offerBrowser = false,
   children,
 }: {
   conversation: string;
   groups: TranscriptTraceGroup[];
   live?: LiveActivity;
+  /** A finished turn that used Row-Bot's browser: "Used the browser · site" opens its pane (U16). */
+  offerBrowser?: boolean;
   /**
    * What computer use is doing now ("Using Microsoft Edge", "Waiting for your
    * OK"): a computer step in progress says it, as the browser's step names its action.
@@ -640,6 +644,11 @@ export default function TranscriptTrace({
                     ? 'Thinking'
                     : 'Working'
                   : '';
+  // A finished turn that used Row-Bot's browser offers its pane, as the live step did (U16).
+  const usedBrowser =
+    offerBrowser &&
+    !live &&
+    steps.some((step) => step.group_kind === 'browser');
   if (!steps.length && !running && thought === null && !children) return null;
   return (
     <div
@@ -721,6 +730,12 @@ export default function TranscriptTrace({
         <span className="visually-hidden" role="status">
           {announcement}
         </span>
+      )}
+      {usedBrowser && (
+        <BrowserStepDone
+          conversationId={conversation}
+          site={siteOfSteps(steps)}
+        />
       )}
       {children}
     </div>
