@@ -327,6 +327,68 @@ it('retains an uncertain original receipt and locks input without resending', as
   expect(session.hasRetained()).toBe(true);
   session.dispose();
 });
+it('a Start refused by a locked keychain says why and offers Connect and Close again (B413)', async () => {
+  const session = new SubscriptionAccountsSession();
+  const p = props({
+    session,
+    compact: true,
+    initialProvider: 'codex',
+    initialAction: 'connect',
+    apply: vi
+      .fn<SubscriptionAccountsProps['apply']>()
+      .mockRejectedValue({ code: 'subscription_storage_unavailable' }),
+  });
+  const view = render(<SubscriptionAccounts {...p} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    /keychain is locked or unavailable/,
+  );
+  expect(screen.queryByText(/couldn't confirm/)).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled(),
+  );
+  expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled();
+  expect(session.hasRetained()).toBe(false);
+
+  // Closed and opened again (the keychain unlocked meanwhile), Connect tries again.
+  view.unmount();
+  render(<SubscriptionAccounts {...p} />);
+  vi.mocked(p.apply).mockImplementationOnce(
+    async (_intent, _review, commandId) => ({
+      command_id: commandId,
+      status: 'completed',
+      accounts: snapshot,
+      flow,
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  expect(await screen.findByText('Waiting for you to sign in')).toBeVisible();
+  expect(p.apply).toHaveBeenCalledTimes(2);
+  session.dispose();
+});
+it('a Start whose outcome is unknown keeps it to check, with Close held (B413)', async () => {
+  const session = new SubscriptionAccountsSession();
+  const p = props({
+    session,
+    compact: true,
+    initialProvider: 'codex',
+    initialAction: 'connect',
+    apply: vi
+      .fn<SubscriptionAccountsProps['apply']>()
+      .mockRejectedValue({ code: 'network_unavailable' }),
+  });
+  render(<SubscriptionAccounts {...p} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+
+  expect(await screen.findByText(/couldn't confirm that/)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
+  expect(session.hasRetained()).toBe(true);
+  session.dispose();
+});
 it('supports explicit cancel while a login check is still running', async () => {
   let reject!: (reason: unknown) => void;
   const p = props();
