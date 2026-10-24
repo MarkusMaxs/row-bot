@@ -924,6 +924,11 @@ export default function MonitorHome({
 }: MonitorHomeProps) {
   const notify = useNotify();
   const [healthReload, setHealthReload] = useState(0);
+  // The Workflows check counts runs and their approvals (B414): an answered
+  // approval clears its warning at once.
+  useLiveUpdate(['runs', 'approvals'], () =>
+    setHealthReload((value) => value + 1),
+  );
   const [diagnosisBusy, setDiagnosisBusy] = useState(false);
   const [diagnosisError, setDiagnosisError] = useState('');
   const [copyNotice, setCopyNotice] = useState('');

@@ -365,6 +365,16 @@ export default function OverviewHome({
     attentionFeed.refresh();
   };
 
+  // A workflow run started, finished or waits (B407): Today shows it at once.
+  const [runsChanged, setRunsChanged] = useState(0);
+  useLiveUpdate(['runs'], () => setRunsChanged((value) => value + 1));
+  // The Workflows check counts runs and their approvals (B414): an answered
+  // approval clears its warning at once.
+  const [workflowsChanged, setWorkflowsChanged] = useState(0);
+  useLiveUpdate(['runs', 'approvals'], () =>
+    setWorkflowsChanged((value) => value + 1),
+  );
+
   useEffect(() => {
     if (!loadHealth) return;
     const abort = new AbortController();
@@ -378,11 +388,8 @@ export default function OverviewHome({
       },
     );
     return () => abort.abort();
-  }, [fixed, loadHealth, refreshKey]);
+  }, [fixed, loadHealth, refreshKey, workflowsChanged]);
 
-  // A workflow run started, finished or waits (B407): Today shows it at once.
-  const [runsChanged, setRunsChanged] = useState(0);
-  useLiveUpdate(['runs'], () => setRunsChanged((value) => value + 1));
   useEffect(() => {
     if (!loadTasks) return;
     const abort = new AbortController();
