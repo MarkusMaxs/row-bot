@@ -5,7 +5,7 @@ description: "Let Row-Bot work in apps on your Windows or macOS computer with yo
 
 # Computer Use
 
-With computer use, Row-Bot works in an app on this computer the way you would: it looks at the app's window, then clicks, types, scrolls and presses keys with your real mouse and keyboard while you watch. Use it for desktop apps, or for your own browser when you ask for it. For websites, Row-Bot's own browser is usually better (see [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal)).
+With computer use, Row-Bot works in an app on this computer the way you would: it looks at the app's window, then clicks, types, scrolls and presses keys with your real mouse and keyboard while you watch. Use it for desktop apps, or for your own browser when you ask for it. For websites, Row-Bot's own browser is usually better (see [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal)).
 
 Computer use is off by default. It works only in a chat in Row-Bot on this computer, one chat at a time, and never from schedules, channels, workflows or helper agents.
 
@@ -44,9 +44,9 @@ Row-Bot never types a password, one-time code or card number: it asks you to typ
 
 With computer use set up, Row-Bot can record your main screen to a video when you ask. It asks first ("Record your screen?"): the recording shows everything on the screen, including other apps and notifications. The conversation shows **Recording · 0:42** with **Stop**; the video (MP4) is saved to the conversation's files and shows there with a player. It stops when you or Row-Bot stop it, at its time limit (5 minutes unless asked otherwise, at most 10), before it gets too large for the chat, when the conversation is deleted, and when Row-Bot quits.
 
-- On Windows, Cua Driver records video with ffmpeg. Row-Bot uses the one on this computer, or asks on the same card to download it first (about 30 MB, from PyPI; see [Video Editing](/docs/chat/tools-approvals-and-terminal)). On macOS it needs macOS 15 or later and Screen Recording permission.
+- On Windows, Cua Driver records video with ffmpeg. Row-Bot uses the one on this computer, or asks on the same card to download it first (about 30 MB, from PyPI; see [ffmpeg](/docs/chat/tools-approvals-and-terminal#ffmpeg)). On macOS it needs macOS 15 or later and Screen Recording permission.
 - The recording runs in a Cua session of its own, into a private folder in Row-Bot's data; the folder (including Cua's per-step pictures) is removed once the video is saved.
-- Without computer use set up, Row-Bot says that recording the screen needs it and how to set it up. Its own browser can be recorded without it (see [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal)).
+- Without computer use set up, Row-Bot says that recording the screen needs it and how to set it up. Its own browser can be recorded without it (see [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal)).
 
 ## Privacy And Cua Telemetry
 
