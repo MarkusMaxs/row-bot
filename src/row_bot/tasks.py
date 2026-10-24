@@ -1578,18 +1578,30 @@ def _canonicalize_workflow_model_override(value: str | None) -> str | None:
 
 
 def _approval_detail(intr: dict) -> str:
-    """One step's approval in words, as the chat's approval card reads; never a dump of its arguments (B312)."""
+    """One step's approval in words, as the chat's approval card reads; never a dump of its arguments (B312).
+
+    The words a Row-Bot gate wrote for its card ("Run shell command: mkdir reports", which starts with
+    its label) come first (U19); any other tool's arguments in words, since an app's own description
+    can be a dump of them.
+    """
+    from row_bot.approval_messages import plain_tool_call, reviewer_note
+
     tool_name = intr.get("tool", "unknown tool")
-    if isinstance(intr.get("args"), dict) and intr["args"]:
-        from row_bot.approval_messages import plain_tool_call
-
-        detail = plain_tool_call(tool_name, intr["args"], label=str(intr.get("label") or ""))
+    description = " ".join(str(intr.get("description") or "").split())
+    label = str(intr.get("label") or "").strip()
+    if label and description.startswith(label):
+        detail = description if len(description) <= 220 else description[:217].rstrip() + "..."
+    elif isinstance(intr.get("args"), dict) and intr["args"]:
+        detail = plain_tool_call(tool_name, intr["args"], label=label)
     else:
-        detail = intr.get("description", "") or f"Tool '{tool_name}' needs approval"
-    # Under Auto, why the reviewer asked rather than approving it.
-    from row_bot.approval_messages import reviewer_note
-
-    note = reviewer_note(intr)
+        detail = description or f"Tool '{tool_name}' needs approval"
+    if intr.get("person_only"):
+        # The person's own rule (Always ask me): it says so, never as the reviewer's question.
+        review = intr.get("review") if isinstance(intr.get("review"), dict) else {}
+        note = str(review.get("reason") or "")
+    else:
+        # Under Auto, why the reviewer asked rather than approving it.
+        note = reviewer_note(intr)
     return f"{detail} ({note})" if note else detail
 
 
