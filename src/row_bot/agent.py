@@ -74,6 +74,10 @@ class AgentResumeError(RuntimeError):
     """Raised when a paused agent graph cannot resume successfully."""
 
 
+class AgentInvokeError(RuntimeError):
+    """Raised when a workflow step's agent call ends in an error; its message says why, as the person reads it."""
+
+
 class ContextCompactionError(RuntimeError):
     """Raised when an over-limit request cannot be compacted safely."""
 
@@ -6378,6 +6382,9 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                         exc_info=True,
                     )
                 _notify_api_error(_err_msg)
+                if runtime_surface == "workflow":
+                    # The step failed: its run must not read as done with the error as its answer (B417).
+                    raise AgentInvokeError(_err_msg) from exc
                 return _err_msg
 
         # Read final state from checkpoint
