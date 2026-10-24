@@ -7,12 +7,11 @@ conversation on the same route, so the cached prefix is found again:
 - xAI Responses: ``prompt_cache_key``;
 - xAI Chat Completions: the ``x-grok-conv-id`` header;
 - OpenRouter: ``session_id`` (sticky provider routing);
-- Codex: the ``session_id`` header;
 - OpenCode: the ``x-opencode-session`` header.
 
-OpenAI's and Codex's ``prompt_cache_key`` is shared by interactive chats
-instead (``shared_prefix_cache_key``), so a new chat finds the system prompt
-and tools another chat cached.
+OpenAI's ``prompt_cache_key`` and Codex's (with its ``session_id`` header)
+are shared by interactive chats instead (``shared_prefix_cache_key``), so a
+new chat finds the system prompt and tools another chat cached.
 
 The key is an HMAC of the conversation id under a key that lives only in this
 process, so a provider never sees the conversation id itself (channel
@@ -92,7 +91,7 @@ _OWN_KEY_SURFACES = frozenset({"workflow", "goal", "agent", "agent_child"})
 
 
 def shared_prefix_cache_key(scope: str) -> str | None:
-    """The ``prompt_cache_key`` for OpenAI and Codex: shared by interactive chats.
+    """The ``prompt_cache_key`` for OpenAI and Codex (and Codex's session): shared by interactive chats.
 
     Every interactive chat (desktop, channels, voice) starts with the same
     system prompt and tools. OpenAI routes a key and the prompt's first tokens

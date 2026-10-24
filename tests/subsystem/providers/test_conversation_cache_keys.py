@@ -200,25 +200,29 @@ def subscription_credentials(monkeypatch) -> None:
     monkeypatch.setattr(xai_oauth, "xai_oauth_runtime_credentials", lambda **kwargs: credentials)
 
 
-def test_codex_session_is_the_conversation_key_and_chats_share_the_cache_key(subscription_credentials) -> None:
+def test_codex_chats_share_one_session_and_a_workflow_keeps_its_own(subscription_credentials) -> None:
     client = _SSEClient()
 
     # Chat Only and compaction build a new instance per call.
-    for thread_id in (CONVERSATION, CONVERSATION, OTHER_CONVERSATION, ""):
-        model = ChatCodexResponses(model_name="gpt-5.5", http_client=client)
-        in_conversation(thread_id, lambda: model.invoke(PROMPT))
+    for surface in ("normal_chat", "workflow"):
+        for thread_id in (CONVERSATION, CONVERSATION, OTHER_CONVERSATION, ""):
+            model = ChatCodexResponses(model_name="gpt-5.5", http_client=client)
+            in_conversation(thread_id, lambda: model.invoke(PROMPT), surface)
 
     body_keys = [call["json"]["prompt_cache_key"] for call in client.calls]
     header_keys = [call["headers"]["session_id"] for call in client.calls]
-    first, again, other, outside = header_keys
+    # The backend finds the cache by the session, so both carry the same key.
+    assert body_keys == header_keys
+    chats, workflows = header_keys[:4], header_keys[4:]
+    # Every interactive chat starts with the same prefix, so a new chat finds it cached.
+    assert chats[0] == chats[1] == chats[2] != chats[3]
+    assert "12345" not in chats[0]
+    # A workflow's back-to-back calls keep a session of their conversation.
+    first, again, other, outside = workflows
     assert first == again != other
-    assert outside not in {first, other}
     assert first == in_conversation(CONVERSATION, lambda: cache_affinity.conversation_cache_key("codex"))
-    assert "12345" not in first
-    # The cache key is the same for every interactive chat, so a new one finds the cached prefix.
-    assert body_keys[0] == body_keys[1] == body_keys[2]
-    assert body_keys[0] not in header_keys
-    assert body_keys[3] == header_keys[3]  # outside a conversation: the instance's own session
+    assert chats[0] not in workflows
+    assert outside not in {first, other}
 
 
 def test_codex_outside_a_conversation_keeps_one_session_per_instance(subscription_credentials) -> None:
