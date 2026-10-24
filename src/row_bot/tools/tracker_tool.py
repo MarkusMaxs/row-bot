@@ -387,7 +387,9 @@ class _TrackerLogInput(BaseModel):
         default="true",
         description=(
             "Value to log.  For boolean trackers use 'true'/'false'. "
-            "For numeric trackers use a number (e.g. '6').  For duration "
+            "For numeric trackers use one number in the tracker's own unit (an existing tracker "
+            "keeps its unit: a run of 5 km in 31 minutes on a minutes tracker logs '31', with "
+            "'5 km' in notes).  For duration "
             "trackers use 'started'/'ended'.  For categorical use the "
             "category label (e.g. 'good', 'bad')."
         ),
