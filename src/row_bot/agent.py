@@ -2604,6 +2604,24 @@ def _root_system_prompt(small_profile: bool) -> str:
     return get_agent_system_prompt(small_context=True) if accepts else get_agent_system_prompt()
 
 
+def _offered_tool_parents() -> set[str]:
+    """Every tool group the conversation offers, bound or on demand: the same on every turn."""
+    bound = set(_current_effective_tool_parent_names_var.get())
+    return bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
+
+
+def _guides_loadable() -> bool:
+    return any(getattr(record, "source", "") == "guide"
+               for record in (_current_authorized_skill_records_var.get() or ()))
+
+
+def _tool_guides_prompt() -> str:
+    """The tool guides above a small window (WP A6): the ``inline`` ones in full, the rest an index."""
+    from row_bot.skills import get_tool_guides_prompt
+
+    return get_tool_guides_prompt(sorted(_offered_tool_parents()), loadable=_guides_loadable())
+
+
 def _small_profile_tool_guides() -> str:
     """The tool guides on a small window (WP A5): one line per guide, read in full with skill_load
     where the skill bridges are bound; the TASKS and MEMORY guidance in full when those tools are
@@ -2613,11 +2631,8 @@ def _small_profile_tool_guides() -> str:
     from row_bot.skills import get_tool_guide_index
 
     bound = set(_current_effective_tool_parent_names_var.get())
-    offered = bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
-    loadable = any(getattr(record, "source", "") == "guide"
-                   for record in (_current_authorized_skill_records_var.get() or ()))
     parts = [text for parent, text in ROOT_TOOL_GUIDES if parent in bound]
-    index = get_tool_guide_index(sorted(offered), loadable=loadable)
+    index = get_tool_guide_index(sorted(_offered_tool_parents()), loadable=_guides_loadable())
     if index:
         parts.append(index)
     return "\n\n".join(parts)
@@ -2822,15 +2837,7 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
         if small_profile:
             tool_guides_text = _small_profile_tool_guides()
         else:
-            from row_bot.skills import get_skills_prompt
-
-            active_tool_names = tuple(sorted(
-                set(_current_effective_tool_parent_names_var.get()) | _on_demand_parents_used(state["messages"])
-            ))
-            tool_guides_text = get_skills_prompt(
-                [],
-                active_tool_names=active_tool_names,
-            )
+            tool_guides_text = _tool_guides_prompt()
     except Exception as exc:
         logger.debug("Tool-guide injection skipped (non-fatal): %s", exc)
     _section = stable_section(
@@ -4612,6 +4619,12 @@ def get_current_thread_id() -> str:
     return _current_thread_id_var.get("")
 
 
+def get_current_runtime_surface() -> str:
+    """Return the runtime surface (``normal_chat``, ``workflow`` …) of the active invocation."""
+
+    return _current_runtime_surface_var.get("")
+
+
 def get_active_runtime_context() -> dict:
     """Return lightweight runtime facts for status/introspection tools."""
 
@@ -5287,8 +5300,22 @@ def _collect_agent_tool_candidates(
 # profile limits and guides unchanged). On every window, Developer tools come with a code folder (WP A5):
 # without one each of them fails, and their 22 schemas and guide went with every call of every chat.
 SMALL_CONTEXT_TOKENS = 65_536
-ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder", "video_editing",
-                                   "file_delivery", "pages"})
+# A local model (Ollama and other on-device runtimes) up to this window gets the middle tier too: its
+# whole prompt is processed on this computer, so every token costs time to the first word.
+LOCAL_MIDDLE_CONTEXT_TOKENS = 131_072
+# The middle tier (64K or less, or local up to 128K) also offers Row-Bot's self-management on demand.
+ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status"})
+# Rarely used on any window: offered through tool search (and by name), not bound to every call.
+# Pages, questions, helpers, processes, tasks, memory and web stay bound: Row-Bot uses them unasked.
+RARELY_USED_TOOL_GROUPS = frozenset({
+    "row_bot_updater", "custom_tool_builder", "video_editing", "file_delivery", "tracker", "wiki", "goal",
+    "youtube", "arxiv", "system_info",
+})
+RARELY_USED_TOOLS = frozenset({
+    "agent_profiles", "agent_profile_save", "agent_promote", "agent_retry",
+    "row_bot_create_skill", "row_bot_patch_skill", "row_bot_send_feedback", "row_bot_apply_proposal",
+    "row_bot_reject_proposal", "row_bot_verify_proposal", "row_bot_review_skill_library",
+})
 _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
     "current_on_demand_tools", default={}
 )
@@ -5308,22 +5335,6 @@ def _has_code_folder() -> bool:
         return bool(get_workspace_id() or infer_workspace_id_from_thread(get_thread_id()))
     except Exception:
         return False
-
-
-def _on_demand_parents_used(messages: list[Any]) -> set[str]:
-    """Groups loaded on demand earlier in this conversation: their guide joins the prompt (F11)."""
-    on_demand = _current_on_demand_tools_var.get()
-    if not on_demand:
-        return set()
-    used: set[str] = set()
-    for message in messages:
-        for call in getattr(message, "tool_calls", None) or ():
-            name = str(call.get("name") or "")
-            if name == "tool_invoke":
-                name = str((call.get("args") or {}).get("name") or "")
-            if name in on_demand:
-                used.add(on_demand[name][0])
-    return used
 
 
 def _activate_agent_cache_metadata(cache_key: frozenset[str]) -> None:
@@ -5751,7 +5762,12 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     is_background = _background_workflow_var.get()
     approval_mode = get_approval_mode()
     effective_context = get_context_size(model_label)
-    small_window = 0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS and normalized_allowlist is None
+    small_window = normalized_allowlist is None and (
+        0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS
+        or (0 < int(effective_context or 0) <= LOCAL_MIDDLE_CONTEXT_TOKENS and not is_cloud_model(model_label))
+    )
+    # A profile's own tool list is bound as chosen; otherwise rarely used tools are offered on demand.
+    defer_rarely_used = normalized_allowlist is None
     # 32K or less: core tools bound, the rest through tool search (WP A5, F43).
     small_profile = _small_context_profile(effective_context)
     defer_to_core = small_profile and normalized_allowlist is None
@@ -5853,7 +5869,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         active_skill_ids,
         skill_discovery_enabled,
         skill_fingerprint,
-    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=small_profile)
+    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=True)
     cache_key = frozenset(enabled_tool_names) | frozenset({
         f"ctx:{effective_context}",
         f"model:{model_label}",
@@ -6005,6 +6021,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 entry for entry in eager_core_entries
                 if (small_window and entry["parent"] in ON_DEMAND_TOOL_GROUPS)
                 or (defer_to_core and entry["parent"] not in SMALL_PROFILE_CORE_GROUPS)
+                or (defer_rarely_used and (entry["parent"] in RARELY_USED_TOOL_GROUPS
+                                           or str(getattr(entry["tool"], "name", "")) in RARELY_USED_TOOLS))
             ]
             if on_demand_entries:
                 eager_core_entries = [entry for entry in eager_core_entries if entry not in on_demand_entries]

@@ -314,7 +314,9 @@ def build_skill_discovery_tools(
 
     documents = tuple(record.search_document() for record in frozen_records)
     records_by_id = {record.canonical_id: record for record in frozen_records}
-    manifest = render_capability_manifest(frozen_records, context_tokens=context_tokens)
+    # Tool guides are listed once, in the prompt's guide index; they stay loadable here.
+    manifest = render_capability_manifest(
+        [record for record in frozen_records if record.source != "guide"], context_tokens=context_tokens)
     fallback_thread_id = str(thread_id or "").strip()[:512]
 
     def _search(query: str, limit: int = 3) -> str:

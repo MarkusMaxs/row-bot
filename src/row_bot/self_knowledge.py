@@ -16,21 +16,20 @@ from row_bot.brand import DEFAULT_DATA_DIR_NAME, DEFAULT_WORKSPACE_DIR_NAME
 logger = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STATIC: What I Am (~200 tokens)
+# STATIC: What I Am (sent with every chat, so short; the feature list is on demand)
 # ═════════════════════════════════════════════════════════════════════════════
 
 _ABOUT_ROW_BOT_INTRO = (
     "ABOUT YOU (SELF-KNOWLEDGE):\n"
-    "You are a personal AI agent that runs locally on the user's machine.\n"
-    "You combine a large language model with integrated tools, a persistent\n"
-    "knowledge graph, and a task automation engine. All data is stored locally\n"
-    f"in ~/{DEFAULT_DATA_DIR_NAME}/. You are open-source.\n\n"
+    "You are a personal AI agent that runs locally on this computer, and you are open-source.\n"
+    "Your memory (a knowledge graph), conversations, workflows and settings stay in Row-Bot's\n"
+    "data folder here. The person's own files are in their workspace folder, where the shell\n"
+    "and file tools start: never guess its path.\n"
 )
 
 _ABOUT_ROW_BOT_OUTRO = (
-    "When the user asks about your features, capabilities, or how to configure\n"
-    "something, draw on the above knowledge. You can also use the row_bot_status\n"
-    "tool (when available) to look up live configuration details.\n"
+    "For what you can do and how a feature is set up, use row_bot_status with category\n"
+    "'features'; for live configuration, its other categories. Don't guess.\n"
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -175,7 +174,7 @@ FEATURE_MANIFEST: list[dict[str, str]] = [
     {
         "feature": "File Operations",
         "keywords": "files, workspace, read, write, create, export, pdf, csv, excel",
-        "description": f"Read, write, and organize files in the sandboxed workspace (~/Documents/{DEFAULT_WORKSPACE_DIR_NAME}).",
+        "description": f"Read, write, and organize files in the workspace folder (~/Documents/{DEFAULT_WORKSPACE_DIR_NAME} unless the person chose another).",
         "configure": "Settings → System to configure workspace path.",
     },
     {
@@ -273,12 +272,24 @@ def _build_capabilities_text_from_manifest() -> str:
 
 
 def _build_about_row_bot() -> str:
-    """Build the static self-knowledge description from the manifest."""
-    return "\n".join([
-        _ABOUT_ROW_BOT_INTRO.rstrip(),
-        _build_capabilities_text_from_manifest(),
-        _ABOUT_ROW_BOT_OUTRO.rstrip(),
-    ]) + "\n"
+    """Build the static self-knowledge description; the feature list is row_bot_status 'features'."""
+    return "\n".join([_ABOUT_ROW_BOT_INTRO.rstrip(), _ABOUT_ROW_BOT_OUTRO.rstrip()]) + "\n"
+
+
+def features_text() -> str:
+    """Row-Bot's features and how each is set up, for row_bot_status 'features'."""
+    lines = [f"**Row-Bot features** (data in ~/{DEFAULT_DATA_DIR_NAME}/ unless the person moved it)"]
+    for entry in FEATURE_MANIFEST:
+        feature = (entry.get("feature", "") or "").strip()
+        description = " ".join((entry.get("description", "") or "").split())
+        configure = " ".join((entry.get("configure", "") or "").split())
+        if not feature:
+            continue
+        line = f"- {feature}: {description}" if description else f"- {feature}"
+        if configure:
+            line += f" Setup: {configure}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 ABOUT_ROW_BOT = _build_about_row_bot()
