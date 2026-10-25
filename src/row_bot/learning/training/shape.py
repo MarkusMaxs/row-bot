@@ -122,11 +122,13 @@ class Stats:
     searches_added: int = 0
     system_changed: bool = False
     state_removed: int = 0
+    # The browser's or the computer's picture after an action (5.3): a text-only model is served without it.
+    pictures_removed: int = 0
 
     @property
     def changed(self) -> bool:
         return bool(self.tools_deferred or self.calls_bridged or self.searches_added or self.system_changed
-                    or self.state_removed)
+                    or self.state_removed or self.pictures_removed)
 
 
 # ── Row-Bot's own envelope for a context ────────────────────────────────────

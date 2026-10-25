@@ -38,7 +38,9 @@ small-context profile's prompt and tool exposure at 32K, a call to a tool now be
 written as the ``tool_search`` / ``tool_invoke`` steps the served model would take). A row whose
 rendering changed anything is **derived**, never the main model's raw output (E3); the manifest
 names the rendering and counts derived rows. ``shape="captured"`` keeps rows exactly as captured
-(the paper's ablation compares the two).
+(the paper's ablation compares the two). The picture a model that sees images gets after a browser or
+computer action (5.3) is left out of a served row, as the text-only personal model is served without it;
+a captured row can't hold it, so such a turn is left out there (``unsupported_content``).
 
 **Identity**: deterministic and content-addressed: the same records and recipe give the same rows
 and the same ``ds_…`` id. The ``DataSpec`` records which providers' answers it holds (D7) and the
@@ -178,6 +180,17 @@ def openai_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
     if kind == "tool":
         return {"role": "tool", "content": _text(data.get("content")), "tool_call_id": str(data.get("tool_call_id") or "")}
     return None
+
+
+def _page_picture(message: Mapping[str, Any]) -> bool:
+    """The browser's or the computer's picture after an action (5.3, ``browser.model_view``): one extra message,
+    never saved to the conversation, that only a model that sees images is sent with the action's result. A
+    text-only personal model reads the action's result in words instead, so its served rows leave it out."""
+
+    kind, data = _data(message)
+    content = data.get("content")
+    return (kind in {"human", "user"} and not data.get("id") and isinstance(content, list)
+            and any(isinstance(part, Mapping) and part.get("type") == "image_url" for part in content))
 
 
 def _is_person(message: Mapping[str, Any]) -> bool:
@@ -643,6 +656,11 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
     try:
         output = json.loads(raw.decode("utf-8"))
         sent = [message for message in request["messages"] if isinstance(message, Mapping)]
+        pictures = 0
+        if envelope is not None and (not episode.historical or frame is not None):
+            # The browser's or the computer's picture: the personal model is served without it (text only).
+            pictures = sum(1 for message in sent if _page_picture(message))
+            sent = [message for message in sent if not _page_picture(message)]
         person = max((index for index, message in enumerate(sent) if _is_person(message)), default=-1)
         messages: list[dict[str, Any]] = []
         starts: list[int] = []  # where each of the person's messages is in ``messages``
@@ -703,9 +721,10 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
                 system, messages, tools, envelope, agent=agent)
         except shape_module.RenderError:
             return None, "unrenderable", 0
+        rendered.pictures_removed = pictures
         derived = rendered.changed
         if stats is not None and derived:
-            for name in ("tools_deferred", "calls_bridged", "searches_added", "state_removed"):
+            for name in ("tools_deferred", "calls_bridged", "searches_added", "state_removed", "pictures_removed"):
                 setattr(stats, name, getattr(stats, name) + getattr(rendered, name))
             stats.system_changed = stats.system_changed or rendered.system_changed
     if system:
@@ -857,6 +876,7 @@ def compile_dataset(
             "searches_added": sum(item.searches_added for item in rendered),
             "system_rewritten": sum(item.system_changed for item in rendered),
             "state_removed": sum(item.state_removed for item in rendered),
+            "pictures_removed": sum(item.pictures_removed for item in rendered),
             # O113: imported tool steps kept as targets, and those that became context only (and why).
             "past_steps": {key: past_steps[key] for key in ("kept", "tool_not_offered", "arguments_invalid")},
         })
