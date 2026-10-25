@@ -282,7 +282,7 @@ it('Personal model: a training run replaces the setup states, and keeps itself f
   expect(
     screen.queryByRole('heading', { name: 'No personal model yet' }),
   ).toBeNull();
-  const facts = screen.getByLabelText('Personal model');
+  const facts = screen.getByLabelText('Personal model', { selector: 'dl' });
   expect(facts).toHaveTextContent(
     'Qwen3.5 2B · Apache 2.0 · On this computer (4.6 GB)',
   );
