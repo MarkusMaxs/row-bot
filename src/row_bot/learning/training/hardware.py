@@ -314,6 +314,14 @@ def gpu_memory(*, run: Runner = subprocess.run, which: Callable[[str], str | Non
     return max(cards, key=lambda card: card[1])
 
 
+def forget_memory_reading() -> None:
+    """Read the card's memory afresh next time (something was just unloaded from it)."""
+
+    global _memory_seen
+    with _lock:
+        _memory_seen = None
+
+
 def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None = None,
                           clock: Callable[[], float] | None = None) -> bool:
     """Whether the card has the memory free to train now (read at most every 30 s). True when this

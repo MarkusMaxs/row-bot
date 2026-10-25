@@ -3597,6 +3597,19 @@
     "TranscriptRow": {
       "additionalProperties": false,
       "properties": {
+        "answered_by": {
+          "anyOf": [
+            {
+              "const": "personal_model",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answered By"
+        },
         "approval_id": {
           "anyOf": [
             {
@@ -3709,7 +3722,8 @@
                 "continuation",
                 "agent_task",
                 "agent_guidance",
-                "page"
+                "page",
+                "personal_model_fallback"
               ],
               "type": "string"
             },

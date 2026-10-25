@@ -33,7 +33,18 @@ _ACTIONS = frozenset({
     "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
     "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
     "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
+    "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
+    "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
+    "review_version",
 })
+# Using the personal model (L2c2): its comparison, trial, keep and undo, Export…, Delete version,
+# Advanced and Retrain without it. Every one of them is the person's own choice (D24).
+_USE_ACTIONS = frozenset({"compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now",
+                          "undo_use", "export_version", "delete_version", "save_advanced", "reset_advanced",
+                          "retrain_without", "dismiss", "review_version"})
+_KIND_ACTIONS = frozenset({"use_version", "keep_version", "keep_not_now", "undo_use"})
+_VERSION_NUMBER_ACTIONS = frozenset({"compare_version", "use_version", "export_version", "delete_version",
+                                     "retrain_without", "review_version"})
 # The personal model's version (L2c): make it ready again (Try again, Check again), or choose where it runs.
 _VERSION_ACTIONS = frozenset({"make_ready", "choose_runtime"})
 # The personal model's download (L2b): the training engine and the starting model.
@@ -60,7 +71,7 @@ _RUNNER_REASONS = frozenset({
     "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
     "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
     "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-    "planned", "planning", "up_to_date", "gpu_busy",
+    "planned", "planning", "up_to_date", "gpu_busy", "comparing",
 })
 _VERSION_PHASES = frozenset({"exporting", "export_failed", "making_ready", "ready", "runtime_failed",
                              "waiting_for_you"})
@@ -262,7 +273,16 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "runtimes": _runtimes(),
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
+        **_use_parts(),
     }
+
+
+def _use_parts() -> dict[str, Any]:
+    from row_bot.learning.versions import suggested_folder
+
+    rows, comparison = _versions_view()
+    return {"versions": rows, "comparison": comparison, "uses": _uses_view(), "advanced": _advanced_view(),
+            "export_folder": _text(suggested_folder(), 1024)}
 
 
 def _runtimes() -> list[dict[str, Any]]:
@@ -345,6 +365,157 @@ def _version() -> dict[str, Any] | None:
 
 def _model_view(model: Any) -> dict[str, Any]:
     return {"id": model.id, "name": model.name, "licence": model.licence, "download_bytes": model.download_bytes}
+
+
+# ── Using the personal model (L2c2) ─────────────────────────────────────────
+
+_VERDICTS = frozenset({"better", "same", "worse", "too_few"})
+_OVERALL = frozenset({"better", "mixed", "worse", "no_difference", "unclear"})
+_ROW_KINDS = frozenset({"document_lookups", "structured_transforms", "small_coding", "tool_workflows", "own_work"})
+
+
+def _comparing_now(version: int) -> bool:
+    runner_module = sys.modules.get("row_bot.learning.runner")
+    runner = runner_module.loaded() if runner_module is not None else None
+    comparisons = getattr(runner, "comparisons", None)
+    try:
+        return bool(comparisons is not None and comparisons.running() and comparisons.version == version)
+    except Exception:
+        return False
+
+
+def _comparison_view(item: Any) -> dict[str, Any] | None:
+    """A ready version's comparison: waiting, running (with its real denominator), paused, or its result."""
+
+    if not item.ready:
+        return None
+    result = item.comparison
+    progress = item.progress or {}
+    state = "waiting"
+    if result is not None:
+        state = "done"
+    elif _comparing_now(item.version):
+        state = "running"
+    elif progress.get("state") in ("paused", "stopped", "failed"):
+        state = str(progress["state"])
+    view: dict[str, Any] = {
+        "version": item.version, "state": state,
+        "done": max(0, int(progress.get("done") or 0)) if state != "done" else 0,
+        "total": max(0, int(progress.get("total") or 0)) if state != "done" else 0,
+        "compared_at": None, "arms": [], "rows": [], "verdict": None, "line": "", "recommend": None, "note": "",
+        "coding_left_out": False, "baseline_unavailable": False, "main_unavailable": None, "reviewed": False,
+    }
+    if result is None:
+        return view
+    arms = []
+    for arm in result.get("arms") or ():
+        if arm.get("role") not in ("new", "baseline", "main"):
+            continue
+        arms.append({
+            "key": _text(arm.get("key"), 32), "label": _text(arm.get("label"), 128), "role": arm["role"],
+            "ran": max(0, int(arm.get("ran") or 0)), "cached": max(0, int(arm.get("cached") or 0)),
+            "seconds_per_task": float(arm["seconds_per_task"]) if arm.get("seconds_per_task") is not None else None,
+            "cloud_tokens_per_task": int(arm["cloud_tokens_per_task"]) if arm.get("cloud_tokens_per_task") is not None
+            else None,
+        })
+    keys = {arm["key"] for arm in arms}
+    rows = []
+    for row in result.get("rows") or ():
+        if row.get("kind") not in _ROW_KINDS:
+            continue
+        counted = row.get("counted") or {}
+        rows.append({
+            "kind": row["kind"], "label": _text(row.get("label"), 64), "total": max(0, int(row.get("total") or 0)),
+            "cells": [{"key": key, "passed": max(0, int(value)), "counted": max(0, int(counted.get(key, row.get("total") or 0)))}
+                      for key, value in (row.get("passed") or {}).items() if key in keys],
+            "verdict": row.get("verdict") if row.get("verdict") in _VERDICTS else "too_few",
+        })
+    overall = result.get("overall") or {}
+    view.update({
+        "compared_at": _iso(result.get("compared_at")), "arms": arms, "rows": rows,
+        "verdict": overall.get("verdict") if overall.get("verdict") in _OVERALL else "unclear",
+        "line": _text(overall.get("line"), 400),
+        "recommend": overall.get("recommend") if overall.get("recommend") in _ROW_KINDS - {"own_work"} else None,
+        "note": _text(result.get("note"), 400), "coding_left_out": bool(result.get("left_out")),
+        "baseline_unavailable": bool(result.get("baseline_unavailable")),
+        "main_unavailable": result.get("main_unavailable") if result.get("main_unavailable") in (
+            "no_main_model", "sign_in_unsupported", "main_failed") else None,
+        "reviewed": bool(result.get("reviewed_at")),
+    })
+    return view
+
+
+def _uses_view() -> list[dict[str, Any]]:
+    """The kinds of work given to personal-model versions: on trial or in use, with the trial's numbers."""
+
+    if not (learning.data_dir() / learning.MODELS_FOLDER / learning.USE_FILE).is_file():
+        return []
+    from row_bot.learning import kinds, use
+
+    shown = []
+    for item in sorted(use.read().assignments.values(), key=lambda entry: kinds.KINDS.index(entry.kind)):
+        shown.append({
+            "kind": item.kind, "label": kinds.label(item.kind), "version": item.version, "state": item.state,
+            "since": _iso(item.since), "previous_version": item.previous,
+            "trial": {"requests": item.trial.requests, "answered": item.trial.answered,
+                      "fallbacks": item.trial.fallbacks, "seconds_per_request": item.trial.mean_seconds},
+            "total": {"requests": item.total.requests, "answered": item.total.answered,
+                      "fallbacks": item.total.fallbacks, "seconds_per_request": item.total.mean_seconds},
+            "keep_due": use.keep_due(item),
+        })
+    return shown
+
+
+def _versions_view() -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Every version (newest first) and the newest ready one's comparison."""
+
+    if not (learning.data_dir() / learning.MODELS_FOLDER / "versions").is_dir():
+        return [], None
+    try:
+        from row_bot.learning import versions
+
+        found = versions.all_versions()
+    except Exception:
+        logger.debug("Learning could not read its versions", exc_info=True)
+        return [], None
+    rows = []
+    for item in found[:20]:
+        rows.append({
+            "version": item.version, "ready": item.ready, "file_bytes": max(0, int(item.gguf_bytes or 0)),
+            "trained_at": _iso(item.trained_at), "compared": item.comparison is not None,
+            "uses": [{"kind": entry.kind, "state": entry.state} for entry in item.uses],
+        })
+    newest_ready = next((item for item in found if item.ready), None)
+    return rows, _comparison_view(newest_ready) if newest_ready is not None else None
+
+
+def _advanced_view() -> dict[str, Any] | None:
+    """Advanced ›: the next run's settings, the recommended ones and the choices (D9)."""
+
+    try:
+        from row_bot.learning.training import advanced, hardware, recipes
+
+        recipe = recipes.for_hardware(hardware.peek()) or recipes.default()
+        found = advanced.view(recipe)
+    except Exception:
+        logger.debug("Learning could not read its advanced settings", exc_info=True)
+        return None
+    return found
+
+
+def _needs_you(settings: learning.LearningSettings) -> list[dict[str, Any]]:
+    if not settings.enabled or not (learning.data_dir() / learning.MODELS_FOLDER).is_dir():
+        return []
+    try:
+        from row_bot.learning import versions
+
+        items = versions.needs_you()
+    except Exception:
+        logger.debug("Learning could not read what needs the person", exc_info=True)
+        return []
+    return [{"id": _text(item["id"], 128), "type": item["type"], "version": int(item["version"]),
+             "kind": item.get("kind"), "title": _text(item["title"], 200)}
+            for item in items[:20] if item.get("type") in ("compare", "keep", "retrain")]
 
 
 def _no_training(runner: dict[str, Any]) -> dict[str, Any]:
@@ -473,6 +644,8 @@ def _control_state(settings: learning.LearningSettings, opted_out: list[str]) ->
                   settings.serve_runtime],
         "download": settings.model_download,
         "opted_out": sorted(opted_out),
+        # Which version answers which kind of work (L2c2): a Keep or Undo from a stale view conflicts.
+        "use": [[item["kind"], item["version"], item["state"]] for item in _uses_view()],
     }
 
 
@@ -504,6 +677,7 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         "data": _data(),
         "opted_out_conversations": [_text(item, 256) for item in opted_out[:2000]],
         "owner_unset_channels": _owner_unset_channels(),
+        "needs_you": _needs_you(settings),
     }
     data["revision"] = sha256(
         json.dumps(_control_state(settings, opted_out), sort_keys=True).encode("utf-8")
@@ -629,6 +803,122 @@ def read_learning_lessons(*, validate: Callable[[], None]) -> dict[str, Any]:
     return {"items": items, "total": len(items)}
 
 
+def read_learning_version(version: int, *, validate: Callable[[], None]) -> dict[str, Any]:
+    """Experiment details of one version (UX §4, §7; D7, D14): the data it was trained on (counts, the
+    providers' terms note), the method, the versions that made it, every test run (aggregates only, no
+    hidden task) and its files (names belong here and in Export…, O54)."""
+
+    _require_preview()
+    validate()
+    from row_bot.learning import versions
+    from row_bot.learning.training import releases
+
+    if type(version) is not int or version < 1:
+        raise ClientPlatformError("invalid_learning_command")
+    found = versions.get(version)
+    if found is None:
+        raise ClientPlatformError("learning_version_changed")
+    folder = releases.version_dir(version)
+
+    def load(name: str) -> dict[str, Any]:
+        try:
+            value = json.loads((folder / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    dataset = load(releases.DATASET_FILE)
+    manifest = load(releases.MANIFEST_FILE)
+    identity = manifest.get("identity") if isinstance(manifest.get("identity"), dict) else {}
+    from row_bot.learning.training import dataset as dataset_module
+
+    reasons = getattr(releases, "_REASONS", {})
+    providers = sorted({releases._provider_name(str(item), dataset_module.TERMS_PROVIDERS)  # noqa: SLF001
+                        for item in dataset.get("providers") or ()})
+    left_out = [{"reason": _text(reasons.get(key, key.replace("_", " ")), 80), "count": int(count)}
+                for key, count in sorted((dataset.get("left_out") or {}).items()) if isinstance(count, int) and count]
+    recipe = identity.get("recipe") if isinstance(identity.get("recipe"), dict) else {}
+    base = identity.get("base") if isinstance(identity.get("base"), dict) else {}
+    runtime = identity.get("runtime") if isinstance(identity.get("runtime"), dict) else {}
+    from row_bot.learning.training import recipes
+
+    try:
+        recipe_now = recipes.load(str(recipe.get("name") or "8gb-v1").split("-v")[0])
+    except Exception:
+        recipe_now = recipes.default()
+    settings = dict(recipe_now.settings)
+    epochs = recipe_now.epochs
+    if learning.store_exists():
+        # What this version really trained with (Advanced may have changed the recipe's values, D9).
+        try:
+            from row_bot.learning.training.jobs import TrainingJobs
+
+            jobs = TrainingJobs()
+            job = next((item for item in jobs.all() if item.version == version and item.id == found_job_id(found)),
+                       None) or next((item for item in jobs.all() if item.version == version), None)
+            if job is not None:
+                settings.update({key: value for key, value in (jobs.plan_of(job)["recipe"].get("settings") or {}).items()
+                                 if key in ("rank", "learning_rate", "max_seq_length")})
+        except Exception:
+            logger.debug("Learning couldn't read the version's training plan", exc_info=True)
+    named_versions = [{"name": "Starting model", "value": _text(
+        f"{base.get('name') or '?'} at {str(base.get('version') or '')[:12]}", 200)}]
+    if recipe:
+        named_versions.append({"name": "Recipe", "value": _text(f"{recipe_now.title} ({recipe.get('name')})", 200)})
+    if runtime:
+        named_versions.append({"name": "Runs in", "value": _text(f"{runtime.get('name')} {runtime.get('version') or ''}".strip(), 200)})
+    from row_bot.learning.training import lockfile
+    from row_bot.version import __version__
+
+    named_versions.append({"name": "Exported with", "value": f"llama.cpp {lockfile.LLAMA_CPP_RELEASE}"})
+    named_versions.append({"name": "Made by", "value": f"Row-Bot {__version__}"})
+    runs: list[dict[str, Any]] = []
+    comparison = found.comparison or {}
+    labels = {item.get("key"): item.get("label") for item in comparison.get("arms") or ()}
+    for suite, title in (("visible", "Visible tasks"), ("hidden", "Hidden tasks and your held-back work")):
+        for key, table in ((comparison.get("details") or {}).get(suite) or {}).items():
+            passed = sum(int(value[0]) for value in table.values())
+            total = sum(int(value[1]) for value in table.values())
+            runs.append({"suite": title, "arm": _text(labels.get(key) or key, 128), "passed": passed, "total": total})
+    files = []
+    try:
+        files = [{"name": name, "bytes": size} for name, _, size in versions.export_files(version)]
+    except versions.VersionError:
+        pass
+    result = {
+        "version": version,
+        "data": {
+            "examples": int(dataset.get("examples") or 0), "validation": int(dataset.get("validation") or 0),
+            "conversations": len(dataset.get("conversations") or ()),
+            "first_at": _iso(dataset.get("first_at")), "last_at": _iso(dataset.get("last_at")),
+            "providers": [_text(item, 80) for item in providers][:16], "left_out": left_out[:32],
+            "terms_note": bool(dataset.get("terms_note")),
+        },
+        "method": {
+            "name": "Standard (LoRA)", "title": _text(recipe_now.title, 80),
+            "rank": int(settings.get("rank", 16)), "learning_rate": float(settings.get("learning_rate", 2e-4)),
+            "epochs": int(epochs), "context": int(settings.get("max_seq_length", recipe_now.max_seq_length)),
+            "quantization": _text(found.quantization, 16),
+        },
+        "versions": named_versions,
+        "runs": runs[:12],
+        "files": files[:16],
+        "budget_tokens_per_task": int((comparison.get("budget") or {}).get("task_tokens") or 0),
+        "comparison_note": _text(comparison.get("note"), 400),
+    }
+    validate()
+    return result
+
+
+def found_job_id(found: Any) -> str:
+    """The training job a version came from (its state file names it)."""
+
+    from row_bot.learning.training import releases
+
+    state = releases.read_state(releases.version_dir(found.version))
+    return state.job_id if state is not None else ""
+
+
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 
@@ -707,6 +997,8 @@ def _target(action: str, command: dict[str, Any]) -> str:
         return "learning:download"
     if action in _VERSION_ACTIONS:
         return "learning:version"
+    if action in _USE_ACTIONS:
+        return "learning:use"
     return "learning:settings"
 
 
@@ -782,6 +1074,146 @@ def _version_action(action: str, runtime: str) -> str:
     if state.phase == "waiting_for_you":
         return f"Checking whether v{state.version} is loaded in {serving.RUNTIME_NAMES.get(state.runtime, 'it')}."
     return f"Making v{state.version} ready in {serving.RUNTIME_NAMES.get(learning.read_settings().serve_runtime, 'it')}."
+
+
+_VERSION_ERRORS = {
+    "version_missing": "learning_version_changed",
+    "files_missing": "learning_version_changed",
+    "invalid_folder": "learning_export_unavailable",
+    "inside_data_folder": "learning_export_unavailable",
+    "folder_unavailable": "learning_export_unavailable",
+    "copy_failed": "learning_export_unavailable",
+    "not_enough_disk": "learning_not_enough_disk",
+}
+
+
+def _use_action(action: str, wire: dict[str, Any]) -> str:
+    """The person's choices about their personal model (L2c2), in words."""
+
+    from row_bot.learning import kinds, model_compare, use, versions
+
+    settings = learning.read_settings()
+    version = wire.get("version")
+    kind = wire.get("kind") or ""
+    needs_on = {"compare_version", "use_version", "retrain_without", "save_advanced", "reset_advanced"}
+    if action in needs_on and not settings.enabled:
+        raise ClientPlatformError("learning_off")
+    if action in {"compare_version", "retrain_without"} and settings.paused:
+        raise ClientPlatformError("learning_paused")
+    try:
+        if action == "compare_version":
+            from row_bot.learning import runner as runner_module
+
+            found = versions.get(int(version))
+            if found is None or not found.ready:
+                raise ClientPlatformError("learning_version_changed")
+            comparisons = runner_module.get().comparisons
+            if comparisons is None or comparisons.running():
+                raise ClientPlatformError("learning_version_busy")
+            if runner_module.training_now():
+                raise ClientPlatformError("learning_compare_unavailable")
+            for path in (model_compare.comparison_path(int(version)), model_compare.progress_path(int(version))):
+                path.unlink(missing_ok=True)
+            comparisons.start(int(version))
+            runner_module.start_background()
+            return f"Comparing v{int(version)} with your main model."
+        if action == "stop_compare":
+            from row_bot.learning import runner as runner_module
+
+            runner = runner_module.loaded()
+            if runner is not None and runner.comparisons is not None:
+                runner.comparisons.stop()
+            return "Comparison stopped. It runs again later."
+        if action == "use_version":
+            ref = versions.ready_ref(int(version))
+            if ref is None:
+                raise ClientPlatformError("learning_version_changed")
+            use.start_trial(int(version), kind, ref)
+            _move_version(int(version), "trial")
+            model_compare.mark_reviewed(int(version))
+            return (f"v{int(version)} now answers {kinds.phrase(kind)}, on trial. Your main model finishes "
+                    "anything it gets stuck on.")
+        if action == "keep_version":
+            kept = use.keep(kind)
+            _move_version(kept.version, "in_use")
+            return f"v{kept.version} is in use for {kinds.phrase(kind)}."
+        if action == "keep_not_now":
+            use.not_now(kind)
+            return "The trial goes on. Row-Bot asks again after more requests."
+        if action == "undo_use":
+            restored = use.undo(kind, still_ready=lambda other: versions.ready_ref(other))
+            if restored is None:
+                return f"{kinds.label(kind)} go back to your main model."
+            return f"{kinds.label(kind)} go back to v{restored.version}."
+        if action == "export_version":
+            report = versions.export_version(int(version), wire["folder"])
+            return f"Exported v{int(version)} ({_size_words(report['bytes'])}) to {report['folder']}."
+        if action == "delete_version":
+            if _training_runs():
+                raise ClientPlatformError("learning_version_busy")
+            report = versions.delete_version(int(version))
+            freed = f" {_size_words(report['freed'])} freed." if report["freed"] else ""
+            undone = report["undone"]
+            back = (f" {', '.join(kinds.label(item) for item in undone)} go back to your main model."
+                    if undone else "")
+            return f"v{int(version)} deleted.{freed}{back}"
+        if action == "save_advanced":
+            from row_bot.learning.training import advanced, hardware, recipes
+
+            recipe = recipes.for_hardware(hardware.peek()) or recipes.default()
+            advanced.save(wire.get("advanced") or {}, recipe)
+            return "Saved. The next training run uses these settings."
+        if action == "reset_advanced":
+            from row_bot.learning.training import advanced
+
+            advanced.reset()
+            return "Back to the recommended settings."
+        if action == "retrain_without":
+            from row_bot.learning import runner as runner_module
+
+            runner = runner_module.get()
+            if runner.planner is None:
+                raise ClientPlatformError("learning_nothing_to_train")
+            outcome = versions.retrain_without(int(version), planner=runner.planner)
+            runner_module.start_background()
+            if outcome.job is None:
+                if outcome.reason == "current":
+                    return "A new version is already planned. It trains without that chat."
+                return "Row-Bot retrains once there are enough examples without that chat."
+            return f"v{outcome.job.version} is planned without that chat. It trains during quiet hours."
+        if action == "dismiss":
+            versions.dismiss(wire["item_id"])
+            return "Dismissed."
+        model_compare.mark_reviewed(int(version))
+        return "Not now. The comparison stays under Personal model."
+    except use.UseError as error:
+        raise ClientPlatformError("learning_version_changed") from error
+    except versions.VersionError as error:
+        raise ClientPlatformError(_VERSION_ERRORS.get(error.code, "learning_version_changed")) from None
+
+
+def _move_version(version: int, to: str) -> None:
+    """The version's job and release follow the person's choice (trial, in use)."""
+
+    from dataclasses import replace
+
+    from row_bot.learning import contracts, versions
+    from row_bot.learning.training.jobs import TrainingJobs, can_move
+
+    if not learning.store_exists():
+        return
+    found = versions.get(version)
+    try:
+        jobs = TrainingJobs()
+        for job in jobs.all():
+            if job.version == version and can_move(job.state, to):
+                jobs.move(job.id, to, reason="person")
+        store = _store()
+        release = store.get("release", found.release_id) if found is not None and found.release_id else None
+        if isinstance(release, contracts.Release) and release.status in ("candidate", "trial"):
+            store.put(replace(release, status=to))  # type: ignore[arg-type]
+    except Exception:
+        logger.debug("Learning couldn't record the version's use", exc_info=True)
 
 
 def _download_words(view: Any, model_name: str) -> str:
@@ -894,6 +1326,22 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     runtime = _text(command.get("runtime"), 32)
     if action == "choose_runtime" and runtime not in learning.SERVE_RUNTIMES:
         raise ClientPlatformError("invalid_learning_command")
+    version = command.get("version")
+    if action in _VERSION_NUMBER_ACTIONS and (type(version) is not int or not 1 <= version <= 100_000):
+        raise ClientPlatformError("invalid_learning_command")
+    kind = command.get("kind")
+    if action in _KIND_ACTIONS and kind not in ("document_lookups", "structured_transforms", "small_coding",
+                                                "tool_workflows"):
+        raise ClientPlatformError("invalid_learning_command")
+    folder = _text(command.get("folder"), 1024)
+    if action == "export_version" and not folder.strip():
+        raise ClientPlatformError("invalid_learning_command")
+    advanced_values = command.get("advanced")
+    if action == "save_advanced" and not isinstance(advanced_values, dict):
+        raise ClientPlatformError("invalid_learning_command")
+    item_id = _text(command.get("item_id"), 128)
+    if action == "dismiss" and not item_id:
+        raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
         "command_id": command["command_id"],
@@ -910,6 +1358,11 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "download": command.get("download"),
         "job_id": job_id,
         "runtime": runtime,
+        "version": version if type(version) is int else None,
+        "kind": kind if isinstance(kind, str) else None,
+        "folder": folder,
+        "advanced": dict(advanced_values) if isinstance(advanced_values, dict) else None,
+        "item_id": item_id,
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -1018,6 +1471,8 @@ def _perform(
         summary = _train(action, wire["job_id"])
     elif action in _VERSION_ACTIONS:
         summary = _version_action(action, wire["runtime"])
+    elif action in _USE_ACTIONS:
+        summary = _use_action(action, wire)
     else:
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs
@@ -1071,4 +1526,5 @@ __all__ = [
     "read_learning_lessons",
     "read_learning_receipt",
     "read_learning_training",
+    "read_learning_version",
 ]

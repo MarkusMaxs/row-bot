@@ -111,6 +111,24 @@ def test_ollama_registers_the_gguf_with_its_renderer_and_context_and_is_ready_af
     assert ollama.deleted == [] and ollama.unloaded == [tag]  # no graphics memory held after the checks
 
 
+def test_a_named_model_is_served_under_its_own_name_and_never_replaces_the_version(
+        version_files, data_dir, model_settings):
+    # The untouched starting model a first version is compared with (L2c2): its own Ollama model,
+    # never written over the version's (the 5070 e2e caught that once).
+    folder, gguf = version_files
+    ollama, verifier, saved = FakeOllama(), FakeVerifier(), []
+
+    outcome = serving.serve("ollama", version=1, gguf=gguf, serve_context=32768, folder=folder, ollama=ollama,
+                            verifier=verifier, catalog=lambda: 3, root=data_dir, tag="row-bot-personal-base:abcd1234",
+                            tool_turn=False, save_model_settings=lambda name, **values: saved.append(name))
+
+    assert outcome.state == "ready" and outcome.model_ref == "model:ollama:row-bot-personal-base:abcd1234"
+    assert [name for name, _ in ollama.created] == ["row-bot-personal-base:abcd1234"]
+    assert serving.ollama_tag(1, data_dir) not in {name for name, _ in ollama.created}
+    assert saved == ["row-bot-personal-base:abcd1234"] and ollama.unloaded == ["row-bot-personal-base:abcd1234"]
+    assert [call[0] for call in verifier.calls] == ["probe"]  # it never learned the tool bridge
+
+
 @pytest.mark.parametrize("ready, turn_ok, reason", [(False, True, "probe_failed"), (True, False, "tool_turn_failed")])
 def test_a_version_that_fails_a_check_is_never_ready_and_is_taken_back_out_of_ollama(
         version_files, data_dir, model_settings, ready, turn_ok, reason):

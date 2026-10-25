@@ -317,6 +317,46 @@ def start_runner() -> None:
         logger.warning("Learning could not start its quiet-hours runner (%s)", type(exc).__name__)
 
 
+MODELS_FOLDER = "learning_models"
+USE_FILE = "use.json"
+
+
+def route_turn(**request: Any) -> Any | None:
+    """Where a new chat turn runs (L2c2): a route to the personal model when the person gave its
+    kind of work to a version, else None (the main model). While nothing is in use this is one path
+    check and imports nothing. Models in use stay in use while Learning is off or paused (UX §8);
+    without the preview flag nothing is routed (O34)."""
+
+    if not _PREVIEW:
+        return None
+    try:
+        if not (data_dir() / MODELS_FOLDER / USE_FILE).is_file():
+            return None
+        from row_bot.learning import routing
+
+        return routing.route(**request)
+    except Exception as exc:
+        logger.warning("Learning couldn't route a turn; the main model answers (%s)", type(exc).__name__)
+        return None
+
+
+def offered_personal_models() -> dict[str, str]:
+    """``{model reference: "Personal model v1"}`` of the personal-model versions model lists offer
+    (D11: every ready version), or ``{}``. While there is none this is one path check."""
+
+    if not _PREVIEW:
+        return {}
+    try:
+        if not (data_dir() / MODELS_FOLDER / "versions").is_dir():
+            return {}
+        from row_bot.learning import versions
+
+        return versions.offered()
+    except Exception as exc:
+        logger.debug("Learning couldn't list its personal models (%s)", type(exc).__name__)
+        return {}
+
+
 def note_retry(thread_id: str, replaced: Iterable[Any]) -> None:
     """Retry ran the person's last message again in place: an implicit signal. Off: nothing."""
 
@@ -351,6 +391,7 @@ __all__ = [
     "FOLDER",
     "LearningSettings",
     "MAX_MONTHLY_TOKEN_LIMIT",
+    "MODELS_FOLDER",
     "MODEL_DOWNLOADS",
     "PREVIEW_ENV",
     "SERVE_RUNTIMES",
@@ -364,8 +405,10 @@ __all__ = [
     "is_enabled",
     "note_channel_sender",
     "note_retry",
+    "offered_personal_models",
     "preview_enabled",
     "read_settings",
+    "route_turn",
     "settings_path",
     "settings_saved",
     "start_past_chat_import",

@@ -182,9 +182,7 @@ test('the personal model: needs more examples, training, preparing, making ready
     ),
   ).toBeVisible();
   await expect(facts(page)).toContainText('Ollama ✓');
-  await expect(facts(page)).toContainText(
-    'row-bot-personal-v1-Q8_0.gguf · 2 GB',
-  );
+  await expect(facts(page)).toContainText('v1 · 2 GB');
   await shoot(page, info, 'model-ready');
 
   // Runs in: where personal models run; moving v1 makes it ready there.

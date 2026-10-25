@@ -392,6 +392,8 @@ _STATUS.update(
         "learning_download_changed": 409,
         "learning_version_changed": 409,
         "learning_version_busy": 409,
+        "learning_compare_unavailable": 409,
+        "learning_export_unavailable": 409,
         "invalid_plugin_lifecycle_command": 422,
         "plugin_marketplace_unavailable": 409,
         "plugin_marketplace_entry_unavailable": 404,
@@ -1250,7 +1252,7 @@ def cached_choices() -> dict:
     """Read existing caches/catalogues; opening a client never refreshes a provider."""
     from row_bot.providers.model_catalog_cache import read_model_catalog_cache
     from row_bot.providers.client_status import picker_choices
-    from row_bot.providers.model_visibility import annotate
+    from row_bot.providers.model_visibility import annotate, withheld
     from row_bot.tools import registry as tool_registry
     from row_bot.plugins import registry as plugin_registry, state as plugin_state
     from row_bot.mcp_client.runtime import get_catalog_snapshot
@@ -1267,6 +1269,8 @@ def cached_choices() -> dict:
                 "available": option["available"],
                 "unavailable_reason": option["unavailable_reason"],
                 "billing": option["billing"],
+                # Learning (preview, D11): a personal-model version, tagged Personal in the picker.
+                "personal": withheld(option["provider_id"], option["selection_ref"]),
             }
             for option in picker_choices("chat")
         ),
@@ -9706,6 +9710,17 @@ def create_router(
             request,
             dto.LearningLessonPage,
             await call(read_learning_lessons, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/versions/{version}")
+    async def learning_version(version: int, request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_version
+
+        return await respond(
+            request,
+            dto.LearningVersionDetails,
+            await call(read_learning_version, version, validate=dispatch_validation(request, current)),
         )
 
     @router.get("/learning/commands/{command_id}")

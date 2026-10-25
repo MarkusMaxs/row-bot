@@ -129,11 +129,15 @@ class Planner:
         return self._root if self._root is not None else gate.data_dir()
 
     def recipe(self) -> Any:
+        """The recipe the next run trains with: the tier's certified one, with Advanced's choices (D9)."""
+
+        from row_bot.learning.training import advanced
+
         if self._recipe_for is not None:
-            return self._recipe_for()
+            return advanced.apply(self._recipe_for(), self._root)
         from row_bot.learning.training import hardware, recipes
 
-        return recipes.for_hardware(hardware.peek()) or recipes.default()
+        return advanced.apply(recipes.for_hardware(hardware.peek()) or recipes.default(), self._root)
 
     def trained_ids(self) -> set[str]:
         if self._trained_ids is not None:
@@ -181,8 +185,11 @@ class Planner:
     def due(self) -> bool:
         return self.clock() - self._planned_at >= PLAN_SECONDS
 
-    def plan(self, *, force: bool = False) -> PlanOutcome:
-        """Plan a run when there is enough (new) work to train on. Never while one is current."""
+    def plan(self, *, force: bool = False, retrain: bool = False) -> PlanOutcome:
+        """Plan a run when there is enough (new) work to train on. Never while one is current.
+
+        ``retrain``: "Retrain without it" (O6): a deleted chat's examples are already gone from the
+        data, so the next version is planned now, without waiting for new examples."""
 
         if not force and not self.due():
             return PlanOutcome(reason="later", summary=self._summary)
@@ -198,7 +205,7 @@ class Planner:
         if not summary.enough:
             return PlanOutcome(reason="no_data", summary=summary)
         trained = self.trained_ids()
-        if trained and summary.new_examples < recipe.min_new_examples:
+        if trained and summary.new_examples < recipe.min_new_examples and not retrain:
             return PlanOutcome(reason="up_to_date", summary=summary)
         try:
             compiled = dataset_module.compile_dataset(
@@ -212,7 +219,7 @@ class Planner:
             summary = self._summary
         if compiled.examples < recipe.min_examples:
             return PlanOutcome(reason="no_data", summary=summary)
-        if trained and summary.new_examples < recipe.min_new_examples:
+        if trained and summary.new_examples < recipe.min_new_examples and not retrain:
             return PlanOutcome(reason="up_to_date", summary=summary)
         steps = recipe.steps_for(compiled.examples)
         job = self.jobs.plan(steps_total=steps, checkpoint_every=recipe.checkpoint_interval(steps),

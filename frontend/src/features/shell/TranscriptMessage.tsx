@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   CornerDownRight,
+  Cpu,
   GraduationCap,
   Pencil,
   Repeat2,
@@ -239,6 +240,21 @@ export const TranscriptMessage = memo(function TranscriptMessage({
         <span>{visibleText(shown)}</span>
       </div>
     );
+  if (row.note === 'personal_model_fallback')
+    // Learning (preview): the person's personal model got stuck on this turn
+    // and their main model finished it (a quiet line, like a continuation).
+    return (
+      <div
+        className="transcript-note"
+        role="note"
+        data-note={row.note}
+        data-message-id={row.message_id ?? row.id}
+        data-row-id={row.id}
+      >
+        <Cpu aria-hidden />
+        <span>{visibleText(shown)}</span>
+      </div>
+    );
   if (row.note === 'agent_task' || row.note === 'agent_guidance')
     // A delegated agent's thread: what the parent asked it to do, never its
     // internal handoff prompt as the person's bubble (B167).
@@ -365,6 +381,17 @@ export const TranscriptMessage = memo(function TranscriptMessage({
           <span className="turn-chip" data-tone="neutral">
             <CircleStop aria-hidden />
             {stop.label}
+          </span>
+        )}
+        {row.answered_by === 'personal_model' && hasText && !failure && (
+          // Learning (preview): a quiet line, never a badge on the reply.
+          <span
+            className="turn-chip"
+            data-tone="neutral"
+            data-kind="personal-model"
+          >
+            <Cpu aria-hidden />
+            Answered by your personal model
           </span>
         )}
         {row.cut_short && (

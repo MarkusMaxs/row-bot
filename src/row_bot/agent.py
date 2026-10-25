@@ -761,18 +761,23 @@ def _new_agent_graph_input(user_input: str, config: dict, *, agent=None) -> tupl
                 if not content:
                     continue
                 if str(item.get("role") or "") == "human":
+                    ui: dict[str, Any] = {
+                        "thread_event": True,
+                        "source_event_id": str(item.get("source_event_id") or ""),
+                    }
+                    # Learning (preview): the main model finishing a stuck personal model's turn. The
+                    # transcript shows only the note's public sentence, never this event's text.
+                    fallback = (item.get("row_bot_ui") or {}).get("learning_fallback") if isinstance(
+                        item.get("row_bot_ui"), dict) else None
+                    if isinstance(fallback, dict) and isinstance(fallback.get("text"), str):
+                        ui["learning_fallback"] = {
+                            "text": fallback["text"][:300],
+                            "version": int(fallback.get("version") or 0),
+                            "kind": str(fallback.get("kind") or "")[:64],
+                            "reason": str(fallback.get("reason") or "")[:64],
+                        }
                     event_messages.append(
-                        HumanMessage(
-                            content=content,
-                            additional_kwargs={
-                                "row_bot_ui": {
-                                    "thread_event": True,
-                                    "source_event_id": str(
-                                        item.get("source_event_id") or ""
-                                    ),
-                                }
-                            },
-                        )
+                        HumanMessage(content=content, additional_kwargs={"row_bot_ui": ui})
                     )
                 else:
                     event_messages.append(

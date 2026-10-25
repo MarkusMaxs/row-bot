@@ -2319,6 +2319,9 @@ export class HttpTransport implements ClientTransport {
   learningLessons(signal?: AbortSignal) {
     return wire.getLearningLessons(this.base, this.session(), signal);
   }
+  learningVersion(version: number, signal?: AbortSignal) {
+    return wire.getLearningVersion(this.base, this.session(), version, signal);
+  }
   learningReceipt(command: string, signal?: AbortSignal) {
     return wire.getLearningReceipt(this.base, this.session(), command, signal);
   }

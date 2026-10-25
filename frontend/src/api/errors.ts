@@ -2795,6 +2795,14 @@ const CATALOG: Record<string, Entry> = {
     'Row-Bot is already preparing your personal model. It says here when it’s done.',
     'none',
   ],
+  learning_compare_unavailable: [
+    'Your personal model can’t be compared while it trains. Row-Bot compares it once training ends.',
+    'none',
+  ],
+  learning_export_unavailable: [
+    'Row-Bot couldn’t save the files there. Choose a folder outside Row-Bot’s own data, then try again.',
+    'review',
+  ],
   knowledge_changed: [
     'This memory changed. Try again with its current version.',
     'retry',

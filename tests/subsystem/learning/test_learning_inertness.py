@@ -102,6 +102,26 @@ def test_model_lists_and_local_models_load_nothing_of_learning(data_dir, no_lear
     assert _learning_modules() in ([], ["row_bot.learning"])
 
 
+def test_routing_a_turn_and_listing_personal_models_load_nothing_while_none_is_in_use(data_dir,
+                                                                                     no_learning_modules):
+    """L2c2's hooks on every chat turn (routing) and every model list (the picker entry) are a path
+    check while nothing is in use or trained: no Learning module, no file, no thread."""
+
+    from row_bot import learning
+    from row_bot.providers import client_status
+
+    before = set(threading.enumerate())
+
+    assert learning.route_turn(conversation_id="c", text="According to the policy, what is the limit?",
+                               model_ref="model:openai:gpt-6.1-sol") is None
+    assert learning.offered_personal_models() == {}
+    client_status.picker_choices("chat")
+
+    assert learning_files(data_dir) == []
+    assert _learning_modules() in ([], ["row_bot.learning"])
+    assert set(threading.enumerate()) <= before
+
+
 def test_deleting_a_conversation_with_learning_off_touches_nothing_of_learning(data_dir, no_learning_modules):
     gone = threads.create_thread("Off", thread_id=f"off-{uuid.uuid4().hex[:10]}", seed_default_skills=False)
     session_files = learning_files(threads.DATA_DIR)

@@ -45,6 +45,13 @@ import {
   VersionCard,
   versionFileWords,
 } from './PersonalModelVersion';
+import {
+  AdvancedSection,
+  PersonalModelNeeds,
+  UsesSection,
+  VersionReview,
+  VersionsSection,
+} from './PersonalModelUse';
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
@@ -140,13 +147,25 @@ function Banners({
   );
 }
 
-function Overview() {
+function Overview({
+  io,
+  onReview,
+}: {
+  io: LearningIO;
+  onReview: (version: number) => void;
+}) {
+  const needs = io.snapshot?.needs_you ?? [];
+  const uses = io.snapshot?.personal_model.uses ?? [];
   return (
     <div className="learning-section-list">
       <Section title="Needs you">
-        <InlineEmpty icon={<Inbox size={15} />}>
-          Nothing needs you. Changes that are ready to review show here.
-        </InlineEmpty>
+        {needs.length ? (
+          <PersonalModelNeeds io={io} onReview={onReview} />
+        ) : (
+          <InlineEmpty icon={<Inbox size={15} />}>
+            Nothing needs you. Changes that are ready to review show here.
+          </InlineEmpty>
+        )}
       </Section>
       <Section title="Overnight">
         <InlineEmpty icon={<Moon size={15} />}>
@@ -155,13 +174,40 @@ function Overview() {
         </InlineEmpty>
       </Section>
       <Section title="What Row-Bot is learning">
-        <div className="learning-empty-lead">
-          <strong>Nothing learned yet.</strong>
-          <p>
-            Row-Bot looks for things to improve during quiet hours. The quickest
-            way to help is <strong>Teach</strong> on a reply that went wrong.
-          </p>
-        </div>
+        {uses.length ? (
+          <table className="learning-results learning-kinds">
+            <caption className="visually-hidden">
+              Kinds of work and where they stand
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Kind of work</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {uses.map((item) => (
+                <tr key={item.kind}>
+                  <th scope="row">{item.label}</th>
+                  <td>
+                    {item.state === 'trial'
+                      ? `Trying personal model v${item.version}`
+                      : `Personal model v${item.version} in use`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="learning-empty-lead">
+            <strong>Nothing learned yet.</strong>
+            <p>
+              Row-Bot looks for things to improve during quiet hours. The
+              quickest way to help is <strong>Teach</strong> on a reply that
+              went wrong.
+            </p>
+          </div>
+        )}
       </Section>
       <Section title="How Row-Bot learns">
         <InlineEmpty icon={<Sparkles size={15} />}>
@@ -306,10 +352,12 @@ function PersonalModel({
   io,
   snapshot,
   onOpenSettings,
+  onReview,
 }: {
   io: LearningIO;
   snapshot: LearningSnapshot;
   onOpenSettings: (anchor?: string) => void;
+  onReview: () => void;
 }) {
   const [hardware, setHardware] = useState<LearningHardware | null>(null);
   const [askOpen, setAskOpen] = useState(false);
@@ -404,16 +452,26 @@ function PersonalModel({
         {`Row-Bot can train a model of your own on your work, here on this computer. First it needs ${missingWords(model)}.`}
       </EmptyState>
     );
+  const mainName = snapshot.spending.model_name || 'your main model';
+  // The card shows a version until its comparison starts; Versions shows it from then on.
+  const comparison = model.comparison;
+  const preparing =
+    model.version &&
+    (model.version.phase !== 'ready' ||
+      !comparison ||
+      comparison.state === 'waiting');
   return (
     <div className="learning-section-list">
       {download && <DownloadProgress io={io} snapshot={snapshot} />}
-      {model.version && (
+      {preparing && (
         <VersionCard
           io={io}
           model={model}
           onRunsIn={() => setRunsInOpen(true)}
         />
       )}
+      <UsesSection io={io} model={model} mainName={mainName} />
+      <VersionsSection io={io} model={model} onReview={onReview} />
       {state}
       <dl className="learning-facts" aria-label="Personal model">
         {(downloaded || model.version) && (
@@ -432,7 +490,7 @@ function PersonalModel({
             </dd>
           </div>
         )}
-        {model.version?.file_name && (
+        {!!model.version?.file_bytes && (
           <div>
             <dt>Newest version</dt>
             <dd>{versionFileWords(model.version)}</dd>
@@ -473,6 +531,9 @@ function PersonalModel({
           </dd>
         </div>
       </dl>
+      {downloaded && model.advanced && (
+        <AdvancedSection io={io} advanced={model.advanced} />
+      )}
       <DownloadAsk
         open={askOpen}
         onOpenChange={setAskOpen}
@@ -507,8 +568,10 @@ export default function LearningHome({
 }) {
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const deleteData = useDeleteLearningData(io);
   const snapshot = io.snapshot;
+  const comparison = snapshot?.personal_model.comparison;
   async function command(action: 'pause' | 'resume') {
     setBusy(true);
     try {
@@ -577,7 +640,9 @@ export default function LearningHome({
         onResume={() => void command('resume')}
         onRaiseLimit={() => onOpenSettings('monthly_token_limit')}
       />
-      {view === 'overview' && <Overview />}
+      {view === 'overview' && (
+        <Overview io={io} onReview={() => setReviewing(true)} />
+      )}
       {view === 'changes' && <Changes />}
       {view === 'lessons' && <Lessons io={io} />}
       {view === 'model' && (
@@ -585,6 +650,16 @@ export default function LearningHome({
           io={io}
           snapshot={snapshot}
           onOpenSettings={onOpenSettings}
+          onReview={() => setReviewing(true)}
+        />
+      )}
+      {comparison?.state === 'done' && (
+        <VersionReview
+          open={reviewing}
+          onOpenChange={setReviewing}
+          io={io}
+          model={snapshot.personal_model}
+          comparison={comparison}
         />
       )}
     </section>

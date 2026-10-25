@@ -33,7 +33,8 @@
                 "planned",
                 "planning",
                 "up_to_date",
-                "gpu_busy"
+                "gpu_busy",
+                "comparing"
               ],
               "type": "string"
             },

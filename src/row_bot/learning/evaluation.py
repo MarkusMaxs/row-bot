@@ -97,6 +97,10 @@ class _LimitReached(Exception):
     """The monthly token limit would be passed by the next call."""
 
 
+# A pack runner (the real-runtime worker, L2c2) raises this to stop a comparison at the limit.
+LimitReached = _LimitReached
+
+
 # ── Arms, budgets, results ──────────────────────────────────────────────────
 
 
@@ -122,6 +126,10 @@ class Arm:
     guidance: tuple[str, ...] = ()
     subject_kind: Literal["lesson", "release", "attempt", "strategy", "baseline"] = "baseline"
     subject_id: str | None = None
+    # The main model's arm (O31): its pack results are kept for :data:`CACHE_DAYS` per model, task
+    # (by its content), metric version, budget and runner, so a comparison doesn't spend tokens again
+    # on a result it already has. Replayed decisions are never cached.
+    cache: bool = False
 
 
 @dataclass(frozen=True)
@@ -187,6 +195,14 @@ class ArmResult:
     local_tokens: int
     model_ref: str | None
     by_kind: dict[str, tuple[int, int]]
+    # Aggregates that hold for audit runs too (no case leaves an audit, E10): tasks that ran (or came
+    # from the cache), their wall time, the tokens they measured (cached ones included) and how many
+    # of those were cloud tokens; how many results came from the cache (O31).
+    ran: int = 0
+    seconds: float = 0.0
+    measured_tokens: int = 0
+    measured_cloud_tokens: int = 0
+    cached: int = 0
 
     @property
     def passed(self) -> int:
@@ -865,6 +881,98 @@ def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: 
                       reply.tokens, reply.tokens if reply.local else 0, 1, round(time.monotonic() - started, 3), detail)
 
 
+# ── Pack runners and the main model's cache ─────────────────────────────────
+
+
+class PackRunner(Protocol):
+    """Runs one pack task for one arm somewhere else than the in-process tool loop (the real Agent
+    runtime in an owned worker, ``eval_worker.RuntimeRunner``, O56). Raises :data:`LimitReached` to
+    stop the comparison at the monthly limit. ``signature`` names how it runs (for the cache)."""
+
+    signature: str
+
+    def run(self, task: PackTask, arm: Arm, *, budget: Budget, meter: TokenMeter | None,
+            arm_left: int | None) -> CaseResult: ...
+
+
+CACHE_FILE = "arm_cache.json"
+CACHE_DAYS = 30
+_CACHE_ENTRIES = 20_000
+
+
+class ArmCache:
+    """Pack results of cached arms (the main model, O31), kept :data:`CACHE_DAYS` days.
+
+    Keys are hashes of (model, the task's own content, metric version, budget, runner): a changed
+    pack task, metric or budget is a new key. Values are counts only (status, tokens, steps, time),
+    never a task or its id, so the file says nothing about the hidden tasks (E10).
+    """
+
+    def __init__(self, root: Any = None, *, clock: Callable[[], float] = time.time) -> None:
+        self._root = root
+        self.clock = clock
+        self._entries: dict[str, dict[str, Any]] | None = None
+        self._dirty = False
+        self.hits = 0
+
+    @property
+    def path(self) -> Any:
+        return gate.folder_path(self._root) / CACHE_FILE
+
+    @staticmethod
+    def key(arm: Arm, task: PackTask, budget: Budget, signature: str) -> str:
+        import hashlib
+
+        content = json.dumps(task.to_dict(), sort_keys=True, ensure_ascii=False)
+        material = json.dumps([str(arm.model_ref or ""), hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                               METRIC_VERSION, budget.to_dict(), signature], sort_keys=True)
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _load(self) -> dict[str, dict[str, Any]]:
+        if self._entries is None:
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raw = {}
+            entries = raw.get("entries") if isinstance(raw, dict) and raw.get("version") == 1 else None
+            oldest = float(self.clock()) - CACHE_DAYS * 86_400
+            self._entries = {key: value for key, value in (entries or {}).items()
+                             if isinstance(value, dict) and float(value.get("at") or 0) >= oldest}
+        return self._entries
+
+    def get(self, key: str, task: PackTask) -> CaseResult | None:
+        found = self._load().get(key)
+        if found is None or found.get("status") not in ("passed", "failed", "budget"):
+            return None
+        self.hits += 1
+        return CaseResult(task.id, "pack", task.kind_of_work, found["status"], str(found.get("check") or ""),
+                          int(found.get("tokens") or 0), int(found.get("local_tokens") or 0),
+                          int(found.get("steps") or 0), float(found.get("seconds") or 0.0), "kept from an earlier test")
+
+    def put(self, key: str, case: CaseResult) -> None:
+        if case.status not in ("passed", "failed", "budget"):
+            return  # an error or a stop is never kept: it runs again next time
+        entries = self._load()
+        entries[key] = {"at": round(float(self.clock()), 3), "status": case.status, "check": case.check,
+                        "tokens": case.tokens, "local_tokens": case.local_tokens, "steps": case.steps,
+                        "seconds": case.seconds}
+        if len(entries) > _CACHE_ENTRIES:
+            for old in sorted(entries, key=lambda item: entries[item]["at"])[: len(entries) - _CACHE_ENTRIES]:
+                entries.pop(old, None)
+        self._dirty = True
+
+    def save(self) -> None:
+        if not self._dirty or self._entries is None:
+            return
+        from row_bot.learning import atomic
+
+        try:
+            atomic.write_text(self.path, json.dumps({"version": 1, "entries": self._entries}, sort_keys=True))
+            self._dirty = False
+        except OSError:
+            logger.info("Learning couldn't keep its main-model results")
+
+
 # ── Comparisons ─────────────────────────────────────────────────────────────
 
 
@@ -957,22 +1065,27 @@ def compare(arms: Sequence[Arm], *, tasks: Sequence[PackTask] = (), replay: Sequ
             client: ModelClient | None = None, judge: Judge | None = None, calibration: Calibration | None = None,
             budget: Budget = Budget(), meter: TokenMeter | None = None, store: Any | None = None,
             save: bool = True, clock: Callable[[], float] = time.time, backend: str = "auto",
-            suite: Literal["replay", "pack", "practice"] | None = None) -> Comparison:
+            suite: Literal["replay", "pack", "practice"] | None = None, runner: PackRunner | None = None,
+            cache: ArmCache | None = None, on_case: Callable[[str, CaseResult], None] | None = None) -> Comparison:
     """Run every arm on the same pack tasks and replayed decisions, with the same budget.
 
     The first arm is the baseline the others are compared with. A judge is used only
-    with its calibration and only when that calibration is reliable.
+    with its calibration and only when that calibration is reliable. ``runner`` runs pack tasks
+    through the real Agent runtime (O56) instead of the in-process tool loop; ``cache`` keeps
+    and reuses the results of arms marked ``cache`` (O31); ``on_case(arm, case)`` follows progress.
     """
 
     return _compare(arms, list(tasks), list(replay), client=client, judge=judge, calibration=calibration,
                     budget=budget, meter=meter, store=store, save=save, clock=clock, backend=backend,
-                    suite=suite or ("replay" if replay and not tasks else "pack"), aggregate_only=False)
+                    suite=suite or ("replay" if replay and not tasks else "pack"), aggregate_only=False,
+                    runner=runner, cache=cache, on_case=on_case)
 
 
 def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase], *, client: ModelClient | None,
              judge: Judge | None, calibration: Calibration | None, budget: Budget, meter: TokenMeter | None,
              store: Any | None, save: bool, clock: Callable[[], float], backend: str, suite: str,
-             aggregate_only: bool) -> Comparison:
+             aggregate_only: bool, runner: PackRunner | None = None, cache: ArmCache | None = None,
+             on_case: Callable[[str, CaseResult], None] | None = None) -> Comparison:
     if not arms:
         raise EvaluationError("no_arms")
     if len({arm.name for arm in arms}) != len(arms):
@@ -990,6 +1103,8 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
     started = float(clock())
     results: dict[str, list[CaseResult]] = {arm.name: [] for arm in arms}
     spent: dict[str, int] = {arm.name: 0 for arm in arms}
+    cached_count: dict[str, int] = {arm.name: 0 for arm in arms}
+    signature = str(getattr(runner, "signature", "") or "in-process-1")
     stopped = ""
     items: list[PackTask | ReplayCase] = [*tasks, *replay]
     for index, item in enumerate(items):
@@ -1003,14 +1118,29 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                     round_results[arm.name] = CaseResult(case_id, "pack" if isinstance(item, PackTask) else "replay",
                                                          kind, "budget", "budget", detail="the arm's budget was spent")
                     continue
-                if isinstance(item, PackTask):
+                key = (ArmCache.key(arm, item, budget, signature)
+                       if cache is not None and arm.cache and isinstance(item, PackTask) else None)
+                kept = cache.get(key, item) if key is not None and cache is not None else None
+                if kept is not None:
+                    round_results[arm.name] = kept
+                    cached_count[arm.name] += 1
+                    if on_case is not None:
+                        on_case(arm.name, kept)
+                    continue  # nothing spent: the result is from an earlier test (O31)
+                if isinstance(item, PackTask) and runner is not None:
+                    result = runner.run(item, arm, budget=budget, meter=meter, arm_left=left)
+                elif isinstance(item, PackTask):
                     result = run_pack_task(item, arm, client=client, budget=budget, meter=meter, arm_left=left,
                                            backend=backend)
                 else:
                     result = run_replay_case(item, arm, client=client, budget=budget, meter=meter, judge=judge,
                                              arm_left=left)
+                if key is not None and cache is not None:
+                    cache.put(key, result)
                 round_results[arm.name] = result
                 spent[arm.name] += result.tokens
+                if on_case is not None:
+                    on_case(arm.name, result)
         except _LimitReached:
             stopped = meter.note()
             for later in items[index:]:
@@ -1059,8 +1189,15 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                               "check": case.check, "tokens": case.tokens, "steps": case.steps,
                               "seconds": case.seconds, "detail": case.detail} for case in cases]
         runs.append((run, body))
-        arm_results.append(ArmResult(arm, run, [] if aggregate_only else cases, spent[arm.name], local,
-                                     arm.model_ref, by_kind))
+        ran = [case for case in cases if case.status != "not_run"]
+        arm_results.append(ArmResult(
+            arm, run, [] if aggregate_only else cases, spent[arm.name], local, arm.model_ref, by_kind,
+            ran=len(ran), seconds=round(sum(case.seconds for case in ran), 3),
+            measured_tokens=sum(case.tokens for case in ran),
+            measured_cloud_tokens=sum(max(0, case.tokens - case.local_tokens) for case in ran),
+            cached=cached_count[arm.name]))
+    if cache is not None:
+        cache.save()
     if save:
         from row_bot.learning.store import LearningStore
 
@@ -1119,9 +1256,14 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 judge: Judge | None = None, calibration: Calibration | None = None, budget: Budget = Budget(),
                 meter: TokenMeter | None = None, packs: Iterable[str] | None = None, include_replay: bool = True,
                 store: Any | None = None, save: bool = True, clock: Callable[[], float] = time.time,
-                backend: str = "auto") -> Comparison:
+                backend: str = "auto", runner: PackRunner | None = None, cache: ArmCache | None = None,
+                verifiers: Iterable[str] | None = None,
+                on_progress: Callable[[int, int], None] | None = None) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
-    work and tokens per arm; no task, id or text (E10)."""
+    work and tokens per arm; no task, id or text (E10).
+
+    ``verifiers`` leaves out hidden tasks checked any other way (``code_tests`` need a container
+    for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more."""
 
     from row_bot.learning.store import LearningStore
 
@@ -1130,11 +1272,33 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
         raise EvaluationError("learning_off")
     who = f"{_caller()}: {asked_by}".strip(": ")
     vault = _vault(saved)
-    tasks = vault.hidden_tasks(asked_by=who, packs=packs)
+    allowed = None if verifiers is None else set(verifiers)
+    tasks = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
+             if allowed is None or task.verifier.kind in allowed]
     replay = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)] if include_replay else []
+    total = (len(tasks) + len(replay)) * len(arms)
+    done = [0]
+
+    def counted(_arm: str, _case: CaseResult) -> None:
+        done[0] += 1
+        if on_progress is not None:
+            on_progress(done[0], total)
+
     return _compare(arms, tasks, replay, client=client, judge=judge, calibration=calibration, budget=budget,
                     meter=meter, store=saved, save=save, clock=clock, backend=backend, suite="audit",
-                    aggregate_only=True)
+                    aggregate_only=True, runner=runner, cache=cache, on_case=counted)
+
+
+def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,
+               verifiers: Iterable[str] | None = None, include_replay: bool = True) -> int:
+    """How many hidden tasks an :func:`audit_check` with the same choices would run (a count only)."""
+
+    allowed = None if verifiers is None else set(verifiers)
+    vault = _vault(store)
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    count = sum(1 for task in vault.hidden_tasks(asked_by=who, packs=packs)
+                if allowed is None or task.verifier.kind in allowed)
+    return count + (len(vault.replay_tasks(asked_by=who)) if include_replay else 0)
 
 
 def is_novel(candidate: PackTask | str, *, asked_by: str, store: Any | None = None) -> bool:
@@ -1183,9 +1347,14 @@ def audit_selfcheck(*, asked_by: str, store: Any | None = None, backend: str = "
 __all__ = [
     "Action",
     "Arm",
+    "ArmCache",
     "ArmResult",
     "AuditLook",
     "Budget",
+    "CACHE_DAYS",
+    "LimitReached",
+    "PackRunner",
+    "audit_size",
     "CalibrationCase",
     "Calibration",
     "CaseResult",

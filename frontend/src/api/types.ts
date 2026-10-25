@@ -446,6 +446,10 @@ export interface ClientTransport {
     signal?: AbortSignal,
   ): Promise<Wire.LearningConversation>;
   learningLessons?(signal?: AbortSignal): Promise<Wire.LearningLessonPage>;
+  learningVersion?(
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<Wire.LearningVersionDetails>;
   learningReceipt?(
     command: string,
     signal?: AbortSignal,

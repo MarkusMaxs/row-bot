@@ -5346,7 +5346,7 @@ class _FixturePlanner:
     def due(self) -> bool:
         return False
 
-    def plan(self, *, force: bool = False):
+    def plan(self, *, force: bool = False, retrain: bool = False):
         from row_bot.learning.training.planner import PlanOutcome
 
         return PlanOutcome(reason="later", summary=self.summary())
@@ -5479,7 +5479,7 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         planner, makes, engine = _FixturePlanner(), _FixtureReleases(), FakeEngine(seconds_per_step=_L2C_SECONDS)
         lease = FakeLease(since_activity=3600.0)
         runner.configure(engine=engine, dataset=FakeDataset(examples=_L2C_EXAMPLES), lease=lease, planner=planner,
-                         releases=makes)
+                         releases=makes, comparisons=_FixtureComparisons())
         runner.get().hours = QuietHours(now=lambda: datetime(2026, 10, 16, 14, 0))
         # Ollama reads as installed whatever the machine running the spec has (CI has none).
         from row_bot.learning.training import serving
@@ -5514,6 +5514,254 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         job = supervisor.jobs.plan(steps_total=_L2C_STEPS, checkpoint_every=10,
                                    dataset={"id": "ds_" + "e" * 32, "examples": _L2C_EXAMPLES})
         supervisor.train_now(job.id)
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
+# ── Learning (preview), L2c2: compare, trial and use the personal model ──
+
+_L2C2_CHAT = "l2c2-travel-policy"
+_L2C2_REF = "model:ollama:row-bot-personal-v1:fixture0"
+_l2c2: dict[str, object] = {}
+
+
+class _FixtureComparisons:
+    """Stands in for ``model_compare.Comparisons``: never runs a model. Compare now starts a
+    comparison that stays at its first task until the spec moves it (``progress``) or finishes it
+    (``compared``); Stop stops it."""
+
+    def __init__(self) -> None:
+        self.version: int | None = None
+
+    def running(self) -> bool:
+        return self.version is not None
+
+    def tick(self) -> bool:
+        return False
+
+    def _progress(self, version: int, **values) -> None:
+        import time
+
+        from row_bot.learning import model_compare
+
+        current = model_compare.read_progress(version) or {}
+        model_compare._write_json(model_compare.progress_path(version), {  # noqa: SLF001
+            **current, **values, "updated_at": time.time()})
+
+    def start(self, version: int) -> bool:
+        self.version = int(version)
+        self._progress(self.version, state="running", phase="visible", done=0, total=96)
+        return True
+
+    def stop(self, timeout: float = 15.0) -> None:
+        if self.version is not None:
+            self._progress(self.version, state="stopped", reason="stopped")
+        self.version = None
+
+    def wait(self, timeout: float = 30.0) -> bool:
+        return True
+
+
+def _l2c2_files() -> None:
+    """v1's files and records as a real release leaves them (the GGUF a sparse file of its real size):
+    what Experiment details, Export… and Retrain without it read."""
+
+    import time
+
+    from row_bot.learning.store import LearningStore
+    from row_bot.learning.training import releases
+    from tests.fixtures.learning import release
+
+    folder = releases.version_dir(1)
+    state = releases.read_state(folder)
+    if state is None or state.phase != releases.READY:
+        raise HTTPException(409, "Make v1 ready first")
+    (folder / "adapter").mkdir(parents=True, exist_ok=True)
+    (folder / "adapter" / "adapter_model.safetensors").write_bytes(b"\0" * 43_676)
+    (folder / "adapter" / "adapter_config.json").write_text('{"r": 16}', encoding="utf-8")
+    with open(folder / str(state.gguf), "wb") as handle:
+        handle.truncate(_L2C_GGUF)
+    (folder / releases.MODEL_CARD_FILE).write_text("# Personal model v1\n", encoding="utf-8")
+    now = time.time()
+    (folder / releases.MANIFEST_FILE).write_text(json.dumps({"identity": {
+        "base": {"name": "Qwen3.5 2B", "version": "a1b2c3d4e5f6a7b8"},
+        "recipe": {"name": "8gb-v1"}, "runtime": {"name": "Ollama", "version": "0.40.4"}}}), encoding="utf-8")
+    (folder / releases.DATASET_FILE).write_text(json.dumps({
+        "examples": _L2C_EXAMPLES, "validation": 17, "conversations": [f"chat-{i:02d}" for i in range(41)],
+        "first_at": now - 15 * 86400, "last_at": now - 3600, "providers": ["openai"],
+        "left_out": {"too_long": 3, "held_out": 11}, "terms_note": True}), encoding="utf-8")
+    store = LearningStore()
+    store.create()
+    if store.get("release", "rel_l2c2") is None:
+        store.put(release("rel_l2c2", version=1, source_thread_ids=("l2c2-deleted-chat",)))
+    releases.write_state(folder, replace(state, release_id="rel_l2c2"))
+
+
+def _l2c2_main() -> str:
+    """The main model's name, as Learning shows it (the profile's default model)."""
+
+    from row_bot.application.client_learning import _default_model_name
+
+    return _default_model_name() or "your main model"
+
+
+def _l2c2_comparison(verdict: str) -> dict:
+    """A finished comparison of v1 with the starting model and the main model."""
+
+    import time
+
+    main = _l2c2_main()
+
+    from row_bot.learning import model_compare
+
+    passed = {"document_lookups": {"base": 6, "v1": 10, "main": 11},
+              "structured_transforms": {"base": 7, "v1": 7, "main": 9},
+              "tool_workflows": {"base": 3, "v1": 4, "main": 7},
+              "own_work": {"base": 4, "v1": 5, "main": 8}}
+    totals = {"document_lookups": 12, "structured_transforms": 10, "tool_workflows": 8, "own_work": 10}
+    labels = {"document_lookups": "Document lookups", "structured_transforms": "Structured transforms",
+              "tool_workflows": "Tool workflows", "own_work": "Your own work"}
+    if verdict == "no_difference":
+        passed["document_lookups"]["v1"] = 7
+    rows = []
+    for kind, total in totals.items():
+        counted = {key: total for key in ("base", "v1", "main")}
+        if kind == "structured_transforms":
+            counted["v1"] = 9  # one task the personal model's runtime failed: left out of its count (O19)
+        better = verdict == "better" and kind == "document_lookups"
+        rows.append({"kind": kind, "label": labels[kind], "total": total, "passed": passed[kind],
+                     "counted": counted, "verdict": "better" if better else "same"})
+    overall = ({"verdict": "better", "recommend": "document_lookups",
+                "line": "Better at document lookups than the starting model: 10 of 12 passed, against 6."}
+               if verdict == "better" else
+               {"verdict": "no_difference", "recommend": None,
+                "line": "No clear difference from the starting model. Not used."})
+    table = {key: {labels[kind]: [passed[kind][key], totals[kind]] for kind in totals if kind != "own_work"}
+             for key in ("base", "v1", "main")}
+    return {
+        "format": model_compare.FORMAT, "schema_version": 1, "version": 1, "release_id": "rel_l2c2",
+        "compared_at": time.time() - 600, "seconds": 2950.0,
+        "arms": [
+            {"key": "base", "label": "the starting model", "role": "baseline", "ran": 40, "cached": 0,
+             "seconds_per_task": 6.2, "cloud_tokens_per_task": 0},
+            {"key": "v1", "label": "v1 (new)", "role": "new", "ran": 40, "cached": 0, "seconds_per_task": 4.8,
+             "cloud_tokens_per_task": 0},
+            {"key": "main", "label": main, "role": "main", "ran": 40, "cached": 40,
+             "seconds_per_task": 21.5, "cloud_tokens_per_task": 18_400},
+        ],
+        "rows": rows, "overall": overall,
+        "note": f"Testing used 590K tokens (and 1.1M on this computer); {main}\u2019s results were reused.",
+        "stopped": "", "left_out": [model_compare.CODING_NOTE], "baseline_unavailable": None,
+        "main_unavailable": None,
+        "details": {"visible": table, "hidden": {key: {"Your own work": [passed["own_work"][key], 10]}
+                                                 for key in ("base", "v1", "main")}},
+        "runs": {}, "budget": {"task_tokens": 150_000}, "visible_per_pack": 16, "hidden": True,
+        "worker_notes": [], "write_backs": [], "metric_version": 1, "reviewed_at": None,
+    }
+
+
+def _l2c2_chat() -> None:
+    """A chat where v1 answered one turn and got stuck on the next, which the main model finished."""
+
+    from row_bot import threads
+    from row_bot.learning import routing
+
+    if not threads._thread_exists(_L2C2_CHAT):  # noqa: SLF001
+        threads.create_thread("Travel policy", thread_id=_L2C2_CHAT, seed_default_skills=False)
+    note = f"Your personal model got stuck; {_l2c2_main()} finished this."
+    personal = {"model": "row-bot-personal-v1:fixture0"}
+    threads.append_checkpoint_messages(_L2C2_CHAT, [
+        HumanMessage(id="l2c2-ask-1", content="What is the client dinner limit in the travel policy?"),
+        AIMessage(id="l2c2-personal", content="The client dinner limit is 85 EUR a person (TRV-014, section 3).",
+                  response_metadata=personal),
+        HumanMessage(id="l2c2-ask-2", content="And for a dinner with 12 people?"),
+        AIMessage(id="l2c2-stuck", content="", response_metadata=personal, tool_calls=[
+            {"id": "l2c2-call-1", "name": "calculate", "args": {"expression": "85 * 12"}}]),
+        ToolMessage(tool_call_id="l2c2-call-1", content="The personal model stopped here."),
+        HumanMessage(id="l2c2-handover", content=routing._HANDOVER.format(  # noqa: SLF001
+            why="it repeated the same step", request=routing._quoted("And for a dinner with 12 people?")),  # noqa: SLF001
+                     additional_kwargs={"row_bot_ui": {"thread_event": True, "source_event_id": "",
+                                                       "learning_fallback": {
+                                                           "text": note, "version": 1, "kind": "document_lookups",
+                                                           "reason": "tool_loop"}}}),
+        AIMessage(id="l2c2-main", content="For 12 people the limit is 1,020 EUR (85 EUR \u00d7 12).",
+                  response_metadata={"model_name": "gpt-6.1-sol"}),
+    ])
+
+
+@app.post("/__l2c2_fixture/learning/{action}")
+def l2c2_learning(action: str, name: str = "", x_fixture_token: str = Header(default="")) -> dict:
+    """The personal model compared, on trial, kept, in a chat and in the picker for the L2c2 spec. Uses
+    L2c's fixture (setup, train, finish, version ready) first. No model, runtime or provider runs."""
+
+    predecessor._authorize(x_fixture_token)
+    import time
+
+    from row_bot import learning
+    from row_bot.learning import model_compare, runner, use, versions
+
+    if action == "restore":
+        import shutil
+
+        models = learning.data_dir() / learning.MODELS_FOLDER
+        for name_ in (learning.USE_FILE, "needs_you.json"):
+            (models / name_).unlink(missing_ok=True)
+        (learning.data_dir() / "learning_advanced.json").unlink(missing_ok=True)
+        if "suggested" in _l2c2:
+            versions.suggested_folder = _l2c2["suggested"]
+        try:
+            from row_bot.thread_cleanup import delete_thread
+
+            delete_thread(_L2C2_CHAT)
+        except Exception:
+            logging.getLogger(__name__).debug("L2c2 fixture chat already gone", exc_info=True)
+        shutil.rmtree(models / "base", ignore_errors=True)
+        _l2c2.clear()
+        return {"action": action}
+    if "suggested" not in _l2c2:
+        # Export… offers a folder that names no real person's home.
+        _l2c2["suggested"] = versions.suggested_folder
+        versions.suggested_folder = lambda: str(Path("C:/Users/you/Documents/Row-Bot personal models")) \
+            if os.name == "nt" else "/home/you/Documents/Row-Bot personal models"
+    if action == "files":
+        _l2c2_files()
+    elif action == "progress":  # name: tasks done of 96
+        comparisons = runner.get().comparisons
+        if not isinstance(comparisons, _FixtureComparisons) or comparisons.version is None:
+            raise HTTPException(409, "Compare now first")
+        comparisons._progress(comparisons.version, done=int(name or 0))  # noqa: SLF001
+    elif action == "compared":  # name: better | no_difference
+        comparisons = runner.get().comparisons
+        if isinstance(comparisons, _FixtureComparisons):
+            comparisons.version = None
+        model_compare._write_json(model_compare.comparison_path(1), _l2c2_comparison(name or "better"))  # noqa: SLF001
+        model_compare.progress_path(1).unlink(missing_ok=True)
+    elif action == "keep-due":  # v1 on trial for four days, with 18 requests (one finished by the main model)
+        kind = name or "document_lookups"
+        use.start_trial(1, kind, _L2C2_REF, clock=lambda: time.time() - 4 * 86400)
+        for outcome in ["answered"] * 17 + ["fallback"]:
+            use.record(kind, 1, outcome, 4.2)
+    elif action == "retrain":  # a chat v1 was trained on is deleted
+        from row_bot.learning.store import LearningStore
+
+        LearningStore().purge_thread("l2c2-deleted-chat")
+    elif action == "chat":
+        _l2c2_chat()
+    elif action == "picker":  # v1 in the composer's picker, beside the synthetic local models (s8's seed first)
+        from row_bot.providers import model_catalog_cache as cache
+        from row_bot.providers.selection import add_quick_choice_for_model
+
+        snapshot = cache.read_model_catalog_cache()
+        tag = _L2C2_REF.split(":", 2)[2]
+        rows = [row for row in snapshot.ollama_rows if row.get("model_id") != tag]
+        rows.append({"provider_id": "ollama", "model_id": tag, "display_name": tag, "installed": True,
+                     "capabilities_snapshot": _S8_CHAT})
+        cache.write_model_catalog_cache(cache.CatalogCacheSnapshot(
+            1, snapshot.generated_at + 1, snapshot.cloud_cache, rows,
+            {"ollama": {"status": "ok", "count": len(rows)}}, (), "synthetic-browser"))
+        add_quick_choice_for_model(tag, provider_id="ollama", display_name=tag, capabilities_snapshot=_S8_CHAT,
+                                   surface="chat")
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
     return {"action": action}

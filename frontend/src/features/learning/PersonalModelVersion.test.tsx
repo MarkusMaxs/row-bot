@@ -58,7 +58,7 @@ it('says a ready version waits for its comparison and that the main model still 
   expect(view.note).toBe(
     'Row-Bot compares it with your main model before asking you to use it. Until then your main model answers everything.',
   );
-  expect(view.actions).toEqual([]);
+  expect(view.actions).toEqual([{ label: 'Compare now', kind: 'compare' }]);
 });
 
 it('follows the export step by step, then the checks in the runtime', () => {
@@ -186,7 +186,7 @@ it('lets the person choose where personal models run', async () => {
   });
 });
 
-it('marks the runtime a version passed its check in, and names its file', () => {
+it('marks the runtime a version passed its check in, and says its size without its file name', () => {
   const ready = installedModel({ runtime: 'ollama', version: versionState() });
   expect(runsInWords(ready)).toBe('Ollama ✓');
   expect(
@@ -194,7 +194,6 @@ it('marks the runtime a version passed its check in, and names its file', () => 
       installedModel({ runtime: 'lmstudio', version: versionState() }),
     ),
   ).toBe('LM Studio');
-  expect(versionFileWords(versionState())).toBe(
-    'row-bot-personal-v1-Q8_0.gguf · 2\u00a0GB',
-  );
+  // O54: main screens say "v1 · 2 GB"; file names belong to Export… and Experiment details.
+  expect(versionFileWords(versionState())).toBe('v1 · 2\u00a0GB');
 });

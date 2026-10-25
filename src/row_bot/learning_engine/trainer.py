@@ -710,24 +710,31 @@ def _export(options: dict[str, str], out: Path, report: dict[str, Any], progress
     if not kinds or any(kind not in QUANTIZATIONS for kind in kinds):
         raise ValueError("unknown quantization")
     started = time.monotonic()
-    import torch
-    from peft import PeftModel
-    from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
+    # ``--adapter none``: the untouched starting model, converted as it is (Row-Bot compares a first
+    # version with it, L2c2): nothing to merge, and the starting model's own folder is never removed.
+    untouched = options.get("adapter", "").strip().lower() == "none"
+    if untouched:
+        merged = Path(options["model"])
+        options = {**options, "keep_merged": "1"}
+    else:
+        import torch
+        from peft import PeftModel
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
-    config = AutoConfig.from_pretrained(options["model"], local_files_only=True)
-    architecture = (config.architectures or [""])[0]
-    loader = AutoModelForImageTextToText if "ConditionalGeneration" in architecture else AutoModelForCausalLM
-    model = loader.from_pretrained(options["model"], torch_dtype=torch.bfloat16, local_files_only=True,
-                                   device_map="cpu")
-    model = PeftModel.from_pretrained(model, options["adapter"], local_files_only=True).merge_and_unload()
-    merged = out / "merged"
-    model.save_pretrained(str(merged), safe_serialization=True)
-    AutoTokenizer.from_pretrained(options["model"], local_files_only=True).save_pretrained(str(merged))
-    for name in ("chat_template.jinja", "preprocessor_config.json", "video_preprocessor_config.json"):
-        source = Path(options["model"]) / name
-        if source.is_file() and not (merged / name).exists():
-            (merged / name).write_bytes(source.read_bytes())
-    del model
+        config = AutoConfig.from_pretrained(options["model"], local_files_only=True)
+        architecture = (config.architectures or [""])[0]
+        loader = AutoModelForImageTextToText if "ConditionalGeneration" in architecture else AutoModelForCausalLM
+        model = loader.from_pretrained(options["model"], torch_dtype=torch.bfloat16, local_files_only=True,
+                                       device_map="cpu")
+        model = PeftModel.from_pretrained(model, options["adapter"], local_files_only=True).merge_and_unload()
+        merged = out / "merged"
+        model.save_pretrained(str(merged), safe_serialization=True)
+        AutoTokenizer.from_pretrained(options["model"], local_files_only=True).save_pretrained(str(merged))
+        for name in ("chat_template.jinja", "preprocessor_config.json", "video_preprocessor_config.json"):
+            source = Path(options["model"]) / name
+            if source.is_file() and not (merged / name).exists():
+                (merged / name).write_bytes(source.read_bytes())
+        del model
     report["steps"]["merge_seconds"] = round(time.monotonic() - started, 1)
     progress["step"] = "convert"
     llama = Path(options["llama"])
