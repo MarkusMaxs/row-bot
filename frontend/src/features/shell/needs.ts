@@ -17,7 +17,7 @@ const READ_EVERY_MS = 60_000;
 export function useAttention(
   load?: (signal?: AbortSignal) => Promise<AttentionSnapshot>,
 ) {
-  return useSharedRead(load, READ_EVERY_MS);
+  return useSharedRead(load, READ_EVERY_MS, ['monitor']);
 }
 
 /** A conversation that waits on the person: an approval, a goal's question or stopped agent work. */

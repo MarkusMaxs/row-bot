@@ -25,7 +25,8 @@ pages:
       not shown in this reference.
   models:
     description: Choose which model does each job (Brain, Vision, Image, Video), the
-      reading limit and limits for long work, and pin models from the catalog.
+      reading limit and limits for long work, and star the models you use from the
+      catalog.
     docs_route: /docs/settings/models
     screenshot_id: settings-models
   voice:

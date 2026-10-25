@@ -22,13 +22,32 @@ Start with what Row-Bot already tells you. The sidebar's attention indicator app
 - For local and custom endpoints, use enough context for Row-Bot's instructions and tool schemas; lower the **Reading limit** in Settings › Models on smaller computers.
 - If reasoning choices are missing, rejected, or reset, use the active model's conditional control or `/reasoning`, then follow [Reasoning Controls](/docs/chat/reasoning-controls#troubleshooting).
 
+- With a local model, if a reply stops with "The response was interrupted", choose **Resume**. Row-Bot already asks the model once more when it writes a tool call its runtime can't read; a second failure shows this card.
+
+## Windows
+
+- **Windows Firewall asks about `Row-Bot Server`** once after an update, because each version runs from its own folder under `versions`. Allow it for private networks; after that it doesn't ask again.
+- **Computer use moves your real mouse.** Keep your hands off the mouse and keyboard while it works; if you touch them, it stops and asks "Carry on?". Esc stops it at once.
+- **Video editing downloads ffmpeg once**, about 30 MB from the Python Package Index, after you approve its card.
+
+## macOS
+
+- **The first time Row-Bot works in your Documents folder**, macOS asks for permission and the command waits until you answer. This is a known issue.
+- **After allowing Screen Recording or Accessibility** for computer use, choose **Check setup** in Settings › System. If it still says a permission is missing, choose **Row-Bot › Quit** and open Row-Bot again: macOS sometimes applies Screen Recording only to a fresh start.
+- **If Row-Bot doesn't start after you replaced the app by hand**, macOS may be waiting for you to allow keychain access for the new copy. Look for the keychain dialog and choose **Always Allow**.
+
+## Linux And Docker
+
+- **Linux** runs as a browser app: open the address Row-Bot prints. Computer use and the native window aren't available there.
+- **Docker** keeps everything in its data volume; see [Docker And VPS Operations](/docs/operations/docker/) for backups and upgrades.
+
 ## Chat, Tool, And Approval Problems
 
 - Check the model picker, the composer's **Mode** (Agent or Chat only), the conversation's agent profile, its **Approvals** setting, and the enabled tools.
 - If an action is waiting, approve or deny it in the conversation, from the sidebar's attention indicator, or from Overview. Approvals wait until you answer.
 - If a step shows as skipped, it was denied and did not run.
 - Ask Row-Bot to explain the last tool result if the transcript is unclear.
-- If Computer Use is paused, choose Resume only after reviewing the target; if its lease is busy, stop or finish the active native task first.
+- If computer use stopped and asks "Carry on?", you moved the mouse or typed: choose **Carry on** once you have stopped, or **Stop**. "Row-Bot is using the computer in another chat" means another chat is using it: stop that one or wait for it.
 
 ## Workflow Problems
 

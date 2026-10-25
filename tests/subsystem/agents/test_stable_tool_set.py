@@ -15,6 +15,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from row_bot.skill_discovery import SkillRecord
 from tests.subsystem.agents.test_agent_tool_filtering import (  # noqa: F401 -- shared harness
+    ASK,
     READER,
     _bound_tools,
     _lc_tool,
@@ -202,7 +203,7 @@ def test_developer_tools_and_workflows_come_with_a_code_folder(tmp_path, monkeyp
 
     monkeypatch.setattr(agent, "_has_code_folder", lambda: False)
     without = _bound_tools(agent.get_agent_graph(list(tools)))
-    assert set(without) == {"create_code_folder", "use_code_folder", READER}
+    assert set(without) == {"create_code_folder", "use_code_folder", READER, ASK}
     assert "CODE TOOLS: the Developer tools" in agent._agent_runtime_guidance(sorted(tools))
     assert "Developer Tool Guide" not in skills.get_skills_prompt(
         [], active_tool_names=agent._current_effective_tool_parent_names_var.get())

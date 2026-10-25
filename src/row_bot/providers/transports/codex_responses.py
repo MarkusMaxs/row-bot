@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from contextlib import nullcontext
@@ -16,7 +17,7 @@ from pydantic import Field, PrivateAttr
 from row_bot.cancellation import current_cancellation_scope
 from row_bot.prompt_cache import usage_metadata_from_provider_usage
 from row_bot.providers import codex as codex_auth
-from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.cache_affinity import shared_prefix_cache_key
 from row_bot.providers.transports.responses_reasoning import (
     ENCRYPTED_REASONING_INCLUDE,
     is_encrypted_reasoning_rejection,
@@ -70,16 +71,19 @@ class ChatCodexResponses(BaseChatModel):
         return self.bind(tools=[_responses_tool(tool) for tool in tools], tool_choice=tool_choice or "auto", **kwargs)
 
     def _session_key(self) -> str:
-        """The cache key and session of this request: one per conversation.
+        """The cache key and session of this request (``cache_affinity``).
 
         Codex CLI sends its conversation id as both ``prompt_cache_key`` and the
-        ``session_id`` header, so every call of a conversation reaches the same
-        prompt cache. Row-Bot sends a per-process digest of its conversation id
-        (``cache_affinity``), which is the same for every model instance that
-        serves the conversation, Chat Only and compaction included. Outside a
+        ``session_id`` header, and the backend finds a prompt cache by the
+        session. Row-Bot sends one per-process key shared by its interactive
+        chats, which all start with the same system prompt and tools, so a new
+        chat finds the prefix another chat cached (with a key per conversation
+        nearly every new chat missed it). Workflows, goals and helpers get their
+        conversation's own key. The key is the same for every model instance
+        that serves a conversation, Chat Only and compaction included. Outside a
         conversation the instance keeps one random session, as before.
         """
-        return self.session_id or conversation_cache_key(CODEX_TRANSPORT) or self._instance_session_id
+        return self.session_id or shared_prefix_cache_key(CODEX_TRANSPORT) or self._instance_session_id
 
     def _generate(
         self,
@@ -255,27 +259,18 @@ class ChatCodexResponses(BaseChatModel):
                 response = self._post_once(body)
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code < 200 or status_code >= 300:
-            raise RuntimeError(f"Codex Responses request failed with HTTP {status_code}: {_safe_response_text(response)}")
+            raise _request_failed(status_code, response, self.model_name)
         return response
 
     def _iter_response_events(self, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         client = self.http_client or _new_http_client(self.timeout)
         owns_client = self.http_client is None
         scope = current_cancellation_scope()
-        unregister_callbacks: list[Any] = []
         try:
-            if scope is not None and owns_client:
-                close_client = getattr(client, "close", None)
-                if callable(close_client):
-                    unregister_callbacks.append(scope.register(close_client, "codex_responses_client.close"))
             retry_after_refresh = False
             with self._stream_once(client, body) as response:
-                if scope is not None:
-                    close_response = getattr(response, "close", None)
-                    if callable(close_response):
-                        unregister_callbacks.append(scope.register(close_response, "codex_responses_response.close"))
-                    if scope.is_cancelled():
-                        return
+                if scope is not None and scope.is_cancelled():
+                    return
                 if int(getattr(response, "status_code", 0) or 0) == 401:
                     if scope is not None and scope.is_cancelled():
                         return
@@ -289,12 +284,8 @@ class ChatCodexResponses(BaseChatModel):
                 return
             if retry_after_refresh:
                 with self._stream_once(client, body) as response:
-                    if scope is not None:
-                        close_response = getattr(response, "close", None)
-                        if callable(close_response):
-                            unregister_callbacks.append(scope.register(close_response, "codex_responses_retry_response.close"))
-                        if scope.is_cancelled():
-                            return
+                    if scope is not None and scope.is_cancelled():
+                        return
                     self._raise_for_status(response)
                     yield from _iter_sse_events(response, scope=scope)
         except Exception as exc:
@@ -304,11 +295,6 @@ class ChatCodexResponses(BaseChatModel):
             logger.warning("codex_sse: stream failed: %s", exc)
             raise
         finally:
-            for unregister in reversed(unregister_callbacks):
-                try:
-                    unregister()
-                except Exception:
-                    logger.debug("codex_sse: unregister cancellation callback failed", exc_info=True)
             if owns_client:
                 client.close()
 
@@ -336,7 +322,7 @@ class ChatCodexResponses(BaseChatModel):
     def _raise_for_status(self, response: Any) -> None:
         status_code = int(getattr(response, "status_code", 0) or 0)
         if status_code < 200 or status_code >= 300:
-            raise RuntimeError(f"Codex Responses request failed with HTTP {status_code}: {_safe_response_text(response)}")
+            raise _request_failed(status_code, response, self.model_name)
 
     def _post_once(self, body: dict[str, Any]) -> Any:
         client = self.http_client or _new_http_client(self.timeout)
@@ -375,16 +361,51 @@ class ChatCodexResponses(BaseChatModel):
 
 
 def _new_http_client(timeout: float) -> Any:
-    import httpx
+    # Its requests register with Stop as they start; Stop shuts their sockets down (``cancellable_http``).
+    from row_bot.providers.transports.cancellable_http import cancellable_http_client
 
-    return httpx.Client(timeout=timeout)
+    return cancellable_http_client(timeout=timeout)
 
 
 def _responses_url(base_url: str) -> str:
     return f"{str(base_url or CODEX_RESPONSES_BASE_URL).rstrip('/')}/responses"
 
 
+# "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.", "Model not found", "The model
+# `x` does not exist": the words follow "model" or its name at once, so a refusal of a setting isn't taken for one.
+_UNAVAILABLE_MODEL = re.compile(
+    r"\bmodel\b\s*(?:['\"`][^'\"`]*['\"`]\s*)?(?:is\s+)?(?:not supported|unsupported|not available|does not exist|not found)",
+    re.IGNORECASE,
+)
+
+
+def _request_failed(status_code: int, response: Any, model: str) -> RuntimeError:
+    detail = _safe_response_text(response)
+    if status_code in {400, 404} and _UNAVAILABLE_MODEL.search(detail):
+        # ChatGPT stops serving a model to plans; a workflow chosen with it says so plainly (B394).
+        return RuntimeError(f"{model} isn't available with your ChatGPT plan. Choose another model. "
+                            f"ChatGPT said: {detail}")
+    return RuntimeError(f"Codex Responses request failed with HTTP {status_code}: {detail}")
+
+
 def _safe_response_text(response: Any) -> str:
+    """ChatGPT's own reason for a failed request; a streamed answer's body is read first (B393)."""
+    try:
+        if getattr(response, "is_stream_consumed", True) is False and hasattr(response, "read"):
+            response.read()
+    except Exception:
+        pass
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])[:300]
+        for key in ("detail", "message"):
+            if isinstance(payload.get(key), str) and payload[key]:
+                return payload[key][:300]
     try:
         return str(getattr(response, "text", "") or "")[:300]
     except Exception:

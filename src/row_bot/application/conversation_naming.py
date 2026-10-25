@@ -22,6 +22,7 @@ import sqlite3
 import threading
 from contextlib import closing
 from typing import Any
+from row_bot.application.live_updates import publishes as _publishes_live
 
 _LOG = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ def _automatic(conversation_id: str) -> bool:
             and agent_runs.get_agent_run_for_thread(conversation_id) is None)
 
 
+@_publishes_live("conversations")
 def _write(conversation_id: str, name: str, *, replacing: str | None = None) -> bool:
     """Write an automatic name unless the person has named the conversation; with
     ``replacing``, only while the name is still the one read before the title call."""

@@ -357,7 +357,7 @@ def test_compaction_strips_thinking_from_completed_kept_turns_but_not_from_a_too
     monkeypatch.setattr(agent, "_emit_context_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(agent, "_record_compaction_event", lambda *args, **kwargs: {})
     monkeypatch.setattr("row_bot.threads.save_summary_state_cas",
-                        lambda thread_id, state, expected_revision: saved.append(dict(state)) or True)
+                        lambda thread_id, state, expected_revision, **_kwargs: saved.append(dict(state)) or True)
     monkeypatch.setattr(agent, "_choose_compaction_boundary", lambda inputs, previous: 2)
     _summarizer(monkeypatch)
     token = agent._current_thread_id_var.set("thread-thinking")
@@ -391,3 +391,57 @@ def test_thinking_is_never_stripped_inside_the_turn_in_progress() -> None:
 
     assert _thinking_of(request, "a2") == []
     assert _thinking_of(request, "a3") == ["t3"]
+
+
+# ── B418: a tool call the local runtime couldn't parse ──────────────────────────────────────────
+
+class _Unparsed(FakeMessagesListChatModel):
+    """Fails the first *failures* requests as Ollama does when it can't parse the model's tool call."""
+
+    failures: int = 1
+    error: str = "XML syntax error on line 14: element <function> closed by </parameter> (status code: -1)"
+    seen: list = []
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.seen.append(list(messages))
+        if len(self.seen) <= self.failures:
+            raise RuntimeError(self.error)
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+
+@pytest.mark.parametrize("error", [
+    "XML syntax error on line 14: element <function> closed by </parameter> (status code: -1)",
+    "error parsing tool call: raw='{\"name\": \"web_search\"', err=unexpected end of JSON input (status code: 500)",
+])
+def test_a_tool_call_the_runtime_could_not_parse_is_asked_for_once_more(monkeypatch, error) -> None:
+    conversation = AgentConversation(agent, monkeypatch, context_window=65_536)
+    conversation.say("Keep me on track for a 10k.")
+    model = _Unparsed(responses=[AIMessage(content="Here is a plan.", id="ai-answer")], error=error, seen=[])
+
+    answer = _model_call(conversation, model)
+
+    assert answer.content == "Here is a plan."
+    first, again = model.seen
+    assert first == again  # the same request: nothing compacted or changed
+
+
+def test_a_second_unparsed_tool_call_stands(monkeypatch) -> None:
+    conversation = AgentConversation(agent, monkeypatch, context_window=65_536)
+    conversation.say("Keep me on track for a 10k.")
+    model = _Unparsed(responses=[AIMessage(content="unused")], failures=5, seen=[])
+
+    with pytest.raises(RuntimeError, match="XML syntax error"):
+        _model_call(conversation, model)
+
+    assert len(model.seen) == 2
+
+
+def test_a_provider_that_is_down_is_not_asked_again(monkeypatch) -> None:
+    conversation = AgentConversation(agent, monkeypatch, context_window=65_536)
+    conversation.say("Hello")
+    model = _Unparsed(responses=[AIMessage(content="unused")], error="Connection refused (status code: -1)", seen=[])
+
+    with pytest.raises(RuntimeError, match="Connection refused"):
+        _model_call(conversation, model)
+
+    assert len(model.seen) == 1

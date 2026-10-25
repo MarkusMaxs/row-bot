@@ -151,6 +151,8 @@ ROW_BOT_PUBLIC_URL=https://row-bot.example.com
 ROW_BOT_ALLOWED_HOSTS=row-bot.example.com
 ROW_BOT_TRUSTED_PROXY_CIDRS=127.0.0.1/32
 ROW_BOT_WORKERS=1
+# Optional: turn install stats off on this server (see Privacy And Safety).
+ROW_BOT_INSTALL_COUNT=0
 ```
 
 Use the address that actually connects from the proxy to Row-Bot. Do not trust every private address, a whole Docker bridge range, or caller-supplied forwarding headers. Do not buffer the event stream (`/api/v1/events`, `text/event-stream`) and terminate remote traffic with HTTPS. The reviewed [Caddy example](https://github.com/siddsachar/row-bot/blob/main/deploy/reverse-proxy/Caddyfile.example) and [systemd service](https://github.com/siddsachar/row-bot/blob/main/deploy/systemd/row-bot.service.example) are starting points, not substitutes for operator-owned firewall, rate-limit, logging, backup, and recovery policy.

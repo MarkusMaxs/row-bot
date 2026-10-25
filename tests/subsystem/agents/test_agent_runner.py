@@ -801,7 +801,8 @@ def test_builtin_read_only_profile_does_not_inherit_write_heavy_tools(tmp_path, 
         "Review this.",
         parent_thread_id=parent_thread_id,
         profile="review",
-        enabled_tool_names=["filesystem", "row_bot_status", "gmail", "image_gen", "agents"],
+        enabled_tool_names=["filesystem", "row_bot_status", "gmail", "outlook_mail", "outlook_calendar", "image_gen",
+                            "agents"],
         wait=True,
     )
 

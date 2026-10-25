@@ -223,23 +223,66 @@ def test_a_guide_left_as_an_index_line_reads_in_full_through_skill_load(local_mo
     graph, _on_demand = local_model.graph()
     bound = graph.tools.tools_by_name
 
-    assert "filesystem_guide" in bound["skill_search"].description
+    # Listed once, in the prompt's guide index, not again in skill_search's catalog.
+    assert "filesystem_guide" not in bound["skill_search"].description
     loaded = json.loads(bound["skill_load"].invoke(
         {"name": "filesystem_guide"}, config={"configurable": {"thread_id": local_model.thread_id}}))
     assert loaded["ok"] is True and loaded["instructions"].strip()
 
 
-def test_a_window_above_32k_keeps_todays_prompt(local_model):
+def test_a_large_window_keeps_the_whole_prompt_with_guides_as_an_index_and_rare_tools_on_demand(local_model):
     local_model.window = LARGE
     prepared = local_model.request([HumanMessage(content="hello", id="person-1")])
     root = str(next(m for m in prepared.messages if isinstance(m, SystemMessage)).content)
-    bound = prepared.graph.tools.tools_by_name
+    graph, on_demand = local_model.graph()
+    bound = graph.tools.tools_by_name
 
     from row_bot.prompts import _AGENT_GUIDELINES
 
     assert root.endswith(_AGENT_GUIDELINES)  # the whole root prompt, TASKS and MEMORY included
     assert STATIC_SELF_KNOWLEDGE[:40] in prepared.system
-    assert "TOOL GUIDES (index)" not in prepared.system
-    assert {"delegate_work", "row_bot_status", "create_chart", "tracker_log"} <= set(bound)
-    assert "tool_search" not in bound  # nothing is deferred on a large window
+    # Guides are an index read with skill_load (WP A6), not their full text on every call.
+    assert "TOOL GUIDES (index)" in prepared.system and "skill_load(name)" in prepared.system
+    assert "- agents_guide (agents):" in prepared.system
+    assert "DELEGATING:" not in prepared.system
+    # What Row-Bot uses unasked stays bound; rarely used tools are offered on demand.
+    assert {"delegate_work", "row_bot_status", "create_chart", "page_create", "ask_person", "start_process",
+            "task_create", "save_memory", "tool_search", "tool_invoke"} <= set(bound)
+    for rare in ("tracker_log", "edit_video", "custom_tool_builder", "agent_profile_save", "row_bot_create_skill"):
+        assert rare not in bound
+        assert rare in on_demand
     assert "Current state:" in str(prepared.messages[-1].content)
+
+
+def test_a_large_window_reads_a_guide_in_full_through_skill_load(local_model):
+    local_model.window = LARGE
+    graph, _on_demand = local_model.graph()
+    bound = graph.tools.tools_by_name
+
+    loaded = json.loads(bound["skill_load"].invoke(
+        {"name": "agents_guide"}, config={"configurable": {"thread_id": local_model.thread_id}}))
+    assert loaded["ok"] is True and "DELEGATING:" in loaded["instructions"]
+
+
+def test_a_guide_with_safety_rules_is_sent_in_full_and_the_rest_as_index_lines(local_model):
+    from row_bot.skills import get_tool_guides_prompt
+
+    text = get_tool_guides_prompt(["browser", "computer_use", "agents", "chart"])
+
+    assert "you never type a password" in text  # browser and computer use: read before acting
+    assert "COMPUTER USE WORKFLOW" in text
+    assert "- agents_guide (agents):" in text and "- chart_guide (chart):" in text
+    assert "DELEGATING:" not in text
+    assert "- browser_guide" not in text  # sent in full, so not in the index too
+
+
+def test_a_local_model_up_to_128k_offers_self_management_on_demand_and_a_cloud_one_binds_it(local_model, monkeypatch):
+    local_model.window = 131_072
+    graph, on_demand = local_model.graph()
+    assert "row_bot_status" not in graph.tools.tools_by_name and "row_bot_status" in on_demand
+    assert "page_create" in graph.tools.tools_by_name  # pages are bound on every window
+
+    monkeypatch.setattr(local_model.agent, "is_cloud_model", lambda model: True)
+    local_model.agent.clear_agent_cache()
+    graph, on_demand = local_model.graph()
+    assert "row_bot_status" in graph.tools.tools_by_name and "row_bot_status" not in on_demand

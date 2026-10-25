@@ -1220,10 +1220,10 @@ export default function ProviderConfiguration(
               {modelAction ? (
                 <>
                   <option value="provider.model.pin">
-                    Pin model to picker
+                    List model in a picker
                   </option>
                   <option value="provider.model.unpin">
-                    Remove model from picker
+                    Take model out of a picker
                   </option>
                 </>
               ) : (
@@ -1293,7 +1293,7 @@ export default function ProviderConfiguration(
                 </Select>
               </Field>
               <p>
-                Provider identity is preserved. Pinning does not select a
+                Provider identity is preserved. Listing does not select a
                 default or prove runtime readiness.
               </p>
             </>
@@ -1495,7 +1495,7 @@ export default function ProviderConfiguration(
               )}
               {operation === 'provider.endpoint.delete' && (
                 <p>
-                  Removes this endpoint and its exact model-picker pins.
+                  Removes this endpoint and its models from the model lists.
                   Credential recovery bytes and global model selections are
                   retained; unavailable selections require an explicit new
                   choice.
@@ -1513,7 +1513,8 @@ export default function ProviderConfiguration(
           )}
           {operation === 'provider.endpoint.delete' && state.reviewed && (
             <p role="status">
-              Confirm removal of this endpoint and its model-picker pins.
+              Confirm removal of this endpoint and its models from the model
+              lists.
             </p>
           )}
           <div className="actions">
@@ -1532,9 +1533,9 @@ export default function ProviderConfiguration(
                   : operation === 'provider.endpoint.refresh'
                     ? 'Refresh models'
                     : operation === 'provider.model.pin'
-                      ? 'Pin model'
+                      ? 'List model'
                       : operation === 'provider.model.unpin'
-                        ? 'Unpin model'
+                        ? 'Take model out'
                         : state.existing
                           ? 'Save endpoint'
                           : 'Create endpoint'}

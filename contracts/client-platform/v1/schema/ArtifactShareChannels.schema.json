@@ -26,6 +26,33 @@
       ],
       "title": "ArtifactShareChannel",
       "type": "object"
+    },
+    "ArtifactShareXAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[0-9]{1,20}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "maxLength": 80,
+          "title": "Name",
+          "type": "string"
+        },
+        "username": {
+          "pattern": "^[A-Za-z0-9_]{1,50}$",
+          "title": "Username",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "username"
+      ],
+      "title": "ArtifactShareXAccount",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -54,6 +81,14 @@
       "pattern": "^[a-f0-9]{64}$",
       "title": "Revision",
       "type": "string"
+    },
+    "x_accounts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactShareXAccount"
+      },
+      "maxItems": 16,
+      "title": "X Accounts",
+      "type": "array"
     }
   },
   "required": [

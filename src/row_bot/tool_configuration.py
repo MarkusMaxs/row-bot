@@ -62,8 +62,18 @@ def _constant(_value):
 
 
 def read_saved(path: Path | None = None) -> SavedToolConfiguration:
-    """Read exact bounded bytes through the existing native directory guard."""
+    """Read exact bounded bytes through the existing native directory guard.
+
+    It holds the writers' lock: a save moves the old file aside before the new one takes its name, and a
+    read in between saw no file or a changed one (a 503 handshake, B408). Holding it, a read sees the file
+    before or after a save, and never holds it open while a save moves it (Windows refuses that).
+    """
     path = (path or configuration_path()).absolute()
+    with LOCK:
+        return _read_saved(path)
+
+
+def _read_saved(path: Path) -> SavedToolConfiguration:
     try:
         if not path.parent.exists():
             return SavedToolConfiguration({}, "missing", False)

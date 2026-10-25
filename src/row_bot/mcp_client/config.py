@@ -19,6 +19,7 @@ import uuid
 import sys
 from typing import Any, Callable, Iterator
 
+from row_bot.application.live_updates import publishes as _publishes_live
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.mcp_client.logging import log_event
 from row_bot.mcp_client import targets
@@ -155,6 +156,7 @@ def read_saved_document(path, *, configuration: bool = True) -> SavedMcpConfigur
             raise McpConfigurationError("mcp_configuration_unavailable") from None
 
 
+@_publishes_live("monitor")  # An app on or off, signed in or removed changes what needs the person.
 def publish_saved_configuration(document: dict[str, Any], *, expected_digest: str,
                                 command_id: str, persist_recovery: Callable,
                                 validate: Callable[[], None] = lambda: None,

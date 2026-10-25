@@ -41,8 +41,11 @@ def sharing_channels(cursor: str | None = None) -> dict:
                 raise ValueError
         except (ValueError, TypeError):
             raise ClientPlatformError("cursor_expired") from None
+    from row_bot import x_accounts
     return {"items": items[offset:offset + 50], "revision": revision,
-            "next_cursor": f"{revision}:{offset + 50}" if offset + 50 < len(items) else None}
+            "next_cursor": f"{revision}:{offset + 50}" if offset + 50 < len(items) else None,
+            "x_accounts": [{"id": account.id, "username": account.username, "name": account.name}
+                           for account in x_accounts.listed()]}
 
 
 def execute_sharing(service: Any, command: dict, conversation_id: str, *, owner_id: str,

@@ -4,6 +4,7 @@ person's own OAuth app, whose secret stays in the keychain. Fakes only; nothing 
 # ruff: noqa: F811 -- shared isolated fixtures
 import json
 from pathlib import Path
+import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -206,6 +207,43 @@ def test_a_sign_in_left_past_its_time_stops_the_setup_and_connecting_again_signs
         until_waiting(again)  # A new sign-in page opens.
     finally:
         plans.cancel(context(), again)
+
+
+def test_a_sign_in_whose_wait_ran_out_reads_as_ended_while_its_end_is_still_being_recorded(hosted, monkeypatch):
+    """B408 (macOS CI, the test above): the sign-in's own wait ran out just as the person came back. Its
+    thread had marked it expired but not yet recorded that, and the app's page said "Finishing your last
+    change"."""
+    hosted(dcr=True)
+    _, plan = api.read_item(owner_id="owner", item_id=item_id())
+    first = str(uuid4())
+    api.start_plan(context(), plan_id=first, item_id=item_id(), digest=plan["digest"])
+    until_waiting(first)
+    flow = waiting_flow()
+    recording, release = threading.Event(), threading.Event()
+    complete = admissions.complete_command
+
+    def slow(owner_id, key, result):
+        if key == flow.command_id and threading.current_thread().name == "mcp-sign-in":
+            recording.set()  # The sign-in's thread is about to record its end...
+            release.wait(5)  # ...and is held there while the person reads the page.
+        return complete(owner_id, key, result)
+    monkeypatch.setattr(admissions, "complete_command", slow)
+    flow.created -= client_mcp_auth._TTL + 1  # Five minutes pass without the person finishing...
+    flow.event.set()  # ...and the sign-in's own wait ends then, with no answer from the browser.
+    try:
+        assert recording.wait(5) and flow.state == "expired"
+        found, fresh = api.read_item(owner_id="owner", item_id=item_id())  # They come back to the app's page.
+        assert not {b["code"] for b in found["entry"]["blockers"]} & RECOVERING
+        assert found["entry"]["next_action"]["kind"] == "continue_setup" and fresh is not None
+        assert not config.configuration_recovery_required()
+    finally:
+        release.set()
+    for _ in range(200):
+        if flow.finished:
+            break
+        time.sleep(0.02)
+    assert flow.finished and flow.state == "expired"
+    assert plans.read_plan(context(), first)["state"] == "expired"
 
 
 def test_a_sign_in_whose_own_wait_runs_out_ends_as_expired_not_failed(hosted):

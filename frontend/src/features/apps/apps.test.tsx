@@ -877,6 +877,76 @@ it('adds from a pasted link without fetching anything, then opens what it found'
   );
 });
 
+it('saving access says Saving…, then the page shows the saved access with no setup steps (B346)', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const installed = entry({
+    id: 'mcp:abc',
+    installed: true,
+    enabled: true,
+    lifecycle: 'installed',
+    readiness: 'ready',
+    next_action: { kind: 'none', label: '' },
+  });
+  const readOnly = {
+    ...access,
+    preset: 'read_only' as const,
+    tools: access.tools.map((tool) =>
+      tool.effect === 'read_only' ? tool : { ...tool, state: 'off' as const },
+    ),
+  };
+  const shown = (value: IntegrationDetail['about']['access']) =>
+    detail({
+      entry: installed,
+      plan: null,
+      about: { ...detail().about, access: value },
+    });
+  const saving = plan({
+    plan_id: 'b1b1b1b1-0000-4000-8000-000000000046',
+    item_id: 'mcp:abc',
+    intent: 'access',
+    state: 'running',
+    current_step: 'enable',
+    steps: [
+      step('consent', 'done'),
+      step('test', 'done'),
+      step('access', 'done'),
+      step('enable', 'running'),
+    ],
+  });
+  const controller = {
+    integrationDetail: vi
+      .fn()
+      .mockResolvedValueOnce(shown(access))
+      .mockResolvedValue(shown(readOnly)),
+    reviewInstallPlan: vi.fn(async () => plan({ intent: 'access' })),
+    startInstallPlan: vi.fn(async () => saving),
+    installPlan: vi.fn(async () => ({
+      ...saving,
+      state: 'completed' as const,
+      message: 'Saved.',
+    })),
+  };
+  show('/settings/apps/item?id=mcp%3Aabc', controller);
+  expect(
+    await screen.findByText('3 of 3 actions on · Ask before changes'),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose' }));
+  const sheet = await screen.findByRole('dialog', {
+    name: 'Change what Notion can do',
+  });
+  fireEvent.click(within(sheet).getByRole('radio', { name: /Read only/ }));
+  fireEvent.click(within(sheet).getByRole('button', { name: 'Save' }));
+  // While it saves: one status, never a setup stepper.
+  expect(await screen.findByText('Saving…')).toBeVisible();
+  expect(screen.queryByRole('list', { name: 'Setup steps' })).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(800));
+  expect(
+    await screen.findByText('1 of 3 actions on · Read only'),
+  ).toBeVisible();
+  expect(screen.queryByText('Saving…')).toBeNull();
+  expect(screen.queryByRole('list', { name: 'Setup steps' })).toBeNull();
+});
+
 it('keeps a custom access policy as it is when the person saves without changing it', async () => {
   const onAllow = vi.fn();
   render(
@@ -1769,6 +1839,43 @@ it('names a built-in way as itself, not as the app it is one way to', async () =
     ),
   ).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Try it' })).toBeNull();
+});
+
+it('says an Outlook account works through the person’s own Microsoft app, never a key (U8)', async () => {
+  const outlook = entry({
+    id: 'builtin:account:microsoft',
+    kind: 'builtin',
+    name: 'Outlook account',
+    description: 'Outlook mail and calendar through your own Microsoft app.',
+    app: {
+      id: 'outlook',
+      name: 'Outlook',
+      publisher: 'Microsoft',
+      category: 'productivity',
+      icon: 'si:microsoftoutlook',
+      verified: true,
+      featured_rank: 7,
+    },
+    source: 'builtin',
+    method: 'built_in',
+    publisher: 'Row-Bot',
+    installed: true,
+    enabled: true,
+    lifecycle: 'installed',
+    readiness: 'ready',
+    next_action: { kind: 'none', label: '' },
+  });
+  show('/settings/apps/item?id=builtin%3Aaccount%3Amicrosoft', {
+    integrationDetail: vi.fn(async () =>
+      detail({ entry: outlook, plan: null }),
+    ),
+  });
+  expect(
+    await screen.findByText(
+      'Part of Row-Bot: it works through your own Microsoft app and sign-in.',
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText(/sign-in or key/)).toBeNull();
 });
 
 it('sets up a built-in way in its own settings, scoped to it, with no plan of its own', async () => {

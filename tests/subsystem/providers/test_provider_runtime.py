@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 import row_bot.providers.runtime as runtime
-from row_bot.cancellation import CancellationScope, use_cancellation_scope
+from tests.helpers.fake_provider_http import assert_stop_ends_requests_of
 from row_bot.agent_budget import new_execution_budget
 from row_bot.providers.errors import ProviderErrorKind, normalize_provider_error
 from row_bot.providers.transports.anthropic_cancellable import CancellableChatAnthropic
@@ -23,31 +23,6 @@ class _FakeChatOpenAI:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.calls.append(kwargs)
-
-
-class _CloseCountingStream(httpx.SyncByteStream):
-    def __init__(self) -> None:
-        self.close_calls = 0
-
-    def __iter__(self):
-        return iter(())
-
-    def close(self) -> None:
-        self.close_calls += 1
-
-
-def _assert_sync_client_registered_with_cancellation_scope(client: httpx.Client) -> None:
-    stream = _CloseCountingStream()
-    response = httpx.Response(200, request=httpx.Request("GET", "https://example.test"), stream=stream)
-    scope = CancellationScope()
-
-    with use_cancellation_scope(scope):
-        for hook in client.event_hooks["response"]:
-            hook(response)
-
-    assert stream.close_calls == 0
-    scope.cancel("test")
-    assert stream.close_calls == 1
 
 
 def test_openai_gpt5_family_uses_responses_api(monkeypatch):
@@ -94,7 +69,7 @@ def test_anthropic_provider_constructor_is_preserved(monkeypatch):
     assert model.effort is None
     assert model.thinking is None
     assert "http_client" not in model.model_kwargs
-    _assert_sync_client_registered_with_cancellation_scope(model._client._client)
+    assert_stop_ends_requests_of(model._client._client)
 
 
 def test_google_provider_constructor_is_preserved(monkeypatch):
@@ -298,7 +273,7 @@ def test_openrouter_provider_constructor_is_preserved(monkeypatch):
     assert model.model_name == "anthropic/claude-sonnet-4"
     assert model.openrouter_api_key.get_secret_value() == "openrouter-key"
     assert "reasoning" not in model.model_kwargs
-    _assert_sync_client_registered_with_cancellation_scope(model.client.sdk_configuration.client)
+    assert_stop_ends_requests_of(model.client.sdk_configuration.client)
 
 
 def _answer_openrouter_requests(monkeypatch) -> list[httpx.Request]:
@@ -958,7 +933,7 @@ def test_minimax_provider_creates_chat_anthropic_with_minimax_base_url(monkeypat
     assert model.anthropic_api_key.get_secret_value() == "test-minimax-key"
     assert "http_client" not in model.model_kwargs
     assert model.anthropic_api_url == "https://api.minimax.io/anthropic"
-    _assert_sync_client_registered_with_cancellation_scope(model._client._client)
+    assert_stop_ends_requests_of(model._client._client)
 
 
 def test_atlascloud_provider_creates_openai_compatible_client(monkeypatch):
@@ -2071,8 +2046,9 @@ def test_agent_graph_installs_custom_tool_validation_repair(tmp_path, monkeypatc
 
     assert isinstance(graph.tools, ToolNode)
     # read_tool_output pages through results shortened when created; it is bound with every tool set.
-    assert set(graph.tools.tools_by_name) == {"duckduckgo", "read_tool_output"}
+    assert set(graph.tools.tools_by_name) == {"duckduckgo", "read_tool_output", "ask_person"}
     assert "ROW_BOT_TOOL_VALIDATION_RETRY_REQUIRED" in graph.tools.tools_by_name["read_tool_output"].invoke({})
+    assert "ROW_BOT_TOOL_VALIDATION_RETRY_REQUIRED" in graph.tools.tools_by_name["ask_person"].invoke({})
     bound_tool = graph.tools.tools_by_name["duckduckgo"]
     # Profile enforcement copies the tool; the bound schema and validation
     # repair must survive that wrapper and still dispatch valid arguments.
@@ -2101,7 +2077,7 @@ def test_openai_pre_model_trim_keeps_standard_skill_injections(tmp_path, monkeyp
 
     monkeypatch.setattr(self_knowledge, "build_static_self_knowledge_block", lambda: "SELF_SENTINEL")
     monkeypatch.setattr(self_knowledge, "build_dynamic_self_knowledge_block", lambda: "")
-    monkeypatch.setattr(skills, "get_skills_prompt", lambda *args, **kwargs: "SKILL_SENTINEL")
+    monkeypatch.setattr(skills, "get_tool_guides_prompt", lambda *args, **kwargs: "SKILL_SENTINEL")
     monkeypatch.setattr(plugin_registry, "get_skills_prompt", lambda *args, **kwargs: "PLUGIN_SENTINEL")
 
     agent.set_active_model_override("gpt-4o")

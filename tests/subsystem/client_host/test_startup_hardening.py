@@ -163,10 +163,13 @@ def test_preflight_handles_real_broken_optional_package_subprocess(tmp_path):
 
 def test_auto_start_channels_are_scheduled_in_background(monkeypatch):
     app_module = importlib.import_module("row_bot.app")
+    from row_bot.application import live_updates
     from row_bot.channels import registry as channel_registry
 
     invalidations: list[str] = []
     monkeypatch.setattr(channel_registry, "clear_agent_cache_if_loaded", lambda: invalidations.append("clear"))
+    live = live_updates.LiveUpdates()
+    monkeypatch.setattr(live_updates, "live_updates", live)
 
     class FakeChannel:
         name = "fake"
@@ -188,6 +191,8 @@ def test_auto_start_channels_are_scheduled_in_background(monkeypatch):
         await task
         assert channel.started is True
         assert invalidations == ["clear"]
+        # Monitor hears at once that a channel set to start with Row-Bot is running (B408).
+        assert live.frame()["topics"]["monitor"] >= 1
 
     asyncio.run(run_check())
 
@@ -851,7 +856,7 @@ def test_direct_native_mode_writes_window_state(tmp_path, monkeypatch):
 
     def fake_open_window(port, control_port=None, *, client_v2=True):
         opened.append((port, control_port, client_v2))
-        return SimpleNamespace(pid=2222)
+        return SimpleNamespace(pid=2222, wait=lambda: 0)
 
     monkeypatch.setattr(launcher, "_open_window", fake_open_window)
     args = SimpleNamespace(
@@ -928,7 +933,7 @@ def test_direct_mode_honours_saved_native_preference(tmp_path, monkeypatch):
 
     def fake_open_window(port, control_port=None, *, client_v2=True):
         opened.append((port, control_port, client_v2))
-        return SimpleNamespace(pid=2223)
+        return SimpleNamespace(pid=2223, wait=lambda: 0)
 
     monkeypatch.setattr(launcher, "_open_window", fake_open_window)
     args = SimpleNamespace(
@@ -1117,3 +1122,30 @@ def test_windows_tray_keeps_pystray_backend_and_menu(monkeypatch):
     # Restart to Update shows only while an update is ready.
     assert items[2].kwargs["visible"](items[2]) is False
     assert events[-2:] == ["startup", ("icon_run", None)]
+
+
+def test_a_keychain_dialog_at_startup_never_stops_the_server_answering(monkeypatch):
+    """B422: reading provider secrets can wait on a keychain dialog; the event loop runs on meanwhile."""
+    import threading
+
+    app_module = importlib.import_module("row_bot.app")
+    dialog_answered = threading.Event()
+    calls: list[str] = []
+
+    def keychain_waits() -> bool:
+        # Answered by the event loop (call_soon below): only possible while the loop keeps running.
+        calls.append("cloud" if dialog_answered.wait(timeout=5) else "loop blocked")
+        return True
+
+    monkeypatch.setattr(app_module, "is_cloud_available", keychain_waits)
+    monkeypatch.setattr(app_module, "get_current_model", lambda: calls.append("model"))
+
+    async def run_check() -> None:
+        startup = asyncio.create_task(app_module._load_cached_model_catalog(lambda status: calls.append(status)))
+        await asyncio.sleep(0)
+        asyncio.get_running_loop().call_soon(dialog_answered.set)
+        await startup
+
+    asyncio.run(run_check())
+
+    assert calls == ["cloud", "☁️ Loading cached model catalog...", "model"]

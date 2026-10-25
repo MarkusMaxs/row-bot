@@ -1,22 +1,60 @@
 import { useEffect, useState } from 'react';
-import { Power, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react';
-import type { ApprovalSetup, ApprovalView } from '../../api/types';
+import {
+  Folder,
+  HatGlasses,
+  Power,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+} from 'lucide-react';
+import type {
+  ApprovalAnswer,
+  ApprovalQuestion,
+  ApprovalSetup,
+  ApprovalView,
+} from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
 import { useOverlay } from '../../ui/overlays';
 import { Button, Hint, Kbd, Skeleton } from '../../ui/primitives';
 import { absoluteTime, humanizeToken, relativeTime } from '../../ui/format';
 import FolderSetupCard from './FolderSetupCard';
+import { BrowserThumbnail } from '../browser/BrowserThumbnail';
+import { ComputerThumbnail } from './ComputerStep';
+import { requestBrowserPane } from '../browser/open-pane';
+import QuestionCard from './QuestionCard';
+import XPostDetails from './XPostDetails';
 import { AppIcon } from '../apps/parts';
-import { WaitingSince } from './InPlaceApproval';
+import { WaitingSince } from './waiting-since';
 import { readPendingApprovalsNow } from './pending-approvals';
 import {
   approvalAction,
+  rawToolName,
   approvalQuestion,
   keyArgument,
   plainApprovalReason,
   readableValue,
 } from './tool-activity';
+
+// The Ctrl ↵ hint only where a hardware keyboard is likely: a fine pointer on a wide layout, never a phone
+// or a touch screen (B389). The shortcut itself works wherever a keyboard is.
+const KEYBOARD_LAYOUT = '(pointer: fine) and (min-width: 641px)';
+function useKeyboardLayout() {
+  const read = () =>
+    typeof matchMedia === 'function'
+      ? matchMedia(KEYBOARD_LAYOUT).matches
+      : false;
+  const [keyboard, setKeyboard] = useState(read);
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return;
+    const media = matchMedia(KEYBOARD_LAYOUT);
+    const changed = () => setKeyboard(media.matches);
+    media.addEventListener('change', changed);
+    changed();
+    return () => media.removeEventListener('change', changed);
+  }, []);
+  return keyboard;
+}
 
 type Hint_ = {
   action_label?: string;
@@ -25,6 +63,8 @@ type Hint_ = {
   setup?: ApprovalSetup | null;
   reviewer_reason?: string;
   question?: string;
+  questions?: ApprovalQuestion[];
+  memory_text?: string;
 };
 
 /** Under Auto: why the reviewer asked the person rather than approving it (quiet, one line). */
@@ -36,6 +76,11 @@ function ReviewerNote({ reason }: { reason?: string }) {
       The reviewer asked you: {reason}
     </small>
   );
+}
+
+/** An action in Row-Bot's browser ("Browser Click"): its card shows the page. */
+function browserAction(label: string | undefined) {
+  return /^browser[ _]/i.test(label ?? '');
 }
 
 /** A notice's approval that is no longer waiting. */
@@ -52,10 +97,12 @@ const RISK: Record<string, string> = {
   critical: 'Critical risk',
 };
 
-/** The server's scope sentences, in the card's words. */
-function plainScope(scope: string | null | undefined): string {
+/** What one approval lets happen, in the card's words: "This command only." (U7). */
+function plainScope(scope: string | null | undefined, action: string): string {
   if (!scope || /^Only this requested action will be resolved\.?$/.test(scope))
-    return 'Only this action.';
+    return /\bcommand\b/i.test(action)
+      ? 'This command only.'
+      : 'This action only.';
   const together =
     /^(\d+) requested actions will be resolved together\.?$/.exec(scope);
   return together ? `These ${together[1]} actions, together.` : scope;
@@ -91,6 +138,7 @@ function fieldsWritten(view: ApprovalView): boolean {
 function ApprovalDetails({ view }: { view: ApprovalView }) {
   const risk = RISK[view.risk_class ?? ''];
   const reason = reasonWords(view);
+  const action = approvalAction(view.action_label || '', view.app);
   return (
     <div className="approval-detail stack">
       <p className="approval-detail-reason">
@@ -98,15 +146,33 @@ function ApprovalDetails({ view }: { view: ApprovalView }) {
       </p>
       <dl>
         <dt>Action</dt>
-        <dd>{approvalAction(view.action_label || '', view.app)}</dd>
+        <dd>{action}</dd>
+        {view.folder && (
+          // By the folder's name, as Settings names it; never its path.
+          <>
+            <dt>Runs in</dt>
+            <dd className="approval-detail-folder">
+              <Folder size={14} aria-hidden />
+              {view.folder}
+            </dd>
+          </>
+        )}
+        {rawToolName(view.action_label || '') && (
+          <>
+            <dt>Tool</dt>
+            <dd>
+              <code>{rawToolName(view.action_label || '')}</code>
+            </dd>
+          </>
+        )}
         {risk && (
           <>
             <dt>Risk</dt>
             <dd>{risk}</dd>
           </>
         )}
-        <dt>Affects</dt>
-        <dd>{plainScope(view.scope)}</dd>
+        <dt>This approval covers</dt>
+        <dd>{plainScope(view.scope, action)}</dd>
         {view.reviewer_reason && (
           <>
             <dt>Reviewer</dt>
@@ -168,6 +234,13 @@ function editableTarget(target: EventTarget | null) {
  * "Turn on Web search?" with Turn on (⌘↵) / Not now, in place of sending
  * the person to Settings. A code folder the work needs is a folder card
  * (B277), answered only once the person has picked the folder.
+ *
+ * Row-Bot's question with options (N4) is a question card instead: answered
+ * or skipped, never approved.
+ *
+ * A memory write in an incognito chat (N11) asks "Save to memory? This chat
+ * is incognito." with the exact text, and Save / Don't save: only the person
+ * answers it, so it offers neither Auto nor the rest of the turn.
  */
 export default function ApprovalCard({
   id,
@@ -238,10 +311,45 @@ export default function ApprovalCard({
       setBusy(false);
     }
   }
+  /** A question's answers (one per question), or null to skip it. */
+  async function answer(answers: ApprovalAnswer[] | null) {
+    if (!view || busy || resolution) return;
+    setBusy(true);
+    try {
+      await controller.intent(
+        id,
+        'approval.resolve',
+        answers
+          ? { decision: 'approve', nonce: view.nonce, answers }
+          : { decision: 'reject', nonce: view.nonce },
+        view.revision,
+      );
+      setResolution(
+        answers
+          ? 'Answered. Row-Bot goes on with your answer.'
+          : 'Skipped. Row-Bot goes on with its recommendation.',
+      );
+      readPendingApprovalsNow(controller.pendingApprovals);
+      onResolved?.();
+    } catch (cause) {
+      setError(clientError(cause).message);
+      setBusy(false);
+    }
+  }
   const setup = view?.setup ?? hint?.setup ?? null;
-  // A folder card never answers without a picked folder, so no shortcut.
+  const questions = view?.questions?.length
+    ? view.questions
+    : (hint?.questions ?? []);
+  // A folder card never answers without a picked folder, and a question is
+  // never approved, so neither takes the shortcut.
   const folderCard = setup?.kind === 'folder' || setup?.kind === 'clone';
-  const ready = Boolean(view) && !busy && !resolution && !notice && !folderCard;
+  const ready =
+    Boolean(view) &&
+    !busy &&
+    !resolution &&
+    !notice &&
+    !folderCard &&
+    !questions.length;
   useEffect(() => {
     if (!ready) return;
     const key = (event: KeyboardEvent) => {
@@ -260,6 +368,7 @@ export default function ApprovalCard({
     document.addEventListener('keydown', key);
     return () => document.removeEventListener('keydown', key);
   });
+  const keyboard = useKeyboardLayout();
   const action = view?.action_label || hint?.action_label || '';
   // The app asking, shown as the catalog knows it.
   const app = view?.app ?? null;
@@ -269,15 +378,30 @@ export default function ApprovalCard({
     hint?.question ||
     approvalQuestion(view?.action_label || action, app);
   const risk = view?.risk_class || hint?.risk_class || 'unknown';
+  // A post on X (N7) shows exactly what goes out, and as whom, in place of the reason.
+  const post = view?.x_post ?? null;
   // The reason names every field already when an app's tool asks; the key argument would repeat one.
   const argument =
-    view && fieldsWritten(view) ? '' : keyArgument(view?.safe_argument_summary);
+    post || (view && fieldsWritten(view))
+      ? ''
+      : keyArgument(view?.safe_argument_summary);
   if (answered)
     return (
       <p className="approval-card-answered">
         <ShieldCheck aria-hidden />
         This request was answered.
       </p>
+    );
+  if (questions.length)
+    return (
+      <QuestionCard
+        questions={questions}
+        ready={Boolean(view) && !busy && !resolution}
+        resolution={resolution}
+        error={error}
+        notice={notice}
+        onSubmit={answer}
+      />
     );
   if (setup && (setup.kind === 'folder' || setup.kind === 'clone'))
     return (
@@ -290,6 +414,61 @@ export default function ApprovalCard({
         error={error}
         onDecide={(decision) => resolve(decision)}
       />
+    );
+  const memoryText = view?.memory_text || hint?.memory_text || '';
+  if (memoryText)
+    return (
+      <aside
+        className="approval-card"
+        data-kind="memory"
+        aria-label={`Approval required: ${question}`}
+      >
+        <span className="approval-card-icon" aria-hidden>
+          <HatGlasses />
+        </span>
+        <div className="approval-card-context">
+          <strong>{question}</strong>
+          <blockquote className="approval-card-memory">{memoryText}</blockquote>
+          {view?.requested_at && (
+            <small className="approval-card-meta">
+              <WaitingSince value={view.requested_at} />
+            </small>
+          )}
+        </div>
+        <div className="approval-card-actions">
+          <Button
+            disabled={!view || busy || Boolean(resolution)}
+            onClick={() => void resolve('reject')}
+          >
+            Don’t save
+          </Button>
+          <Button
+            variant="primary"
+            aria-keyshortcuts={notice ? undefined : 'Control+Enter Meta+Enter'}
+            disabled={!view || busy || Boolean(resolution)}
+            onClick={() => void resolve('approve')}
+          >
+            Save
+            {!notice && keyboard && (
+              <span aria-hidden className="approval-card-kbd">
+                <Kbd keys="Mod+Enter" />
+              </span>
+            )}
+          </Button>
+        </div>
+        {resolution && (
+          <p role="status" className="approval-card-status">
+            {resolution === 'Approval submitted.'
+              ? 'Saving to memory…'
+              : 'Not saved to memory.'}
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="approval-card-status">
+            {error}
+          </p>
+        )}
+      </aside>
     );
   if (setup)
     return (
@@ -323,9 +502,11 @@ export default function ApprovalCard({
             onClick={() => void resolve('approve')}
           >
             Turn on
-            <span aria-hidden className="approval-card-kbd">
-              <Kbd keys="Mod+Enter" />
-            </span>
+            {keyboard && (
+              <span aria-hidden className="approval-card-kbd">
+                <Kbd keys="Mod+Enter" />
+              </span>
+            )}
           </Button>
         </div>
         {resolution && (
@@ -348,7 +529,7 @@ export default function ApprovalCard({
       aria-label={
         view?.question || hint?.question
           ? `Approval required: ${question}`
-          : `Approval required for ${app?.tool || action || 'requested action'}${app ? ` in ${app.name}` : ''}`
+          : `Approval required for ${app?.tool || (rawToolName(action) ? approvalAction(action) : action) || 'requested action'}${app ? ` in ${app.name}` : ''}`
       }
       data-risk={risk}
     >
@@ -360,12 +541,25 @@ export default function ApprovalCard({
           <div className="approval-card-context">
             {app && <span className="approval-card-app">{app.name}</span>}
             <strong>{question}</strong>
-            <span
-              className="approval-card-reason"
-              data-fields={fieldsWritten(view) || undefined}
-            >
-              {reasonWords(view)}
-            </span>
+            {conversationId && browserAction(view.action_label) && (
+              <BrowserThumbnail
+                conversationId={conversationId}
+                onOpen={() => requestBrowserPane(conversationId)}
+              />
+            )}
+            {conversationId && view.action_label === 'Computer activity' && (
+              <ComputerThumbnail conversationId={conversationId} />
+            )}
+            {post ? (
+              <XPostDetails post={post} />
+            ) : (
+              <span
+                className="approval-card-reason"
+                data-fields={fieldsWritten(view) || undefined}
+              >
+                {reasonWords(view)}
+              </span>
+            )}
             {argument && (
               <code className="approval-card-argument">{argument}</code>
             )}
@@ -411,7 +605,7 @@ export default function ApprovalCard({
               onClick={() => void resolve('approve')}
             >
               Approve
-              {!notice && (
+              {!notice && keyboard && (
                 <span aria-hidden className="approval-card-kbd">
                   <Kbd keys="Mod+Enter" />
                 </span>

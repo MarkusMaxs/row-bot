@@ -114,9 +114,19 @@ const FILTERS: { value: Filter; label: string }[] = [
 /** Scheduled and Failed filter every saved workflow, read page by page. */
 const CLIENT_FILTER_PAGES = 20;
 
+/** A one-off ("Once") workflow that has run, with nothing left to run: done, not unscheduled (U17). */
+function ranOnce(task: TaskSummary) {
+  return Boolean(
+    task.at &&
+    !task.schedule &&
+    task.last_run &&
+    !parseTimestamp(task.next_run),
+  );
+}
+
 function matchesFilter(task: TaskSummary, filter: Filter) {
   if (filter === 'scheduled')
-    return task.enabled && Boolean(task.schedule || task.at);
+    return task.enabled && Boolean(task.schedule || task.at) && !ranOnce(task);
   if (filter === 'failed')
     return FAILED_RUN_STATUSES.has(
       String(task.last_status ?? '').toLowerCase(),
@@ -905,11 +915,13 @@ export function SavedTasks({
                         </>
                       ) : (
                         <span className="workflow-next-none">
-                          {task.schedule || task.at
-                            ? task.enabled
-                              ? 'Not scheduled'
-                              : 'Paused'
-                            : ''}
+                          {ranOnce(task)
+                            ? 'Done'
+                            : task.schedule || task.at
+                              ? task.enabled
+                                ? 'Not scheduled'
+                                : 'Paused'
+                              : ''}
                         </span>
                       )}
                     </span>
@@ -1104,6 +1116,24 @@ export default function TaskLibrary() {
     },
     [controller],
   );
+  // Your code folders, for a workflow's own folder (N9).
+  const loadFolders = useCallback(
+    async (signal?: AbortSignal) => {
+      const found: { id: string; name: string }[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await controller.library('workspace', cursor, signal);
+        found.push(
+          ...page.items
+            .filter((item) => item.available)
+            .map((item) => ({ id: item.resource_id, name: item.name })),
+        );
+        cursor = page.next_cursor ?? undefined;
+      } while (cursor && found.length < 500);
+      return found;
+    },
+    [controller],
+  );
   const quickEdits = useMemo(() => taskEdits(controller), [controller]);
   const deleteOwner = useRef<TaskCommandOwner<void>>({ pending: null });
   const duplicateOwner = useRef<TaskCommandOwner<string>>({ pending: null });
@@ -1126,19 +1156,39 @@ export default function TaskLibrary() {
     taskEditSessions?.subscribe ?? noTaskSubscription,
     taskEditSessions?.getSnapshot ?? noTaskSnapshot,
   );
-  // Overview links open one workflow's runs: /?tab=workflows&workflow=<id>.
+  // A workflow its removed code folder stopped opens its settings at Code folder (N9).
+  const [folderFor, setFolderFor] = useState<string | null>(null);
+  const chooseFolder = useCallback(
+    (id: string, name: string) => {
+      setRunsFor(null);
+      setFolderFor(id);
+      taskEditSessions?.open('settings', id, name);
+    },
+    [taskEditSessions],
+  );
+  // Overview links open one workflow's runs: /?tab=workflows&workflow=<id>;
+  // with &fix=folder, its settings at the Code folder instead.
   const requestedRuns = search.get('workflow');
+  const requestedFix = search.get('fix');
   useEffect(() => {
     if (!requestedRuns) return;
-    setRunsFor({ id: requestedRuns, name: '' });
     setSearch(
       (current) => {
         const next = new URLSearchParams(current);
         next.delete('workflow');
+        next.delete('fix');
         return next;
       },
       { replace: true },
     );
+    if (requestedFix === 'folder') {
+      controller.taskEditor(requestedRuns).then(
+        (task) => chooseFolder(requestedRuns, task.fields.name),
+        () => chooseFolder(requestedRuns, ''),
+      );
+      return;
+    }
+    setRunsFor({ id: requestedRuns, name: '' });
     // The link carries only the id; name the drawer once the task is read.
     controller.taskEditor(requestedRuns).then(
       (task) =>
@@ -1149,7 +1199,7 @@ export default function TaskLibrary() {
         ),
       () => {},
     );
-  }, [controller, requestedRuns, setSearch]);
+  }, [controller, requestedRuns, requestedFix, setSearch, chooseFolder]);
   useEffect(() => {
     if (!state.handshake) return;
     const abort = new AbortController();
@@ -1291,6 +1341,11 @@ export default function TaskLibrary() {
           onCancel={close}
           profileOptions={profileOptions}
           modelOptions={modelOptions}
+          loadFolders={loadFolders}
+          loadApps={loadApps}
+          focus={
+            folderFor === selected.session.taskId ? 'workspace_id' : undefined
+          }
           webhook={{
             localBase: window.location.origin,
             readAddress: reach.readAddress,
@@ -1515,6 +1570,7 @@ export default function TaskLibrary() {
               openConversation(id);
             }}
             onFinished={() => setReload((value) => value + 1)}
+            onChooseFolder={() => chooseFolder(runsFor.id, runsFor.name)}
           />
         )}
       </Drawer>

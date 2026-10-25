@@ -87,6 +87,7 @@ BOT_COMMANDS = [
     BotCommand("model", "Switch model (cloud/local)"),
     BotCommand("approval", "Switch approval mode"),
     BotCommand("reasoning", "Show or set model reasoning"),
+    BotCommand("incognito", "Keep this chat out of memory (on or off)"),
     BotCommand("tools", "List enabled tools"),
     BotCommand("profiles", "List agents"),
     BotCommand("profile", "Show or set Agent Profile"),
@@ -434,6 +435,7 @@ def _resume_agent_sync(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict | None = None,
     event_queue=None,
 ) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
@@ -450,7 +452,8 @@ def _resume_agent_sync(
     used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
-        enabled, config, approved, interrupt_ids=interrupt_ids
+        enabled, config, approved, interrupt_ids=interrupt_ids,
+        **({"resume_values": resume_values} if resume_values else {}),
     ):
         if event_type == "token":
             full_answer.append(payload)
@@ -946,12 +949,20 @@ def _escape_html(text: str) -> str:
 # ──────────────────────────────────────────────────────────────────────
 def _format_interrupt(data) -> str:
     """Format interrupt data (single dict or list of dicts) as HTML."""
-    items = data if isinstance(data, list) else [data]
+    from row_bot.channels.approval import asked_now
+
+    items = asked_now(data)  # A memory write of an incognito chat is asked by itself (B412).
     parts: list[str] = []
 
     for item in items:
         if not isinstance(item, dict):
             parts.append(_escape_html(str(item)))
+            continue
+        memory = item.get("memory_save")
+        if isinstance(memory, dict) and memory.get("text"):
+            # A memory write in an incognito chat (N11): the exact text, the person's alone to save.
+            parts.append(f"<b>{_escape_html(item.get('question') or 'Save to memory?')}</b>")
+            parts.append(f"<i>{_escape_html(str(memory['text']))}</i>")
             continue
         tool_name = item.get("tool", item.get("name", "Unknown tool"))
         desc = item.get("description", "")
@@ -974,8 +985,10 @@ def _format_interrupt(data) -> str:
 
 
 def _extract_interrupt_ids(data) -> list[str] | None:
-    """Extract explicit interrupt IDs for identity-bound resume."""
-    items = data if isinstance(data, list) else [data]
+    """Extract explicit interrupt IDs for identity-bound resume: those the answer goes to."""
+    from row_bot.channels.approval import asked_now
+
+    items = asked_now(data)
     ids = [item.get("__interrupt_id") for item in items
            if isinstance(item, dict) and item.get("__interrupt_id")]
     return ids or None
@@ -1137,6 +1150,17 @@ async def _cmd_reasoning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     args = (update.message.text or "").split(maxsplit=1)
     arg = args[1] if len(args) > 1 else ""
     response = ch_commands.cmd_reasoning("telegram", arg, thread_id=thread_id)
+    await update.message.reply_text(response)
+
+
+async def _cmd_incognito(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /incognito for this Telegram conversation (N11)."""
+    if not _is_authorised(update):
+        return
+    thread_id = _thread_id_for_command(update, context)
+    args = (update.message.text or "").split(maxsplit=1)
+    arg = args[1] if len(args) > 1 else ""
+    response = ch_commands.cmd_incognito("telegram", arg, thread_id=thread_id)
     await update.message.reply_text(response)
 
 
@@ -1498,6 +1522,7 @@ async def _stream_agent_resume_to_telegram(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict | None = None,
     message_thread_id: int | None = None,
     draft_id_seed: Any | None = None,
 ) -> tuple[str, dict | None, list[bytes], list[str], ChannelDeliveryResult]:
@@ -1513,6 +1538,7 @@ async def _stream_agent_resume_to_telegram(
     result, delivery = await consume_channel_producer(
         consumer, lambda sink: _resume_agent_sync(
             config, approved, interrupt_ids=interrupt_ids, event_queue=sink,
+            **({"resume_values": resume_values} if resume_values else {}),
         ),
     )
     answer, interrupt_data, captured_images, captured_video_paths = result
@@ -1554,6 +1580,50 @@ async def _send_telegram_media(
             log.warning("Failed to send video to Telegram: %s", exc)
 
 
+def _question_html(item: dict, step: int) -> str:
+    """One question of Row-Bot's card (N4) as Telegram HTML: the header, the question and what each option means."""
+    questions = item["questions"]
+    question = questions[step]
+    count = f" ({step + 1} of {len(questions)})" if len(questions) > 1 else ""
+    lines = [f"❓ <b>Row-Bot has a question</b>{count} · {_escape_html(question['header'])}",
+             f"<b>{_escape_html(question['question'])}</b>"]
+    for option in question["options"]:
+        if option["description"]:
+            lines.append(f"• {_escape_html(option['label'])}: {_escape_html(option['description'])}")
+    lines.append("")
+    lines.append("<i>Tap the ones you want, then Done, or reply with your own answer.</i>" if question["multi_select"]
+                 else "<i>Tap one, or reply with your own answer.</i>")
+    return "\n".join(lines)
+
+
+def _question_keyboard(item: dict, progress: dict) -> InlineKeyboardMarkup:
+    """A button per option (toggles for several), then Done and Skip: ``q:<token>:<step>:<choice>``."""
+    step = progress["step"]
+    question = item["questions"][step]
+    prefix = f"q:{progress['token']}:{step}:"
+    rows = []
+    for index, option in enumerate(question["options"]):
+        label = option["label"] + (" (recommended)" if option["recommended"] else "")
+        if question["multi_select"]:
+            label = ("☑ " if index in progress["picked"] else "☐ ") + label
+        rows.append([InlineKeyboardButton(label, callback_data=f"{prefix}{index}")])
+    last = [InlineKeyboardButton("Skip", callback_data=f"{prefix}s")]
+    if question["multi_select"]:
+        last.insert(0, InlineKeyboardButton("Done", callback_data=f"{prefix}d"))
+    rows.append(last)
+    return InlineKeyboardMarkup(rows)
+
+
+def _start_question(pending: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Begin a waiting question on its pending entry: the first step's text and buttons."""
+    from row_bot.channels import approval as approval_helpers
+
+    item = approval_helpers.question_of(pending["data"])
+    progress = approval_helpers.question_progress(pending)
+    progress["token"] = secrets.token_hex(4)
+    return _question_html(item, progress["step"]), _question_keyboard(item, progress)
+
+
 def _interrupt_approval_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
@@ -1571,19 +1641,18 @@ async def _send_interrupt_approval_card(
     *,
     message_thread_id: int | None = None,
 ) -> None:
+    pending = {"data": interrupt_data, "config": config, "_ts": time.time()}
+    from row_bot.channels import approval as approval_helpers
+
+    if approval_helpers.question_of(interrupt_data) is not None:
+        # Row-Bot's question (N4): a button per option, answered by tap or by reply.
+        text, keyboard = _start_question(pending)
+    else:
+        text, keyboard = _format_interrupt(interrupt_data), _interrupt_approval_keyboard()
     with _pending_lock:
-        _pending_interrupts[chat_id] = {
-            "data": interrupt_data,
-            "config": config,
-            "_ts": time.time(),
-        }
+        _pending_interrupts[chat_id] = pending
     kwargs = {"message_thread_id": message_thread_id} if message_thread_id else {}
-    await _send_html_msg(
-        chat,
-        _format_interrupt(interrupt_data),
-        reply_markup=_interrupt_approval_keyboard(),
-        **kwargs,
-    )
+    await _send_html_msg(chat, text, reply_markup=keyboard, **kwargs)
 
 
 def _telegram_goal_callbacks(
@@ -1648,6 +1717,8 @@ async def _run_agent_for_message(
     chat_id = update.effective_chat.id
     msg = update.message
 
+    if await _answer_question_by_reply(update, context, user_text):
+        return
     # Block while interrupt is pending
     if chat_id in _pending_interrupts:  # race-free: dict 'in' is atomic under GIL
         await msg.reply_text(
@@ -1825,7 +1896,8 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Find full resume token from pending map
         msg_id = query.message.message_id
         with _pending_lock:
-            info = _pending_task_approvals.pop(msg_id, None)
+            info = _pending_task_approvals.get(msg_id)
+            info = _pending_task_approvals.pop(msg_id, None) if info is not None and info.get("data") is None else None
         if info is None:
             await query.edit_message_text("ℹ️ This approval is no longer pending.")
             return
@@ -1856,10 +1928,21 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.effective_chat.send_message(f"⚠️ Error: {exc}")
         return
 
+    if cb_data.startswith("q:"):
+        await _handle_question_button(update, context, query, cb_data)
+        return
+
     # ── Live chat interrupt buttons (interrupt_approve / interrupt_deny) ──
     chat_id = update.effective_chat.id
+    from row_bot.channels import approval as approval_helpers
+
     with _pending_lock:
-        pending = _pending_interrupts.pop(chat_id, None)
+        pending = _pending_interrupts.get(chat_id)
+        # A question is answered on its own buttons; Approve / Deny never answer it (N4).
+        if pending is not None and approval_helpers.question_of(pending.get("data")) is None:
+            _pending_interrupts.pop(chat_id, None)
+        else:
+            pending = None
     if pending is None:
         await query.edit_message_text("ℹ️ No pending approval to respond to.")
         return
@@ -1867,7 +1950,127 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     approved = query.data == "interrupt_approve"
     action = "Approved ✅" if approved else "Denied ❌"
     await query.edit_message_text(f"{action} — processing…")
+    await _continue_after_interrupt(update, context, chat_id, pending, approved, query.message)
 
+
+async def _answer_question_by_reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """A reply while Row-Bot's question waits is the person's own answer (N4); True when it was one.
+
+    In the chat where the turn waits, any message answers its question; a workflow's or a helper's
+    question is answered by replying to its message.
+    """
+    from row_bot.channels import approval as approval_helpers
+
+    chat_id = update.effective_chat.id
+    msg = update.message
+    replied = getattr(getattr(msg, "reply_to_message", None), "message_id", None)
+    with _pending_lock:
+        task = _pending_task_approvals.get(replied) if replied is not None else None
+        pending = task if task is not None and task.get("data") is not None else _pending_interrupts.get(chat_id)
+    if pending is None or approval_helpers.question_of(pending.get("data")) is None:
+        return False
+    state, value = approval_helpers.question_reply(pending, text, numbered=False)
+    if state == "again":
+        await msg.reply_text(value)
+        return True
+    if state == "next":
+        item = approval_helpers.question_of(pending["data"])
+        progress = approval_helpers.question_progress(pending)
+        text, keyboard = _question_html(item, progress["step"]), _question_keyboard(item, progress)
+        if pending is task:
+            # A workflow's buttons are found by their message: its next question replaces it there.
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=replied, text=text, parse_mode="HTML",
+                                                reply_markup=keyboard)
+        else:
+            await _send_html_msg(update.effective_chat, text, reply_markup=keyboard)
+        return True
+    await _finish_question(update, context, pending, state, value, msg, task_message_id=replied if pending is task else None)
+    return True
+
+
+async def _handle_question_button(update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str) -> None:
+    """A tap on Row-Bot's question (N4): pick, toggle, Done or Skip, for the step the buttons belong to."""
+    from row_bot.channels import approval as approval_helpers
+    from row_bot.questions import skipped
+
+    try:
+        _prefix, token, step_text, choice = data.split(":")
+        step = int(step_text)
+    except ValueError:
+        await query.edit_message_text("This question is no longer waiting.")
+        return
+    chat_id = update.effective_chat.id
+    message_id = query.message.message_id
+    with _pending_lock:
+        task = _pending_task_approvals.get(message_id)
+        pending = next((entry for entry in (task, _pending_interrupts.get(chat_id))
+                        if entry is not None and entry.get("question_progress", {}).get("token") == token), None)
+    if pending is None:
+        await query.edit_message_text("This question is no longer waiting.")
+        return
+    if approval_helpers.question_progress(pending)["step"] != step:
+        return  # A second tap on a question already answered: its next one is showing.
+    item = approval_helpers.question_of(pending["data"])
+    progress = approval_helpers.question_progress(pending)
+    question = item["questions"][step]
+    if choice == "s":
+        state, value = "skipped", skipped()
+    elif choice == "d":
+        if not progress["picked"]:
+            return
+        state, value = approval_helpers.question_step(pending, {"choices": sorted(progress["picked"]), "other": ""})
+    elif choice.isdigit() and int(choice) < len(question["options"]):
+        index = int(choice)
+        if question["multi_select"]:
+            progress["picked"] = sorted(set(progress["picked"]) ^ {index})
+            await query.edit_message_reply_markup(reply_markup=_question_keyboard(item, progress))
+            return
+        state, value = approval_helpers.question_step(pending, {"choices": [index], "other": ""})
+    else:
+        return
+    if state == "next":
+        await query.edit_message_text(_question_html(item, value), parse_mode="HTML",
+                                      reply_markup=_question_keyboard(item, progress))
+        return
+    await _finish_question(update, context, pending, state, value, query.message,
+                           task_message_id=message_id if pending is task else None, edit=query)
+
+
+async def _finish_question(update: Update, context: ContextTypes.DEFAULT_TYPE, pending: dict, state: str,
+                           value: dict, message, *, task_message_id: int | None = None, edit=None) -> None:
+    """The card is done: say what was chosen, then the waiting turn (or the workflow or helper) goes on."""
+    from row_bot.channels import approval as approval_helpers
+
+    chat_id = update.effective_chat.id
+    with _pending_lock:
+        if task_message_id is not None:
+            taken = _pending_task_approvals.pop(task_message_id, None)
+        else:
+            taken = _pending_interrupts.pop(chat_id, None) if _pending_interrupts.get(chat_id) is pending else None
+    if taken is None:
+        await update.effective_chat.send_message("This question is no longer waiting.")
+        return
+    chosen = approval_helpers.answered_text(pending["data"], value)
+    if edit is not None:
+        await edit.edit_message_text(_escape_html(chosen), parse_mode="HTML")
+    else:
+        await update.effective_chat.send_message(chosen)
+    if task_message_id is not None:
+        from row_bot.tasks import respond_to_approval
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: respond_to_approval(pending["resume_token"], state == "answered", answer=value,
+                                              note="Answered via Telegram", source="telegram"))
+        if not result:
+            await update.effective_chat.send_message("This question can no longer be answered.")
+        return
+    await _continue_after_interrupt(update, context, chat_id, pending, True, message,
+                                    resume_values=approval_helpers.question_resume(pending["data"], value))
+
+
+async def _continue_after_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id: int, pending: dict,
+                                    approved: bool, message, *, resume_values: dict | None = None) -> None:
+    """The waiting turn goes on after its approval (or, with ``resume_values``, its question's answer)."""
     config = _refresh_thread_model_override(pending["config"])
     context.chat_data["thread_config"] = config
     interrupt_ids = _extract_interrupt_ids(pending["data"])
@@ -1882,8 +2085,9 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             config,
             approved,
             interrupt_ids=interrupt_ids,
-            message_thread_id=_telegram_message_thread_id(query.message),
-            draft_id_seed=getattr(query.message, "message_id", None),
+            resume_values=resume_values,
+            message_thread_id=_telegram_message_thread_id(message),
+            draft_id_seed=getattr(message, "message_id", None),
         )
     except Exception as exc:
         log.error("Agent resume error: %s", exc)
@@ -1906,21 +2110,21 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             chat_id,
             new_interrupt,
             config,
-            message_thread_id=_telegram_message_thread_id(query.message),
+            message_thread_id=_telegram_message_thread_id(message),
         )
     else:
         if not delivery.delivered and not delivery.uncertain:
             await _send_telegram_safe_text(
                 update.effective_chat,
                 answer,
-                message_thread_id=_telegram_message_thread_id(query.message),
+                message_thread_id=_telegram_message_thread_id(message),
             )
         thread_id = ch_runtime.thread_id_from_config(config)
         if thread_id and answer:
             _goal_run_turn, _goal_send_text = _telegram_goal_callbacks(
                 update.effective_chat,
-                message_thread_id=_telegram_message_thread_id(query.message),
-                draft_id_seed=getattr(query.message, "message_id", None),
+                message_thread_id=_telegram_message_thread_id(message),
+                draft_id_seed=getattr(message, "message_id", None),
             )
 
             goal_result = await ch_runtime.continue_channel_goal_after_turn_async(
@@ -1938,7 +2142,7 @@ async def _handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     chat_id,
                     goal_result.interrupt_data,
                     config,
-                    message_thread_id=_telegram_message_thread_id(query.message),
+                    message_thread_id=_telegram_message_thread_id(message),
                 )
 
 
@@ -2314,6 +2518,7 @@ async def start_bot() -> bool:
     _app.add_handler(CommandHandler("model", _cmd_model))
     _app.add_handler(CommandHandler("approval", _cmd_approval))
     _app.add_handler(CommandHandler("reasoning", _cmd_reasoning))
+    _app.add_handler(CommandHandler("incognito", _cmd_incognito))
     _app.add_handler(CommandHandler("tools", _cmd_tools))
     _app.add_handler(CommandHandler("profiles", _cmd_profiles))
     _app.add_handler(CommandHandler("profile", _cmd_profile))
@@ -2438,7 +2643,7 @@ def send_outbound(chat_id: int, text: str) -> None:
 
 
 def send_task_approval(chat_id: int, resume_token: str,
-                       task_name: str, message: str) -> str | None:
+                       task_name: str, message: str, question: dict | None = None) -> str | None:
     """Send a task approval request with inline ✅/❌ buttons.
 
     Called synchronously from ``tasks.py`` after pausing a pipeline.
@@ -2453,6 +2658,16 @@ def send_task_approval(chat_id: int, resume_token: str,
     _sent_msg_id: list[int | None] = [None]
 
     async def _send():
+        if question is not None:
+            # Row-Bot's question (N4): its own buttons; a reply to this message is the person's own answer.
+            pending = {"resume_token": resume_token, "task_name": task_name, "data": question, "_ts": time.time()}
+            text, keyboard = _start_question(pending)
+            sent = await _app.bot.send_message(chat_id=chat_id, text=f"<b>{_escape_html(task_name)}</b>\n{text}",
+                                               parse_mode="HTML", reply_markup=keyboard)
+            with _pending_lock:
+                _pending_task_approvals[sent.message_id] = pending
+            _sent_msg_id[0] = sent.message_id
+            return
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
@@ -2507,8 +2722,9 @@ def _update_approval_msg(message_id: int, status: str,
     if not _running or _app is None or _bot_loop is None:
         return
 
-    icon = "✅" if status == "approved" else "❌"
-    label = "Approved" if status == "approved" else "Denied"
+    from row_bot.channels.approval import resolution_words
+
+    icon, _space, label = resolution_words(status).partition(" ")
     source_txt = f" (from {source})" if source else ""
 
     async def _edit():
@@ -2700,7 +2916,10 @@ class TelegramChannel(Channel):
         task_name = config.get("task_name", "Unknown task")
         resume_token = config.get("resume_token", "")
         message = config.get("message", "Approval required to continue.")
-        msg_ref = send_task_approval(int(target), resume_token, task_name, message)
+        from row_bot.channels.approval import question_of
+
+        msg_ref = send_task_approval(int(target), resume_token, task_name, message,
+                                     question=question_of(interrupt_data))
         return msg_ref
 
     def update_approval_message(self, message_ref: str,

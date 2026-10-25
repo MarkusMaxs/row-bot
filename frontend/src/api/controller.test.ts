@@ -1439,7 +1439,7 @@ describe('revisioned snapshot and independent selection', () => {
         conversation_revision: '1',
         descriptor: {
           panel_kind: 'browser.live',
-          title: 'Managed browser',
+          title: 'Browser',
           required_capabilities: ['browser_navigate'],
         },
       },

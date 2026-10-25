@@ -15,7 +15,7 @@ _tool_probe_cache: dict[str, dict[str, Any]] = {}
 _TOOL_PROBE_TTL_SECONDS = 10 * 60
 
 TOOL_CAPABLE_FAMILIES = {
-    "qwen3", "qwen3.5", "qwen3.6", "qwen3-coder", "llama3.1", "llama3.3",
+    "qwen3", "qwen3.5", "qwen3.6", "qwen3.8", "qwen3-coder", "llama3.1", "llama3.3",
     "llama3-groq-tool-use", "mistral", "mistral-nemo", "mistral-small",
     "mistral-small3.1", "mistral-small3.2", "mistral-large", "mixtral",
     "magistral", "ministral-3", "nemotron", "nemotron-3-nano",

@@ -13,7 +13,7 @@ import {
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Toast from '@radix-ui/react-toast';
 import { PanelLeftClose, X } from 'lucide-react';
-import { Button, IconButton } from './primitives';
+import { Button, Hint, IconButton } from './primitives';
 import { DialogFooterContext, type FooterSlot } from './dialog-footer';
 
 type Overlay = {
@@ -34,6 +34,8 @@ export type NoticeTone = 'warning' | 'danger';
 /** One action on a notice, e.g. Undo after an easy-to-regret removal. */
 export type NoticeAction = {
   label: string;
+  /** Its full name when the label is short ("Review" › "Review in Knowledge"): its tooltip and accessible name. */
+  title?: string;
   onAction: () => void;
   /**
    * Runs once when the notice ends without its action: it timed out, was
@@ -414,20 +416,27 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
                 <Toast.Description className="toast-message">
                   {notice.message}
                 </Toast.Description>
-                {notice.action && (
-                  <Toast.Action altText={notice.action.label} asChild>
-                    <Button
-                      variant="ghost"
-                      className="small"
-                      onClick={() => {
-                        releaseFocus();
-                        finish(notice.id, true);
-                      }}
-                    >
-                      {notice.action.label}
-                    </Button>
-                  </Toast.Action>
-                )}
+                {notice.action &&
+                  (() => {
+                    const { label, title } = notice.action;
+                    // One line: the message wraps beside it, never the action.
+                    const action = (
+                      <Toast.Action altText={title ?? label} asChild>
+                        <Button
+                          variant="ghost"
+                          className="small toast-action"
+                          aria-label={title}
+                          onClick={() => {
+                            releaseFocus();
+                            finish(notice.id, true);
+                          }}
+                        >
+                          {label}
+                        </Button>
+                      </Toast.Action>
+                    );
+                    return title ? <Hint label={title}>{action}</Hint> : action;
+                  })()}
                 <Toast.Close asChild>
                   <Button
                     iconOnly

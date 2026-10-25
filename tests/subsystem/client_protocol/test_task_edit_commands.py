@@ -187,6 +187,22 @@ def test_delivery_defaults_are_passive_revision_bound_and_idempotent(
         ]
 
 
+def test_delivery_lists_only_channels_that_are_set_up(task_api, monkeypatch):
+    """B345: WhatsApp's bridge ships with Row-Bot, so it counts as configured; with no phone linked it is
+    not set up, and delivery never offers it."""
+    service, _ = task_api
+    from row_bot.channels import registry
+
+    monkeypatch.setattr(registry, "configured_channels", lambda: [
+        SimpleNamespace(name="telegram", display_name="Telegram", is_set_up=lambda: True),
+        SimpleNamespace(name="whatsapp", display_name="WhatsApp", is_set_up=lambda: False),
+    ])
+    with _client(service) as client:
+        _, headers = bootstrap(client)
+        snapshot = client.get("/api/v1/tasks/delivery-defaults", headers=headers).json()
+    assert [item["label"] for item in snapshot["channels"]] == ["Telegram"]
+
+
 @pytest.mark.parametrize("creating", [True, False])
 def test_crash_after_commit_resumes_schedule_without_repeating_edit(
     task_api, fields, monkeypatch, creating

@@ -315,6 +315,25 @@ def test_inline_subtask_retains_authority_through_post_provider_notification(del
     assert effects == ["provider"]
 
 
+@pytest.mark.parametrize(("delivery", "message"), [
+    (("", ""), ""),
+    (("delivered", "Delivered to Telegram"), "Delivered to Telegram"),
+])
+def test_a_finished_workflow_is_announced_by_its_name(runtime, monkeypatch, delivery, message):
+    """U17: the toast read "Task Complete: Tea haiku test finished (1 step)."."""
+    from row_bot import notifications
+    tasks, _, _, task_id, conversation_id, _ = runtime
+    notices = []
+    monkeypatch.setattr(notifications, "notify", lambda **kwargs: notices.append(kwargs))
+    monkeypatch.setattr(tasks, "_deliver_to_channels", lambda *_, **__: delivery)
+
+    # As a scheduled run or Run now runs it: with its notice.
+    tasks.run_task_background(task_id, conversation_id, [])
+
+    finished = [(notice["title"], notice["message"]) for notice in notices if notice.get("source") == "workflow"]
+    assert finished == [("Synthetic reviewed run finished", message)]
+
+
 def test_review_does_not_execute_or_create_run_and_policy_hash_is_stable(runtime):
     first = review(runtime)
     second = review(runtime)
@@ -1000,3 +1019,31 @@ def test_a_workflow_approval_names_the_action_in_words(runtime, monkeypatch):
 
     card = execution.list_task_approvals(runtime[3], "reviewed-run").items[0]
     assert card.message == "Step 1/1: Save purchase orders (riverside shop): 3 orders"
+
+
+def test_an_always_ask_command_says_what_runs_and_whose_rule_it_is(runtime, monkeypatch):
+    """U19: the chat card's words for the command, and the person's own rule, never "the reviewer asked you"."""
+    person_rule = {"type": "interrupt", "interrupts": [{
+        "tool": "run_command", "label": "Run shell command", "description": "Run shell command: mkdir reports",
+        "args": {"command": "mkdir reports", "background": False}, "person_only": True, "binding": "b1",
+        "review": {"decision": "ask", "reason": "You asked to approve this yourself."}}]}
+    _fake_graph(monkeypatch, invoke=lambda prompt, tools, config, stop_event=None: person_rule,
+                resume=lambda tools, config, approved=True, stop_event=None: "done")
+    runtime[0].update_task(runtime[3], prompts=["Make the reports folder"], safety_mode="auto")
+    assert start(runtime).run.status == "paused"
+
+    [pending] = runtime[0].get_pending_approvals()
+
+    assert "Run shell command: mkdir reports (You asked to approve this yourself.)" in pending["message"]
+    assert "reviewer" not in pending["message"]
+    assert "background" not in pending["message"]
+
+
+def test_a_card_only_the_person_answers_has_no_reviewer_reason():
+    from row_bot.approval_messages import reviewer_note, reviewer_reason
+
+    asked = {"review": {"decision": "ask", "reason": "Not in the workflow."}}
+    person = {**asked, "person_only": True, "review": {"decision": "ask", "reason": "You asked to approve this yourself."}}
+
+    assert reviewer_note(asked) == "The reviewer asked you: Not in the workflow."
+    assert reviewer_reason(person) == "" and reviewer_note(person) == ""

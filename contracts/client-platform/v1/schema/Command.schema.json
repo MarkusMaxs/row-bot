@@ -249,9 +249,49 @@
       "title": "AgentStopPayload",
       "type": "object"
     },
+    "ApprovalAnswer": {
+      "additionalProperties": false,
+      "description": "The person's answer to one of Row-Bot's questions (N4): the options picked, by position, or their own words.",
+      "properties": {
+        "choices": {
+          "items": {
+            "maximum": 3,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "title": "Choices",
+          "type": "array"
+        },
+        "other": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Other",
+          "type": "string"
+        }
+      },
+      "title": "ApprovalAnswer",
+      "type": "object"
+    },
     "ApprovalPayload": {
       "additionalProperties": false,
       "properties": {
+        "answers": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ApprovalAnswer"
+              },
+              "maxItems": 4,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Answers"
+        },
         "decision": {
           "enum": [
             "approve",
@@ -1241,242 +1281,6 @@
       "title": "BindPayload",
       "type": "object"
     },
-    "BrowserBackCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/BrowserCommandRevisionPayload"
-        },
-        "type": {
-          "const": "browser.back",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "BrowserBackCommand",
-      "type": "object"
-    },
-    "BrowserCheckCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/BrowserCommandRevisionPayload"
-        },
-        "type": {
-          "const": "browser.check",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "BrowserCheckCommand",
-      "type": "object"
-    },
-    "BrowserCommandNavigatePayload": {
-      "additionalProperties": false,
-      "properties": {
-        "nonce": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Nonce",
-          "type": "string"
-        },
-        "revision": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Revision",
-          "type": "string"
-        },
-        "url": {
-          "maxLength": 8192,
-          "minLength": 1,
-          "title": "Url",
-          "type": "string"
-        }
-      },
-      "required": [
-        "revision",
-        "url",
-        "nonce"
-      ],
-      "title": "BrowserCommandNavigatePayload",
-      "type": "object"
-    },
-    "BrowserCommandRevisionPayload": {
-      "additionalProperties": false,
-      "properties": {
-        "nonce": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Nonce",
-          "type": "string"
-        },
-        "revision": {
-          "pattern": "^[0-9a-f]{64}$",
-          "title": "Revision",
-          "type": "string"
-        }
-      },
-      "required": [
-        "revision",
-        "nonce"
-      ],
-      "title": "BrowserCommandRevisionPayload",
-      "type": "object"
-    },
-    "BrowserEndCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/BrowserCommandRevisionPayload"
-        },
-        "type": {
-          "const": "browser.end",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "BrowserEndCommand",
-      "type": "object"
-    },
-    "BrowserNavigateCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/BrowserCommandNavigatePayload"
-        },
-        "type": {
-          "const": "browser.navigate",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "BrowserNavigateCommand",
-      "type": "object"
-    },
-    "BrowserTakeOverCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/BrowserCommandRevisionPayload"
-        },
-        "type": {
-          "const": "browser.take_over",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "BrowserTakeOverCommand",
-      "type": "object"
-    },
     "BuddyCancelCommand": {
       "additionalProperties": false,
       "properties": {
@@ -2286,7 +2090,7 @@
           "type": "string"
         },
         "payload": {
-          "$ref": "#/$defs/EmptyPayload"
+          "$ref": "#/$defs/DeletePayload"
         },
         "type": {
           "const": "conversation.delete",
@@ -2302,6 +2106,43 @@
         "payload"
       ],
       "title": "ConversationDeleteCommand",
+      "type": "object"
+    },
+    "ConversationIncognitoCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/IncognitoPayload"
+        },
+        "type": {
+          "const": "conversation.incognito",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationIncognitoCommand",
       "type": "object"
     },
     "ConversationPinCommand": {
@@ -2487,6 +2328,43 @@
         "payload"
       ],
       "title": "ConversationRenameCommand",
+      "type": "object"
+    },
+    "ConversationRestoreCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/EmptyPayload"
+        },
+        "type": {
+          "const": "conversation.restore",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationRestoreCommand",
       "type": "object"
     },
     "ConversationResumeCommand": {
@@ -2759,6 +2637,11 @@
           "title": "Agent Profile Id",
           "type": "string"
         },
+        "incognito": {
+          "default": false,
+          "title": "Incognito",
+          "type": "boolean"
+        },
         "title": {
           "default": "New conversation",
           "maxLength": 256,
@@ -2838,6 +2721,18 @@
         "nonce"
       ],
       "title": "DefaultModelPayload",
+      "type": "object"
+    },
+    "DeletePayload": {
+      "additionalProperties": false,
+      "properties": {
+        "undo": {
+          "default": false,
+          "title": "Undo",
+          "type": "boolean"
+        }
+      },
+      "title": "DeletePayload",
       "type": "object"
     },
     "DeveloperRepositoryBranchCreateCommand": {
@@ -4200,6 +4095,21 @@
         "payload"
       ],
       "title": "GoalControlCommand",
+      "type": "object"
+    },
+    "IncognitoPayload": {
+      "additionalProperties": false,
+      "description": "Turn incognito on or off for a conversation (N11).",
+      "properties": {
+        "incognito": {
+          "title": "Incognito",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "incognito"
+      ],
+      "title": "IncognitoPayload",
       "type": "object"
     },
     "KnowledgeArchiveCommand": {
@@ -8826,6 +8736,19 @@
         "model_selection": {
           "$ref": "#/$defs/ModelSelection"
         },
+        "page_id": {
+          "anyOf": [
+            {
+              "pattern": "^page-[0-9a-f]{8}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Page Id"
+        },
         "retry": {
           "default": false,
           "title": "Retry",
@@ -9439,6 +9362,19 @@
             }
           ],
           "title": "Schedule"
+        },
+        "timezone": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timezone"
         }
       },
       "required": [
@@ -9459,6 +9395,18 @@
     "TaskGraphFields": {
       "additionalProperties": false,
       "properties": {
+        "always_ask": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Always Ask"
+        },
         "apps": {
           "anyOf": [
             {
@@ -9959,6 +9907,16 @@
           "title": "Agent Profile Id",
           "type": "string"
         },
+        "always_ask": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Always Ask",
+          "type": "array"
+        },
         "approval_mode": {
           "enum": [
             "block",
@@ -9980,6 +9938,15 @@
             }
           ],
           "title": "Concurrency Group"
+        },
+        "missed_runs": {
+          "default": "skip",
+          "enum": [
+            "skip",
+            "run_once"
+          ],
+          "title": "Missed Runs",
+          "type": "string"
         },
         "model_override": {
           "anyOf": [
@@ -10017,6 +9984,19 @@
           ],
           "title": "Trigger Type",
           "type": "string"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
         }
       },
       "required": [
@@ -11295,11 +11275,6 @@
       "artifact.notes.generate": "#/$defs/ArtifactNotesGenerateCommand",
       "artifact.preset.mutate": "#/$defs/ArtifactPresetMutateCommand",
       "artifact.share": "#/$defs/ArtifactShareCommand",
-      "browser.back": "#/$defs/BrowserBackCommand",
-      "browser.check": "#/$defs/BrowserCheckCommand",
-      "browser.end": "#/$defs/BrowserEndCommand",
-      "browser.navigate": "#/$defs/BrowserNavigateCommand",
-      "browser.take_over": "#/$defs/BrowserTakeOverCommand",
       "buddy.cancel": "#/$defs/BuddyCancelCommand",
       "buddy.hatch": "#/$defs/BuddyHatchCommand",
       "buddy.remove": "#/$defs/BuddyRemoveCommand",
@@ -11310,11 +11285,13 @@
       "conversation.controls": "#/$defs/ConversationControlsCommand",
       "conversation.create": "#/$defs/ConversationCreateCommand",
       "conversation.delete": "#/$defs/ConversationDeleteCommand",
+      "conversation.incognito": "#/$defs/ConversationIncognitoCommand",
       "conversation.pin": "#/$defs/ConversationPinCommand",
       "conversation.queue.dispatch": "#/$defs/ConversationQueueDispatchCommand",
       "conversation.queue.edit": "#/$defs/ConversationQueueEditCommand",
       "conversation.queue.remove": "#/$defs/ConversationQueueRemoveCommand",
       "conversation.rename": "#/$defs/ConversationRenameCommand",
+      "conversation.restore": "#/$defs/ConversationRestoreCommand",
       "conversation.resume": "#/$defs/ConversationResumeCommand",
       "conversation.skills": "#/$defs/ConversationSkillsCommand",
       "conversation.steer": "#/$defs/ConversationSteerCommand",
@@ -11450,7 +11427,13 @@
       "$ref": "#/$defs/ConversationPinCommand"
     },
     {
+      "$ref": "#/$defs/ConversationIncognitoCommand"
+    },
+    {
       "$ref": "#/$defs/ConversationDeleteCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationRestoreCommand"
     },
     {
       "$ref": "#/$defs/ConversationSubmitCommand"
@@ -11739,21 +11722,6 @@
     },
     {
       "$ref": "#/$defs/DeveloperRepositorySandboxCleanupCommand"
-    },
-    {
-      "$ref": "#/$defs/BrowserNavigateCommand"
-    },
-    {
-      "$ref": "#/$defs/BrowserTakeOverCommand"
-    },
-    {
-      "$ref": "#/$defs/BrowserCheckCommand"
-    },
-    {
-      "$ref": "#/$defs/BrowserBackCommand"
-    },
-    {
-      "$ref": "#/$defs/BrowserEndCommand"
     },
     {
       "$ref": "#/$defs/McpFacadeControlCommand"

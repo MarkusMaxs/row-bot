@@ -1,8 +1,9 @@
 """``ChatOpenAI`` for the direct OpenAI provider: cache key and stateless reasoning replay.
 
-- Every request of a conversation carries the same ``prompt_cache_key``
-  (``cache_affinity``), on Chat Completions and Responses alike. Calls outside
-  a conversation send none. ``prompt_cache_retention`` is left at the server
+- Every request carries the ``prompt_cache_key`` of ``cache_affinity``, on
+  Chat Completions and Responses alike: one shared by interactive chats, and a
+  conversation's own for workflows, goals and helpers. Calls outside a
+  conversation send none. ``prompt_cache_retention`` is left at the server
   default (24 hours for organizations without Zero Data Retention).
 - Responses requests are stateless: the runtime sets ``store=False`` and asks
   for ``reasoning.encrypted_content``, so nothing is kept at OpenAI and the
@@ -32,13 +33,15 @@ import functools
 import logging
 from typing import Any, AsyncIterator, Iterator
 
+import openai
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from pydantic import model_validator
 from typing_extensions import Self
 
-from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.cache_affinity import shared_prefix_cache_key
+from row_bot.providers.transports.cancellable_http import RequestStopped
 from row_bot.providers.transports.responses_reasoning import (
     ENCRYPTED_REASONING_INCLUDE,
     is_encrypted_reasoning_rejection,
@@ -47,6 +50,11 @@ from row_bot.providers.transports.responses_reasoning import (
 logger = logging.getLogger(__name__)
 
 OPENAI_DIRECT_SCOPE = "openai"
+
+
+class OpenAIRequestStopped(RequestStopped, openai.OpenAIError):
+    """Stop ended the request. The OpenAI SDK (also behind xAI and OpenCode) passes its own errors on without
+    retrying them."""
 
 
 def stateless_responses_kwargs(model_name: str) -> dict[str, Any]:
@@ -79,7 +87,7 @@ class DirectChatOpenAI(ChatOpenAI):
     def _get_request_payload(self, input_: Any, *, stop: list[str] | None = None, **kwargs: Any) -> dict:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         if "prompt_cache_key" not in payload:
-            cache_key = conversation_cache_key(OPENAI_DIRECT_SCOPE)
+            cache_key = shared_prefix_cache_key(OPENAI_DIRECT_SCOPE)
             if cache_key:
                 payload["prompt_cache_key"] = cache_key
         if payload.get("store") is False and isinstance(payload.get("input"), list):

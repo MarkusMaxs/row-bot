@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from dataclasses import asdict
 from typing import Any, TYPE_CHECKING
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 from row_bot.runtime import admissions
 from row_bot.runtime.executions import generation_registry
 from row_bot.projection.conversation import conversation_projection
+from row_bot.application.live_updates import publish as _publish_live, publishes as _publishes_live
 
 
 class ClientPlatformError(ValueError):
@@ -42,6 +43,16 @@ _LOG = logging.getLogger(__name__)
 # whoever closes or replaces that state settles it first (settle_background).
 _BACKGROUND_LOCK = threading.RLock()  # Re-entrant: a start that runs its work at once may finish under it.
 _BACKGROUND: set[threading.Thread] = set()
+
+
+@contextmanager
+def _turn_end_step(conversation_id: str, step: str) -> Iterator[None]:
+    """One step of ending a turn. A step that fails is logged and the turn still ends: its conversation
+    never keeps showing a reply being written with nothing running (B396)."""
+    try:
+        yield
+    except Exception:
+        _LOG.warning("Ending a turn in %s: %s failed", conversation_id, step, exc_info=True)
 
 
 def run_in_background(target: Callable[[], None], *, name: str) -> None:
@@ -135,31 +146,53 @@ def _buddy_follows(conversation_id: str, event: tuple, handle: Any = None) -> No
     elif kind == "tool_done":
         _buddy(conversation_id, "tool.finished", "Tool finished")
     elif kind == "interrupt":
-        from row_bot.application.client_computer_controls import pause_item
-        if pause_item(payload) is not None:
-            _buddy(conversation_id, "generation.interrupted", "Waiting for you")
-        elif not getattr(handle, "approval_granted", False):
+        if not getattr(handle, "approval_granted", False):
             # An action the person already approved for this turn asks
             # nobody, so Buddy never says "Needs approval" for it (B333).
-            _buddy(conversation_id, "approval.needed", "Approval pending",
-                   approval_id=str(getattr(handle, "approval_id", "") or ""))
+            from row_bot.questions import question_item
+            asking = question_item(payload) is not None
+            _buddy(conversation_id, "approval.needed", "Row-Bot has a question" if asking else "Approval pending",
+                   approval_id=str(getattr(handle, "approval_id", "") or ""), **({"question": True} if asking else {}))
     elif kind == "done":
         _buddy(conversation_id, "generation.done", "Done")
     elif kind == "error":
         _buddy(conversation_id, "generation.error", "Error")
 
 
+def _question_answer(asked: dict | None, payload: dict) -> dict | None:
+    """The resume value a resolve carries for Row-Bot's question: its answers (Answer) or skipped (Skip).
+
+    Answers are checked against the question's own options; answers sent for an approval are refused, so an
+    answer can never stand in for one.
+    """
+    from row_bot import questions
+
+    answers = payload.get("answers")
+    if asked is None:
+        if answers is not None:
+            raise ClientPlatformError("question_answer_invalid")
+        return None
+    if payload.get("decision") != "approve":
+        return questions.skipped()
+    try:
+        return questions.answer(asked, answers)
+    except questions.QuestionError:
+        raise ClientPlatformError("question_answer_invalid") from None
+
+
 def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: str,
-                    expected_results: int, computer: bool) -> Iterator[tuple]:
+                    expected_results: int, computer: bool, memory: bool = False) -> Iterator[tuple]:
     """A denied approval ends the turn once the denied calls have their results.
 
     The model is not asked again, so it cannot retry the action or reach for
     another way to do it: the stream is closed there, and the reply says so.
     Closing it before LangGraph saves the tool step leaves the results unsaved,
-    so they are recorded before the reply (B234).
+    so they are recorded before the reply (B234). The reply never claims nothing
+    happened: earlier steps of the turn may have acted (U13).
     """
-    message = ("Computer Use access was denied. No action was taken." if computer
-               else "The requested action was denied. No action was taken.")
+    message = ("You said no, so Row-Bot didn't use the computer for that." if computer
+               else "You chose not to save that, so Row-Bot didn't." if memory
+               else "You said no, so Row-Bot stopped there.")
     iterator = iter(events)
     settled = 0
     try:
@@ -198,6 +231,7 @@ def _accepted_app_scope(conversation_id: str) -> dict | None:
     return scope if isinstance(scope, dict) else None
 
 
+@_publishes_live("approvals", "conversations")
 def _withdraw_turn_approvals(conversation_id: str, generation_id: str = "") -> list[str]:
     """Withdraw the conversation's waiting approvals (only one turn's, with ``generation_id``)."""
     from row_bot.tasks import _get_conn
@@ -286,11 +320,12 @@ class ClientPlatformService:
                         cancel_scope: Any = None, queued_pass_id: str = "", queue_context: dict | None = None,
                         resume_pending: bool = False,
                         attachments: list[dict[str, Any]] | None = None,
-                        note: str = "", retry: bool = False) -> Any:
+                        note: str = "", retry: bool = False, shown: dict[str, str] | None = None) -> Any:
         """Single admission path for every conversation turn.
 
         ``retry`` runs the person's last message again in place: the turn it replaces goes in the same write that
-        admits the new one, after every check has passed (``threads.append_checkpoint_messages``)."""
+        admits the new one, after every check has passed (``threads.append_checkpoint_messages``). ``shown``: what
+        the transcript shows instead of the text, and its note (the person's message sent from a page)."""
         from langchain_core.messages import HumanMessage
         from row_bot import threads
         from row_bot.models import get_current_model
@@ -311,6 +346,10 @@ class ClientPlatformService:
             threads.migrate_checkpoint_message_ids(conversation_id)
             if self.registry.active(conversation_id):
                 raise ClientPlatformError("generation_active")
+            # Nothing runs here: a turn this process left behind (its end couldn't be recorded, or it was
+            # admitted and never started) can't keep the conversation from taking a message (B399).
+            if settled := admissions.settle_leftovers(conversation_id, self.registry.server_epoch):
+                _LOG.warning("Settled %d leftover turn(s) in %s", settled, conversation_id)
             submission_id = str(configurable.get("platform_submission_id") or uuid.uuid4())
             generation_id = str(configurable.get("generation_id") or uuid.uuid4())
             admitted = admissions.reserve(conversation_id, submission_id, generation_id,
@@ -328,8 +367,16 @@ class ClientPlatformService:
                 # A server-started follow-up: the transcript shows the note,
                 # the model reads the prompt.
                 public_metadata = {"platform_public_content": note, "platform_note": "continuation"}
+            elif shown:
+                # The person's message from a page (N5): the chat shows its decisions in words, the model reads
+                # them with their structured list. Its note keeps it from counting as the person's request when
+                # the Auto reviewer decides an approval: a page's decision never approves a tool call.
+                public_metadata = {"platform_public_content": shown["text"], "platform_note": shown["note"]}
             first_message = text is not None and not note and not threads.get_latest_checkpoint_revision(conversation_id)
-            retry_text = text if retry and text is not None and not note and not self._approval_waiting(conversation_id) else ""
+            # A retry finds the turn it replaces by what the chat shows of the person's message.
+            retry_text = ((shown["text"] if shown else text)
+                          if retry and text is not None and not note and not self._approval_waiting(conversation_id)
+                          else "")
             if text is not None and not threads.append_checkpoint_messages(
                     conversation_id, [HumanMessage(content=text, id=submission_id, additional_kwargs=public_metadata)],
                     retry_text=retry_text):
@@ -349,8 +396,13 @@ class ClientPlatformService:
             remember_context(conversation_id, generation_id, config, queue_context)
             handle = self.registry.register(conversation_id, generation_id=generation_id,
                                             pass_id=admitted["pass_id"], cancel_scope=cancel_scope)
-            admissions.start(handle.pass_id, handle.execution_id, handle.server_epoch)
-            handle.segment_id = admissions.start_segment(handle.pass_id)
+            try:
+                admissions.start(handle.pass_id, handle.execution_id, handle.server_epoch)
+                handle.segment_id = admissions.start_segment(handle.pass_id)
+            except BaseException:
+                # Never launched: the conversation must not look busy for good (B399).
+                self.registry.finish(handle, status="interrupted")
+                raise
             handle.input_checkpoint_revision = threads.get_latest_checkpoint_revision(conversation_id)
             handle.model_ref = str(configurable.get("model_override") or "")
             handle.submission_id = submission_id
@@ -377,35 +429,42 @@ class ClientPlatformService:
         with _COMMAND_LOCK:
             if handle.producer_done.is_set():
                 return
+            conversation_id = handle.conversation_id
             status = "stopped" if handle.cancel_scope.is_cancelled() else status
             if status == "stopped":
                 self._keep_stopped_reply(handle)
             if status not in {"completed", "waiting_approval"}:
-                self._answer_open_calls(handle.conversation_id, status)
+                self._answer_open_calls(conversation_id, status)
             # Clients reset on a checkpoint installed below and resubscribe
             # from a snapshot, which carries no queue: an update published
             # after it never reaches them and they kept "1 queued" (B97).
-            self._publish_queue(handle.conversation_id, finishing=handle.pass_id)
-            self._refresh_checkpoint(handle.conversation_id)
+            with _turn_end_step(conversation_id, "publishing the queue"):
+                self._publish_queue(conversation_id, finishing=handle.pass_id)
+            with _turn_end_step(conversation_id, "reading the saved reply in"):
+                self._refresh_checkpoint(conversation_id)
             from row_bot.application.live_content import discard, references
-            for reference in references(handle.conversation_id):
+            for reference in references(conversation_id):
                 if reference.startswith(f"live:{handle.pass_id}:"):
-                    self.projection.settle_live(handle.conversation_id, "assistant:" + reference, adopted=False)
-                    discard(handle.conversation_id, reference)
-            status = admissions.finish(handle.pass_id, status, boundary={
-                "execution_id": handle.execution_id, "server_epoch": handle.server_epoch,
-                "segment_id": handle.segment_id, "message_id": handle.output_message_id,
-                "checkpoint_revision": handle.output_checkpoint_revision})
-            self._publish_queue(handle.conversation_id)
+                    with _turn_end_step(conversation_id, "retiring the live reply"):
+                        self.projection.settle_live(conversation_id, "assistant:" + reference, adopted=False)
+                        discard(conversation_id, reference)
+            with _turn_end_step(conversation_id, "recording the turn"):
+                status = admissions.finish(handle.pass_id, status, boundary={
+                    "execution_id": handle.execution_id, "server_epoch": handle.server_epoch,
+                    "segment_id": handle.segment_id, "message_id": handle.output_message_id,
+                    "checkpoint_revision": handle.output_checkpoint_revision})
+            with _turn_end_step(conversation_id, "publishing the queue"):
+                self._publish_queue(conversation_id)
             from row_bot.application import client_queue
             # Pause waiting inputs before announcing the terminal state, so a
             # client that re-reads its waiting messages on that state sees
             # their paused revision rather than a stale one.
             if status != "completed":
-                client_queue.pause_pending(self, handle.conversation_id)
+                with _turn_end_step(conversation_id, "pausing waiting messages"):
+                    client_queue.pause_pending(self, conversation_id)
             final_view = {**handle.view(), "status": status, "revision": str(handle.revision + 1),
                           "quiesced": True, "cleanup_complete": True, "can_stop": False}
-            self.projection.publish(handle.conversation_id, "generation.state", final_view)
+            self.projection.publish(conversation_id, "generation.state", final_view)
             self.registry.finish(handle, status=status)
             from row_bot.application import approval_grants
             if status == "waiting_approval" and handle.approval_granted:
@@ -564,6 +623,7 @@ class ClientPlatformService:
                 orchestration_activity = {"state": "attention", "phase": "goal_needs_you"}
         return {"id": conversation_id, "revision": str(row["client_revision"]),
                 "title": row["name"], "pinned": bool(row["pinned_at"]),
+                "incognito": bool(row.get("incognito")),
                 "updated_at": str(row.get("updated_at") or ""),
                 "parent_conversation_id": parent_conversation_id or None,
                 "activity_state": orchestration_activity.get("state"),
@@ -624,7 +684,7 @@ class ClientPlatformService:
             rows = conn.execute(
                 "SELECT thread_id,CASE WHEN COALESCE(pinned_at,'')<>'' THEN 1 ELSE 0 END AS pinned,"
                 "COALESCE(updated_at,'') AS recent FROM thread_meta "
-                + "WHERE " + _LIST_GROUPS[group] + " "
+                + "WHERE COALESCE(deleted_at,'')='' AND (" + _LIST_GROUPS[group] + ") "
                 + ("AND (CASE WHEN COALESCE(pinned_at,'')<>'' THEN 1 ELSE 0 END,COALESCE(updated_at,''),thread_id)"
                    "<(:pinned,:recent,:thread_id) " if after else "")
                 + "ORDER BY pinned DESC,recent DESC,thread_id DESC LIMIT :limit",
@@ -734,9 +794,13 @@ class ClientPlatformService:
             if snapshot.get("generation") is None and not self.registry.active(conversation_id):
                 snapshot["generation"] = self._paused_approval_generation(conversation_id)
             present = {row["id"] for row in snapshot["rows"]}
+            # Only live rows the projection dropped to stay within its bound come back from their live text. A
+            # live row retired as the twin of its saved answer never does: it came back as an empty "Paged
+            # content" row that stayed after its text was thrown away (B401).
+            evicted = self.projection.evicted_live_rows(conversation_id)
             for reference in references(conversation_id)[-100:]:
                 row_id = "assistant:" + reference
-                if row_id not in present:
+                if row_id not in present and row_id in evicted:
                     row = {"id": row_id, "role": "assistant", "blocks": [],
                            "content_status": "lazy", "content_ref": reference,
                            "render_revision": snapshot["projection_revision"]}
@@ -953,6 +1017,7 @@ class ClientPlatformService:
                 thread_id=conversation_id,
                 agent_profile_id=str(profile["id"]) if profile else "",
                 agent_profile_slug=str(profile["slug"]) if profile else "",
+                incognito=bool(payload.get("incognito")),
             )
             if profile:
                 skills = profile.get("skill_policy_json") or {}
@@ -975,6 +1040,12 @@ class ClientPlatformService:
             if str(command.get("expected_revision")) != approval["revision"]:
                 raise ClientPlatformError("revision_conflict", approval["revision"])
             return self._resolve_approval(target, payload, runtime_surface=runtime_surface)
+        if kind == "conversation.restore":
+            # Undo of a held delete (B343); once it has been removed, it is too late.
+            from row_bot.thread_cleanup import restore_held_thread
+            if not restore_held_thread(target):
+                raise ClientPlatformError("restore_expired")
+            return {"conversation_id": target, "status": "completed"}
         row = self._metadata(target)
         expected = command.get("expected_revision")
         if expected is None or str(expected) != str(row["client_revision"]):
@@ -1011,6 +1082,17 @@ class ClientPlatformService:
                 raise ClientPlatformError(str(exc)) from exc
             return {"conversation_id": target, "revision": str(row["client_revision"]),
                     "saved_name": name, "status": "completed"}
+        if kind == "conversation.incognito":
+            incognito = bool(payload.get("incognito"))
+            if bool(row.get("incognito")) == incognito:
+                return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed"}
+            if not incognito and self.registry.active(target):
+                # The reply under way answers what was said incognito: it ends first (N11).
+                raise ClientPlatformError("generation_active")
+            threads.set_thread_incognito(target, incognito)
+            revision = str(self._metadata(target)["client_revision"])
+            self.projection.publish(target, "resource.changed", {"revision": revision})
+            return {"conversation_id": target, "revision": revision, "status": "completed"}
         if kind in {"conversation.rename", "conversation.pin"}:
             with closing(sqlite3.connect(threads.DB_PATH)) as conn, conn:
                 if kind.endswith("rename"):
@@ -1025,6 +1107,7 @@ class ClientPlatformService:
                     raise ClientPlatformError("revision_conflict")
                 if kind.endswith("rename"):
                     conn.execute("UPDATE thread_meta SET name_source='manual' WHERE thread_id=?", (target,))
+            _publish_live("conversations")
             return {"conversation_id": target, "revision": str(row["client_revision"] + 1), "status": "completed"}
         if kind == "conversation.controls":
             if self.registry.active(target):
@@ -1141,6 +1224,10 @@ class ClientPlatformService:
             self.registry.stop(target, reason="delete")
             if self.registry.active(target):
                 return {"conversation_id": target, "status": "DeleteBlocked"}
+            if payload.get("undo"):
+                from row_bot.thread_cleanup import hold_thread_deletion
+                hold_thread_deletion(target)
+                return {"conversation_id": target, "status": "DeleteCompleted"}
             result = delete_thread(target)
             return {
                 "conversation_id": target,
@@ -1149,6 +1236,21 @@ class ClientPlatformService:
                 "retained_developer_work": bool(result.retained_worktree_path or result.retained_sandbox),
             }
         raise ClientPlatformError("invalid_command")
+
+    @staticmethod
+    def _retried_page_message(conversation_id: str, text: str) -> tuple[str, dict[str, str]] | None:
+        """The person's last message, when it was sent from a page and the chat shows it as ``text``: what the
+        agent read, and what the chat shows with its note."""
+        from row_bot import threads
+        from row_bot.turn_context import is_person_message
+        messages = threads.get_latest_checkpoint_messages(conversation_id)
+        last = next((message for message in reversed(messages) if is_person_message(message)), None)
+        extra = getattr(last, "additional_kwargs", None) or {}
+        shown = extra.get("platform_public_content")
+        if (last is None or extra.get("platform_note") != "page" or not isinstance(shown, str)
+                or shown.strip() != text.strip() or not isinstance(last.content, str)):
+            return None
+        return last.content, {"text": shown, "note": "page"}
 
     @staticmethod
     def _approval_waiting(conversation_id: str) -> bool:
@@ -1273,6 +1375,17 @@ class ClientPlatformService:
         if followup is not None:
             text = followup.prompt
         attachment_refs = list(payload.get("attachment_refs") or ())
+        page_id = str(payload.get("page_id") or "")
+        if page_id and (resume or followup is not None or queue_record is not None or frozen_context is not None
+                        or attachment_refs or payload.get("retry")):
+            raise ClientPlatformError("invalid_command")
+        # Retry on the reply to a message sent from a page runs that message again: the same decisions, as the
+        # page wrote them, still marked as from the page (never the words the chat shows, as the person's own).
+        retried_page = (self._retried_page_message(conversation_id, text)
+                        if not resume and followup is None and queue_record is None and frozen_context is None
+                        and not page_id and not attachment_refs and payload.get("retry") is True else None)
+        if retried_page is not None:
+            text = retried_page[0]
         if len(attachment_refs) > 32:
             raise ClientPlatformError("payload_too_large")
         attachment_views: list[dict[str, Any]] = []
@@ -1347,11 +1460,28 @@ class ClientPlatformService:
         if frozen_context is not None:  # Remembered for a resume: this turn's own apps, not those it was queued behind.
             kept = {key: value for key, value in queue_context["configurable"].items() if key != "app_scope"}
             queue_context = {**queue_context, "configurable": {**kept, **({"app_scope": deepcopy(narrowed)} if narrowed else {})}}
-        handle = self.admit_execution(conversation_id, config, text=None if resume else text,
-            queued_pass_id=str(queue_record["pass_id"]) if queue_record else "", queue_context=queue_context,
-            resume_pending=resume, attachments=None if resume else attachment_views,
-            note=followup.note if followup is not None else "",
-            retry=not resume and queue_record is None and followup is None and payload.get("retry") is True)
+        shown = retried_page[1] if retried_page is not None else None
+        if page_id:
+            # The person's Send to Row-Bot under a page (N5): its decisions, written by Row-Bot from the page
+            # (never the client's words), move to sent now and come back if the message isn't admitted.
+            from row_bot import pages
+            try:
+                text, shown_text = pages.claim(page_id, conversation_id, submission_id)
+            except pages.PageError as exc:
+                raise ClientPlatformError(exc.code) from None
+            shown = {"text": shown_text, "note": "page"}
+        try:
+            handle = self.admit_execution(conversation_id, config, text=None if resume else text,
+                queued_pass_id=str(queue_record["pass_id"]) if queue_record else "", queue_context=queue_context,
+                resume_pending=resume, attachments=None if resume else attachment_views,
+                note=followup.note if followup is not None else "",
+                retry=not resume and queue_record is None and followup is None and payload.get("retry") is True,
+                shown=shown)
+        except BaseException:
+            if page_id:
+                from row_bot import pages
+                pages.release(page_id, submission_id)
+            raise
         handle.followups = True
         if not resume and frozen_context is None and queue_record is None and followup is None and command_id:
             from row_bot.application.conversation_drafts import consume_admitted_draft
@@ -1363,17 +1493,22 @@ class ClientPlatformService:
         if followup is None and not resume and str(payload.get("text") or "").strip():
             # The person's message answers a goal that waits on them (B318).
             from row_bot import goals
-            goals.resume_goal_for_answer(conversation_id)
+            try:
+                goals.resume_goal_for_answer(conversation_id)
+            except Exception:
+                # The turn is admitted: it still runs, or it would never end (B399).
+                _LOG.warning("The goal waiting in %s could not take the answer", conversation_id, exc_info=True)
 
         def producer() -> None:
             from row_bot.application.conversation_followups import after_platform_turn, live_goal
             status = "interrupted"
             final_text = ""
             error_text = ""  # A provider limit here makes a goal wait (B244).
-            # The goal this turn works on, even if the model finishes it mid-turn.
-            started_goal = live_goal(conversation_id)
+            started_goal = None
             _buddy(conversation_id, "generation.started", "Thinking")
             try:
+                # The goal this turn works on, even if the model finishes it mid-turn.
+                started_goal = live_goal(conversation_id)
                 self.registry.check_dispatch(handle)
                 files = []
                 if attachment_refs:
@@ -1430,16 +1565,24 @@ class ClientPlatformService:
                             descriptor = describe(binding)
                             if not descriptor.available or descriptor.resource_revision != target["resource_revision"]:
                                 raise ClientPlatformError("resource_revision_conflict")
+                    # A question's answer resumes its own interrupt only (N4).
+                    answered = ({"resume_values": approval_context["resume_values"]}
+                                if (approval_context or {}).get("resume_values") else {})
                     events = ((self.resume_factory or resume_stream_agent)(enabled, config,
                               bool((approval_context or {}).get("approved")),
-                              interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event)
+                              interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event,
+                              **answered)
                               if resume else (self.stream_factory or stream_agent)(prepared_text, enabled, config, stop_event=handle.cancel_scope.stop_event))
-                    if approval_context is not None and not approval_context.get("approved"):
+                    # A denial ends the turn, but a "no" to one card asked by itself (resume_values) leaves what
+                    # waited beside it to ask again for itself (B412).
+                    if (approval_context is not None and not approval_context.get("approved")
+                            and not approval_context.get("resume_values")):
                         events = _settled_denial(
                             events, conversation_id=conversation_id,
                             identity=str(uuid.uuid5(uuid.NAMESPACE_URL, f"row-bot:denied:{handle.pass_id}")),
                             expected_results=len(approval_context.get("interrupt_ids") or ()),
-                            computer=bool(approval_context.get("computer")))
+                            computer=bool(approval_context.get("computer")),
+                            memory=bool(approval_context.get("memory")))
                     for event in events:
                         self.registry.check_dispatch(handle)
                         if self.stream_factory is not None and event[0] in {"token", "tool_start", "tool_done", "output_binding"}:
@@ -1483,10 +1626,11 @@ class ClientPlatformService:
                         recheck_after_failed_turn(model_ref)
                     except Exception:
                         _LOG.warning("Monitor could not recheck the model after a failed turn", exc_info=True)
-                after_platform_turn(conversation_id, generation_id=generation_id, status=status,
-                                    assistant_text=final_text, model_ref=model_ref,
-                                    goal_id=str((started_goal or {}).get("id") or ""),
-                                    error_text=error_text)
+                with _turn_end_step(conversation_id, "the goal's step"):
+                    after_platform_turn(conversation_id, generation_id=generation_id, status=status,
+                                        assistant_text=final_text, model_ref=model_ref,
+                                        goal_id=str((started_goal or {}).get("id") or ""),
+                                        error_text=error_text)
                 self.finish_execution(handle, status)
                 from row_bot.application.conversation_naming import after_turn
                 after_turn(self, conversation_id, status=status, reply=final_text, model_ref=model_ref)
@@ -1570,10 +1714,17 @@ class ClientPlatformService:
                 canonical_tool_name,
             )
 
-            tool_name = canonical_tool_name(getter("name") or getter("tool_name"))
             raw_tool = str(getter("raw_name") or "")
             design_step = raw_tool if re.fullmatch(r"designer_[a-z_]{1,55}", raw_tool) else ""
             call_id = str(getter("tool_call_id") or getter("id") or "")
+            # A live step carries the tool's own name, as its saved step does, never its display name ("🌐
+            # Browser"): it reads the same before and after it settles, and the browser's steps group as the
+            # browser's, so the chat shows the live browser step (U16). Its result keeps the name its call had.
+            names = handle.__dict__.setdefault("tool_names", {})
+            own_name = names.get(call_id) or str(getter("runtime_name") or raw_tool or "")
+            if call_id and own_name:
+                names[call_id] = own_name
+            tool_name = canonical_tool_name(own_name or getter("name") or getter("tool_name"))
             if not call_id:
                 call_id = hashlib.sha256(
                     f"{handle.pass_id}:{handle.segment_id}:{getter('message_id')}:{tool_name}".encode()
@@ -1588,7 +1739,7 @@ class ClientPlatformService:
             from row_bot.application.conversation_traces import app_of_tool
             apps = handle.__dict__.setdefault("tool_apps", {})
             if call_id not in apps:
-                apps[call_id] = app_of_tool(getter("runtime_name") or raw_tool, getter("args"))
+                apps[call_id] = app_of_tool(getter("runtime_name") or raw_tool, getter("args"), words=True)
             app = apps[call_id]
             item = build_trace_item(
                 item_id=call_id,
@@ -1624,7 +1775,8 @@ class ClientPlatformService:
                 "content_ref": item.content_ref,
                 **({"app": dict(app)} if app else {}),
                 **({"specialization": public_specialization(item.specialization)}
-                   if item.specialization is not None and item.specialization.kind in CARD_SPECIALIZATIONS
+                   if item.specialization is not None
+                   and item.specialization.kind in CARD_SPECIALIZATIONS | {"request_corrected"}
                    else {})})
             if kind == "tool_done":
                 for metadata in getter("media", []) or []:
@@ -1649,9 +1801,11 @@ class ClientPlatformService:
         elif kind == "thinking":
             self.projection.publish(conversation_id, "generation.activity", {"state": "thinking"})
         elif kind == "tool_writing" and isinstance(payload, dict):
-            from row_bot.agent import _resolve_tool_display_name
+            from row_bot.application.conversation_traces import canonical_tool_name
+            # The tool's own name, as its step carries it: the client words it ("Writing a page"), never as
+            # the tool's display name ("📁 Pages").
             self.projection.publish(conversation_id, "generation.activity", {
-                "state": "writing", "tool": _resolve_tool_display_name(str(payload.get("name") or ""))[:120],
+                "state": "writing", "tool": canonical_tool_name(str(payload.get("name") or ""))[:120],
                 "bytes": max(0, int(payload.get("bytes") or 0))})
         elif kind in {
             "context_usage",
@@ -1688,6 +1842,8 @@ class ClientPlatformService:
             from row_bot.application import approval_grants
             handle.approval_granted = approval_grants.granted(conversation_id, payload)
             if not handle.approval_granted:
+                # An X post's card (its full text and pictures) is read with the approval, not streamed.
+                public_approval.pop("x_post", None)
                 self.projection.publish(conversation_id, "approval.required", {
                     "status": "waiting_approval", "approval_id": handle.approval_id,
                     **public_approval})
@@ -1767,50 +1923,87 @@ class ClientPlatformService:
             row = conn.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone()
         if not row or row["status"] != "pending":
             raise ClientPlatformError("approval_already_resolved")
+        from row_bot import questions
+        asked = questions.stored_question(row["approval_payload_json"])
+        answer = _question_answer(asked, payload)
+        if row["resume_kind"] == "conversation" and asked is not None:
+            return self._answer_question_locked(approval_id, row, asked, answer, runtime_surface=runtime_surface)
         if row["resume_kind"] == "conversation":
             conversation_id = str(row["source_thread_id"])
             approved = payload.get("decision") == "approve"
             from row_bot.application import client_computer_controls as computer
             stored = computer.approval_context(row["approval_payload_json"])
-            if computer.pause_item(stored.get("interrupt")) is not None and not approved:
-                # A computer-use pause has no "deny": its alternative is Stop.
-                # Replaying the paused turn could start the computer again.
-                self.stop_conversation(conversation_id)
-                return {"approval_id": approval_id, "status": "completed"}
-            # A paused computer runs again, from a fresh capture, before the
-            # turn goes on (Resume).
+            # A computer the turn was using keeps its session when the turn goes on.
             lease_generation = computer.prepare_approval_resume(
                 self, conversation_id, stored, approved=approved, runtime_surface=runtime_surface)
-            try:
-                context = self.claim_legacy_approval(approval_id, conversation_id, approved)
-            except ClientPlatformError:
-                if lease_generation and computer.pause_item(stored.get("interrupt")) is not None:
-                    computer.stop_computer_use(conversation_id, generation_id=lease_generation)
-                raise
+            interrupt = stored.get("interrupt")
+            context = self.claim_legacy_approval(approval_id, conversation_id, approved)
+            # A card only the person answers is asked by itself (B412): this answer is its own, and what waits
+            # beside it (another incognito memory write, say) asks again for itself, so it never ends the turn.
+            from row_bot.tools.approval_gate import asked_alone
+            alone = asked_alone(interrupt)
+            alone_id = str((alone or {}).get("__interrupt_id") or "")
+            asks_again = len(context["interrupt_ids"]) > 1 and alone_id in context["interrupt_ids"]
             from row_bot.application.conversation_followups import after_approval
-            after_approval(conversation_id, approved=approved)
+            after_approval(conversation_id, approved=approved or asks_again)
             # Answered, by the person or by what they approved for this turn:
             # Buddy stops saying "Needs approval" now, not when the turn ends (B333).
             _buddy(conversation_id, "approval.approved" if approved else "approval.denied",
                    "Approved" if approved else "Denied", approval_id=approval_id)
-            interrupt = stored.get("interrupt")
-            if approved and payload.get("scope") == "turn":
+            if approved and payload.get("scope") == "turn" and alone is None:
                 from row_bot.application import approval_grants
                 kinds = approval_grants.approval_kinds(interrupt)
                 if kinds:
                     approval_grants.grant(conversation_id, kinds)
+            answered = ({"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
+                        else {"interrupt_ids": context["interrupt_ids"]})
             result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,
-                                 approval_context={"approved": approved,
-                                                   "interrupt_ids": context["interrupt_ids"],
+                                 approval_context={"approved": approved, **answered,
                                                    "pass_id": context.get("pass_id"),
                                                    "generation_id": lease_generation,
                                                    "computer": any(
-                                                       isinstance(item, dict) and item.get("tool") == "computer_use"
+                                                       isinstance(item, dict) and item.get("tool") == "computer"
+                                                       for item in (interrupt if isinstance(interrupt, list) else [interrupt])),
+                                                   # An incognito chat's memory write (N11): Don't save.
+                                                   "memory": any(
+                                                       isinstance(item, dict) and isinstance(item.get("memory_save"), dict)
                                                        for item in (interrupt if isinstance(interrupt, list) else [interrupt]))})
             return {**result, "approval_id": approval_id}
-        if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve"):
+        if not respond_to_approval(row["resume_token"], payload.get("decision") == "approve", answer=answer):
             raise ClientPlatformError("approval_already_resolved")
         return {"approval_id": approval_id, "status": "completed"}
+
+    def _answer_question_locked(self, approval_id: str, row: Any, asked: dict, answer: dict, *,
+                                runtime_surface: str) -> dict:
+        """The person answered (or skipped) Row-Bot's question in a conversation: only the question goes on (N4).
+
+        Never an approval: the turn resumes the question's own interrupt with the answer, and any action asked
+        beside it asks again for itself.
+        """
+        from row_bot import questions
+        from row_bot.application import client_computer_controls as computer
+        conversation_id = str(row["source_thread_id"])
+        stored = computer.approval_context(row["approval_payload_json"])
+        try:
+            resume_values = questions.resume_values(stored.get("interrupt"), answer)
+        except questions.QuestionError:
+            raise ClientPlatformError("approval_already_resolved") from None
+        answered = questions.outcome(answer) == "answered"
+        # A computer the turn was using keeps its session when the turn goes on, as after an approval.
+        lease_generation = computer.prepare_approval_resume(self, conversation_id, stored, approved=True,
+                                                            runtime_surface=runtime_surface)
+        context = self.claim_legacy_approval(approval_id, conversation_id, answered)
+        from row_bot.application.conversation_followups import after_approval
+        # A goal waiting on its question goes on either way: skipping is not a denial.
+        after_approval(conversation_id, approved=True)
+        _buddy(conversation_id, "approval.approved" if answered else "approval.denied",
+               "Answered" if answered else "Skipped", approval_id=approval_id)
+        result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,
+                             approval_context={"approved": True, "interrupt_ids": context["interrupt_ids"],
+                                               "resume_values": resume_values,
+                                               "pass_id": context.get("pass_id"),
+                                               "generation_id": lease_generation, "computer": False})
+        return {**result, "approval_id": approval_id}
 
 
 client_platform_service = ClientPlatformService()

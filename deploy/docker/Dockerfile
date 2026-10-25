@@ -94,7 +94,6 @@ ENV HOME=/data \
     ROW_BOT_HOST=0.0.0.0 \
     ROW_BOT_PORT=8080 \
     ROW_BOT_UPDATES=external \
-    ROW_BOT_BROWSER_HEADLESS=1 \
     PLAYWRIGHT_BROWSERS_PATH=/opt/row-bot/playwright-browsers \
     XDG_CACHE_HOME=/data/cache \
     HF_HOME=/data/cache/huggingface \
