@@ -1,0 +1,145 @@
+{
+  "$defs": {
+    "BrowserTab": {
+      "additionalProperties": false,
+      "description": "One of a conversation's tabs in Row-Bot's browser.",
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "id": {
+          "pattern": "^t[0-9]{1,6}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 160,
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 2048,
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "url",
+        "active"
+      ],
+      "title": "BrowserTab",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "What the Browser pane shows for one conversation: never page content or field values.",
+  "properties": {
+    "acting": {
+      "maxLength": 160,
+      "title": "Acting",
+      "type": "string"
+    },
+    "control": {
+      "enum": [
+        "agent",
+        "person"
+      ],
+      "title": "Control",
+      "type": "string"
+    },
+    "conversation_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9:_-]+$",
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "loading": {
+      "title": "Loading",
+      "type": "boolean"
+    },
+    "recording": {
+      "title": "Recording",
+      "type": "boolean"
+    },
+    "revision": {
+      "minimum": 0,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sign_in": {
+      "enum": [
+        "",
+        "password",
+        "code",
+        "card"
+      ],
+      "title": "Sign In",
+      "type": "string"
+    },
+    "site": {
+      "maxLength": 253,
+      "title": "Site",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "stopped",
+        "starting",
+        "running",
+        "crashed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "tabs": {
+      "items": {
+        "$ref": "#/$defs/BrowserTab"
+      },
+      "maxItems": 32,
+      "title": "Tabs",
+      "type": "array"
+    },
+    "title": {
+      "maxLength": 160,
+      "title": "Title",
+      "type": "string"
+    },
+    "url": {
+      "maxLength": 2048,
+      "title": "Url",
+      "type": "string"
+    },
+    "waiting": {
+      "maxLength": 160,
+      "title": "Waiting",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "conversation_id",
+    "status",
+    "control",
+    "acting",
+    "waiting",
+    "url",
+    "title",
+    "site",
+    "loading",
+    "sign_in",
+    "recording",
+    "tabs",
+    "revision"
+  ],
+  "title": "BrowserPaneState",
+  "type": "object"
+}

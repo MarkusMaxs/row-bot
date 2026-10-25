@@ -58,7 +58,10 @@ export type SavedFile =
       reveal(): Promise<boolean>;
     };
 
-/** Whether a desktop window's native features are bound right now. */
+/**
+ * 'reconnecting' while something the person asked for waits on a desktop
+ * window's native features to bind again; 'ready' otherwise (B406).
+ */
 export type NativeConnection = 'ready' | 'reconnecting';
 
 /**
@@ -138,8 +141,9 @@ export interface ClientPlatform {
     signal?: AbortSignal,
   ): Promise<CapabilityResult<SavedFile>>;
   /**
-   * Desktop windows: whether native features are bound, or reconnecting
-   * (the window binds its bridge again by itself; B231).
+   * Desktop windows: whether something the person asked for is waiting on
+   * native features that are binding again (the window binds its bridge
+   * again by itself and silently; B231, B406).
    */
   nativeConnection?: {
     get(): NativeConnection;

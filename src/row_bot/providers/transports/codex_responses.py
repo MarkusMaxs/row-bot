@@ -17,7 +17,7 @@ from pydantic import Field, PrivateAttr
 from row_bot.cancellation import current_cancellation_scope
 from row_bot.prompt_cache import usage_metadata_from_provider_usage
 from row_bot.providers import codex as codex_auth
-from row_bot.providers.cache_affinity import conversation_cache_key
+from row_bot.providers.cache_affinity import shared_prefix_cache_key
 from row_bot.providers.transports.responses_reasoning import (
     ENCRYPTED_REASONING_INCLUDE,
     is_encrypted_reasoning_rejection,
@@ -71,16 +71,19 @@ class ChatCodexResponses(BaseChatModel):
         return self.bind(tools=[_responses_tool(tool) for tool in tools], tool_choice=tool_choice or "auto", **kwargs)
 
     def _session_key(self) -> str:
-        """The cache key and session of this request: one per conversation.
+        """The cache key and session of this request (``cache_affinity``).
 
         Codex CLI sends its conversation id as both ``prompt_cache_key`` and the
-        ``session_id`` header, so every call of a conversation reaches the same
-        prompt cache. Row-Bot sends a per-process digest of its conversation id
-        (``cache_affinity``), which is the same for every model instance that
-        serves the conversation, Chat Only and compaction included. Outside a
+        ``session_id`` header, and the backend finds a prompt cache by the
+        session. Row-Bot sends one per-process key shared by its interactive
+        chats, which all start with the same system prompt and tools, so a new
+        chat finds the prefix another chat cached (with a key per conversation
+        nearly every new chat missed it). Workflows, goals and helpers get their
+        conversation's own key. The key is the same for every model instance
+        that serves a conversation, Chat Only and compaction included. Outside a
         conversation the instance keeps one random session, as before.
         """
-        return self.session_id or conversation_cache_key(CODEX_TRANSPORT) or self._instance_session_id
+        return self.session_id or shared_prefix_cache_key(CODEX_TRANSPORT) or self._instance_session_id
 
     def _generate(
         self,

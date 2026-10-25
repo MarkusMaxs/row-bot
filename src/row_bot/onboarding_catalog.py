@@ -24,7 +24,7 @@ SETUP_STEPS: dict[str, dict[str, str]] = {
     },
     "workflows": {
         "title": "Workflows",
-        "description": "Add starter workflows and delivery defaults.",
+        "description": "Make a workflow, or turn on one of the starters.",
     },
     "designer": {
         "title": "Designer",

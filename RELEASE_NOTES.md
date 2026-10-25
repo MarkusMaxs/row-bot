@@ -2,6 +2,318 @@
 
 ---
 
+## v5.3.0 - A Browser In The App, Pages, Outlook & Reviewed Approvals
+
+Row-Bot 5.3 puts its browser inside the app and rebuilds computer use. Row-Bot
+can make pages you work in beside the chat, ask you questions with options, and
+connect Outlook and several X accounts. Chats can be incognito, background work
+shows up at once, Auto approvals are reviewed and a new Hands-off level asks
+nothing. Row-Bot can run servers and long jobs in the background, edit video,
+send you files and work on code from any of your devices. Claude works with your
+Claude plan again, through your own Claude Code. From 5.2.1 it arrives through
+background updates: Settings › Updates offers **Restart now**. Read **Upgrade
+Notes** below before upgrading.
+
+### New Since The Beta
+
+- **Row-Bot uses what it can do, without being asked** - you no longer have to
+  name a feature:
+  - a plan, checklist, comparison or numbers to track becomes a page;
+  - a choice only you can make comes as a question card;
+  - research on several things goes to helpers;
+  - a file server or watcher starts in the background, in your workspace;
+  - "keep me on track" gets a plan and a weekly check-in.
+- **Faster first replies, less of your plan used** - a new chat sends about 40%
+  less to the model before your first message. Tool guides and rarely used
+  tools are read when needed, not sent every time. With a ChatGPT plan, the
+  shared start of each new chat is now found in the provider's cache, about 95%
+  of a new chat's first request.
+- **Always ask me in workflows** - a workflow step set to Always ask me now
+  stops for your answer, where it used to fail. Its card says what runs, such
+  as "Run shell command: mkdir reports".
+- **Local models** - when a local model writes a tool call its runtime can't
+  read, Row-Bot asks it once more instead of stopping with "The response was
+  interrupted". First run suggests the most capable models you have installed,
+  and never an "abliterated" or "uncensored" one. qwen3.8 is recognised as a
+  model that uses tools.
+- **A Mac installer that shows the way** - the DMG opens on a window that says
+  "Drag Row-Bot to Applications", with an arrow.
+- **Fixes from beta testing:**
+  - "Add and process" in Documents no longer stops at "The documents list
+    changed";
+  - signing in to a provider refreshes its models;
+  - a refused sign-in no longer leaves its dialog stuck;
+  - every memory write in an incognito chat, including a helper's, asks you
+    with its own card;
+  - a Mac app whose keychain asks for permission at start no longer freezes;
+  - logging "5k in 31 minutes" records the minutes.
+- **Polish from beta feedback:**
+  - clearer approval wording, with tool errors in plain words;
+  - no internal tags or "(Source: Internal Knowledge)" in replies;
+  - favourites shown in every model picker;
+  - helper chats kept out of the Library;
+  - the conversation details card laid out properly at narrower windows;
+  - an easier-to-find Browser pane;
+  - named workflow controls.
+
+### Row-Bot's Browser And Computer Use
+
+- **The browser is inside the app** - a Browser pane beside the chat shows the
+  page live as Row-Bot works, with tabs, an address bar, Back, Forward, Reload,
+  Take control / Give back and Stop. Pop it out to its own window, or use it full
+  screen on a phone. It works from any signed-in device.
+- **Sign in once** - Row-Bot's browser keeps you signed in to sites across
+  restarts. When a page asks for a password, code or card number, the pane says
+  "Sign in here" and you type it; Row-Bot never does. Settings › System ›
+  Browser and computer use lists the sites you're signed in to, with Sign out.
+- **Normal sites just work** - sign-in pages with redirects, embedded sign-in
+  frames, pop-ups, uploads, downloads and slow pages.
+- **Asks at the right moments** - Row-Bot asks before paying, buying, booking
+  with a charge, sending, posting, deleting, changing account settings or
+  uploading a file, with a card that shows the page.
+- **Computer use, rebuilt** - Row-Bot works in an app on your computer with the
+  real mouse and keyboard while you watch, looks at the window after every step
+  and carries on by itself. A Stop bar on your screen ("Row-Bot is using …")
+  ends it at once with Esc; the chat's Stop works from any device. Use the mouse
+  yourself and Row-Bot pauses and asks "Carry on?". It asks the first time it
+  uses each app in a chat, and never types passwords, codes or card numbers.
+- **In the chat** - "Using the browser" or "Using Microsoft Edge" with a live
+  picture; tap it to watch. Models that see images look at the page or window
+  after each step.
+
+### Pages And Questions
+
+- **Pages** - ask for a plan you can approve step by step, a checklist, a
+  dashboard, options to compare, a form or a small calculator, and Row-Bot makes
+  an interactive page beside the chat (full screen on a phone). Approve, change
+  or skip steps, then send your decisions in one go; nothing is sent until you
+  click. Pages remember what you tick on every device, follow light and dark,
+  download as HTML and are all in Library › Pages. A page runs apart from
+  Row-Bot, with no internet and no access to your chats, files or tools.
+- **Questions with options** - Row-Bot can ask you a question in a card: tap an
+  option, write your own answer or skip. It works in the app, from helpers and
+  workflows, and in Telegram, Discord, Slack and WhatsApp. An answer is never
+  taken as an approval.
+
+### Outlook And X
+
+- **Outlook, through your own Microsoft app** - connect an Outlook or Microsoft
+  365 mailbox (outlook.com too) with an app you register in Microsoft Entra; no
+  client secret. Sign in on this computer, or from a phone with a code. Row-Bot
+  can search, read, draft, file and send mail and manage your calendar;
+  sending, replying, forwarding, deleting and invitations always ask first.
+- **Microsoft 365 setup asks for your tenant** - connecting a Microsoft 365
+  (Work IQ) server asks for your Microsoft Entra tenant ID instead of failing,
+  and says it needs an admin and Copilot Credits. A setup step that fails says
+  what went wrong.
+- **Several X accounts** - connect more than one X account in Settings › Apps ›
+  X and remove any one on its own. Every post, reply, quote or delete names the
+  account it goes out as; its card shows that account, the whole text and each
+  picture or video, and only you can approve it, even under Auto. If X doesn't
+  confirm a post, Row-Bot checks the account's latest posts instead of sending
+  it again.
+
+### Privacy
+
+- **Incognito chats** - start one from New chat ▾ › New incognito chat, or turn
+  any chat incognito from its ⋯ menu (in a channel chat, `/incognito on`).
+  Row-Bot and its helpers work as usual and can still use what they remember,
+  but nothing in an incognito chat is read for memory. Row-Bot saves to memory
+  from it only when you tap Save on its card, under every approval level.
+  Turning incognito off never reaches back: memory reads the chat only from
+  that moment.
+- **Install stats** - once a day, Row-Bot sends its maker a random ID, its
+  version and your system (Windows, macOS, Linux or Docker), nothing else, so
+  its maker can see how many installations are in use. It is on by default and
+  goes to Row-Bot's stats service on Cloudflare. Cloudflare sees your IP
+  address, as for any connection, and the service counts how many
+  installations reported from each country each day; it never stores the
+  address, and never keeps the country with your installation's ID. Records
+  are deleted after 35 days; only totals without IDs are kept. Turn it off in
+  Settings › System › Privacy ("Share install stats") or with
+  `ROW_BOT_INSTALL_COUNT=0` on a server or in Docker; the same page can delete
+  what was sent and lists everything else Row-Bot contacts.
+
+### Approvals
+
+- **Auto is reviewed** - under Auto, a reviewer (the chat's own model at its
+  lowest effort) approves an action that clearly matches what you asked and
+  asks you about anything else. If it can't decide, it asks. Its decisions show
+  quietly on the step. Chats, profiles and workflows set to Auto use it.
+- **Hands-off** - a new level that runs every action without asking, including
+  the ones Auto still asks about. You choose it on purpose, after one clear
+  warning, and Row-Bot shows it while it's on.
+- **Plain words** - approvals and steps name the app and what it will do
+  ("Allow Stripe to create a product?"), never a tool's raw name. On a phone the
+  card no longer shows a keyboard shortcut.
+- **Helpers ask in your chat** - when a helper agent needs an approval, the
+  card shows in the conversation that started it.
+
+### Work In The Background
+
+- **Servers and long commands** - Row-Bot can start a dev server or a long
+  command and carry on with the conversation. It asks first, as it does for a
+  command; follow, read and stop them in the chat and in Monitor. They stop
+  when Row-Bot quits.
+- **Helpers follow the conversation** - helper agents use the chat's model and
+  reasoning. Ask for another ("use a helper on Sonnet at low effort") or use
+  `/agent --model … --reasoning …`. A helper keeps the chat's apps; a read-only
+  helper only reads them. Its row and header say which model and reasoning it
+  runs on.
+- **Stop is immediate** - Stop ends a cloud model's request at once. Before, a
+  request still waiting on the provider kept the turn at "Stopping…" until the
+  provider answered, on Linux and in Docker for every provider.
+
+### Browser, Video And Files
+
+- **Apps on this computer** - Row-Bot's browser opens a local development
+  address once you allow it in that chat; servers Row-Bot started itself need
+  no asking. It can take page screenshots at phone, tablet or desktop size.
+- **Recordings** - after asking, Row-Bot can record its browser, or the screen
+  with Computer Use.
+- **Video editing** - trim, speed up, crop, zoom, add titles and captions.
+  ffmpeg (about 30 MB) is downloaded once, after asking, and never comes with
+  the installer. Intel Macs and Windows on Arm use an ffmpeg you install.
+- **Many images at once** - Row-Bot looks at up to 8 images together, and makes
+  contact sheets that tile many images, or a video's frames, into one.
+- **Send a file** - ask Row-Bot to send a file to your phone or computer (a
+  download in the chat on every signed-in device for 7 days, with a notice in
+  open windows), or to your own chat on Telegram, Discord, Slack or WhatsApp
+  (it asks first).
+
+### Code And Workflows
+
+- **Code folders from any device** - attach a code folder from your phone or
+  another computer: choose one in Row-Bot's workspace folder, or clone one
+  there. Cloning follows your approval level.
+- **A sandbox ready for tests** - Prepare sandbox installs a project's test
+  tools with the network on only for the install. Row-Bot offers it when tests
+  can't run, and offers to download the sandbox image when you choose Docker.
+- **Workflows as a flowchart** - Edit workflow › Steps shows a workflow as a
+  flowchart, with labelled branches and loops. Click a step to edit it; a
+  problem shows on its step. The list is one tap away.
+- **Workflow details** - a Monthly schedule preset, each step shows the apps it
+  uses, and Delivery lists only the channels you've set up.
+- **A workflow's own folder, timezone and missed runs** - a workflow can work in
+  its own code folder, keep its schedule in a timezone you choose (daylight
+  saving keeps the time), and run once when Row-Bot starts if it was closed at a
+  scheduled time.
+- **Always ask me** - makes a workflow step or an app wait for your own
+  approval, even under Auto or Hands-off, on a card that shows exactly what
+  will be sent.
+- **Your Git identity** - Row-Bot no longer sets a Git name or email by
+  itself; only you choose who your commits are from.
+
+### Models And Apps
+
+- **Claude with your Claude plan** - Row-Bot runs your own Claude Code,
+  installed and signed in by you, for each model call. Row-Bot never reads,
+  stores or passes on a Claude credential, and every tool call still goes
+  through Row-Bot's approvals. For these runs Claude Code's telemetry, error
+  reports and auto-updates are turned off. Settings › Providers says what to do
+  at each step: install, sign in, update or check.
+- **Favourite models** - favourite the models you use and hide the rest, from
+  the model picker's ⋯ menu (or Shift+F10) and in Settings › Models. Setup
+  lists your favourites first. Hidden models wait under More models and still
+  work.
+- **Connect an app from your phone** - a sign-in finishes through Row-Bot's
+  public address, by pasting back the address your browser ends on, or with a
+  code where the service offers one.
+- **Google is ready after sign-in** - the first sign-in turns on the Gmail and
+  Calendar access you reviewed, so Google no longer reads Off.
+- **App access after Save** - an app's page shows the access you just chose.
+- **Clearer refusals** - when ChatGPT or Ollama Cloud refuses a request, the
+  error says why. A chat or workflow set to a model ChatGPT no longer offers
+  says so and asks you to choose another model.
+
+### Home And Conversations
+
+- **A calmer Home** - one column: a greeting that says the one thing that
+  matters, the Ask box, Needs you only when something does, your recent work,
+  and Today with only what's real. Home and the sidebar count the same things.
+- **Maths** - replies show formulas typeset, written with `\( \)`, `\[ \]`,
+  `$$ $$`, or `$…$` where it can't be a price. The typesetting comes with
+  Row-Bot and loads only for a message with maths.
+- **Deleting a chat** - takes effect at once. Undo still works, and closing the
+  window during Undo no longer brings the chat back.
+- **Documents** - asking about an empty library answers "No results" instead
+  of an error about the embedding model.
+- **Background work shows at once** - a workflow run started on its schedule, a
+  helper, or an approval raised in another chat appears in the sidebar, Home and
+  Monitor straight away, without reloading. Monitor and Needs you also update
+  at once when a channel, app or plugin starts or stops needing you.
+- **No "reconnecting" notice for nothing** - "Desktop features are
+  reconnecting…" no longer appears after a reload or on Home; it shows only when
+  something you asked for is waiting on it. Reloading a Home tab stays on it.
+- **Fixes** - the sidebar stops spinning when a reply has finished; Row-Bot no
+  longer says an app isn't connected while your apps are still connecting; a
+  conversation is never left blocked when a reply's end couldn't be recorded; a
+  reply no longer leaves an empty "Paged content" row; Conversation details
+  open with one tap after resizing between desktop and phone; a Settings switch
+  made while another tool setting was saving no longer loses your other
+  settings, and switching a tool no longer makes a window fail to connect for a
+  moment or gets stuck "finishing your last change" on Windows.
+
+### Windows And macOS
+
+- **One firewall question on Windows** - with phone or LAN access on, Windows
+  Firewall asks about Row-Bot once, not after every update. The server now runs
+  from one place that updates keep.
+- **Quit & Reopen on a Mac** - Row-Bot opens again after "Quit & Reopen" (for
+  example after allowing Screen Recording), and quitting Row-Bot quits all of
+  it.
+- **Row-Bot in the Dock** - the Dock, Cmd-Tab and Force Quit show Row-Bot and
+  its icon, not "Python 3.12".
+- **Libraries with security fixes** - aiohttp, certifi, mcp, Pillow 13, pypdf
+  and the WhatsApp bridge's follow-redirects are updated to releases that fix
+  published advisories.
+
+### Upgrade Notes
+
+- **From 5.2.1 or the beta, in the background** - Row-Bot downloads 5.3.0 and
+  says Restart to update. From 5.1 or 5.0, read the 5.2.0 notes below: the move
+  to 5.2 needs the full installer once.
+- **Claude, set up again** - the old Claude sign-in is gone. On first start
+  its saved tokens are deleted, and a profile that used it says once: "Claude
+  now works through Claude Code. Set it up again."
+- **Auto may ask a little more** - Auto now asks about anything that doesn't
+  clearly match your request, and each review is a small call to the chat's
+  model. Choose Hands-off for a chat or workflow that should never ask.
+- **Workflow schedules** - existing schedules keep their times: on first start
+  they are given the computer's current timezone. Existing workflows keep no
+  code folder and keep skipping runs missed while Row-Bot was closed; a
+  one-time run missed while closed still runs once on start, as before.
+- **Your X account** - your existing X sign-in becomes your first account the
+  next time Row-Bot reaches X (at start-up when X is on, when you press Check,
+  or on the first X action); until then it shows as "Your X account · Signed in
+  before Row-Bot 5.3". Nothing needs re-entering. To add another account,
+  switch to it on x.com in your browser, then choose Add another account.
+- **Computer use** - it now uses your real mouse and keyboard while you watch,
+  with a Stop bar on screen; you can stop it with Esc at any time.
+- **Background commands** - a job started with `&` inside a command now stops
+  when that command finishes; an app a command opens keeps running as before.
+  Ask Row-Bot to start a server instead.
+- **Windows Firewall, once more** - after updating to 5.3, Windows may ask
+  once about `Row-Bot Server` in Row-Bot's `versions` folder; after that it
+  doesn't ask again.
+- **macOS** - a Mac that updates in the background shows Row-Bot's icon in the
+  Dock straight away. The name "Row-Bot", and the Quit & Reopen fix, arrive
+  with the 5.3 DMG.
+
+### Known Issues
+
+- **The first time on a Mac** - when Row-Bot first works in your Documents
+  folder, macOS asks for permission, and the command waits until you answer.
+
+---
+
+## v5.3.0-beta.1 - The First 5.3 Beta
+
+The first 5.3 beta, delivered through 5.2's background updates on the Beta
+channel. Everything in it is in v5.3.0 above.
+
+---
+
 ## v5.2.1 - Fixes For The Mac, Skills And Sign-In
 
 A fix release, mostly for the Mac. On a Mac installed from the DMG, documents,

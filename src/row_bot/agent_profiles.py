@@ -228,6 +228,8 @@ _PLAN_TOOLS = _profile_tools(
     "calendar",
     "documents",
     "gmail",
+    "outlook_calendar",
+    "outlook_mail",
     "task",
     "tracker",
     "weather",
@@ -247,6 +249,8 @@ _WRITE_TOOLS = _profile_tools(
     "calendar",
     "documents",
     "gmail",
+    "outlook_calendar",
+    "outlook_mail",
     "task",
 )
 
@@ -278,6 +282,8 @@ _CREATIVE_TOOLS = _profile_tools(
 _AUTOMATE_TOOLS = _profile_tools(
     "calendar",
     "gmail",
+    "outlook_calendar",
+    "outlook_mail",
     "task",
     "tracker",
     "weather",

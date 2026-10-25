@@ -175,12 +175,15 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
     """Load the person's and the assistant's messages from a thread's checkpoint.
 
     Each is ``{"role", "content"}``, with the message's ``id`` when it has one.
+    An incognito conversation has none, and one that was incognito only those
+    said after it was turned off (N11): every memory reader starts here.
     """
     try:
-        from row_bot.threads import get_latest_checkpoint_messages
+        from row_bot.threads import get_latest_checkpoint_messages, incognito_state
         from row_bot.turn_context import is_person_message, is_turn_context_message
 
         messages = get_latest_checkpoint_messages(thread_id)
+        messages = messages[incognito_state(thread_id).readable_from(messages):]
         result = []
         for m in messages:
             if is_turn_context_message(m) or _is_app_event(m):
@@ -859,13 +862,21 @@ def _checkpoint_revision(thread_id: str) -> str:
         return ""
 
 
-def _skipped_thread(thread_id: str, name: str, thread_type: str, workflow_ids: set[str]) -> bool:
+def _skipped_thread(thread_id: str, name: str, thread_type: str, workflow_ids: set[str],
+                    incognito_ids: set[str]) -> bool:
     return (
         name.startswith(_WORKFLOW_NAME_PREFIX)
         or thread_id in workflow_ids
+        or thread_id in incognito_ids
         or thread_type in _SKIPPED_THREAD_TYPES
         or thread_id.startswith(_INTERNAL_THREAD_PREFIXES)
     )
+
+
+def read_to_end(thread_id: str) -> None:
+    """Move a conversation's watermark to its end: what it holds now is never read (incognito turned off)."""
+    revision = _checkpoint_revision(thread_id)  # Before the messages, as _unread reads them.
+    _save_watermark(thread_id, _watermark_for(_get_thread_messages(thread_id), revision))
 
 
 def _unread(thread_id: str, updated: str, watermark: dict | None, cutoff: str) -> _Unread | None:
@@ -946,7 +957,7 @@ def run_extraction(
         Number of new/updated memories saved.
     """
     from row_bot.models import get_current_model
-    from row_bot.threads import _list_threads, get_workflow_thread_ids
+    from row_bot.threads import _list_threads, get_workflow_thread_ids, incognito_state, incognito_thread_ids
 
     if not str(get_current_model() or "").strip():
         # Nothing is preset (decision 9). Leave the bookmark where it is so the
@@ -970,15 +981,17 @@ def run_extraction(
         return 0
 
     # Workflow runs, delegated Agents' threads and Row-Bot's temporary threads
-    # hold no user-stated facts; the open conversation races live tool calls.
+    # hold no user-stated facts; incognito conversations are never read (N11);
+    # the open conversation races live tool calls.
     watermarks = _thread_watermarks()
     workflow_ids = get_workflow_thread_ids()
+    incognito_ids = incognito_thread_ids()
     due: list[tuple[str, str, _Unread]] = []
     for tid, name, _created, updated, *_rest in threads:
         if tid in exclude:
             continue
         thread_type, raw_watermark = watermarks.get(str(tid), ("", ""))
-        if _skipped_thread(str(tid), str(name or ""), thread_type, workflow_ids):
+        if _skipped_thread(str(tid), str(name or ""), thread_type, workflow_ids, incognito_ids):
             continue
         unread = _unread(str(tid), str(updated or ""), _parse_watermark(raw_watermark), cutoff)
         if unread is not None:
@@ -1013,12 +1026,17 @@ def run_extraction(
                         len(due) - scanned)
             break
 
+        if incognito_state(tid).incognito:
+            continue  # Turned incognito since the run began: it is not read.
         conv_text = _conversation_window(unread.messages, unread.start)
 
         if on_status:
             on_status(f"Extracting memories from: {name}")
 
         extracted = _extract_from_conversation(conv_text)
+        if incognito_state(tid).incognito:
+            # Turned incognito while it was being read: nothing from it is saved, and it stays unread.
+            continue
         if isinstance(extracted, _NoReply):
             # No reply from the model: this conversation and the rest stay unread.
             journal_entry["errors"].append("The model did not reply; the rest waits for the next run")

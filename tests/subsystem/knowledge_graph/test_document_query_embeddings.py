@@ -213,7 +213,10 @@ def documents_tool(tmp_path, monkeypatch, reload_for_data_dir):
     import row_bot.tools.documents_tool  # noqa: F401 - registers the tool
     from row_bot.tools import registry
 
-    (documents,) = reload_for_data_dir(tmp_path / "data", "row_bot.documents")
+    # The search reads its embedding settings from this library's own folder (the default: a local model), never
+    # from a folder or a settings reader an earlier test in the worker left behind.
+    *_, documents = reload_for_data_dir(
+        tmp_path / "data", "row_bot.embedding_config", "row_bot.document_index", "row_bot.documents")
     embedding_providers.release_embedding_resources("test reset", collect=False)
     attempts = []
 

@@ -649,7 +649,8 @@ export default function ComposerControls({
       />
       {!singleLine && (
         <Menu
-          label={mode === 'full' ? 'Approvals: Hands-off' : 'Approvals'}
+          // The level in its name under every level: "Approvals: Ask" (U7).
+          label={`Approvals: ${approval}`}
           hint={
             mode === 'full'
               ? 'Hands-off is on: nothing asks before it runs'

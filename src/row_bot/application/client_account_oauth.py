@@ -1,4 +1,4 @@
-"""Explicit Google and X account setup over existing OAuth owners.
+"""Explicit Google, X and Microsoft (Outlook) account setup over existing OAuth owners.
 
 Any signed-in device may import credentials, check, disconnect and sign in.
 The desktop app on this computer signs in through this computer's browser,
@@ -9,6 +9,10 @@ page for that device's browser, and the provider sends it back to
 one-time state (with PKCE, bound to the session that started it, for
 ``LINK_TTL`` seconds) finds the waiting sign-in. Without exactly one such
 address only the desktop app can sign in. Tokens go to the keychain only.
+
+Microsoft's own app registration is a public client (``microsoft_account``): the desktop app here signs in
+with PKCE and a loopback address; any other device signs in with Microsoft's device code, entered at
+microsoft.com/devicelogin, so it needs no public address.
 """
 
 from __future__ import annotations
@@ -21,22 +25,27 @@ import hmac
 import json
 import logging
 import secrets
-from threading import RLock, Thread
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import re
+import socket
+import threading
+from threading import Event, RLock, Thread
 import time
 from typing import Any, Callable, Iterable
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import UUID
 
-from row_bot import account_tokens
+from row_bot import account_tokens, microsoft_account
 from row_bot.application.client_platform import ClientPlatformError
 
 logger = logging.getLogger(__name__)
 _LOCK = RLock()
 _JOBS: dict[str, dict[str, Any]] = {}
 _ACTIVE: set[str] = set()
-_NAMES = {"google": "Google", "x": "X"}
+_NAMES = {"google": "Google", "x": "X", "microsoft": "Microsoft"}
 CALLBACK_PATH = "/api/v1/accounts/{account}/auth/callback"
 LINK_TTL = 300  # Seconds a sign-in through Row-Bot's public address waits for its callback.
+LOOPBACK_TTL = 300  # Seconds a Microsoft sign-in on this computer waits for the browser to come back.
 GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
@@ -83,8 +92,12 @@ def sign_in_route(account: str, device: Device) -> dict[str, str | None]:
     a loopback address (X, or a Google Desktop app client). ``link``: this
     device's browser, returning to Row-Bot's public address (X, or a Google Web
     application client that lists it). ``unavailable`` names its blocker.
-    ``callback_url`` is the public address the provider must list, when one applies.
+    ``callback_url`` is the public address the provider must list, when one applies. Microsoft signs in
+    from another device with a code (``device``), which needs no public address.
     """
+    if _account(account) == "microsoft":
+        return {"sign_in": "this_computer" if device.on_this_computer else "device", "sign_in_blocker": None,
+                "callback_url": None}
     callback = public_callback(account, device.public_origins)
     client = account_tokens.google_client() if account == "google" else None
     kind = _google_kind(client)
@@ -104,7 +117,7 @@ def sign_in_route(account: str, device: Device) -> dict[str, str | None]:
 
 
 def sign_in_routes(device: Device) -> dict[str, dict[str, str | None]]:
-    """Google's and X's sign-in routes for this device (Settings › Accounts)."""
+    """Each account's sign-in route for this device (Settings › Accounts)."""
     return {account: sign_in_route(account, device) for account in _NAMES}
 
 
@@ -113,22 +126,47 @@ def read_account_auth(*, account: str, device: Device = Device()) -> dict[str, A
     _account(account)
     if account == "google":
         configured = account_tokens.google_client() is not None
+        signed_in = account_tokens.digest(account)
+        state = "not_configured" if not configured else account_tokens.state(account)
+        saved = int(bool(signed_in))
+    elif account == "microsoft":
+        configured = microsoft_account.client() is not None
+        signed_in = account_tokens.digest(account)
+        state = microsoft_account.state()  # A sign-in made with another app registration needs a new one.
+        saved = int(bool(signed_in))
     else:
+        from row_bot import x_accounts
         from row_bot.api_keys import get_key
         configured = bool(get_key("X_CLIENT_ID") and get_key("X_CLIENT_SECRET"))
-    signed_in = account_tokens.digest(account)
-    state = "not_configured" if not configured else account_tokens.state(account)
+        signed_in = x_accounts.digest()  # Every connected X account's sign-in, and the list.
+        state = "not_configured" if not configured else x_accounts.overall_state()
+        saved = len(x_accounts.summaries())
     revision = hashlib.sha256(json.dumps({
         "account": account, "configured": configured, "token": signed_in,
-        "client": account_tokens.digest("google_client") if account == "google" else None,
+        "client": account_tokens.digest(account + "_client") if account in {"google", "microsoft"} else None,
     }, sort_keys=True).encode()).hexdigest()
     route = sign_in_route(account, device)  # Differs by device, so the revision leaves it out.
     return {
         "schema_version": 1, "account": account, "revision": revision,
         "configured": configured, "state": state,
-        "token_files": int(bool(signed_in)),  # Saved sign-ins (in the keychain); the name predates that.
+        "token_files": saved,  # Saved sign-ins (in the keychain); the name predates that.
         "sign_in": route["sign_in"], "sign_in_blocker": route["sign_in_blocker"],
+        # Who is signed in, for the account's row ("you@yourdomain.com"); Microsoft's only.
+        "address": (microsoft_account.address() or None) if account == "microsoft" and signed_in else None,
     }
+
+
+def _install_microsoft_client(raw: str) -> None:
+    """The person's own Microsoft app registration: its Application (client) ID and, optionally, its tenant."""
+    try:
+        given = json.loads(raw) if raw and len(raw) <= 4096 else None
+        if not isinstance(given, dict) or set(given) - {"client_id", "tenant"}:
+            raise ValueError
+        microsoft_account.save_client(str(given.get("client_id") or ""), str(given.get("tenant") or ""))
+    except (ValueError, TypeError):
+        raise ClientPlatformError("account_microsoft_app_invalid") from None
+    except account_tokens.AccountTokenError:
+        raise ClientPlatformError("account_secure_storage_unavailable") from None
 
 
 def _install_google_credentials(raw: str, device: Device) -> None:
@@ -191,6 +229,83 @@ def _google_flow() -> bytes:
     flow = InstalledAppFlow.from_client_config(client, GMAIL_SCOPES + CALENDAR_SCOPES)
     credentials = flow.run_local_server(host="127.0.0.1", port=0, timeout_seconds=180)
     return credentials.to_json().encode()
+
+
+def _open_browser(url: str) -> None:
+    import webbrowser
+    webbrowser.open(url)
+
+
+class _Loopback6(HTTPServer):
+    address_family = socket.AF_INET6
+
+
+_AADSTS = re.compile(r"AADSTS(\d{4,6})")
+_ADMIN_CONSENT = {65001, 65004, 90094, 90095}  # Microsoft's codes for "an admin must approve this app".
+
+
+def _microsoft_flow(job: dict[str, Any]) -> dict:
+    """Sign in to Microsoft in this computer's browser: PKCE, returning to a loopback address that accepts
+    only this sign-in's one-time state. Returns what the sign-in keeps; raises when it didn't finish."""
+    found = microsoft_account.client()
+    if found is None:
+        raise ClientPlatformError("account_credentials_required")
+    verifier, challenge = microsoft_account.pkce()
+    state = secrets.token_urlsafe(32)
+    arrived, answer = Event(), {}
+
+    class Callback(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 -- http.server's name
+            parsed = urlparse(self.path)
+            query = {key: values[0] for key, values in parse_qs(parsed.query).items() if len(values) == 1}
+            given = str(query.get("state") or "")
+            if parsed.path != "/" or arrived.is_set() or not hmac.compare_digest(given.encode(), state.encode()):
+                self._say(400, "This isn't Row-Bot's current sign-in. Return to Row-Bot and sign in again.")
+                return
+            answer.update(code=str(query.get("code") or "")[:4096],
+                          codes=_AADSTS.findall(str(query.get("error_description") or ""))[:4])
+            arrived.set()
+            self._say(200, "Row-Bot is finishing signing in to Outlook. You can close this tab." if answer["code"]
+                      else "Microsoft didn't allow the sign-in. Return to Row-Bot to try again.")
+
+        def _say(self, status: int, text: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(text.encode("utf-8"))
+
+        def log_message(self, *_: Any) -> None:
+            pass  # The address holds the code: never logged.
+
+    # Loopback only, on a port chosen for this sign-in. "localhost" may mean either loopback address, so the
+    # same port listens on both where it can.
+    servers = [HTTPServer(("127.0.0.1", 0), Callback)]
+    try:
+        servers.append(_Loopback6(("::1", servers[0].server_address[1]), Callback))
+    except OSError:
+        pass  # No IPv6 loopback here: a browser goes on to 127.0.0.1.
+    redirect = f"http://localhost:{servers[0].server_address[1]}"  # Microsoft allows any port for http://localhost.
+    for server in servers:
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True,
+                         name="row-bot-microsoft-callback").start()
+    try:
+        _open_browser(microsoft_account.authorize_url(found, redirect, state, challenge))
+        deadline = time.monotonic() + LOOPBACK_TTL
+        while not arrived.wait(0.2):
+            if job["stop"].is_set() or time.monotonic() >= deadline:
+                raise InterruptedError("the sign-in was stopped or ran out of time")
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+    if not answer.get("code"):
+        codes = {int(code) for code in answer.get("codes") or []}
+        raise microsoft_account.SignInError("admin_consent" if codes & _ADMIN_CONSENT else "denied")
+    with microsoft_account._http() as http:
+        token = microsoft_account.exchange(found, answer["code"], redirect, verifier, http)
+        return microsoft_account.finish_sign_in(found, token, http)
 
 
 def _x_flow() -> bytes:
@@ -267,14 +382,28 @@ def _x_tokens(link: dict[str, Any], code: str, http: Any) -> dict[str, Any]:
                           link["verifier"], http=http)
 
 
+def _x_listed(account_id: str) -> bool:
+    """Whether an X account (its ID; "" for the sign-in from before 5.3) is there to remove."""
+    from row_bot import x_accounts
+
+    return any(row["id"] == account_id for row in x_accounts.summaries())
+
+
 def _receipt(command_id: str, account: str, action: str, phase: str, message: str, *,
-             device: Device = Device(), authorization_url: str | None = None) -> dict[str, Any]:
-    return {
+             device: Device = Device(), authorization_url: str | None = None,
+             code: dict[str, Any] | None = None) -> dict[str, Any]:
+    receipt = {
         "schema_version": 1, "command_id": command_id, "account": account,
         "action": action, "phase": phase, "message": message[:256],
         "snapshot": read_account_auth(account=account, device=device),
         "authorization_url": authorization_url,
     }
+    if code is not None and phase == "running":
+        # The code to enter on Microsoft's page, and how long it still works (never the device code itself).
+        receipt["device_code"] = {"user_code": code["user_code"], "verification_uri": code["verification_uri"],
+                                  "verification_uri_complete": ""}
+        receipt["expires_in"] = max(0, int(code["deadline"] - time.monotonic()))
+    return receipt
 
 
 def _expire() -> None:
@@ -296,21 +425,45 @@ def _expire() -> None:
 # What an account's setup reviews (Google's: "Gmail and Calendar. Sending and changes always ask
 # first."): its first sign-in turns that access on, so the account reads Connected, not Off (F29).
 # A sign-in that replaces one keeps the switches as the person left them.
-_REVIEWED_ACCESS = {"google": ("gmail", "calendar")}
+_REVIEWED_ACCESS = {"google": ("gmail", "calendar"), "microsoft": ("outlook_mail", "outlook_calendar")}
 
 
-def _save_sign_in(account: str, token: dict) -> None:
+_MICROSOFT_FAILED = {
+    "admin_consent": "Your organisation lets only an admin approve new apps. Ask your Microsoft 365 admin (or "
+                     "GoDaddy) to grant admin consent to your Row-Bot app, then sign in again.",
+    "denied": "Microsoft didn't allow the sign-in. Your existing sign-in was kept.",
+    "expired": "The code ran out before it was used. Sign in again for a new one.",
+    "scopes": "Microsoft didn't grant all of Mail and Calendar. Check the app's API permissions (step 4), then "
+              "sign in again.",
+    "client": "Microsoft doesn't accept this app for that sign-in. Check its Application (client) ID, and for a "
+              "code, Allow public client flows (step 3).",
+}
+
+
+def _failed_message(account: str, error: BaseException | None) -> str:
+    if account == "microsoft" and isinstance(error, microsoft_account.SignInError) and error.code in _MICROSOFT_FAILED:
+        return _MICROSOFT_FAILED[error.code]
+    return "Authentication failed. Existing tokens were kept. Retry from this account."
+
+
+def _save_sign_in(account: str, token: dict) -> str:
+    """Keep a new sign-in (keychain only; a failure keeps the old one) and say what was saved."""
+    if account == "x":
+        from row_bot import x_accounts
+
+        # Its own account, named by X (``/2/users/me``): a new one is added, one already there is replaced.
+        return f"Connected {x_accounts.add(token).handle} on X."
     first = account_tokens.read(account) is None
     account_tokens.write(account, token)  # Keychain only; a failure keeps the old sign-in.
     account_tokens.record_check(account, "valid")  # The provider has just issued it.
-    if not first:
-        return
-    from row_bot.tools import registry
-    for tool in _REVIEWED_ACCESS.get(account, ()):
-        try:
-            registry.set_enabled(tool, True)
-        except Exception:
-            logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
+    if first:
+        from row_bot.tools import registry
+        for tool in _REVIEWED_ACCESS.get(account, ()):
+            try:
+                registry.set_enabled(tool, True)
+            except Exception:
+                logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
+    return "Account authorization saved."
 
 
 def _finish_auth(job_key: str) -> None:
@@ -321,19 +474,23 @@ def _finish_auth(job_key: str) -> None:
     account = job["account"]
     command_id = job["command_id"]
     try:
-        content = _google_flow() if account == "google" else _x_flow()
+        if account == "microsoft":
+            token = _microsoft_flow(job)
+        else:
+            token = json.loads(_google_flow() if account == "google" else _x_flow())
         with _LOCK:
             cancelled = job["cancelled"]
             if not cancelled:
                 job["validate"]()
-                _save_sign_in(account, json.loads(content))
+                saved = _save_sign_in(account, token)
         phase = "cancelled" if cancelled else "completed"
-        message = "Authentication cancelled." if cancelled else "Account authorization saved."
-    except Exception:
+        message = "Authentication cancelled." if cancelled else saved
+    except Exception as error:
         with _LOCK:
             cancelled = job["cancelled"]
         phase = "cancelled" if cancelled else "failed"
-        message = "Authentication cancelled." if cancelled else "Authentication failed. Existing tokens were kept. Retry from this account."
+        message = "Authentication cancelled." if cancelled else _failed_message(account, error)
+        logger.info("A %s sign-in did not finish (%s)", _NAMES[account], getattr(error, "code", type(error).__name__))
     with _LOCK:
         try:
             job["receipt"] = _receipt(command_id, account, "start", phase, message, device=job["device"])
@@ -341,12 +498,66 @@ def _finish_auth(job_key: str) -> None:
             _ACTIVE.discard(account)
 
 
+def _pause(job: dict[str, Any], seconds: float) -> None:
+    """Wait between asks for a device code's answer; a cancel ends the wait at once."""
+    job["stop"].wait(seconds)
+
+
+def _finish_device(job_key: str) -> None:
+    """Ask Microsoft, as often as it allows, until the person entered the code and allowed it on their device,
+    declined, or the code ran out."""
+    with _LOCK:
+        job = _JOBS.get(job_key)
+    if not job:
+        return
+    code, found = job["device_code"], job["client"]
+    every, phase, message = code["start"].interval, "failed", _failed_message("microsoft", None)
+    try:
+        with microsoft_account._http() as http:
+            while True:
+                _pause(job, every)
+                if job["cancelled"]:
+                    raise InterruptedError
+                if time.monotonic() >= code["deadline"]:
+                    raise microsoft_account.SignInError("expired")
+                answer = microsoft_account.device_poll(found, code["start"], http)
+                if answer == "slow_down":
+                    every = min(every + 5, 60)
+                if isinstance(answer, dict):
+                    break
+            token = microsoft_account.finish_sign_in(found, answer, http)
+        with _LOCK:
+            if job["cancelled"]:
+                raise InterruptedError
+            if microsoft_account.client() != found:
+                raise ValueError("the app registration changed during the sign-in")
+            job["validate"]()
+            _save_sign_in("microsoft", token)
+        phase, message = "completed", "Account authorization saved."
+    except Exception as error:
+        message = _failed_message("microsoft", error)
+        logger.info("A Microsoft sign-in with a code did not finish (%s)", getattr(error, "code", type(error).__name__))
+    with _LOCK:
+        if job["cancelled"] and phase != "completed":
+            phase, message = "cancelled", "Authentication cancelled."
+        try:
+            if job["receipt"]["phase"] == "running":
+                job["receipt"] = _receipt(job["command_id"], "microsoft", "start", phase, message, device=job["device"])
+        finally:
+            _ACTIVE.discard("microsoft")
+
+
 def execute_account_auth(
     *, owner_id: str, command_id: str, account: str, action: str,
     expected_revision: str, confirmed: bool = False, credentials_json: str = "",
-    validate: Callable[[], None] = lambda: None, device: Device = Device(),
+    validate: Callable[[], None] = lambda: None, device: Device = Device(), x_account: str = "",
 ) -> dict[str, Any]:
-    """Accept an exact one-shot account action; OAuth runs in a background job or waits for its callback."""
+    """Accept an exact one-shot account action; OAuth runs in a background job or waits for its callback.
+
+    X has several accounts: ``start`` adds one (or signs one in again), ``disconnect`` removes the one
+    ``x_account`` names (its numeric ID; "" for the sign-in from before 5.3 not yet named) and leaves
+    the others, and ``check`` checks them all.
+    """
     try:
         if str(UUID(command_id)) != command_id:
             raise ValueError
@@ -359,7 +570,8 @@ def execute_account_auth(
         _expire()
         prior = _JOBS.get(key)
         if prior:
-            if prior["account"] != account or prior["action"] != action or prior["expected_revision"] != expected_revision:
+            if (prior["account"] != account or prior["action"] != action
+                    or prior["expected_revision"] != expected_revision or prior.get("x_account", "") != x_account):
                 raise ClientPlatformError("account_command_conflict")
             return prior["receipt"]
         if account in _ACTIVE:
@@ -374,16 +586,20 @@ def execute_account_auth(
                                       else "account_redirect_mismatch")
         if action == "disconnect" and not confirmed:
             raise ClientPlatformError("account_confirmation_required")
-        if action == "import_credentials" and account != "google":
+        if action == "import_credentials" and account not in {"google", "microsoft"}:
             raise ClientPlatformError("invalid_account_command")
+        if x_account and (account != "x" or action != "disconnect" or not x_account.isdigit()):
+            raise ClientPlatformError("invalid_account_command")
+        if account == "x" and action == "disconnect" and not _x_listed(x_account):
+            raise ClientPlatformError("account_changed")
         _ACTIVE.add(account)
         if len(_JOBS) >= 64:
             finished = next((item for item, value in _JOBS.items() if value["receipt"] and value["receipt"]["phase"] not in {"running", "cancel_requested"}), None)
             if finished:
                 _JOBS.pop(finished)
         job = {"owner_id": owner_id, "command_id": command_id, "account": account, "action": action,
-               "expected_revision": expected_revision, "cancelled": False, "receipt": None,
-               "validate": validate, "device": device}
+               "expected_revision": expected_revision, "x_account": x_account, "cancelled": False, "receipt": None,
+               "validate": validate, "device": device, "stop": Event()}
         _JOBS[key] = job
     try:
         if action == "start" and current["sign_in"] == "link":
@@ -394,24 +610,56 @@ def execute_account_auth(
                                           f"Waiting for {_NAMES[account]} to send the browser back to Row-Bot.",
                                           device=device, authorization_url=url)
             return job["receipt"]
+        if action == "start" and current["sign_in"] == "device":
+            # From another device: Microsoft's code, entered on its own page on any device.
+            found = microsoft_account.client()
+            with microsoft_account._http() as http:
+                start = microsoft_account.device_start(found, http)
+            with _LOCK:
+                job["client"] = found
+                job["device_code"] = {"start": start, "user_code": start.user_code,
+                                      "verification_uri": start.verification_uri,
+                                      "deadline": time.monotonic() + start.expires_in}
+                job["receipt"] = _receipt(command_id, account, action, "running",
+                                          "Enter the code on Microsoft's page, then allow access.", device=device,
+                                          code=job["device_code"])
+            Thread(target=_finish_device, args=(key,), daemon=True, name="row-bot-microsoft-code").start()
+            return job["receipt"]
         if action == "start":
             job["receipt"] = _receipt(command_id, account, action, "running", "Complete sign-in in the browser on this computer.",
                                       device=device)
             Thread(target=_finish_auth, args=(key,), daemon=True, name=f"row-bot-{account}-auth").start()
             return job["receipt"]
-        if action == "import_credentials":
+        if action == "import_credentials" and account == "microsoft":
+            validate()
+            _install_microsoft_client(credentials_json)
+            phase, message = "completed", "Your Microsoft app is saved."
+        elif action == "import_credentials":
             validate()
             _install_google_credentials(credentials_json, device)
             phase, message = "completed", "Google credentials saved locally."
+        elif action == "disconnect" and account == "x":
+            validate()
+            from row_bot import x_accounts
+            handle = next((f"@{row['username']}" for row in x_accounts.summaries()
+                           if row["id"] == x_account and row["username"]), "The X account")
+            x_accounts.remove(x_account)  # Only this one; the others stay signed in.
+            phase, message = "completed", (f"{handle} was removed from this computer. X may still list Row-Bot "
+                                           "as allowed; you can revoke it there.")
         elif action == "disconnect":
             validate()
-            account_tokens.delete(account)
+            if account == "microsoft":
+                microsoft_account.forget()
+            else:
+                account_tokens.delete(account)
             phase, message = "completed", "Local account tokens removed. Provider authorization may still exist."
         else:
             validate()
             # Each check remembers its verdict for Settings › Accounts.
             if account == "google":
                 statuses = [account_tokens.check_google()[0]]  # Gmail and Calendar share one sign-in.
+            elif account == "microsoft":
+                statuses = [microsoft_account.check()[0]]  # Outlook's mail and calendar share one sign-in.
             else:
                 from row_bot.tools.x_tool import XTool
                 statuses = [XTool().check_token_health()[0]]
@@ -423,6 +671,12 @@ def execute_account_auth(
                 phase, message = "failed", "The account token could not be checked. Try again later."
         job["receipt"] = _receipt(command_id, account, action, phase, message, device=device)
         return job["receipt"]
+    except microsoft_account.SignInError as error:
+        with _LOCK:
+            _JOBS.pop(key, None)
+            _ACTIVE.discard(account)
+        logger.info("Microsoft gave no sign-in code (%s)", error.code)
+        raise ClientPlatformError("account_device_code_unavailable") from None
     except Exception:
         with _LOCK:
             _JOBS.pop(key, None)
@@ -466,8 +720,8 @@ def accept_callback(*, account: str, state: str, code: str = "", error: str = ""
             if _client(account) != link["client"]:
                 raise ValueError("the client changed during the sign-in")
             job["validate"]()
-            _save_sign_in(account, token)
-        phase, message = "completed", "Account authorization saved."
+            message = _save_sign_in(account, token)
+        phase = "completed"
     except Exception as exc:
         logger.info("A %s sign-in through Row-Bot's public address did not finish (%s)", name, type(exc).__name__)
     with _LOCK:
@@ -486,6 +740,8 @@ def read_account_auth_receipt(*, owner_id: str, command_id: str) -> dict[str, An
         _expire()
         job = _JOBS.get(f"{owner_id}:{command_id}")
         if job and job["receipt"]:
+            if job.get("device_code") and job["receipt"].get("device_code"):
+                return {**job["receipt"], "expires_in": max(0, int(job["device_code"]["deadline"] - time.monotonic()))}
             return job["receipt"]
     raise ClientPlatformError("account_receipt_missing")
 
@@ -498,8 +754,14 @@ def cancel_account_auth(*, owner_id: str, command_id: str) -> dict[str, Any]:
             raise ClientPlatformError("account_receipt_missing")
         if job["receipt"]["phase"] == "running":
             job["cancelled"] = True
+            job["stop"].set()  # A wait for the browser or for a code's answer ends now.
             link = job.get("link")
-            if link and not link["used"]:
+            if job.get("device_code"):
+                # Nothing more is asked of Microsoft; a code allowed meanwhile is never saved.
+                job["receipt"] = _receipt(command_id, job["account"], "start", "cancelled", "Authentication cancelled.",
+                                          device=job["device"])
+                _ACTIVE.discard(job["account"])
+            elif link and not link["used"]:
                 # Nothing runs until the callback, which can no longer use the state.
                 link["used"] = True
                 job["receipt"] = _receipt(command_id, job["account"], "start", "cancelled", "Authentication cancelled.",

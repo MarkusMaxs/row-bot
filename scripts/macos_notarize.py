@@ -584,7 +584,9 @@ def main(argv: list[str] | None = None) -> int:
             script = Path(__file__).resolve().parents[1] / "installer" / "build_mac_dmg.sh"
 
             def build_dmg(app: Path, dmg: Path) -> None:
+                # The DMG's layout step installs its two pinned packages with this run's own Python.
                 if subprocess.run(["bash", str(script), str(app), str(dmg), args.identity], check=False,
+                                  env={**os.environ, "DMG_PYTHON": sys.executable},
                                   timeout=TIMEOUTS["hdiutil"] * 2).returncode:
                     raise NotarizeError(f"building {dmg.name} failed")
 

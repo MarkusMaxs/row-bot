@@ -257,7 +257,8 @@ def test_f_p05_large_active_stream_remains_retrievable_and_completes(platform):
 
 
 def test_designer_steps_carry_their_runtime_tool_for_the_design_panel(platform):
-    """A drafting turn's tool activity names the designer step (U35); other tools keep only their public name."""
+    """A drafting turn's tool activity names the designer step (U35). Every live step carries its tool's own
+    name, as its saved step does, never the display name with its emoji (U16)."""
     design_id, shell_id, first_id, final_id = map(
         fixture_id, ("design-step-tool", "design-step-shell", "design-step-first", "design-step-final"))
     fake = ScriptedAgentStream((
@@ -283,6 +284,34 @@ def test_designer_steps_carry_their_runtime_tool_for_the_design_panel(platform):
     activity = [event["payload"] for event in platform.events_since("conversation-a", cursor)["events"]
                 if event["type"] == "tool.activity"]
     assert [(item["tool_name"], item.get("runtime_tool", "")) for item in activity] == [
-        ("🎨 Designer", "designer_set_pages"), ("🎨 Designer", "designer_set_pages"),
-        ("🖥️ Shell", ""), ("🖥️ Shell", ""),
+        ("designer_set_pages", "designer_set_pages"), ("designer_set_pages", "designer_set_pages"),
+        ("shell_run", ""), ("shell_run", ""),
+    ]
+
+
+def test_the_browser_s_live_steps_group_as_the_browser_s(platform):
+    """U16: the browser's live steps carried its display name ("🌐 Browser"), so they grouped as generic
+    and the chat never showed its live browser step."""
+    call_id, first_id, final_id = map(fixture_id, ("browser-step", "browser-first", "browser-final"))
+    fake = ScriptedAgentStream((
+        ("token", "Looking"),
+        CheckpointCommit((AIMessage(content="Looking", id=first_id, tool_calls=[
+            {"name": "browser_navigate", "args": {}, "id": call_id},
+        ]),), first_id),
+        ("tool_call", {"id": call_id, "message_id": first_id, "name": "🌐 Browser",
+                       "raw_name": "browser_navigate", "runtime_name": "browser_navigate"}),
+        ("tool_done", {"id": call_id, "message_id": first_id, "name": "🌐 Browser", "raw_name": "browser_navigate",
+                       "content": "Opened https://en.wikipedia.org/wiki/Tea."}),
+        ("token", "Done"),
+        CheckpointCommit((AIMessage(content="Done", id=final_id),), final_id),
+        ("done", "Done"),
+    ))
+    cursor = platform.snapshot("conversation-a")["cursor"]
+    receipt = submit(platform, fake, "browser-step")
+    handle = platform.registry.get(receipt["execution_id"])
+    assert handle.producer_done.wait(10)
+    activity = [event["payload"] for event in platform.events_since("conversation-a", cursor)["events"]
+                if event["type"] == "tool.activity"]
+    assert [(item["tool_name"], item["group_kind"], item["status"]) for item in activity] == [
+        ("Browser Navigate", "browser", "pending"), ("Browser Navigate", "browser", "succeeded"),
     ]
