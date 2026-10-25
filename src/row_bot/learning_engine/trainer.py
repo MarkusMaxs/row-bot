@@ -12,7 +12,9 @@ adapter's files. Errors are reported as a reason class, never the engine's own t
 The recipe is L0d's certified 8 GB one (O23): bf16 LoRA (r 16, alpha 16, dropout 0) on the
 attention and MLP projections, learning rate 2e-4 (linear, 2 warmup steps), adamw_8bit, batch 1
 x accumulation 4, Unsloth's gradient checkpointing, PyTorch held to 95% of the card (W8), loss
-only on the assistant's turns. A recipe's settings can change these within limits.
+only on the assistant's turns. A recipe's settings can change these within limits. With more than
+one pass, each pass's adapter is saved and reported, so Row-Bot can fall back to an earlier pass
+(:class:`Passes`, O119).
 
 ``fit`` and ``export`` are for ``scripts/learning_gpu_check.py``: a few steps on rows of one
 length to measure memory and speed, and a merged GGUF made with llama.cpp's own tools (never
@@ -55,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
     "weight_decay": 0.0,
     "vram_cap": 0.95,
     "seed": 3407,
+    "passes": 1,
 }
 LIMITS: dict[str, tuple[float, float]] = {
     "max_seq_length": (512, 131072),
@@ -70,6 +73,8 @@ LIMITS: dict[str, tuple[float, float]] = {
     # smaller tier's (an 8 GB check on a 32 GB card caps at 0.2375, O77).
     "vram_cap": (0.2, 0.99),
     "seed": (0, 2**31 - 1),
+    # The passes over the examples; each one's adapter is kept when there are more than one (O119).
+    "passes": (1, 100),
 }
 
 
@@ -114,6 +119,18 @@ def classify(error: BaseException) -> str:
 
 
 # ── The data ────────────────────────────────────────────────────────────────
+
+
+def validation_rows(folder: Path) -> list[dict[str, Any]]:
+    """The lease's validation rows (``validation.jsonl``); none when it has none."""
+
+    path = Path(folder) / "validation.jsonl"
+    try:
+        if not path.is_file() or path.stat().st_size == 0:
+            return []
+    except OSError:
+        return []
+    return read_rows(path)
 
 
 def read_rows(path: Path, limit: int = 1_000_000) -> list[dict[str, Any]]:
@@ -307,6 +324,62 @@ def encode_rows(tokenizer: Any, rows: list[dict[str, Any]], max_seq: int) -> lis
     return encoded
 
 
+class Passes:
+    """The passes over the examples (O119). With more than one, each pass's adapter is saved when the
+    pass ends (``pass-<n>``) and, when the dataset holds validation rows, the loss on them is measured
+    for the model card. Row-Bot makes the last pass ready and falls back to an earlier one when it can't
+    finish a short task: a repetitive dataset overfits by its third pass and loops, while a varied one
+    keeps gaining, and a few validation rows don't tell the two apart. The losses are kept beside the
+    checkpoints (``passes.json``), so a resumed run remembers the passes before it."""
+
+    FILE = "passes.json"
+
+    def __init__(self, spec: dict[str, Any], settings: dict[str, Any], resumed: int = 0) -> None:
+        self.most = int(settings["passes"])
+        self.on = self.most > 1
+        self.total = int(spec["steps_total"])
+        self.per_pass = max(1, self.total // self.most)
+        self.output = Path(spec["output"])
+        self.losses: list[float | None] = []
+        if self.on and resumed:
+            try:
+                saved = json.loads((self.output / self.FILE).read_text(encoding="utf-8"))
+                if saved.get("per_pass") == self.per_pass:
+                    self.losses = list(saved.get("losses") or [])[:resumed // self.per_pass]
+            except (OSError, ValueError, AttributeError):
+                self.losses = []
+
+    def ends(self, step: int) -> int | None:
+        """The pass (from 1) that ends at ``step`` (the last pass ends at the last step), or None."""
+
+        if not self.on:
+            return None
+        if step == self.total:
+            return self.most
+        number = step // self.per_pass
+        return number if step % self.per_pass == 0 and number < self.most else None
+
+    def folder(self, number: int) -> Path:
+        return self.output / f"pass-{number}"
+
+    def record(self, number: int, loss: float | None) -> None:
+        """Pass ``number`` ended (its adapter saved) with this validation loss (None: no validation rows)."""
+
+        self.losses = self.losses[:number - 1] + [None if loss is None or not math.isfinite(loss) else float(loss)]
+        (self.output / self.FILE).write_text(json.dumps({"per_pass": self.per_pass, "losses": self.losses}),
+                                             encoding="utf-8")
+
+    def report(self) -> dict[str, Any] | None:
+        """The ``passes`` message's fields once every pass has ended: each pass's validation loss and the
+        files of its saved adapter. None for a single pass."""
+
+        if not self.on or len(self.losses) != self.most:
+            return None
+        files = [[_describe(path) for path in sorted(self.folder(number).iterdir()) if path.is_file()]
+                 for number in range(1, self.most + 1)]
+        return {"losses": [None if value is None else round(value, 6) for value in self.losses], "files": files}
+
+
 class UnslothBackend:
     """Trains for real. ``reporter`` gets each step, checkpoint and the pause point."""
 
@@ -320,6 +393,12 @@ class UnslothBackend:
         output = Path(spec["output"])
         torch, model, tokenizer = load_model(self.model_dir, settings)
         encoded = encode_rows(tokenizer, rows, settings["max_seq_length"])
+        passes = reporter.passes
+        checks = []
+        if passes.on:
+            checks = [item for item in (render_and_mask(tokenizer, row, settings["max_seq_length"])
+                                        for row in validation_rows(Path(spec["lease"]["dataset"])))
+                      if item is not None]
         from datasets import Dataset
         from transformers import TrainerCallback
         from trl import SFTConfig, SFTTrainer
@@ -350,9 +429,25 @@ class UnslothBackend:
                 self.flush()
                 self.pending = (state.global_step, now - (self.started_at or now))
                 self.started_at = now
+                number = passes.ends(state.global_step)
+                if number is not None and checks:
+                    control.should_evaluate = True  # the pass's validation loss, then on_evaluate
+                elif number is not None:
+                    self.pass_done(number, None, kwargs["model"])
                 if reporter.pause_requested():
                     control.should_save = True
                     control.should_training_stop = True
+
+            def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+                number = passes.ends(state.global_step)
+                if number is not None:
+                    loss = (metrics or {}).get("eval_loss")
+                    self.pass_done(number, float(loss) if isinstance(loss, (int, float)) else None, kwargs["model"])
+                torch.cuda.empty_cache()
+
+            def pass_done(self, number, loss, model) -> None:
+                model.save_pretrained(str(passes.folder(number)))
+                passes.record(number, loss)
 
             def on_log(self, args, state, control, logs=None, **kwargs):
                 if logs and "loss" in logs:
@@ -377,9 +472,11 @@ class UnslothBackend:
             seed=settings["seed"], report_to="none", max_length=settings["max_seq_length"],
             save_strategy="steps", save_steps=every, save_total_limit=2, dataset_num_proc=1, packing=False,
             bf16=True, dataloader_num_workers=0, disable_tqdm=True, save_only_model=False,
+            # O119: the validation rows are measured at each pass's end only (on_step_end asks).
+            eval_strategy="no", per_device_eval_batch_size=1, prediction_loss_only=True,
         )
         trainer = SFTTrainer(model=model, processing_class=tokenizer, train_dataset=dataset, args=config,
-                             callbacks=[Bridge()])
+                             eval_dataset=Dataset.from_list(checks) if checks else None, callbacks=[Bridge()])
         resume = str(output / spec["resume_from"]) if spec["resume_from"] else None
         torch.cuda.empty_cache()
         try:
@@ -418,6 +515,7 @@ class Reporter:
         self.step_now = protocol.checkpoint_step(spec["resume_from"]) if spec["resume_from"] else 0
         self.checkpointed = self.step_now
         self.stepped = False
+        self.passes = Passes(spec, settings_from(spec["recipe"]["settings"]), resumed=self.step_now)
         self._pause = threading.Event()
 
     def request_pause(self) -> None:
@@ -521,6 +619,9 @@ def run_protocol(protocol: Any, reader: Any, writer: Any, backend: Any,
     if reporter.step_now != reporter.total:
         send("error", reason="engine_error", step=reporter.step_now)
         return 1
+    passes = reporter.passes.report()
+    if passes is not None:
+        send("passes", **passes)
     if files:
         send("artifacts", files=files)
     send("finished", step=reporter.step_now)

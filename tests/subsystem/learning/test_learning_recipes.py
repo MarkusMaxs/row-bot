@@ -41,11 +41,13 @@ def test_a_computer_trains_with_the_best_certified_recipe_its_card_fits():
 def test_steps_checkpoints_and_the_protocol_spec():
     recipe = recipes.load("8gb")
 
-    assert recipe.rows_per_step == 4 and recipe.steps_for(154) == 39 and recipe.steps_for(0) == 1
+    # O114: three passes over the examples (one moved nothing on 90 rows; three lifted own work).
+    assert recipe.rows_per_step == 4 and recipe.steps_for(154) == 39 * 3 and recipe.steps_for(0) == 1
     assert recipe.checkpoint_interval(39) == 10 and recipe.checkpoint_interval(3) == 3
     spec = recipe.spec()
     assert spec["name"] == "8gb-v1" and spec["settings"]["report_to"] == "none"
     assert spec["settings"]["max_seq_length"] == 16_384
+    assert spec["settings"]["passes"] == 3  # each pass's adapter kept, so an earlier one can be used (O119)
 
 
 def _text(**changes) -> str:

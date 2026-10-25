@@ -10,6 +10,8 @@ driven step by step (no sleeps); every process here ends before its test does.""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 import time
 
@@ -33,6 +35,7 @@ from tests.fixtures.learning import (
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 BASE_PYTHON = getattr(sys, "_base_executable", "") or sys.executable
+CHECKPOINT_EVERY = 5
 
 
 @pytest.fixture(autouse=True)
@@ -56,17 +59,18 @@ def _no_worker_outlives_its_test(monkeypatch):
 class Training:
     """A supervisor over the fake trainer, a fake lease, fake clocks and a planned job."""
 
-    def __init__(self, root, clock, **engine_options) -> None:
+    def __init__(self, root, clock, *, steps_total: int = 20, recipe: dict | None = None, validation: int = 0,
+                 **engine_options) -> None:
         LearningStore(root).create()
         self.root = root
         self.clock = clock
         self.ticks = FakeClock(1000.0)
         self.lease = FakeLease()
         self.engine = FakeEngine(**engine_options)
-        self.dataset = FakeDataset()
+        self.dataset = FakeDataset(validation=validation)
         self.supervisor = TrainingSupervisor(root=root, clock=clock, monotonic=self.ticks, engine=self.engine,
                                              dataset=self.dataset, lease=self.lease, start_threads=False)
-        self.job = self.supervisor.jobs.plan(steps_total=20, checkpoint_every=5)
+        self.job = self.supervisor.jobs.plan(steps_total=steps_total, checkpoint_every=CHECKPOINT_EVERY, recipe=recipe)
 
     def current(self):
         return self.supervisor.jobs.get(self.job.id)
@@ -75,11 +79,17 @@ class Training:
         return self.supervisor.wait_for(predicate, timeout=timeout, job_id=self.job.id)
 
     def advance(self, steps: int):
+        """The worker takes ``steps`` more steps. A step that saves a checkpoint reports the step first and
+        the checkpoint after it, so landing on one waits for the checkpoint too (and its pruning, recorded
+        with it)."""
+
         worker = self.supervisor.live_worker()
         assert worker is not None, "no live worker"
         target = self.current().steps_done + steps
+        saves = target % CHECKPOINT_EVERY == 0
         worker.advance(steps)
-        return self.until(lambda job: job.steps_done >= target or job.state not in ("preparing", "running"))
+        return self.until(lambda job: job.state not in ("preparing", "running") or (
+            job.steps_done >= target and (not saves or (job.checkpoint_step or 0) >= target)))
 
     def start(self):
         self.supervisor.train_now(self.job.id)
@@ -121,6 +131,55 @@ def test_train_now_runs_a_worker_that_reports_progress_and_keeps_the_newest_two_
     assert (training_jobs.run_dir(job.id, training.root) / "checkpoints" / "adapter.bin").is_file()
     # It read its own prepared data, nothing else.
     assert training.dataset.prepared == [job.id]
+
+
+# O119: three passes of 4 steps; each pass's adapter is saved and reported.
+PASSES = {"name": "8gb-v1", "settings": {"report_to": "none", "passes": 3}}
+
+
+@pytest.mark.parametrize("losses, validation, reported", [
+    ([0.9, 0.5, 0.7], 2, [0.9, 0.5, 0.7]),  # the loss on the rows held back, for the model card
+    ([], 0, [None, None, None]),  # no rows held back: none measured
+])
+def test_a_run_of_several_passes_saves_and_reports_each_passs_adapter(learning_on, clock, losses, validation,
+                                                                       reported):
+    training = _training(learning_on, clock, steps_total=12, recipe=PASSES, validation=validation, pace="free",
+                         validation_losses=losses)
+    try:
+        training.supervisor.train_now(training.job.id)
+        job = training.until(lambda job: job.state == "evaluating")
+        assert (job.steps_done, job.steps_total) == (12, 12)  # every pass trains
+        run = training_jobs.run_dir(job.id, training.root)
+        record = json.loads((run / training_jobs.PASSES_FILE).read_text(encoding="utf-8"))
+        assert record["losses"] == reported
+        checkpoints = run / "checkpoints"
+        saved = [(checkpoints / f"pass-{number}" / "adapter.bin").read_bytes() for number in (1, 2, 3)]
+        assert len(set(saved)) == 3  # each pass's own adapter, as it was at that pass's end
+        assert [[item["sha256"] for item in files] for files in record["files"]] == [
+            [hashlib.sha256(item).hexdigest()] for item in saved]
+        assert (checkpoints / "adapter.bin").read_bytes() == saved[2]  # the run's adapter is the last pass's
+        assert training.supervisor.wait_idle(10)
+    finally:
+        training.stop()
+
+
+def test_a_resumed_run_remembers_the_passes_before_it(learning_on, clock):
+    training = _training(learning_on, clock, steps_total=12, recipe=PASSES, validation=2,
+                         validation_losses=[0.5, 0.6, 0.4])
+    try:
+        training.start()
+        training.advance(6)  # pass 1 measured at step 4
+        training.supervisor.stop(training.job.id)  # continues from step 5's checkpoint
+        training.supervisor.train_now(training.job.id)
+        training.until(lambda job: job.state == "running")
+        training.supervisor.live_worker().advance(7)
+        job = training.until(lambda job: job.state == "evaluating")
+        record = json.loads((training_jobs.run_dir(job.id, training.root) / training_jobs.PASSES_FILE).read_text(
+            encoding="utf-8"))
+        assert record["losses"] == [0.5, 0.6, 0.4] and len(record["files"]) == 3
+        assert training.supervisor.wait_idle(10)
+    finally:
+        training.stop()
 
 
 def test_the_worker_belongs_to_no_conversation_and_gets_only_its_spec_lease_and_a_clean_environment(
@@ -169,9 +228,52 @@ def test_pause_on_use_saves_at_the_next_step_and_the_worker_exits(training):
     assert [item.state for item in job.transitions][-2:] == ["pausing", "paused"]
 
 
+def test_a_pause_before_the_first_step_ends_the_worker_at_once_and_it_continues_from_the_same_checkpoint(training):
+    # A worker loads the model before its first step (minutes on a real card): using Row-Bot then doesn't wait
+    # for that step. Nothing is lost: it continues from the checkpoint it started from.
+    training.start()
+    training.lease.set(chat_cloud=True)
+    assert training.supervisor.watch() is False  # nothing left to watch: it ended now
+    job = training.current()
+    assert (job.state, job.pause_reason, job.steps_done, job.checkpoint_step) == ("paused", "in_use", 0, None)
+    assert training.supervisor.wait_idle(5)
+
+    training.lease.set()
+    training.supervisor.train_now(job.id)
+    training.until(lambda job: job.state == "running")
+    training.advance(7)
+    training.supervisor.stop(training.job.id)  # paused by the person at step 5's checkpoint
+    training.supervisor.train_now(training.job.id)
+    job = training.until(lambda job: job.state == "running")
+    assert job.steps_done == 5  # resumed, still loading the model
+
+    training.lease.set(chat_cloud=True)
+    assert training.supervisor.watch() is False
+    job = training.current()
+    assert (job.state, job.pause_reason, job.steps_done, job.checkpoint_step) == ("paused", "in_use", 5, 5)
+    assert [item.state for item in job.transitions][-2:] == ["running", "paused"]  # never "Pausing after this step"
+    assert training.supervisor.wait_idle(5)
+
+    training.lease.set()
+    training.supervisor.train_now(job.id)
+    assert training.until(lambda job: job.state == "running").steps_done == 5
+    assert training.advance(2).steps_done == 7
+
+
+def test_only_a_run_that_hasnt_trained_a_step_takes_the_recipe_as_it_is_now(training):
+    training.start()
+    assert training.dataset.started == [training.job.id]
+    training.advance(7)
+    training.supervisor.stop(training.job.id)
+    training.supervisor.train_now(training.job.id)
+    training.until(lambda job: job.state == "running")
+    assert training.dataset.started == [training.job.id]  # it trained steps: it keeps its own spec
+
+
 def test_the_person_using_row_bot_after_training_started_counts_but_earlier_use_does_not(training):
     training.lease.set(since_activity=30.0)  # they pressed Train now half a minute after chatting
     training.start()
+    training.advance(1)
     assert training.supervisor.watch() is True
     assert training.current().state == "running"
     training.ticks.advance(60)  # a minute later they send a message

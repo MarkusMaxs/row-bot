@@ -68,9 +68,12 @@ def _gpu_free() -> bool:
 
 
 class Dataset(Protocol):
-    """Prepares a job's own data folder (its lease) and says how many examples it holds (L2c)."""
+    """Prepares a job's own data folder (its lease) and says how many examples it holds (L2c);
+    ``starting`` gives a job that hasn't trained a step the recipe as it is now (O117)."""
 
     def prepare(self, job: Job, folder: Path) -> int: ...
+
+    def starting(self, job: Job) -> Job: ...
 
 
 class NoDataset:
@@ -78,6 +81,9 @@ class NoDataset:
 
     def prepare(self, job: Job, folder: Path) -> int:
         raise TrainingError("nothing_to_train")
+
+    def starting(self, job: Job) -> Job:
+        return job
 
 
 @dataclass
@@ -297,6 +303,11 @@ class TrainingSupervisor:
 
     def _launch(self, job: Job, trigger: str, *, at_most: int | None = None) -> Job:
         run = jobs_module.run_dir(job.id, self.jobs.root)
+        if at_most is None and not job.steps_done and job.checkpoint_step is None:
+            try:  # nothing trained yet: it takes the recipe as it is now (a run with steps keeps its own)
+                job = self.dataset.starting(job)
+            except Exception:
+                logger.warning("Learning couldn't bring a planned run up to date; it starts as planned", exc_info=True)
         try:
             data, examples = self._lease_folder(job)
         except TrainingError:
@@ -371,7 +382,8 @@ class TrainingSupervisor:
         return moved
 
     def request_pause(self, reason: str) -> Job | None:
-        """Ask the live worker to pause at its next step (pause on use, Learning paused)."""
+        """Ask the live worker to pause at its next step (pause on use, Learning paused). Before its first
+        step it ends now: loading the model can take minutes, and it continues from the same checkpoint."""
 
         with self._lock:
             run = self._run
@@ -380,7 +392,7 @@ class TrainingSupervisor:
             job = self.jobs.get(run.job_id)
             if job is None:
                 return None
-            if job.state == "preparing":
+            if job.state == "preparing" or "progress" not in run.messages:
                 return self._end_run(reason)  # nothing to save yet
             if job.state != "running":
                 return job
@@ -444,6 +456,16 @@ class TrainingSupervisor:
                     logger.warning("Learning skipped a checkpoint whose files don't match it (step %d)",
                                    message["step"])
                 self._notify(wake=False)
+                return
+            elif kind == "passes":
+                # Each pass's validation loss and saved adapter (O119): a version that can't finish a
+                # short task falls back to the pass before.
+                try:
+                    (jobs_module.run_dir(job.id, self.jobs.root) / jobs_module.PASSES_FILE).write_text(
+                        json.dumps({"losses": message["losses"], "files": message["files"]}, sort_keys=True),
+                        encoding="utf-8")
+                except OSError:
+                    logger.warning("Learning couldn't record a training run's passes")
                 return
             elif kind == "artifacts":
                 # What the finished run produced (names, sizes, SHA-256): the version's adapter is checked

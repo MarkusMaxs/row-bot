@@ -88,6 +88,7 @@ class VersionState:
     free_bytes: int | None = None
     trained_at: float | None = None
     examples: int = 0
+    kept_pass: Mapping[str, Any] = field(default_factory=dict)
     updated_at: float = 0.0
     verified_at: float | None = None
     checks: Mapping[str, Any] = field(default_factory=dict)
@@ -121,8 +122,30 @@ def write_state(folder: Path, state: VersionState) -> VersionState:
     return state
 
 
-def latest_state(root: Path | None = None) -> VersionState | None:
-    """The newest version's state (the Personal model view follows it)."""
+def couldnt_start(state: VersionState | None) -> bool:
+    """A version its runtime couldn't start (a failed load, probe or tool turn) and that was never ready.
+    It stays listed with Try again, Change where it runs and Delete, but it doesn't hold up the next
+    version, and what it was trained on doesn't count as trained (it may have been trained another way,
+    as the preview's first pilot was). A runtime that isn't there yet (``waiting_for_you``) isn't this."""
+
+    return state is not None and state.phase == RUNTIME_FAILED and not state.verified_at
+
+
+def holds_back(job: Any, root: Path | None = None) -> bool:
+    """Whether the unsettled ``job`` keeps the next version from being planned: every one does, except a
+    finished run whose version couldn't start."""
+
+    if job is None:
+        return False
+    if job.state != "evaluating" or not job.version:
+        return True
+    state = read_state(version_dir(int(job.version), root))
+    return not (state is not None and state.job_id == job.id and couldnt_start(state))
+
+
+def latest_state(root: Path | None = None, *, started: bool = False) -> VersionState | None:
+    """The newest version's state (the Personal model view follows it); with ``started``, the newest
+    one that didn't fail to start (what new examples are counted against)."""
 
     folder = versions_dir(root)
     if not folder.is_dir():
@@ -131,15 +154,16 @@ def latest_state(root: Path | None = None) -> VersionState | None:
     for entry in folder.iterdir():
         if entry.is_dir() and entry.name.startswith("v") and entry.name[1:].isdigit():
             state = read_state(entry)
-            if state is not None:
+            if state is not None and not (started and couldnt_start(state)):
                 found.append(state)
     return max(found, key=lambda item: item.version) if found else None
 
 
 def trained_example_ids(root: Path | None = None) -> set[str]:
-    """The examples the newest version was trained on (ids only), to count what is new since."""
+    """The examples the newest version was trained on (ids only), to count what is new since. A version
+    that couldn't start doesn't count."""
 
-    state = latest_state(root)
+    state = latest_state(root, started=True)
     if state is None:
         return set()
     try:
@@ -178,6 +202,7 @@ _REASONS = {
     "repeated web or tool content", "unsupported_content": "with images or files", "partial": "incomplete records",
     "incomplete": "incomplete records", "no_target": "nothing to learn from", "past_chat_tool_step":
     "past-chat tool steps", "unrenderable": "the model's chat format couldn't hold them",
+    "past_chat_waiting": "past chats waiting for a first chat here that uses tools",
 }
 
 
@@ -192,6 +217,46 @@ def _provider_name(provider: str, terms: Mapping[str, str]) -> str:
     if provider.startswith("custom_openai_"):
         return "your own endpoint"
     return provider
+
+
+# A version whose ready check failed for one of these reasons falls back to the pass before (O119): it
+# couldn't finish a short task (it looped until the step budget ended the turn, or made no call). A runtime
+# that is missing or can't load it is no reason to: every pass would fail the same way.
+WALK_BACK = frozenset({"tool_turn_failed"})
+
+
+def pass_words(kept: Mapping[str, Any], ready: bool) -> list[str]:
+    """Which pass a version of several passes kept and why, in plain words (O119), and each pass's
+    validation loss (for information: it doesn't choose)."""
+
+    trained = int(kept.get("of") or 0)
+    if trained < 2:
+        return []
+    number = int(kept.get("pass") or trained)
+    lines = []
+    failed = [item for item in kept.get("failed") or () if isinstance(item, Mapping)]
+    if failed:
+        words = "; ".join(f"pass {int(item['pass'])} couldn't finish a short task"
+                          + (f" ({int(item['tool_calls'])} tool calls)" if item.get("tool_calls") else "")
+                          for item in failed)
+        kept_part = f"; kept pass {number} of {trained}" if ready else ""
+        lines.append(f"- {words[0].upper()}{words[1:]}{kept_part}.")
+    elif ready:
+        lines.append(f"- Kept pass {number} of {trained}, the last.")
+    losses = list(kept.get("losses") or ())
+    if any(value is not None for value in losses):
+        shown = ", ".join("-" if value is None else f"{float(value):.3f}" for value in losses)
+        lines.append(f"- Loss on the examples held back, by pass (for information): {shown}.")
+    return lines
+
+
+def _adapter_pin(recipe: Any, state: VersionState, sha: str) -> Pin:
+    """The version's adapter: with several passes, the pin names the one kept (O119)."""
+
+    kept = state.kept_pass or {}
+    method = (f"{recipe.method}, pass {int(kept['pass'])} of {int(kept['of'])}"
+              if int(kept.get("of") or 0) > 1 and kept.get("pass") else recipe.method)
+    return Pin("adapter_model.safetensors", method, sha or None)
 
 
 def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState, recipe: Any,
@@ -243,6 +308,7 @@ def model_card(release: Release, dataset: Mapping[str, Any], state: VersionState
     lines.append(f"- Recipe: {recipe.title} ({recipe.name}): LoRA rank {recipe.settings.get('rank')}, "
                  f"{recipe.max_seq_length:,}-token examples, "
                  f"{'one pass' if recipe.epochs == 1 else f'{recipe.epochs} passes'}, no reasoning.")
+    lines += pass_words(state.kept_pass, state.phase == READY)
     if engine_versions:
         lines.append("- Training engine: " + ", ".join(f"{key} {value}" for key, value in sorted(engine_versions.items()))
                      + ".")
@@ -445,32 +511,73 @@ class ReleaseMaker:
             logger.exception("Learning couldn't make personal model v%s", job.version)
 
     def _steps(self, job: Job, *, quiet: bool, runtime: str | None) -> None:
-        from row_bot.learning.training import export, jobs as jobs_module, serving
+        from row_bot.learning.training import jobs as jobs_module
 
         version = int(job.version or 1)
         folder = version_dir(version, self.root)
         recipe = self.recipe()
         runtime = runtime or self.chosen_runtime()
         previous = read_state(folder)
-        if previous is None or previous.job_id != job.id:
-            previous = VersionState(version=version, phase=EXPORTING, job_id=job.id, runtime=runtime,
-                                    quantization=recipe.quantization, trained_at=job.finished_at or job.updated_at)
-        state = previous
         run = jobs_module.run_dir(job.id, self.root)
+        passes = _read_json(run / jobs_module.PASSES_FILE)
+        if previous is None or previous.job_id != job.id:
+            trained = len(passes.get("files") or ())
+            kept = {"pass": trained, "of": trained, "losses": passes.get("losses") or [], "failed": []} if trained else {}
+            previous = VersionState(version=version, phase=EXPORTING, job_id=job.id, runtime=runtime,
+                                    quantization=recipe.quantization, trained_at=job.finished_at or job.updated_at,
+                                    kept_pass=kept)
+        state = previous
+        while True:
+            outcome, state = self._make_ready(job, state, previous, recipe, runtime, quiet, run, passes)
+            previous = state  # moved to another runtime: withdrawn once, on the first try
+            kept = dict(state.kept_pass or {})
+            number = int(kept.get("pass") or 0)
+            if outcome is None or outcome.state != "failed" or outcome.reason not in WALK_BACK or not number:
+                return
+            # It couldn't finish a short task: the pass before is exported and checked (O119).
+            failed = [*kept.get("failed", []), {"pass": number,
+                                                "tool_calls": int((outcome.tool_turn or {}).get("tool_calls") or 0)}]
+            if number < 2:  # no pass could: the version couldn't start (O106)
+                state = self._save(folder, read_state(folder) or state, kept_pass={**kept, "failed": failed})
+                self._write_card(folder, state, recipe, self.engine())
+                return
+            state = self._save(folder, read_state(folder) or state, phase=EXPORTING, step="merge",
+                               kept_pass={**kept, "pass": number - 1, "failed": failed})
+            logger.info("Personal model v%d's pass %d couldn't finish a short task; trying pass %d", version, number,
+                        number - 1)
+            self._check()
+
+    def _make_ready(self, job: Job, state: VersionState, previous: VersionState, recipe: Any, runtime: str,
+                    quiet: bool, run: Path, passes: Mapping[str, Any]) -> tuple[Any, VersionState]:
+        """Export the version's current pass (unless it is exported) and make it ready in ``runtime``.
+        Returns the runtime's outcome (None when the export failed) and the state."""
+
+        from row_bot.learning.training import export, serving
+
+        version = state.version
+        folder = version_dir(version, self.root)
         engine_status = self.engine()
         model, weights_folder, weights_bytes = self.starting_model()
+        kept = state.kept_pass or {}
+        number = int(kept.get("pass") or 0)
         exported = state.gguf is not None and (folder / state.gguf).is_file() and state.phase not in (EXPORTING,)
         if not exported:
             state = self._save(folder, state, phase=EXPORTING, step="merge", failure=None, runtime=runtime,
                                needs_bytes=None, free_bytes=None, command=None)
-            artifacts = _read_json(run / ARTIFACTS_FILE)
-            expected = {item.get("name"): item.get("sha256") for item in artifacts.get("files") or ()
-                        if isinstance(item, dict)}
+            if number:  # the pass being made ready: the adapter saved at its end, as the engine reported it
+                source = run / "checkpoints" / f"pass-{number}"
+                files = (passes.get("files") or [])[number - 1]
+            else:
+                source = run / "checkpoints"
+                files = _read_json(run / ARTIFACTS_FILE).get("files") or ()
+            expected = {item.get("name"): item.get("sha256") for item in files if isinstance(item, dict)}
             try:
-                adapter, adapter_bytes, adapter_sha = export.copy_adapter(run / "checkpoints", folder / "adapter", expected)
+                adapter, adapter_bytes, adapter_sha = export.copy_adapter(source, folder / "adapter", expected)
                 release = self._record(job, state, recipe, model, weights_folder, adapter_sha, run)
                 state = self._save(folder, state, release_id=release.id, adapter_bytes=adapter_bytes,
                                    examples=int(_read_json(folder / DATASET_FILE).get("examples") or 0))
+                if kept.get("failed"):
+                    self._update_release(state, adapter=_adapter_pin(recipe, state, adapter_sha))
                 if weights_folder is None:
                     raise export.ExportError("engine_missing")
                 result = (self.exporter or export.export_gguf)(
@@ -485,7 +592,7 @@ class ReleaseMaker:
                 self._save(folder, current, phase=EXPORT_FAILED, failure=error.code, step=error.step,
                            needs_bytes=error.needs, free_bytes=error.free)
                 logger.warning("Learning couldn't export personal model v%d (%s)", version, error.code)
-                return
+                return None, state
             state = self._save(folder, read_state(folder) or state, phase=MAKING_READY, step=None,
                                gguf=result.gguf.name, gguf_bytes=result.gguf_bytes, quantization=result.quantization)
             self._update_release(state, quantization=result.quantization)
@@ -517,12 +624,13 @@ class ReleaseMaker:
                 self.jobs.move(job.id, "ready", reason="made_ready", release_id=state.release_id or None)
             logger.info("Learning made personal model v%d ready in %s", version, runtime)
         elif outcome.state == "waiting_for_you":
-            self._save(folder, current, phase=WAITING, runtime=runtime, failure=outcome.reason, command=outcome.command,
-                       checks=checks)
+            state = self._save(folder, current, phase=WAITING, runtime=runtime, failure=outcome.reason,
+                               command=outcome.command, checks=checks)
         else:
-            self._save(folder, current, phase=RUNTIME_FAILED, runtime=runtime, failure=outcome.reason, command=None,
-                       checks=checks)
+            state = self._save(folder, current, phase=RUNTIME_FAILED, runtime=runtime, failure=outcome.reason,
+                               command=None, checks=checks)
             logger.warning("Personal model v%d couldn't start in %s (%s)", version, runtime, outcome.reason)
+        return outcome, state
 
     def _step(self, folder: Path, step: str) -> None:
         state = read_state(folder)
@@ -573,7 +681,7 @@ class ReleaseMaker:
             status="candidate",
             identity=ReleaseIdentity(
                 base=base, tokenizer=tokenizer, template=template,
-                adapter=Pin("adapter_model.safetensors", recipe.method, adapter_sha or None),
+                adapter=_adapter_pin(recipe, state, adapter_sha),
                 quantization=recipe.quantization, data=data, recipe=recipe_pin,
             ),
             source_thread_ids=tuple(str(item) for item in manifest.get("conversations") or ())[:50_000],

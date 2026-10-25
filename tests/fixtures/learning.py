@@ -393,15 +393,24 @@ class FakeEngine:
 class FakeDataset:
     """Prepares a job's lease: a few synthetic examples (never chat data)."""
 
-    def __init__(self, examples: int = 12) -> None:
+    def __init__(self, examples: int = 12, validation: int = 0) -> None:
         self.examples = examples
+        self.validation = validation
         self.prepared: list[str] = []
+        self.started: list[str] = []  # the jobs that started without a step trained
+
+    def starting(self, job: Any) -> Any:
+        self.started.append(job.id)
+        return job
 
     def prepare(self, job: Any, folder: Path) -> int:
         lines = [json.dumps({"messages": [{"role": "user", "content": f"Synthetic task {index}"},
                                           {"role": "assistant", "content": "Done."}]})
                  for index in range(self.examples)]
         (Path(folder) / "examples.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        if self.validation:
+            (Path(folder) / "validation.jsonl").write_text("\n".join(lines[:self.validation]) + "\n",
+                                                           encoding="utf-8", newline="\n")
         self.prepared.append(job.id)
         return self.examples
 

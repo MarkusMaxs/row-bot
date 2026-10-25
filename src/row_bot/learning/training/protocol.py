@@ -26,6 +26,9 @@ of range, NaN or infinity.
 - ``progress`` ``{step, steps_total, loss, seconds_per_step}``: after each step.
 - ``checkpoint`` ``{step, name}``: a checkpoint folder ``checkpoint-<step>`` was written
   with its manifest (:func:`write_checkpoint_manifest`) last.
+- ``passes`` ``{losses, files}``: a run of more than one pass (O119), after its last step: each
+  pass's validation loss (``null`` with no validation rows) and the files of the adapter it saved
+  at that pass's end (``pass-<n>``), so Row-Bot can fall back to an earlier pass.
 - ``artifacts`` ``{files}``: what the finished run produced (names, sizes, hashes).
 - ``paused`` ``{step}`` (only after ``pause``), ``finished`` ``{step}`` (at the last
   step) or ``error`` ``{reason, step}``: the last message; the worker then exits.
@@ -65,6 +68,8 @@ ERROR_REASONS = frozenset({
     "data_unreadable",  # the job's prepared data can't be read
     "engine_error",  # anything else inside the engine
 })
+
+MAX_PASSES = 100
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
@@ -165,7 +170,22 @@ def encode(message: dict[str, Any]) -> bytes:
 # ── Messages ────────────────────────────────────────────────────────────────
 
 HOST_TYPES = frozenset({"start", "pause", "advance"})
-WORKER_TYPES = frozenset({"hello", "started", "progress", "checkpoint", "artifacts", "paused", "finished", "error"})
+WORKER_TYPES = frozenset({"hello", "started", "progress", "checkpoint", "passes", "artifacts", "paused", "finished",
+                          "error"})
+
+
+def _files(files: Any) -> None:
+    """A list of files, each its name, size and SHA-256."""
+
+    if type(files) is not list or len(files) > MAX_CHECKPOINT_FILES:
+        raise ProtocolError("invalid_message", "files")
+    for item in files:
+        if type(item) is not dict:
+            raise ProtocolError("invalid_message", "file")
+        _keys(item, {"name", "bytes", "sha256"}, "file")
+        _text(item["name"], "file name", _NAME)
+        _int(item["bytes"], "file bytes", high=1 << 50)
+        _text(item["sha256"], "file sha256", _SHA256)
 
 
 def check_message(message: Any) -> dict[str, Any]:
@@ -202,18 +222,20 @@ def check_message(message: Any) -> dict[str, Any]:
         _int(message["step"], "step", low=1)
         if checkpoint_step(message["name"]) != message["step"]:
             raise ProtocolError("invalid_message", "checkpoint name")
-    elif kind == "artifacts":
-        _keys(message, {"v", "type", "files"}, kind)
-        files = message["files"]
-        if type(files) is not list or len(files) > MAX_CHECKPOINT_FILES:
+    elif kind == "passes":
+        _keys(message, {"v", "type", "losses", "files"}, kind)
+        losses, files = message["losses"], message["files"]
+        if type(losses) is not list or not 2 <= len(losses) <= MAX_PASSES:
+            raise ProtocolError("invalid_message", "losses")
+        for value in losses:
+            _number(value, "loss", optional=True)
+        if type(files) is not list or len(files) != len(losses):
             raise ProtocolError("invalid_message", "files")
         for item in files:
-            if type(item) is not dict:
-                raise ProtocolError("invalid_message", "file")
-            _keys(item, {"name", "bytes", "sha256"}, "file")
-            _text(item["name"], "file name", _NAME)
-            _int(item["bytes"], "file bytes", high=1 << 50)
-            _text(item["sha256"], "file sha256", _SHA256)
+            _files(item)
+    elif kind == "artifacts":
+        _keys(message, {"v", "type", "files"}, kind)
+        _files(message["files"])
     elif kind in ("paused", "finished"):
         _keys(message, {"v", "type", "step"}, kind)
         _int(message["step"], "step")
@@ -407,8 +429,8 @@ class Session:
 
     ``hello`` first; ``started`` once, at the resumed step; then steps that only move
     forward (never past the plan); checkpoints at or behind the current step and
-    after the previous one; ``paused`` only after the host asked, ``finished`` only at
-    the last step; and nothing after the last message.
+    after the previous one; ``passes`` once, at the last step; ``paused`` only after the host
+    asked, ``finished`` only at the last step; and nothing after the last message.
     """
 
     def __init__(self, spec: dict[str, Any]) -> None:
@@ -418,6 +440,7 @@ class Session:
         self.step = 0
         self.checkpoint = 0
         self.pause_requested = False
+        self.passes = False
         self.worker = ""
 
     @property
@@ -463,6 +486,10 @@ class Session:
             if not self.checkpoint < message["step"] <= self.step:
                 raise ProtocolError("out_of_order", "a checkpoint out of order")
             self.checkpoint = message["step"]
+        elif kind == "passes":
+            if self.passes or self.step != self.steps_total:
+                raise ProtocolError("out_of_order", "passes twice or before the last step")
+            self.passes = True
         elif kind == "artifacts":
             if self.step != self.steps_total:
                 raise ProtocolError("out_of_order", "artifacts before the last step")

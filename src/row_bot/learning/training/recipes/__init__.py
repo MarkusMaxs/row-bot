@@ -2,7 +2,8 @@
 
 A recipe says how a personal model is trained on a tier's graphics card: the starting model,
 the trainer's settings (``learning_engine/trainer.py`` clamps each to its limits), how many
-passes over the examples, how often a checkpoint is saved, the fewest examples worth training
+passes over the examples (each pass's adapter is kept, so a version that can't finish a short task
+falls back to the pass before, O119), how often a checkpoint is saved, the fewest examples worth training
 on, the context it is served at (O30), its quantization (O26) and that it is non-thinking
 (O24). Only **certified** recipes are ever chosen: today the 8 GB tier (Qwen3.5 2B, bf16 LoRA
 at 16K, measured in L0d and L2b). The larger tiers are listed, uncertified, until the RTX 5090
@@ -96,9 +97,10 @@ class Recipe:
         return max(1, min(self.checkpoint_every, int(steps)))
 
     def spec(self) -> dict[str, Any]:
-        """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting)."""
+        """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting),
+        with its passes (O119)."""
 
-        return {"name": self.name, "settings": {**dict(self.settings), "report_to": "none"}}
+        return {"name": self.name, "settings": {**dict(self.settings), "report_to": "none", "passes": self.epochs}}
 
 
 def _number(value: Any, where: str, *, integer: bool = False, low: float = 0.0, high: float = math.inf) -> Any:

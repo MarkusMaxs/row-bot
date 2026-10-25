@@ -163,11 +163,114 @@ def test_the_model_card_says_what_it_was_trained_on_in_plain_words(maker_for):
     assert "Left out: 3 kept back as hidden tests, 2 a tool failed." in card
     assert "Answers from: Ollama (on this computer), OpenAI." in card
     assert "may be limited by their terms" in card  # D7
-    assert "Starting model: Qwen/Qwen3.5-2B" in card and "LoRA rank 16, 16,384-token examples, one pass" in card
+    assert "Starting model: Qwen/Qwen3.5-2B" in card and "LoRA rank 16, 16,384-token examples, 3 passes" in card
     assert "Training engine: torch 2.10.0, unsloth 2026.4.1." in card
     assert "Runs in Ollama: Row-Bot's check and one real task with a tool passed." in card
     assert "Not yet compared with your main model." in card
     assert "chat-1" not in card and "ep_1" not in card  # counts, never ids or content
+
+
+def _passes(jobs, root: Path, job, losses=(0.9, 0.85, 0.84)) -> list[str]:
+    """The run trained three passes: each one's adapter saved at its end, as the engine reported them."""
+
+    run = jobs_module.run_dir(job.id, root)
+    shas, files = [], []
+    for number in (1, 2, 3):
+        folder = run / "checkpoints" / f"pass-{number}"
+        folder.mkdir(parents=True)
+        (folder / "adapter_model.safetensors").write_bytes(f"lora-pass-{number}".encode())
+        (folder / "adapter_config.json").write_text('{"r": 16}', encoding="utf-8")
+        sha = hashlib.sha256((folder / "adapter_model.safetensors").read_bytes()).hexdigest()
+        config = hashlib.sha256(b'{"r": 16}').hexdigest()
+        shas.append(sha)
+        files.append([{"name": "adapter_model.safetensors", "bytes": 11, "sha256": sha},
+                      {"name": "adapter_config.json", "bytes": 9, "sha256": config}])
+    (run / jobs_module.PASSES_FILE).write_text(json.dumps({"losses": list(losses), "files": files}), encoding="utf-8")
+    return shas
+
+
+def _looping(calls: int = 90) -> serving.ServeOutcome:
+    """The ready check's tool turn didn't finish: it called tools until the step budget ended it."""
+
+    return serving.ServeOutcome("failed", "ollama", reason="tool_turn_failed", probe={"agent_ready": True},
+                                tool_turn={"ok": False, "answered": False, "tool_calls": calls})
+
+
+def test_a_pass_that_cant_finish_a_short_task_falls_back_to_the_pass_before(maker_for):
+    exporter = Exporter()
+    maker = maker_for(exporter=exporter, server=Server(_looping(), _ready()))
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    shas = _passes(maker_for.jobs, maker_for.root, job)
+
+    maker.tick()
+
+    folder = releases.version_dir(1, maker_for.root)
+    state = releases.read_state(folder)
+    assert state.phase == releases.READY
+    assert (state.kept_pass["pass"], state.kept_pass["failed"]) == (2, [{"pass": 3, "tool_calls": 90}])
+    assert len(exporter.calls) == 2  # pass 3, then pass 2
+    assert (folder / "adapter" / "adapter_model.safetensors").read_bytes() == b"lora-pass-2"
+    card = (folder / releases.MODEL_CARD_FILE).read_text(encoding="utf-8")
+    assert "Pass 3 couldn't finish a short task (90 tool calls); kept pass 2 of 3." in card
+    assert "Loss on the examples held back, by pass (for information): 0.900, 0.850, 0.840." in card
+    release = LearningStore(maker_for.root).get("release", state.release_id)
+    assert (release.identity.adapter.version, release.identity.adapter.sha256) == ("lora_sft, pass 2 of 3", shas[1])
+    assert json.loads((folder / releases.MANIFEST_FILE).read_text(encoding="utf-8"))["identity"]["adapter"][
+        "version"] == "lora_sft, pass 2 of 3"
+    assert maker_for.jobs.get(job.id).state == "ready"
+
+
+def test_the_last_pass_that_is_ready_is_kept(maker_for):
+    exporter = Exporter()
+    maker = maker_for(exporter=exporter, server=Server(_ready()))
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    shas = _passes(maker_for.jobs, maker_for.root, job)
+
+    maker.tick()
+
+    folder = releases.version_dir(1, maker_for.root)
+    state = releases.read_state(folder)
+    assert (state.phase, state.kept_pass["pass"], state.kept_pass["failed"]) == (releases.READY, 3, [])
+    assert len(exporter.calls) == 1  # the last pass made ready at once: nothing to fall back from
+    card = (folder / releases.MODEL_CARD_FILE).read_text(encoding="utf-8")
+    assert "Kept pass 3 of 3, the last." in card
+    release = LearningStore(maker_for.root).get("release", state.release_id)
+    assert (release.identity.adapter.version, release.identity.adapter.sha256) == ("lora_sft, pass 3 of 3", shas[2])
+
+
+@pytest.mark.parametrize("outcome", [
+    serving.ServeOutcome("failed", "ollama", reason="not_installed"),  # no runtime: every pass would fail alike
+    serving.ServeOutcome("failed", "ollama", reason="probe_failed", probe={"agent_ready": False}),
+])
+def test_a_failure_that_isnt_the_models_doesnt_fall_back(maker_for, outcome):
+    exporter = Exporter()
+    maker = maker_for(exporter=exporter, server=Server(outcome))
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    _passes(maker_for.jobs, maker_for.root, job)
+
+    maker.tick()
+
+    state = releases.read_state(releases.version_dir(1, maker_for.root))
+    assert (state.phase, state.failure, state.kept_pass["pass"]) == (releases.RUNTIME_FAILED, outcome.reason, 3)
+    assert len(exporter.calls) == 1
+
+
+def test_when_no_pass_can_finish_a_short_task_the_version_couldnt_start(maker_for):
+    exporter = Exporter()
+    maker = maker_for(exporter=exporter, server=Server(_looping()))
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    _passes(maker_for.jobs, maker_for.root, job)
+
+    maker.tick()
+
+    folder = releases.version_dir(1, maker_for.root)
+    state = releases.read_state(folder)
+    assert (state.phase, state.failure) == (releases.RUNTIME_FAILED, "tool_turn_failed")  # couldn't start (O106)
+    assert [item["pass"] for item in state.kept_pass["failed"]] == [3, 2, 1] and len(exporter.calls) == 3
+    card = (folder / releases.MODEL_CARD_FILE).read_text(encoding="utf-8")
+    assert ("Pass 3 couldn't finish a short task (90 tool calls); pass 2 couldn't finish a short task (90 tool "
+            "calls); pass 1 couldn't finish a short task (90 tool calls).") in card
+    assert maker_for.jobs.get(job.id).state == "evaluating"  # it waits with its ways out, and doesn't block
 
 
 def test_each_version_names_the_one_before_it(maker_for):
@@ -295,3 +398,21 @@ def test_moving_a_ready_version_to_another_runtime_takes_it_out_of_ollama(maker_
     state = releases.read_state(releases.version_dir(1, maker_for.root))
     assert (state.phase, state.runtime, state.command) == (releases.WAITING, "lmstudio", command)
     assert maker_for.withdrawn == [("ollama", 1)] and exporter.calls == []  # the same file, not exported again
+
+
+def test_try_again_still_makes_a_version_that_couldnt_start_ready_while_the_next_one_waits(maker_for):
+    failing = maker_for(server=Server(serving.ServeOutcome("failed", "ollama", reason="tool_turn_failed")))
+    job = _finished_run(maker_for.jobs, maker_for.root)
+    failing.tick()
+    folder = releases.version_dir(1, maker_for.root)
+    assert releases.couldnt_start(releases.read_state(folder))
+    assert not releases.holds_back(maker_for.jobs.get(job.id), maker_for.root)
+    assert releases.trained_example_ids(maker_for.root) == set()  # not counted as trained
+    nxt = maker_for.jobs.plan(steps_total=1, checkpoint_every=1)  # the runner planned v2
+    assert nxt.version == 2 and failing.due() is None
+
+    maker_for(server=Server(_ready())).start(maker_for.jobs.get(job.id))  # Try again
+
+    state = releases.read_state(folder)
+    assert state.phase == releases.READY and maker_for.jobs.get(job.id).state == "ready"
+    assert not releases.couldnt_start(state) and releases.trained_example_ids(maker_for.root) == {"ep_1", "ep_2"}

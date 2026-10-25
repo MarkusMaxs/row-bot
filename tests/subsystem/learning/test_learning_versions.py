@@ -224,7 +224,7 @@ def test_advanced_starts_at_the_recommended_values(data_dir):
     found = advanced.view(recipe, data_dir)
 
     assert found["values"] == found["recommended"] == {
-        "starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002, "epochs": 1, "context": 16384,
+        "starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384,
         "method": "standard"}
     assert found["changed"] is False and found["choices"]["context"] == [16384]  # 32K didn't fit 8 GB
     assert [item["available"] for item in found["data_mix"]] == [True, False, False, False]
@@ -383,3 +383,28 @@ def test_the_starting_model_is_exported_once_and_served_with_only_the_probe(data
 
     assert reason is None and ref == again and ref.startswith("model:ollama:row-bot-personal-base:")
     assert exported == [True] and served == [("ollama", base_model.tag(data_dir), False)]
+
+
+def test_deleting_a_version_that_never_became_ready_settles_it_and_keeps_the_starting_model(learning_on):
+    from dataclasses import replace
+
+    from row_bot.learning.training import jobs as jobs_module
+
+    LearningStore(learning_on).create()
+    jobs = jobs_module.TrainingJobs(learning_on)
+    job = jobs.plan(steps_total=1, checkpoint_every=1)
+    for state in ("preparing", "running", "evaluating"):
+        jobs.move(job.id, state)
+    folder = _version(learning_on, phase=releases.RUNTIME_FAILED)
+    releases.write_state(folder, replace(releases.read_state(folder), job_id=job.id, failure="tool_turn_failed"))
+    base = base_model.folder("qwen3.5-2b", learning_on)
+    base.mkdir(parents=True)
+    (base / "state.json").write_text(json.dumps({"model_id": "qwen3.5-2b", "gguf": "base.gguf"}), encoding="utf-8")
+    (base / "base.gguf").write_bytes(b"g" * 100)
+    maker = releases.ReleaseMaker(learning_on, jobs=jobs, start_threads=False)
+
+    versions.delete_version(1, root=learning_on, withdraw=lambda *args, **kwargs: None)
+
+    assert jobs.get(job.id).state == "not_used" and jobs.current() is None
+    assert maker.due() is None and not folder.exists()  # never made again
+    assert (base / "base.gguf").is_file()  # training in quiet hours is on: the next version is compared with it
