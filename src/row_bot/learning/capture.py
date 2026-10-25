@@ -22,7 +22,10 @@ on. It leaves when idle, when Learning is turned off (dropping what is queued) a
 on :func:`shutdown`. It never keeps a database handle between batches.
 
 - Per turn, once, before anything of it is written, it decides scope (D27,
-  ``scope.resolve``): denied means nothing of that turn is written. It finds the
+  ``scope.resolve``): denied means nothing of that turn is written. A chat that
+  is or was incognito (N11) is denied; one that turns incognito while its turn
+  runs is asked again with every later batch, and nothing more of that turn is
+  written (what was written before stays, as memories saved before do). It finds the
   conversation a delegated Agent's thread belongs to (``conversation_id``), the
   parent episode, and the reply the person's message followed (the next-message
   marker, ``Episode.follows_decision_id``).
@@ -667,13 +670,17 @@ class Capture:
     def _write(self, root: Path, items: list[Any]) -> None:
         store = self._store_factory(root)
         sink = _Sink()
+        incognito: dict[str, bool] = {}  # asked once per conversation in a batch
         for item in items:
             try:
                 if isinstance(item, _Retry):
                     self._retry_records(store, item, sink)
                     continue
                 turn = item.turn
+                asked = turn.resolved
                 if not self._resolve(turn, store):
+                    continue
+                if asked and self._turned_incognito(turn, incognito):
                     continue
                 if isinstance(item, _End):
                     # A turn that recorded nothing leaves no empty episode (unless it was stopped).
@@ -749,6 +756,20 @@ class Capture:
         while len(self._last_turn) > _MAX_LAST_TURNS:
             self._last_turn.popitem(last=False)
         return True
+
+    def _turned_incognito(self, turn: Turn, asked: dict[str, bool]) -> bool:
+        """N11: the turn's chat turned incognito after its scope was decided. Nothing more of the turn is
+        written, including what is queued now; what was written before stays."""
+
+        from row_bot.learning import scope
+
+        for thread in dict.fromkeys((turn.thread_id, turn.conversation_id)):
+            if thread not in asked:
+                asked[thread] = scope.is_incognito([thread], lookup=self._lookup)
+            if asked[thread]:
+                turn.allowed = False
+                return True
+        return False
 
     def _parent_thread(self, turn: Turn) -> str:
         """The conversation a delegated Agent's thread was started from (its Agent run's parent)."""

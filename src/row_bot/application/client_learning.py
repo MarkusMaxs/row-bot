@@ -95,6 +95,7 @@ _NOT_USED = {
     "unknown_source": "Learning can’t tell who this chat is with, so it isn’t used.",
     "my_chats_off": "Learning from your chats is off in Settings › Learning.",
     "workflows_and_goals_off": "Learning from workflows and goals is off in Settings › Learning.",
+    "incognito_chat": "Learning doesn’t use chats that are or were incognito.",
 }
 _LESSON_LIMIT = 200
 

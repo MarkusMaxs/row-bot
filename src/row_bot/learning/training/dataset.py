@@ -442,7 +442,9 @@ def _scope_reason(conversation: str, *, historical: bool, goal: bool, store: Any
         reason = "opted_out"
     else:
         facts = scope.describe_thread(conversation, historical=historical, goal=goal, lookup=lookup)
-        decision = scope.decide(facts, replace(settings, enabled=True, paused=False))
+        # A chat that turned incognito keeps what Learning recorded before it did, as memory keeps what it saved
+        # (N11): incognito stops the recording, not the use of what came before.
+        decision = scope.decide(replace(facts, incognito=False), replace(settings, enabled=True, paused=False))
         if not decision.allowed:
             reason = {
                 scope.UNKNOWN_SOURCE: "conversation_gone",

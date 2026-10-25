@@ -711,9 +711,13 @@ export default function Navigation({
                 icon: <FileText size={16} />,
                 onSelect: () => openActions(conversation, 'pdf'),
               },
-              ...[learningMenuItem({ id: conversation.id, title })].filter(
-                (item) => item !== null,
-              ),
+              ...[
+                learningMenuItem({
+                  id: conversation.id,
+                  title,
+                  incognito: conversation.incognito,
+                }),
+              ].filter((item) => item !== null),
               {
                 label: 'Delete…',
                 icon: <Trash2 size={16} />,

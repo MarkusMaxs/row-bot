@@ -101,10 +101,18 @@ class FakeThreads:
         self.reads = 0
         self._info = ThreadInfo
 
-    def chat(self, thread_id: str) -> FakeThreads:
-        """Add a chat in the app (its owner's)."""
+    def chat(self, thread_id: str, *, incognito: bool = False) -> FakeThreads:
+        """Add a chat in the app (its owner's); ``incognito``: started as an incognito chat (N11)."""
 
-        self.threads[thread_id] = self._info(exists=True)
+        self.threads[thread_id] = self._info(exists=True, incognito=incognito)
+        return self
+
+    def went_incognito(self, thread_id: str) -> FakeThreads:
+        """The chat is incognito now, or was (turning it off again keeps where, N11)."""
+
+        from dataclasses import replace
+
+        self.threads[thread_id] = replace(self.threads[thread_id], incognito=True)
         return self
 
     def child(self, thread_id: str, parent: str) -> FakeThreads:
@@ -123,6 +131,10 @@ class FakeThreads:
 
     def owner_identity(self, channel: str) -> str:
         return self.owners.get(channel, "")
+
+    def incognito(self, thread_id: str) -> bool:
+        info = self.threads.get(thread_id)
+        return bool(info is not None and info.incognito)
 
 
 def all_blob_text(root: Path) -> str:

@@ -87,9 +87,9 @@ function Reply() {
   ) : null;
 }
 
-function Chat({ id }: { id: string }) {
+function Chat({ id, incognito }: { id: string; incognito?: boolean }) {
   const chat = useChatTeach(id);
-  const item = useLearningChatMenu()({ id, title: 'Budget chat' });
+  const item = useLearningChatMenu()({ id, title: 'Budget chat', incognito });
   return (
     <TeachContext.Provider value={chat.teach}>
       <Reply />
@@ -99,7 +99,7 @@ function Chat({ id }: { id: string }) {
   );
 }
 
-function show(controller: ClientController) {
+function show(controller: ClientController, incognito = false) {
   return render(
     <RuntimeContext.Provider
       value={
@@ -107,7 +107,7 @@ function show(controller: ClientController) {
       }
     >
       <OverlayProvider>
-        <Chat id="chat-a" />
+        <Chat id="chat-a" incognito={incognito} />
       </OverlayProvider>
     </RuntimeContext.Provider>,
   );
@@ -250,4 +250,16 @@ it('Don’t learn from this chat is a check item; ticking it confirms that it de
     action: 'opt_in',
     conversation_id: 'chat-a',
   });
+});
+
+it('an incognito chat offers neither Teach nor Don’t learn from this chat: Learning never records it', async () => {
+  const { controller } = controllerFor(learningSnapshot({ state: 'on' }), {
+    conversation: 'not_used',
+  });
+  show(controller, true);
+  await act(async () => undefined);
+
+  expect(controller.learningConversation).toHaveBeenCalledWith('chat-a');
+  expect(screen.queryByRole('button', { name: 'Chat menu' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Teach Row-Bot' })).toBeNull();
 });
