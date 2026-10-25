@@ -123,16 +123,18 @@ it('shows schedule, delivery and policy in the rail of a new workflow with manua
   expect(
     within(rail).queryByLabelText('Date and time'),
   ).not.toBeInTheDocument();
-  expect(within(rail).queryByLabelText('Repeats')).not.toBeInTheDocument();
+  expect(within(rail).queryByLabelText('How often')).not.toBeInTheDocument();
   expect(
     within(rail).getByRole('switch', { name: 'Enabled' }),
   ).not.toBeChecked();
-  // Results always stay in the app; with no channel set up that is all.
+  // The switch is named by its own visible label and says what it does (U15).
+  expect(within(rail).getByLabelText('Enabled')).toHaveAccessibleDescription(
+    /Scheduled runs happen only while this is on/,
+  );
+  // Results always stay in the app: a fact, not a locked checkbox (U15).
   const delivery = within(rail).getByRole('group', { name: 'Send results to' });
-  const app = within(delivery).getByRole('checkbox', { name: 'In this app' });
-  expect(app).toBeChecked();
-  expect(app).toBeDisabled();
-  expect(within(delivery).getAllByRole('checkbox')).toHaveLength(1);
+  expect(within(delivery).getByText('Always in this app')).toBeVisible();
+  expect(within(delivery).queryAllByRole('checkbox')).toHaveLength(0);
   expect(
     within(delivery).getByText(/Set up a channel in Settings › Apps/),
   ).toBeVisible();
@@ -326,7 +328,8 @@ it.each([
           (box) =>
             box.getAttribute('aria-label') ?? box.parentElement?.textContent,
         ),
-    ).toEqual(['In this app', ...ticked]);
+    ).toEqual([...ticked]);
+    expect(within(delivery).getByText('Always in this app')).toBeVisible();
     expect(within(delivery).getByText(words)).toBeInTheDocument();
   },
 );
@@ -521,7 +524,9 @@ it('preserves advanced graph and legacy destination settings as readonly', async
   await screen.findByDisplayValue('Saved workflow');
   expect(screen.getByLabelText('Prompt 1')).toHaveAttribute('readonly');
   expect(screen.getByLabelText('Task type')).toBeDisabled();
-  expect(screen.getByText(/change them in the step graph/)).toBeVisible();
+  expect(
+    screen.getByText(/open the step graph to see or change them/),
+  ).toBeVisible();
   const delivery = screen.getByRole('group', { name: 'Send results to' });
   expect(within(delivery).queryAllByRole('checkbox')).toHaveLength(0);
   expect(
@@ -548,15 +553,38 @@ it('preserves advanced graph and legacy destination settings as readonly', async
   );
 });
 
+it('shows no empty Steps heading for a branching workflow kept in its step graph (U15)', async () => {
+  render(
+    <TaskEditor
+      {...props({
+        taskId: 'task-a',
+        onAdvancedSteps: vi.fn(),
+        load: vi
+          .fn()
+          .mockResolvedValue(
+            snapshot({ advanced: true, fields: { ...fields, prompts: [] } }),
+          ),
+      })}
+    />,
+  );
+  await screen.findByDisplayValue('Saved workflow');
+  expect(
+    screen.getByText(/open the step graph to see or change them/),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: /Open step graph/ })).toBeVisible();
+  expect(screen.queryByRole('heading', { name: 'Steps' })).toBeNull();
+  expect(screen.queryByText(/each sees the previous output/)).toBeNull();
+});
+
 it('saves a local one-shot date with no recurring schedule', async () => {
   const callbacks = props();
   render(<TaskEditor {...callbacks} />);
   fillNew();
   fireEvent.click(screen.getByRole('radio', { name: 'Repeats' }));
-  expect(screen.getByLabelText('Repeats')).toHaveValue('daily');
+  expect(screen.getByLabelText('How often')).toHaveValue('daily');
   expect(screen.getByLabelText('Time')).toHaveValue('09:00');
   fireEvent.click(screen.getByRole('radio', { name: 'Once' }));
-  expect(screen.queryByLabelText('Repeats')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('How often')).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Date and time'), {
     target: { value: '2027-01-01T10:00' },
   });
@@ -596,7 +624,7 @@ it('replaces a saved one-shot date with a recurring schedule, and clears both fo
     '2027-01-01T10:00',
   );
   fireEvent.click(screen.getByRole('radio', { name: 'Repeats' }));
-  fireEvent.change(screen.getByLabelText('Repeats'), {
+  fireEvent.change(screen.getByLabelText('How often'), {
     target: { value: 'weekdays' },
   });
   fireEvent.change(screen.getByLabelText('Time'), {
@@ -637,7 +665,7 @@ it('opens a saved recurring schedule in the builder and saves it untouched', asy
   render(<TaskEditor {...callbacks} />);
   await screen.findByDisplayValue('Saved workflow');
   expect(screen.getByRole('radio', { name: 'Repeats' })).toBeChecked();
-  expect(screen.getByLabelText('Repeats')).toHaveValue('days');
+  expect(screen.getByLabelText('How often')).toHaveValue('days');
   expect(screen.getByRole('button', { name: 'Friday' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -671,7 +699,7 @@ it('keeps a saved schedule exactly as written until the schedule is edited', asy
   });
   render(<TaskEditor {...callbacks} />);
   await screen.findByDisplayValue('Saved workflow');
-  expect(screen.getByLabelText('Repeats')).toHaveValue('minutes');
+  expect(screen.getByLabelText('How often')).toHaveValue('minutes');
   expect(screen.getByLabelText('Every (minutes)')).toHaveValue(30);
   fireEvent.change(screen.getByLabelText('Name'), {
     target: { value: 'Renamed' },
@@ -711,7 +739,7 @@ it('shows a numbered-weekday cron as written, counting Monday as 0', async () =>
     />,
   );
   await screen.findByDisplayValue('Saved workflow');
-  expect(screen.getByLabelText('Repeats')).toHaveValue('cron');
+  expect(screen.getByLabelText('How often')).toHaveValue('cron');
   expect(
     screen.getByLabelText('Cron expression', { exact: false }),
   ).toHaveValue('0 9 * * 1');

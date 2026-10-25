@@ -42,6 +42,7 @@ const VOICE = open('voice', 'Voice settings', 'dictation');
 const ACCOUNTS = open('apps', 'Apps');
 const GITHUB = open('apps/github', 'GitHub');
 const GOOGLE = open('apps/google', 'Google');
+const OUTLOOK = open('apps/outlook', 'Outlook');
 const CHANNELS = open('apps?category=communication', 'Apps');
 const PLUGINS = open('apps', 'Apps');
 const MCP = open('apps', 'Apps');
@@ -56,11 +57,6 @@ const MIGRATION = open('data', 'Import', 'migration');
 const UPDATES = open('updates', 'Updates', 'updates.channel');
 const TUNNEL = open('access', 'Tunnel', 'tunnel');
 const REMOTE_ACCESS = open('access', 'Devices & remote access');
-
-const CANT_DO_FROM_HERE: Entry = [
-  "Row-Bot can't do that from here yet. Ask for it in the conversation instead.",
-  'none',
-];
 
 const CATALOG: Record<string, Entry> = {
   plan_changed: [
@@ -410,6 +406,17 @@ const CATALOG: Record<string, Entry> = {
     'Signing in from here needs Row-Bot’s public HTTPS address. Add it in Devices & remote access, or sign in from the Row-Bot desktop app on the computer it runs on.',
     'review',
     REMOTE_ACCESS,
+  ],
+  // Outlook: the person's own Microsoft app.
+  account_microsoft_app_invalid: [
+    'Check the Application (client) ID: it looks like 1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f, on your app’s Overview in Microsoft Entra. A tenant is a Directory (tenant) ID or a domain.',
+    'review',
+    OUTLOOK,
+  ],
+  account_device_code_unavailable: [
+    'Microsoft didn’t give a sign-in code. In your app’s Authentication settings, turn on Allow public client flows, then try again.',
+    'review',
+    OUTLOOK,
   ],
   account_redirect_mismatch: [
     'This Google client doesn’t list Row-Bot’s sign-in address. Create a Web application client with the redirect address Google’s guide shows, then choose its file.',
@@ -1504,6 +1511,11 @@ const CATALOG: Record<string, Entry> = {
     'review',
   ],
   sharing_media_limit: ['Choose up to four pages for X.', 'review'],
+  x_account_required: ['Choose the X account to post as.', 'review'],
+  x_account_unavailable: [
+    'No X account is connected. Connect one in Settings › Apps › X.',
+    'review',
+  ],
   sharing_outcome_uncertain: [
     "Row-Bot couldn't confirm whether it was shared. Check the destination before trying again.",
     'review',
@@ -1745,6 +1757,28 @@ const CATALOG: Record<string, Entry> = {
   ],
   sent_files_gone: [
     "Those files can't be found any more, so they weren't sent. Ask Row-Bot to send them again.",
+    'none',
+  ],
+  chat_page_unavailable: [
+    "This page isn't here any more. Ask Row-Bot to make it again.",
+    'none',
+  ],
+  chat_page_invalid: [
+    "The page couldn't save that. Try again.",
+    'retry',
+    RETRY,
+  ],
+  chat_page_too_large: [
+    'This page is saving more than it can hold, so the last change was not saved.',
+    'none',
+  ],
+  chat_page_rate_limited: [
+    'This page is saving too often. Wait a moment and try again.',
+    'retry',
+    RETRY,
+  ],
+  chat_page_nothing_to_send: [
+    'There are no decisions on this page to send.',
     'none',
   ],
   local_address_unavailable: [
@@ -2010,91 +2044,35 @@ const CATALOG: Record<string, Entry> = {
     'none',
   ],
 
-  // Managed browser
-  browser_action_denied: [
-    "The managed browser isn't allowed to do that.",
+  // Row-Bot's browser (the Browser pane)
+  browser_disabled: [
+    "Row-Bot's browser is turned off. Turn it on in Settings › System › Browser and computer use.",
     'none',
-  ],
-  browser_action_failed: [
-    "The browser action didn't work. Try again.",
-    'retry',
-    RETRY,
+    open('system', 'System', 'browser-computer-use'),
   ],
   browser_navigation_denied: [
     "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
     'review',
   ],
-  browser_outcome_uncertain: [
-    "Row-Bot couldn't confirm whether the browser action finished. Check the browser before trying again.",
-    'review',
-    RETRY,
-  ],
-  browser_receipt_unavailable: [
-    "Row-Bot can't find the earlier browser action. Check the browser's current page.",
-    'review',
-  ],
-  browser_revision_conflict: [
-    'The page changed. Look at it again, then try again.',
+  browser_unavailable: [
+    "Row-Bot's browser didn't respond. Try again, or restart it from the browser's menu.",
     'retry',
     RETRY,
   ],
-  browser_session_inactive: [
-    "The managed browser isn't running. Open it from the conversation, then try again.",
-    'review',
-  ],
-  browser_status_unavailable: [
-    "The browser's status couldn't be read. Try again.",
-    'retry',
-    RETRY,
-  ],
-  browser_window_unavailable: [
-    'The browser window is closed. Open it again, then try.',
-    'review',
-  ],
-  exact_page_target_and_hidden_text_contract_required: CANT_DO_FROM_HERE,
-  exact_page_target_contract_required: CANT_DO_FROM_HERE,
   invalid_browser_command: ["That browser action isn't valid.", 'review'],
   invalid_browser_url: [
     "That web address isn't valid. Check it and try again.",
     'review',
   ],
-  owned_tab_identity_contract_required: CANT_DO_FROM_HERE,
-  semantic_page_observation_contract_required: CANT_DO_FROM_HERE,
-  use_computer_use_for_external_browser: [
-    "Row-Bot can't control your own browser from here. Ask it to use Computer Use instead.",
-    'none',
-  ],
 
-  // Computer use (the card in the conversation)
-  computer_use_busy: [
-    'Computer use is changing over right now. Wait a moment, then try again.',
-    'retry',
-    RETRY,
-  ],
-  computer_use_inactive: [
-    "Row-Bot isn't using your computer in this conversation.",
-    'none',
-  ],
+  // Computer use (the step in the conversation)
   computer_use_local_only: [
     'Computer use can only be watched and controlled on the computer it runs on.',
     'none',
   ],
-  computer_use_not_paused: [
-    "Computer use isn't paused, so there's nothing to resume.",
-    'none',
-  ],
   computer_use_outcome_uncertain: [
-    "Row-Bot couldn't confirm that finished. Check the card before trying again.",
+    "Row-Bot couldn't confirm it stopped. Check the conversation before trying again.",
     'review',
-    RETRY,
-  ],
-  computer_use_resume_failed: [
-    "Row-Bot couldn't pick up where it left off. Stop, then ask again in the conversation.",
-    'review',
-  ],
-  computer_use_revision_conflict: [
-    'The picture changed. Try again to see the latest one.',
-    'retry',
     RETRY,
   ],
   invalid_computer_use_command: [
@@ -3024,17 +3002,35 @@ const MAY_HAVE_RUN = new Set([
   'session_expired',
 ]);
 
-const resourceDenials = new Set([
-  'workspace_read_hooks_unavailable',
-  'resource_binding_revoked',
-  'workspace_path_denied',
-  'folder_selection_denied',
-  'path_denied',
+/**
+ * Refusals (403) that say exactly why: a folder outside the workspace, an
+ * address Row-Bot's browser never opens, computer use from another device.
+ * Any other 403 says only that this device isn't allowed.
+ */
+const refusals = new Set([
+  'browser_disabled',
+  'browser_navigation_denied',
   'capability_unavailable',
-  // Refusals that say exactly why (F19, F18), not "this device isn't allowed".
-  'workspace_folder_refused',
   'clone_blocked',
+  'computer_use_local_only',
+  'developer_repository_action_denied',
+  'document_processing_denied',
+  'folder_selection_denied',
+  'git_read_hooks_unavailable',
+  'media_scope_conflict',
+  'migration_path_escaped',
+  'path_denied',
+  'process_policy_denied',
+  'resource_binding_revoked',
   'sandbox_prepare_blocked',
+  'view_tool_denied',
+  'view_tool_refused',
+  'views_off',
+  'wiki_scope_unavailable',
+  'workspace_creation_denied',
+  'workspace_folder_refused',
+  'workspace_path_denied',
+  'workspace_read_hooks_unavailable',
 ]);
 
 function describe(code: string): ClientError | null {
@@ -3071,16 +3067,8 @@ export function clientError(value: unknown): ClientError {
       : {};
   const code = typeof candidate.code === 'string' ? candidate.code : '';
   if (candidate.status === 401) return describe('session_expired')!;
-  if (code && resourceDenials.has(code))
-    return (
-      describe(code) ?? {
-        code,
-        message:
-          "That design or code folder can't be used right now. Refresh it and check its permissions.",
-        recovery: 'review',
-        action: RETRY,
-      }
-    );
+  const refusal = refusals.has(code) ? describe(code) : null;
+  if (refusal) return refusal;
   if (candidate.status === 403) return describe('action_denied')!;
   if (candidate.status === 426) return describe('protocol_incompatible')!;
   const known = code ? describe(code) : null;

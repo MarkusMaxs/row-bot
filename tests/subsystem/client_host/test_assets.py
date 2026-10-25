@@ -59,6 +59,8 @@ def test_dual_host_cache_history_and_private_manifest(build: Path) -> None:
     host = client(build)
     assert host.get("/").json() == {"surface": "existing root fixture"}
     assert host.get("/app-v2").headers["location"] == "/app-v2/"
+    # Reloading a Home tab stays on that tab (B406).
+    assert host.get("/app-v2?tab=monitor").headers["location"] == "/app-v2/?tab=monitor"
     shell = host.get("/app-v2/")
     assert shell.status_code == 200 and shell.headers["cache-control"] == "no-store"
     assert "sha256-" in shell.headers["content-security-policy"]

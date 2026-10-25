@@ -147,7 +147,7 @@ def test_shell_prefix_or_explicit_allowlist_never_grants_read_only_execution(
         ("search_memory", "memory"),
         ("developer_read_file", "developer"),
         ("row_bot_status", "row_bot_status"),
-        ("browser_snapshot", "browser"),
+        ("browser_extract", "browser"),
     ],
 )
 def test_known_read_halves_remain_usable(runtime, name, parent):
@@ -174,7 +174,7 @@ def test_composite_action_argument_is_checked_for_positional_and_keyword_calls(r
         return "read tabs"
 
     bound = runtime._bind_profile_tool(
-        StructuredTool.from_function(tabs, name="browser_tab", description="Tabs"),
+        StructuredTool.from_function(tabs, name="browser_tabs", description="Tabs"),
         source="core",
         parent="browser",
     )

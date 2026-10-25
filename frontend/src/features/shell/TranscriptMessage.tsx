@@ -10,6 +10,7 @@ import {
   TriangleAlert,
   Volume2,
   VolumeX,
+  LayoutTemplate,
 } from 'lucide-react';
 import type { TranscriptRow, TranscriptTraceGroup } from '../../api/types';
 import { clientError } from '../../api/errors';
@@ -88,6 +89,8 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   agents = NO_AGENTS,
   turnStart = false,
   latest = false,
+  computer,
+  offerBrowser = false,
   streaming = false,
   onRetry,
   onEdit,
@@ -112,6 +115,10 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   turnStart?: boolean;
   /** The newest assistant turn keeps its actions visible. */
   latest?: boolean;
+  /** What computer use is doing now, for a computer step in progress. */
+  computer?: string;
+  /** This turn used Row-Bot's browser: its last activity row offers the pane (U16). */
+  offerBrowser?: boolean;
   /** Text is still arriving for this row. */
   streaming?: boolean;
   onRetry?: () => void;
@@ -267,6 +274,13 @@ export const TranscriptMessage = memo(function TranscriptMessage({
     >
       {turnStart && row.role !== 'tool' && <TurnMarker role={row.role} />}
       <div className="transcript-content">
+        {row.note === 'page' && (
+          // The person's Send under a page (N5): their decisions there, in words.
+          <small className="message-source">
+            <LayoutTemplate size={14} aria-hidden />
+            Sent from a page
+          </small>
+        )}
         {row.content_status && row.content_status !== 'inline' && (
           <small className="message-delivery-state">
             {row.content_status === 'lazy'
@@ -313,7 +327,12 @@ export const TranscriptMessage = memo(function TranscriptMessage({
           </div>
         )}
         {hasActivity && (
-          <TranscriptTrace conversation={conversationId!} groups={traces!} />
+          <TranscriptTrace
+            conversation={conversationId!}
+            groups={traces!}
+            computer={computer}
+            offerBrowser={offerBrowser}
+          />
         )}
         <AgentStubs agents={agents} />
         {!!embeds.length && (

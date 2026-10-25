@@ -228,7 +228,8 @@ def revalidate_configuration(cfg: dict) -> None:
     source = cfg.get("source", {})
     if not isinstance(source, dict) or source.get("marketplace") != "official":
         return
-    install = {key: cfg[key] for key in ("transport", "url", "command", "args", "headers", "env") if cfg.get(key)}
+    # What the record asks the person for (a tenant in its address, say) is part of the recipe too (B398).
+    install = {key: cfg[key] for key in ("transport", "url", "command", "args", "headers", "env", "inputs") if cfg.get(key)}
     bundle = cfg.get("bundle") if isinstance(cfg.get("bundle"), dict) else {}
     if bundle.get("url"):  # A Registry bundle: its record names the file and checksum, the bundle how it runs.
         install = {"transport": "stdio", "command": "", "args": [], "bundle": {"url": bundle["url"], "sha256": bundle.get("sha256")}}

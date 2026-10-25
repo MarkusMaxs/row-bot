@@ -69,7 +69,7 @@ def notify(
         logger.debug("Buddy notification event failed", exc_info=True)
 
     # 1. Desktop notification (plyer) — immediate
-    _desktop_notify(title, f"{message} ({timestamp})")
+    _desktop_notify(title, f"{message} ({timestamp})".strip())
 
     # 2. Sound — immediate, non-blocking
     _play_sound(sound)

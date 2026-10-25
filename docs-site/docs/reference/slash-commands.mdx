@@ -1,0 +1,47 @@
+---
+title: "Slash Commands"
+description: "The commands you can type with / in a Row-Bot chat or a messaging channel, and what each does."
+---
+
+# Slash Commands
+
+Type `/` in the composer to see the commands and your skills. In Telegram, Discord, Slack and WhatsApp, send the same commands as a message. `/help` lists them wherever you are.
+
+## Chat
+
+| Command | What it does |
+| --- | --- |
+| `/new` | Start a new conversation |
+| `/stop` | Stop the reply that is running |
+| `/reasoning [level]` | Show or set the reasoning for this chat's model. Without a level it lists the valid choices |
+| `/export` | Open export for this conversation |
+| `/incognito on` or `/incognito off` | In a channel: keep the conversation out of memory, or stop. In the app, use the chat's **⋯ › Incognito** |
+
+## Skills
+
+| Command | What it does |
+| --- | --- |
+| `/skills` | Open the Skills picker for this chat |
+| `/skill-name` | Use one skill. With other text, it focuses that message on the skill; alone, it turns the skill on for the chat |
+| `/noskill` | Remove a skill from this chat |
+| `/skill-reset` | Reset this chat's skills to the defaults |
+
+## Agents And Goals
+
+| Command | What it does |
+| --- | --- |
+| `/agent [--worktree] [--model=…] [--reasoning=level] [profile] <task>` | Start a helper on a task, for example `/agent --reasoning low summarise the thread` |
+| `/agents` | Show the helpers this chat started |
+| `/profiles` | List the agent profiles this chat can use |
+| `/profile [name]` | Show or set this chat's agent profile |
+| `/goal <aim>` | Give the chat a goal it keeps working towards. `/goal pause`, `/goal resume`, `/goal status` and `/goal clear` control it |
+
+## Information
+
+| Command | What it does |
+| --- | --- |
+| `/status` | A short summary of Row-Bot's state |
+| `/tools` | The tools that are on |
+| `/help` | The commands available here |
+
+In a messaging channel, `/model` shows or switches the model, and `/approval` shows or switches the approval level.

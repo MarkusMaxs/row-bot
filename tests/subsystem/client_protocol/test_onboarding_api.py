@@ -9,6 +9,8 @@ from uuid import uuid4
 import pytest
 
 from row_bot.application import client_onboarding
+# Loaded as in the running app, so a test's first read doesn't import (and create) the task database.
+from row_bot import tasks as _tasks  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
 
 pytestmark = pytest.mark.subsystem
@@ -101,6 +103,30 @@ def test_onboarding_model_finish_and_checklist_resume(tmp_path, monkeypatch):
     )["snapshot"]
     assert "voice" in completed["completed_steps"]
     assert "voice" not in completed["skipped_steps"]
+
+
+def test_setup_counts_only_what_the_person_did(tmp_path, reload_for_data_dir):
+    tasks, storage = reload_for_data_dir(tmp_path, "row_bot.tasks", "row_bot.developer.storage")
+    _choose(tmp_path)
+    tasks.seed_default_tasks()
+
+    # A new profile: the person chose a model; the starter workflows and the
+    # Developer tools Row-Bot ships with are not something they set up.
+    assert client_onboarding.read_onboarding()["completed_steps"] == ["models"]
+
+    starter = next(task for task in tasks.list_tasks() if task["name"] == "Daily Operating Brief")
+    tasks.update_task(starter["id"], enabled=True)
+    assert "workflows" in client_onboarding.read_onboarding()["completed_steps"]
+    tasks.update_task(starter["id"], enabled=False)
+    assert "workflows" not in client_onboarding.read_onboarding()["completed_steps"]
+    tasks.create_task(name="Weekly invoices", prompts=["Summarise this week's invoices."], enabled=False)
+    assert "workflows" in client_onboarding.read_onboarding()["completed_steps"]
+
+    assert "developer" not in client_onboarding.read_onboarding()["completed_steps"]
+    folder = tmp_path / "code"
+    folder.mkdir()
+    storage.add_or_update_local_workspace(str(folder))
+    assert "developer" in client_onboarding.read_onboarding()["completed_steps"]
 
 
 def test_starter_workflows_are_explicit_and_replay_one_receipt(tmp_path, monkeypatch):

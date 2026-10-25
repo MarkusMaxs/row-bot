@@ -36,6 +36,8 @@ function accounts(github: Partial<Accounts['github']>): Accounts {
     gmail: item({ account_id: 'gmail' }),
     calendar: item({ account_id: 'calendar' }),
     x: item({ account_id: 'x' }),
+    outlook_mail: item({ account_id: 'outlook_mail' }),
+    outlook_calendar: item({ account_id: 'outlook_calendar' }),
   };
 }
 const snapshot: GitHubAccessSnapshot = {

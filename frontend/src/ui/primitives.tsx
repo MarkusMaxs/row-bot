@@ -885,7 +885,8 @@ export function Segmented<T extends string>({
             role="radio"
             className="segmented-option"
             aria-checked={checked}
-            aria-label={option.hideLabel ? option.label : undefined}
+            // Named on the radio itself, so every assistive tool reads it (U15).
+            aria-label={option.label}
             tabIndex={index === tabbable ? 0 : -1}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}

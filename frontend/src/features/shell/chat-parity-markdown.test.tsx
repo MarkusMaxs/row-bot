@@ -183,3 +183,26 @@ it('numbers a list from the number it starts with', () => {
   render(<SafeMarkdown text={'3. Third\n4. Fourth'} />);
   expect((screen.getByRole('list') as HTMLOListElement).start).toBe(3);
 });
+
+it('collapses a runaway reply of empty lines so it cannot fill the screen (U4)', () => {
+  const emptyLines = Array.from({ length: 400 }, () => '>  ').join('\n');
+  const { container } = render(
+    <SafeMarkdown
+      text={`> Dear Sam,\n>  \n> Thank you.\n${emptyLines}\n> >  \n${'  \n'.repeat(300)}Kind regards`}
+    />,
+  );
+  const quote = container.querySelector('blockquote')!;
+  // The letter and one gap inside it; no empty lines after it, no stray ">".
+  expect(quote).toHaveTextContent(/^Dear Sam,Thank you\.$/);
+  expect(quote.querySelectorAll('br')).toHaveLength(2);
+  expect(container).not.toHaveTextContent('>');
+  expect(screen.getByText('Kind regards')).toBeVisible();
+});
+
+it('shows a quote of nothing but empty lines as nothing, and keeps code exactly', () => {
+  const { container } = render(
+    <SafeMarkdown text={`>  \n>\n> >  \n\n\`\`\`\na\n\n\n\n\nb\n\`\`\``} />,
+  );
+  expect(container.querySelector('blockquote')).toBeNull();
+  expect(container.querySelector('pre')?.textContent).toContain('a\n\n\n\n\nb');
+});
