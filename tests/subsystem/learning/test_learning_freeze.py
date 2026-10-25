@@ -245,9 +245,11 @@ def test_the_vaults_counts_come_without_reading_any_problem_out(writer, chats, c
     work = CapturedWork(writer, chats, clock)
     answers = [work.turn(f"chat-{CANARY}-{index}", f"Question {index} about {CANARY}", f"Answer {index}.")[-1]
                for index in range(6)]
-    store = LearningStore(learning_on)
-    for number, at in enumerate((10.0, 20.0)):
-        store.put(signal(f"chat-{CANARY}-{number}", f"sig_{number}", decision_id=answers[number], created_at=at))
+    store = LearningStore(learning_on, clock=clock)
+    for number in range(2):
+        # Taught with what it should have said (A3: a reference), so the 2nd is held out as a correction.
+        store.put(signal(f"chat-{CANARY}-{number}", f"sig_{number}", decision_id=answers[number],
+                         created_at=clock.now + number, answer=f"It should have said {CANARY}."))
     before = evaluation.audit_counts(asked_by="test", store=store)
     assert before["vault"] == 0 and not audit.vault_exists(learning_on)  # never creates a vault
 
@@ -256,7 +258,7 @@ def test_the_vaults_counts_come_without_reading_any_problem_out(writer, chats, c
 
     # 12 model calls, 2 of them corrected (never uncorrected problems): every 4th of the other 10.
     assert refreshed["held"] == 2
-    assert counts["vault"] == 1 and counts["pack_tasks"] == 32 and counts["corrected"] == 0
-    assert counts["uncorrected"] == counts["exact"] == 2 and counts["redacted"] == 0
-    assert counts["corrections_waiting"] == len(holdout.waiting_for_vault(store)) == 1
+    assert counts["vault"] == 1 and counts["pack_tasks"] == 32 and counts["corrected"] == 1
+    assert counts["uncorrected"] == 2 and counts["exact"] == 3 and counts["redacted"] == 0
+    assert len(holdout.waiting_for_vault(store)) == 1 and counts["corrections_waiting"] == 0
     assert CANARY not in json.dumps(counts)

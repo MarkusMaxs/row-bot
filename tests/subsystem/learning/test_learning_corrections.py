@@ -207,7 +207,8 @@ def test_replay_tests_a_held_out_correction_against_the_redos_move_and_says_only
         assert arm.cases == [] and result.clusters == {}  # aggregates only (E10)
 
 
-def test_a_teach_with_no_redo_waits_for_one(work, learning_on, clock):
+def test_a_teach_with_no_redo_and_no_answer_is_not_held_out(work, learning_on, clock):
+    # Amendment A3: with no reference it could be neither trained on nor tested, so it isn't held out.
     store = LearningStore(learning_on, clock=clock)
     answers = [work.turn(f"chat-{index}", f"Total {index}?", f"It's {index}.", tool=False, person_message=True)[-1]
                for index in range(2)]
@@ -218,8 +219,9 @@ def test_a_teach_with_no_redo_waits_for_one(work, learning_on, clock):
 
     report = evaluation.refresh_audit(store=store, asked_by="nightly")
 
-    assert report["corrections_added"] == 0 and report["corrections_waiting"] == 1
-    assert answers[1] in store.held_out_ids()  # still held out: nothing trains or drafts on it
+    assert report["corrections_added"] == 0 and report["corrections_waiting"] == 0
+    assert not set(answers) & store.held_out_ids()
+    assert holdout.waiting_for_vault(store) == set()
 
 
 def test_a_teach_with_its_answer_and_no_redo_is_a_hidden_problem_checked_against_that_answer(work, learning_on,
