@@ -787,13 +787,46 @@ JobState = Literal[
     "unknown_remote",
 ]
 JobBackend = Literal["local", "hugging_face", "none"]
+# Why a job is pausing or paused (L2a). The first four resume by themselves (in quiet
+# hours, or when Row-Bot is free again after Train now); the last three wait for the
+# person's Continue or Discard.
+JobPauseReason = Literal[
+    "in_use",  # the person used Row-Bot: paused at the next step
+    "local_gpu",  # a chat needed the same graphics card: stopped at once
+    "learning_paused",
+    "learning_off",
+    "you",  # the person's Stop
+    "app_closed",  # Row-Bot closed (or crashed) while it trained
+    "worker_stopped",  # the training engine stopped unexpectedly
+]
+# What started it: quiet hours (D12), or the person's Train now.
+JobTrigger = Literal["quiet_hours", "train_now"]
+# How its last resume went when the newest saved step couldn't be used.
+JobRecovery = Literal["previous_checkpoint", "start_over"]
+
+
+@dataclass(frozen=True)
+class JobTransition(_Part):
+    """One timestamped move of a job's state, with its reason code."""
+
+    state: JobState
+    at: float = _field(minimum=0)
+    reason: str | None = _field(None, text=64)
 
 
 @dataclass(frozen=True)
 class Job(Record):
-    """A persisted piece of Learning work and where it stands (L2a)."""
+    """A persisted piece of Learning work and where it stands (L2a).
+
+    v2 adds what training needs to survive a restart and to say where it stands:
+    the version it trains, what started it, why it paused, its timings and loss,
+    how its last resume went and its timestamped transitions (the newest 200).
+    """
 
     KIND: ClassVar[str] = "job"
+    SCHEMA_VERSION: ClassVar[int] = 2
+    # v1 had no training fields: they read as unset.
+    MIGRATIONS: ClassVar[Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {1: lambda data: data}
     FORM: ClassVar[Literal["jsonl", "manifest"]] = "manifest"
 
     id: str = _field(pattern="id")
@@ -812,6 +845,17 @@ class Job(Record):
     remote_request_id: str | None = _field(None, text=256)
     error_code: str | None = _field(None, text=64)
     cost: Cost = field(default_factory=Cost)
+    # v2: training.
+    version: int | None = _field(None, minimum=1)
+    trigger: JobTrigger = "quiet_hours"
+    pause_reason: JobPauseReason | None = None
+    started_at: float | None = _field(None, minimum=0)
+    finished_at: float | None = _field(None, minimum=0)
+    progress_at: float | None = _field(None, minimum=0)
+    seconds_per_step: float | None = _field(None, minimum=0)
+    loss: float | None = _field(None, minimum=0)
+    recovered: JobRecovery | None = None
+    transitions: tuple[JobTransition, ...] = _field((), items=200)
 
     def _validate(self) -> None:
         if self.updated_at < self.created_at:
@@ -820,6 +864,10 @@ class Job(Record):
             raise ContractError("invalid_record", "more steps done than planned")
         if self.state == "unknown_remote" and self.backend != "hugging_face":
             raise ContractError("invalid_record", "only a remote job can be unknown")
+        if self.pause_reason is not None and self.state not in ("pausing", "paused"):
+            raise ContractError("invalid_record", "only a pausing or paused job has a pause reason")
+        if self.checkpoint_step is not None and self.checkpoint_step > self.steps_done:
+            raise ContractError("invalid_record", "a checkpoint ahead of the steps done")
 
 
 RECORD_TYPES: dict[str, type[Record]] = {
@@ -929,6 +977,7 @@ __all__ = [
     "Decision",
     "Episode",
     "Job",
+    "JobTransition",
     "LessonRecord",
     "MAX_RECORD_BYTES",
     "Pin",

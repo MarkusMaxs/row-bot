@@ -749,6 +749,9 @@ async def _run_startup_sequence():
 
     if _learning.is_enabled():
         await asyncio.to_thread(_learning.start_past_chat_import)
+        # Training left running when Row-Bot closed pauses at its newest checkpoint; the
+        # quiet-hours runner starts (L2a).
+        await asyncio.to_thread(_learning.start_runner)
 
     _set("⬆ Starting auto-update scheduler…")
     try:
@@ -1203,9 +1206,11 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
         _shutdown_cleanup_started = False
         return False
     stop_performance_monitor()
-    # Learning (preview), only if it ran: the past-chat import stops, and capture writes what it
-    # holds (a few seconds at most) and stops.
+    # Learning (preview), only if it ran: the past-chat import stops, training stops with its
+    # whole process tree (it continues from its newest checkpoint next time), and capture
+    # writes what it holds (a few seconds at most) and stops.
     for _learning_name, _learning_stop in (("row_bot.learning.past_chats", "stop_background"),
+                                           ("row_bot.learning.runner", "shutdown"),
                                            ("row_bot.learning.capture", "shutdown")):
         _learning_module = sys.modules.get(_learning_name)
         if _learning_module is not None:

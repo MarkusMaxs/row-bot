@@ -4021,7 +4021,8 @@ class LearningPersonalModel(WireModel):
     starting_model: LearningStartingModel
     # The answer to the download ask: Download waits until the engine can be installed (L2b).
     download: Literal["not_asked", "waiting", "not_now"]
-    engine: Literal["not_downloaded"]
+    # Installed with its starting-model weights (L2b); "not_downloaded" until then.
+    engine: Literal["not_downloaded", "installed"]
     engine_download_bytes: int = Field(ge=0)
 
 
@@ -4037,6 +4038,42 @@ class LearningChannelNote(WireModel):
     note: str = Field(max_length=256)
 
 
+class LearningRunnerStatus(WireModel):
+    # What the quiet-hours runner would do now, and why not (the client words each reason).
+    state: Literal["off", "paused", "training", "waiting", "scheduled", "held", "failed", "trained", "nothing_to_do"]
+    reason: Literal[
+        "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
+        "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
+        "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused",
+    ] | None = None
+
+
+class LearningTraining(WireModel):
+    """The personal model's current training run (L2a), polled while it runs."""
+
+    # "none": no run planned; the others are the run's state (never a raw machine word on screen).
+    state: Literal["none", "planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"]
+    job_id: str | None = Field(default=None, max_length=128)
+    # The personal-model version this run trains ("Training v2").
+    version: int | None = Field(default=None, ge=1)
+    step: int = Field(ge=0)
+    steps_total: int | None = Field(default=None, ge=0)
+    # The newest saved step: where it continues from.
+    checkpoint_step: int | None = Field(default=None, ge=0)
+    seconds_left: int | None = Field(default=None, ge=0)
+    pause_reason: Literal[
+        "in_use", "local_gpu", "learning_paused", "learning_off", "you", "app_closed", "worker_stopped",
+    ] | None = None
+    # Paused runs: continues by itself (quiet hours, or when Row-Bot is free after Train now), or asks.
+    resumes: Literal["quiet_hours", "when_free", "ask"] | None = None
+    failure: Literal["out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"] | None = None
+    # The newest saved step couldn't be used: it went back to the one before, or started over.
+    recovered: Literal["previous_checkpoint", "start_over"] | None = None
+    trigger: Literal["quiet_hours", "train_now"] | None = None
+    can_train_now: bool
+    runner: LearningRunnerStatus
+
+
 class LearningSnapshot(WireModel):
     schema_version: Literal[1]
     # Covers the saved choices and the switched-off chats, not progress or spending.
@@ -4050,6 +4087,7 @@ class LearningSnapshot(WireModel):
     quiet_hours: LearningQuietHours
     past_chats: LearningPastChats
     personal_model: LearningPersonalModel
+    training: LearningTraining
     data: LearningData
     opted_out_conversations: list[Annotated[str, StringConstraints(max_length=256)]] = Field(max_length=2000)
     owner_unset_channels: list[LearningChannelNote] = Field(max_length=8)
@@ -4118,9 +4156,12 @@ class LearningCommand(WireModel):
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     action: Literal[
         "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
-        "undo_teach", "answer_download",
+        "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
+        "discard_training", "use_recommended",
     ]
     setup: LearningSetupChoices | None = None
+    # The training run a training action is for (the one the person saw).
+    job_id: str = Field(default="", max_length=128)
     conversation_id: str = Field(default="", max_length=256)
     # Teach: the reply (its message id) or the failed step (its tool call id).
     message_id: str = Field(default="", max_length=256)

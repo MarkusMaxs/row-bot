@@ -5129,6 +5129,82 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
     return {"action": action}
 
 
+# ── Learning (preview), L2a: training with the fake trainer, driven step by step ──
+
+_l2a: dict[str, object] = {}
+
+
+@app.post("/__l2a_fixture/learning/{action}")
+def l2a_learning(action: str, steps: int = 0, x_fixture_token: str = Header(default="")) -> dict:
+    """The personal model's training for the L2a spec: the fake trainer as the training engine,
+    a planned run, steps taken on request, the person using Row-Bot, Row-Bot closing, running out
+    of GPU memory. No GPU, no download, no provider."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.learning import runner
+    from row_bot.learning.training import jobs as training_jobs
+    from tests.fixtures.learning import FakeDataset, FakeEngine, FakeLease
+
+    if action == "restore":
+        runner.shutdown(10)
+        runner._runner = None  # a fresh runner for the next spec
+        runner._thread = None
+        lease = sys.modules.get("row_bot.learning.lease")
+        if lease is not None:
+            lease.release_training()
+        training_jobs.remove_all_runs()
+        _l2a.clear()
+        return {"action": action}
+    supervisor = runner.get().supervisor
+    if action == "engine":
+        from datetime import datetime
+
+        from row_bot.learning.runner import QuietHours
+
+        lease = FakeLease(since_activity=3600.0)
+        engine = FakeEngine()
+        _l2a.update(lease=lease, engine=engine)
+        runner.configure(engine=engine, dataset=FakeDataset(), lease=lease)
+        # An afternoon, whatever the hour the spec runs: nothing starts by itself in quiet hours.
+        runner.get().hours = QuietHours(now=lambda: datetime(2026, 10, 16, 14, 0))
+        supervisor.jobs.plan(steps_total=1000, checkpoint_every=10)
+        return {"action": action}
+    lease = _l2a["lease"]
+    engine = _l2a["engine"]
+    job = supervisor.jobs.current()
+    if action == "advance":
+        target = job.steps_done + max(1, steps)
+        supervisor.live_worker().advance(max(1, steps))
+        supervisor.wait_for(lambda found: found.steps_done >= target or found.state not in ("preparing", "running"))
+    elif action == "use":  # the person chats (on a cloud model): pause at the next step
+        lease.set(chat_cloud=True, since_activity=0.0)
+        supervisor.watch()
+        supervisor.wait_for(lambda found: found.state == "pausing")
+    elif action == "step":  # the step in progress ends: it saves and pauses
+        supervisor.live_worker().advance(1)
+        supervisor.wait_for(lambda found: found.state == "paused")
+        supervisor.wait_idle(10)
+    elif action == "free":  # the chat ended a while ago: Train now's run continues
+        lease.set(since_activity=3600.0)
+        runner.get().check()
+        supervisor.wait_for(lambda found: found.state == "running")
+    elif action == "closed":  # Row-Bot closed while it trained (it asks on the next start)
+        supervisor.stop_now("app_closed")
+    elif action == "oom":  # a run that doesn't fit the graphics card
+        if job is not None and job.state not in ("failed", "evaluating"):
+            supervisor.discard(job.id)
+        engine.options["oom_at_step"] = 4
+        planned = supervisor.jobs.plan(steps_total=1000, checkpoint_every=10)
+        supervisor.train_now(planned.id)
+        supervisor.wait_for(lambda found: found.state == "running")
+        supervisor.live_worker().advance(5)
+        supervisor.wait_for(lambda found: found.state == "failed")
+        supervisor.wait_idle(10)
+        engine.options.pop("oom_at_step", None)
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
 # ── S11: helpers ────────────────────────────────────────────────────────────
 # A chat's helpers as the runner records them: each with the model and reasoning
 # it started on (B386), and one waiting on an approval that no notice put in the

@@ -8,6 +8,7 @@ import type {
   LearningLessonPage,
   LearningReceipt,
   LearningSnapshot,
+  LearningTraining,
 } from '../../api/types';
 import { useRuntime } from '../../runtime';
 
@@ -33,6 +34,11 @@ export type LearningIO = {
   hardware: (refresh?: boolean) => Promise<LearningHardware>;
   lessons: () => Promise<LearningLessonPage>;
   conversation: (id: string) => Promise<LearningConversation>;
+  /**
+   * Keep the training run fresh while a surface shows it (every 2 s while it
+   * runs, every 15 s otherwise); returns the stop. Absent in some tests.
+   */
+  watchTraining?: () => () => void;
 };
 
 // Commands that don't depend on the saved choices: after a change from another
@@ -43,7 +49,31 @@ const RETRY_ON_CHANGE = new Set<LearningAction>([
   'opt_out',
   'opt_in',
   'answer_download',
+  'train_now',
+  'stop_training',
+  'continue_training',
+  'discard_training',
+  'use_recommended',
 ]);
+
+/** How often the training run is read while it runs, and otherwise. */
+export const TRAINING_POLL_MS = 2000;
+export const TRAINING_IDLE_POLL_MS = 15000;
+
+/** A run whose worker is (or may be) going: Monitor's row, Buddy's line, the progress bar. */
+export function trainingLive(training: LearningTraining | null | undefined) {
+  return (
+    training?.state === 'preparing' ||
+    training?.state === 'running' ||
+    training?.state === 'pausing'
+  );
+}
+
+function pageVisible() {
+  return (
+    typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  );
+}
 
 type View = { snapshot: LearningSnapshot | null; error: string };
 
@@ -138,8 +168,62 @@ class LearningStore {
       receipt = await send(snapshot.revision);
     }
     this.set(receipt.snapshot);
+    if (this.watchers) this.scheduleTraining(TRAINING_POLL_MS);
     return receipt;
   };
+
+  // ── The training run, polled while a surface shows it ──────────────────
+
+  private watchers = 0;
+  private trainingTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly onVisibility = () => {
+    if (pageVisible() && this.watchers) this.scheduleTraining(0);
+  };
+
+  watchTraining = () => {
+    this.watchers += 1;
+    if (this.watchers === 1) {
+      document.addEventListener('visibilitychange', this.onVisibility);
+      this.scheduleTraining(0);
+    }
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      this.watchers -= 1;
+      if (!this.watchers) {
+        clearTimeout(this.trainingTimer);
+        document.removeEventListener('visibilitychange', this.onVisibility);
+      }
+    };
+  };
+
+  private scheduleTraining(delay: number) {
+    clearTimeout(this.trainingTimer);
+    if (!this.watchers) return;
+    this.trainingTimer = setTimeout(() => void this.readTraining(), delay);
+  }
+
+  private async readTraining() {
+    if (!this.watchers) return;
+    if (!pageVisible()) return; // read again when the page shows
+    let next = this.view.snapshot?.training ?? null;
+    try {
+      const training = await this.controller.learningTraining();
+      const snapshot = this.view.snapshot;
+      if (training && snapshot) {
+        this.publish({ snapshot: { ...snapshot, training }, error: '' });
+        next = training;
+      }
+    } catch {
+      // The next read tries again; the last known run stays shown.
+    }
+    this.scheduleTraining(
+      trainingLive(next) || next?.state === 'waiting'
+        ? TRAINING_POLL_MS
+        : TRAINING_IDLE_POLL_MS,
+    );
+  }
 }
 
 const stores = new WeakMap<ClientController, LearningStore>();
@@ -226,10 +310,18 @@ export function useLearning(): LearningIO | null {
               controller.learningHardware(refresh),
             lessons: () => controller.learningLessons(),
             conversation: (id: string) => controller.learningConversation(id),
+            watchTraining: store.watchTraining,
           }
         : null,
     [controller, preview, store, view],
   );
+}
+
+/** Keeps the training run fresh while the calling surface is shown. */
+export function useTrainingWatch(io: LearningIO | null) {
+  const watch = io?.watchTraining;
+  const on = learningIsOn(io);
+  useEffect(() => (on && watch ? watch() : undefined), [on, watch]);
 }
 
 /** Learning is on, paused or not: the Learning tab and the chat controls exist. */

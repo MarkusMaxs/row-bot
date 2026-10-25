@@ -67,3 +67,19 @@ def _process_capture_stopped():
     capture = sys.modules.get("row_bot.learning.capture")
     if capture is not None:
         capture.shutdown(10.0)
+
+
+@pytest.fixture(autouse=True)
+def _training_stopped():
+    """The app's training runner (if a test started it) ends with its worker, and the next test
+    gets a fresh one."""
+
+    yield
+    runner = sys.modules.get("row_bot.learning.runner")
+    if runner is not None:
+        runner.shutdown(10.0)
+        runner._runner = None  # noqa: SLF001 - a fresh app runner for the next test
+        runner._thread = None  # noqa: SLF001
+    lease = sys.modules.get("row_bot.learning.lease")
+    if lease is not None:
+        lease.release_training()

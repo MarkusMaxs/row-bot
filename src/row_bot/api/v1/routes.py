@@ -384,6 +384,8 @@ _STATUS.update(
         "learning_settings_unavailable": 409,
         "learning_save_unconfirmed": 503,
         "learning_receipt_unavailable": 404,
+        "learning_nothing_to_train": 409,
+        "learning_training_changed": 409,
         "invalid_plugin_lifecycle_command": 422,
         "plugin_marketplace_unavailable": 409,
         "plugin_marketplace_entry_unavailable": 404,
@@ -9633,6 +9635,18 @@ def create_router(
             request,
             dto.LearningSnapshot,
             await call(read_learning, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/training")
+    async def learning_training(request: Request) -> JSONResponse:
+        # Polled by Monitor's row and the Personal model view while a run is live.
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_training
+
+        return await respond(
+            request,
+            dto.LearningTraining,
+            await call(read_learning_training, validate=dispatch_validation(request, current)),
         )
 
     @router.get("/learning/hardware")

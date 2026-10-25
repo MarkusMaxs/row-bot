@@ -80,6 +80,7 @@ export default function Home({
       stop: (process) => controller.stopBackgroundProcess(process),
       openConversation: (conversation) =>
         navigate(`/conversations/${encodeURIComponent(conversation)}`),
+      openLearning: () => navigate('/?tab=learning&view=model'),
     }),
     [controller, navigate],
   );
@@ -689,6 +690,7 @@ export default function Home({
                 loadLogs={loadLogs}
                 loadTasks={identity ? loadTasks : undefined}
                 processes={identity ? processes : undefined}
+                learning={learning}
               />
             ),
           },

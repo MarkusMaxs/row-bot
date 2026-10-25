@@ -88,3 +88,47 @@ export function dayWords(isoDate: string): string {
 export function plural(count: number, one: string, many = `${one}s`) {
   return `${count.toLocaleString()} ${count === 1 ? one : many}`;
 }
+
+/** "about 40 min left", "about 1 h 40 min left", "less than a minute left". */
+export function timeLeftWords(seconds: number): string {
+  const minutes = Math.round(Math.max(0, seconds) / 60);
+  if (minutes < 1) return 'less than a minute left';
+  if (minutes < 60) return `about ${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `about ${hours} h ${rest} min left` : `about ${hours} h left`;
+}
+
+/** "step 340 of 1,000" (or "step 340" while the plan isn't known). */
+export function stepWords(step: number, total: number | null | undefined) {
+  return total
+    ? `step ${step.toLocaleString()} of ${total.toLocaleString()}`
+    : `step ${step.toLocaleString()}`;
+}
+
+/** Why training stopped, and the way out (designs/learning-ux.md §9). */
+export const TRAINING_FAILURES: Record<
+  string,
+  { text: string; action: string }
+> = {
+  out_of_gpu_memory: {
+    text: 'Training stopped: not enough GPU memory. A smaller starting model or shorter tasks fit. Earlier versions are kept.',
+    action: 'Use recommended settings',
+  },
+  out_of_disk: {
+    text: 'Training stopped: there isn’t enough free disk space to save its progress. Free some space, then try again.',
+    action: 'Try again',
+  },
+  data_unreadable: {
+    text: 'Training stopped: Row-Bot couldn’t read the examples it prepared. Trying again prepares them afresh.',
+    action: 'Try again',
+  },
+  cannot_resume: {
+    text: 'Training stopped: it couldn’t continue from its saved steps. Trying again starts it afresh.',
+    action: 'Try again',
+  },
+  engine_error: {
+    text: 'Training stopped: something went wrong in the training engine. Earlier versions are kept.',
+    action: 'Try again',
+  },
+};

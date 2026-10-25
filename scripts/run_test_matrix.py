@@ -100,6 +100,7 @@ BROWSER_SMOKE_SPECS = (
     "incognito",
     "live-updates",
     "learning",
+    "learning-training",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
@@ -125,7 +126,7 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility", "learning", "settings-claude-plan", "install-count",
+    "model-visibility", "learning", "learning-training", "settings-claude-plan", "install-count",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")

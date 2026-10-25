@@ -2763,6 +2763,14 @@ const CATALOG: Record<string, Entry> = {
     "Row-Bot can't find the earlier step for this. Check Learning before trying again.",
     'review',
   ],
+  learning_nothing_to_train: [
+    "There's nothing to train yet. Training starts once Row-Bot has enough examples from your work.",
+    'none',
+  ],
+  learning_training_changed: [
+    'Training changed meanwhile. Check it and try again.',
+    'review',
+  ],
   knowledge_changed: [
     'This memory changed. Try again with its current version.',
     'retry',
