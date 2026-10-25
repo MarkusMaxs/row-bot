@@ -3,13 +3,17 @@
 Public documentation index for Row-Bot.
 
 - [Row-Bot Documentation](/docs/)
-  Route: /docs/. A complete public user guide for installing, configuring, and using Row-Bot end to end.
+  Route: /docs/. The Row-Bot user guide: install, first steps, everyday use, settings, connections, privacy and troubleshooting.
 - [Getting Started](/docs/getting-started/)
   Route: /docs/getting-started/. Install Row-Bot, complete first launch, and learn the first choices that matter.
+- [What's New In 5.3](/docs/getting-started/whats-new)
+  Route: /docs/getting-started/whats-new. The highlights of Row-Bot 5.3 with links to each guide, and what to know before upgrading from 5.2.
 - [Installation](/docs/getting-started/installation)
   Route: /docs/getting-started/installation. Install Row-Bot on Windows, macOS or Linux, see where it keeps your data, move from 5.1, uninstall, or run it from source.
 - [First Launch](/docs/getting-started/first-launch)
   Route: /docs/getting-started/first-launch. Answer "How should Row-Bot think?" to choose your first model, then finish the rest at your own pace in Setup Center.
+- [Your First Tasks](/docs/getting-started/first-tasks)
+  Route: /docs/getting-started/first-tasks. Five things to try in your first ten minutes with Row-Bot, each in plain words.
 - [Models And Providers](/docs/configuration/models-and-providers)
   Route: /docs/configuration/models-and-providers. Configure providers, discover models, choose defaults, and pin quick model choices.
 - [Row-Bot Interface](/docs/app-shell/navigation)
@@ -17,13 +21,13 @@ Public documentation index for Row-Bot.
 - [Home: Overview](/docs/home/overview)
   Route: /docs/home/overview. Start from Home Overview: ask Row-Bot anything, answer what needs you, and pick up recent work, in one calm column.
 - [Chat](/docs/chat/)
-  Route: /docs/chat/. Use Row-Bot conversations: the composer, models, attachments, context and token usage, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library.
+  Route: /docs/chat/. Use Row-Bot conversations: the composer, models, incognito chats, attachments, pages, questions, context and token usage, apps and skills in a chat, approvals, the details card, and the conversation library.
 - [Model Picker](/docs/chat/model-picker)
   Route: /docs/chat/model-picker. Choose a conversation's model from one list across local, subscription, pay-per-use and custom providers, and troubleshoot missing models.
 - [Reasoning Controls](/docs/chat/reasoning-controls)
   Route: /docs/chat/reasoning-controls. Choose provider-aware reasoning effort, thinking toggles, and token budgets for the active Row-Bot model.
-- [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal)
-  Route: /docs/chat/tools-approvals-and-terminal. Understand Row-Bot tools and tool steps, approvals that wait until you answer, and the interactive terminal docked under a conversation.
+- [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal)
+  Route: /docs/chat/tools-approvals-and-terminal. Row-Bot's tools and tool steps, the approval levels, background processes, Row-Bot's browser, video editing, images, sending files, and the terminal.
 - [Progressive Tools And Skills](/docs/guides/progressive-tools-and-skills)
   Route: /docs/guides/progressive-tools-and-skills. Understand how Row-Bot discovers external tools and task-specific skills without loading every capability into every prompt.
 - [Profiles, Goals, And Agents](/docs/profiles-goals-agents/)
@@ -62,34 +66,34 @@ Public documentation index for Row-Bot.
   Route: /docs/concepts/extensions-and-trust. Compare Row-Bot tools, Skills, Custom Tools, plugins, MCP servers, channels, and accounts by what they add and where they run.
 - [Settings](/docs/settings/)
   Route: /docs/settings/. Find every Row-Bot settings page: six groups from General to System, with search for any setting.
+- [Settings: Preferences](/docs/settings/preferences)
+  Route: /docs/settings/preferences. Set the assistant's name and personality, learning new skills, how Row-Bot opens, the overnight Dream Cycle, and this device's appearance.
+- [Settings: Buddy](/docs/settings/buddy)
+  Route: /docs/settings/buddy. Use Buddy in the sidebar or as a compact desktop overlay, message the selected thread, handle approvals, and configure its appearance.
 - [Settings: Providers](/docs/settings/providers)
   Route: /docs/settings/providers. Connect local, hosted, subscription, and custom model providers.
 - [Settings: Models](/docs/settings/models)
   Route: /docs/settings/models. Choose which model does each job (Brain, Vision, Image, Video), set the reading limit and limits for long work, and star the models you use from the catalog.
-- [Settings: Memory](/docs/settings/knowledge)
-  Route: /docs/settings/knowledge. Turn remembering on or off, check graph health, configure the wiki vault, and delete all knowledge in Settings Memory.
-- [Settings: Buddy](/docs/settings/buddy)
-  Route: /docs/settings/buddy. Use Buddy in the sidebar or as a compact desktop overlay, message the selected thread, handle approvals, and configure its appearance.
 - [Settings: Voice](/docs/settings/voice)
   Route: /docs/settings/voice. Configure dictation, realtime talk, read-aloud, voice models, devices, and diagnostics.
-- [Settings: System](/docs/settings/system)
-  Route: /docs/settings/system. Choose Row-Bot's workspace folder and what it may do on this computer (commands, files, browser and computer use), manage logs, and see what Row-Bot sends and contacts.
-- [Settings: Tracker](/docs/settings/tracker)
-  Route: /docs/settings/tracker. Turn tracking on or off, open a tracker to see its entries, start one in chat, and delete trackers.
+- [Settings: Memory](/docs/settings/knowledge)
+  Route: /docs/settings/knowledge. Turn remembering on or off, check graph health, configure the wiki vault, and delete all knowledge in Settings Memory.
 - [Settings: Documents](/docs/settings/documents)
   Route: /docs/settings/documents. Manage document ingestion, extraction, and vector indexing.
+- [Settings: Tracker](/docs/settings/tracker)
+  Route: /docs/settings/tracker. Turn tracking on or off, open a tracker to see its entries, start one in chat, and delete trackers.
 - [Settings: Tools](/docs/settings/tools)
   Route: /docs/settings/tools. Configure progressive external-tool loading, search and knowledge tools, built-in tools, and custom tools.
 - [Settings: Skills](/docs/settings/skills)
   Route: /docs/settings/skills. Find, add, try, update, and remove skills, and open the skill editor to create or edit one.
 - [Settings: Apps](/docs/settings/apps)
   Route: /docs/settings/apps. Find and connect the services Row-Bot can work in, including your accounts and messaging channels, choose what each app may do, change its settings, and turn apps off or remove them.
-- [Settings: Preferences](/docs/settings/preferences)
-  Route: /docs/settings/preferences. Set the assistant's name and personality, learning new skills, how Row-Bot opens, the overnight Dream Cycle, and this device's appearance.
+- [Settings: System](/docs/settings/system)
+  Route: /docs/settings/system. Choose Row-Bot's workspace folder and what it may do on this computer (commands, files, browser and computer use), manage logs, and see what Row-Bot sends and contacts.
 - [Extend Row-Bot](/docs/extending/)
   Route: /docs/extending/. Choose between built-in tools, Skills, Custom Tools, packages, apps, channels, and accounts, and how Row-Bot sets apps and skills up.
 - [Accounts And Authorisation](/docs/integrations/accounts)
-  Route: /docs/integrations/accounts. Connect your GitHub, Google and X accounts as apps, set Google up with your own OAuth client, and keep scopes, tokens and data flow understandable.
+  Route: /docs/integrations/accounts. Connect your GitHub, Google, Outlook and X accounts as apps, set Google and Outlook up with your own app, use several X accounts, and keep scopes, tokens and data flow understandable.
 - [Channels](/docs/integrations/channels)
   Route: /docs/integrations/channels. Connect Row-Bot to messaging channels as apps: setup steps, pairing, public addresses, conversations and threads, delivery, and safe external behavior.
 - [Skills](/docs/skills/)
@@ -122,8 +126,14 @@ Public documentation index for Row-Bot.
   Route: /docs/privacy-safety/. Understand local data, provider calls, credentials, approvals, channels, MCP, plugins, and sharing.
 - [Troubleshooting](/docs/troubleshooting/)
   Route: /docs/troubleshooting/. Resolve setup, model, chat, approval, workflow, design, code folder, Knowledge, Monitor, app, skill, channel, account, catalog, voice, and Buddy issues.
+- [Frequently Asked Questions](/docs/faq/)
+  Route: /docs/faq/. Short answers to the questions people ask most about Row-Bot: privacy, costs, models, devices and safety.
 - [Reference](/docs/reference/)
   Route: /docs/reference/. Look up Row-Bot tools, providers, settings, channels, skills, MCP, plugins, data storage, and approvals.
+- [Keyboard Shortcuts](/docs/reference/keyboard-shortcuts)
+  Route: /docs/reference/keyboard-shortcuts. Every keyboard shortcut in Row-Bot, on macOS and on Windows and Linux.
+- [Slash Commands](/docs/reference/slash-commands)
+  Route: /docs/reference/slash-commands. The commands you can type with / in a Row-Bot chat or a messaging channel, and what each does.
 - [Tools](/docs/reference/generated/tools)
   Route: /docs/reference/generated/tools. Generated reference for Row-Bot tools and tool guides.
 - [Providers](/docs/reference/generated/providers)
@@ -177,7 +187,7 @@ Public documentation index for Row-Bot.
 - [Reference Tables](/docs/reference/generated/)
   Route: /docs/reference/generated/. Compact lookup tables for Row-Bot features and settings.
 - [Settings: Accounts](/docs/settings/accounts)
-  Route: /docs/settings/accounts. Settings no longer has an Accounts page; the GitHub, Google and X accounts are apps in Settings Apps.
+  Route: /docs/settings/accounts. Settings no longer has an Accounts page; the GitHub, Google, Outlook and X accounts are apps in Settings Apps.
 - [Settings: Channels](/docs/settings/channels)
   Route: /docs/settings/channels. Settings no longer has a Channels page; Telegram, WhatsApp, Discord, Slack and SMS are apps in Settings Apps.
 - [Settings: Integrations](/docs/settings/integrations)

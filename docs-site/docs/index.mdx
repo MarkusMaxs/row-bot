@@ -1,53 +1,51 @@
 ---
 title: "Row-Bot Documentation"
-description: "A complete public user guide for installing, configuring, and using Row-Bot end to end."
+description: "The Row-Bot user guide: install, first steps, everyday use, settings, connections, privacy and troubleshooting."
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
 
 # Row-Bot Documentation
 
-Row-Bot is a local-first AI workbench for people who want provider-aware models, parent-led agents, durable documents, memory, tools, workflows, design, code help, integrations, and voice in one controllable system. Run it as a desktop application or a private authenticated server; this guide explains installation, Docker deployment, owner access, the main interface, settings, and every explicit external route.
+Row-Bot is a personal AI assistant that runs on your own computer. It chats, remembers what matters to you, works with your documents and apps, browses the web and uses the apps on your computer while you watch, runs workflows on a schedule, and makes designs and code. Your data stays on your machine, and you choose which models it uses, from a free local model to the ChatGPT, Claude or Grok plan you already have. Use it on your desktop, from your phone, or as a private server.
 
-These pages describe Row-Bot 5.3.0-beta.1, the release represented by this source tree.
+These pages describe Row-Bot 5.3.0.
 
 <Screenshot id="knowledge-graph" alt="Row-Bot window on Home › Knowledge with the memory graph and the sidebar." caption="Home › Knowledge draws what Row-Bot remembers as a local graph, beside your conversations, agents and Home tabs." />
 
 ## Start Here
 
-- [Getting Started](/docs/getting-started/) explains the install path, first launch, and setup choices.
-- [Row-Bot Interface](/docs/app-shell/navigation) tours the sidebar, Home, a conversation and its details card, panels, the terminal, the ⌘K command palette, Buddy and Settings.
-- [Home: Overview](/docs/home/overview) explains the first page: the Ask box, what needs you, live status and recent work.
-- [Chat](/docs/chat/) explains conversations, composer controls, attachments, model selection, approvals in place, tool results, and the conversation library.
-- [Reasoning Controls](/docs/chat/reasoning-controls) explains model-specific effort, thinking toggles, token budgets, and provider-default fallback behavior.
-- [Settings](/docs/settings/) explains every settings page and what each choice changes.
-- [Profiles, Goals, And Agents](/docs/profiles-goals-agents/) explains the Agents dialog, goals that keep going until done, delegated agents, and recovery.
-- [Remote Access And Server Mode](/docs/operations/remote-access) explains invitations, sessions, Tailscale, LAN, HTTPS proxies, and browser-local voice.
-- [Docker And VPS Operations](/docs/operations/docker/) explains the official container, persistent data and secrets, backup, upgrade, and rollback.
-- [Computer Use](/docs/computer-use/) explains the opt-in native desktop tool, setup, live controls, and safety boundaries.
+1. [What's New In 5.3](/docs/getting-started/whats-new): the highlights, and what to know before upgrading.
+2. [Install Row-Bot](/docs/getting-started/installation) on Windows, macOS or Linux, or with Docker.
+3. [First Launch](/docs/getting-started/first-launch): choose how Row-Bot thinks.
+4. [Your First Tasks](/docs/getting-started/first-tasks): five things to try in ten minutes.
+5. [The Row-Bot Interface](/docs/app-shell/navigation): the sidebar, Home, a conversation, the command palette and Settings.
 
-## Feature Guides
+## Use Row-Bot
 
-- [Apps](/docs/settings/apps) for connecting services such as GitHub, Notion or Linear, choosing what each may do, and using them in chats.
-- [Skills](/docs/skills/) for adding ways of doing a job from featured catalogs and using them with their /name.
-- [Workflows](/docs/guides/workflows) for repeatable background work and scheduled agents.
-- [Reasoning Controls](/docs/chat/reasoning-controls) for choosing the supported reasoning depth of the active model without changing models.
-- [Designs](/docs/designer/) for decks, documents, landing pages, mockups and storyboards in a conversation's Design panel.
-- [Code Folders](/docs/developer/) for binding or cloning a folder from a conversation and working on it in the Developer panel.
-- [Knowledge](/docs/knowledge/) for local memory, durable document ingestion, graph review, and background organization.
-- [Computer Use](/docs/computer-use/) for target-window automation in native Windows and macOS applications.
-- [Phone And Native Desktop](/docs/mobile-native/) for the same owner product on a phone and in the native desktop app.
-- [Remote Access And Server Mode](/docs/operations/remote-access) for owner invitations, Tailscale, LAN, SSH, Docker, HTTPS proxies, and remote browser voice.
-- [Docker And VPS Operations](/docs/operations/docker/) for the official image, hardened Compose, credentials, backup, upgrade, rollback, and recovery.
-- [Monitor](/docs/monitor/) for kept health checks, one-click fixes, activity, history, and logs.
-- [Insights](/docs/home/insights) for what Row-Bot noticed and the proposals it prepared for your review.
-- [Skills](/docs/skills/) for finding, adding, trying, and creating skills.
-- [Settings: Apps](/docs/settings/apps) for connecting the services Row-Bot can work in and choosing what each may do.
-- [Progressive Tools And Skills](/docs/guides/progressive-tools-and-skills) for automatic external-tool discovery, per-task skill selection, compatibility mode, and safety boundaries.
-- [Channels](/docs/integrations/channels), [Hosted And Local Apps](/docs/integrations/mcp), and [Packages](/docs/integrations/plugins) for messaging channels, app connections, and packages.
-- [Extend Row-Bot](/docs/extending/) to choose safely between Skills, Custom Tools, plugins, MCP, channels, and accounts.
-- [Operations, Data, And Recovery](/docs/operations/) for backups, restore, updates, repair, uninstall, and diagnostic sharing.
-- [Voice and Buddy](/docs/voice-and-buddy/) for speech input, Talk, Dictate, read-aloud, and Buddy's native drag-to-undock desktop overlay.
+- [Chat](/docs/chat/): conversations, incognito chats, pages, questions, attachments and context.
+- [Model Picker](/docs/chat/model-picker) and [Reasoning Controls](/docs/chat/reasoning-controls): choose a model and how hard it thinks.
+- [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal): Ask, Auto, Hands-off and Block, background processes, Row-Bot's browser, video editing, sending files and the terminal.
+- [Computer Use](/docs/computer-use/): Row-Bot works in an app on your computer with your mouse and keyboard while you watch.
+- [Workflows](/docs/guides/workflows): work that runs again on a schedule, with approvals and delivery.
+- [Profiles, Goals, And Agents](/docs/profiles-goals-agents/): agent profiles, goals that keep going, and helpers.
+- [Knowledge](/docs/knowledge/): memory, documents and what Row-Bot has learned.
+- [Designs](/docs/designer/) and [Code Folders](/docs/developer/): decks, documents and mockups, and work on code.
+- [Monitor](/docs/monitor/) and [Insights](/docs/home/insights): health checks with one-click fixes, and what Row-Bot noticed.
+- [Phone And Native Desktop](/docs/mobile-native/) and [Voice and Buddy](/docs/voice-and-buddy/).
+
+## Connect And Extend
+
+- [Apps](/docs/settings/apps): connect services such as GitHub, Notion, Linear, Google and Outlook, and choose what each may do.
+- [Accounts](/docs/integrations/accounts), [Channels](/docs/integrations/channels), [Skills](/docs/skills/), [Hosted And Local Apps](/docs/integrations/mcp) and [Packages](/docs/integrations/plugins).
+- [Extend Row-Bot](/docs/extending/): choose between skills, custom tools, plugins, MCP, channels and accounts.
+- [Progressive Tools And Skills](/docs/guides/progressive-tools-and-skills): how Row-Bot finds the tools and skills a request needs, and keeps the rest out of the way.
+
+## Run It Safely
+
+- [Privacy And Safety](/docs/privacy-safety/): what stays on your computer, and every connection Row-Bot makes.
+- [Updates](/docs/operations/updates), [Operations, Data, And Recovery](/docs/operations/), [Remote Access And Server Mode](/docs/operations/remote-access) and [Docker And VPS Operations](/docs/operations/docker/).
+- [Troubleshooting](/docs/troubleshooting/) and [Frequently Asked Questions](/docs/faq/).
 
 ## How To Read These Docs
 

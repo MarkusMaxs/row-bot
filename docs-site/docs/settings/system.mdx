@@ -27,7 +27,7 @@ Risky actions still ask first, as each conversation's **Approvals** setting deci
 - **Work with files** controls the file tools.
 - **Browser and computer use** opens their setup:
   - **Browser** turns the browser tool on and chooses its runtime: a supported installed Chrome or Edge, or Row-Bot's exact managed Playwright Chromium. **Install browser runtime** and Repair are explicit actions; normal start-up only checks readiness and never downloads a browser.
-  - **Desktop apps** sets up **Computer Use (Beta)**, which stays off by default and is gated by platform readiness, its telemetry disclosure, and a verified optional runtime. See [Computer Use](/docs/computer-use/).
+  - **Desktop apps** sets up **Computer use**: Row-Bot works in an app on this computer with your mouse and keyboard while you watch. It stays off until you set it up, which installs a verified Cua Driver after you accept its telemetry notice. See [Computer Use](/docs/computer-use/).
 
 ## Logs
 
@@ -43,7 +43,7 @@ Risky actions still ask first, as each conversation's **Approvals** setting deci
 
 Additional blocked command patterns, app availability for Computer Use, and removing the managed Computer Use runtime live under **Advanced system settings**.
 
-**Let the agent read Row-Bot's data folder** is there too, off by default. Row-Bot's data folder holds your conversations, settings and keys, so shell commands that name it are refused. When it is on, such commands ask you every time instead. File tools never read or change that folder.
+**Let the agent read Row-Bot's data folder** is there too, off by default. Row-Bot's data folder holds your conversations, settings and keys, so shell commands that name it are refused. When it is on, such commands follow the chat's approvals: **Ask** asks, **Auto**'s reviewer approves one only when you clearly asked for it, **Hands-off** runs them, and **Block** still refuses them. File tools never read or change that folder.
 
 ## What Moved
 
