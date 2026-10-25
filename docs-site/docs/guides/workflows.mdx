@@ -34,9 +34,13 @@ Choose **Home**, then the **Workflows** tab. Overview's **New workflow** quick s
 1. Choose **New workflow**. The editor opens on the page, as editing does.
 2. Give it a name, an icon and a short description, and choose **Workflow** or **Reminder**.
 3. Write the **Steps**: what Row-Bot should do first, then what next. Each step can use the previous step's output; drag steps, or use the arrow keys, to reorder them.
-4. Choose **When it runs**: manually, at a date and time, or repeating (every day, weekdays, chosen days, every few hours or minutes, or a custom cron expression).
+4. Choose **When it runs**: manually, at a date and time, or repeating. Repeating can be every day, weekdays, chosen days, **Monthly**, every few hours or minutes, or a custom cron expression. **Timezone** starts at this computer's timezone, and you can search for another. A daily time stays the same across daylight saving.
 5. Choose **Send results to**: follow your defaults, choose channels only for this workflow, or keep results in the app.
-6. Under **Model and approvals**, pick an **Agent profile** and **Approvals**: **Ask before actions**, **Block actions**, or **Auto, within the profile**.
+6. Under **Change model and approvals**, pick an **Agent profile** and **Approvals**:
+   - **Ask before actions**;
+   - **Auto, reviewed**: a reviewer approves what matches the workflow's own steps;
+   - **Hands-off**: nothing pauses;
+   - **Block actions**.
 7. Save, then **Run** it once and review the result.
 
 ## Advanced Workflows
@@ -44,11 +48,16 @@ Choose **Home**, then the **Workflows** tab. Overview's **New workflow** quick s
 - **Edit workflow steps** opens the step editor, with a builder and a step graph. Besides prompts, steps can be conditions, approvals, running another workflow, delegating to an agent, waiting for agents, and notifications.
 - The step graph shows the steps as a flowchart, from **Start** to **End**: arrows after a condition say **yes** or **no**, and after an approval **approved** or **denied**. Click a step (or press Enter on it) to edit it beside the chart. A step that points to a removed step says so on its card, and steps nothing leads to sit under **Not reached**. **List** shows the same steps in order; your choice is remembered on this device.
 - **Workflow settings** chooses the model, whether runs reuse one conversation, a concurrency group, and the trigger: manual and scheduled runs only, **When another workflow completes**, or **Webhook (HTTP POST)**. A webhook trigger creates a private secret when you save; download its configuration and keep it private.
+- **If Row-Bot is closed at a scheduled time**, in Workflow settings:
+  - **Skip it** (the default);
+  - **Run once when Row-Bot starts**: only the latest missed time runs, and the run says it ran late.
+- **Code folder**, in Workflow settings, gives the workflow a [code folder](/docs/developer/) of its own: every step works in it. **None: the conversation's folder** keeps today's behaviour. If the folder is removed, the next run stops, says why, and opens the settings at **Code folder** so you can choose another.
+- **Always ask me**, on a step, makes anything that step changes wait for your own approval, even on Auto or Hands-off. The card says exactly what runs, such as "Run shell command: mkdir reports (You asked to approve this yourself.)". If nobody answers within a day, the run stops. In Workflow settings you can also tick "Always ask me before *app* acts" for up to 16 apps.
 
 ## Workflows With Apps
 
 - **Start from a template**, below the workflow list, offers workflows that use apps: **GitHub pull-request digest**, **Linear triage** and **Notion weekly summary**. Each is created switched off, with a schedule and **Ask before actions** approvals; turn it on when it suits you. A template whose app isn't connected shows **Connect** instead. Templates never add a webhook or change how Row-Bot can be reached.
-- In the step editor, a prompt step's **Apps this step uses** limits that step to the apps you choose, as mentioning an app in chat does. With none chosen, the step can use every app the workflow may. The workflow's Agent profile and approvals still apply.
+- In the step editor, a prompt step's **Apps this step uses** limits that step to the apps you choose, as mentioning an app in chat does. With none chosen, the step can use every app the workflow may. The workflow's Agent profile and approvals still apply. Each step shows the apps it uses, and **Delivery** lists only the channels you have set up.
 - On **Auto**, a reviewer approves what matches the workflow's own steps; anything else, including an app action its access asks about that the reviewer isn't sure of, pauses the run and waits for you. On **Hands-off**, which you turn on in the workflow's settings, nothing pauses for approval.
 
 ## Approvals In Workflows
@@ -65,7 +74,8 @@ Avoid workflows that send messages, write files, start servers, or call external
 
 ## Troubleshooting
 
-- If a workflow does not run on schedule, check that it is enabled and that an earlier run isn't still waiting for approval.
+- If a workflow does not run on schedule, check that it is enabled and that an earlier run isn't still waiting for approval. A run missed while Row-Bot was closed is skipped unless the workflow's settings say **Run once when Row-Bot starts**.
+- If a run stopped with "Choose a folder", its code folder was removed: choose another in its settings, or **None**.
 - If delivery fails, check the selected channel and its Settings page.
 - If a run waits for approval, answer it from the attention indicator or Overview.
 - If results are too broad, split the workflow into smaller steps.

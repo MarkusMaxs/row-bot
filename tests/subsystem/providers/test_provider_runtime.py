@@ -2077,7 +2077,7 @@ def test_openai_pre_model_trim_keeps_standard_skill_injections(tmp_path, monkeyp
 
     monkeypatch.setattr(self_knowledge, "build_static_self_knowledge_block", lambda: "SELF_SENTINEL")
     monkeypatch.setattr(self_knowledge, "build_dynamic_self_knowledge_block", lambda: "")
-    monkeypatch.setattr(skills, "get_skills_prompt", lambda *args, **kwargs: "SKILL_SENTINEL")
+    monkeypatch.setattr(skills, "get_tool_guides_prompt", lambda *args, **kwargs: "SKILL_SENTINEL")
     monkeypatch.setattr(plugin_registry, "get_skills_prompt", lambda *args, **kwargs: "PLUGIN_SENTINEL")
 
     agent.set_active_model_override("gpt-4o")

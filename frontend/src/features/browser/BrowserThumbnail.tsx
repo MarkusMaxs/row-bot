@@ -1,8 +1,9 @@
 import { Globe, PanelRightOpen } from 'lucide-react';
-import type { BrowserPaneState } from '../../api/types';
-import { StatusDot } from '../../ui/primitives';
+import type { BrowserPaneState, TranscriptTraceItem } from '../../api/types';
+import { Hint, StatusDot } from '../../ui/primitives';
 import { actingWords } from './BrowserPane';
 import { useBrowserLive, type LiveFrame } from './live';
+import { requestBrowserPane } from './open-pane';
 
 function Picture({
   state,
@@ -103,5 +104,57 @@ export function BrowserStep({
         </button>
       </div>
     </div>
+  );
+}
+
+// The page a browser step ended on, as its result names it: "Page: Tea (https://en.wikipedia.org/wiki/Tea)".
+const PAGE_LINE = /^Page: .*\((https?:\/\/[^\s)]+)\)\s*$/gm;
+
+/** "wikipedia.org": the site a turn's browser steps last showed, or "" when none says. */
+export function siteOfSteps(steps: TranscriptTraceItem[]): string {
+  for (const step of [...steps].reverse()) {
+    if (step.group_kind !== 'browser') continue;
+    const last = [...step.safe_summary.matchAll(PAGE_LINE)].at(-1);
+    if (!last) continue;
+    try {
+      return new URL(last[1]).hostname.replace(/^www\./, '');
+    } catch {
+      continue;
+    }
+  }
+  return '';
+}
+
+/**
+ * A finished turn's browser step: "Used the browser · wikipedia.org".
+ * Tapping it opens the Browser pane, as the live step does (U16).
+ */
+export function BrowserStepDone({
+  conversationId,
+  site,
+}: {
+  conversationId: string;
+  site: string;
+}) {
+  return (
+    <Hint label="Open browser">
+      <button
+        type="button"
+        className="browser-step-done"
+        aria-label={site ? `Open the browser: ${site}` : 'Open the browser'}
+        onClick={() => requestBrowserPane(conversationId)}
+      >
+        <Globe size={16} aria-hidden className="browser-step-done-icon" />
+        <span className="browser-step-title">
+          Used the browser
+          {site ? <span className="browser-step-site"> · {site}</span> : null}
+        </span>
+        <PanelRightOpen
+          size={15}
+          aria-hidden
+          className="browser-step-done-open"
+        />
+      </button>
+    </Hint>
   );
 }

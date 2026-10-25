@@ -41,6 +41,9 @@ TEST_ENV = {
         )
     ),
     "ROW_BOT_TEST_MODE": "1",
+    # Install stats off: an app a lane starts must never reach the real stats service. Tests of
+    # install stats clear this and point it at a fake service.
+    "ROW_BOT_INSTALL_COUNT": "0",
 }
 COVERAGE_ENV = {**TEST_ENV, "COVERAGE_FILE": str(REPO_ROOT / ".tmp" / "coverage" / ".coverage")}
 
@@ -52,13 +55,17 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # providers, restart recovery, the desktop Buddy window, the UI primitives and the
 # approval levels (Hands-off's one-time dialog, the reviewer's notes), background
 # processes (start, view output, stop), Row-Bot's browser (a local address asked
-# for once per chat, screenshots, page sizes, recordings) and video edits and many
+# for once per chat, screenshots, page sizes, recordings), computer use on a fake desktop
+# (its step and live picture, asking first, "Carry on?", a setup problem) and video edits and many
 # images at once (the ffmpeg download asked for once, edits with Stop, contact sheets),
 # files sent to the person's devices (the download on another device, its notice) or a chat app,
 # a workflow's steps as a flowchart (branches, loops, a broken branch, a card opening its step),
 # favourite and hidden models (the picker's menu, More models, Settings › Models and Setup),
 # Row-Bot's questions with options (asked, answered, collapsed; a helper's and a workflow's),
 # a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
+# Outlook through your own Microsoft app (its guide, a code from another device, its states and
+# cards) with Microsoft 365's tenant step and a failed step in words,
+# pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox),
 # and Learning (preview): turning it on, its tab, Teach and Undo, a chat switched off, the personal
 # model's download, training, its versions, comparing, trying and using it, and the night's look
 # for things to improve with the changes it drafted.
@@ -78,6 +85,7 @@ BROWSER_SMOKE_SPECS = (
     "conversation-processes",
     "conversation-browser",
     "browser-pane",
+    "computer-use",
     "conversation-media",
     "conversation-delivery",
     "workspace-folders",
@@ -88,6 +96,11 @@ BROWSER_SMOKE_SPECS = (
     "model-visibility",
     "question-cards",
     "workflow-review",
+    "pages",
+    "x-accounts",
+    "outlook",
+    "incognito",
+    "live-updates",
     "learning",
     "learning-training",
     "learning-download",
@@ -97,7 +110,7 @@ BROWSER_SMOKE_SPECS = (
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
-    "capability-surfaces", "conversation-layout", "ledger-fixes", "media", "message-content",
+    "capability-surfaces", "conversation-layout", "install-count", "ledger-fixes", "media", "message-content",
     "navigation", "panels", "persistence", "polish-visual", "resources",
     "settings-claude-plan", "settings-models", "settings-routes", "settings", "sidebar", "suggestions",
     "terminal", "theme", "visual-alignment", "voice", "workflows",
@@ -120,6 +133,7 @@ BROWSER_PHONE_SPECS = (
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
     "model-visibility", "learning", "learning-training", "learning-download", "learning-version", "learning-use", "settings-claude-plan",
+    "install-count",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")
@@ -213,6 +227,13 @@ COMMANDS: dict[str, CommandSpec] = {
     "subsystem": _pytest("subsystem", "tests/subsystem", *PARALLEL),
     "installer-contracts": _pytest("installer-contracts", "tests/subsystem/installer", "tests/contracts/installers"),
     "docs": _pytest("docs", "tests/docs", "tests/marketing"),
+    # The installation count's collector (services/install-count, N6): its Worker in workerd with a local
+    # D1 and rate limiter. Install it first (npm ci --ignore-scripts --prefix services/install-count);
+    # Wrangler's own usage metrics stay off.
+    "install-count-worker": _cmd(
+        "install-count-worker", "node", "services/install-count/node_modules/vitest/vitest.mjs", "run",
+        "--root", "services/install-count", env={"WRANGLER_SEND_METRICS": "false"},
+    ),
     "browser-smoke": _browser(
         "browser-smoke", "--project=chromium-desktop", "--project=chromium-buddy-overlay", *_specs(*BROWSER_SMOKE_SPECS),
     ),
@@ -267,6 +288,7 @@ TIER_COMMANDS: dict[str, tuple[str, ...]] = {
     "subsystem": ("subsystem",),
     "installer-contracts": ("installer-contracts",),
     "docs": ("docs",),
+    "install-count": ("install-count-worker",),
 }
 
 
@@ -338,6 +360,8 @@ def changed_commands(changed_files: list[str]) -> list[CommandSpec]:
     if any(path in {"pyproject.toml", "uv.lock", "requirements.txt", "scripts/dependency_requirements.py"}
            for path in changed_files):
         commands.append(COMMANDS["dependency-requirements"])
+    if any(path.replace("\\", "/").startswith("services/install-count/") for path in changed_files):
+        commands.append(COMMANDS["install-count-worker"])
     if paths := changed_test_paths(changed_files):
         commands.append(_pytest("changed-tests", *paths))
     return commands

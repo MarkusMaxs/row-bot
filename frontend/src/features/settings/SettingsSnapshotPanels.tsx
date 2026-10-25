@@ -39,6 +39,7 @@ import {
   SquareTerminal,
   Square,
   Play,
+  Plus,
   Trash2,
   Unlink,
   Volume2,
@@ -68,7 +69,7 @@ import ConnectedGitHubAccess, {
 } from './GitHubAccessControls';
 import ConnectedAccountAuth, { type AccountAuth } from './AccountAuthControls';
 import { ConnectSheet, type ConnectStep } from './ConnectSheet';
-import { ACCOUNT_LINKS } from './connect-guides';
+import { ACCOUNT_LINKS, OUTLOOK_PERMISSIONS } from './connect-guides';
 import type {
   DocumentRuntimeStatus,
   SettingsMutationReceipt,
@@ -82,6 +83,9 @@ import { favouritesFirst } from '../shell/model-choices';
 import {
   Button,
   Disclosure,
+  EntityList,
+  EntityRow,
+  Field,
   IconButton,
   Input,
   Segmented,
@@ -954,7 +958,7 @@ function ReviewedSettingsAction({
       if (computerRecovery) {
         const computer = snapshot.system.computer_use;
         setMessage(
-          `Computer Use: ${computer.status_message} ${computer.remediation} ` +
+          `Computer use: ${computer.status_message} ${computer.remediation} ` +
             'You can start a new action after inspecting this state.',
         );
       } else {
@@ -1040,7 +1044,7 @@ function ReviewedSettingsAction({
         (tunnelRecovery || computerRecovery) &&
         mutation.refreshSnapshot && (
           <Button disabled={busy} onClick={() => void inspectPartial()}>
-            Inspect current {computerRecovery ? 'Computer Use' : 'tunnel'} state
+            Inspect current {computerRecovery ? 'computer use' : 'tunnel'} state
           </Button>
         )}
       {pendingCommand && inspectedPartial && (
@@ -1056,7 +1060,7 @@ function ReviewedSettingsAction({
         >
           {tunnelRecovery
             ? 'Try another tunnel action'
-            : 'Try another Computer Use action'}
+            : 'Try another computer use action'}
         </Button>
       )}
       {error && <p role="alert">{error}</p>}
@@ -2258,6 +2262,7 @@ export function SystemSnapshotPanel({
   writeClipboard,
   part = 'system',
   network,
+  privacy,
 }: {
   snapshot: SettingsSnapshot['system'];
   mutation: SettingsMutationIO;
@@ -2267,6 +2272,8 @@ export function SystemSnapshotPanel({
   part?: 'system' | 'access';
   /** Access › Advanced › Network: listen mode, addresses, Tailscale. */
   network?: ReactNode;
+  /** System › Privacy: install stats and what else Row-Bot contacts (N6). */
+  privacy?: ReactNode;
 }) {
   const appAvailability = useSyncExternalStore(
     appPwaClient.subscribe,
@@ -2470,7 +2477,7 @@ export function SystemSnapshotPanel({
                   ? cu.enabled
                     ? 'Computer use on'
                     : 'Computer use off'
-                  : 'Computer Use unavailable',
+                  : "Computer use isn't available here",
               ]}
             >
               {browserAvailable
@@ -2521,6 +2528,7 @@ export function SystemSnapshotPanel({
           }}
         />
       </SettingsGroup>
+      {privacy}
       <SettingsAdvanced meta="Blocked commands, offline support">
         <SettingsGroup label="Advanced system settings">
           {shellAvailable && (
@@ -2564,16 +2572,16 @@ export function SystemSnapshotPanel({
       {cu.available && cu.disclosure_acknowledged && (
         <SettingsDangerZone>
           <DangerAction
-            title="Remove the managed Computer Use runtime"
-            description="Deletes Row-Bot's managed Cua Driver and turns Computer Use off. You can install it again later."
+            title="Remove Cua Driver"
+            description="Deletes Row-Bot's copy of Cua Driver and turns computer use off. You can install it again later."
           >
             <ReviewedSettingsAction
               mutation={mutation}
               field="computer_use.remove"
-              label="Remove managed Cua runtime"
+              label="Remove Cua Driver"
               description=""
               variant="danger"
-              confirm="This deletes the managed runtime files. You can install the reviewed runtime again later."
+              confirm="This deletes Row-Bot's copy of Cua Driver. You can install it again later."
             />
           </DangerAction>
         </SettingsDangerZone>
@@ -2606,7 +2614,7 @@ function BrowserComputerSetup({
         open={open}
         onOpenChange={setOpen}
         title="Browser and computer use"
-        description="Web and native-app automation keep separate setup and authority."
+        description="Row-Bot's browser works on websites. Computer use works in apps on this computer, with your mouse and keyboard, while you watch."
       >
         <div className="settings-dialog-rows">
           <SettingsGroup title="Browser">
@@ -2655,7 +2663,7 @@ function BrowserComputerSetup({
           <SettingsGroup title="Desktop apps">
             {computerAvailable ? (
               <SettingsItem
-                label="Computer Use (Beta)"
+                label="Computer use"
                 help={cu.status_message}
                 layout="inline"
                 bind={false}
@@ -2664,23 +2672,23 @@ function BrowserComputerSetup({
                     <SwitchSetting
                       mutation={mutation}
                       field="computer_use.enabled"
-                      label="Computer Use (Beta)"
+                      label="Computer use"
                       value={cu.enabled === true}
                       bare
                     />
                   ) : (
                     <StatusLine tone="warning">
-                      Telemetry notice required
+                      Review the notice below first
                     </StatusLine>
                   )
                 }
               />
             ) : (
               <SettingsItem
-                label="Computer Use (Beta)"
+                label="Computer use"
                 status={
                   <StatusLine tone="warning">
-                    Computer Use unavailable
+                    Computer use isn't available here
                   </StatusLine>
                 }
               />
@@ -2702,8 +2710,8 @@ function BrowserComputerSetup({
                 <ReviewedSettingsAction
                   mutation={mutation}
                   field="computer_use.check"
-                  label="Check Computer Use setup"
-                  description="Run the reviewed local driver diagnostics and report missing access."
+                  label="Check setup"
+                  description="Checks Cua Driver and the permissions it needs."
                 />
                 {!cu.screen_actions_available && (
                   <p className="settings-help">
@@ -2740,17 +2748,17 @@ function BrowserComputerSetup({
                       mutation={mutation}
                       field="computer_use.test"
                       label="Test with Calculator"
-                      description="Open Calculator briefly and verify a local target window."
+                      description="Opens Calculator and takes a picture of it, to show computer use works."
                     />
                   )}
                 <ReviewedSettingsAction
                   mutation={mutation}
                   field="computer_use.install"
-                  label="Install Computer Use runtime"
-                  description="Downloads the pinned Cua Driver artifact for this platform."
+                  label="Install Cua Driver"
+                  description="Downloads the reviewed version of Cua Driver for this computer."
                 />
                 <details>
-                  <summary>Advanced system Cua executable</summary>
+                  <summary>Use your own Cua Driver</summary>
                   <p className="settings-help">
                     Verifying starts the executable you select on this host. Use
                     only a separately reviewed Cua Driver binary.
@@ -2766,8 +2774,8 @@ function BrowserComputerSetup({
                     <ReviewedSettingsAction
                       mutation={mutation}
                       field="computer_use.use_managed_runtime"
-                      label="Use managed Cua runtime"
-                      description="Return to Row-Bot's reviewed managed component."
+                      label="Use Row-Bot's Cua Driver"
+                      description="Go back to the reviewed copy Row-Bot installs."
                     />
                   )}
                 </details>
@@ -2775,7 +2783,7 @@ function BrowserComputerSetup({
             )}
             {cu.available && (
               <details className="settings-divided settings-system-detail">
-                <summary>Computer Use setup details</summary>
+                <summary>Setup details</summary>
                 <Facts>
                   <Fact
                     label="Disclosure"
@@ -3751,6 +3759,7 @@ function AccountActions({
   locked,
   onCheck,
   onReconnect,
+  reconnectLabel = 'Reconnect',
   onDisconnect,
 }: {
   name: string;
@@ -3758,6 +3767,7 @@ function AccountActions({
   locked: boolean;
   onCheck: () => void;
   onReconnect?: () => void;
+  reconnectLabel?: string;
   onDisconnect?: () => void;
 }) {
   if (state === 'not_connected') return null;
@@ -3765,12 +3775,12 @@ function AccountActions({
     <>
       {state === 'reconnect' && onReconnect ? (
         <Button
-          aria-label={`Reconnect ${name}`}
+          aria-label={`${reconnectLabel}${reconnectLabel === 'Reconnect' ? '' : ' to'} ${name}`}
           disabled={locked}
           onClick={onReconnect}
         >
           <RotateCw size={14} aria-hidden />
-          Reconnect
+          {reconnectLabel}
         </Button>
       ) : (
         <Button
@@ -4285,6 +4295,72 @@ function GoogleAccount({
   );
 }
 
+type XAccountSummary = NonNullable<AccountItem['x_accounts']>[number];
+
+/**
+ * Each connected X account (N7): its handle, name and numeric ID, its own
+ * status and Remove; then Add another account. X signs in whichever account
+ * is open in the browser, so the hint says how to add a different one.
+ */
+function XAccountList({
+  accounts,
+  auth,
+  canAdd,
+}: {
+  accounts: XAccountSummary[];
+  auth: AccountAuth | null;
+  canAdd: boolean;
+}) {
+  return (
+    <div className="settings-x-accounts">
+      <EntityList label="X accounts">
+        {accounts.map((row) => {
+          const handle = row.username ? `@${row.username}` : 'Your X account';
+          return (
+            <EntityRow
+              key={row.id || 'before'}
+              title={
+                row.username && row.name ? `${handle} · ${row.name}` : handle
+              }
+              icon={<AtSign size={16} />}
+              status={ACCOUNT_STATES[accountState([row.state])]}
+              meta={
+                row.id
+                  ? `ID ${row.id}`
+                  : 'Signed in before Row-Bot 5.3; Check shows its name'
+              }
+              action={
+                auth && (
+                  <IconButton
+                    size="sm"
+                    label={`Remove ${handle}`}
+                    disabled={auth.locked}
+                    onClick={() => auth.removeX({ id: row.id, handle })}
+                  >
+                    <Unlink size={16} aria-hidden />
+                  </IconButton>
+                )
+              }
+            />
+          );
+        })}
+      </EntityList>
+      {auth && canAdd && (
+        <div className="settings-x-add">
+          <Button className="small" disabled={auth.locked} onClick={auth.start}>
+            <Plus size={14} aria-hidden />
+            Add another account
+          </Button>
+          <span className="muted">
+            X signs in the account open in your browser. To add a different one,
+            switch accounts on x.com first.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function XAccount({
   account,
   mutation,
@@ -4296,6 +4372,7 @@ function XAccount({
 }) {
   const state = accountState([account.authentication_state]);
   const usable = auth && auth.snapshot;
+  const accounts = account.x_accounts ?? [];
   return (
     <AccountRow
       anchor="x"
@@ -4305,10 +4382,12 @@ function XAccount({
       state={state}
       meta={
         state === 'reconnect'
-          ? 'The sign-in expired or was turned down'
+          ? accounts.length > 1
+            ? 'An account’s sign-in expired or was turned down'
+            : 'The sign-in expired or was turned down'
           : state === 'unchecked'
             ? 'Signed in; Check confirms it works'
-            : 'Post and read on X for you. Posting always asks first.'
+            : 'Post and read on X for you. Every post names its account and asks you first.'
       }
       actions={
         usable && (
@@ -4320,7 +4399,6 @@ function XAccount({
             onReconnect={
               account.configured && auth.canSignIn ? auth.start : undefined
             }
-            onDisconnect={auth.disconnect}
           />
         )
       }
@@ -4395,6 +4473,13 @@ function XAccount({
         },
       ]}
     >
+      {accounts.length > 0 && (
+        <XAccountList
+          accounts={accounts}
+          auth={usable ? auth : null}
+          canAdd={Boolean(account.configured && auth?.canSignIn)}
+        />
+      )}
       <AccessSwitch
         mutation={mutation}
         field="x.enabled"
@@ -4440,6 +4525,198 @@ function XAccount({
 }
 
 /**
+ * Outlook through the person's own Microsoft app (N10): the one-time app
+ * registration in steps, the app's client ID, and a sign-in here (this
+ * computer's browser) or with a code from any other device. Mail and
+ * Calendar share the sign-in and each have a switch.
+ */
+function OutlookAccount({
+  mail,
+  calendar,
+  mutation,
+  auth,
+}: {
+  mail: AccountItem;
+  calendar: AccountItem;
+  mutation: SettingsMutationIO;
+  auth: AccountAuth | null;
+}) {
+  const state = accountState([
+    mail.authentication_state,
+    calendar.authentication_state,
+  ]);
+  const configured = mail.configured;
+  const usable = auth && auth.snapshot;
+  const address = auth?.snapshot?.address ?? mail.address ?? '';
+  const byCode = auth?.snapshot?.sign_in === 'device';
+  const [clientId, setClientId] = useState('');
+  const [tenant, setTenant] = useState('');
+  return (
+    <AccountRow
+      anchor="outlook"
+      name="Outlook"
+      icon={<Mail size={16} aria-hidden />}
+      tone="4"
+      state={state}
+      meta={
+        state === 'reconnect'
+          ? `${address || 'Outlook'} · sign in again to keep using it`
+          : state === 'unchecked'
+            ? `${address || 'Signed in'} · Check confirms it works`
+            : signedIn(state)
+              ? address || 'Mail and calendar'
+              : 'Mail and calendar through your own Microsoft app. Sending and invitations always ask first.'
+      }
+      actions={
+        usable && (
+          <AccountActions
+            name="Outlook"
+            state={state}
+            locked={auth.locked}
+            onCheck={auth.check}
+            onReconnect={configured && auth.canSignIn ? auth.start : undefined}
+            reconnectLabel="Sign in again"
+            onDisconnect={auth.disconnect}
+          />
+        )
+      }
+      feedback={auth?.feedback}
+      guideOpen={state === 'reconnect' && !configured}
+      guide={[
+        {
+          id: 'register',
+          text: 'In Microsoft Entra, open App registrations and choose New registration. Name it Row-Bot.',
+          link: {
+            href: ACCOUNT_LINKS.microsoftRegistrations,
+            label: 'Open App registrations',
+          },
+          done: configured,
+        },
+        {
+          id: 'accounts',
+          text: 'Under Supported account types, choose accounts in any organizational directory and personal Microsoft accounts. That covers a work mailbox (GoDaddy’s Microsoft 365, say) and outlook.com.',
+          done: configured,
+        },
+        {
+          id: 'platform',
+          text: 'Under Redirect URI, choose Public client/native (mobile & desktop) and enter this address. Then, in Authentication, turn on Allow public client flows, so you can sign in with a code from a phone. No client secret is needed.',
+          copy: { value: 'http://localhost', label: 'Redirect URI' },
+          done: configured,
+        },
+        {
+          id: 'permissions',
+          text: 'In API permissions, add these Microsoft Graph delegated permissions.',
+          copy: {
+            value: OUTLOOK_PERMISSIONS,
+            label: 'Microsoft Graph permissions',
+          },
+          done: configured,
+        },
+        {
+          id: 'client',
+          text: 'Paste the Application (client) ID from the app’s Overview. Add the Directory (tenant) ID only to keep sign-in to your own organization.',
+          done: configured,
+          children: usable && (
+            <form
+              className="stack"
+              onSubmit={(event) => {
+                event.preventDefault();
+                auth.saveApp(clientId, tenant);
+              }}
+            >
+              <Field label="Application (client) ID">
+                <Input
+                  value={clientId}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={
+                    configured
+                      ? 'Saved; paste another to replace it'
+                      : '1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f'
+                  }
+                  onChange={(event) => setClientId(event.target.value)}
+                />
+              </Field>
+              <Field label="Directory (tenant) ID (optional)">
+                <Input
+                  value={tenant}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Any organization or personal account"
+                  onChange={(event) => setTenant(event.target.value)}
+                />
+              </Field>
+              <div className="action-cluster">
+                <Button
+                  type="submit"
+                  className="small"
+                  disabled={auth.locked || !clientId.trim()}
+                >
+                  Save
+                </Button>
+              </div>
+            </form>
+          ),
+        },
+        {
+          id: 'authenticate',
+          text: byCode
+            ? 'Sign in to Microsoft with a code: Row-Bot shows it here, and you enter it on Microsoft’s page on this device or any other.'
+            : 'Sign in to Microsoft in your browser.',
+          done: signedIn(state),
+          children: usable && (
+            <>
+              {auth.canSignIn ? (
+                <div className="action-cluster">
+                  <Button
+                    variant="primary"
+                    className="small"
+                    disabled={auth.locked || !configured}
+                    onClick={auth.start}
+                  >
+                    {byCode ? 'Sign in with a code' : 'Sign in with Microsoft'}
+                  </Button>
+                </div>
+              ) : (
+                <p className="muted">{auth.blocked}</p>
+              )}
+              <p className="settings-help">
+                On a work mailbox your provider manages (GoDaddy, say),
+                Microsoft may show “Need admin approval”: only an admin can
+                approve new apps there. Ask your Microsoft 365 admin, or
+                GoDaddy, to approve your Row-Bot app.
+              </p>
+            </>
+          ),
+        },
+      ]}
+    >
+      {/* Its switches once signed in: until then the guide is the one next step. */}
+      {signedIn(state) && mail.enabled !== null && (
+        <SwitchSetting
+          mutation={mutation}
+          field="outlook_mail.enabled"
+          label="Outlook mail access"
+          hint="Search, read, draft and file email. Sending, replying, forwarding and deleting ask first."
+          value={mail.enabled}
+          row={{ sub: true }}
+        />
+      )}
+      {signedIn(state) && calendar.enabled !== null && (
+        <SwitchSetting
+          mutation={mutation}
+          field="outlook_calendar.enabled"
+          label="Outlook calendar access"
+          hint="See events and free times, and add your own. Invitations, cancelling and answers ask first."
+          value={calendar.enabled}
+          row={{ sub: true }}
+        />
+      )}
+    </AccountRow>
+  );
+}
+
+/**
  * Settings › Accounts (B263): GitHub, Google and X, each one row with one
  * status and labelled actions. Opening the page reads the saved state only;
  * no token is refreshed and no account is contacted until an action is
@@ -4455,7 +4732,7 @@ export function AccountsSnapshotPanel({
   mutation: SettingsMutationIO;
   showActions?: boolean;
   /** One account only, as its app's settings (Apps › Google › Settings). */
-  only?: 'github' | 'google' | 'x';
+  only?: 'github' | 'google' | 'x' | 'microsoft';
 }) {
   if (snapshot.availability !== 'available')
     return (
@@ -4471,11 +4748,15 @@ export function AccountsSnapshotPanel({
       snapshot.calendar.authentication_state,
     ]),
     accountState([snapshot.x.authentication_state]),
+    accountState([
+      snapshot.outlook_mail.authentication_state,
+      snapshot.outlook_calendar.authentication_state,
+    ]),
   ];
   const count = (state: AccountState) =>
     states.filter((item) => item === state).length;
   const changed = () => reloadAccounts(mutation);
-  const shown = (account: 'github' | 'google' | 'x') =>
+  const shown = (account: 'github' | 'google' | 'x' | 'microsoft') =>
     !only || only === account;
   return (
     <div className="stack settings-snapshot-page settings-accounts-page">
@@ -4540,6 +4821,25 @@ export function AccountsSnapshotPanel({
           </ConnectedAccountAuth>
         ) : (
           <XAccount account={snapshot.x} mutation={mutation} auth={null} />
+        )}
+        {!shown('microsoft') ? null : showActions ? (
+          <ConnectedAccountAuth account="microsoft" onChanged={changed}>
+            {(auth) => (
+              <OutlookAccount
+                mail={snapshot.outlook_mail}
+                calendar={snapshot.outlook_calendar}
+                mutation={mutation}
+                auth={auth}
+              />
+            )}
+          </ConnectedAccountAuth>
+        ) : (
+          <OutlookAccount
+            mail={snapshot.outlook_mail}
+            calendar={snapshot.outlook_calendar}
+            mutation={mutation}
+            auth={null}
+          />
         )}
       </SettingsGroup>
     </div>

@@ -3,6 +3,9 @@
 Exposes two sub-tools:
   • search_conversations — keyword search across all thread messages
   • list_conversations  — list all saved threads with names and dates
+
+An incognito conversation (N11) is seen only from itself; one that was
+incognito is seen from elsewhere only after incognito was turned off.
 """
 
 from __future__ import annotations
@@ -46,13 +49,15 @@ _MAX_THREADS = 200  # safety cap on how many threads to scan
 _LIST_CHARS = 20_000  # list_conversations beyond this is read on with read_tool_output
 
 
-def _get_thread_messages(thread_id: str) -> list[dict]:
+def _get_thread_messages(thread_id: str, *, own: bool = False) -> list[dict]:
     """Load human + assistant messages from a thread's checkpoint.
 
     Uses the SqliteSaver checkpointer directly — no dependency on the
-    agent graph or app.py.
+    agent graph or app.py. Another conversation (not *own*) gives only what
+    may be read outside it: nothing while it is incognito, and only what was
+    said after incognito was turned off.
     """
-    from row_bot.threads import checkpointer
+    from row_bot.threads import checkpointer, incognito_state
     from row_bot.turn_context import is_turn_context_message
 
     config = {"configurable": {"thread_id": thread_id}}
@@ -63,6 +68,8 @@ def _get_thread_messages(thread_id: str) -> list[dict]:
 
         channel_values = checkpoint_tuple.checkpoint.get("channel_values", {})
         messages = channel_values.get("messages", [])
+        if not own:
+            messages = messages[incognito_state(thread_id).readable_from(messages):]
 
         result: list[dict] = []
         for m in messages:
@@ -89,11 +96,19 @@ def _snippet(text: str, max_len: int = _SNIPPET_LEN) -> str:
 
 # ── Tool functions ───────────────────────────────────────────────────────────
 
+def _visible_threads() -> tuple[list, str]:
+    """The conversations this one may look through: every one but those incognito, except itself."""
+    from row_bot.threads import _list_threads, incognito_thread_ids
+    from row_bot.tool_outputs import current_thread_id
+
+    own = current_thread_id()
+    hidden = incognito_thread_ids() - {own}
+    return [row for row in _list_threads() if row[0] not in hidden], own
+
+
 def _search_conversations(query: str, max_results: int = 15) -> str:
     """Search all past conversations for messages containing *query* keywords."""
-    from row_bot.threads import _list_threads
-
-    threads = _list_threads()
+    threads, own = _visible_threads()
     if not threads:
         return "No saved conversations found."
 
@@ -106,7 +121,7 @@ def _search_conversations(query: str, max_results: int = 15) -> str:
     threads_scanned = 0
 
     for tid, name, created_at, updated_at, *_cs_rest in threads[:_MAX_THREADS]:
-        messages = _get_thread_messages(tid)
+        messages = _get_thread_messages(tid, own=bool(own) and tid == own)
         threads_scanned += 1
 
         for msg in messages:
@@ -146,9 +161,7 @@ def _search_conversations(query: str, max_results: int = 15) -> str:
 
 def _list_conversations() -> str:
     """List all saved conversations with names and dates."""
-    from row_bot.threads import _list_threads
-
-    threads = _list_threads()
+    threads, _own = _visible_threads()
     if not threads:
         return "No saved conversations found."
 

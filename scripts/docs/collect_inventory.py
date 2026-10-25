@@ -651,6 +651,7 @@ def collect_environment() -> list[dict[str, Any]]:
         "ROW_BOT_UPDATES_DIR": "The folder shared with the host that applies updates (its status.json, Row-Bot's request.json).",
         "ROW_BOT_UPDATE_FEED": "A loopback release feed for rehearsing a background update before it is published.",
         "ROW_BOT_UPDATE_FEED_TESTING": "Set to 1 to let ROW_BOT_UPDATE_FEED replace GitHub; for tests and rehearsals only.",
+        "ROW_BOT_INSTALL_COUNT": "Set to 0 to turn install stats off on this server: no card, no ID, nothing sent.",
         "ROW_BOT_PLUGIN_INDEX_URL": "Override the public plugin marketplace index URL.",
         "ROW_BOT_PLUGIN_REPO_URL": "Override the plugin repository used by marketplace installs.",
         "ROW_BOT_XAI_OAUTH_CLIENT_ID": "Override the xAI OAuth client identifier.",

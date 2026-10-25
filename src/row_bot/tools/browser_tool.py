@@ -875,7 +875,7 @@ _TOOLS: tuple[tuple[Any, str, str, type[BaseModel] | None], ...] = (
      "Show the page at a phone, tablet or desktop size to check a responsive layout.", _ViewportInput),
     (browser_record, "browser_record",
      "Record this chat's page in Row-Bot's browser to a video (asks first): start, do the steps, then stop. "
-     "To record the whole screen use computer_use start_recording.", _RecordInput),
+     "To record the whole screen use computer_record.", _RecordInput),
 )
 
 
@@ -892,7 +892,7 @@ class BrowserTool(BaseTool):
     def description(self) -> str:
         return (
             "Use websites in Row-Bot's own browser, shown live in the Browser pane, where the person stays signed "
-            "in. Use Computer Use for desktop apps or the person's own browser."
+            "in. Use the computer tool for desktop apps or the person's own browser."
         )
 
     @property

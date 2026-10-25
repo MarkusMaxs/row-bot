@@ -79,7 +79,7 @@ it('lists the local models, favourites first, with their state in words', () => 
   ]);
   const group = screen.getByRole('region', { name: 'On this computer' });
   expect(group).toHaveTextContent(
-    'Favourites come first in every model list. Hidden models wait under More models and still work.',
+    'A starred model is listed first wherever you choose a model. Hidden models wait under More models and still work.',
   );
   expect(group).toHaveTextContent('1 favourite · 1 hidden');
   const list = screen.getByRole('list', { name: 'Models on this computer' });

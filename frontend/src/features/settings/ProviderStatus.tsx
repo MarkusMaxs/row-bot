@@ -67,6 +67,15 @@ const sourceLabels: Record<string, string> = {
 const cliApps: Record<string, string> = {
   codex: 'Codex',
 };
+/** The account a subscription signs in with (no key involved). */
+const subscriptionAccounts: Record<string, string> = {
+  codex: 'ChatGPT',
+};
+function notConnectedDetail(card: ProviderLiveCard) {
+  if (card.group !== 'subscription') return 'Needs an API key';
+  const account = subscriptionAccounts[card.provider_id] ?? card.display_name;
+  return `Sign in with your ${account} account`;
+}
 function sourceLabel(card: ProviderLiveCard) {
   const app = cliApps[card.provider_id] ?? 'its own app';
   if (card.source === 'external_cli') return `Uses your ${app} sign-in`;
@@ -149,9 +158,9 @@ function cardDetail(card: ProviderLiveCard) {
             ? 'Ready to sign in with your xAI account'
             : 'Needs an xAI client ID first: ⋯ › Set up xAI sign-in'
           : sourceLabel(card) ||
-            (card.configured ? 'Connected' : 'Needs an API key');
+            (card.configured ? 'Connected' : notConnectedDetail(card));
   const details = [source];
-  if (card.plan_type) details.push(`${card.plan_type} plan`);
+  if (card.plan_type) details.push(`${humanizeToken(card.plan_type)} plan`);
   if (card.model_count !== null)
     details.push(
       `${card.model_count} ${card.model_count_source.includes('fallback') ? 'known models' : 'models'}`,

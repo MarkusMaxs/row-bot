@@ -14290,6 +14290,118 @@
         }
       }
     },
+    "/api/v1/live": {
+      "get": {
+        "description": "SSE live data validates LiveFrame: topic names and revisions only, never content. The first frame is sent at once; later frames when a revision moves on (bursts coalesce).",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "./LiveFrame.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/live/poll": {
+      "get": {
+        "description": "Long poll: answers with the LiveFrame once its revision passes `after` (at once for another epoch), or after 25 seconds.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./LiveFrame.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
     "/api/v1/monitor": {
       "get": {
         "parameters": [
@@ -15413,6 +15525,438 @@
               "application/json": {
                 "schema": {
                   "$ref": "./NoticePage.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages": {
+      "get": {
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./PagePage.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./PageView.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/decisions": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./PageDecisionWrite.schema.json"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./PageView.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/download": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./PageFrameRequest.schema.json"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./PageDownload.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/frame": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./PageFrameRequest.schema.json"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./PageFrame.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/save": {
+      "post": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./PageFrameRequest.schema.json"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./ExportSaved.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{page_id}/state": {
+      "put": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./PageStateWrite.schema.json"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./PageView.schema.json"
                 }
               }
             },
@@ -21817,6 +22361,152 @@
               "application/json": {
                 "schema": {
                   "$ref": "./Acknowledged.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/system/install-count": {
+      "get": {
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./InstallCountSnapshot.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      },
+      "put": {
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./InstallCountChoice.schema.json"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./InstallCountSnapshot.schema.json"
+                }
+              }
+            },
+            "description": "Authenticated result"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "./Problem.schema.json"
+                }
+              }
+            },
+            "description": "Safe problem"
+          }
+        }
+      }
+    },
+    "/api/v1/system/install-count/delete": {
+      "post": {
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Client-Session",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./InstallCountDeletion.schema.json"
                 }
               }
             },

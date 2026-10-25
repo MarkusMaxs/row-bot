@@ -17,6 +17,7 @@ import {
   CircleAlert,
   Code2,
   FileText,
+  HatGlasses,
   Home,
   Layers,
   Library,
@@ -33,6 +34,8 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useClientState, useRuntime } from '../../runtime';
+import { useLive } from '../../live';
+import { fallbackDue } from '../../api/live-updates';
 import AttentionIndicator from './AttentionIndicator';
 import { useShellSettled } from '../../shell-settled';
 import { useOverlay } from '../../ui/overlays';
@@ -63,6 +66,7 @@ import { DEFAULT_PROFILE_ID, openAgentProfiles } from './agent-profiles';
 import { useAgentFavourites } from './agent-favourites';
 import { agentWorkLabel } from './agent-activity';
 import { ConversationGlyph } from './ConversationGlyph';
+import { incognitoAction, useIncognitoSwitch } from './incognito';
 import {
   CONVERSATION_TYPES,
   TYPE_GROUPS,
@@ -287,6 +291,7 @@ function activityLabel(
 export default function Navigation({
   onOpenConversation,
   onNewChat,
+  onNewIncognitoChat,
   onStartProfileChat,
   onPanel,
   creatingChat = false,
@@ -295,6 +300,8 @@ export default function Navigation({
 }: {
   onOpenConversation?: () => void;
   onNewChat?: () => void;
+  /** New chat ▾ › New incognito chat (N11). */
+  onNewIncognitoChat?: () => void;
   onStartProfileChat?: (profile: ProfileSummary) => void;
   /** Show a resource's panel: the Designs filter's New design opens there. */
   onPanel?: (panel: PanelDescriptor, options?: { wide?: boolean }) => void;
@@ -358,6 +365,7 @@ export default function Navigation({
     overlay.close();
     onStartProfileChat?.(profile);
   };
+  const turnIncognito = useIncognitoSwitch();
   const openLibrary = (opener: HTMLElement | null) => {
     if (profileSession)
       openProfiles(opener, {
@@ -453,6 +461,7 @@ export default function Navigation({
     );
   // Rows are rechecked while they show activity, the open one included: a
   // reply whose end never reached it settles from the recheck (B396).
+  const live = useLive();
   const activeRowKey = rows
     .filter((row) => observedActivity(row))
     .map((row) => row.id)
@@ -491,13 +500,20 @@ export default function Navigation({
         inFlight = false;
       }
     };
-    const timer = window.setInterval(() => void poll(), 15000);
+    // The list itself follows live updates (B407): this recheck is the
+    // fallback for when the live stream is down.
+    let readAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (!fallbackDue(live, readAt)) return;
+      readAt = Date.now();
+      void poll();
+    }, 15000);
     return () => {
       alive = false;
       request?.abort();
       window.clearInterval(timer);
     };
-  }, [activeRowKey, controller, state.status]);
+  }, [activeRowKey, controller, live, state.status]);
   function openActions(
     conversation: ConversationView,
     initialExport: false | 'markdown' | 'pdf' = false,
@@ -607,7 +623,7 @@ export default function Navigation({
           <Button
             variant="ghost"
             className="nav-conversation-link"
-            aria-label={title}
+            aria-label={conversation.incognito ? `${title} (incognito)` : title}
             aria-current={
               location.pathname === `/conversations/${conversation.id}`
                 ? 'page'
@@ -684,6 +700,7 @@ export default function Navigation({
                 icon: <PencilLine size={16} />,
                 onSelect: () => openActions(conversation),
               },
+              incognitoAction(conversation, turnIncognito),
               {
                 label: 'Export as Markdown',
                 icon: <Upload size={16} />,
@@ -794,8 +811,8 @@ export default function Navigation({
           {headerActions}
         </div>
       </header>
-      {/* The sidebar's one primary action; ▾ starts a chat with an agent
-          (B268). Its shortcut shows on hover and focus. */}
+      {/* The sidebar's one primary action; ▾ starts an incognito chat (N11)
+          or a chat with an agent (B268). Its shortcut shows on hover and focus. */}
       <div className="nav-new-chat">
         <Button
           variant="ghost"
@@ -816,34 +833,54 @@ export default function Navigation({
             <Kbd keys={NEW_CHAT_SHORTCUT} />
           </span>
         </Button>
-        {profileSession && (
+        {(profileSession || onNewIncognitoChat) && (
           <Menu
-            label="New chat with an agent…"
-            hint="New chat with an agent…"
+            label="New chat options"
+            hint="New chat options"
             iconOnly
             variant="ghost"
             className="nav-new-chat-more"
             actions={[
-              // Each agent says what it is for in one short line, so the
-              // Design agent (visual ideas) is not taken for New design.
-              ...favourites.map((profile) => ({
-                label: profile.display_name,
-                description: profile.description || undefined,
-                icon: (
-                  <AgentAvatar
-                    seed={agentSeed(profile.id, profile.id)}
-                    size={18}
-                  />
-                ),
-                disabled: profileChatDisabled,
-                onSelect: () => startProfileChat(profile),
-              })),
-              {
-                label: 'All agents…',
-                icon: <Bot size={16} />,
-                separatorBefore: true,
-                onSelect: openLibrary,
-              },
+              ...(onNewIncognitoChat
+                ? [
+                    {
+                      label: 'New incognito chat',
+                      description: 'Nothing in it is saved to memory',
+                      icon: <HatGlasses size={16} />,
+                      disabled: newChatDisabled,
+                      onSelect: () => {
+                        overlay.close();
+                        onNewIncognitoChat();
+                      },
+                    },
+                  ]
+                : []),
+              ...(profileSession
+                ? [
+                    // Each agent says what it is for in one short line, so the
+                    // Design agent (visual ideas) is not taken for New design.
+                    ...favourites.map((profile, index) => ({
+                      label: profile.display_name,
+                      description: profile.description || undefined,
+                      icon: (
+                        <AgentAvatar
+                          seed={agentSeed(profile.id, profile.id)}
+                          size={18}
+                        />
+                      ),
+                      disabled: profileChatDisabled,
+                      separatorBefore:
+                        index === 0 && Boolean(onNewIncognitoChat),
+                      onSelect: () => startProfileChat(profile),
+                    })),
+                    {
+                      label: 'All agents…',
+                      icon: <Bot size={16} />,
+                      separatorBefore: true,
+                      onSelect: openLibrary,
+                    },
+                  ]
+                : []),
             ]}
           >
             <ChevronDown size={15} aria-hidden />

@@ -17,9 +17,9 @@ type Action = ModelVisibilityMutation['action'];
 
 /**
  * Settings › Models › On this computer (F10): the local models, each with a
- * star (favourites come first in every model list) and Hide (it waits under
- * More models and still works). Choosing happens in the pickers; this only
- * lists and manages them.
+ * star (listed first in every model list, U10) and Hide (it waits under More
+ * models and still works), as in the Catalog. Choosing happens in the
+ * pickers; this only lists and manages them.
  */
 export default function LocalModelSettings({
   controller,
@@ -154,7 +154,7 @@ export default function LocalModelSettings({
     <SettingsGroup
       title="On this computer"
       anchor="local-models"
-      note="Favourites come first in every model list. Hidden models wait under More models and still work."
+      note="A starred model is listed first wherever you choose a model. Hidden models wait under More models and still work."
       meta={
         counts.length > 0 || hiddenTotal > 0 ? (
           <>

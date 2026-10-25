@@ -68,10 +68,15 @@ test('a message waiting at Stop stays listed and goes with Send now', async ({
     description: JSON.stringify({
       signature:
         'Failed to load resource: the server responded with a status of 409 (Conflict)',
-      count: 1,
+      // The refused send always answers 409. Send now can land before the
+      // list's read after Stop does (it can take over a second on a busy
+      // server), carry the revision Stop moved and retry once on the
+      // current one: a second 409 the person never sees.
+      count: 2,
+      upTo: true,
       owner: 'Phase 9 waiting messages',
       fixture:
-        'A new message is sent while a stopped conversation still has one waiting (queue_pending)',
+        'A new message is sent while a stopped conversation still has one waiting (queue_pending); Send now may retry once on the revision Stop moved (queue_revision_conflict)',
     }),
   });
   const started = Date.now();

@@ -325,6 +325,69 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
+  pages(conversationId?: string, signal?: AbortSignal) {
+    return wire.getPages(this.base, this.session(), conversationId, signal);
+  }
+  page(pageId: string, signal?: AbortSignal) {
+    return wire.getPage(this.base, this.session(), pageId, signal);
+  }
+  pageFrame(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
+    return wire.createPageFrame(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  savePageState(
+    pageId: string,
+    state: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageState(
+      this.base,
+      this.session(),
+      pageId,
+      { state },
+      signal,
+    );
+  }
+  savePageDecision(
+    pageId: string,
+    decision: wire.PageDecisionWrite,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageDecision(
+      this.base,
+      this.session(),
+      pageId,
+      decision,
+      signal,
+    );
+  }
+  downloadPage(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
+    return wire.downloadPage(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  savePageToExports(
+    pageId: string,
+    theme: wire.PageTheme,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageToExports(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
   browserLocalAddresses(conversation: string, signal?: AbortSignal) {
     return wire.getBrowserLocalAddresses(
       this.base,
@@ -368,6 +431,20 @@ export class HttpTransport implements ClientTransport {
       { hourly_network_checks: enabled },
       signal,
     );
+  }
+  installCount(signal?: AbortSignal) {
+    return wire.getInstallCount(this.base, this.session(), signal);
+  }
+  chooseInstallCount(enabled: boolean, signal?: AbortSignal) {
+    return wire.chooseInstallCount(
+      this.base,
+      this.session(),
+      { enabled },
+      signal,
+    );
+  }
+  deleteCountedData(signal?: AbortSignal) {
+    return wire.deleteCountedData(this.base, this.session(), signal);
   }
   updates(signal?: AbortSignal) {
     return wire.getUpdates(this.base, this.session(), signal);
@@ -417,11 +494,11 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  accountAuth(account: 'google' | 'x', signal?: AbortSignal) {
+  accountAuth(account: 'google' | 'x' | 'microsoft', signal?: AbortSignal) {
     return wire.getAccountAuth(this.base, this.session(), account, signal);
   }
   accountAuthCommand(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     command: wire.AccountAuthCommand,
     signal?: AbortSignal,
   ) {
@@ -434,7 +511,7 @@ export class HttpTransport implements ClientTransport {
     );
   }
   accountAuthReceipt(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) {
@@ -447,7 +524,7 @@ export class HttpTransport implements ClientTransport {
     );
   }
   cancelAccountAuth(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) {
@@ -3065,6 +3142,15 @@ export class HttpTransport implements ClientTransport {
   }
   notices(position?: wire.NoticePosition, signal?: AbortSignal) {
     return wire.getNotices(this.base, this.session(), position, signal);
+  }
+  observeLive(signal: AbortSignal) {
+    return wire.observeLive(this.base, this.session(), signal);
+  }
+  pollLive(
+    position: { after: number; epoch: string } | undefined,
+    signal: AbortSignal,
+  ) {
+    return wire.pollLive(this.base, this.session(), position, signal);
   }
   acknowledge(subscription: string, cursor: string, signal?: AbortSignal) {
     return wire.acknowledge(
