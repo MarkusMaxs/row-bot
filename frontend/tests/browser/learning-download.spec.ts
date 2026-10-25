@@ -235,7 +235,7 @@ test('the download: the ask, downloading, Monitor, paused, not enough disk, fail
 
   // The Personal model view reflects them.
   await openModel(page, GPU);
-  const facts = page.getByLabel('Personal model', { exact: true });
+  const facts = page.locator('dl[aria-label="Personal model"]');
   await expect(facts).toContainText('On this computer (4.6 GB)');
   await expect(facts).toContainText('Installed (4 GB)');
   await shoot(page, info, 'model-installed');
