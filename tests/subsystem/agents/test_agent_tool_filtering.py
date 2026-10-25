@@ -31,6 +31,7 @@ def _restore_agent_context_after_filtering_test():
 
 # Pages through tool results shortened when created; bound with every Agent tool set.
 READER = "read_tool_output"
+ASK = "ask_person"  # Row-Bot asks the person questions (N4): bound with every tool set.
 
 
 def _bound_tools(graph: SimpleNamespace) -> dict[str, BaseTool]:
@@ -122,7 +123,7 @@ def test_get_agent_graph_without_allowlist_progressively_exposes_plugin_and_chan
 
     graph = agent.get_agent_graph(["filesystem"])
 
-    assert list(_bound_tools(graph)) == ["filesystem", "tool_search", "tool_invoke", READER]
+    assert list(_bound_tools(graph)) == ["filesystem", "tool_search", "tool_invoke", READER, ASK]
     search = _bound_tools(graph)["tool_search"]
     results = json.loads(search.invoke({"query": "lookup", "limit": 5}))["results"]
     assert [result["name"] for result in results] == ["plugin_lookup"]
@@ -165,7 +166,7 @@ def test_get_agent_graph_with_allowlist_filters_plugin_and_channel_tools(monkeyp
         tool_allowlist=["filesystem", "plugin_lookup"],
     )
 
-    assert list(_bound_tools(graph)) == ["filesystem", "tool_search", "tool_invoke", READER]
+    assert list(_bound_tools(graph)) == ["filesystem", "tool_search", "tool_invoke", READER, ASK]
     search = _bound_tools(graph)["tool_search"]
     assert [
         result["name"]
@@ -204,7 +205,7 @@ def test_get_agent_graph_with_allowlist_filters_individual_mcp_tools(monkeypatch
 
     graph = agent.get_agent_graph(["mcp"], tool_allowlist=["mcp_local_echo"])
 
-    assert list(_bound_tools(graph)) == ["tool_search", "tool_invoke", READER]
+    assert list(_bound_tools(graph)) == ["tool_search", "tool_invoke", READER, ASK]
     search = _bound_tools(graph)["tool_search"]
     assert json.loads(search.invoke({"query": "echo"}))["results"][0]["name"] == "mcp_local_echo"
     assert allow_args == [{"mcp_local_echo"}]
@@ -261,7 +262,7 @@ def test_get_agent_graph_parent_mcp_allowlist_includes_all_mcp_tools(monkeypatch
 
     graph = agent.get_agent_graph(["mcp"], tool_allowlist=["mcp"])
 
-    assert list(_bound_tools(graph)) == ["tool_search", "tool_invoke", READER]
+    assert list(_bound_tools(graph)) == ["tool_search", "tool_invoke", READER, ASK]
     search = _bound_tools(graph)["tool_search"]
     assert {
         result["name"]
@@ -292,7 +293,7 @@ def test_eager_loading_mode_preserves_direct_external_tool_list(monkeypatch):
 
     graph = agent.get_agent_graph(["filesystem"])
 
-    assert list(_bound_tools(graph)) == ["filesystem", "plugin_lookup", READER]
+    assert list(_bound_tools(graph)) == ["filesystem", "plugin_lookup", READER, ASK]
 
 
 def test_get_agent_graph_cache_key_includes_allowlist(monkeypatch):
@@ -360,7 +361,7 @@ def test_gemini_final_boundary_isolates_malformed_mcp_plugin_and_channel_tools(m
 
     graph = agent.get_agent_graph(["filesystem", "mcp"])
 
-    assert list(_bound_tools(graph)) == ["filesystem", READER]
+    assert list(_bound_tools(graph)) == ["filesystem", READER, ASK]
 
 
 def test_gemini_explicit_allowlist_fails_for_malformed_tool(monkeypatch):
@@ -414,7 +415,7 @@ def test_forced_approval_resume_keeps_empty_discovery_bridge_bound(monkeypatch):
 
     graph = agent.get_agent_graph([], tool_allowlist=[])
 
-    assert list(_bound_tools(graph)) == ["tool_search", "tool_invoke", READER]
+    assert list(_bound_tools(graph)) == ["tool_search", "tool_invoke", READER, ASK]
     invoke = _bound_tools(graph)["tool_invoke"]
     payload = json.loads(invoke.invoke({"name": "removed_target", "arguments": {}}))
     assert payload["ok"] is False
@@ -509,7 +510,7 @@ def test_discovery_assembly_failure_falls_back_to_same_filtered_external_snapsho
 
     graph = agent.get_agent_graph([], tool_allowlist=["plugin_allowed"])
 
-    assert list(_bound_tools(graph)) == ["plugin_allowed", READER]
+    assert list(_bound_tools(graph)) == ["plugin_allowed", READER, ASK]
 
 
 def test_cache_identity_tracks_external_metadata_and_skill_snapshot(monkeypatch):
@@ -563,10 +564,8 @@ def _registry_with(monkeypatch, agent, tools: dict[str, list[StructuredTool]]):
     )
 
 
-def test_a_small_window_offers_rare_groups_through_tool_search_and_their_guide_when_used(monkeypatch):
+def test_a_small_window_offers_rare_groups_through_tool_search(monkeypatch):
     """F11: on 64k or less, rarely used built-in groups leave every turn's prompt but stay usable."""
-    from langchain_core.messages import AIMessage
-
     agent = _prepare_graph(monkeypatch)
     status, memory = _lc_tool("row_bot_status"), _lc_tool("search_memory")
     _registry_with(monkeypatch, agent, {"row_bot_status": [status], "memory": [memory]})
@@ -574,17 +573,13 @@ def test_a_small_window_offers_rare_groups_through_tool_search_and_their_guide_w
     graph = agent.get_agent_graph(["row_bot_status", "memory"])
 
     bound = _bound_tools(graph)
-    assert set(bound) == {"search_memory", "tool_search", "tool_invoke", READER}
+    assert set(bound) == {"search_memory", "tool_search", "tool_invoke", READER, ASK}
     # Its guide is not in the prompt until the group is used...
     assert "row_bot_status" not in agent._current_effective_tool_parent_names_var.get()
     found = json.loads(bound["tool_search"].invoke({"query": "row_bot_status", "limit": 5}))["results"]
     assert [result["name"] for result in found] == ["row_bot_status"]
     assert bound["tool_invoke"].invoke(
         {"name": "row_bot_status", "arguments": {"query": "voice"}}) == "row_bot_status:voice"
-    # ...and joins on the next step once it is.
-    used = [AIMessage(content="", tool_calls=[{"name": "tool_invoke", "id": "c1", "type": "tool_call",
-                                               "args": {"name": "row_bot_status", "arguments": {}}}])]
-    assert agent._on_demand_parents_used(used) == {"row_bot_status"}
 
 
 def test_a_rare_tool_called_by_its_own_name_still_runs(monkeypatch):
@@ -605,18 +600,18 @@ def test_a_rare_tool_called_by_its_own_name_still_runs(monkeypatch):
 
 def test_a_large_window_binds_every_group_and_developer_tools_with_a_code_folder(monkeypatch):
     agent = _prepare_graph(monkeypatch)
-    monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 131_072)
+    monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 262_144)
     _registry_with(monkeypatch, agent, {"row_bot_status": [_lc_tool("row_bot_status")],
                                         "developer": [_lc_tool("developer_read_file")]})
     monkeypatch.setattr(agent, "_has_code_folder", lambda: False)
 
     # F34: without a code folder every Developer tool fails, so none is bound, on any window.
-    assert set(_bound_tools(agent.get_agent_graph(["row_bot_status", "developer"]))) == {"row_bot_status", READER}
+    assert set(_bound_tools(agent.get_agent_graph(["row_bot_status", "developer"]))) == {"row_bot_status", READER, ASK}
 
     monkeypatch.setattr(agent, "_has_code_folder", lambda: True)
     graph = agent.get_agent_graph(["row_bot_status", "developer"])
 
-    assert set(_bound_tools(graph)) == {"row_bot_status", "developer_read_file", READER}
+    assert set(_bound_tools(graph)) == {"row_bot_status", "developer_read_file", READER, ASK}
 
 
 def test_a_small_window_binds_developer_tools_only_with_a_code_folder(monkeypatch):

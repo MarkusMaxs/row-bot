@@ -1,11 +1,20 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter, useLocation } from 'react-router-dom';
+import { LiveUpdates } from '../../api/live-updates';
 import type {
   AttentionProblem,
   ConversationView,
   GenerationState,
+  LiveFrame,
   MonitorSnapshot,
   OnboardingSnapshot,
   PendingApproval,
@@ -15,6 +24,7 @@ import type {
   TaskSummary,
   TaskSummaryPage,
 } from '../../api/types';
+import { provideLive } from '../../live';
 import OverviewHome, { type OverviewHomeProps } from './OverviewHome';
 import AttentionIndicator from '../shell/AttentionIndicator';
 
@@ -1217,5 +1227,115 @@ it('advances its own clock every minute when no time is supplied', () => {
     );
   } finally {
     vi.useRealTimers();
+  }
+});
+
+it('offers choosing a folder for a workflow its removed code folder stopped (N9)', async () => {
+  render(
+    <MemoryRouter>
+      <OverviewHome
+        conversations={[]}
+        setup={setupSnapshot()}
+        monitor={null}
+        loadApprovals={vi.fn().mockResolvedValue(approvals())}
+        loadAttention={attention(
+          problem({
+            id: 'workflow:wf-landing',
+            title: 'Landing checks needs a code folder',
+            detail:
+              "Its code folder isn't a code folder any more, so it didn't run. Choose another.",
+            place: 'workflows',
+            fix: fix({
+              kind: 'choose_folder',
+              href: '/?tab=workflows&workflow=wf-landing&fix=folder',
+              name: 'Landing checks',
+            }),
+          }),
+        )}
+        now={now}
+        {...handlers}
+      />
+    </MemoryRouter>,
+  );
+  expect(
+    await screen.findByText('Landing checks needs a code folder'),
+  ).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Choose a folder' })).toHaveAttribute(
+    'href',
+    '/?tab=workflows&workflow=wf-landing&fix=folder',
+  );
+});
+
+// Last in this file: it gives the window live updates.
+it('reads the checks again once an approval is answered, so the Workflows warning leaves Today at once (B414)', async () => {
+  const frames: ((frame: LiveFrame) => void)[] = [];
+  const live = new LiveUpdates(
+    {
+      async *observeLive(signal: AbortSignal) {
+        while (!signal.aborted)
+          yield await new Promise<LiveFrame>((resolve) => frames.push(resolve));
+      },
+    },
+    () => Promise.resolve(),
+  );
+  const send = (revision: number, approvals: number) =>
+    frames.shift()?.({
+      epoch: 'server-a',
+      revision,
+      topics: {
+        conversations: 0,
+        runs: 0,
+        approvals,
+        helpers: 0,
+        processes: 0,
+        monitor: 0,
+        models: 0,
+        learning: 0,
+      },
+    });
+  const workflows = (status: 'ok' | 'warn', waiting: string) =>
+    check({
+      id: 'workflows',
+      name: 'Workflows',
+      status,
+      detail: `0 scheduled · 0 running · ${waiting} waiting`,
+      settings_tab: '',
+    });
+  const loadHealth = vi
+    .fn()
+    .mockResolvedValueOnce({
+      schema_version: 1,
+      hourly_network_checks: true,
+      checks: [workflows('warn', '1 approval')],
+    })
+    .mockResolvedValue({
+      schema_version: 1,
+      hourly_network_checks: true,
+      checks: [workflows('ok', '0 approvals')],
+    });
+  provideLive(live);
+  live.start();
+  try {
+    show({ loadHealth });
+    const today = await screen.findByRole('list', { name: 'Today' });
+    expect(
+      within(today).getByText(
+        'Workflows: 0 scheduled · 0 running · 1 approval waiting',
+      ),
+    ).toBeVisible();
+    await waitFor(() => expect(frames).toHaveLength(1));
+    act(() => void send(1, 0));
+    await waitFor(() => expect(live.connected).toBe(true));
+
+    // The workflow's approval was answered, here or anywhere else.
+    await waitFor(() => expect(frames).toHaveLength(1));
+    act(() => void send(2, 1));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('list', { name: 'Today' })).toBeNull(),
+    );
+    expect(loadHealth).toHaveBeenCalledTimes(2);
+  } finally {
+    live.stop();
   }
 });

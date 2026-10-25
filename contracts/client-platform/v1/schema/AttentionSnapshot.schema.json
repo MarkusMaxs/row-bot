@@ -97,7 +97,8 @@
             "reconnect_account",
             "choose_model",
             "open",
-            "check_again"
+            "check_again",
+            "choose_folder"
           ],
           "title": "Kind",
           "type": "string"

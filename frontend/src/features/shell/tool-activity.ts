@@ -18,7 +18,9 @@ import {
   GitPullRequest,
   Globe,
   Image,
+  LayoutTemplate,
   Mail,
+  MessageCircleQuestion,
   MessagesSquare,
   Monitor,
   MousePointerClick,
@@ -34,6 +36,8 @@ import {
   Zap,
   type LucideIcon,
   PackageOpen,
+  Upload,
+  Download,
 } from 'lucide-react';
 import type {
   TranscriptTraceGroup,
@@ -77,10 +81,18 @@ const EXACT: Record<string, Verb> = {
   browser_navigate: verb('Opened page', 'Opening page', Globe),
   browser_click: verb('Clicked in the browser', 'Clicking', MousePointerClick),
   browser_type: verb('Typed in the browser', 'Typing', MousePointerClick),
+  browser_select: verb(
+    'Chose an option',
+    'Choosing an option',
+    MousePointerClick,
+  ),
+  browser_press: verb('Pressed a key', 'Pressing a key', MousePointerClick),
   browser_scroll: verb('Scrolled the page', 'Scrolling', MousePointerClick),
-  browser_snapshot: verb('Read the browser', 'Reading the browser', Globe),
-  browser_back: verb('Went back', 'Going back', Globe),
-  browser_tab: verb('Switched tab', 'Switching tab', Globe),
+  browser_wait_for: verb('Read the page', 'Reading the page', Globe),
+  browser_extract: verb('Read the page', 'Reading the page', Globe),
+  browser_tabs: verb('Used the tabs', 'Using the tabs', Globe),
+  browser_upload: verb('Uploaded a file', 'Uploading a file', Upload),
+  browser_download: verb('Downloaded a file', 'Downloading a file', Download),
   browser_screenshot: verb('Took a screenshot', 'Taking a screenshot', Camera),
   browser_viewport: verb(
     'Changed the page size',
@@ -88,6 +100,11 @@ const EXACT: Record<string, Verb> = {
     Smartphone,
   ),
   browser_record: verb('Recorded the browser', 'Recording the browser', Video),
+  computer: verb('Used the computer', 'Using the computer', Monitor),
+  // A turn's computer steps, grouped ("Computer activity").
+  computer_activity: verb('Used the computer', 'Using the computer', Monitor),
+  computer_record: verb('Recorded the screen', 'Recording the screen', Video),
+  // Conversations from before 5.3.
   computer_use: verb('Used the computer', 'Using the computer', Monitor),
   wikipedia: verb('Searched Wikipedia', 'Searching Wikipedia', BookOpen),
   arxiv: verb('Searched arXiv', 'Searching arXiv', BookOpen),
@@ -147,7 +164,15 @@ const EXACT: Record<string, Verb> = {
   ),
   request_connection: verb('Asked to connect', 'Asking to connect', Plug),
   suggest_apps: verb('Suggested apps', 'Looking for apps', Plug),
+  ask_person: verb(
+    'Asked you a question',
+    'Waiting for your answer',
+    MessageCircleQuestion,
+  ),
   export_to_pdf: verb('Exported a PDF', 'Exporting a PDF', FileText),
+  page_create: verb('Wrote a page', 'Writing a page', LayoutTemplate),
+  page_update: verb('Changed a page', 'Changing a page', LayoutTemplate),
+  page_read: verb('Read a page', 'Reading a page', LayoutTemplate),
   save_memory: verb('Saved a memory', 'Saving a memory', Brain),
   search_memory: verb('Searched memory', 'Searching memory', Brain),
   update_memory: verb('Updated a memory', 'Updating a memory', Brain),
@@ -172,6 +197,36 @@ const EXACT: Record<string, Verb> = {
   send_gmail_message: verb('Sent an email', 'Sending an email', Mail),
   create_gmail_draft: verb('Drafted an email', 'Drafting an email', Mail),
   search_gmail: verb('Searched email', 'Searching email', Mail),
+  outlook_search_mail: verb('Searched email', 'Searching email', Mail),
+  outlook_read_mail: verb('Read an email', 'Reading an email', Mail),
+  outlook_draft_mail: verb('Drafted an email', 'Drafting an email', Mail),
+  outlook_send_mail: verb('Sent an email', 'Sending an email', Mail),
+  outlook_reply_mail: verb('Replied to an email', 'Replying to an email', Mail),
+  outlook_forward_mail: verb('Forwarded an email', 'Forwarding an email', Mail),
+  outlook_update_mail: verb('Filed an email', 'Filing an email', Mail),
+  outlook_delete_mail: verb('Deleted an email', 'Deleting an email', Mail),
+  outlook_list_events: verb(
+    'Checked the calendar',
+    'Checking the calendar',
+    Calendar,
+  ),
+  outlook_find_free_times: verb(
+    'Found free times',
+    'Finding free times',
+    Calendar,
+  ),
+  outlook_create_event: verb('Added an event', 'Adding an event', Calendar),
+  outlook_update_event: verb('Changed an event', 'Changing an event', Calendar),
+  outlook_cancel_event: verb(
+    'Cancelled an event',
+    'Cancelling an event',
+    Calendar,
+  ),
+  outlook_respond_event: verb(
+    'Answered an invitation',
+    'Answering an invitation',
+    Calendar,
+  ),
   delegate_work: verb('Delegated work', 'Delegating work', Bot),
   run_command: verb('Ran a command', 'Running a command', Terminal),
   shell: verb('Ran a command', 'Running a command', Terminal),
@@ -281,6 +336,10 @@ const PATTERNS: Array<[RegExp, Verb]> = [
     /^developer_/,
     verb('Worked in the code folder', 'Working in the code folder', GitBranch),
   ],
+  [
+    /^designer_/,
+    verb('Worked on the design', 'Working on the design', Palette),
+  ],
   [/^(wiki|tracker)_/, verb('Updated notes', 'Updating notes', BookOpen)],
   [/memor/, verb('Used memory', 'Using memory', Brain)],
   [/search$/, verb('Searched', 'Searching', Search)],
@@ -320,7 +379,9 @@ export function stepVerb(
     return tool;
   }
   const known = describe(name);
-  const fallback = humanizeToken(bareName(name)) || 'Tool';
+  // An app's tool with no app named reads as its words, never "MCP …" (B391).
+  const fallback =
+    (!known && unnamedAppTool(name)) || humanizeToken(bareName(name)) || 'Tool';
   if (status === 'pending')
     return known?.running ?? `Running ${midSentence(fallback)}`;
   // A step that failed or never ran must not read as done ("Deleted a file").
@@ -377,6 +438,15 @@ function midSentence(label: string) {
   return /^\p{Lu}\p{Ll}/u.test(label)
     ? label[0].toLowerCase() + label.slice(1)
     : label;
+}
+
+/**
+ * A tool call the model is still writing (B324), in its step's own words:
+ * "Writing a page · 3 KB", never the tool's display name or its emoji.
+ */
+export function writingLabel(name: string, bytes: number): string {
+  const size = `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${describe(name)?.running ?? 'Preparing the next step'} · ${size}`;
 }
 
 export function stepIcon(name: string): LucideIcon {
@@ -469,16 +539,38 @@ export type ActivitySummary = {
   icons: LucideIcon[];
   /** The step that is running now, if any. */
   current: TranscriptTraceItem | null;
+  /** Row-Bot's questions to the person among the steps (N4). */
+  questions?: number;
 };
 
+/** A call the model got wrong and was told to send again (U11): no failure of the turn's. */
+export function isCorrected(step: TranscriptTraceItem) {
+  return step.specialization?.kind === 'request_corrected';
+}
+
+/**
+ * The turn's steps in order, as a person reads them: a corrected call is left
+ * out once the model sent that tool's call again, so only the last one the
+ * model gave up on shows (one quiet line).
+ */
 export function orderedSteps(groups: TranscriptTraceGroup[]) {
-  return [...groups]
+  const steps = [...groups]
     .sort((first, second) => first.group_order - second.group_order)
     .flatMap((group) =>
       [...group.items].sort(
         (first, second) => first.call_order - second.call_order,
       ),
     );
+  return steps.filter(
+    (step, index) =>
+      !isCorrected(step) ||
+      !steps.some(
+        (other, at) =>
+          other !== step &&
+          other.canonical_name === step.canonical_name &&
+          (!isCorrected(other) || at > index),
+      ),
+  );
 }
 
 const ATTENTION = new Set<StepStatus>([
@@ -504,7 +596,9 @@ export function summarizeActivity(
   return {
     total: steps.length,
     failed: steps.filter(
-      (step) => step.status === 'failed' || step.status === 'uncertain',
+      (step) =>
+        (step.status === 'failed' && !isCorrected(step)) ||
+        step.status === 'uncertain',
     ).length,
     skipped: steps.filter(
       (step) => step.status === 'blocked' || step.status === 'cancelled',
@@ -513,6 +607,9 @@ export function summarizeActivity(
     icons,
     current:
       [...steps].reverse().find((step) => step.status === 'pending') ?? null,
+    questions: steps.filter(
+      (step) => step.canonical_name === 'ask_person' && !isCorrected(step),
+    ).length,
   };
 }
 
@@ -522,6 +619,15 @@ export function activityLabel(summary: ActivitySummary): string {
   // Nothing ran: every step was denied, blocked or cancelled.
   if (summary.total && summary.skipped === summary.total)
     return `${summary.total} ${noun} skipped`;
+  // A turn that only asked the person reads as what it did (N4).
+  if (
+    summary.total &&
+    summary.questions === summary.total &&
+    !summary.failed &&
+    !summary.skipped &&
+    !summary.pending
+  )
+    return summary.total === 1 ? 'Asked you a question' : 'Asked you questions';
   return [
     `Used ${summary.total} ${noun}`,
     summary.failed ? `${summary.failed} failed` : '',
@@ -599,22 +705,62 @@ const TOOL_VERBS = new Set(
   ).split(' '),
 );
 
-/** "Send an email?" for a canonical tool name awaiting approval; "Allow Granola to delete page?" for an app's. */
+// Nouns that take no "a" ("get data", not "get a data").
+const UNCOUNTED = new Set(
+  (
+    'access analytics code content data feedback health help history info information mail media ' +
+    'metadata money music news software status text usage weather work'
+  ).split(' '),
+);
+
+/** "create product" → "create a product": a verb and one thing reads as a sentence (B388). */
+function withArticle(phrase: string): string {
+  const [verb, noun, ...rest] = phrase.split(' ');
+  if (rest.length || !noun || !TOOL_VERBS.has(verb.toLowerCase()))
+    return phrase;
+  if (!/^[a-z]+$/.test(noun) || /s$/.test(noun) || UNCOUNTED.has(noun))
+    return phrase;
+  return `${verb} ${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
+}
+
+/** "Allow Stripe to create a product?" for an app's tool, or "Allow Stripe to use “Balance”?". */
+function appQuestion(app: string, tool: string): string {
+  const phrase = midSentence(tool);
+  return TOOL_VERBS.has(phrase.split(' ')[0].toLowerCase())
+    ? `Allow ${app} to ${withArticle(phrase)}?`
+    : `Allow ${app} to use “${tool}”?`;
+}
+
+/** An app tool's runtime name the server named no app for ("mcp_stripe_create_product"): its words, without
+ * claiming an app (two connections can make one name), so never "MCP"; the name itself stays under Details. */
+function unnamedAppTool(name: string): string {
+  const found = /^mcp_([a-z0-9_]+)$/.exec(bareName(name));
+  const words = found ? found[1].replaceAll('_', ' ').trim() : '';
+  return words ? words[0].toUpperCase() + words.slice(1) : '';
+}
+
+/** "Send an email?" for a canonical tool name awaiting approval; "Allow Granola to delete a page?" for an app's. */
 export function approvalQuestion(name: string, app?: ToolApp): string {
-  if (app?.tool) {
-    const phrase = midSentence(app.tool);
-    return TOOL_VERBS.has(phrase.split(' ')[0].toLowerCase())
-      ? `Allow ${app.name} to ${phrase}?`
-      : `Allow ${app.name} to use “${app.tool}”?`;
-  }
-  if (!describe(name))
+  if (app?.tool) return appQuestion(app.name, app.tool);
+  if (!describe(name)) {
+    const words = unnamedAppTool(name);
+    if (words) return `Allow “${words}”?`;
     return `Allow ${humanizeToken(bareName(name)) || 'this action'}?`;
+  }
   return `${imperative(stepVerb(name, 'pending'))}?`;
+}
+
+/** The runtime name of an app's tool, shown under Details only ("mcp_stripe_create_product"). */
+export function rawToolName(name: string): string {
+  const bare = bareName(name);
+  return /^mcp_[a-z0-9_]+$/.test(bare) ? bare : '';
 }
 
 /** The action itself, for a label: "Delete a file", "Fixture action", or "Granola · Delete page". */
 export function approvalAction(name: string, app?: ToolApp): string {
   if (app?.tool) return `${app.name} · ${app.tool}`;
+  const words = !describe(name) && unnamedAppTool(name);
+  if (words) return words;
   if (!describe(name)) return humanizeToken(bareName(name)) || 'This action';
   return imperative(stepVerb(name, 'pending'));
 }

@@ -98,15 +98,34 @@ An app that a finished command opened (an editor, say) keeps running, as before;
 
 ## Row-Bot's Browser
 
-Row-Bot's browser is its own managed browser profile, separate from yours. Besides opening websites, it can open apps you run on this computer, take screenshots, show a page at a phone or tablet size, and record what it does.
+Row-Bot's browser is Chromium with Row-Bot's own profile (your installed Chrome or Edge, or Row-Bot's own browser if neither is installed). It has no window of its own: you watch it in the **Browser pane** beside the chat, where you stay signed in to sites. Besides opening websites, it can open apps you run on this computer, take screenshots, show a page at a phone or tablet size, and record what it does.
+
+### The Browser Pane
+
+While a turn uses the browser, the chat shows **Using the browser · site** with a small live picture; tap it (or **⋯ › Open browser**) to open the pane. It shows the page live, with tabs, an address bar, **Back**, **Forward** and **Reload**. **Pop out** opens it in its own window (a new tab in a web browser). On a phone it fills the screen.
+
+- **The page fits the pane**: sites lay out for the pane's size, docked, full screen or popped out, so they read as they would in a window that size. With the pane closed, the page is an ordinary desktop window.
+- **One line says who's driving**: what Row-Bot is doing now ("Row-Bot: Clicking "Next"") with **Take control** and **Stop**, or **You have control** with **Give back**.
+- **Click, type and scroll in the page yourself.** Doing so takes control; Row-Bot waits until you give it back.
+- **Signing in is yours.** Row-Bot never types a password, one-time code or card number. When a page asks for one, the pane says **Sign in here** and Row-Bot asks you in the chat. Sign-ins last across restarts, so it's usually once per site.
+- **It works from any signed-in device**, and stops streaming whenever the pane is hidden.
+- **If the browser stops**, the pane says "Row-Bot's browser stopped. Restart it?" with **Restart**. Your sign-ins stay.
+
+### What Asks First
+
+Most of what Row-Bot does on a page just runs, as you would click it. Paying, buying, booking with a charge, sending, posting, deleting and changing account settings ask first, with a card that says what will happen on which site and shows the page. **Ask** asks you, **Auto**'s reviewer approves only what clearly matches what you asked for (and asks you otherwise), **Hands-off** runs it, and **Block** refuses. Uploading a file to a site asks too.
+
+### Signed-In Sites
+
+**Settings › System › Browser and computer use** lists the sites you're signed in to in Row-Bot's browser, with **Sign out** for one and **Sign out of all**. The pane's **⋯** menu has the same list.
 
 ### Apps On This Computer
 
 An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, opens only once it's allowed in that conversation. **Ask** asks ("Allow Row-Bot's browser to open localhost:5173 in this chat?"), **Auto**'s reviewer decides or asks, **Hands-off** allows it, and **Block** refuses. A server Row-Bot started in the same conversation, and that is listening on that port, opens without asking; an address a program only printed doesn't count.
 
 - **One address, one conversation, one hour.** Another port, or another conversation, asks again. The server's live-reload connection (same address) is included.
-- **The list and Remove**: the conversation's **⋯ › Manage browser** panel lists each allowed address, who allowed it and when it ends, with **Remove**.
-- **Pages can be read and clicked**, but forms that post or upload to a local address stay blocked.
+- **The list and Remove**: the Browser pane's **⋯ › Addresses on this computer** lists each allowed address, who allowed it and when it ends, with **Remove**.
+- **Once allowed, the app works as any site does**: its forms and uploads included. Paying, sending, deleting and the rest still ask first.
 - **Never allowed**: other computers and devices on your network (routers, printers, file servers), cloud metadata addresses, and Row-Bot's own app. Row-Bot says so instead of asking.
 
 ### Screenshots And Page Sizes

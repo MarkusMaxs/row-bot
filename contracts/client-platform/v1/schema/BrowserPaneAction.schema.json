@@ -1,0 +1,40 @@
+{
+  "additionalProperties": false,
+  "description": "The pane's own controls: the address bar, Back, Forward, Reload, tabs, control and Restart.",
+  "properties": {
+    "action": {
+      "enum": [
+        "navigate",
+        "back",
+        "forward",
+        "reload",
+        "stop_loading",
+        "take_control",
+        "give_back",
+        "new_tab",
+        "switch_tab",
+        "close_tab",
+        "restart"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "tab": {
+      "default": "",
+      "pattern": "^(t[0-9]{1,6})?$",
+      "title": "Tab",
+      "type": "string"
+    },
+    "url": {
+      "default": "",
+      "maxLength": 8192,
+      "title": "Url",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "title": "BrowserPaneAction",
+  "type": "object"
+}

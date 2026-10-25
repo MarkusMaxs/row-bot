@@ -76,6 +76,25 @@ def _missing_starter_workflows() -> int:
     return sum(name not in existing for name in _STARTER_WORKFLOW_NAMES)
 
 
+def _own_workflow() -> bool:
+    """A workflow the person made, turned on or ran; the starters as shipped don't count."""
+    path = get_tasks_db_path(create_parent=False)
+    if not path.exists():
+        return False
+    try:
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        try:
+            rows = connection.execute("SELECT name, enabled, last_run FROM tasks").fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return False
+    return any(
+        name not in _STARTER_WORKFLOW_NAMES or enabled or last_run
+        for name, enabled, last_run in rows
+    )
+
+
 def _default_model() -> str | None:
     """The saved chat default; nothing is preset (decision 9)."""
     from row_bot.application.client_first_run import saved_default_model
@@ -83,20 +102,11 @@ def _default_model() -> str | None:
     return saved_default_model()
 
 
-def _developer_enabled() -> bool:
-    """Developer tools are on unless saved off (decision 13)."""
-    try:
-        from row_bot.tools import registry
+def _code_folder_connected() -> bool:
+    """A code folder the person connected; Developer tools being on by default doesn't count."""
+    from row_bot.developer import storage
 
-        if registry.get_tool("developer") is not None:
-            return bool(registry.is_enabled("developer"))
-        saved = json.loads(registry._config_path().read_text(encoding="utf-8"))
-        tools = saved.get("tools", saved) if isinstance(saved.get("tools"), dict) else saved
-        return bool(tools.get("developer", True)) if isinstance(tools, dict) else True
-    except (OSError, ValueError):
-        return True
-    except Exception:
-        return False
+    return bool(storage.list_workspaces())
 
 
 def _complete(config: dict[str, Any], default_model: str | None) -> bool:
@@ -110,15 +120,16 @@ def _snapshot(config: dict[str, Any]) -> dict[str, Any]:
     default_model = _default_model()
     complete_setup = _complete(config, default_model)
     starters_missing = _missing_starter_workflows() if complete_setup else 0
+    # An area ticks itself only for something the person did or set up:
+    # what Row-Bot ships with (starter workflows, tools on by default) doesn't count.
     live_done = [
         step for step, done in (
             ("models", bool(default_model)),
-            ("workflows", complete_setup and starters_missing == 0),
-            ("developer", _developer_enabled()),
+            ("workflows", complete_setup and _own_workflow()),
+            ("developer", _code_folder_connected()),
         ) if done
     ]
-    # Setup shows the real state: live areas count as done, and "models" is
-    # done only while a default model exists.
+    # Setup shows the real state: "models" is done only while a default model exists.
     complete = [
         step for step in dict.fromkeys([*_clean(config.get("onboarding_completed_steps"), SETUP_STEPS), *live_done])
         if step != "models" or default_model

@@ -299,3 +299,78 @@ def test_saving_settings_never_turns_mcp_back_on(owner, declared_server):
                           digest=plan["digest"])
     assert done["state"] == "completed" and "stays off" in done["message"], done
     assert json.loads(config.CONFIG_PATH.read_text())["enabled"] is False
+
+
+# A Microsoft 365 (Work IQ) server as the MCP Registry lists it: its address needs the tenant's ID (B398).
+WORK_IQ = {"server": {"name": "com.microsoft/workiq-admintools", "title": "Admin MCP Server", "version": "1.0.0",
+                      "description": "Admin tools for Microsoft 365", "remotes": [{
+                          "type": "streamable-http",
+                          "url": "https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_AdminTools",
+                          "variables": {"tenant_id": {"description": "Microsoft Entra tenant ID", "isRequired": True}}}]},
+           "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active"}}}
+TENANT = "1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f"
+
+
+@pytest.fixture
+def work_iq(owner, monkeypatch, tmp_path):
+    """The Work IQ record in the catalog; the Registry answers with that same record when it is checked again."""
+    from row_bot.mcp_client import auth as auth_module, marketplace
+    from tests.helpers.registry import use_registry
+    listed = json.loads(json.dumps(WORK_IQ))
+    monkeypatch.setattr(marketplace, "_fetch_json", lambda url, timeout=0: listed)
+    discovered = []
+    monkeypatch.setattr(auth_module, "discover_sign_in",
+                        lambda url: discovered.append(url) or {"required": False, "metadata": True, "dcr": True})
+    use_registry(monkeypatch, tmp_path, marketplace.registry_entries({"servers": [WORK_IQ]}))
+    secret_store._set_backend_for_tests(MemoryKeyring())
+    facts.invalidate()
+    yield listed, discovered
+    secret_store._set_backend_for_tests(None)
+
+
+def _start_work_iq():
+    item_id = "mcp:official:com.microsoft/workiq-admintools@1.0.0"
+    _, plan = api.read_item(owner_id="owner", item_id=item_id)
+    plan_id = str(uuid4())
+    return plan, plan_id, api.start_plan(context(), plan_id=plan_id, item_id=item_id, digest=plan["digest"])
+
+
+def test_an_address_variable_is_asked_for_by_name_checked_and_fills_the_address(work_iq):
+    _, discovered = work_iq
+    plan, plan_id, paused = _start_work_iq()
+    (asked,) = next(s for s in plan["steps"] if s["type"] == "inputs")["inputs"]
+    assert (asked["label"], asked["description"]) == ("Microsoft Entra tenant ID",
+                                                      "Microsoft Entra admin center › Overview › Tenant ID")
+    # Saving it at consent used to fail at once ("This step could not finish"), never asking for the tenant.
+    assert (paused["state"], paused["pause"]) == ("paused", "inputs"), paused
+    assert next(s for s in paused["steps"] if s["type"] == "inputs")["message"] == "Add Microsoft Entra tenant ID to continue."
+    refused = plans.resume(context(inputs={"tenant_id": "contoso"}), plan_id)
+    assert refused["pause"] == "inputs"
+    assert next(s for s in refused["steps"] if s["type"] == "inputs")["message"].startswith(
+        "Check Microsoft Entra tenant ID: a tenant ID looks like ")
+    done = plans.resume(context(inputs={"tenant_id": TENANT}), plan_id)
+    assert done["pause"] == "access", done
+    saved = next(cfg for cfg in config.read_saved_configuration().document["servers"].values()
+                 if (cfg.get("source") or {}).get("registry_name") == "com.microsoft/workiq-admintools")
+    assert saved["input_values"] == {"tenant_id": TENANT}
+    filled = f"https://agent365.svc.cloud.microsoft/agents/tenants/{TENANT}/servers/mcp_AdminTools"
+    assert inputs.resolve(saved, {})["url"] == filled and discovered[-1] == filled
+
+
+@pytest.mark.parametrize(("answer", "says"), [
+    ({**WORK_IQ, "_meta": {"io.modelcontextprotocol.registry/official": {"status": "deleted"}}},
+     "it's no longer listed in the MCP Registry."),
+    (RuntimeError("an owner failed"), "something unexpected went wrong. Retry; if it happens again, Row-Bot's log has the details."),
+])
+def test_a_step_that_fails_says_what_failed_never_only_that_it_did(work_iq, monkeypatch, answer, says):
+    from row_bot.mcp_client import marketplace
+
+    def registry(url, timeout=0):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(marketplace, "_fetch_json", registry)
+    _, _, failed = _start_work_iq()
+    step = next(s for s in failed["steps"] if s["type"] == "consent")
+    assert failed["state"] == "failed" and step["message"] == failed["message"]
+    assert failed["message"] == f"Couldn't add {failed['name']}: {says}"

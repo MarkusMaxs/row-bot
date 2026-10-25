@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal
 
 from row_bot.process_cancellation import kill_process_tree
+from row_bot.application.live_updates import publish as _publish_live, publishes as _publishes_live
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,7 @@ def _record_data(record: BackgroundProcess) -> dict[str, Any]:
     }
 
 
+@_publishes_live("processes")
 def _save(record: BackgroundProcess) -> None:
     if record.inline:
         return
@@ -642,6 +644,7 @@ def _scan_urls(record: BackgroundProcess, text: str) -> None:
             origin = local_origin(match.group(1), match.group(2), port)
             if origin not in record.urls and len(record.urls) < 8:
                 record.urls.append(origin)
+                _publish_live("processes")
 
 
 def _listening_ports(record: BackgroundProcess) -> list[int]:
@@ -874,6 +877,7 @@ class CommandRun:
     limit_message: str = ""
 
 
+@_publishes_live("processes")
 def _forget(record: BackgroundProcess) -> None:
     from row_bot.developer import runtime
 

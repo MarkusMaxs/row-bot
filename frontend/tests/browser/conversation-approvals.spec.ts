@@ -45,8 +45,7 @@ test('Hands-off is turned on once, on purpose, and reads in words while on', asy
   await forgetFullAutonomy(page);
   await newConversation(page);
   const approvals = page.getByRole('button', {
-    name: 'Approvals',
-    exact: true,
+    name: /^Approvals: /,
   });
   await approvals.click();
   const menu = page.getByRole('menu');
@@ -129,7 +128,7 @@ test('the reviewer’s decisions are visible but quiet', async ({
 }, info) => {
   await newConversation(page);
   // The chat runs on Auto: the reviewer decides first.
-  await page.getByRole('button', { name: 'Approvals', exact: true }).click();
+  await page.getByRole('button', { name: /^Approvals: / }).click();
   await page.getByRole('menuitem', { name: /^Auto/ }).click();
   await send(page, 'Tidy my notes reviewer asked fixture');
   const card = page.getByRole('complementary', {
@@ -150,12 +149,9 @@ test('the reviewer’s decisions are visible but quiet', async ({
   // The conversation itself: Buddy's companion can show the latest reply too.
   const transcript = page.getByRole('log', { name: 'Conversation' });
   await expect(
-    transcript.getByText(
-      'The requested action was denied. No action was taken.',
-      {
-        exact: true,
-      },
-    ),
+    transcript.getByText('You said no, so Row-Bot stopped there.', {
+      exact: true,
+    }),
   ).toBeVisible();
 
   await send(page, 'Save and commit decided without asking fixture');

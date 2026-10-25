@@ -36,6 +36,7 @@ const mock = vi.hoisted(() => ({
       title: string;
       revision: string;
       pinned: boolean;
+      incognito?: boolean;
     } | null,
     projection: null as Snapshot | null,
     workspace: null as ConversationWorkspace | null,
@@ -535,7 +536,7 @@ it('anchors bounded approval context inline with canonical resolve controls', as
   );
 });
 
-function computerPaused() {
+function computerAsking() {
   activeConversation();
   mock.state.projection = {
     ...mock.state.projection!,
@@ -551,7 +552,7 @@ function computerPaused() {
     {
       cursor: '4',
       event: {
-        event_id: 'event-pause',
+        event_id: 'event-ask',
         type: 'approval.required',
         conversation_id: 'conversation-a',
         projection_revision: '4',
@@ -566,34 +567,38 @@ function computerPaused() {
           status: 'waiting_approval',
           approval_id: 'approval-a',
           action_label: 'Computer activity',
-          reason:
-            'Computer control is paused. Use Resume or Stop in the live panel.',
+          reason: 'Let Row-Bot use Microsoft Edge in this chat?',
         },
       },
     },
   ] as never[];
+}
+
+function computerWorking(patch: Record<string, unknown> = {}) {
   mock.computerUse.mockResolvedValue({
     schema_version: 1,
     conversation_id: 'conversation-a',
     revision: 'c'.repeat(64),
     active: true,
-    state: 'paused',
-    app: 'Calculator',
+    state: 'working',
+    app: 'Microsoft Edge',
+    window: 'HomeServe – Make a claim',
+    doing: 'Clicked "Leak"',
     has_picture: false,
-    approval_id: 'approval-a',
-    can_pause: false,
-    can_resume: true,
+    problem: null,
     can_stop: true,
+    ...patch,
   });
 }
 
-it('shows a paused computer as the computer card in place of the approval card', async () => {
-  computerPaused();
+it('shows what Row-Bot is doing on the computer, with Stop, in the conversation', async () => {
+  activeConversation();
+  computerWorking();
   mock.state.handshake.application_capabilities = ['computer:interactive'];
   mock.computerUseCommand.mockResolvedValue({
     schema_version: 1,
     command_id: crypto.randomUUID(),
-    action: 'computer_use.resume',
+    action: 'computer_use.stop',
     conversation_id: 'conversation-a',
     status: 'completed',
     code: null,
@@ -601,33 +606,67 @@ it('shows a paused computer as the computer card in place of the approval card',
   });
 
   await act(async () => conversation());
-  const card = await screen.findByRole('region', { name: 'Computer use' });
-  expect(card).toHaveTextContent('Using your computer · Calculator');
-  expect(within(card).getByRole('button', { name: 'Stop' })).toBeVisible();
-  // Never both: Resume answers the pause, so no approval card asks again.
-  expect(
-    screen.queryByRole('complementary', { name: /Approval required/ }),
-  ).toBeNull();
-  expect(mock.approval).not.toHaveBeenCalled();
+  const step = await screen.findByRole('region', {
+    name: 'Using Microsoft Edge',
+  });
+  expect(step).toHaveTextContent('Using Microsoft Edge');
+  expect(step).toHaveTextContent('HomeServe – Make a claim');
+  expect(within(step).getByRole('status')).toHaveTextContent('Clicked "Leak"');
   await act(async () =>
-    fireEvent.click(within(card).getByRole('button', { name: 'Resume' })),
+    fireEvent.click(
+      within(step).getByRole('button', { name: 'Stop using the computer' }),
+    ),
   );
   expect(mock.computerUseCommand).toHaveBeenCalledWith(
     'conversation-a',
-    'computer_use.resume',
+    'computer_use.stop',
   );
 });
 
-it('keeps the approval card on another device and never asks about the computer', async () => {
-  computerPaused();
+it('keeps the approval card beside the step while computer use waits for an OK', async () => {
+  computerAsking();
+  computerWorking({ state: 'waiting_approval', doing: '' });
+  mock.state.handshake.application_capabilities = ['computer:interactive'];
   mock.approval.mockResolvedValue({
     id: 'approval-a',
     status: 'pending',
     revision: '0',
     expires_at: '2030-01-01T00:00:00Z',
-    summary: 'Computer control is paused.',
+    summary: 'Pay in Microsoft Edge?',
     action_label: 'Computer activity',
-    reason: 'Computer control is paused. Use Resume or Stop in the live panel.',
+    question: 'Pay in Microsoft Edge?',
+    reason:
+      'Row-Bot will click "Confirm and pay £60" in Microsoft Edge. This can charge you.',
+    risk_class: 'high',
+    scope: 'Only this requested action will be resolved.',
+    safe_argument_summary: '',
+    requesting_trace_id: '',
+    policy_revision: '1',
+    nonce: 'n'.repeat(32),
+  } satisfies ApprovalView);
+
+  await act(async () => conversation());
+  const step = await screen.findByRole('region', {
+    name: 'Using Microsoft Edge',
+  });
+  expect(within(step).getByRole('status')).toHaveTextContent(
+    'Waiting for your OK',
+  );
+  expect(
+    await screen.findByRole('complementary', { name: /Approval required/ }),
+  ).toBeVisible();
+});
+
+it('keeps the approval card on another device and never asks about the computer', async () => {
+  computerAsking();
+  mock.approval.mockResolvedValue({
+    id: 'approval-a',
+    status: 'pending',
+    revision: '0',
+    expires_at: '2030-01-01T00:00:00Z',
+    summary: 'Let Row-Bot use Microsoft Edge in this chat?',
+    action_label: 'Computer activity',
+    reason: 'Let Row-Bot use Microsoft Edge in this chat?',
     risk_class: 'unknown',
     scope: 'Only this requested action will be resolved.',
     safe_argument_summary: '',
@@ -641,7 +680,7 @@ it('keeps the approval card on another device and never asks about the computer'
     await screen.findByRole('complementary', { name: /Approval required/ }),
   ).toBeVisible();
   expect(mock.computerUse).not.toHaveBeenCalled();
-  expect(screen.queryByRole('region', { name: 'Computer use' })).toBeNull();
+  expect(screen.queryByRole('region', { name: /^Using / })).toBeNull();
 });
 
 it('renders assistant Markdown safely and copies only the visible canonical text', async () => {
@@ -725,7 +764,7 @@ it('opens the managed browser as a panel and closes the Context sheet it came fr
     screen.getByRole('button', { name: 'Conversation actions' }),
   );
   await user.click(
-    await screen.findByRole('menuitem', { name: 'Manage browser' }),
+    await screen.findByRole('menuitem', { name: 'Open browser' }),
   );
   expect(onPanel).toHaveBeenCalledWith(
     expect.objectContaining({ panel_kind: 'browser.live' }),
@@ -792,7 +831,7 @@ it('publishes how far the composer reaches up from the bottom, so notices float 
   expect(clearance()).toBe('');
 });
 
-it('deletes from the details menu after confirmation: the chat closes at once and the delete waits for its Undo notice', async () => {
+it('deletes from the details menu after confirmation: the chat closes and is deleted at once, with Undo (B343)', async () => {
   activeConversation();
   const handshake = mock.state.handshake as { client_session_id?: string };
   handshake.client_session_id = 'session-a';
@@ -814,24 +853,23 @@ it('deletes from the details menu after confirmation: the chat closes at once an
       confirmLabel: 'Delete conversation',
     });
     expect(mock.navigate).not.toHaveBeenCalledWith('/');
-    act(() => confirmation.onConfirm());
+    await act(async () => confirmation.onConfirm());
     expect(mock.navigate).toHaveBeenCalledWith('/');
     expect(mock.forgetConversation).toHaveBeenCalledWith('conversation-a');
-    const [message, , undo] = mock.notify.mock.lastCall!;
-    expect(message).toBe("Deleted 'conversation-a'.");
-    expect(undo).toMatchObject({ label: 'Undo' });
-    // Nothing is deleted while Undo is on offer.
-    expect(mock.command).not.toHaveBeenCalled();
-    expect(mock.intent).not.toHaveBeenCalled();
-    await act(async () => undo.onEnd());
+    // Sent at once, so closing the page while Undo shows can't undo it.
     expect(mock.command).toHaveBeenCalledWith(
       'conversation-a',
       expect.objectContaining({
         type: 'conversation.delete',
         expected_revision: '1',
+        payload: { undo: true },
       }),
       expect.any(String),
     );
+    expect(mock.intent).not.toHaveBeenCalled();
+    const [message, , undo] = mock.notify.mock.lastCall!;
+    expect(message).toBe("Deleted 'conversation-a'.");
+    expect(undo).toMatchObject({ label: 'Undo' });
   } finally {
     delete handshake.client_session_id;
   }
@@ -906,6 +944,58 @@ it('uses one persistent Conversation details entry point for the compact sheet',
     key: 'conversation-context',
     title: 'Conversation details',
   });
+});
+
+function PlacedConversation({
+  placement,
+}: {
+  placement: 'inline' | 'compact';
+}) {
+  const { host, parking } = useContextHostOwner();
+  return (
+    <ContextHostContext.Provider value={host}>
+      <ConversationView onPanel={vi.fn()} contextPlacement={placement} />
+      <div ref={parking} hidden />
+    </ContextHostContext.Provider>
+  );
+}
+
+it('opens Conversation details with one tap after moving between a desktop and a phone layout (B402)', async () => {
+  idleConversation();
+  localStorage.removeItem('row-bot.context-hidden.v1');
+  let rendered!: ReturnType<typeof render>;
+  await act(async () => {
+    rendered = render(<PlacedConversation placement="inline" />);
+  });
+  const details = () =>
+    screen.getByRole('complementary', {
+      name: 'Conversation details',
+      hidden: true,
+    });
+  const toggle = () =>
+    screen.getByRole('button', { name: 'Conversation details' });
+  const sheets = () =>
+    mock.open.mock.calls.filter(
+      ([overlay]) => overlay.key === 'conversation-context',
+    ).length;
+  // A desktop pins the details open beside the chat.
+  expect(details()).toBeVisible();
+
+  // The window narrows to a phone: the chat shows, and one tap opens the sheet.
+  rendered.rerender(<PlacedConversation placement="compact" />);
+  expect(details()).not.toBeVisible();
+  fireEvent.click(toggle());
+  expect(sheets()).toBe(1);
+
+  // Wide again, the card shows the details: the sheet closes rather than sit
+  // empty over the chat, to come back empty on the phone.
+  rendered.rerender(<PlacedConversation placement="inline" />);
+  expect(mock.dismiss).toHaveBeenCalledWith('conversation-context');
+  expect(details()).toBeVisible();
+
+  rendered.rerender(<PlacedConversation placement="compact" />);
+  fireEvent.click(toggle());
+  expect(sheets()).toBe(2);
 });
 
 function transcriptGeometry(initialHeight = 900) {
@@ -1829,7 +1919,7 @@ it('shows a failed compact approval save in the conversation without changing it
   mock.drafts.set('conversation-a', { text: 'Keep my draft', attachments: [] });
   await act(async () => conversation());
   await act(async () =>
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Approvals' }), {
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Approvals: Ask' }), {
       key: 'Enter',
     }),
   );
@@ -1840,10 +1930,9 @@ it('shows a failed compact approval save in the conversation without changing it
   expect(screen.getByRole('alert')).toHaveTextContent(/review|changed|retry/i);
   expect(mock.drafts.get('conversation-a')?.text).toBe('Keep my draft');
   // The shield's glyph shows the mode; its description names it.
-  expect(screen.getByRole('button', { name: 'Approvals' })).toHaveAttribute(
-    'aria-description',
-    'Approvals: Ask',
-  );
+  expect(
+    screen.getByRole('button', { name: 'Approvals: Ask' }),
+  ).toHaveAttribute('aria-description', 'Approvals: Ask');
 });
 
 it('reserves Resume before dispatch and recovers a lost accepted response after reload without another admission', async () => {
@@ -2780,12 +2869,13 @@ it('renders a folded create_chart result with its parent message (B4)', async ()
   ).toBeNull();
 });
 
-it('floats Context below 740px and docks it again only from 780px', () => {
-  expect(isNarrowChat(718, false)).toBe(true);
-  expect(isNarrowChat(760, false)).toBe(false);
-  // Hysteresis: a floating chat stays floating until it is clearly wide.
-  expect(isNarrowChat(760, true)).toBe(true);
-  expect(isNarrowChat(780, true)).toBe(false);
+it('opens details on demand below 940px and gives them a rail again only from 980px (U3)', () => {
+  // A 1024px window with the sidebar open: the transcript keeps the width.
+  expect(isNarrowChat(760, false)).toBe(true);
+  expect(isNarrowChat(960, false)).toBe(false);
+  // Hysteresis: a narrow chat stays narrow until it is clearly wide.
+  expect(isNarrowChat(960, true)).toBe(true);
+  expect(isNarrowChat(980, true)).toBe(false);
 });
 
 it('says so when an attached image cannot be seen and offers a vision model (decision 11)', async () => {
@@ -3217,7 +3307,7 @@ function HostedConversation() {
   );
 }
 
-it('pins Conversation details open in a wide chat, beside the column, until its toggle hides it (B221)', async () => {
+it('keeps Conversation details open in a wide chat, beside the column, until its toggle hides it (U3)', async () => {
   idleConversation();
   localStorage.removeItem('row-bot.context-hidden.v1');
   await act(async () => {
@@ -3227,7 +3317,7 @@ it('pins Conversation details open in a wide chat, beside the column, until its 
   const details = screen.getByRole('complementary', {
     name: 'Conversation details',
   });
-  // It floats pinned open (no column of its own) and the column moves aside.
+  // It stays open in its rail and the column moves aside for it.
   expect(details.closest('.context-card')).toHaveClass('context-card-pinned');
   expect(workspace).toHaveClass('details-wide', 'details-open');
   const toggle = screen.getByRole('button', { name: 'Conversation details' });
@@ -3501,4 +3591,30 @@ it('re-reads its sidebar row when its agents report in (B302)', async () => {
     'conversation-a',
     expect.any(AbortSignal),
   );
+});
+
+it('says an incognito chat is incognito in its header and its composer, and nowhere else (N11)', async () => {
+  idleConversation();
+  mock.state.conversation = { ...mock.state.conversation!, incognito: true };
+  const view = await act(async () => conversation());
+
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+    'placeholder',
+    'Message Row-Bot (incognito)',
+  );
+  expect(
+    screen.getByRole('img', {
+      name: 'Incognito: nothing here is saved to memory',
+    }),
+  ).toBeVisible();
+  // No banner: the chat reads as any other.
+  expect(screen.queryByRole('alert')).toBeNull();
+
+  mock.state.conversation = { ...mock.state.conversation!, incognito: false };
+  view.rerender(<Conversation onPanel={vi.fn()} />);
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveAttribute(
+    'placeholder',
+    'Message Row-Bot…',
+  );
+  expect(screen.queryByRole('img', { name: /Incognito/ })).toBeNull();
 });

@@ -109,3 +109,32 @@ def test_an_answer_saved_before_it_starts_streaming_shows_once(platform):
         assert handle.producer_done.wait(10)
     final = [row["id"] for row in platform.snapshot("conversation-a")["rows"] if row["role"] == "assistant"]
     assert final == ["assistant:checkpoint:" + native_id]
+
+
+def test_a_retired_twin_never_comes_back_as_an_empty_paged_row(platform):
+    """B401: a live row retired because its answer was already saved left its live text behind until the turn
+    ended. Every read in between added an empty "Paged content" row for that text, and when the turn ended
+    and the text was thrown away nothing sent the page to read again: the row stayed, and loading it said
+    "That is no longer available." until a reload."""
+    from tests.helpers.client_platform_fakes import StreamBarrier
+
+    text = "Filed the receipts and sent the summary."
+    native_id = fixture_id("retired-twin-answer")
+    saved, streamed = StreamBarrier(), StreamBarrier()
+    fake = ScriptedAgentStream((CheckpointCommit((AIMessage(content=text, id=native_id),)), saved,
+                               ("token", text), streamed, ("done", text)))
+    handle = platform.registry.get(submit(platform, fake, "retired-twin")["execution_id"])
+    try:
+        assert saved.entered.wait(10)
+        saved.release.set()
+        assert streamed.entered.wait(10)
+        # The settle for the retired twin sends pages to read again, while the turn still runs.
+        during = platform.snapshot("conversation-a")["rows"]
+    finally:
+        saved.release.set()
+        streamed.release.set()
+        assert handle.producer_done.wait(10)
+    after = platform.snapshot("conversation-a")["rows"]
+    for rows in (during, after):
+        assert [row["id"] for row in rows if row.get("content_status") == "lazy"] == []
+        assert [row["id"] for row in rows if row["role"] == "assistant"] == ["assistant:checkpoint:" + native_id]

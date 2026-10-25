@@ -1,0 +1,37 @@
+{
+  "additionalProperties": false,
+  "description": "One live picture of the page (a JPEG) and the page's size in CSS pixels.",
+  "properties": {
+    "css_height": {
+      "maximum": 100000,
+      "minimum": 0,
+      "title": "Css Height",
+      "type": "number"
+    },
+    "css_width": {
+      "maximum": 100000,
+      "minimum": 0,
+      "title": "Css Width",
+      "type": "number"
+    },
+    "image_base64": {
+      "maxLength": 8000000,
+      "minLength": 1,
+      "title": "Image Base64",
+      "type": "string"
+    },
+    "seq": {
+      "minimum": 0,
+      "title": "Seq",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "seq",
+    "css_width",
+    "css_height",
+    "image_base64"
+  ],
+  "title": "BrowserFrame",
+  "type": "object"
+}

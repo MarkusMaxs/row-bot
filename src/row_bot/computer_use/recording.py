@@ -1,8 +1,8 @@
 """Record the screen through Cua Driver (F2): only when the person has Computer use set up.
 
-The recording runs on a Cua client of its own, so the Computer use session (its lease, Stop
-and Take over) never ends it by accident, and actions the agent takes through Computer use
-aren't written into the recording's folder. Cua writes ``recording.mp4`` (the main display)
+The recording runs on a Cua client of its own, so stopping a computer use session never
+ends it by accident, and actions the agent takes through computer use aren't written into
+the recording's folder. Cua writes ``recording.mp4`` (the main display)
 into a private folder under Row-Bot's data; once the video is saved to the conversation, the
 whole folder goes. On Windows Cua needs ffmpeg for the video; on macOS it needs macOS 15.
 """
@@ -60,9 +60,9 @@ def _video_problem(structured: dict[str, Any]) -> str:
 
 
 def _default_client() -> Any:
-    from row_bot.computer_use.service import ComputerUseService
+    from row_bot.computer_use.client import default_client
 
-    return ComputerUseService._default_client()
+    return default_client()
 
 
 class ScreenRecording:

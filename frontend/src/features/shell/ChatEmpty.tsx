@@ -110,10 +110,15 @@ export default function ChatEmpty({
         </p>
       </div>
     );
-  // Never-used chats stay out, as in the sidebar and on Home.
+  // Never-used chats and helpers' own threads stay out, as in the sidebar
+  // and on Home (U12): a helper is reached from the chat that started it.
   const threads = recent
     .filter(
-      (item) => item.id !== conversationId && item.title && !neverUsed(item),
+      (item) =>
+        item.id !== conversationId &&
+        item.title &&
+        !item.parent_conversation_id &&
+        !neverUsed(item),
     )
     .slice(0, 3);
   const suggestions = design ? DESIGN : GENERAL;

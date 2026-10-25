@@ -23,7 +23,8 @@ def _media_ref(value: str, *, default_provider: str) -> str:
 
 def _picker(surface: str, current: str, rows: tuple, *, enabled: bool | None = None,
             media_options: dict[str, str] | None = None, visibility: ModelVisibility | None = None) -> dict:
-    options = picker_options(rows, surface, current)
+    options = picker_options(rows, surface, current,
+                             favourites=visibility.favourites if visibility is not None else None)
     if current and not any(option["selection_ref"] == current for option in options):
         parsed = parse_model_ref(current)
         provider_id, model_id = parsed if parsed else ("", current)
@@ -42,9 +43,9 @@ def _picker(surface: str, current: str, rows: tuple, *, enabled: bool | None = N
     warning = ""
     if current and (current_option is None or not current_option["available"]):
         if current.startswith("model:ollama:"):
-            warning = f"Current {surface.capitalize()} local model is unavailable. Manage local models in Ollama, then refresh or choose another pinned model."
+            warning = f"Current {surface.capitalize()} local model is unavailable. Manage local models in Ollama, then refresh or choose another model."
         else:
-            warning = f"Current {surface.capitalize()} default is unavailable. Connect the provider, refresh the catalog, or choose another pinned model."
+            warning = f"Current {surface.capitalize()} default is unavailable. Connect the provider, refresh the catalog, or choose another model."
     return {"current_ref": current, "enabled": enabled, "warning": warning,
             "options": annotate(options[:4096], key="selection_ref", visibility=visibility)}
 
@@ -177,6 +178,7 @@ def catalog_provider_summary(surface: str, *, validate: Callable[[], None] = lam
         raise ValueError("invalid_model_surface")
     validate()
     snapshot, rows = client_status._read(None, include_readiness=True)
+    starred = set(read_model_visibility().favourites)
     groups: dict[str, dict] = {}
     for row in rows:
         if surface not in row.categories:
@@ -185,7 +187,8 @@ def catalog_provider_summary(surface: str, *, validate: Callable[[], None] = lam
             "display_name": row.provider_display_name, "total": 0, "ready": 0, "pinned": 0})
         group["total"] += 1
         group["ready"] += int(row.configured and row.runtime_ready and bool(row.installed))
-        group["pinned"] += int(surface in row.pinned_surfaces)
+        # Listed in its pickers: pinned for the job, or a favourite (U10).
+        group["pinned"] += int(surface in row.pinned_surfaces or row.selection_ref in starred)
     validate()
     return {"schema_version": 1, "revision": snapshot.revision, "surface": surface,
             "providers": sorted(groups.values(), key=lambda row: (row["display_name"].casefold(), row["provider_id"]))}

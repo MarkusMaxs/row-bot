@@ -116,6 +116,21 @@
 .conversation-rename:focus-visible {
   opacity: 1;
 }
+/* An incognito chat's mark beside its title (N11): quiet, never a warning. */
+.conversation-incognito {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+}
+.conversation-incognito:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
 .conversation-title-input {
   flex: 1 1 auto;
   min-width: 160px;
@@ -583,6 +598,28 @@
   border-inline-start: 3px solid var(--border-subtle);
   color: var(--text-secondary);
 }
+/* Maths (KaTeX): formulas take the text's colour in light and dark; a wide
+   display formula scrolls inside its own box, never the page. */
+.message-text .math-block {
+  max-width: 100%;
+  margin: 0 0 12px;
+}
+.math-display {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 4px;
+}
+.math-display .katex-display {
+  margin: 0;
+}
+.math .katex {
+  color: inherit;
+}
+.math[data-pending] code {
+  color: var(--text-secondary);
+}
 .message-text hr {
   margin: 16px 0;
   border: 0;
@@ -843,6 +880,19 @@
 }
 .activity-step-details > summary::-webkit-details-marker {
   display: none;
+}
+/* A call the model sent again (U11): the step row's layout, nothing to open. */
+.activity-step-quiet {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  margin-inline-start: -6px;
+  padding: 5px 8px 5px 7px;
+}
+.activity-step[data-trace-status='corrected'] .activity-step-verb {
+  color: var(--text-secondary);
+  font-weight: var(--weight-regular);
 }
 .activity-step-details > summary:hover {
   background: var(--surface-hover);
@@ -1112,6 +1162,92 @@
   color: var(--text-muted);
   font-size: var(--text-12);
 }
+/* A post on X (N7): the account, its target, the full text and each file. */
+.x-post-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 4px 0 2px;
+}
+.x-post-card p {
+  margin: 0;
+}
+.x-post-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  color: var(--text-secondary);
+}
+.x-post-handle {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.x-post-id,
+.x-post-muted {
+  color: var(--text-muted);
+  font-size: var(--text-12);
+}
+.x-post-target {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.x-post-text {
+  max-height: 20rem;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  line-height: 21px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.x-post-media {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.x-post-media li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.x-post-media img,
+.x-post-media-icon {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 8px;
+  object-fit: cover;
+}
+.x-post-media-icon {
+  display: grid;
+  place-items: center;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+}
+.x-post-media-facts {
+  display: grid;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  line-height: 18px;
+}
+.x-post-media-name {
+  color: var(--text-primary);
+  font-size: var(--text-13);
+  overflow-wrap: anywhere;
+}
+.x-post-media abbr {
+  text-decoration: none;
+}
 /* Under Auto: why the reviewer asked. Visible but quiet. */
 .approval-card-reviewer {
   display: inline-flex;
@@ -1183,6 +1319,182 @@
 .approval-card[data-kind='setup'] .approval-card-icon {
   color: var(--accent-solid);
 }
+/* Row-Bot's question with options (N4): header chips, the question, and the
+   options as large rows to tap. A calm accent like a setup card, never a
+   warning: a question is not a risk. A memory write in an incognito chat
+   (N11) is the same calm card, with the exact text quoted. */
+.approval-card[data-kind='question'],
+.approval-card[data-kind='memory'] {
+  border-color: color-mix(in srgb, var(--accent-solid) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-subtle) 60%, var(--surface));
+}
+.approval-card[data-kind='question'] .approval-card-icon,
+.approval-card[data-kind='memory'] .approval-card-icon {
+  color: var(--accent-solid);
+}
+.approval-card-memory {
+  margin: 4px 0 0;
+  padding: 2px 0 2px 12px;
+  border-inline-start: 3px solid var(--border-subtle);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.question-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.question-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  line-height: 20px;
+}
+.question-card-chip[data-state='current'] {
+  border-color: color-mix(in srgb, var(--accent-solid) 45%, transparent);
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.question-card-chip[data-state='next'] {
+  color: var(--text-muted);
+}
+.question-card-options {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: 6px;
+  min-width: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+}
+.question-card-question {
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  font-weight: var(--weight-semibold);
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.question-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.question-option:hover {
+  background: var(--surface-hover);
+}
+.question-option[data-checked] {
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-subtle) 55%, var(--surface));
+}
+.question-option:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.question-option input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent-solid);
+}
+.question-option input:focus-visible {
+  outline: none;
+}
+.question-option-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.question-option-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--text-primary);
+  font-size: var(--text-14);
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.question-option-tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent-solid);
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  line-height: 18px;
+}
+.question-option-description {
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+  line-height: 18px;
+}
+.question-option-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  padding: 0 4px;
+  border: 1px solid var(--border-hairline);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font: 500 11px/1 var(--font-mono);
+}
+.question-card-options:disabled .question-option {
+  cursor: default;
+}
+.question-card-other {
+  width: 100%;
+}
+.question-card .approval-card-actions .question-card-back {
+  margin-inline-end: auto;
+}
+/* The digit keys are for a keyboard; a phone taps, on rows the card's full width. */
+@media (pointer: coarse), (max-width: 640px) {
+  .question-option-key {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .question-card-options {
+    grid-column: 1 / -1;
+  }
+  /* Under the full-width options, the actions keep the card's right edge, as on a desktop. */
+  .question-card .approval-card-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
+/* Answered: one plain, quiet line ("You chose: Beta.1 now"). */
+.transcript-card.question-answered {
+  border-color: var(--border-hairline);
+  background: none;
+}
+.transcript-card.question-answered .transcript-card-icon {
+  color: var(--text-muted);
+}
+
 /* The registered folders a folder card offers (B277): one row each. */
 .folder-setup-choices {
   display: grid;
@@ -1800,78 +2112,35 @@
   font-size: var(--text-12);
 }
 
-/* Computer use while a turn holds the computer: the latest picture, then
-   Pause/Resume and Stop. As quiet as the cards above; status is a dot, then
-   a word. The picture fits the card and keeps its shape. */
-.computer-card {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-hairline);
-  border-radius: 12px;
-  background: var(--surface-raised);
+/* Computer use while a turn holds the computer: the same step as the
+   browser's (its layout and picture), with a quiet hint and Stop. */
+.computer-step {
+  align-items: flex-start;
 }
-.computer-card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.computer-card-icon {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  color: var(--accent-solid);
-}
-.computer-card[data-state='stopped'] .computer-card-icon {
-  color: var(--text-muted);
-}
-.computer-card-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: var(--text-14);
-  font-weight: var(--weight-semibold);
+.computer-step-window {
+  font-size: var(--text-13);
   line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.computer-card-app {
-  color: var(--text-secondary);
-  font-weight: var(--weight-regular);
+.computer-step-hint {
+  color: var(--text-muted);
+  font-size: var(--text-12);
+  line-height: 18px;
 }
-.computer-card-picture {
-  display: block;
-  width: 100%;
-  height: auto;
-  max-height: min(360px, 50vh);
-  object-fit: contain;
-  border: 1px solid var(--border-hairline);
-  border-radius: 8px;
-  background: var(--surface-sunken);
-}
-.computer-card-note {
-  margin: 0;
+.computer-step-fix {
   color: var(--text-secondary);
   font-size: var(--text-13);
   line-height: 20px;
 }
-.computer-card-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.computer-card-actions svg {
-  width: 16px;
-  height: 16px;
-  flex: none;
-}
-.computer-card-error {
-  margin: 0;
+.computer-step-error {
   color: var(--status-danger-text);
   font-size: var(--text-12);
+}
+.computer-problem-icon {
+  color: var(--status-danger-text);
+}
+.computer-stop {
+  flex: none;
+  margin-left: auto;
 }
 
 /* A server-started step: a goal's next turn, work continuing in a design or
@@ -1900,6 +2169,15 @@
 .approval-detail dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+.approval-detail dd.approval-detail-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.approval-detail-folder svg {
+  flex: none;
+  color: var(--text-muted);
 }
 .turn-notice {
   margin: 16px 0 4px;
@@ -2804,6 +3082,11 @@
 }
 .composer .message-composer::placeholder {
   color: var(--text-muted);
+  /* One line however narrow the field: a long hint ("Message Row-Bot
+     (incognito)") is cut short, never wrapped to a second line. */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .composer .message-composer:focus-visible {
   outline: none;
@@ -3955,7 +4238,7 @@ button.attachment-tile-face:hover {
   .message-user .message-text,
   .activity-summary,
   .approval-card,
-  .computer-card,
+  .computer-step,
   .turn-notice {
     border: 1px solid CanvasText;
     background: Canvas;

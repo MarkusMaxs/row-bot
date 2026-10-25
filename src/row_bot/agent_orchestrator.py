@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from row_bot.application.live_updates import publishes as _publishes_live
 
 logger = logging.getLogger(__name__)
 
@@ -2406,6 +2407,7 @@ def _approval_payload_from_db_row(row: Mapping[str, Any] | None) -> dict[str, An
     return _parse_object(row.get("approval_payload_json"))
 
 
+@_publishes_live("approvals", "conversations")
 def _persist_parent_approval(
     orchestration: Mapping[str, Any],
     result: Mapping[str, Any],
@@ -2805,8 +2807,12 @@ def resume_parent_orchestration(
     *,
     resume_token: str,
     approved: bool,
+    answer: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Resume a background interrupt in the original parent checkpoint."""
+    """Resume a background interrupt in the original parent checkpoint.
+
+    ``answer``: the parent asked a question (N4); only that question's interrupt goes on with it.
+    """
 
     orchestration = get_orchestration(orchestration_id)
     if not _is_unified_parent(orchestration):
@@ -2922,11 +2928,17 @@ def resume_parent_orchestration(
         else:
             from row_bot.agent import resume_invoke_agent
 
+            answered = {}
+            if answer is not None:
+                from row_bot.questions import resume_values
+
+                answered = {"resume_values": resume_values(current_interrupts, answer)}
             result = resume_invoke_agent(
                 enabled_tools,
                 config,
                 approved,
                 interrupt_ids=interrupt_ids,
+                **answered,
             )
         pass_result = complete_parent_pass(
             orchestration_id,

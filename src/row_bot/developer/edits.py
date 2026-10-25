@@ -9,6 +9,7 @@ import hashlib
 import os
 import stat
 import sys
+import time
 import uuid
 
 from row_bot.developer import change_ledger
@@ -1114,8 +1115,17 @@ def _rename_edit_no_replace(source: pathlib.Path | str, destination: pathlib.Pat
     if os.name == "nt":
         if src_dir_fd is not None or dst_dir_fd is not None:
             raise FileEditError("file_publication_unavailable")
-        os.rename(source, destination)
-        return
+        # Windows refuses to move a file someone is reading (5 or 32: a reader in another thread, antivirus, an
+        # indexer). Readers let go within moments, so try again briefly before the save fails half done (B408).
+        # A name already taken (183) is never retried: this move never replaces.
+        for attempt in range(5):
+            try:
+                os.rename(source, destination)
+                return
+            except OSError as exc:
+                if getattr(exc, "winerror", None) not in (5, 32) or attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     import ctypes
     library = ctypes.CDLL(None, use_errno=True)
     try:

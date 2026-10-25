@@ -14,12 +14,13 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { createClientController } from './api';
 import { selectClientPlatform } from './platform';
 import { RuntimeContext } from './runtime';
+import { provideLive } from './live';
 import { bindPageLifecycle } from './page-lifecycle';
 import { PwaStatus } from './pwa';
 import { ThemeProvider } from './ui/theme';
 import { OverlayProvider } from './ui/overlays';
 import { installInputModality } from './ui/input-modality';
-import { setServerUtcOffset } from './ui/format';
+import { setServerTimezone, setServerUtcOffset } from './ui/format';
 import { EmptyState, ErrorState, Skeleton } from './ui/primitives';
 import Workspace, { panelMetrics } from './features/shell/Workspace';
 import { EditMenu } from './features/shell/EditMenu';
@@ -53,7 +54,7 @@ import { createPluginSettingsSession } from './features/settings/PluginSettings'
 import { createSkillsSettingsSession } from './features/settings/SkillsSettings';
 import { createGoalProfileSettingsSession } from './features/settings/GoalProfileSettings';
 import { createConversationActionsSession } from './features/settings/ConversationActions';
-import { createBrowserControlSession } from './features/browser/BrowserLiveControls';
+import BrowserWindow from './features/browser/BrowserWindow';
 import {
   bindActiveConversationSession,
   browserSessionStorage,
@@ -95,47 +96,6 @@ function createConversationActionSessions() {
         sessions.delete(disposable[0]);
       }
       const session = createConversationActionsSession(conversationId);
-      sessions.set(conversationId, session);
-      return session;
-    },
-    hasRetained() {
-      return (
-        !disposed &&
-        [...sessions.values()].some((session) => session.hasRetained())
-      );
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      sessions.forEach((session) => session.dispose());
-      sessions.clear();
-    },
-  };
-}
-function createBrowserControlSessions() {
-  const sessions = new Map<
-    string,
-    ReturnType<typeof createBrowserControlSession>
-  >();
-  let disposed = false;
-  return {
-    get(conversationId: string) {
-      if (disposed || !conversationId) return undefined;
-      const existing = sessions.get(conversationId);
-      if (existing) {
-        sessions.delete(conversationId);
-        sessions.set(conversationId, existing);
-        return existing;
-      }
-      if (sessions.size >= 8) {
-        const disposable = [...sessions].find(
-          ([, session]) => !session.hasRetained(),
-        );
-        if (!disposable) return undefined;
-        disposable[1].dispose();
-        sessions.delete(disposable[0]);
-      }
-      const session = createBrowserControlSession(conversationId);
       sessions.set(conversationId, session);
       return session;
     },
@@ -204,6 +164,8 @@ async function start() {
     browserSessionStorage(),
   );
   await controller.start();
+  // Background state reaches the sidebar, Home and Monitor at once (B407).
+  provideLive(controller.live);
   let platform = await selectClientPlatform(
     controller,
     controller.getSnapshot().handshake,
@@ -214,10 +176,11 @@ async function start() {
   const unpublishBuddyTarget = publishBuddyTarget(controller, platform);
   const unbindDraftSync = bindDraftSync(controller);
   // Times saved without an offset are the server's clock; read them with its offset (B341).
-  const followServerClock = () =>
-    setServerUtcOffset(
-      controller.getSnapshot().handshake?.server_utc_offset_minutes,
-    );
+  const followServerClock = () => {
+    const handshake = controller.getSnapshot().handshake;
+    setServerUtcOffset(handshake?.server_utc_offset_minutes);
+    setServerTimezone(handshake?.server_timezone);
+  };
   followServerClock();
   const unfollowServerClock = controller.subscribe(followServerClock);
   const releaseNativeLease = keepNativeLease(controller, platform);
@@ -314,10 +277,6 @@ async function start() {
     controller,
     createConversationActionSessions,
   );
-  const browserControlOwner = createAuthenticatedEditorOwner(
-    controller,
-    createBrowserControlSessions,
-  );
   if (import.meta.env.VITE_ENABLE_FIXTURES === '1') {
     Object.defineProperty(window, '__ROW_BOT_WORKSPACE_METRICS__', {
       value: () => ({ ...resourcePanelMetrics }),
@@ -372,7 +331,6 @@ async function start() {
             skillsOwner,
             goalProfileOwner,
             conversationActionsOwner,
-            browserControlOwner,
             knowledgeOwner,
             providerConfigurationOwner,
             artifactDesignSessions,
@@ -385,6 +343,10 @@ async function start() {
               <DesktopReconnecting platform={platform} />
               <Suspense fallback={<Skeleton label="Opening workspace" />}>
                 <Routes>
+                  <Route
+                    path="browser/:conversationId"
+                    element={<BrowserWindow />}
+                  />
                   <Route path="/" element={<Workspace />}>
                     <Route
                       path="conversations/:conversationId"
@@ -455,7 +417,6 @@ async function start() {
       skillsOwner.hasRetained() ||
       goalProfileOwner.hasRetained() ||
       conversationActionsOwner.hasRetained() ||
-      browserControlOwner.hasRetained() ||
       knowledgeOwner.hasRetained() ||
       providerConfigurationOwner.hasRetained() ||
       artifactDesignSessions.hasRetained(),
@@ -483,7 +444,6 @@ async function start() {
       skillsOwner.dispose();
       goalProfileOwner.dispose();
       conversationActionsOwner.dispose();
-      browserControlOwner.dispose();
       knowledgeOwner.dispose();
       providerConfigurationOwner.dispose();
       artifactDesignSessions.dispose();

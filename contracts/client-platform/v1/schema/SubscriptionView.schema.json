@@ -464,6 +464,30 @@
       "title": "TraceMediaReference",
       "type": "object"
     },
+    "TraceQuestionAnswer": {
+      "additionalProperties": false,
+      "description": "One answered question, as its collapsed card says it (\"Beta timing: Beta.1 now\").",
+      "properties": {
+        "answer": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "header": {
+          "maxLength": 12,
+          "minLength": 1,
+          "title": "Header",
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "answer"
+      ],
+      "title": "TraceQuestionAnswer",
+      "type": "object"
+    },
     "TraceSpecialization": {
       "additionalProperties": false,
       "properties": {
@@ -473,6 +497,14 @@
           },
           "maxItems": 16,
           "title": "Agent Runs",
+          "type": "array"
+        },
+        "answers": {
+          "items": {
+            "$ref": "#/$defs/TraceQuestionAnswer"
+          },
+          "maxItems": 4,
+          "title": "Answers",
           "type": "array"
         },
         "apps": {
@@ -542,7 +574,10 @@
             "video_edit",
             "delivery",
             "sandbox_job",
-            "sandbox_unprepared"
+            "sandbox_unprepared",
+            "question_answered",
+            "page",
+            "request_corrected"
           ],
           "title": "Kind",
           "type": "string"
@@ -572,6 +607,24 @@
           ],
           "default": null,
           "title": "Newly Active"
+        },
+        "outcome": {
+          "default": "",
+          "enum": [
+            "",
+            "answered",
+            "skipped",
+            "timed_out"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "page_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(page-[0-9a-f]{8})?$",
+          "title": "Page Id",
+          "type": "string"
         },
         "process_id": {
           "default": "",
@@ -766,6 +819,7 @@
                 "continuation",
                 "agent_task",
                 "agent_guidance",
+                "page",
                 "personal_model_fallback"
               ],
               "type": "string"

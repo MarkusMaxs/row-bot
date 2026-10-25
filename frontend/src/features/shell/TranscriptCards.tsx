@@ -1,9 +1,15 @@
 import { createContext, useContext, useRef, useState } from 'react';
-import { FolderCode, Link2, Palette } from 'lucide-react';
+import {
+  FolderCode,
+  Link2,
+  MessageCircleQuestion,
+  Palette,
+} from 'lucide-react';
 import type {
   EventRecord,
   ResourceView,
   TraceAppRef,
+  TraceQuestionAnswer,
   TranscriptTraceGroup,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
@@ -17,6 +23,7 @@ import { VideoEditCard } from './VideoEditCard';
 import { DeliveryCard } from './DeliveryCard';
 import { SandboxJobCard } from './SandboxJobCard';
 import { SandboxPrepareOffer } from './SandboxPrepare';
+import { PageCard } from '../pages/PageCard';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
@@ -58,14 +65,35 @@ export type TranscriptCard =
   /** Prepare sandbox, or the sandbox image's download, a step started (F18). */
   | { kind: 'sandbox_job'; jobId: string }
   /** A sandbox test run that couldn't start for want of its tools: Prepare sandbox (F18). */
-  | { kind: 'sandbox_offer'; reason: string };
+  | { kind: 'sandbox_offer'; reason: string }
+  /** A page a step made or changed, with Open (N5). */
+  | { kind: 'page'; pageId: string }
+  /** Row-Bot's question, answered (or skipped), collapsed to what was chosen (N4). */
+  | {
+      kind: 'answer';
+      callId: string;
+      outcome: 'answered' | 'skipped' | 'timed_out';
+      answers: TraceQuestionAnswer[];
+    };
 
 type Specialization = NonNullable<
   TranscriptTraceGroup['items'][number]['specialization']
 >;
 
-export function cardOf(value: Specialization | null | undefined) {
+export function cardOf(value: Specialization | null | undefined, callId = '') {
   if (!value) return null;
+  if (
+    value.kind === 'question_answered' &&
+    (value.outcome === 'answered' ||
+      value.outcome === 'skipped' ||
+      value.outcome === 'timed_out')
+  )
+    return {
+      kind: 'answer',
+      callId,
+      outcome: value.outcome,
+      answers: value.answers ?? [],
+    } satisfies TranscriptCard;
   if (
     (value.kind === 'resource_created' || value.kind === 'resource_bound') &&
     (value.resource_kind === 'design' || value.resource_kind === 'code') &&
@@ -106,6 +134,8 @@ export function cardOf(value: Specialization | null | undefined) {
       kind: 'sandbox_offer',
       reason: value.error_code ?? '',
     } satisfies TranscriptCard;
+  if (value.kind === 'page' && value.page_id)
+    return { kind: 'page', pageId: value.page_id } satisfies TranscriptCard;
   if (value.kind === 'video_edit' && value.edit_id)
     return {
       kind: 'video_edit',
@@ -139,11 +169,15 @@ export function cardKey(card: TranscriptCard) {
               ? `video_edit:${card.editId}`
               : card.kind === 'delivery'
                 ? `delivery:${card.deliveryId}`
-                : card.kind === 'sandbox_job'
-                  ? `sandbox_job:${card.jobId}`
-                  : card.kind === 'sandbox_offer'
-                    ? 'sandbox_offer'
-                    : `connect:${card.target}`;
+                : card.kind === 'answer'
+                  ? `answer:${card.callId}`
+                  : card.kind === 'page'
+                    ? `page:${card.pageId}`
+                    : card.kind === 'sandbox_job'
+                      ? `sandbox_job:${card.jobId}`
+                      : card.kind === 'sandbox_offer'
+                        ? 'sandbox_offer'
+                        : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -154,7 +188,7 @@ export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
       const card: TranscriptCard | null =
         item.app?.view && item.status === 'succeeded'
           ? { kind: 'view', callId: item.call_id, app: item.app }
-          : cardOf(item.specialization);
+          : cardOf(item.specialization, item.call_id);
       if (!card || seen.has(cardKey(card))) continue;
       seen.add(cardKey(card));
       cards.push(card);
@@ -174,7 +208,10 @@ export function liveCards(
   const cards: TranscriptCard[] = [];
   for (const record of activity) {
     if (record.event.type !== 'tool.activity') continue;
-    const card = cardOf(record.event.payload.specialization);
+    const card = cardOf(
+      record.event.payload.specialization,
+      record.event.payload.tool_call_id,
+    );
     if (!card) continue;
     const key = cardKey(card);
     if (settled.has(key) || seen.has(key)) continue;
@@ -401,6 +438,57 @@ function AppsCard({
   );
 }
 
+/**
+ * Row-Bot's question once answered: "You chose: Beta.1 now", plain and
+ * quiet, or that it was skipped or had no answer in time (N4).
+ */
+function AnsweredCard({
+  card,
+}: {
+  card: Extract<TranscriptCard, { kind: 'answer' }>;
+}) {
+  const single = card.answers.length === 1;
+  const words =
+    card.outcome === 'skipped'
+      ? 'You skipped the question'
+      : card.outcome === 'timed_out'
+        ? 'No answer in time'
+        : `You chose: ${card.answers
+            .map((item) =>
+              single ? item.answer : `${item.header}: ${item.answer}`,
+            )
+            .join(' · ')}`;
+  return (
+    <div
+      className="transcript-card question-answered"
+      data-outcome={card.outcome}
+      role="group"
+      aria-label={words}
+    >
+      <MessageCircleQuestion className="transcript-card-icon" aria-hidden />
+      <div className="transcript-card-text">
+        {card.outcome !== 'answered' ? (
+          <span>{words}</span>
+        ) : (
+          <span>
+            You chose:{' '}
+            {card.answers.map((item, index) => (
+              <span
+                key={`${index}:${item.header}`}
+                className="question-answered-item"
+              >
+                {index > 0 && ' · '}
+                {!single && <>{item.header}: </>}
+                <strong>{item.answer}</strong>
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TranscriptCards({
   cards,
   live = false,
@@ -440,6 +528,14 @@ export function TranscriptCards({
             key={cardKey(card)}
             conversationId={conversation}
             reason={card.reason}
+          />
+        ) : card.kind === 'answer' ? (
+          <AnsweredCard key={cardKey(card)} card={card} />
+        ) : card.kind === 'page' ? (
+          <PageCard
+            key={cardKey(card)}
+            pageId={card.pageId}
+            conversationId={conversation}
           />
         ) : card.kind === 'video_edit' ? (
           <VideoEditCard

@@ -14,6 +14,7 @@ import threading
 import uuid
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
+from row_bot.application.live_updates import publishes as _publishes_live
 
 
 _SCHEMA_LOCK = threading.RLock()
@@ -661,6 +662,7 @@ def get_agent_settings_snapshot(overrides: Mapping[str, Any] | None = None) -> d
     return snapshot
 
 
+@_publishes_live("helpers", "conversations")
 def create_agent_run(
     *,
     run_id: str | None = None,
@@ -834,6 +836,7 @@ def create_agent_run(
     return run
 
 
+@_publishes_live("helpers", "conversations")
 def start_agent_run(run_id: str) -> dict[str, Any] | None:
     """Mark a queued Agent Run as running."""
     ensure_agent_run_schema()
@@ -991,6 +994,7 @@ def append_agent_event(
     }
 
 
+@_publishes_live("helpers", "conversations")
 def update_agent_status(
     run_id: str,
     status: str,
@@ -1076,6 +1080,7 @@ def save_agent_resume_state(
     return get_agent_run(run_id)
 
 
+@_publishes_live("helpers", "conversations")
 def finish_agent_run(
     run_id: str,
     status: str,
@@ -1451,6 +1456,7 @@ def list_child_runs(
     return runs
 
 
+@_publishes_live("helpers", "conversations")
 def stop_agent_run(run_id: str) -> dict[str, Any] | None:
     """Request Stop; a live producer retains ownership until acknowledged exit."""
     ensure_agent_run_schema()
@@ -1642,6 +1648,7 @@ def _thread_row_exists(thread_id: str) -> bool:
         return False
 
 
+@_publishes_live("helpers", "conversations")
 def recover_stale_agent_runs() -> dict[str, int]:
     """Normalize durable Agent Run rows after app/process restart.
 
@@ -1673,10 +1680,15 @@ def recover_stale_agent_runs() -> dict[str, int]:
             f"SELECT * FROM agent_runs WHERE status NOT IN ({placeholders})",
             tuple(TERMINAL_STATUSES),
         ).fetchall()
+        # A finished orchestration (its chat already answered) is never
+        # resumed: a background helper it left running is stopped like any
+        # other run, or its chat showed agents working for good (B396).
         orchestration_run_ids = {
             str(row["run_id"])
             for row in conn.execute(
-                "SELECT run_id FROM agent_orchestration_members"
+                "SELECT m.run_id FROM agent_orchestration_members m "
+                "JOIN agent_orchestrations o ON o.id = m.orchestration_id "
+                "WHERE o.status NOT IN ('completed', 'completed_partial', 'failed', 'stopped')"
             ).fetchall()
         }
         for row in rows:

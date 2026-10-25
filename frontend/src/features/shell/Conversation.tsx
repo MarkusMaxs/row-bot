@@ -79,6 +79,7 @@ import {
 } from './command-receipts';
 import SafeMarkdown from './chat-parity-markdown';
 import TranscriptTrace from './TranscriptTrace';
+import { writingLabel } from './tool-activity';
 import SlashPalette, { type SlashPaletteHandle } from './SlashPalette';
 import MentionPalette, { type MentionItem } from './MentionPalette';
 import { AppIcon } from '../apps/parts';
@@ -109,6 +110,7 @@ import {
   ATTACHMENT_LIMITS,
 } from './attachment-limits';
 import ApprovalCard from './ApprovalCard';
+import { waitingWords } from './InPlaceApproval';
 import {
   readPendingApprovalsNow,
   usePendingApprovals,
@@ -122,9 +124,15 @@ import { DeliveryIoContext, type DeliveryIo } from './deliveries';
 import { SpeakersContext, TurnMarker, type Speakers } from './TurnMarker';
 import { useBuddyStill } from '../buddy/BuddyStill';
 import { AgentAvatar, agentSeed } from '../../ui/AgentAvatar';
-import { ComputerUseCard, useComputerUse } from './ComputerUseCard';
+import { ComputerStep, useComputerUse } from './ComputerStep';
+import { BrowserStep } from '../browser/BrowserThumbnail';
 import { registerPromptSender } from './composer-bridge';
 import ConversationHeader from './ConversationHeader';
+import {
+  INCOGNITO_PLACEHOLDER,
+  incognitoAction,
+  useIncognitoSwitch,
+} from './incognito';
 import ErrorFix from './ErrorFix';
 import { TranscriptMessage } from './TranscriptMessage';
 import {
@@ -135,8 +143,11 @@ import {
 import { publicBlockText } from './TranscriptBlocks';
 import {
   answerStreaming,
+  browserOffers,
   buildTranscript,
+  finishedLiveSteps,
   liveMedia,
+  settleFinishedSteps,
   turnStarts,
 } from './transcript-model';
 import {
@@ -153,8 +164,9 @@ const EMPTY_ROWS: readonly TranscriptRow[] = [];
 const CONTEXT_HIDDEN_KEY = 'row-bot.context-hidden.v1';
 
 /** Below 740px Context floats; a floating chat docks it again from 780px. */
+/** Too narrow for the details rail beside a comfortable reading column (U3). */
 export function isNarrowChat(width: number, narrow: boolean): boolean {
-  return narrow ? width < 780 : width < 740;
+  return narrow ? width < 980 : width < 940;
 }
 
 function readContextHidden(): boolean {
@@ -292,6 +304,11 @@ export default function Conversation({
   const learningMenuItem = useLearningChatMenu();
   const historyReady =
     Boolean(id) && !state.loadingConversation && state.conversation?.id === id;
+  // Incognito (N11): its mark in the header, its words in the composer, its switch in the ⋯ menu.
+  const incognito = Boolean(
+    id && state.conversation?.id === id && state.conversation.incognito,
+  );
+  const turnIncognito = useIncognitoSwitch();
   const draft = controller.getDraft(id ?? 'new');
   const voiceScope = controller.dictationScope();
   const [talkBusy, setTalkBusy] = useState(false);
@@ -518,10 +535,10 @@ export default function Conversation({
   // Compact layouts show Context as a sheet that adopts the same mounted
   // host, so it stays live (agents, goal, resources) while it is open.
   const sheetHosted = Boolean(contextHost) && compactPlacement;
-  // Conversation details is a small floating card. A wide chat keeps it
-  // pinned open under the header's buttons (hidden only on request) and moves
-  // the reading column aside for it (B221); a narrow one floats it over the
-  // chat on demand. Panels such as Design keep the full-height right region.
+  // A wide chat keeps Conversation details open in a rail anchored to its
+  // right edge, hidden only on request (U3); a narrow one opens them on
+  // demand as a card over the chat. Panels such as Design keep the
+  // full-height right region.
   const [contextHidden, setContextHiddenState] = useState(readContextHidden);
   const [floatingOpen, setFloatingOpen] = useState(false);
   const floatingContext = hosted && narrowChat;
@@ -533,6 +550,17 @@ export default function Conversation({
     ? floatingContext
     : compactPlacement || narrowChat;
   useEffect(() => setFloatingOpen(false), [id]);
+  // Open details belong to the layout they were opened in (B402). Leaving a
+  // phone's layout closes its sheet: the desktop card shows the details, and
+  // a sheet kept open came back empty on the phone, so the first tap only
+  // closed it. Either way the floating card starts closed again.
+  const placedCompact = useRef(compactPlacement);
+  useEffect(() => {
+    if (placedCompact.current === compactPlacement) return;
+    placedCompact.current = compactPlacement;
+    setFloatingOpen(false);
+    if (!compactPlacement) overlay.dismiss('conversation-context');
+  }, [compactPlacement, overlay]);
   useEffect(() => {
     if (!floatingContext || !floatingOpen) return;
     const close = () => setFloatingOpen(false);
@@ -769,9 +797,15 @@ export default function Conversation({
   }, [earlierRows, rows]);
   // Tool results fold into their parent; charts and generated media hoist
   // onto it and render once (B4, B22).
+  // A step the live turn finished (a question just answered) reads as finished in its saved row, with its
+  // card in place, before the reply that follows it (N4).
+  const finishedSteps = finishedLiveSteps(state.activity);
+  const finishedKey = [...finishedSteps.keys()].join();
   const items = useMemo(
-    () => buildTranscript(transcriptRows),
-    [transcriptRows],
+    () => buildTranscript(settleFinishedSteps(transcriptRows, finishedSteps)),
+    // finishedKey stands for finishedSteps: they change together.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [transcriptRows, finishedKey],
   );
   const earlierIds = useMemo(
     () => new Set(earlierRows.map((row) => row.id)),
@@ -846,6 +880,26 @@ export default function Conversation({
         record.event.type === 'approval.required' &&
         record.event.payload.approval_id === generation?.approval_id,
     );
+  // Row-Bot's browser shows as a live step while the turn uses it, on every
+  // signed-in device; tapping it opens the Browser pane (N12-A).
+  // The turn's tool steps settle into the transcript as they're saved, so this
+  // follows the turn's own steps (settled or live), not only steps in flight.
+  const turnStart = rows.map((row) => row.role).lastIndexOf('user');
+  const browserLive =
+    Boolean(
+      generation &&
+      (!generation.quiesced || generation.status === 'waiting_approval'),
+    ) &&
+    (liveTraceGroups.some((group) => group.kind === 'browser') ||
+      rows
+        .slice(turnStart + 1)
+        .some((row) => row.traces?.some((group) => group.kind === 'browser')) ||
+      state.activity.some(
+        (record) =>
+          record.event.type === 'tool.activity' &&
+          record.event.payload.group_kind === 'browser' &&
+          record.event.payload.pass_id === generation?.pass_id,
+      ));
   // Computer use shows as a card while this conversation's turn holds the
   // computer; only this computer's owner sees it (other devices keep the
   // trace). The turn using the computer, or asking to, is what to follow.
@@ -862,11 +916,19 @@ export default function Conversation({
     turnKey: `${generation?.generation_id ?? ''}:${generation?.status ?? ''}`,
     load: controller.computerUse,
   });
-  // A paused computer waits on an approval; the card's Resume answers it,
-  // so the approval card stays away (never both).
+  // The person used the computer: Row-Bot asks "Carry on?" on the question card below.
   const computerPause =
-    Boolean(computer.snapshot?.approval_id) &&
-    computer.snapshot?.approval_id === generation?.approval_id;
+    Boolean(computer.snapshot?.active) && computer.snapshot?.state === 'paused';
+  // A computer step's row says what is happening, as the browser's step does.
+  const computerLine = !computer.snapshot?.active
+    ? ''
+    : computer.snapshot.state === 'waiting_approval'
+      ? 'Waiting for your OK'
+      : computer.snapshot.state === 'paused'
+        ? 'Paused while you use the computer'
+        : computer.snapshot.app
+          ? `Using ${computer.snapshot.app}`
+          : '';
   const lastActivity = state.activity.at(-1)?.event;
   const thinkingActive =
     Boolean(running) && lastActivity?.type === 'generation.activity';
@@ -874,7 +936,10 @@ export default function Conversation({
     thinkingActive &&
     lastActivity?.type === 'generation.activity' &&
     lastActivity.payload.state === 'writing'
-      ? `Writing ${lastActivity.payload.tool || 'a tool call'} · ${Math.max(1, Math.round((lastActivity.payload.bytes ?? 0) / 1024))} KB`
+      ? writingLabel(
+          lastActivity.payload.tool ?? '',
+          lastActivity.payload.bytes ?? 0,
+        )
       : undefined;
   const answering = Boolean(running) && answerStreaming(rows, state.activity);
   // The sidebar row follows this conversation's agents and turn as they end,
@@ -2109,7 +2174,7 @@ export default function Conversation({
     if (!id) return;
     onPanel({
       panel_kind: 'browser.live',
-      title: 'Managed browser',
+      title: 'Browser',
       required_capabilities: ['browser_navigate'],
     });
     // Below 1024px Context is a sheet; the panel must not open behind it.
@@ -2459,12 +2524,17 @@ export default function Conversation({
   };
   // Retry and Send again resend the last message as it was (its words and
   // its files, never the files' names as text, B136), marked a retry so the server runs it again in place. A follow-up note is
-  // the server continuing, not something the person sent.
+  // the server continuing, not something the person sent. A message sent from a page is the person's: the server runs
+  // it again as it was, from the page (N5).
   const lastUser = useMemo(() => {
     for (let index = items.length - 1; index >= 0; index -= 1)
-      if (items[index].row.role === 'user' && !items[index].row.note) {
+      if (
+        items[index].row.role === 'user' &&
+        (!items[index].row.note || items[index].row.note === 'page')
+      ) {
         const blocks = items[index].row.blocks;
         return {
+          fromPage: items[index].row.note === 'page',
           text: blocks
             .filter((block) => block.type !== 'attachment')
             .map(publicBlockText)
@@ -2485,7 +2555,11 @@ export default function Conversation({
           ),
         };
       }
-    return { text: '', attachments: [] as AttachmentView[] };
+    return {
+      fromPage: false,
+      text: '',
+      attachments: [] as AttachmentView[],
+    };
   }, [items]);
   const lastUserText = lastUser.text;
   let lastAssistant = -1;
@@ -2523,7 +2597,13 @@ export default function Conversation({
       );
       if (end) start = index + 1;
     });
-    return { starts, ends, texts };
+    return {
+      starts,
+      ends,
+      texts,
+      browser: browserOffers(items),
+      lastUser: items.map((item) => item.row.role).lastIndexOf('user'),
+    };
   }, [items]);
   const newChatRef = useRef(onNewChat);
   useLayoutEffect(() => {
@@ -2616,7 +2696,7 @@ export default function Conversation({
     !state.history &&
     generation?.status === 'stopped' &&
     items.at(-1)?.row.role === 'user' &&
-    !items.at(-1)?.row.note &&
+    (!items.at(-1)?.row.note || items.at(-1)?.row.note === 'page') &&
     Boolean(lastUserText) &&
     pending?.conversation !== id;
   // A delegated agent's own conversation: its icon, its replies, and the
@@ -3103,7 +3183,17 @@ export default function Conversation({
             contextDisabled={!contextReady}
             actions={headerActions}
             leading={headerLeading}
-            menuActions={headerMenu}
+            incognito={incognito}
+            menuActions={
+              headerMenu && id && state.conversation?.id === id
+                ? [
+                    ...headerMenu,
+                    incognitoAction(state.conversation, turnIncognito, {
+                      separatorBefore: headerMenu.length > 0,
+                    }),
+                  ]
+                : headerMenu
+            }
             trailingMenuActions={(() => {
               const item = id ? learningMenuItem({ id, title }) : null;
               return item ? [item] : [];
@@ -3210,6 +3300,7 @@ export default function Conversation({
                             cards={item.cards}
                             agents={item.agents}
                             turnStart={turns.starts[index]}
+                            offerBrowser={turns.browser[index]}
                             toolbar={turns.ends[index]}
                             copyText={turns.texts[index]}
                             onRecover={recoverTurn}
@@ -3234,6 +3325,12 @@ export default function Conversation({
                         agents={item.agents}
                         turnStart={turns.starts[index]}
                         latest={index === lastAssistant && !turnInFlight}
+                        computer={computerLine}
+                        // The live browser step stands in for it while this turn runs.
+                        offerBrowser={
+                          turns.browser[index] &&
+                          !(browserLive && index > turns.lastUser)
+                        }
                         toolbar={turns.ends[index]}
                         copyText={turns.texts[index]}
                         onRecover={recoverTurn}
@@ -3278,11 +3375,13 @@ export default function Conversation({
                     key={item.id}
                     className="message message-assistant"
                     role="group"
-                    aria-label={`${item.title} needs your approval`}
+                    aria-label={waitingWords(item)}
                   >
                     <div className="transcript-content">
                       <p className="message-text">
-                        {item.title} is waiting for your approval.
+                        {item.kind === 'question'
+                          ? `${item.title} has a question.`
+                          : `${item.title} is waiting for your approval.`}
                       </p>
                       <ApprovalCard id={item.id} notice />
                     </div>
@@ -3310,6 +3409,7 @@ export default function Conversation({
                   pendingMedia.length > 0 ||
                   pendingCards.length > 0 ||
                   computer.visible ||
+                  browserLive ||
                   (generation?.approval_id &&
                     generation.status === 'waiting_approval')) && (
                   <div className="message message-assistant message-live">
@@ -3320,6 +3420,7 @@ export default function Conversation({
                       <TranscriptTrace
                         conversation={id}
                         groups={liveTraceGroups}
+                        computer={computerLine}
                         live={{
                           running: isRunning,
                           thinking: thinkingActive,
@@ -3333,8 +3434,14 @@ export default function Conversation({
                           answering,
                         }}
                       >
+                        {browserLive && (
+                          <BrowserStep
+                            conversationId={id}
+                            onOpen={manageBrowser}
+                          />
+                        )}
                         {computer.visible && (
-                          <ComputerUseCard
+                          <ComputerStep
                             conversationId={id}
                             snapshot={computer.snapshot}
                             stopped={computer.stopped}
@@ -3346,7 +3453,6 @@ export default function Conversation({
                         )}
                         {generation?.approval_id &&
                           generation.status === 'waiting_approval' &&
-                          !computerPause &&
                           computer.checked && (
                             <ApprovalCard
                               id={generation.approval_id}
@@ -3699,9 +3805,13 @@ export default function Conversation({
                     ? singleLine
                       ? 'Follow-up…'
                       : 'Queue a follow-up…'
-                    : singleLine
-                      ? 'Message'
-                      : 'Message Row-Bot…'
+                    : incognito
+                      ? singleLine
+                        ? 'Message (incognito)'
+                        : INCOGNITO_PLACEHOLDER
+                      : singleLine
+                        ? 'Message'
+                        : 'Message Row-Bot…'
                 }
                 aria-describedby={
                   composerStateReason ? 'message-composer-state' : undefined
@@ -3748,9 +3858,10 @@ export default function Conversation({
                     !e.altKey &&
                     !e.metaKey &&
                     !e.ctrlKey &&
-                    lastUserText
+                    lastUserText &&
+                    !lastUser.fromPage
                   ) {
-                    // ↑ in an empty composer brings back the last message.
+                    // ↑ in an empty composer brings back the last message (one typed, not sent from a page).
                     e.preventDefault();
                     editMessage(lastUserText);
                     return;

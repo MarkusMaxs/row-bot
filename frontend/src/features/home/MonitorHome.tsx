@@ -39,6 +39,7 @@ import {
   type Tone,
 } from '../../ui/primitives';
 import { clientError } from '../../api/errors';
+import { useLiveUpdate } from '../../live';
 import { absoluteTime, parseTimestamp, relativeTime } from '../../ui/format';
 import { FAILED_RUN_STATUSES, When, plural, runStatus } from './home-format';
 import { Sparkline, Swimlane, type Lane } from './monitor-charts';
@@ -337,6 +338,8 @@ function tileFromChecks(
   )[0];
   const view = CHECK_STATUS[worst.status];
   const ok = checks.filter((check) => check.status === 'ok').length;
+  // Name the rest, so "1 of 11 OK" under OK never reads as ten failures (U18).
+  const unused = checks.length - ok;
   return {
     ...tile,
     tone: view.tone,
@@ -346,7 +349,7 @@ function tileFromChecks(
         ? `${worst.name}: ${worst.detail}`
         : worst.status === 'inactive' && !ok
           ? 'Not set up'
-          : `${ok} of ${checks.length} OK`,
+          : `${plural(ok, 'check')} OK${unused ? ` · ${unused} not in use` : ''}`,
     checked: checkedWords(checks, now),
     checks,
     fix: worst.fix ?? null,
@@ -927,6 +930,11 @@ export default function MonitorHome({
 }: MonitorHomeProps) {
   const notify = useNotify();
   const [healthReload, setHealthReload] = useState(0);
+  // The Workflows check counts runs and their approvals (B414): an answered
+  // approval clears its warning at once.
+  useLiveUpdate(['runs', 'approvals'], () =>
+    setHealthReload((value) => value + 1),
+  );
   const [diagnosisBusy, setDiagnosisBusy] = useState(false);
   const [diagnosisError, setDiagnosisError] = useState('');
   const [copyNotice, setCopyNotice] = useState('');
@@ -935,6 +943,9 @@ export default function MonitorHome({
   const [range, setRange] = useState<'24h' | '7d'>('24h');
   const [history, setHistory] = useState<'dream' | 'extraction'>('dream');
   const [tasks, setTasks] = useState<TaskSummaryPage | null>(null);
+  // A workflow run started, finished or waits (B407): its lane shows it at once.
+  const [tasksReload, setTasksReload] = useState(0);
+  useLiveUpdate(['runs'], () => setTasksReload((value) => value + 1));
   const [health, setHealth] = useState<SystemDiagnosis | null>(null);
   const [clock, setClock] = useState(() => new Date());
   const now = suppliedNow ?? clock;
@@ -944,7 +955,7 @@ export default function MonitorHome({
     setClock(new Date());
     const timer = window.setInterval(() => setClock(new Date()), 60_000);
     return () => window.clearInterval(timer);
-  }, [suppliedNow, snapshot, health]);
+  }, [suppliedNow, snapshot, health, tasks]);
 
   useEffect(() => {
     if (!loadTasks) return;
@@ -956,7 +967,7 @@ export default function MonitorHome({
     return () => {
       active = false;
     };
-  }, [loadTasks]);
+  }, [loadTasks, tasksReload]);
 
   // The server checks by itself and keeps every result (B252); the page
   // reads them, never runs a check. Soon again while the first run is on.
