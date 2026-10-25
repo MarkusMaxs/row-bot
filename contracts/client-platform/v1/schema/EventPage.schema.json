@@ -175,6 +175,73 @@
       "title": "ApprovalFolderChoice",
       "type": "object"
     },
+    "ApprovalQuestion": {
+      "additionalProperties": false,
+      "description": "One of Row-Bot's questions (N4): a header chip, the question and 2 to 4 options; \"Other\" is always offered.",
+      "properties": {
+        "header": {
+          "maxLength": 12,
+          "minLength": 1,
+          "title": "Header",
+          "type": "string"
+        },
+        "multi_select": {
+          "default": false,
+          "title": "Multi Select",
+          "type": "boolean"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ApprovalQuestionOption"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "question": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "question",
+        "options"
+      ],
+      "title": "ApprovalQuestion",
+      "type": "object"
+    },
+    "ApprovalQuestionOption": {
+      "additionalProperties": false,
+      "description": "One option of a question card; the recommended one carries its own tag.",
+      "properties": {
+        "description": {
+          "default": "",
+          "maxLength": 160,
+          "title": "Description",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "recommended": {
+          "default": false,
+          "title": "Recommended",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "ApprovalQuestionOption",
+      "type": "object"
+    },
     "ApprovalRequired": {
       "additionalProperties": false,
       "properties": {
@@ -210,6 +277,32 @@
           "default": null,
           "title": "Approval Id"
         },
+        "folder": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Folder",
+          "type": "string"
+        },
+        "memory_text": {
+          "default": "",
+          "maxLength": 4096,
+          "title": "Memory Text",
+          "type": "string"
+        },
+        "question": {
+          "default": "",
+          "maxLength": 240,
+          "title": "Question",
+          "type": "string"
+        },
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/ApprovalQuestion"
+          },
+          "maxItems": 4,
+          "title": "Questions",
+          "type": "array"
+        },
         "reason": {
           "default": "",
           "maxLength": 1024,
@@ -220,6 +313,12 @@
           "default": "",
           "maxLength": 256,
           "title": "Requesting Trace Id",
+          "type": "string"
+        },
+        "reviewer_reason": {
+          "default": "",
+          "maxLength": 240,
+          "title": "Reviewer Reason",
           "type": "string"
         },
         "risk_class": {
@@ -1764,6 +1863,20 @@
           "title": "At",
           "type": "string"
         },
+        "conversation_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conversation Id"
+        },
         "count": {
           "maximum": 9007199254740991,
           "minimum": 1,
@@ -2992,6 +3105,30 @@
       "title": "TraceMediaReference",
       "type": "object"
     },
+    "TraceQuestionAnswer": {
+      "additionalProperties": false,
+      "description": "One answered question, as its collapsed card says it (\"Beta timing: Beta.1 now\").",
+      "properties": {
+        "answer": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "header": {
+          "maxLength": 12,
+          "minLength": 1,
+          "title": "Header",
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "answer"
+      ],
+      "title": "TraceQuestionAnswer",
+      "type": "object"
+    },
     "TraceSpecialization": {
       "additionalProperties": false,
       "properties": {
@@ -3001,6 +3138,14 @@
           },
           "maxItems": 16,
           "title": "Agent Runs",
+          "type": "array"
+        },
+        "answers": {
+          "items": {
+            "$ref": "#/$defs/TraceQuestionAnswer"
+          },
+          "maxItems": 4,
+          "title": "Answers",
           "type": "array"
         },
         "apps": {
@@ -3017,10 +3162,24 @@
           "title": "Binding Id",
           "type": "string"
         },
+        "delivery_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(send-[0-9a-f]{8})?$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
         "display_name": {
           "default": "",
           "maxLength": 180,
           "title": "Display Name",
+          "type": "string"
+        },
+        "edit_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(edit-[0-9a-f]{8})?$",
+          "title": "Edit Id",
           "type": "string"
         },
         "error_code": {
@@ -3035,6 +3194,13 @@
           "title": "Evicted Skill Id",
           "type": "string"
         },
+        "job_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(prep-[0-9a-f]{8})?$",
+          "title": "Job Id",
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "skill_load",
@@ -3043,7 +3209,16 @@
             "resource_created",
             "resource_bound",
             "setup_needed",
-            "connect_apps"
+            "connect_apps",
+            "background_process",
+            "recording",
+            "video_edit",
+            "delivery",
+            "sandbox_job",
+            "sandbox_unprepared",
+            "question_answered",
+            "page",
+            "request_corrected"
           ],
           "title": "Kind",
           "type": "string"
@@ -3073,6 +3248,38 @@
           ],
           "default": null,
           "title": "Newly Active"
+        },
+        "outcome": {
+          "default": "",
+          "enum": [
+            "",
+            "answered",
+            "skipped",
+            "timed_out"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "page_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(page-[0-9a-f]{8})?$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "process_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(proc-[0-9a-f]{8})?$",
+          "title": "Process Id",
+          "type": "string"
+        },
+        "recording_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(rec-[0-9a-f]{8})?$",
+          "title": "Recording Id",
+          "type": "string"
         },
         "resource_id": {
           "default": "",
@@ -3501,7 +3708,8 @@
               "enum": [
                 "continuation",
                 "agent_task",
-                "agent_guidance"
+                "agent_guidance",
+                "page"
               ],
               "type": "string"
             },

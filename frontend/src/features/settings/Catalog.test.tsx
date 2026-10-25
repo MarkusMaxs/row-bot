@@ -31,6 +31,8 @@ const row: CachedModelPage['items'][number] = {
   runtime_mode: 'agent',
   source: 'saved_catalog',
   runtime_state: 'unknown',
+  favourite_rank: 1,
+  hidden: false,
 };
 const summary: ModelCatalogSummary = {
   schema_version: 1,
@@ -76,6 +78,13 @@ function fixture(
       ...summary,
       surface,
     })),
+    updateModelVisibility: vi.fn(
+      async (body: { action: string; model_ref: string | null }) => ({
+        schema_version: 1 as const,
+        favourites: body.action === 'favourite' ? [body.model_ref!] : [],
+        hidden: body.action === 'hide' ? [body.model_ref!] : [],
+      }),
+    ),
     modelCatalogPage: vi.fn(
       async (
         _surface: string,
@@ -86,9 +95,8 @@ function fixture(
     ),
   } as unknown as ClientController;
   const onDefault = vi.fn(async () => {});
-  const onPin = vi.fn(async () => {});
   const onChanged = vi.fn(async () => {});
-  return { controller, onDefault, onPin, onChanged };
+  return { controller, onDefault, onChanged };
 }
 function show(props = fixture()) {
   render(<ModelCatalog {...props} defaults={{ chat: '' }} />);
@@ -106,18 +114,21 @@ it('shows provider counts first and loads 80-row pages only after a provider ope
   // 80 rows of two labelled icon buttons make whole-page queries costly in
   // jsdom, and findBy repeats them on each poll; this overran 5 s under load.
   // The fake reads resolve at once, so one act() flush settles each step;
-  // pressed: true leaves only the pin buttons for the costly name check.
+  // pressed: true leaves only the star buttons for the costly name check.
   const name = (text: string) => screen.getByText(text, { selector: 'strong' });
   await act(async () => {});
   expect(
-    screen.getByText('81 chat models · 80 ready · 1 pinned'),
+    screen.getByText('81 chat models · 80 ready · 1 listed'),
   ).toBeVisible();
   expect(props.controller.modelCatalogPage).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Open ChatGPT / Codex' }));
   await act(async () => {});
   expect(name('Model 79')).toBeVisible();
   expect(
-    screen.getAllByRole('button', { name: /Unpin Model/, pressed: true }),
+    screen.getAllByRole('button', {
+      name: /Remove Model \d+ from favourites/,
+      pressed: true,
+    }),
   ).toHaveLength(80);
   fireEvent.click(screen.getByText('Show more models', { selector: 'button' }));
   await act(async () => {});
@@ -157,17 +168,19 @@ it('filters by job with chips and searches before mounting rows (B229)', async (
   );
 });
 
-it('pins and applies actual defaults through compact icons; unavailable rows are disabled', async () => {
+it('stars, hides and applies actual defaults through compact icons; unavailable rows are disabled (U10)', async () => {
+  const listed = { ...row, favourite_rank: null };
   const props = show(
     fixture(
       page(
         [
-          row,
+          listed,
           {
-            ...row,
+            ...listed,
             model_id: 'offline',
             selection_ref: 'model:codex:offline',
             display_name: 'Offline',
+            pinned_surfaces: [],
             runtime_ready: false,
             status_reason: 'Connect the provider.',
           },
@@ -180,25 +193,38 @@ it('pins and applies actual defaults through compact icons; unavailable rows are
     await screen.findByRole('button', { name: 'Open ChatGPT / Codex' }),
   );
   await screen.findByText('GPT-6-Astra');
+  // A model in the lists says so, in the words On this computer uses.
+  expect(screen.getByText(/^Listed · ChatGPT \/ Codex/)).toBeVisible();
+  expect(screen.queryByRole('button', { name: /^(Un)?[Pp]in / })).toBeNull();
   fireEvent.click(
-    screen.getByRole('button', { name: 'Unpin GPT-6-Astra for chat' }),
-  );
-  await waitFor(() => expect(props.onPin).toHaveBeenCalledWith('chat', row));
-  const unpinned = { ...row, pinned_surfaces: [] };
-  fireEvent.click(
-    await screen.findByRole('button', {
-      name: 'Set GPT-6-Astra as chat default',
-    }),
+    screen.getByRole('button', { name: 'Add GPT-6-Astra to favourites' }),
   );
   await waitFor(() =>
-    expect(props.onDefault).toHaveBeenCalledWith('chat', unpinned),
+    expect(props.controller.updateModelVisibility).toHaveBeenCalledWith({
+      action: 'favourite',
+      model_ref: 'model:codex:gpt-6-astra',
+    }),
   );
-  // Choosing a default also pins the model to that picker.
   expect(
-    await screen.findByRole('button', { name: 'Unpin GPT-6-Astra for chat' }),
-  ).toBeEnabled();
+    await screen.findByRole('button', {
+      name: 'Remove GPT-6-Astra from favourites',
+      pressed: true,
+    }),
+  ).toBeVisible();
+  expect(screen.getByText(/^Listed first · /)).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Hide GPT-6-Astra' }));
   expect(
-    screen.getByRole('button', { name: 'Unpin Offline for chat' }),
+    await screen.findByRole('button', { name: 'Show GPT-6-Astra' }),
+  ).toBeVisible();
+  expect(screen.getByText(/^Under More models · /)).toBeVisible();
+  expect(props.onChanged).toHaveBeenCalledTimes(2);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Set GPT-6-Astra as chat default' }),
+  );
+  await waitFor(() => expect(props.onDefault).toHaveBeenCalledOnce());
+  // An unavailable model can't be starred or chosen.
+  expect(
+    screen.getByRole('button', { name: 'Add Offline to favourites' }),
   ).toBeDisabled();
   expect(
     screen.getByRole('button', { name: 'Set Offline as chat default' }),
@@ -206,7 +232,7 @@ it('pins and applies actual defaults through compact icons; unavailable rows are
   expect(screen.queryByText(/Brain draft/)).not.toBeInTheDocument();
 });
 
-it('keeps loaded rows in place after pinning one reached through Show more', async () => {
+it('keeps loaded rows in place after starring one reached through Show more', async () => {
   const props = show();
   fireEvent.click(
     await screen.findByRole('button', { name: 'Open ChatGPT / Codex' }),
@@ -214,10 +240,12 @@ it('keeps loaded rows in place after pinning one reached through Show more', asy
   await screen.findByText('GPT-6-Astra');
   fireEvent.click(screen.getByRole('button', { name: 'Show more models' }));
   fireEvent.click(
-    await screen.findByRole('button', { name: 'Unpin GPT-5.5 for chat' }),
+    await screen.findByRole('button', {
+      name: 'Remove GPT-5.5 from favourites',
+    }),
   );
   expect(
-    await screen.findByRole('button', { name: 'Pin GPT-5.5 for chat' }),
+    await screen.findByRole('button', { name: 'Add GPT-5.5 to favourites' }),
   ).toBeEnabled();
   expect(props.onChanged).toHaveBeenCalledTimes(1);
   expect(screen.getByText('GPT-6-Astra')).toBeVisible();

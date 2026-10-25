@@ -877,6 +877,76 @@ it('adds from a pasted link without fetching anything, then opens what it found'
   );
 });
 
+it('saving access says Saving…, then the page shows the saved access with no setup steps (B346)', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const installed = entry({
+    id: 'mcp:abc',
+    installed: true,
+    enabled: true,
+    lifecycle: 'installed',
+    readiness: 'ready',
+    next_action: { kind: 'none', label: '' },
+  });
+  const readOnly = {
+    ...access,
+    preset: 'read_only' as const,
+    tools: access.tools.map((tool) =>
+      tool.effect === 'read_only' ? tool : { ...tool, state: 'off' as const },
+    ),
+  };
+  const shown = (value: IntegrationDetail['about']['access']) =>
+    detail({
+      entry: installed,
+      plan: null,
+      about: { ...detail().about, access: value },
+    });
+  const saving = plan({
+    plan_id: 'b1b1b1b1-0000-4000-8000-000000000046',
+    item_id: 'mcp:abc',
+    intent: 'access',
+    state: 'running',
+    current_step: 'enable',
+    steps: [
+      step('consent', 'done'),
+      step('test', 'done'),
+      step('access', 'done'),
+      step('enable', 'running'),
+    ],
+  });
+  const controller = {
+    integrationDetail: vi
+      .fn()
+      .mockResolvedValueOnce(shown(access))
+      .mockResolvedValue(shown(readOnly)),
+    reviewInstallPlan: vi.fn(async () => plan({ intent: 'access' })),
+    startInstallPlan: vi.fn(async () => saving),
+    installPlan: vi.fn(async () => ({
+      ...saving,
+      state: 'completed' as const,
+      message: 'Saved.',
+    })),
+  };
+  show('/settings/apps/item?id=mcp%3Aabc', controller);
+  expect(
+    await screen.findByText('3 of 3 actions on · Ask before changes'),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Choose' }));
+  const sheet = await screen.findByRole('dialog', {
+    name: 'Change what Notion can do',
+  });
+  fireEvent.click(within(sheet).getByRole('radio', { name: /Read only/ }));
+  fireEvent.click(within(sheet).getByRole('button', { name: 'Save' }));
+  // While it saves: one status, never a setup stepper.
+  expect(await screen.findByText('Saving…')).toBeVisible();
+  expect(screen.queryByRole('list', { name: 'Setup steps' })).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(800));
+  expect(
+    await screen.findByText('1 of 3 actions on · Read only'),
+  ).toBeVisible();
+  expect(screen.queryByText('Saving…')).toBeNull();
+  expect(screen.queryByRole('list', { name: 'Setup steps' })).toBeNull();
+});
+
 it('keeps a custom access policy as it is when the person saves without changing it', async () => {
   const onAllow = vi.fn();
   render(
@@ -1087,6 +1157,87 @@ it('after an abandoned sign-in, Retry leads back to one clear way to finish conn
     expect(controller.reviewInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({ item_id: 'mcp:sentry' }),
     ),
+  );
+});
+
+it('on another device the setup takes the pasted address and carries on (F27)', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const planId = 'f2f2f2f2-0000-4000-8000-000000000027';
+  const waiting = (signIn: Partial<PlanStep['sign_in']> = {}) =>
+    plan({
+      plan_id: planId,
+      state: 'paused',
+      pause: 'sign_in',
+      current_step: 'sign_in',
+      steps: [
+        step('consent', 'done'),
+        step('sign_in', 'waiting', {
+          sign_in: {
+            method: 'oauth_dcr',
+            authorization_url: 'https://auth.example.test/authorize',
+            delivery: 'paste',
+            expires_in: 280,
+            ...signIn,
+          },
+        }),
+        step('access', 'pending'),
+        step('enable', 'pending'),
+      ],
+    });
+  const signedIn = plan({
+    ...waiting(),
+    pause: 'resume',
+    steps: [
+      step('consent', 'done'),
+      step('sign_in', 'waiting'),
+      step('access', 'pending'),
+      step('enable', 'pending'),
+    ],
+  });
+  const accepted = waiting({ received: true });
+  const controller = {
+    integrationDetail: vi.fn(async () => detail({ plan: waiting() })),
+    reviewInstallPlan: vi.fn(async () => waiting()),
+    installPlan: vi
+      .fn()
+      .mockResolvedValueOnce(waiting())
+      .mockResolvedValue(signedIn),
+    finishInstallPlanSignIn: vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('other'), {
+          code: 'mcp_auth_address_other',
+          status: 409,
+        }),
+      )
+      .mockResolvedValue(accepted),
+    continueInstallPlan: vi.fn(async () =>
+      plan({ ...signedIn, pause: 'access' }),
+    ),
+  };
+  const { platform } = show(
+    '/settings/apps/item?id=mcp%3Acurated%3Anotion',
+    controller,
+  );
+  const field = await screen.findByLabelText('Paste that address here');
+  expect(platform.openExternal).not.toHaveBeenCalled(); // The steps come first.
+  const address =
+    'http://127.0.0.1/api/v1/settings/mcp/auth/callback?code=c&state=s';
+  fireEvent.change(field, { target: { value: address } });
+  fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'That address is from a different sign-in.',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
+  expect(
+    await screen.findByText('Finishing signing in to Notion…'),
+  ).toBeVisible();
+  expect(controller.finishInstallPlanSignIn).toHaveBeenLastCalledWith(planId, {
+    address,
+  });
+  await act(() => vi.advanceTimersByTimeAsync(1600));
+  await waitFor(() =>
+    expect(controller.continueInstallPlan).toHaveBeenCalledWith(planId, {}),
   );
 });
 
@@ -1688,6 +1839,43 @@ it('names a built-in way as itself, not as the app it is one way to', async () =
     ),
   ).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Try it' })).toBeNull();
+});
+
+it('says an Outlook account works through the person’s own Microsoft app, never a key (U8)', async () => {
+  const outlook = entry({
+    id: 'builtin:account:microsoft',
+    kind: 'builtin',
+    name: 'Outlook account',
+    description: 'Outlook mail and calendar through your own Microsoft app.',
+    app: {
+      id: 'outlook',
+      name: 'Outlook',
+      publisher: 'Microsoft',
+      category: 'productivity',
+      icon: 'si:microsoftoutlook',
+      verified: true,
+      featured_rank: 7,
+    },
+    source: 'builtin',
+    method: 'built_in',
+    publisher: 'Row-Bot',
+    installed: true,
+    enabled: true,
+    lifecycle: 'installed',
+    readiness: 'ready',
+    next_action: { kind: 'none', label: '' },
+  });
+  show('/settings/apps/item?id=builtin%3Aaccount%3Amicrosoft', {
+    integrationDetail: vi.fn(async () =>
+      detail({ entry: outlook, plan: null }),
+    ),
+  });
+  expect(
+    await screen.findByText(
+      'Part of Row-Bot: it works through your own Microsoft app and sign-in.',
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText(/sign-in or key/)).toBeNull();
 });
 
 it('sets up a built-in way in its own settings, scoped to it, with no plan of its own', async () => {

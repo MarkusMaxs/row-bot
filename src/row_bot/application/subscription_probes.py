@@ -11,7 +11,7 @@ from row_bot.providers.config import ProviderConfigError, load_provider_config, 
 from row_bot.providers.selection import model_ref as qualified_ref, parse_model_ref
 from row_bot.runtime import admissions
 
-PROVIDER_KINDS = {"codex": ("tokens",), "claude_subscription": ("tokens", "runtime"), "xai_oauth": ("tokens", "runtime", "vision")}
+PROVIDER_KINDS = {"codex": ("tokens",), "xai_oauth": ("tokens", "runtime", "vision")}
 
 
 @dataclass(frozen=True)
@@ -95,36 +95,17 @@ def review_probe(provider_id: str, provider_revision: str, kind: str, model_ref:
 
 
 def _make_model(provider, model_id, captured, validate, bounded, stack):
-    import httpx
-    if provider == "xai_oauth":
-        from row_bot.providers import xai_oauth
-        from row_bot.providers.transports.xai_oauth_responses import ChatXAIOAuthResponses
-        base_url = xai_oauth._validated_xai_base_url(str(captured[1].get("base_url") or xai_oauth.XAI_OAUTH_BASE_URL))
-        model = ChatXAIOAuthResponses(model_name=model_id, base_url=base_url, http_client=bounded, timeout=30)
-    else:
-        from row_bot.providers import claude_subscription
-        from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
-        class BoundedTransport(httpx.BaseTransport):
-            def handle_request(self, request: httpx.Request) -> httpx.Response:
-                validate()
-                body = request.read()
-                if len(body) > 64 * 1024:
-                    raise ProviderConfigError("subscription_probe_limit")
-                return bounded._request(request.method, str(request.url), headers=dict(request.headers), content=body, timeout=30)
-        client = stack.enter_context(httpx.Client(transport=BoundedTransport(), follow_redirects=False))
-        credentials = claude_subscription.claude_subscription_runtime_credentials(refresh_if_needed=False, _snapshot=captured)
-        import anthropic
-        sdk = claude_subscription.claude_subscription_sdk_client(credentials.access_token, timeout=30, allow_cli_probe=False,
-            client_factory=lambda **kwargs: anthropic.Anthropic(**kwargs, http_client=client, max_retries=0))
-        stack.callback(sdk.close)
-        model = ChatClaudeSubscriptionMessages(model_name=model_id, anthropic_client=sdk, max_tokens=96)
+    from row_bot.providers import xai_oauth
+    from row_bot.providers.transports.xai_oauth_responses import ChatXAIOAuthResponses
+    base_url = xai_oauth._validated_xai_base_url(str(captured[1].get("base_url") or xai_oauth.XAI_OAUTH_BASE_URL))
+    model = ChatXAIOAuthResponses(model_name=model_id, base_url=base_url, http_client=bounded, timeout=30)
     model.bind_probe_credentials(captured, validate)
     return model
 
 
 def _check_tokens(provider, proof, revision, validate):
-    from row_bot.providers import codex, claude_subscription, xai_oauth
-    module = {"codex": codex, "claude_subscription": claude_subscription, "xai_oauth": xai_oauth}[provider]
+    from row_bot.providers import codex, xai_oauth
+    module = {"codex": codex, "xai_oauth": xai_oauth}[provider]
     validate()
     health = getattr(module, f"check_{provider}_token_health")(refresh_if_needed=False)
     validate()
@@ -184,7 +165,7 @@ def execute_probe(*, flows: SubscriptionFlows, owner_id: str, key: str, command:
             if kind == "tokens":
                 result = _check_tokens(provider, proof, revision, guard)
             else:
-                from row_bot.providers import auth_store, claude_subscription, xai_oauth
+                from row_bot.providers import auth_store, xai_oauth
                 captured = auth_store.read_provider_oauth_bundle_snapshot(provider)
                 guard()
                 if captured[2] != revision:
@@ -194,7 +175,7 @@ def execute_probe(*, flows: SubscriptionFlows, owner_id: str, key: str, command:
                     model_id = parse_model_ref(intent["model_ref"])[1]
                     model = model_factory(provider, model_id, captured, guard, flow.client, stack)
                     guard()
-                    runner = claude_subscription.run_claude_subscription_runtime_probe if provider == "claude_subscription" else xai_oauth.run_xai_oauth_vision_probe if kind == "vision" else xai_oauth.run_xai_oauth_runtime_probe
+                    runner = xai_oauth.run_xai_oauth_vision_probe if kind == "vision" else xai_oauth.run_xai_oauth_runtime_probe
                     raw = runner(model_id, chat_model=model, strict=True, expected_revision=revision, validate=guard, command_proof=proof)
                 result = _result(provider, kind, raw)
             flow.probe_result = asdict(result)

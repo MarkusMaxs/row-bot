@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from typing import Callable
 
 _APP_BOOT_STARTED = time.perf_counter()
 _LAUNCH_SESSION_ID = os.environ.get("ROW_BOT_LAUNCH_SESSION_ID", "")
@@ -307,6 +308,9 @@ async def _auto_start_channel_background(channel) -> None:
         )
         logger.warning("Channel auto-start failed for %s: %s", channel_name, exc)
     finally:
+        from row_bot.integrations import builtin
+
+        builtin.changed()  # Apps and Monitor show the channel as it is now: running, or stopped.
         logger.info(
             "startup.channel.auto_start channel=%s duration_ms=%.1f ok=%s",
             channel_name,
@@ -444,7 +448,8 @@ def _check_oauth_tokens(at_startup: bool = False) -> list[str]:
     from row_bot.tools import registry as _reg
     warnings: list[str] = []
 
-    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)")]:
+    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)"),
+                               ("outlook_mail", "Outlook"), ("outlook_calendar", "Outlook calendar")]:
         if not _reg.is_enabled(tool_name):
             continue
         tool = _reg.get_tool(tool_name)
@@ -553,6 +558,20 @@ async def _run_startup_sequence_guarded():
         )
 
 
+async def _load_cached_model_catalog(set_status: Callable[[str], None]) -> None:
+    """The saved Brain model, once a cloud provider is set up.
+
+    Both steps read provider secrets from the system keychain, which can wait on
+    a dialog (macOS asks again after the app's signature changes). Off the event
+    loop, the server keeps answering meanwhile; on it, the launcher gave up after
+    two minutes with "failed to become ready" (B422).
+    """
+    if await asyncio.to_thread(is_cloud_available):
+        set_status("☁️ Loading cached model catalog...")
+        with _startup_phase("load_cached_model_catalog"):
+            await asyncio.to_thread(get_current_model)
+
+
 async def _run_startup_sequence():
     _app_boot_event("startup_sequence_start")
     if is_docs_read_only_real_data_capture():
@@ -606,6 +625,56 @@ async def _run_startup_sequence():
     except Exception:
         logger.exception("Data folder leftover sweep failed")
 
+    # Deletes still offering Undo when the app stopped are finished (B343).
+    try:
+        from row_bot.thread_cleanup import resume_held_deletions
+        with _startup_phase("held_conversation_deletes"):
+            resume_held_deletions()
+    except Exception:
+        logger.exception("Held conversation deletes could not be resumed")
+
+    # Recordings a crash cut short are marked, and their working files removed (F2).
+    try:
+        from row_bot.recordings import sweep_leftovers
+        with _startup_phase("recording_leftovers"):
+            await asyncio.to_thread(sweep_leftovers)
+    except Exception:
+        logger.exception("Recording leftover check failed")
+
+    # Video edits a crash cut short are marked, and their working files removed (F3).
+    try:
+        from row_bot.video_edits import sweep_leftovers as sweep_video_edits
+        with _startup_phase("video_edit_leftovers"):
+            await asyncio.to_thread(sweep_video_edits)
+    except Exception:
+        logger.exception("Video edit leftover check failed")
+
+    # A Prepare sandbox a crash cut short is marked, and its install container removed (F18).
+    try:
+        from row_bot.developer.sandbox_prepare import sweep_leftovers as sweep_sandbox_jobs
+        with _startup_phase("sandbox_job_leftovers"):
+            await asyncio.to_thread(sweep_sandbox_jobs)
+    except Exception:
+        logger.exception("Sandbox job leftover check failed")
+
+    # Files sent to the devices whose time ran out, and anything a send cut short, are removed (F7).
+    try:
+        from row_bot.file_deliveries import sweep as sweep_deliveries
+        with _startup_phase("delivery_leftovers"):
+            await asyncio.to_thread(sweep_deliveries)
+    except Exception:
+        logger.exception("Delivery clean-up failed")
+
+    # Background processes a crash left running are stopped, and reported once (F1).
+    try:
+        from row_bot.background_processes import report_leftovers
+        with _startup_phase("background_process_leftovers"):
+            leftover_notice = await asyncio.to_thread(report_leftovers)
+        if leftover_notice:
+            _startup_warning(leftover_notice, source="processes")
+    except Exception:
+        logger.exception("Background process leftover check failed")
+
     logger.info("%s startup initiated", APP_DISPLAY_NAME)
     try:
         from row_bot.data_paths import describe_data_paths
@@ -631,6 +700,14 @@ async def _run_startup_sequence():
     except Exception:
         logger.warning("Could not keep the models this profile was using", exc_info=True)
 
+    # Once: Claude now runs the person's own Claude Code; the old Claude sign-in's stored tokens go (N1).
+    try:
+        from row_bot.providers.claude_subscription import retire_old_claude_sign_in
+        with _startup_phase("claude_sign_in_retirement"):
+            await asyncio.to_thread(retire_old_claude_sign_in)
+    except Exception:
+        logger.warning("Could not retire the old Claude sign-in", exc_info=True)
+
     # Once: an off saved while off was the Developer tool's default (B259).
     try:
         from row_bot.application.developer_tool_upgrade import turn_on_developer_tools_once
@@ -639,10 +716,7 @@ async def _run_startup_sequence():
     except Exception:
         logger.warning("Could not apply the Developer tool's new default", exc_info=True)
 
-    if is_cloud_available():
-        _set("☁️ Loading cached model catalog...")
-        with _startup_phase("load_cached_model_catalog"):
-            get_current_model()
+    await _load_cached_model_catalog(_set)
 
     _set("🔄 Scheduling memory extraction…")
     with _startup_phase("memory_extraction_scheduler"):
@@ -677,6 +751,13 @@ async def _run_startup_sequence():
             await asyncio.to_thread(start_update_scheduler)
     except Exception as exc:
         logger.warning("Updater scheduler failed to start (non-fatal): %s", exc)
+
+    # Install stats (N6): its own thread, after a start-up delay; dormant without a collector.
+    try:
+        from row_bot import install_count
+        install_count.start()
+    except Exception as exc:
+        logger.warning("Install stats didn't start (non-fatal): %s", exc)
 
     _set("⚡ Loading workflows…")
     try:
@@ -1025,6 +1106,16 @@ async def _app_view_handler(request: Request) -> Response:
     return Response(html, media_type="text/html; charset=utf-8", headers=headers)
 
 
+async def _page_frame_handler(request: Request) -> Response:
+    """A page (N5), served once to the sandboxed frame it was made for, under its own CSP (sandboxed again)."""
+    from row_bot import pages
+    try:
+        html, headers = pages.frame(str(request.path_params.get("token") or ""))
+    except pages.PageError:
+        return Response("Not found", status_code=404, media_type="text/plain", headers={"Cache-Control": "no-store"})
+    return Response(html, media_type="text/html; charset=utf-8", headers=headers)
+
+
 async def _health_handler(request: Request) -> JSONResponse:  # noqa: ARG001
     """Expose process liveness without provider, route, or user details."""
     return JSONResponse(
@@ -1096,6 +1187,9 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             await asyncio.to_thread(_updater.shutdown_background_update, 15.0)
         except Exception:
             logger.debug("Stopping the background updater failed", exc_info=True)
+    _install_count = sys.modules.get("row_bot.install_count")
+    if _install_count is not None:
+        _install_count.stop()
     from row_bot.application.lifecycle import application_lifecycle
     runtime_shutdown = await application_lifecycle.shutdown()
     if runtime_shutdown["status"] != "quiesced":
@@ -1119,6 +1213,30 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
     except Exception as exc:
         _safe_console_print(f"[shutdown] Channel registry cleanup error: {exc}")
     try:
+        # Recordings stop first, so their videos are saved before the browser and Cua go (F2).
+        from row_bot.recordings import stop_all as _stop_recordings
+        _recorded = await asyncio.to_thread(_stop_recordings, by="quit", timeout=15.0)
+        if _recorded:
+            _safe_console_print(f"[shutdown] Stopped {_recorded} recording(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Recording cleanup error: {exc}")
+    try:
+        # Video edits stop before the background processes they run in (F3); nothing half-made is kept.
+        from row_bot.video_edits import stop_all as _stop_video_edits
+        _edits = await asyncio.to_thread(_stop_video_edits, by="quit", timeout=10.0)
+        if _edits:
+            _safe_console_print(f"[shutdown] Stopped {_edits} video edit(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Video edit cleanup error: {exc}")
+    try:
+        # Prepare sandbox stops with its network off: its install container is removed (F18).
+        from row_bot.developer.sandbox_prepare import stop_all as _stop_sandbox_jobs
+        _jobs = await asyncio.to_thread(_stop_sandbox_jobs, timeout=15.0)
+        if _jobs:
+            _safe_console_print(f"[shutdown] Stopped {_jobs} sandbox job(s)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Sandbox job cleanup error: {exc}")
+    try:
         from row_bot.tools.browser_tool import get_session_manager as _get_bsm
         _get_bsm().kill_all()
         _safe_console_print("[shutdown] Browser session closed")
@@ -1130,6 +1248,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
         _safe_console_print("[shutdown] Shell sessions closed")
     except Exception as exc:
         _safe_console_print(f"[shutdown] Shell cleanup error: {exc}")
+    try:
+        # Background processes stop with Row-Bot, each with everything it started (F1).
+        from row_bot.background_processes import stop_all as _stop_background_processes
+        _stopped = await asyncio.to_thread(_stop_background_processes, by="quit", timeout=10.0)
+        if _stopped:
+            _safe_console_print(f"[shutdown] Stopped {_stopped} background process(es)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Background process cleanup error: {exc}")
     try:
         from row_bot.terminal_bridge import TerminalBridge
         if TerminalBridge.has_instance():
@@ -1177,6 +1303,7 @@ app.add_route("/api/launcher-shutdown", _launcher_shutdown_handler, methods=["PO
 app.add_route("/api/launcher-apply-update", _launcher_apply_update_handler, methods=["POST"])
 app.add_route("/api/webhook/{task_id}", _webhook_handler, methods=["POST"])
 app.add_route("/app-views/{render_id}", _app_view_handler, methods=["GET"])
+app.add_route("/page-frames/{token}", _page_frame_handler, methods=["GET"])
 app.add_route("/", _root_handler, methods=["GET"])
 app.add_route("/favicon.ico", _favicon_handler, methods=["GET"])
 app.add_route("/healthz", _health_handler, methods=["GET"])

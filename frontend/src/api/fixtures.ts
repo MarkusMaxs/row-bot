@@ -90,6 +90,11 @@ export class FixtureTransport implements ClientTransport {
   private wakes = new Map<string, () => void>();
   private snapshots = new Map<string, wire.Snapshot>();
   private receipts = new Map<string, wire.CommandReceipt>();
+  /** Deleted with Undo on offer: restorable, like the server's hold. */
+  private heldDeletes = new Map<
+    string,
+    { row: wire.ConversationView; index: number }
+  >();
   private profileReceipts = new Map<string, wire.ProfileReceipt>();
   readonly profilesData: wire.ProfileSummary[] = [
     {
@@ -502,6 +507,7 @@ export class FixtureTransport implements ClientTransport {
         ...base,
         id,
         title: payload.title ?? 'New conversation',
+        incognito: Boolean(payload.incognito),
       });
       this.snapshots.set(id, {
         ...structuredClone(this.snapshots.get(base.id)!),
@@ -521,7 +527,9 @@ export class FixtureTransport implements ClientTransport {
       if (index < 0) throw { code: 'not_found', status: 404 };
       if (this.conversations[index].revision !== command.expected_revision)
         throw { code: 'revision_conflict', status: 409 };
-      this.conversations.splice(index, 1);
+      const [removed] = this.conversations.splice(index, 1);
+      if ((command.payload as { undo?: boolean }).undo)
+        this.heldDeletes.set(removed.id, { row: removed, index });
       const deleted: wire.CommandReceipt = {
         command_id: command.command_id,
         conversation_id: target,
@@ -529,6 +537,20 @@ export class FixtureTransport implements ClientTransport {
       };
       this.receipts.set(command.command_id, deleted);
       return deleted;
+    }
+    if (command.type === 'conversation.incognito') {
+      const row = this.conversations.find((item) => item.id === target);
+      if (!row) throw { code: 'not_found', status: 404 };
+      if (row.revision !== command.expected_revision)
+        throw { code: 'revision_conflict', status: 409 };
+      row.incognito = (command.payload as wire.IncognitoPayload).incognito;
+      row.revision = String(Number(row.revision) + 1);
+    }
+    if (command.type === 'conversation.restore') {
+      const held = target ? this.heldDeletes.get(target) : undefined;
+      if (!held) throw { code: 'restore_expired', status: 409 };
+      this.heldDeletes.delete(held.row.id);
+      this.conversations.splice(held.index, 0, held.row);
     }
     const receipt: wire.CommandReceipt = {
       command_id: command.command_id,

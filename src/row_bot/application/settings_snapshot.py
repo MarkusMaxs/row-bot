@@ -20,7 +20,7 @@ import sys
 import time
 from typing import Any
 
-from row_bot import account_tokens
+from row_bot import account_tokens, x_accounts
 from row_bot.data_paths import get_row_bot_data_dir
 
 _MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -239,7 +239,10 @@ def _credential_status(name: str) -> dict[str, Any]:
 def _tool_documents(
     root: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    raw = _mapping(_read_json(root / "tools_config.json", default={}))
+    from row_bot import tool_configuration
+
+    with tool_configuration.transaction():  # Never in the middle of a save, when it is briefly away (B408).
+        raw = _mapping(_read_json(root / "tools_config.json", default={}))
     tools = (
         _mapping(raw.get("tools"))
         if isinstance(raw.get("tools"), Mapping)
@@ -1402,6 +1405,8 @@ def _account(
     post_operations: list[str] | None = None,
     engage_operations: list[str] | None = None,
     callback_url: str | None = None,
+    address: str | None = None,
+    x_accounts: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     return {
         "account_id": account_id,
@@ -1414,6 +1419,8 @@ def _account(
         "post_operations": post_operations or [],
         "engage_operations": engage_operations or [],
         "callback_url": callback_url,
+        "address": address,
+        "x_accounts": x_accounts or [],
     }
 
 
@@ -1472,6 +1479,12 @@ def _accounts(
     engage_ops = _strings(x_config.get("engage_operations")) or list(
         _X_ENGAGE_OPERATIONS
     )
+    # Outlook's mail and calendar share one Microsoft sign-in through the person's own app, in the keychain.
+    from row_bot import microsoft_account
+
+    microsoft_configured = microsoft_account.client() is not None
+    microsoft_state = microsoft_account.state()
+    microsoft_address = microsoft_account.address() or None
     return {
         "availability": "available",
         "github": _account(
@@ -1500,7 +1513,7 @@ def _accounts(
             enabled=_enabled("x", tools, registered),
             configured=x_id["configured"] and x_secret["configured"],
             authentication_state=(
-                account_tokens.state("x")
+                x_accounts.overall_state()
                 if x_id["configured"] and x_secret["configured"]
                 else "not_configured"
             ),
@@ -1518,7 +1531,19 @@ def _accounts(
             post_operations=post_ops,
             engage_operations=engage_ops,
             callback_url=X_OAUTH_CALLBACK_URL,
+            # Each connected X account, read from the list and the keychain only (no X call).
+            x_accounts=x_accounts.summaries(),
         ),
+        **{
+            tool: _account(
+                account_id=tool,
+                enabled=_enabled(tool, tools, registered),
+                configured=microsoft_configured,
+                authentication_state=microsoft_state,
+                address=microsoft_address,
+            )
+            for tool in ("outlook_mail", "outlook_calendar")
+        },
     }
 
 

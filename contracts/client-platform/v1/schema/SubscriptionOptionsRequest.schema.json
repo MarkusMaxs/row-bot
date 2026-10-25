@@ -13,7 +13,6 @@
     "provider_id": {
       "enum": [
         "codex",
-        "claude_subscription",
         "xai_oauth"
       ],
       "title": "Provider Id",

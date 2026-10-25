@@ -22,8 +22,8 @@ import uuid
 from row_bot.providers.config import load_provider_config, provider_config_revision, ProviderConfigError
 from row_bot.runtime import admissions
 
-PROVIDERS = ("codex", "claude_subscription", "xai_oauth")
-ACTIONS = frozenset({"start", "check", "submit", "cancel", "disconnect", "restore", "import_token"})
+PROVIDERS = ("codex", "xai_oauth")
+ACTIONS = frozenset({"start", "check", "submit", "cancel", "disconnect", "restore"})
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +56,14 @@ def _provider(provider_id: str) -> None:
         raise SubscriptionError("not_found")
 
 
+def _connection_changed(provider_id: str, *, connected: bool = True) -> None:
+    """A sign-in was saved, removed or restored: runtimes forget the old one, Settings › Models shows it (B411)."""
+    from row_bot.application.provider_settings_commands import invalidate_provider_runtime
+    from row_bot.providers.model_catalog_cache import provider_connection_changed
+    invalidate_provider_runtime()
+    provider_connection_changed(provider_id, connected=connected)
+
+
 def _expiry(value: Any) -> str | None:
     try:
         if not isinstance(value, str) or len(value) > 80:
@@ -86,7 +94,7 @@ def read_accounts(*, validate: Callable[[], None] = lambda: None) -> Subscriptio
 
 
 def _value(operation: str, value: Any) -> str | None:
-    if operation not in {"submit", "import_token"}:
+    if operation != "submit":
         if value is not None:
             raise SubscriptionError("invalid_command")
         return None
@@ -101,7 +109,7 @@ def _value(operation: str, value: Any) -> str | None:
 def review_action(provider_id: str, provider_revision: str, operation: str, value: str | None = None, *,
                   flow_id: str | None = None, server_epoch: str | None = None, validate: Callable[[], None]) -> dict:
     _provider(provider_id)
-    if operation not in ACTIONS or (operation == "import_token" and provider_id != "claude_subscription"):
+    if operation not in ACTIONS:
         raise SubscriptionError("invalid_command")
     value = _value(operation, value)
     if operation in {"check", "submit", "cancel"}:
@@ -390,8 +398,8 @@ class SubscriptionFlows:
 
     @staticmethod
     def _module(provider_id):
-        from row_bot.providers import codex, claude_subscription, xai_oauth
-        return {"codex": codex, "claude_subscription": claude_subscription, "xai_oauth": xai_oauth}[provider_id]
+        from row_bot.providers import codex, xai_oauth
+        return {"codex": codex, "xai_oauth": xai_oauth}[provider_id]
 
     def _start(self, flow: _Flow, validate, proof: dict):
         module = self._module(flow.provider_id)
@@ -401,8 +409,6 @@ class SubscriptionFlows:
         if flow.provider_id == "codex":
             flow.method = "device_code"
             flow.flow = module.start_codex_device_flow(http_client=flow.client)
-        elif flow.provider_id == "claude_subscription":
-            flow.flow = module.start_claude_subscription_oauth_flow()
         else:
             # Loopback from every device, unlike Google and X (client_account_oauth): Row-Bot's
             # shared xAI client redirects to 127.0.0.1, and only xAI registers that client's
@@ -505,8 +511,7 @@ class SubscriptionFlows:
             flow.cancel.set()
             raise SubscriptionError("subscription_storage_unavailable") from None
         flow.published = True
-        from row_bot.application.provider_settings_commands import invalidate_provider_runtime
-        invalidate_provider_runtime()
+        _connection_changed(flow.provider_id)
         flow.pending_tokens = flow.authorization = flow.flow = None
         flow.state = "connected"
         # The loopback listener has already returned before Check can consume it.
@@ -528,12 +533,6 @@ class SubscriptionFlows:
                 if authorization is None:
                     flow.state = "waiting"
                     return
-            elif flow.provider_id == "claude_subscription":
-                if operation != "submit":
-                    raise SubscriptionError("invalid_command")
-                saved = flow.flow
-                authorization = module.ClaudeSubscriptionAuthorization(authorization_code=value, code_verifier=saved.code_verifier,
-                    redirect_uri=saved.redirect_uri, token_url=saved.token_url, client_id=saved.client_id, state=saved.state)
             else:
                 if operation == "submit":
                     # Never race the automatic callback consumer with a pasted code.
@@ -551,7 +550,7 @@ class SubscriptionFlows:
                     authorization = flow.authorization
             guard()
             flow.state = "exchanging"
-            name = "exchange_codex_device_authorization" if flow.provider_id == "codex" else "exchange_claude_subscription_authorization" if flow.provider_id == "claude_subscription" else "exchange_xai_oauth_authorization"
+            name = "exchange_codex_device_authorization" if flow.provider_id == "codex" else "exchange_xai_oauth_authorization"
             flow.pending_tokens = getattr(module, name)(authorization, http_client=flow.client)
             guard()
         flow.state = "publishing"
@@ -645,7 +644,7 @@ class SubscriptionFlows:
                 raise SubscriptionError("subscription_flow_unavailable")
             if operation != "cancel" and flow is not None and flow.active and flow is not _reserved:
                 raise SubscriptionError("subscription_busy")
-            if operation in {"start", "disconnect", "restore", "import_token"}:
+            if operation in {"start", "disconnect", "restore"}:
                 existing = next((item for item in self._flows.values() if item is not _reserved and item.provider_id == provider_id and
                     (item.active or item.listening or (not item.cancel.is_set() and item.state not in {"connected", "expired", "uncertain"}))), None)
                 if existing is not None:
@@ -662,8 +661,7 @@ class SubscriptionFlows:
             cfg = load_provider_config(strict=True)
             if cfg.get("providers", {}).get(provider_id, {}).get("oauth_bundle_command") == proof:
                 validate()
-                from row_bot.application.provider_settings_commands import invalidate_provider_runtime
-                invalidate_provider_runtime()
+                _connection_changed(provider_id)
                 if flow is not None:
                     flow.pending_tokens = flow.authorization = flow.flow = None
                     flow.state = "connected"
@@ -696,7 +694,7 @@ class SubscriptionFlows:
             admissions.complete_command(owner_id, key, self._durable(result))
             validate()
             return result
-        if operation in {"start", "disconnect", "restore", "import_token"} and flow is None:
+        if operation in {"start", "disconnect", "restore"} and flow is None:
             with self._lock:
                 # Repeat reservations after the durable admission wait.
                 if any(item.provider_id == provider_id and (item.active or item.listening or (not item.cancel.is_set() and item.state not in {"connected", "expired", "uncertain"})) for item in self._flows.values()):
@@ -772,12 +770,6 @@ class SubscriptionFlows:
         guard()
         if operation == "disconnect":
             getattr(module, f"disconnect_{provider_id}_metadata")(expected_revision=revision, validate=guard, command_proof=proof)
-        elif operation == "import_token" and provider_id == "claude_subscription":
-            metadata = module.claude_subscription_token_metadata(value)
-            tokens = module.ClaudeSubscriptionTokenSet(access_token=value,
-                expires_at=str(metadata.get("expires_at") or ""), user_id=str(metadata.get("user_id") or ""),
-                account_id=str(metadata.get("account_id") or ""), plan_type=str(metadata.get("plan_type") or ""), scopes=tuple(metadata.get("scopes") or ()))
-            module.save_claude_subscription_oauth_tokens(tokens, expected_revision=revision, validate=guard, command_proof=proof)
         elif operation == "restore":
             from row_bot.providers.config import provider_config_transaction
             with provider_config_transaction():
@@ -794,8 +786,7 @@ class SubscriptionFlows:
                     expected_revision=revision, validate=guard, command_proof=proof)
         else:
             raise SubscriptionError("invalid_command")
-        from row_bot.application.provider_settings_commands import invalidate_provider_runtime
-        invalidate_provider_runtime()
+        _connection_changed(provider_id, connected=operation == "restore")
 
 
 def read_receipt(*, provider_id: str, owner_id: str, command_id: str, validate: Callable[[], None]) -> dict | None:

@@ -9,14 +9,14 @@ from uuid import uuid4
 import pytest
 
 from row_bot.application import subscription_controls, subscription_options as controls
-from row_bot.providers import auth_store, codex, claude_subscription, config, xai_oauth
+from row_bot.providers import auth_store, codex, config, xai_oauth
 from row_bot.runtime import admissions
 from tests.subsystem.providers.test_provider_settings_controls import store as store
 
 pytestmark = pytest.mark.subsystem
 
 
-@pytest.fixture(params=["codex", "claude_subscription"])
+@pytest.fixture(params=["codex"])
 def reference(request, tmp_path, store, monkeypatch):
     provider = request.param
     folder = tmp_path / "synthetic-cli"
@@ -25,10 +25,6 @@ def reference(request, tmp_path, store, monkeypatch):
     legacy = folder / "legacy.json"
     primary.write_text(json.dumps({"access_token": "private-synthetic-cli-token"}), encoding="utf-8")
     monkeypatch.setattr(codex, "codex_auth_path", lambda: primary)
-    monkeypatch.setattr(claude_subscription, "claude_credentials_path", lambda: primary)
-    monkeypatch.setattr(claude_subscription, "claude_legacy_credentials_path", lambda: legacy)
-    monkeypatch.setattr(claude_subscription, "claude_cli_info", lambda *_a: pytest.fail("No CLI process discovery"))
-    monkeypatch.setattr(claude_subscription, "claude_auth_status", lambda *_a: pytest.fail("No CLI status process"))
     monkeypatch.setattr(codex, "codex_cli_info", lambda *_a: pytest.fail("No CLI lookup"))
     monkeypatch.setattr("row_bot.application.provider_settings_commands.invalidate_provider_runtime", lambda: None)
     return provider, primary, legacy
@@ -63,8 +59,8 @@ def test_passive_options_does_not_read_cli_files_or_secrets(reference, store, mo
 
 def test_reference_is_metadata_only_and_keeps_external_bytes_and_recovery(reference, store):
     provider, path, _ = reference
-    save = codex.save_codex_oauth_tokens if provider == "codex" else claude_subscription.save_claude_subscription_oauth_tokens
-    token = codex.CodexTokenSet if provider == "codex" else claude_subscription.ClaudeSubscriptionTokenSet
+    save = codex.save_codex_oauth_tokens
+    token = codex.CodexTokenSet
     save(token(access_token="old-synthetic-owned-token", account_id="synthetic-account"))
     old = dict(store.values)
     before = path.read_bytes()
@@ -74,7 +70,7 @@ def test_reference_is_metadata_only_and_keeps_external_bytes_and_recovery(refere
     assert result["options"]["references"][0 if provider == "codex" else 1]["metadata_saved"]
     entry = config.load_provider_config()["providers"][provider]
     assert entry["oauth_bundle_previous"]["metadata"]["source"] != "external_cli"
-    runtime = codex.codex_runtime_credentials if provider == "codex" else claude_subscription.claude_subscription_runtime_credentials
+    runtime = codex.codex_runtime_credentials
     assert not runtime(refresh_if_needed=False).access_token
     owner = subscription_controls.SubscriptionFlows()
     cmd = {"command_id": str(uuid4()), "type": "provider.subscription.restore", "expected_revision": "0",
@@ -91,10 +87,10 @@ def test_reference_is_metadata_only_and_keeps_external_bytes_and_recovery(refere
 
 def test_reference_retains_cleared_tombstone_and_original_recovery(reference, store):
     provider, _, _ = reference
-    save = codex.save_codex_oauth_tokens if provider == "codex" else claude_subscription.save_claude_subscription_oauth_tokens
-    token = codex.CodexTokenSet if provider == "codex" else claude_subscription.ClaudeSubscriptionTokenSet
+    save = codex.save_codex_oauth_tokens
+    token = codex.CodexTokenSet
     save(token(access_token="old-synthetic-owned-token", account_id="synthetic-account"))
-    disconnect = codex.disconnect_codex_metadata if provider == "codex" else claude_subscription.disconnect_claude_subscription_metadata
+    disconnect = codex.disconnect_codex_metadata
     disconnect()
     old = config.load_provider_config()["providers"][provider]["oauth_bundle_previous"]
     execute(*command(provider, "reference", None))
@@ -103,7 +99,7 @@ def test_reference_retains_cleared_tombstone_and_original_recovery(reference, st
     snapshot = next(item for item in subscription_controls.read_accounts().accounts if item.provider_id == provider)
     assert snapshot.saved_state == "metadata_only"
     assert not auth_store.get_provider_secret(provider, "access_token")
-    runtime = codex.codex_runtime_credentials if provider == "codex" else claude_subscription.claude_subscription_runtime_credentials
+    runtime = codex.codex_runtime_credentials
     assert not runtime(refresh_if_needed=False).access_token
 
 
@@ -134,7 +130,7 @@ def test_reference_rechecked_at_canonical_publication(reference, monkeypatch):
     provider, path, _ = reference
     cmd, review = command(provider, "reference", None)
     before = config.CONFIG_PATH.read_bytes()
-    module = codex if provider == "codex" else claude_subscription
+    module = codex
     original = module.save_external_reference
     def mutate(**kwargs):
         path.write_text('{"different":"synthetic"}', encoding="utf-8")
@@ -248,7 +244,7 @@ def test_cold_options_read_creates_nothing(tmp_path):
 from pathlib import Path
 import os,sys
 from row_bot.application.subscription_options import read_options
-assert len(read_options().references) == 2
+assert len(read_options().references) == 1
 assert 'row_bot.api_keys' not in sys.modules
 assert not Path(os.environ['ROW_BOT_DATA_DIR']).exists()
 """

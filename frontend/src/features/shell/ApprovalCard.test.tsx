@@ -14,8 +14,36 @@ const approval = vi.fn();
 const intent = vi.fn();
 const pendingApprovals = vi.fn();
 const open = vi.fn();
+const browserLive = vi.fn(async function* (
+  _conversation: string,
+  _view: string,
+  _size: unknown,
+  signal: AbortSignal,
+) {
+  yield {
+    state: {
+      schema_version: 1,
+      conversation_id: 'conversation-a',
+      status: 'running',
+      control: 'agent',
+      acting: '',
+      waiting: 'Waiting for your OK in the chat',
+      url: 'https://homecover.example/claim/5',
+      title: 'Pay your excess',
+      site: 'homecover.example',
+      loading: false,
+      sign_in: '',
+      recording: false,
+      tabs: [],
+      revision: 1,
+    },
+  };
+  await new Promise((resolve) => signal.addEventListener('abort', resolve));
+});
 vi.mock('../../runtime', () => ({
-  useRuntime: () => ({ controller: { approval, intent, pendingApprovals } }),
+  useRuntime: () => ({
+    controller: { approval, intent, pendingApprovals, browserLive },
+  }),
 }));
 vi.mock('../../ui/overlays', () => ({
   useOverlay: () => ({ open, notify: vi.fn(), close: vi.fn() }),
@@ -70,6 +98,45 @@ it('ignores Ctrl+Enter typed in a text field (B134)', async () => {
   editable.remove();
 });
 
+it('shows the Ctrl ↵ hint only with a keyboard and a wide layout, never on a phone (B389)', async () => {
+  const media = vi.mocked(window.matchMedia);
+  // A phone: a coarse pointer, a narrow layout. The setup's default matches nothing.
+  const { unmount } = render(<ApprovalCard id="approval-a" />);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled(),
+  );
+  expect(screen.getByRole('button', { name: 'Approve' })).toHaveTextContent(
+    /^Approve$/,
+  );
+  unmount();
+  // A desktop with a mouse and keyboard.
+  media.mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === '(pointer: fine) and (min-width: 641px)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+  try {
+    await renderCard();
+    expect(
+      screen.getByRole('button', { name: 'Approve' }).textContent,
+    ).not.toBe('Approve');
+  } finally {
+    media.mockImplementation(
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        }) as unknown as MediaQueryList,
+    );
+  }
+});
+
 it('approves with Ctrl+Enter when no text field has focus', async () => {
   await renderCard();
   // The shortcut listens once the approval's details have loaded, which can
@@ -98,7 +165,8 @@ it('explains the action in plain words, without request ids or unrated risk', as
   );
   expect(details.title).toBe('Delete a file?');
   render(details.content);
-  expect(screen.getByText('Only this action.')).toBeVisible();
+  expect(screen.getByText('This approval covers')).toBeVisible();
+  expect(screen.getByText('This action only.')).toBeVisible();
   expect(screen.getByText('Delete a file')).toBeVisible();
   expect(screen.getByText('File path: notes.txt')).toBeVisible();
   expect(document.body).not.toHaveTextContent(/workspace_file_delete|\{"/);
@@ -106,6 +174,31 @@ it('explains the action in plain words, without request ids or unrated risk', as
     null,
   );
   expect(screen.queryByText(/No server expiry/)).toBeNull();
+});
+
+it('names the folder a command runs in and what one approval covers (U7)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'run_command',
+    reason: 'Run shell command: npm test',
+    safe_argument_summary: '',
+    folder: 'row-bot',
+  });
+  await renderCard();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  const facts = Object.fromEntries(
+    [...document.querySelectorAll('.approval-detail dt')].map((term) => [
+      term.textContent,
+      term.nextElementSibling?.textContent,
+    ]),
+  );
+  expect(facts).toMatchObject({
+    Action: 'Run a command',
+    'Runs in': 'row-bot',
+    'This approval covers': 'This command only.',
+  });
+  expect(screen.queryByText('Affects')).toBeNull();
 });
 
 it('lists structured arguments in words, never as code', async () => {
@@ -150,7 +243,7 @@ it('asks to turn on a tool the work needs as a setup card (decision 12)', async 
   expect(card).toHaveTextContent('Row-Bot needs Web Search for this.');
   await screen.findByRole('button', { name: 'Turn on' });
   expect(
-    screen.queryByRole('button', { name: 'Always allow in this chat' }),
+    screen.queryByRole('button', { name: 'Use Auto in this chat' }),
   ).toBeNull();
   expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
   await act(async () => {
@@ -223,7 +316,9 @@ it('reads an app tool’s call as labelled fields with their own line breaks, ne
   const card = screen.getByRole('complementary', {
     name: 'Approval required for Save issue in Linear',
   });
-  expect(within(card).getByText('Allow Linear to save issue?')).toBeVisible();
+  expect(
+    within(card).getByText('Allow Linear to save an issue?'),
+  ).toBeVisible();
   // Real line breaks, as the server wrote them: nothing re-read, escaped or repeated.
   expect(
     within(card).getByText(/^Title: Daily summary crashes/).textContent,
@@ -232,7 +327,7 @@ it('reads an app tool’s call as labelled fields with their own line breaks, ne
   expect(card).not.toHaveTextContent(/mcp_|\\n/);
   fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
   const details = open.mock.calls[0][0];
-  expect(details.title).toBe('Allow Linear to save issue?');
+  expect(details.title).toBe('Allow Linear to save an issue?');
   render(details.content);
   expect(screen.getByText('Linear · Save issue')).toBeVisible();
   expect(
@@ -240,6 +335,34 @@ it('reads an app tool’s call as labelled fields with their own line breaks, ne
       .getAllByText(/^Title: Daily summary crashes/)
       .map((node) => node.textContent),
   ).toEqual([reason, reason]);
+});
+
+it('titles an app tool Row-Bot never named with the app and the action, keeping its raw name under Details (B388)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'mcp_stripe_create_product',
+    reason: 'Create a product.',
+    safe_argument_summary: '{"name": "Gift card"}',
+    // Named by the server from the one connection the name can come from.
+    app: {
+      item_id: 'mcp:stripe',
+      name: 'Stripe',
+      icon: 'letter:S',
+      tool: 'Create product',
+    },
+  });
+  await renderCard();
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required for Create product in Stripe',
+  });
+  expect(
+    within(card).getByText('Allow Stripe to create a product?'),
+  ).toBeVisible();
+  expect(card).not.toHaveTextContent(/mcp_|MCP/);
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  expect(screen.getByText('Stripe · Create product')).toBeVisible();
+  expect(screen.getByText('mcp_stripe_create_product')).toBeVisible();
 });
 
 it('re-reads the waiting approvals at once after an answer (B302)', async () => {
@@ -281,4 +404,245 @@ it('offers approving the rest of the reply only for a repeatable action (F21)', 
       '3',
     ),
   );
+});
+
+it('says quietly why the Auto reviewer asked, on the card and in its details (A0)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    reviewer_reason: 'You asked to tidy the folder, not to delete files.',
+  });
+  await renderCard();
+  expect(
+    screen.getByText(
+      'The reviewer asked you: You asked to tidy the folder, not to delete files.',
+    ),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  expect(
+    screen.getByText(
+      'Asked you: You asked to tidy the folder, not to delete files.',
+    ),
+  ).toBeVisible();
+});
+
+it('offers reviewed Auto for this chat under Ask, and approves', async () => {
+  const onAllowInChat = vi.fn(async () => undefined);
+  render(<ApprovalCard id="approval-a" onAllowInChat={onAllowInChat} />);
+  const auto = await screen.findByRole('button', {
+    name: 'Use Auto in this chat',
+  });
+  await waitFor(() => expect(auto).toBeEnabled());
+  expect(screen.queryByText(/The reviewer asked you/)).toBeNull();
+  await act(async () => fireEvent.click(auto));
+  expect(onAllowInChat).toHaveBeenCalledOnce();
+  expect(intent).toHaveBeenCalledWith(
+    'approval-a',
+    'approval.resolve',
+    { decision: 'approve', nonce: 'nonce-a' },
+    '3',
+  );
+});
+
+it('asks the tool’s own question for a local address in one chat (F4)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'Browser Navigate',
+    question: "Allow Row-Bot's browser to open localhost:5173 in this chat?",
+    reason:
+      'localhost:5173 is on this computer. Allowing it lets Row-Bot’s browser open only this address, only in this chat, for up to an hour. You can remove it sooner in the browser panel.',
+    safe_argument_summary: '{"address": "localhost:5173"}',
+  });
+  await renderCard();
+
+  const card = screen.getByRole('complementary', {
+    name: "Approval required: Allow Row-Bot's browser to open localhost:5173 in this chat?",
+  });
+  expect(
+    within(card).getByText(
+      "Allow Row-Bot's browser to open localhost:5173 in this chat?",
+    ),
+  ).toBeVisible();
+  expect(card).toHaveTextContent('only this address, only in this chat');
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  expect(open.mock.calls[0][0].title).toBe(
+    "Allow Row-Bot's browser to open localhost:5173 in this chat?",
+  );
+});
+
+it('asks to download ffmpeg in plain words: how big, from where, and its licence (F3)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'edit_video',
+    question:
+      'Video editing needs ffmpeg (about 30 MB) from PyPI. Download it now?',
+    reason:
+      "Row-Bot will download imageio-ffmpeg 0.6.0 for Windows (30 MB) from PyPI (files.pythonhosted.org), check it against the fingerprint saved in Row-Bot, and keep only its ffmpeg program in Row-Bot's data folder. ffmpeg is free software (GPL version 3 or later); Row-Bot runs it as a separate program. This happens once.",
+    risk_class: 'medium',
+    safe_argument_summary:
+      '{"download": "imageio-ffmpeg 0.6.0 (Windows, 30 MB)", "from": "files.pythonhosted.org", "licence": "ffmpeg 7.1, GPL version 3 or later"}',
+  });
+  await renderCard();
+
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required: Video editing needs ffmpeg (about 30 MB) from PyPI. Download it now?',
+  });
+  expect(card).toHaveTextContent('keep only its ffmpeg program');
+  fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+  render(open.mock.calls[0][0].content);
+  expect(screen.getByText('From: files.pythonhosted.org')).toBeVisible();
+  expect(
+    screen.getByText('Licence: ffmpeg 7.1, GPL version 3 or later'),
+  ).toBeVisible();
+  expect(document.body).not.toHaveTextContent(/edit_video|\{"/);
+});
+
+it('asks to post on X as the named account with the full text, the reply link and each file (N7)', async () => {
+  const text = `Row-Bot 5.3 is out. ${'Every post names its account. '.repeat(50)}`;
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'x_post',
+    reason: 'Reply as @rowbot_ai to https://x.com/i/status/42.',
+    question: 'Reply on X as @rowbot_ai?',
+    reviewer_reason: 'Only you can approve what goes out on X in your name.',
+    x_post: {
+      account_id: '111',
+      username: 'rowbot_ai',
+      name: 'Row-Bot',
+      action: 'reply',
+      text,
+      target_id: '42',
+      target_url: 'https://x.com/i/status/42',
+      target_text: '',
+      media: [
+        {
+          name: 'launch.png',
+          size: 204800,
+          sha256: '0123456789ab',
+          kind: 'image',
+          thumbnail: 'data:image/jpeg;base64,AAAA',
+        },
+        {
+          name: 'demo.mp4',
+          size: 3145728,
+          sha256: 'ba9876543210',
+          kind: 'video',
+          thumbnail: '',
+        },
+      ],
+    },
+  });
+  await renderCard();
+  const card = screen.getByRole('complementary', {
+    name: 'Approval required: Reply on X as @rowbot_ai?',
+  });
+  expect(within(card).getByText('Reply on X as @rowbot_ai?')).toBeVisible();
+  expect(within(card).getByText('@rowbot_ai')).toBeVisible();
+  expect(within(card).getByText('Row-Bot')).toBeVisible();
+  expect(within(card).getByText('ID 111')).toBeVisible();
+  // The whole text, never cut.
+  expect(
+    within(card).getByText(text.trim(), {
+      normalizer: (value) => value.trim(),
+    }),
+  ).toBeVisible();
+  expect(
+    within(card).getByRole('link', { name: 'x.com/i/status/42' }),
+  ).toHaveAttribute('href', 'https://x.com/i/status/42');
+  const files = within(card).getByRole('list', { name: '2 attached files' });
+  expect(
+    within(files).getByRole('img', { name: 'Preview of launch.png' }),
+  ).toBeVisible();
+  expect(within(files).getByText('launch.png')).toBeVisible();
+  expect(within(files).getByText('0123456789ab')).toBeVisible();
+  expect(within(files).getByText('ba9876543210')).toBeVisible();
+  expect(
+    within(card).getByText(/The reviewer asked you: Only you can approve/),
+  ).toBeVisible();
+  // The reason's sentence isn't repeated beside the card's own facts.
+  expect(within(card).queryByText(/^Reply as @rowbot_ai to/)).toBeNull();
+});
+
+it('an approval for a browser action shows the page and opens the Browser pane (N12-A)', async () => {
+  const { onBrowserPaneRequest } = await import('../browser/open-pane');
+  const opened: string[] = [];
+  const stop = onBrowserPaneRequest((conversation) =>
+    opened.push(conversation),
+  );
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'Browser Click',
+    question: 'Pay on homecover.example?',
+    reason:
+      'Row-Bot will click "Confirm and pay £60" on homecover.example. This can charge you.',
+    risk_class: 'high',
+  });
+  render(<ApprovalCard id="approval-a" conversationId="conversation-a" />);
+  const card = await screen.findByRole('complementary', {
+    name: 'Approval required: Pay on homecover.example?',
+  });
+  const picture = await within(card).findByRole('button', {
+    name: 'Open the browser: homecover.example',
+  });
+  fireEvent.click(picture);
+  expect(opened).toEqual(['conversation-a']);
+  stop();
+});
+
+it('asks to save to memory from an incognito chat with the exact text, Save or Don’t save (N11)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'Save Memory',
+    question: 'Save to memory? This chat is incognito.',
+    reason: 'Coffee: I take it black, no sugar.',
+    memory_text: 'Coffee: I take it black, no sugar.',
+  });
+  const onAllowInChat = vi.fn(async () => undefined);
+  render(<ApprovalCard id="approval-a" onAllowInChat={onAllowInChat} />);
+
+  const card = await screen.findByRole('complementary', {
+    name: 'Approval required: Save to memory? This chat is incognito.',
+  });
+  const save = within(card).getByRole('button', { name: /^Save/ });
+  await waitFor(() => expect(save).toBeEnabled());
+  expect(card).toHaveTextContent('Coffee: I take it black, no sugar.');
+  // Only the person answers it: no Auto for this chat, nothing for the rest of the reply.
+  expect(
+    within(card).queryByRole('button', { name: 'Use Auto in this chat' }),
+  ).toBeNull();
+  expect(
+    within(card).queryByRole('button', { name: 'Approve the rest' }),
+  ).toBeNull();
+
+  await act(async () => fireEvent.click(save));
+  expect(intent).toHaveBeenCalledWith(
+    'approval-a',
+    'approval.resolve',
+    { decision: 'approve', nonce: 'nonce-a' },
+    '3',
+  );
+  expect(within(card).getByRole('status')).toHaveTextContent(
+    'Saving to memory…',
+  );
+});
+
+it('keeps an incognito chat’s memory unsaved with Don’t save (N11)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    question: 'Save to memory? This chat is incognito.',
+    memory_text: 'Coffee: I take it black, no sugar.',
+  });
+  render(<ApprovalCard id="approval-a" />);
+  const dont = await screen.findByRole('button', { name: 'Don’t save' });
+  await waitFor(() => expect(dont).toBeEnabled());
+
+  await act(async () => fireEvent.click(dont));
+
+  expect(intent).toHaveBeenCalledWith(
+    'approval-a',
+    'approval.resolve',
+    { decision: 'reject', nonce: 'nonce-a' },
+    '3',
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Not saved to memory.');
 });

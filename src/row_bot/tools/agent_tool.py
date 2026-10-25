@@ -12,6 +12,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, model_validator
 
 from row_bot import agent_runner
+from row_bot.approval_policy import stricter_approval_mode
 from row_bot.agent_profiles import (
     duplicate_agent_profile,
     list_agent_profiles,
@@ -330,6 +331,13 @@ class _DelegateWorkInput(BaseModel):
             "Leave empty to inherit the parent model."
         ),
     )
+    reasoning: str = Field(
+        default="",
+        description=(
+            "Optional reasoning level in /reasoning words (e.g. low, high, off, 'budget 4000'). "
+            "Empty keeps the conversation's level."
+        ),
+    )
     developer_workspace_id: str = Field(
         default="",
         description="Optional Developer workspace id to use. Omit to inherit the current thread workspace.",
@@ -428,7 +436,8 @@ class _AgentProfileSaveInput(BaseModel):
     skills: list[str] = Field(default=[], description="Manual skills pinned/injected when this profile is used.")
     context_mode: ContextMode = Field(default="focused", description="Default context mode.")
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"] = "read_only"
-    approval_mode: Literal["inherit", "block", "approve", "allow_all"] = "inherit"
+    # Never Hands-off: only the person turns that on, in the app.
+    approval_mode: Literal["inherit", "block", "approve", "auto"] = "inherit"
 
 
 class _AgentMessageInput(BaseModel):
@@ -453,6 +462,7 @@ def _delegate_work(
     context_mode: str = "auto",
     display_name: str = "",
     model: str = "",
+    reasoning: str = "",
     parent_thread_id: str = "",
     developer_workspace_id: str = "",
     developer_workspace_path: str = "",
@@ -599,6 +609,7 @@ def _delegate_work(
             context_mode=context_mode,
             enabled_tool_names=enabled_tool_names,
             model_override=effective_child_model,
+            reasoning=str(reasoning or "").strip(),
             approval_mode=str(runtime.get("approval_mode") or ""),
             developer_workspace_id=developer_workspace_id,
             use_worktree=use_worktree,
@@ -623,6 +634,9 @@ def _delegate_work(
             message = "Child Agent is still running after the wait timeout."
     else:
         message = "Child Agent started."
+    thinking = agent_runner.thinking_line(agent_runner.helper_thinking(str((run or {}).get("id") or "")))
+    if thinking:
+        message += f" It runs on {thinking}."
     return _json_response({
         "ok": True,
         "run": _public_run(run),
@@ -974,7 +988,8 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
             icon="hub",
             steps=steps,
             model_override=str(run.get("model_override") or "") or None,
-            safety_mode=str(run.get("approval_mode") or "block"),
+            # A promoted workflow runs on Auto at most: Hands-off is the person's choice.
+            safety_mode=stricter_approval_mode(run.get("approval_mode") or "block", "auto"),
             agent_profile_id=profile_ref or None,
             enabled=False,
             apply_default_skills=False,
@@ -1026,7 +1041,8 @@ class AgentsTool(BaseTool):
                 name="delegate_work",
                 description=(
                     "Start a child Agent for focused async background work. With wait=false, "
-                    "continue useful independent work, then group-join required work before finalizing."
+                    "continue useful independent work, then group-join required work before finalizing. "
+                    "Use it on your own for research or work on several separate items, one child each."
                 ),
                 args_schema=_DelegateWorkInput,
             ),

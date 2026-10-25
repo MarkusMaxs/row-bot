@@ -12,6 +12,9 @@ import TaskSettingsEditor, {
   type TaskSettingsEditorProps,
 } from './TaskSettingsEditor';
 import { TaskEditSession } from './task-edit-sessions';
+import type { ClientController } from '../../api/controller';
+import type { ClientPlatform } from '../../platform';
+import { RuntimeContext } from '../../runtime';
 
 afterEach(cleanup);
 
@@ -193,6 +196,7 @@ it('loads settings without effects and validates changed fields while saving', a
     'a'.repeat(64),
     'b'.repeat(64),
     { ...fields, concurrency_group: 'synthetic-group' },
+    false,
   );
   expect(callbacks.onSaved).toHaveBeenCalledOnce();
 });
@@ -202,7 +206,7 @@ it('uses canonical reviewed profile and shows stricter effective policy', async 
     fields: {
       ...fields,
       agent_profile_id: 'builtin:review',
-      approval_mode: 'allow_all',
+      approval_mode: 'auto',
     },
     effective_approval_mode: 'block',
   });
@@ -216,7 +220,7 @@ it('uses canonical reviewed profile and shows stricter effective policy', async 
     target: { value: 'review' },
   });
   fireEvent.change(screen.getByLabelText('Approval policy'), {
-    target: { value: 'allow_all' },
+    target: { value: 'auto' },
   });
   await act(async () =>
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' })),
@@ -225,7 +229,9 @@ it('uses canonical reviewed profile and shows stricter effective policy', async 
   expect(
     screen.getByText(/^Approvals: Block\. This workflow can only read/),
   ).toBeVisible();
-  expect(screen.getByText(/Auto permits actions/)).toBeInTheDocument();
+  expect(
+    screen.getByText(/A reviewer approves what matches the workflow's steps/),
+  ).toBeInTheDocument();
 });
 
 it('clears inactive trigger target when changing trigger kind without creating a secret', async () => {
@@ -576,4 +582,170 @@ it('offers rotation but not download for a saved webhook without a secret', asyn
   expect(download).toBeEnabled();
   expect(callbacks.download).not.toHaveBeenCalled();
   expect(callbacks.save).not.toHaveBeenCalled();
+});
+
+it('asks once before a workflow runs on Hands-off, and saves the confirmation (A0)', async () => {
+  const { OverlayProvider } = await import('../../ui/overlays');
+  const callbacks = props();
+  render(
+    <OverlayProvider>
+      <TaskSettingsEditor {...callbacks} />
+    </OverlayProvider>,
+  );
+  await findProfileField();
+  fireEvent.change(screen.getByLabelText('Approval policy'), {
+    target: { value: 'full' },
+  });
+  const dialog = await screen.findByRole('alertdialog', {
+    name: 'Turn on Hands-off?',
+  });
+  expect(screen.getByLabelText('Approval policy')).toHaveValue('block');
+  await act(async () =>
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn on' })),
+  );
+  expect(screen.getByLabelText('Approval policy')).toHaveValue('full');
+  expect(
+    screen.getByText(/Nothing pauses for approval; every action runs/),
+  ).toBeVisible();
+  await act(async () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' })),
+  );
+  expect(callbacks.save).toHaveBeenCalledWith(
+    'task-a',
+    'a'.repeat(64),
+    'b'.repeat(64),
+    { ...fields, approval_mode: 'full' },
+    true,
+  );
+});
+
+it('never asks again once Hands-off was turned on on this install', async () => {
+  const callbacks = props({
+    load: vi
+      .fn()
+      .mockResolvedValue(snapshot({ full_autonomy_confirmed: true })),
+  });
+  render(<TaskSettingsEditor {...callbacks} />);
+  await findProfileField();
+  fireEvent.change(screen.getByLabelText('Approval policy'), {
+    target: { value: 'full' },
+  });
+  expect(screen.queryByRole('alertdialog')).toBeNull();
+  expect(screen.getByLabelText('Approval policy')).toHaveValue('full');
+});
+
+const folders = [
+  { id: 'dev_landing', name: 'row-bot-landing' },
+  { id: 'dev_docs', name: 'docs-site' },
+];
+const apps = [
+  { id: 'builtin:account:x', name: 'X', icon: 'X' },
+  { id: 'mcp:notion', name: 'Notion', icon: 'N' },
+];
+/** App icons read through the runtime's controller. */
+function withRuntime(ui: React.ReactNode) {
+  const controller = {
+    integrationIcons: vi.fn(async () => ({ schema_version: 1, items: [] })),
+  } as unknown as ClientController;
+  return (
+    <RuntimeContext.Provider
+      value={{ controller, platform: {} as ClientPlatform }}
+    >
+      {ui}
+    </RuntimeContext.Provider>
+  );
+}
+
+it('saves the workflow code folder, its missed-run rule and the apps that always ask (N9)', async () => {
+  const callbacks = props({
+    loadFolders: vi.fn().mockResolvedValue(folders),
+    loadApps: vi.fn().mockResolvedValue(apps),
+  });
+  render(withRuntime(<TaskSettingsEditor {...callbacks} />));
+  const folder = await screen.findByRole('combobox', { name: 'Code folder' });
+  await screen.findByRole('option', { name: 'row-bot-landing' });
+  expect(folder).toHaveValue('');
+  expect(
+    screen.getByRole('option', { name: "None: the conversation's folder" }),
+  ).toBeInTheDocument();
+  fireEvent.change(folder, { target: { value: 'dev_landing' } });
+  const missed = screen.getByRole('combobox', {
+    name: 'If Row-Bot is closed at a scheduled time',
+  });
+  expect(missed).toHaveValue('skip');
+  fireEvent.change(missed, { target: { value: 'run_once' } });
+  expect(
+    screen.getByText(
+      'Only the latest missed time runs, once, and says it ran late.',
+    ),
+  ).toBeInTheDocument();
+  const always = screen.getByRole('group', { name: 'Always ask me' });
+  fireEvent.click(
+    within(always).getByRole('switch', {
+      name: 'Always ask me before X acts',
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(callbacks.review).toHaveBeenCalledWith(
+    'task-a',
+    expect.objectContaining({
+      workspace_id: 'dev_landing',
+      missed_runs: 'run_once',
+      always_ask: ['builtin:account:x'],
+    }),
+    expect.anything(),
+  );
+});
+
+it('says in plain words when the saved folder is no longer a code folder (N9)', async () => {
+  render(
+    <TaskSettingsEditor
+      {...props({
+        load: vi.fn().mockResolvedValue(
+          snapshot({
+            fields: { ...fields, workspace_id: 'dev_gone' },
+            workspace_name: 'row-bot-landing',
+            workspace_available: false,
+          }),
+        ),
+        loadFolders: vi.fn().mockResolvedValue(folders.slice(1)),
+      })}
+    />,
+  );
+  const folder = await screen.findByRole('combobox', { name: 'Code folder' });
+  expect(folder).toHaveValue('dev_gone');
+  expect(
+    screen.getByRole('option', { name: 'row-bot-landing (removed)' }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "row-bot-landing isn't a code folder any more. Choose another, or None.",
+    ),
+  ).toBeInTheDocument();
+});
+
+it('opened to choose a folder, it focuses the Code folder (N9)', async () => {
+  render(
+    withRuntime(
+      <TaskSettingsEditor
+        {...props({
+          focus: 'workspace_id',
+          load: vi.fn().mockResolvedValue(
+            snapshot({
+              fields: { ...fields, workspace_id: 'dev_gone' },
+              workspace_name: 'row-bot-landing',
+              workspace_available: false,
+            }),
+          ),
+          loadFolders: vi.fn().mockResolvedValue(folders),
+        })}
+      />,
+    ),
+  );
+  const folder = await screen.findByRole('combobox', { name: 'Code folder' });
+  await vi.waitFor(() => expect(folder).toHaveFocus());
 });

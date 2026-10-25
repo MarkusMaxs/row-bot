@@ -542,6 +542,26 @@
       "title": "ContextUsageView",
       "type": "object"
     },
+    "ConversationApprovalView": {
+      "additionalProperties": false,
+      "description": "What the chat's approval control needs to offer Hands-off.",
+      "properties": {
+        "full_autonomy_available": {
+          "title": "Full Autonomy Available",
+          "type": "boolean"
+        },
+        "full_autonomy_confirmed": {
+          "title": "Full Autonomy Confirmed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "full_autonomy_confirmed",
+        "full_autonomy_available"
+      ],
+      "title": "ConversationApprovalView",
+      "type": "object"
+    },
     "ConversationComposer": {
       "additionalProperties": false,
       "properties": {
@@ -642,7 +662,8 @@
           "enum": [
             "block",
             "approve",
-            "allow_all"
+            "auto",
+            "full"
           ],
           "title": "Approval Mode",
           "type": "string"
@@ -857,6 +878,11 @@
           "title": "Id",
           "type": "string"
         },
+        "incognito": {
+          "default": false,
+          "title": "Incognito",
+          "type": "boolean"
+        },
         "parent_conversation_id": {
           "anyOf": [
             {
@@ -920,6 +946,17 @@
           "maxItems": 6,
           "title": "Actions",
           "type": "array"
+        },
+        "approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationApprovalView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "composer": {
           "anyOf": [
@@ -1830,6 +1867,30 @@
       "title": "TraceMediaReference",
       "type": "object"
     },
+    "TraceQuestionAnswer": {
+      "additionalProperties": false,
+      "description": "One answered question, as its collapsed card says it (\"Beta timing: Beta.1 now\").",
+      "properties": {
+        "answer": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Answer",
+          "type": "string"
+        },
+        "header": {
+          "maxLength": 12,
+          "minLength": 1,
+          "title": "Header",
+          "type": "string"
+        }
+      },
+      "required": [
+        "header",
+        "answer"
+      ],
+      "title": "TraceQuestionAnswer",
+      "type": "object"
+    },
     "TraceSpecialization": {
       "additionalProperties": false,
       "properties": {
@@ -1839,6 +1900,14 @@
           },
           "maxItems": 16,
           "title": "Agent Runs",
+          "type": "array"
+        },
+        "answers": {
+          "items": {
+            "$ref": "#/$defs/TraceQuestionAnswer"
+          },
+          "maxItems": 4,
+          "title": "Answers",
           "type": "array"
         },
         "apps": {
@@ -1855,10 +1924,24 @@
           "title": "Binding Id",
           "type": "string"
         },
+        "delivery_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(send-[0-9a-f]{8})?$",
+          "title": "Delivery Id",
+          "type": "string"
+        },
         "display_name": {
           "default": "",
           "maxLength": 180,
           "title": "Display Name",
+          "type": "string"
+        },
+        "edit_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(edit-[0-9a-f]{8})?$",
+          "title": "Edit Id",
           "type": "string"
         },
         "error_code": {
@@ -1873,6 +1956,13 @@
           "title": "Evicted Skill Id",
           "type": "string"
         },
+        "job_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(prep-[0-9a-f]{8})?$",
+          "title": "Job Id",
+          "type": "string"
+        },
         "kind": {
           "enum": [
             "skill_load",
@@ -1881,7 +1971,16 @@
             "resource_created",
             "resource_bound",
             "setup_needed",
-            "connect_apps"
+            "connect_apps",
+            "background_process",
+            "recording",
+            "video_edit",
+            "delivery",
+            "sandbox_job",
+            "sandbox_unprepared",
+            "question_answered",
+            "page",
+            "request_corrected"
           ],
           "title": "Kind",
           "type": "string"
@@ -1911,6 +2010,38 @@
           ],
           "default": null,
           "title": "Newly Active"
+        },
+        "outcome": {
+          "default": "",
+          "enum": [
+            "",
+            "answered",
+            "skipped",
+            "timed_out"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "page_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(page-[0-9a-f]{8})?$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "process_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(proc-[0-9a-f]{8})?$",
+          "title": "Process Id",
+          "type": "string"
+        },
+        "recording_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(rec-[0-9a-f]{8})?$",
+          "title": "Recording Id",
+          "type": "string"
         },
         "resource_id": {
           "default": "",
@@ -2171,7 +2302,8 @@
               "enum": [
                 "continuation",
                 "agent_task",
-                "agent_guidance"
+                "agent_guidance",
+                "page"
               ],
               "type": "string"
             },

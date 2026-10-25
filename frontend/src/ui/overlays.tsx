@@ -1,6 +1,8 @@
 import {
   createContext,
+  useCallback,
   useContext,
+  useMemo,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -11,7 +13,8 @@ import {
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Toast from '@radix-ui/react-toast';
 import { PanelLeftClose, X } from 'lucide-react';
-import { Button, IconButton } from './primitives';
+import { Button, Hint, IconButton } from './primitives';
+import { DialogFooterContext, type FooterSlot } from './dialog-footer';
 
 type Overlay = {
   key?: string;
@@ -31,6 +34,8 @@ export type NoticeTone = 'warning' | 'danger';
 /** One action on a notice, e.g. Undo after an easy-to-regret removal. */
 export type NoticeAction = {
   label: string;
+  /** Its full name when the label is short ("Review" › "Review in Knowledge"): its tooltip and accessible name. */
+  title?: string;
   onAction: () => void;
   /**
    * Runs once when the notice ends without its action: it timed out, was
@@ -129,6 +134,18 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
   const [task, setTask] = useState<Task | null>(null);
   const [confirmation, setConfirmation] = useState<Task | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
+  // Content that put its own actions in the footer (useDialogFooter): they
+  // render into footerHost, and the footer's Close steps aside meanwhile.
+  const [footerHost, setFooterHost] = useState<HTMLElement | null>(null);
+  const [footerClaims, setFooterClaims] = useState(0);
+  const claimFooter = useCallback(() => {
+    setFooterClaims((count) => count + 1);
+    return () => setFooterClaims((count) => Math.max(0, count - 1));
+  }, []);
+  const footerSlot = useMemo<FooterSlot>(
+    () => ({ host: footerHost, claim: claimFooter }),
+    [footerHost, claimFooter],
+  );
   // The notices as last set, so an ending runs its callback exactly once.
   const live = useRef<Notice[]>([]);
   const nextNotice = useRef(1);
@@ -319,12 +336,16 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
                   hidden={Boolean(confirmation)}
                   inert={Boolean(confirmation)}
                 >
-                  {task?.content}
+                  <DialogFooterContext.Provider value={footerSlot}>
+                    {task?.content}
+                  </DialogFooterContext.Provider>
                 </div>
                 {confirmation && (
                   <div className="dialog-body">{confirmation.content}</div>
                 )}
-                {(confirmation || (task?.kind !== 'sheet' && !palette)) && (
+                {(confirmation ||
+                  (!palette &&
+                    (footerClaims > 0 || task?.kind !== 'sheet'))) && (
                   <footer className="dialog-footer">
                     {confirmation ? (
                       <>
@@ -342,7 +363,15 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
                         </Button>
                       </>
                     ) : (
-                      <Button onClick={() => close()}>Close</Button>
+                      <>
+                        {footerClaims === 0 && (
+                          <Button onClick={() => close()}>Close</Button>
+                        )}
+                        <div
+                          ref={setFooterHost}
+                          className="dialog-footer-slot"
+                        />
+                      </>
                     )}
                   </footer>
                 )}
@@ -387,20 +416,27 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
                 <Toast.Description className="toast-message">
                   {notice.message}
                 </Toast.Description>
-                {notice.action && (
-                  <Toast.Action altText={notice.action.label} asChild>
-                    <Button
-                      variant="ghost"
-                      className="small"
-                      onClick={() => {
-                        releaseFocus();
-                        finish(notice.id, true);
-                      }}
-                    >
-                      {notice.action.label}
-                    </Button>
-                  </Toast.Action>
-                )}
+                {notice.action &&
+                  (() => {
+                    const { label, title } = notice.action;
+                    // One line: the message wraps beside it, never the action.
+                    const action = (
+                      <Toast.Action altText={title ?? label} asChild>
+                        <Button
+                          variant="ghost"
+                          className="small toast-action"
+                          aria-label={title}
+                          onClick={() => {
+                            releaseFocus();
+                            finish(notice.id, true);
+                          }}
+                        >
+                          {label}
+                        </Button>
+                      </Toast.Action>
+                    );
+                    return title ? <Hint label={title}>{action}</Hint> : action;
+                  })()}
                 <Toast.Close asChild>
                   <Button
                     iconOnly

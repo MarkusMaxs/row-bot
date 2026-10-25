@@ -21,6 +21,7 @@ export default function Phase4RetainedSettings({
   pickFolder,
   writeClipboard,
   accessNetwork,
+  privacy,
 }: {
   setting: Phase4RetainedSetting;
   snapshot: SettingsSnapshot;
@@ -30,6 +31,8 @@ export default function Phase4RetainedSettings({
   writeClipboard?: ClientPlatform['writeClipboard'];
   /** Access › Advanced › Network: the live network controls. */
   accessNetwork?: ReactNode;
+  /** System › Privacy: install stats and what else Row-Bot contacts. */
+  privacy?: ReactNode;
 }) {
   if (setting === 'voice')
     return (
@@ -58,6 +61,7 @@ export default function Phase4RetainedSettings({
       writeClipboard={writeClipboard}
       part={setting === 'access' ? 'access' : 'system'}
       network={accessNetwork}
+      privacy={privacy}
     />
   );
 }

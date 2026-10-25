@@ -35,6 +35,30 @@
       "title": "Id",
       "type": "string"
     },
+    "kind": {
+      "default": "approval",
+      "enum": [
+        "approval",
+        "question"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "parent_conversation_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Conversation Id"
+    },
     "requested_at": {
       "maxLength": 80,
       "title": "Requested At",

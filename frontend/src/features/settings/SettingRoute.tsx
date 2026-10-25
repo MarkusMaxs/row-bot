@@ -65,6 +65,7 @@ import AccessConnect from './AccessConnect';
 import AccessDevices from './AccessDevices';
 import AccessNetwork from './AccessNetwork';
 import AccessTailscale from './AccessTailscale';
+import ConnectedPrivacy from './InstallCount';
 import { pickSettingsFolder } from './settings-folder';
 import {
   AccountsSnapshotPanel,
@@ -176,11 +177,29 @@ export default function SettingRoute() {
       queue.session
         .getSnapshot()
         .batches?.items.find((item) => item.id === batchId);
+    let done = false;
+    let again: number | undefined;
     let stop = () => {};
+    const finish = () => {
+      done = true;
+      window.clearTimeout(again);
+      stop();
+    };
     const open = () => {
+      if (done) return true;
       const batch = listed();
       if (!batch) return false;
-      stop();
+      // A batch still staging gets a new revision when it settles, so its
+      // review would be refused as "the documents list changed" (B421). The
+      // queue doesn't poll a staging batch, so read it again until it settles.
+      if (batch.status === 'staging') {
+        again ??= window.setTimeout(() => {
+          again = undefined;
+          if (!done) void queue.session.load().catch(() => undefined);
+        }, 1_000);
+        return false;
+      }
+      finish();
       processBatch(batch);
       showYourDocuments();
       return true;
@@ -188,7 +207,7 @@ export default function SettingRoute() {
     if (open()) return;
     stop = queue.session.subscribe(() => void open());
     void queue.session.load().catch(() => undefined);
-    window.setTimeout(() => stop(), 30_000);
+    window.setTimeout(finish, 30_000);
   };
   const showYourDocuments = () =>
     document
@@ -363,7 +382,7 @@ export default function SettingRoute() {
           snapshot={settingsSnapshot!.accounts}
           mutation={mutationFor('accounts')!}
           showActions
-          only={builtIn[2] as 'github' | 'google' | 'x'}
+          only={builtIn[2] as 'github' | 'google' | 'x' | 'microsoft'}
         />
       );
     if (builtIn?.[1] === 'tool')
@@ -522,8 +541,7 @@ export default function SettingRoute() {
                   <SubscriptionAccounts
                     compact
                     initialProvider={
-                      selectedSubscription.provider as
-                        'codex' | 'claude_subscription' | 'xai_oauth'
+                      selectedSubscription.provider as 'codex' | 'xai_oauth'
                     }
                     initialAction={selectedSubscription.action}
                     signInExpired={selectedSubscription.expired}
@@ -555,8 +573,7 @@ export default function SettingRoute() {
                   <SubscriptionOptions
                     compact
                     initialProvider={
-                      selectedSubscriptionOption as
-                        'codex' | 'claude_subscription' | 'xai_oauth'
+                      selectedSubscriptionOption as 'codex' | 'xai_oauth'
                     }
                     onClose={() => setSelectedSubscriptionOption('')}
                     session={subscriptionOptionsOwner.get()}
@@ -853,6 +870,9 @@ export default function SettingRoute() {
                   pickSettingsFolder(platform, controller, signal)
                 }
                 writeClipboard={platform.writeClipboard}
+                privacy={
+                  leaf.id === 'system' ? <ConnectedPrivacy /> : undefined
+                }
                 accessNetwork={
                   leaf.id === 'access' ? (
                     <>

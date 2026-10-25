@@ -1,52 +1,75 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { PendingApproval, PendingApprovalPage } from '../../api/types';
+import {
+  fallbackDue,
+  type LiveTopic,
+  type LiveUpdates,
+} from '../../api/live-updates';
+import { useLive } from '../../live';
 
-type Load = (signal?: AbortSignal) => Promise<PendingApprovalPage>;
+type Load<T> = (signal?: AbortSignal) => Promise<T>;
 
 const READ_EVERY_MS = 15_000;
 const ANNOUNCED_KEY = 'row-bot.approvals-announced.v1';
 
 /**
- * One shared read of every approval waiting for the person (B255). The
- * sidebar indicator, the collapsed rail and the new-approval notice follow the
- * same read, so showing several never multiplies requests. It reads every
- * 15 s while the window is visible, when the window is shown again, and at
- * once after a decision.
+ * One shared read of a value every view of it follows: the waiting approvals
+ * (B255) or what needs the person (B383). Showing it in several places never
+ * multiplies requests. It reads at once when one of its live topics changes
+ * (B407), when the window is shown again and on `read()`; every `every` ms
+ * while the live stream is down, else once a minute as a fallback.
  */
-class Feed {
-  page: PendingApprovalPage | null = null;
+class SharedRead<T> {
+  value: T | null = null;
   private listeners = new Set<() => void>();
   private timer = 0;
   private abort: AbortController | null = null;
+  private readAt = 0;
+  private unsubscribeLive: (() => void)[] = [];
 
-  constructor(private load: Load) {}
+  constructor(
+    private load: Load<T>,
+    private every: number,
+    private live?: LiveUpdates,
+    private topics: readonly LiveTopic[] = [],
+  ) {}
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     if (this.listeners.size === 1) {
       this.read();
-      this.timer = window.setInterval(this.read, READ_EVERY_MS);
+      this.timer = window.setInterval(this.tick, this.every);
       document.addEventListener('visibilitychange', this.read);
+      this.unsubscribeLive = this.live
+        ? this.topics.map((topic) => this.live!.subscribe(topic, this.read))
+        : [];
     }
     return () => {
       this.listeners.delete(listener);
       if (this.listeners.size) return;
       window.clearInterval(this.timer);
       document.removeEventListener('visibilitychange', this.read);
+      this.unsubscribeLive.forEach((stop) => stop());
+      this.unsubscribeLive = [];
       this.abort?.abort();
       this.abort = null;
     };
   };
 
+  private tick = () => {
+    if (fallbackDue(this.live, this.readAt)) this.read();
+  };
+
   read = () => {
     if (document.visibilityState === 'hidden') return;
+    this.readAt = Date.now();
     this.abort?.abort();
     const current = new AbortController();
     this.abort = current;
     this.load(current.signal).then(
-      (page) => {
+      (value) => {
         if (current.signal.aborted) return;
-        this.page = page;
+        this.value = value;
         this.listeners.forEach((listener) => listener());
       },
       () => undefined,
@@ -54,25 +77,41 @@ class Feed {
   };
 }
 
-const feeds = new WeakMap<Load, Feed>();
+const reads = new WeakMap<Load<unknown>, SharedRead<unknown>>();
 const noLoad = () => () => undefined;
 
+/**
+ * A shared read of `load` (null before its first answer) and a re-read; it
+ * reads again at once when one of `topics` changes on the server.
+ */
+export function useSharedRead<T>(
+  load: Load<T> | undefined,
+  every: number,
+  topics: readonly LiveTopic[] = [],
+): { value: T | null; refresh: () => void } {
+  const live = useLive();
+  let read = load
+    ? (reads.get(load as Load<unknown>) as SharedRead<T> | undefined)
+    : undefined;
+  if (load && !read) {
+    read = new SharedRead(load, every, live, topics);
+    reads.set(load as Load<unknown>, read as SharedRead<unknown>);
+  }
+  const value = useSyncExternalStore(
+    read?.subscribe ?? noLoad,
+    () => read?.value ?? null,
+  );
+  const refresh = useCallback(() => read?.read(), [read]);
+  return { value, refresh };
+}
+
 /** The waiting approvals (null before the first read) and a re-read. */
-export function usePendingApprovals(load?: Load): {
+export function usePendingApprovals(load?: Load<PendingApprovalPage>): {
   page: PendingApprovalPage | null;
   refresh: () => void;
 } {
-  let feed = load ? feeds.get(load) : undefined;
-  if (load && !feed) {
-    feed = new Feed(load);
-    feeds.set(load, feed);
-  }
-  const page = useSyncExternalStore(
-    feed?.subscribe ?? noLoad,
-    () => feed?.page ?? null,
-  );
-  const refresh = useCallback(() => feed?.read(), [feed]);
-  return { page, refresh };
+  const { value, refresh } = useSharedRead(load, READ_EVERY_MS, ['approvals']);
+  return { page: value, refresh };
 }
 
 /**
@@ -80,8 +119,8 @@ export function usePendingApprovals(load?: Load): {
  * subscribing: after an answer in a chat the sidebar no longer keeps
  * "1 approval is waiting" until its next 15 s read (B302).
  */
-export function readPendingApprovalsNow(load: Load) {
-  feeds.get(load)?.read();
+export function readPendingApprovalsNow(load: Load<PendingApprovalPage>) {
+  reads.get(load as Load<unknown>)?.read();
 }
 
 /** Announced this page, for windows whose storage is refused. */

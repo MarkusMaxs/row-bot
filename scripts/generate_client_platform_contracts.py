@@ -20,17 +20,18 @@ MODELS = {name: getattr(schemas, name) for name in (
     "SourceLink", "SourceOptIn", "SourceOptInChange", "IntegrationSourceView", "IntegrationSourceList", "CatalogUpdate", "CatalogSchedule", "AccessPresetView",
     "AppRef", "AppView", "AppList", "AppViewRenderRequest", "AppViewTool", "AppViewRender", "AppViewToolCall",
     "AppViewToolResult", "AppViewSettings", "AppViewAppSetting", "AppIconData", "IconBatch", "IconLicense", "IntegrationSignals", "IntegrationBlocker",
-    "IntegrationNextAction", "IntegrationEntry", "IntegrationEntryPage", "PlanInput", "PlanSignIn", "PlanRuntime", "PlanReviewItem",
+    "IntegrationNextAction", "IntegrationEntry", "IntegrationEntryPage", "PlanInput", "PlanDeviceCode", "PlanSignIn", "PlanRuntime", "PlanReviewItem",
     "PlanReview", "PlanLocalApp",
     "PlanTool", "PlanAccess", "PlanStep", "PlanConsent", "InstallPlan", "IntegrationDetail", "PlanReviewRequest",
-    "PlanStartRequest", "PlanContinueRequest", "IntegrationAbout", "IntegrationFile", "IntegrationRequirement", "IntegrationWay",
+    "PlanStartRequest", "PlanContinueRequest", "PlanSignInRequest", "IntegrationAbout", "IntegrationFile", "IntegrationRequirement", "IntegrationWay",
     "IntegrationResolveRequest", "IntegrationSettleRequest",
     "IntegrationAttribution", "IntegrationSourceStatus", "IntegrationSearchRequest",
     "Command", "Event", "Handshake", "Problem", "Outcome", "ResourceBinding",
     "PreviewContract", "CommandReceipt", "AttachmentView", "SessionProof",
     "ConversationView", "ConversationPage", "ConversationActionSnapshot", "ConversationActionReviewRequest",
     "ConversationActionReview", "ConversationActionCommand", "ConversationActionReceipt",
-    "BrowserControlSnapshot", "BrowserPreview", "BrowserReviewRequest", "BrowserReview", "BrowserReceipt",
+    "BrowserTab", "BrowserPaneState", "BrowserFrame", "BrowserInputEvent", "BrowserInput", "BrowserInputResult",
+    "BrowserPaneAction", "BrowserSite", "BrowserSitePage", "BrowserSitesClear", "BrowserSitesCleared",
     "ComputerUseSnapshot", "ComputerUsePreview", "ComputerUseCommand", "ComputerUseReceipt",
     "Snapshot", "TranscriptPage", "SubscriptionView",
     "EventPage", "Choices", "HandshakeView", "ApprovalView", "ResourceView", "Acknowledgement",
@@ -42,7 +43,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "NativeTerminalFrame", "NativeTerminalOutput", "NativeTerminalChanged", "NativeTerminalClosed",
     "StreamReset", "LazyContent", "SearchPage", "ConversationWorkspace", "ConversationComposer", "ConversationComposerQuery", "SlashCommandRead", "SlashCommandResult", "ResourceChoicePage",
     "DelegatedRun", "DelegatedActivityView",
-    "ContextUsageView", "ConversationOpenView", "ProviderStatusSnapshot", "ProviderLiveSnapshot", "ProviderCatalogRefresh", "ProviderRuntimeProbe", "CachedModelPage", "ModelsSettingsState", "ModelSurfaceMutation", "ModelContextMutation", "AgentRuntimeSettingsState", "ModelCatalogSummary", "ModelCameraList", "TaskSummaryPage", "TaskDeliverySnapshot", "ToolCatalogPage",
+    "ContextUsageView", "ConversationOpenView", "ProviderStatusSnapshot", "ProviderLiveSnapshot", "ProviderCatalogRefresh", "ProviderRuntimeProbe", "CachedModelPage", "ModelsSettingsState", "ModelSurfaceMutation", "ModelContextMutation", "ModelVisibilityMutation", "ModelVisibilityState", "AgentRuntimeSettingsState", "ModelCatalogSummary", "ModelCameraList", "TaskSummaryPage", "TaskDeliverySnapshot", "ToolCatalogPage",
     "SettingsSnapshot", "SettingsMutationRequest", "SettingsMutationReview", "SettingsMutationCommand", "SettingsMutationReceipt", "TrackerEntryPage", "GitHubAccessSnapshot", "GitHubAccessCommand", "GitHubAccessReceipt", "AccountAuthSnapshot", "AccountAuthCommand", "AccountAuthReceipt",
     "EntitySummaryPage", "KnowledgeEntityDetail", "KnowledgeRecallPage", "KnowledgeMemoryChangePage", "DocumentSummaryPage", "TaskEditableFields", "TaskEditorSnapshot", "TaskSaveResult",
     "TaskSettingsFields", "TaskSettingsSnapshot", "ProviderSettingsSnapshot",
@@ -72,7 +73,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -102,7 +103,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "TalkStart", "TalkSnapshot", "TalkResult", "TalkOutputRequest", "RealtimeSnapshot", "RealtimeStart", "RealtimeEvent", "RealtimeEventRequest", "RealtimeEventResult", "DefaultModelSnapshot", "VoiceRunView",
     "FolderGrantClaim", "FolderGrantView", "DeckSetupOptions", "ArtifactSetupOptions", "ArtifactPreview", "ArtifactEditingState", "ArtifactLifecycleState", "WorkspaceInspector", "WorkspaceChanges",
     "WorkspaceDirectory", "WorkspaceFile", "WorkspaceDiff", "WorkspaceChangeSetPage", "WorkspaceChangeSetFiles", "DraftView", "DraftSave", "ParentSteeringView", "ClientQueueView",
-    "Notice", "NoticePage", "NoticeFrame")}
+    "Notice", "NoticePage", "NoticeFrame", "LiveFrame")}
 
 # Method, path, request DTO (binary uses bytes), response DTO. This table also
 # drives OpenAPI and is checked against the actual router in the contract tests.
@@ -129,6 +130,7 @@ OPERATIONS = (
     ('get', '/integrations/plans/{plan_id}', None, 'InstallPlan'),
     ('post', '/integrations/plans/{plan_id}/continue', 'PlanContinueRequest', 'InstallPlan'),
     ('post', '/integrations/plans/{plan_id}/cancel', None, 'InstallPlan'),
+    ('post', '/integrations/plans/{plan_id}/sign-in', 'PlanSignInRequest', 'InstallPlan'),
     ('post', '/integrations/items/resolve', 'IntegrationResolveRequest', 'IntegrationEntryPage'),
     ('post', '/integrations/items/settle', 'IntegrationSettleRequest', 'IntegrationDetail'),
     ('post', '/integrations/uploads', 'bytes', 'IntegrationEntryPage'),
@@ -141,11 +143,14 @@ OPERATIONS = (
     ("post", "/conversations/{conversation_id}/actions/review", "ConversationActionReviewRequest", "ConversationActionReview"),
     ("get", "/conversations/{conversation_id}/actions/commands/{command_id}", None, "ConversationActionReceipt"),
     ("post", "/conversations/{conversation_id}/actions/commands", "ConversationActionCommand", "ConversationActionReceipt"),
-    ("get", "/conversations/{conversation_id}/browser", None, "BrowserControlSnapshot"),
-    ("get", "/conversations/{conversation_id}/browser/preview", None, "BrowserPreview"),
-    ("post", "/conversations/{conversation_id}/browser/review", "BrowserReviewRequest", "BrowserReview"),
-    ("get", "/conversations/{conversation_id}/browser/commands/{command_id}", None, "BrowserReceipt"),
-    ("post", "/conversations/{conversation_id}/browser/commands", "Command", "BrowserReceipt"),
+    ("get", "/conversations/{conversation_id}/browser", None, "BrowserPaneState"),
+    ("get", "/conversations/{conversation_id}/browser/live", None, "BrowserPaneState"),
+    ("post", "/conversations/{conversation_id}/browser/input", "BrowserInput", "BrowserInputResult"),
+    ("post", "/conversations/{conversation_id}/browser/actions", "BrowserPaneAction", "BrowserPaneState"),
+    ("get", "/browser/sites", None, "BrowserSitePage"),
+    ("post", "/browser/sites/clear", "BrowserSitesClear", "BrowserSitesCleared"),
+    ("get", "/conversations/{conversation_id}/browser/local-addresses", None, "LocalAddressPage"),
+    ("post", "/conversations/{conversation_id}/browser/local-addresses/{grant_id}/remove", None, "LocalAddressPage"),
     ("get", "/conversations/{conversation_id}/computer", None, "ComputerUseSnapshot"),
     ("get", "/conversations/{conversation_id}/computer/preview", None, "ComputerUsePreview"),
     ("post", "/conversations/{conversation_id}/computer/commands", "ComputerUseCommand", "ComputerUseReceipt"),
@@ -161,6 +166,8 @@ OPERATIONS = (
     ("get", "/events/poll", None, "EventPage"),
     ("get", "/notices", None, "NoticePage"),
     ("get", "/events", None, "Event"),
+    ("get", "/live", None, "LiveFrame"),
+    ("get", "/live/poll", None, "LiveFrame"),
     ("put", "/subscriptions/{subscription_id}/ack", "Acknowledgement", "Acknowledged"),
     ("delete", "/subscriptions/{subscription_id}", None, "Unsubscribed"),
     ("get", "/choices", None, "Choices"),
@@ -196,12 +203,44 @@ OPERATIONS = (
     ("get", "/knowledge/entities/editor", None, "KnowledgeEditorState"),
     ("get", "/knowledge/graph", None, "KnowledgeGraphSnapshot"),
     ("get", "/monitor", None, "MonitorSnapshot"),
+    ("get", "/processes", None, "BackgroundProcessPage"),
+    ("get", "/processes/{process_id}", None, "BackgroundProcessView"),
+    ("get", "/processes/{process_id}/output", None, "BackgroundProcessOutput"),
+    ("post", "/processes/{process_id}/stop", None, "BackgroundProcessView"),
+    ("get", "/recordings", None, "RecordingPage"),
+    ("get", "/recordings/{recording_id}", None, "RecordingView"),
+    ("post", "/recordings/{recording_id}/stop", None, "RecordingView"),
+    ("get", "/workspace-folders", None, "WorkspaceFolderPage"),
+    ("get", "/conversations/{conversation_id}/sandbox", None, "SandboxStatusView"),
+    ("post", "/conversations/{conversation_id}/sandbox/prepare", "SandboxStartPayload", "SandboxJobView"),
+    ("post", "/conversations/{conversation_id}/sandbox/pull", "SandboxStartPayload", "SandboxJobView"),
+    ("get", "/sandbox-jobs", None, "SandboxJobPage"),
+    ("get", "/sandbox-jobs/{job_id}", None, "SandboxJobView"),
+    ("post", "/sandbox-jobs/{job_id}/stop", None, "SandboxJobView"),
+    ("get", "/video-edits", None, "VideoEditPage"),
+    ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
+    ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
+    ("get", "/deliveries", None, "DeliveryPage"),
+    ("get", "/deliveries/{delivery_id}", None, "DeliveryView"),
+    ("get", "/deliveries/{delivery_id}/files/{index}", None, "bytes"),
+    ("post", "/deliveries/{delivery_id}/files/{index}/save", None, "ExportSaved"),
+    ("post", "/deliveries/{delivery_id}/to-devices", None, "DeliveryView"),
+    ("get", "/pages", None, "PagePage"),
+    ("get", "/pages/{page_id}", None, "PageView"),
+    ("post", "/pages/{page_id}/frame", "PageFrameRequest", "PageFrame"),
+    ("put", "/pages/{page_id}/state", "PageStateWrite", "PageView"),
+    ("post", "/pages/{page_id}/decisions", "PageDecisionWrite", "PageView"),
+    ("post", "/pages/{page_id}/download", "PageFrameRequest", "PageDownload"),
+    ("post", "/pages/{page_id}/save", "PageFrameRequest", "ExportSaved"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
     ("post", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("get", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("post", "/monitor/diagnosis/settings", "SystemDiagnosisSettings", "SystemDiagnosis"),
+    ("get", "/system/install-count", None, "InstallCountSnapshot"),
+    ("put", "/system/install-count", "InstallCountChoice", "InstallCountSnapshot"),
+    ("post", "/system/install-count/delete", None, "InstallCountDeletion"),
     ("get", "/system/updates", None, "UpdateSnapshot"),
     ("post", "/system/updates/commands", "UpdateCommand", "UpdateReceipt"),
     ("get", "/system/migration/sources", None, "MigrationSources"),
@@ -405,6 +444,7 @@ OPERATIONS = (
     ("get", "/settings/models/state", None, "ModelsSettingsState"),
     ("post", "/settings/models/surface", "ModelSurfaceMutation", "ModelsSettingsState"),
     ("post", "/settings/models/context", "ModelContextMutation", "ModelsSettingsState"),
+    ("post", "/settings/models/visibility", "ModelVisibilityMutation", "ModelVisibilityState"),
     ("get", "/settings/models/agents", None, "AgentRuntimeSettingsState"),
     ("post", "/settings/models/agents", "AgentRuntimeSettingsState", "AgentRuntimeSettingsState"),
     ("post", "/settings/models/agents/reset", None, "AgentRuntimeSettingsState"),
@@ -574,7 +614,7 @@ async function pace(proof: SessionProof | undefined, path: string, method: strin
   if (!proof) return;
   const view = /^\/conversations\/[^/?]+(?:\/(?:open|workspace|delegated))?(?:\?|$)/.test(path);
   // Following a computer-use session (about once a second) is observation.
-  const observation = path.startsWith('/events') || /^\/conversations\/[^/]+\/subscriptions$/.test(path) || /^\/subscriptions\/[^/]+$/.test(path)
+  const observation = path.startsWith('/events') || path.startsWith('/live') || /^\/conversations\/[^/]+\/subscriptions$/.test(path) || /^\/subscriptions\/[^/]+$/.test(path)
     || method === 'GET' && /^\/conversations\/[^/]+\/computer(?:\/preview)?(?:\?|$)/.test(path);
   const voiceEvent = /\/voice\/realtime\/[^/]+\/event$/.test(path);
   const eventType = body && typeof body === 'object' && 'event' in body && body.event && typeof body.event === 'object' && 'type' in body.event ? body.event.type : undefined;
@@ -695,6 +735,94 @@ export const getKnowledgeGraph = (base: string, proof: SessionProof, limit = 250
   jsonRequest(base, '/knowledge/graph' + query({limit}), 'KnowledgeGraphSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getMonitorSnapshot = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<MonitorSnapshot> =>
   jsonRequest(base, '/monitor', 'MonitorSnapshot', proof, 'GET', undefined, undefined, signal);
+/** Every background process (F1, F6), or one conversation's: running ones first. */
+export const getBackgroundProcesses = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<BackgroundProcessPage> =>
+  jsonRequest(base, '/processes' + query({conversation_id}), 'BackgroundProcessPage', proof, 'GET', undefined, undefined, signal);
+export const getBackgroundProcess = (base: string, proof: SessionProof, process: string, signal?: AbortSignal): Promise<BackgroundProcessView> =>
+  jsonRequest(base, `/processes/${id(process)}`, 'BackgroundProcessView', proof, 'GET', undefined, undefined, signal);
+export const getBackgroundProcessOutput = (base: string, proof: SessionProof, process: string, after = 0, limit = 65536, signal?: AbortSignal): Promise<BackgroundProcessOutput> =>
+  jsonRequest(base, `/processes/${id(process)}/output` + query({after,limit}), 'BackgroundProcessOutput', proof, 'GET', undefined, undefined, signal);
+/** Stop a background process and everything it started; it needs no approval. */
+export const stopBackgroundProcess = (base: string, proof: SessionProof, process: string, signal?: AbortSignal): Promise<BackgroundProcessView> =>
+  jsonRequest(base, `/processes/${id(process)}/stop`, 'BackgroundProcessView', proof, 'POST', undefined, undefined, signal);
+/** Every recording (F2), or one conversation's: running ones first. */
+export const getRecordings = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<RecordingPage> =>
+  jsonRequest(base, '/recordings' + query({conversation_id}), 'RecordingPage', proof, 'GET', undefined, undefined, signal);
+export const getRecording = (base: string, proof: SessionProof, recording: string, signal?: AbortSignal): Promise<RecordingView> =>
+  jsonRequest(base, `/recordings/${id(recording)}`, 'RecordingView', proof, 'GET', undefined, undefined, signal);
+/** Stop a recording; its video is saved to its conversation's files. It needs no approval. */
+export const stopRecording = (base: string, proof: SessionProof, recording: string, signal?: AbortSignal): Promise<RecordingView> =>
+  jsonRequest(base, `/recordings/${id(recording)}/stop`, 'RecordingView', proof, 'POST', undefined, undefined, signal);
+/** The folders in one folder of the Developer workspace root (F19): folders only, checked against the root. */
+export const getWorkspaceFolders = (base: string, proof: SessionProof, path = '', signal?: AbortSignal): Promise<WorkspaceFolderPage> =>
+  jsonRequest(base, '/workspace-folders' + query({path: path || undefined}), 'WorkspaceFolderPage', proof, 'GET', undefined, undefined, signal);
+/** A conversation's code folder's sandbox (F18): Docker, its image, what Prepare would install, the latest job. */
+export const getConversationSandbox = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxStatusView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox`, 'SandboxStatusView', proof, 'GET', undefined, undefined, signal);
+/** Prepare sandbox, confirmed by the person: the network is on for the install only. Block refuses it. */
+export const prepareConversationSandbox = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox/prepare`, 'SandboxJobView', proof, 'POST', {confirmed: true}, undefined, signal);
+/** Download the sandbox image, confirmed by the person. */
+export const pullConversationSandboxImage = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/sandbox/pull`, 'SandboxJobView', proof, 'POST', {confirmed: true}, undefined, signal);
+/** Every sandbox job (F18), or one conversation's: running ones first. */
+export const getSandboxJobs = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<SandboxJobPage> =>
+  jsonRequest(base, '/sandbox-jobs' + query({conversation_id}), 'SandboxJobPage', proof, 'GET', undefined, undefined, signal);
+export const getSandboxJob = (base: string, proof: SessionProof, job: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/sandbox-jobs/${id(job)}`, 'SandboxJobView', proof, 'GET', undefined, undefined, signal);
+/** Stop a sandbox job; the network goes off again. It needs no approval. */
+export const stopSandboxJob = (base: string, proof: SessionProof, job: string, signal?: AbortSignal): Promise<SandboxJobView> =>
+  jsonRequest(base, `/sandbox-jobs/${id(job)}/stop`, 'SandboxJobView', proof, 'POST', undefined, undefined, signal);
+/** Every video edit (F3), or one conversation's: running ones first. */
+export const getVideoEdits = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<VideoEditPage> =>
+  jsonRequest(base, '/video-edits' + query({conversation_id}), 'VideoEditPage', proof, 'GET', undefined, undefined, signal);
+export const getVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
+  jsonRequest(base, `/video-edits/${id(edit)}`, 'VideoEditView', proof, 'GET', undefined, undefined, signal);
+/** Stop a video edit; nothing is saved. It needs no approval. */
+export const stopVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
+  jsonRequest(base, `/video-edits/${id(edit)}/stop`, 'VideoEditView', proof, 'POST', undefined, undefined, signal);
+/** Files sent to the person's devices or a chat app (F7), or one conversation's: newest first. */
+export const getDeliveries = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<DeliveryPage> =>
+  jsonRequest(base, '/deliveries' + query({conversation_id}), 'DeliveryPage', proof, 'GET', undefined, undefined, signal);
+export const getDelivery = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}`, 'DeliveryView', proof, 'GET', undefined, undefined, signal);
+/** One file sent to the devices, with the person's session; refused once it expired. */
+export async function readDeliveryFile(base: string, proof: SessionProof, delivery: string, index: number, signal?: AbortSignal): Promise<Blob> {
+  if (!Number.isInteger(index) || index < 0 || index > 9) throw new Error('invalid_request');
+  const response = await fetch(`${base}/api/v1/deliveries/${id(delivery)}/files/${index}`, {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  const data = await response.blob();
+  if (data.size > 104857600) throw new Error('protocol_incompatible');
+  return data;
+}
+/** Desktop window: the file is saved into Exports on this computer (it can't download). */
+export const saveDeliveryFile = (base: string, proof: SessionProof, delivery: string, index: number, signal?: AbortSignal): Promise<ExportSaved> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}/files/${index}/save`, 'ExportSaved', proof, 'POST', {}, undefined, signal);
+/** The person's "Send to your devices instead" for files that didn't go to a chat app. No approval. */
+export const sendDeliveryToDevices = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
+  jsonRequest(base, `/deliveries/${id(delivery)}/to-devices`, 'DeliveryView', proof, 'POST', {}, undefined, signal);
+/** Pages the agent made (N5), or one conversation's: most recently changed first. */
+export const getPages = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<PagePage> =>
+  jsonRequest(base, '/pages' + query({conversation_id}), 'PagePage', proof, 'GET', undefined, undefined, signal);
+export const getPage = (base: string, proof: SessionProof, page: string, signal?: AbortSignal): Promise<PageView> =>
+  jsonRequest(base, `/pages/${id(page)}`, 'PageView', proof, 'GET', undefined, undefined, signal);
+/** One frame address for a page in this theme, served once to a frame with sandbox="allow-scripts" only. */
+export const createPageFrame = (base: string, proof: SessionProof, page: string, body: PageFrameRequest, signal?: AbortSignal): Promise<PageFrame> =>
+  jsonRequest(base, `/pages/${id(page)}/frame`, 'PageFrame', proof, 'POST', validateWire('PageFrameRequest', body), undefined, signal);
+/** A page's own state, from its bridge (an object, up to 256 KB). */
+export const savePageState = (base: string, proof: SessionProof, page: string, body: PageStateWrite, signal?: AbortSignal): Promise<PageView> =>
+  jsonRequest(base, `/pages/${id(page)}/state`, 'PageView', proof, 'PUT', validateWire('PageStateWrite', body), undefined, signal);
+/** One decision from a page's bridge; it only gathers until the person sends them. */
+export const savePageDecision = (base: string, proof: SessionProof, page: string, body: PageDecisionWrite, signal?: AbortSignal): Promise<PageView> =>
+  jsonRequest(base, `/pages/${id(page)}/decisions`, 'PageView', proof, 'POST', validateWire('PageDecisionWrite', body), undefined, signal);
+/** Download as HTML: one file that works on its own. */
+export const downloadPage = (base: string, proof: SessionProof, page: string, body: PageFrameRequest, signal?: AbortSignal): Promise<PageDownload> =>
+  jsonRequest(base, `/pages/${id(page)}/download`, 'PageDownload', proof, 'POST', validateWire('PageFrameRequest', body), undefined, signal);
+/** Desktop window: the page is saved into Exports on this computer (it can't download). */
+export const savePageToExports = (base: string, proof: SessionProof, page: string, body: PageFrameRequest, signal?: AbortSignal): Promise<ExportSaved> =>
+  jsonRequest(base, `/pages/${id(page)}/save`, 'ExportSaved', proof, 'POST', validateWire('PageFrameRequest', body), undefined, signal);
 export const getAttention = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AttentionSnapshot> =>
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>
@@ -707,6 +835,12 @@ export const getSystemDiagnosis = (base: string, proof: SessionProof, signal?: A
   jsonRequest(base, '/monitor/diagnosis', 'SystemDiagnosis', proof, 'GET', undefined, undefined, signal);
 export const saveSystemDiagnosisSettings = (base: string, proof: SessionProof, body: SystemDiagnosisSettings, signal?: AbortSignal): Promise<SystemDiagnosis> =>
   jsonRequest(base, '/monitor/diagnosis/settings', 'SystemDiagnosis', proof, 'POST', validateWire('SystemDiagnosisSettings', body), undefined, signal);
+export const getInstallCount = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<InstallCountSnapshot> =>
+  jsonRequest(base, '/system/install-count', 'InstallCountSnapshot', proof, 'GET', undefined, undefined, signal);
+export const chooseInstallCount = (base: string, proof: SessionProof, body: InstallCountChoice, signal?: AbortSignal): Promise<InstallCountSnapshot> =>
+  jsonRequest(base, '/system/install-count', 'InstallCountSnapshot', proof, 'PUT', validateWire('InstallCountChoice', body), undefined, signal);
+export const deleteCountedData = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<InstallCountDeletion> =>
+  jsonRequest(base, '/system/install-count/delete', 'InstallCountDeletion', proof, 'POST', undefined, undefined, signal);
 export const getUpdates = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<UpdateSnapshot> =>
   jsonRequest(base, '/system/updates', 'UpdateSnapshot', proof, 'GET', undefined, undefined, signal);
 export const sendUpdateCommand = (base: string, proof: SessionProof, command: UpdateCommand, signal?: AbortSignal): Promise<UpdateReceipt> =>
@@ -864,6 +998,8 @@ export const updateModelSurface = (base: string, proof: SessionProof, body: Mode
   jsonRequest(base, '/settings/models/surface', 'ModelsSettingsState', proof, 'POST', body, undefined, signal);
 export const updateModelContext = (base: string, proof: SessionProof, body: ModelContextMutation, signal?: AbortSignal): Promise<ModelsSettingsState> =>
   jsonRequest(base, '/settings/models/context', 'ModelsSettingsState', proof, 'POST', body, undefined, signal);
+export const updateModelVisibility = (base: string, proof: SessionProof, body: ModelVisibilityMutation, signal?: AbortSignal): Promise<ModelVisibilityState> =>
+  jsonRequest(base, '/settings/models/visibility', 'ModelVisibilityState', proof, 'POST', body, undefined, signal);
 export const getAgentRuntimeSettings = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<AgentRuntimeSettingsState> =>
   jsonRequest(base, '/settings/models/agents', 'AgentRuntimeSettingsState', proof, 'GET', undefined, undefined, signal);
 export const saveAgentRuntimeSettings = (base: string, proof: SessionProof, body: AgentRuntimeSettingsState, signal?: AbortSignal): Promise<AgentRuntimeSettingsState> =>
@@ -1015,16 +1151,63 @@ export const getConversationActionReceipt = (base: string, proof: SessionProof, 
   jsonRequest(base, `/conversations/${id(conversation)}/actions/commands/${id(command)}`, 'ConversationActionReceipt', proof, 'GET', undefined, undefined, signal);
 export const sendConversationAction = (base: string, proof: SessionProof, conversation: string, command: ConversationActionCommand, signal?: AbortSignal): Promise<ConversationActionReceipt> =>
   jsonRequest(base, `/conversations/${id(conversation)}/actions/commands`, 'ConversationActionReceipt', proof, 'POST', validateWire('ConversationActionCommand', command), command.command_id, signal);
-export const getBrowserControls = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<BrowserControlSnapshot> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser`, 'BrowserControlSnapshot', proof, 'GET', undefined, undefined, signal);
-export const getBrowserPreview = (base: string, proof: SessionProof, conversation: string, revision: string, signal?: AbortSignal): Promise<BrowserPreview> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/preview` + query({revision}), 'BrowserPreview', proof, 'GET', undefined, undefined, signal);
-export const reviewBrowserControl = (base: string, proof: SessionProof, conversation: string, body: BrowserReviewRequest, signal?: AbortSignal): Promise<BrowserReview> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/review`, 'BrowserReview', proof, 'POST', validateWire('BrowserReviewRequest', body), undefined, signal);
-export const getBrowserControlReceipt = (base: string, proof: SessionProof, conversation: string, command: string, signal?: AbortSignal): Promise<BrowserReceipt> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/commands/${id(command)}`, 'BrowserReceipt', proof, 'GET', undefined, undefined, signal);
-export const sendBrowserControl = (base: string, proof: SessionProof, conversation: string, command: Command, signal?: AbortSignal): Promise<BrowserReceipt> =>
-  jsonRequest(base, `/conversations/${id(conversation)}/browser/commands`, 'BrowserReceipt', proof, 'POST', validateWire('Command', command), command.command_id, signal);
+/** What the Browser pane shows for a conversation (never starts the browser). */
+export const getBrowserPane = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<BrowserPaneState> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser`, 'BrowserPaneState', proof, 'GET', undefined, undefined, signal);
+/** The person's mouse, wheel and keys in the pane, played on the page. */
+export const sendBrowserInput = (base: string, proof: SessionProof, conversation: string, body: BrowserInput, signal?: AbortSignal): Promise<BrowserInputResult> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser/input`, 'BrowserInputResult', proof, 'POST', validateWire('BrowserInput', body), undefined, signal);
+/** The pane's controls: address bar, Back, Forward, Reload, tabs, Take control / Give back, Restart. */
+export const sendBrowserAction = (base: string, proof: SessionProof, conversation: string, body: BrowserPaneAction, signal?: AbortSignal): Promise<BrowserPaneState> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser/actions`, 'BrowserPaneState', proof, 'POST', validateWire('BrowserPaneAction', body), undefined, signal);
+/** Sites with saved sign-ins in Row-Bot's browser. */
+export const getBrowserSites = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<BrowserSitePage> =>
+  jsonRequest(base, '/browser/sites', 'BrowserSitePage', proof, 'GET', undefined, undefined, signal);
+/** Sign out of one site, or every site. */
+export const clearBrowserSites = (base: string, proof: SessionProof, body: BrowserSitesClear, signal?: AbortSignal): Promise<BrowserSitesCleared> =>
+  jsonRequest(base, '/browser/sites/clear', 'BrowserSitesCleared', proof, 'POST', validateWire('BrowserSitesClear', body), undefined, signal);
+/** The pane's state and live picture while it watches: state frames and JPEG frames, latest only. */
+export async function* observeBrowserLive(base: string, proof: SessionProof, conversation: string,
+  view: 'pane' | 'thumb', size: {width: number; height?: number; scale?: number}, signal?: AbortSignal): AsyncGenerator<{state: BrowserPaneState} | {frame: BrowserFrame}> {
+  signal?.throwIfAborted();
+  const fit = view === 'pane' && size.height ? {height:Math.round(size.height), scale:Math.min(4, Math.max(1, Math.round((size.scale ?? 1) * 100) / 100))} : {};
+  const response = await fetch(`${base}/api/v1/conversations/${id(conversation)}/browser/live` + query({view,width:Math.round(size.width),...fit}), {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  if (!response.body) throw new Error('protocol_incompatible');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', {fatal: true});
+  let buffer = '';
+  try {
+    while (true) {
+      const part = await reader.read();
+      buffer += decoder.decode(part.value, {stream: !part.done});
+      let cut: number;
+      while ((cut = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0,cut); buffer = buffer.slice(cut+2);
+        if (frame.length > 12000000) throw new Error('protocol_incompatible');
+        const fields = Object.fromEntries(frame.split('\n').filter(l => l && !l.startsWith(':')).map(l => {
+          const at = l.indexOf(':'); return [l.slice(0,at),l.slice(at+1).trimStart()];
+        }));
+        if (fields.event === 'state') yield {state: validateWire<BrowserPaneState>('BrowserPaneState', JSON.parse(fields.data))};
+        else if (fields.event === 'frame') yield {frame: validateWire<BrowserFrame>('BrowserFrame', JSON.parse(fields.data))};
+        else if (fields.event) throw new Error('protocol_incompatible');
+      }
+      if (buffer.length > 12000000) throw new Error('protocol_incompatible');
+      if (part.done) return;
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* The stream is already retired. */ }
+    finally { reader.releaseLock(); }
+  }
+}
+/** The addresses on this computer a conversation's browser may open now (F4). */
+export const getBrowserLocalAddresses = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<LocalAddressPage> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser/local-addresses`, 'LocalAddressPage', proof, 'GET', undefined, undefined, signal);
+/** Remove one local address from a conversation; its browser can't open it until it's allowed again. */
+export const removeBrowserLocalAddress = (base: string, proof: SessionProof, conversation: string, grant: string, signal?: AbortSignal): Promise<LocalAddressPage> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/browser/local-addresses/${id(grant)}/remove`, 'LocalAddressPage', proof, 'POST', undefined, undefined, signal);
 export const getComputerUse = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<ComputerUseSnapshot> =>
   jsonRequest(base, `/conversations/${id(conversation)}/computer`, 'ComputerUseSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getComputerUsePreview = (base: string, proof: SessionProof, conversation: string, revision: string, signal?: AbortSignal): Promise<ComputerUsePreview> =>
@@ -1220,6 +1403,8 @@ export const getInstallPlan = (base: string, proof: SessionProof, plan: string, 
   jsonRequest(base, `/integrations/plans/${id(plan)}`, 'InstallPlan', proof, 'GET', undefined, undefined, signal);
 export const continueInstallPlan = (base: string, proof: SessionProof, plan: string, body: PlanContinueRequest, signal?: AbortSignal): Promise<InstallPlan> =>
   jsonRequest(base, `/integrations/plans/${id(plan)}/continue`, 'InstallPlan', proof, 'POST', validateWire('PlanContinueRequest', body), undefined, signal);
+export const finishInstallPlanSignIn = (base: string, proof: SessionProof, plan: string, body: PlanSignInRequest, signal?: AbortSignal): Promise<InstallPlan> =>
+  jsonRequest(base, `/integrations/plans/${id(plan)}/sign-in`, 'InstallPlan', proof, 'POST', validateWire('PlanSignInRequest', body), undefined, signal);
 export const cancelInstallPlan = (base: string, proof: SessionProof, plan: string, signal?: AbortSignal): Promise<InstallPlan> =>
   jsonRequest(base, `/integrations/plans/${id(plan)}/cancel`, 'InstallPlan', proof, 'POST', undefined, undefined, signal);
 export const getMcpConfiguration = (base: string, proof: SessionProof, search: string, cursor?: string, signal?: AbortSignal, target?: McpTarget): Promise<McpConfigurationPage> =>
@@ -1353,6 +1538,9 @@ export const poll = (base: string, proof: SessionProof, subscription_id: string,
   jsonRequest(base, '/events/poll' + query({subscription_id,cursor,notices_after:notices?.after,notices_epoch:notices?.epoch}), 'EventPage', proof, 'GET', undefined, undefined, signal);
 export const getNotices = (base: string, proof: SessionProof, notices?: NoticePosition, signal?: AbortSignal): Promise<NoticePage> =>
   jsonRequest(base, '/notices' + query({after:notices?.after,epoch:notices?.epoch}), 'NoticePage', proof, 'GET', undefined, undefined, signal);
+/** App-wide live updates (B407), long-polled: the frame once its revision passes `after` (or after 25 s). */
+export const pollLive = (base: string, proof: SessionProof, position?: {after: number; epoch: string}, signal?: AbortSignal): Promise<LiveFrame> =>
+  jsonRequest(base, '/live/poll' + query({after:position?.after,epoch:position?.epoch}), 'LiveFrame', proof, 'GET', undefined, undefined, signal);
 export const acknowledge = (base: string, proof: SessionProof, subscription: string, cursor: string, signal?: AbortSignal): Promise<Acknowledged> =>
   jsonRequest(base, `/subscriptions/${id(subscription)}/ack`, 'Acknowledged', proof, 'PUT', {cursor}, undefined, signal);
 export const unsubscribe = (base: string, proof: SessionProof, subscription: string, signal?: AbortSignal, keepalive = false): Promise<Unsubscribed> =>
@@ -1495,6 +1683,39 @@ export async function* observeEvents(base: string, proof: SessionProof, subscrip
   } finally {
     // Cancellation is cleanup; a failed transport must not mask the read or
     // protocol error, prevent lock release, or reject a consumer's return.
+    try { await reader.cancel(); } catch { /* The stream is already retired. */ }
+    finally { reader.releaseLock(); }
+  }
+}
+/** App-wide live updates (B407): which background state changed, as topic revisions only. */
+export async function* observeLive(base: string, proof: SessionProof, signal?: AbortSignal): AsyncGenerator<LiveFrame> {
+  signal?.throwIfAborted();
+  const response = await fetch(`${base}/api/v1/live`, {
+    credentials: 'same-origin', cache: 'no-store', headers: proofHeaders(proof), signal,
+  });
+  if (!response.ok) throw validateWire<Problem>('Problem', await response.json());
+  if (!response.body) throw new Error('protocol_incompatible');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', {fatal: true});
+  let buffer = '';
+  try {
+    while (true) {
+      const part = await reader.read();
+      buffer += decoder.decode(part.value, {stream: !part.done});
+      let cut: number;
+      while ((cut = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0,cut); buffer = buffer.slice(cut+2);
+        if (frame.length > 4096) throw new Error('protocol_incompatible');
+        const fields = Object.fromEntries(frame.split('\n').filter(l => l && !l.startsWith(':')).map(l => {
+          const at = l.indexOf(':'); return [l.slice(0,at),l.slice(at+1).trimStart()];
+        }));
+        if (fields.event === 'live') yield validateWire<LiveFrame>('LiveFrame', JSON.parse(fields.data));
+        else if (fields.event) throw new Error('protocol_incompatible');
+      }
+      if (buffer.length > 4096) throw new Error('protocol_incompatible');
+      if (part.done) return;
+    }
+  } finally {
     try { await reader.cancel(); } catch { /* The stream is already retired. */ }
     finally { reader.releaseLock(); }
   }
@@ -1729,7 +1950,7 @@ def outputs() -> dict[Path, str]:
                                 for name in ("subscription_id", "cursor")]
             query_parameters += [("notices_after", False, {"type": "integer", "minimum": 0}),
                                  ("notices_epoch", False, {"type": "string", "maxLength": 128})]
-        elif suffix == "/notices":
+        elif suffix in {"/notices", "/live/poll"}:
             query_parameters = [("after", False, {"type": "integer", "minimum": 0}),
                                 ("epoch", False, {"type": "string", "maxLength": 128})]
         elif suffix.endswith("/chunks"):
@@ -1760,7 +1981,7 @@ def outputs() -> dict[Path, str]:
                             8388608 if suffix.endswith(SPEECH_OUTPUTS) else
                             1048576 if suffix.endswith("/voice/realtime/{lease_id}/exchange") else 26214400} if response == "bytes"
                            else {"$ref": f"./{response}.schema.json"})
-        mime = "text/event-stream" if suffix == "/events" else "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "audio/wav" if suffix.endswith(SPEECH_OUTPUTS) else "application/octet-stream" if response == "bytes" else "application/json"
+        mime = "text/event-stream" if suffix in {"/events", "/live", "/conversations/{conversation_id}/browser/live"} else "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "audio/wav" if suffix.endswith(SPEECH_OUTPUTS) else "application/octet-stream" if response == "bytes" else "application/json"
         operation = {"parameters": parameters, "responses": {
             "200": {"description": "Authenticated result", "content": {mime: {"schema": response_schema}}},
             "default": {"description": "Safe problem", "content": {"application/problem+json": {
@@ -1774,8 +1995,17 @@ def outputs() -> dict[Path, str]:
                               if request == "bytes" else {"$ref": f"./{request}.schema.json"})
             operation["requestBody"] = {"required": True, "content": {
                 "application/sdp" if suffix.endswith("/voice/realtime/{lease_id}/exchange") else "application/octet-stream" if request == "bytes" else "application/json": {"schema": request_schema}}}
+        if suffix == "/conversations/{conversation_id}/browser/live":
+            operation["description"] = ("SSE state data validates BrowserPaneState; frame data validates BrowserFrame "
+                                        "(the latest JPEG only; frames are dropped, never queued).")
         if suffix == "/events":
             operation["description"] = "SSE domain data validates Event; snapshot_required data validates StreamReset; notice data validates NoticeFrame. IDs are signed cursors; notice frames carry none."
+        if suffix == "/live":
+            operation["description"] = ("SSE live data validates LiveFrame: topic names and revisions only, never content. "
+                                        "The first frame is sent at once; later frames when a revision moves on (bursts coalesce).")
+        if suffix == "/live/poll":
+            operation["description"] = ("Long poll: answers with the LiveFrame once its revision passes `after` (at once for "
+                                        "another epoch), or after 25 seconds.")
         if suffix == "/documents/uploads/commands":
             operation["requestBody"] = {"required": True, "content": {
                 "application/vnd.row-bot.document-upload-v1": {"schema": {"type": "string", "format": "binary",

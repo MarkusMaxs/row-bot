@@ -642,7 +642,6 @@ def collect_environment() -> list[dict[str, Any]]:
         "ROW_BOT_WORKERS": "Set the server worker count; Row-Bot requires exactly one.",
         "ROW_BOT_EPHEMERAL_DATA": "Tell access diagnostics that server data is intentionally ephemeral.",
         "ROW_BOT_SECRETS_DIR": "Read allowlisted externally managed secrets from individual files.",
-        "ROW_BOT_BROWSER_HEADLESS": "Run bundled browser automation without an interactive display.",
         "ROW_BOT_NATIVE": "Select native-window behaviour for advanced launch scenarios.",
         "ROW_BOT_AUTO_START_OLLAMA": "Allow or suppress launcher attempts to start Ollama automatically.",
         "ROW_BOT_STARTUP_TIMEOUT": "Set the launcher startup timeout in seconds.",
@@ -652,6 +651,7 @@ def collect_environment() -> list[dict[str, Any]]:
         "ROW_BOT_UPDATES_DIR": "The folder shared with the host that applies updates (its status.json, Row-Bot's request.json).",
         "ROW_BOT_UPDATE_FEED": "A loopback release feed for rehearsing a background update before it is published.",
         "ROW_BOT_UPDATE_FEED_TESTING": "Set to 1 to let ROW_BOT_UPDATE_FEED replace GitHub; for tests and rehearsals only.",
+        "ROW_BOT_INSTALL_COUNT": "Set to 0 to turn install stats off on this server: no card, no ID, nothing sent.",
         "ROW_BOT_PLUGIN_INDEX_URL": "Override the public plugin marketplace index URL.",
         "ROW_BOT_PLUGIN_REPO_URL": "Override the plugin repository used by marketplace installs.",
         "ROW_BOT_XAI_OAUTH_CLIENT_ID": "Override the xAI OAuth client identifier.",
@@ -881,7 +881,7 @@ def collect_safety() -> list[dict[str, Any]]:
                 "title": str(label),
                 "description": _approval_description(str(mode)),
                 "source": repo_path(ROOT, approval_path),
-                "decision": "block" if mode == "block" else "allow" if mode == "allow_all" else "ask",
+                "decision": _APPROVAL_DECISIONS.get(str(mode), "ask"),
             }
         )
     rows.append(
@@ -896,11 +896,18 @@ def collect_safety() -> list[dict[str, Any]]:
     return rows
 
 
+_APPROVAL_DECISIONS = {"block": "block", "approve": "ask", "auto": "review", "full": "allow"}
+
+
 def _approval_description(mode: str) -> str:
     if mode == "block":
         return "Read-only or blocked mode for actions that would change external state."
-    if mode == "allow_all":
-        return "Automatically allows actions in trusted contexts."
+    if mode == "auto":
+        return ("A reviewer model approves actions that clearly match the person's request and asks the "
+                "person about the rest; it fails safe to asking.")
+    if mode == "full":
+        return ("Approves every action without asking and records each one; chosen by the person, never "
+                "in a conversation other people share.")
     return "Prompts the user before a sensitive action continues."
 
 

@@ -36,7 +36,6 @@ def test_remote_access_environment_is_in_generated_inventory() -> None:
         "ROW_BOT_UNTRUSTED_FORWARDED_ACTION",
         "ROW_BOT_WORKERS",
         "ROW_BOT_SECRETS_DIR",
-        "ROW_BOT_BROWSER_HEADLESS",
     } <= variables
 
 

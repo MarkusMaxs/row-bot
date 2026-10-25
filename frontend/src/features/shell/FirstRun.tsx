@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type {
   CachedModelRow,
+  LocalRuntimeModel,
   LocalRuntimeSnapshot,
   OnboardingSnapshot,
   ProviderLiveCard,
@@ -29,6 +30,9 @@ import { RuntimeContext, useRuntime } from '../../runtime';
 import { writeClipboardText } from '../../platform/clipboard';
 import { Button, Disclosure, Input, Segmented } from '../../ui/primitives';
 import SubscriptionAccounts from '../settings/SubscriptionAccounts';
+import ClaudePlanSetup, {
+  CLAUDE_PLAN_SUMMARY,
+} from '../settings/ClaudePlanSetup';
 import ProviderSettingsPanel from '../settings/ProviderSettingsPanel';
 import {
   MORE_KEY_PROVIDERS,
@@ -308,27 +312,100 @@ function LocalPanel({
         {runtime.models.length === 1 ? '' : 's'}. The one you pick becomes the
         default; you can change it any time.
       </p>
-      <ModelOptions
-        label="Models on this computer"
-        options={runtime.models.map((model) => ({
-          ref: model.model_ref,
-          name: model.name,
-          chatOnly: model.agent_ready === false,
-        }))}
-        onPick={onPick}
-      />
+      <LocalModels models={runtime.models} onPick={onPick} />
     </div>
   );
 }
 
-type Option = { ref: string; name: string; chatOnly: boolean };
+type Option = {
+  ref: string;
+  name: string;
+  chatOnly: boolean;
+  hidden?: boolean;
+};
+
+const localOption = (model: LocalRuntimeModel): Option => ({
+  ref: model.model_ref,
+  name: model.name,
+  chatOnly: model.agent_ready === false,
+  ...(model.hidden ? { hidden: true } : {}),
+});
+
+/**
+ * The local models, short list first (F10): the person's favourites, then
+ * Row-Bot's suggested picks, with every other model one "Show all models"
+ * away (hidden ones last). Without either, every model is listed as before.
+ */
+function LocalModels({
+  models,
+  onPick,
+}: {
+  models: readonly LocalRuntimeModel[];
+  onPick: (modelRef: string, label: string) => void;
+}) {
+  const favourites = models
+    .filter((model) => model.favourite_rank != null)
+    .sort((a, b) => (a.favourite_rank ?? 0) - (b.favourite_rank ?? 0));
+  const picks = models.filter(
+    (model) => model.recommended && model.favourite_rank == null,
+  );
+  const short = new Set([...favourites, ...picks]);
+  const rest = models.filter((model) => !short.has(model));
+  const others = [
+    ...rest.filter((model) => !model.hidden),
+    ...rest.filter((model) => model.hidden),
+  ];
+  if (!short.size)
+    return (
+      <ModelOptions
+        label="Models on this computer"
+        options={others.map(localOption)}
+        onPick={onPick}
+      />
+    );
+  return (
+    <div className="first-run-model-groups">
+      {favourites.length > 0 && (
+        <ModelOptions
+          label="Your favourites"
+          title="Your favourites"
+          options={favourites.map(localOption)}
+          onPick={onPick}
+        />
+      )}
+      {picks.length > 0 && (
+        <ModelOptions
+          label="Recommended"
+          title="Recommended"
+          options={picks.map(localOption)}
+          onPick={onPick}
+        />
+      )}
+      {others.length > 0 && (
+        <Disclosure
+          className="first-run-all-models"
+          summary={`Show all models (${others.length})`}
+        >
+          <ModelOptions
+            label="All models on this computer"
+            options={others.map(localOption)}
+            onPick={onPick}
+          />
+        </Disclosure>
+      )}
+    </div>
+  );
+}
 
 function ModelOptions({
   label,
+  title,
   options,
   onPick,
 }: {
   label: string;
+  /** A short heading over the list (a short list among others). */
+  title?: string;
   options: Option[];
   onPick: (modelRef: string, label: string) => void;
 }) {
@@ -338,6 +415,7 @@ function ModelOptions({
   );
   return (
     <div className="first-run-models">
+      {title && <h4 className="first-run-models-title">{title}</h4>}
       {options.length > 8 && (
         <Input
           type="search"
@@ -358,6 +436,9 @@ function ModelOptions({
               <span>{option.name}</span>
               {option.chatOnly && (
                 <span className="first-run-model-tag">Chat only</span>
+              )}
+              {option.hidden && (
+                <span className="first-run-model-tag">Hidden</span>
               )}
               <span className="first-run-model-use" aria-hidden>
                 Use
@@ -489,6 +570,7 @@ export default function FirstRun({
   const [subscription, setSubscription] = useState<Subscription>('codex');
   const [keyProvider, setKeyProvider] = useState<string | null>(null);
   const [step, setStep] = useState<Step>({ kind: 'pick' });
+  const [checkingClaude, setCheckingClaude] = useState(false);
   const importSources = useRef(snapshot.import_sources ?? []);
   const connected = useMemo(
     () =>
@@ -674,6 +756,22 @@ export default function FirstRun({
                   }
                   onPick={pick}
                 />
+              ) : subscription === 'claude_subscription' ? (
+                <div className="stack">
+                  <p>{CLAUDE_PLAN_SUMMARY}</p>
+                  <ClaudePlanSetup
+                    plan={
+                      cards.find(
+                        (card) => card.provider_id === 'claude_subscription',
+                      )?.claude_plan
+                    }
+                    checking={checkingClaude}
+                    onCheck={() => {
+                      setCheckingClaude(true);
+                      void reload().finally(() => setCheckingClaude(false));
+                    }}
+                  />
+                </div>
               ) : subscriptionAccountsOwner?.get() ? (
                 <SubscriptionAccounts
                   key={subscription}

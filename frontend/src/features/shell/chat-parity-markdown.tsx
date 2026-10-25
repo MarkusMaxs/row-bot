@@ -2,11 +2,16 @@ import { Fragment, useState, type JSX, type ReactNode } from 'react';
 import { Table } from 'lucide-react';
 import { CopyGlyph, Hint, IconButton } from '../../ui/primitives';
 import { CodeBlock } from './CodeBlock';
+import MathTex from './MathTex';
 
 // Underscore emphasis never starts or ends inside a word, so snake_case
 // names such as workspace_file_delete stay literal (as in CommonMark).
+// Maths (KaTeX), after code spans so `$x$` stays code: $$ … $$, \( … \),
+// \[ … \] and $…$. A single $ is maths only where it can't be a price: no
+// digit right after the opening $, no space just inside either $, and its
+// closing $ on the same line ("$5 and $10" stays text).
 const INLINE =
-  /(`[^`\n]+`|\[[^\]\n]+\]\([^\s)]+\)|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}_])__[^_\n]+__(?![\p{L}\p{N}_])|~~[^~\n]+~~|\*[^*\n]+\*|(?<![\p{L}\p{N}_])_[^_\n]+_(?![\p{L}\p{N}_])|https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"\]])/gu;
+  /(`[^`\n]+`|\$\$[^\n]+?\$\$|\\\([^\n]+?\\\)|\\\[[^\n]+?\\\]|(?<![\\$\p{L}\p{N}])\$(?![\s\d$])[^$\n]*?[^\s\\$]\$(?![\p{L}\p{N}$])|\[[^\]\n]+\]\([^\s)]+\)|\*\*[^*\n]+\*\*|(?<![\p{L}\p{N}_])__[^_\n]+__(?![\p{L}\p{N}_])|~~[^~\n]+~~|\*[^*\n]+\*|(?<![\p{L}\p{N}_])_[^_\n]+_(?![\p{L}\p{N}_])|https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"\]])/gu;
 const CITATION = /^\[?\^?(\d{1,3})\]?$/;
 
 function safeHref(value: string) {
@@ -62,11 +67,26 @@ function Citation({ number, href }: { number: string; href: string }) {
   );
 }
 
+/** A maths token's formula and whether it is display maths; null for anything else. */
+function mathToken(part: string): { tex: string; display: boolean } | null {
+  if (part.length > 4 && part.startsWith('$$') && part.endsWith('$$'))
+    return { tex: part.slice(2, -2).trim(), display: true };
+  if (part.startsWith('\\(') && part.endsWith('\\)'))
+    return { tex: part.slice(2, -2).trim(), display: false };
+  if (part.startsWith('\\[') && part.endsWith('\\]'))
+    return { tex: part.slice(2, -2).trim(), display: true };
+  if (part.length > 2 && part.startsWith('$') && part.endsWith('$'))
+    return { tex: part.slice(1, -1), display: false };
+  return null;
+}
+
 function inline(text: string): ReactNode[] {
   return text.split(INLINE).map((part, index) => {
     if (!part) return null;
     if (part.startsWith('`') && part.endsWith('`'))
       return <code key={index}>{part.slice(1, -1)}</code>;
+    const math = mathToken(part);
+    if (math?.tex) return <MathTex key={index} {...math} />;
     const link = /^\[([^\]]+)\]\(([^\s)]+)\)$/.exec(part);
     if (link) {
       const href = safeHref(link[2]);
@@ -240,6 +260,80 @@ function MarkdownTable({
   );
 }
 
+const DISPLAY_FENCES: [string, string][] = [
+  ['$$', '$$'],
+  ['\\[', '\\]'],
+];
+
+/**
+ * Display maths that starts this line: "$$ … $$" or "\[ … \]" alone on one
+ * line, or opened on this line and closed at the end of a later one. Null
+ * until it is closed, so a formula still streaming in reads as text.
+ */
+function displayMath(
+  lines: string[],
+  index: number,
+): { tex: string; next: number } | null {
+  const first = lines[index].trim();
+  for (const [open, close] of DISPLAY_FENCES) {
+    if (!first.startsWith(open)) continue;
+    const rest = first.slice(open.length);
+    if (rest.length >= close.length && rest.endsWith(close)) {
+      const tex = rest.slice(0, -close.length).trim();
+      // "$$a$$ and $$b$$" is text with maths in it, not one display block.
+      return tex && !tex.includes(open) ? { tex, next: index + 1 } : null;
+    }
+    const body = [rest];
+    for (let end = index + 1; end < lines.length; end++) {
+      const line = lines[end].trim();
+      if (line.endsWith(close)) {
+        body.push(line.slice(0, -close.length));
+        const tex = body.join('\n').trim();
+        return tex ? { tex, next: end + 1 } : null;
+      }
+      // Display maths has no blank lines or code in it: this was text.
+      if (!line || line.startsWith('```')) return null;
+      body.push(lines[end]);
+    }
+    return null;
+  }
+  return null;
+}
+
+// A line that shows nothing: blank, a lone hard break ("\"), or quote
+// markers with nothing in them (">", "> >").
+const SHOWS_NOTHING = /^[\s>]*\\?\s*$/;
+// The most of those in a row that are kept (U4).
+const MOST_EMPTY_LINES = 2;
+
+/**
+ * The lines as they render: a run of more than two lines that show nothing
+ * keeps two, so a reply of hundreds of blank hard breaks can't fill the
+ * screen with empty space. Code keeps every line; the stored text is
+ * unchanged.
+ */
+function withoutBlankRuns(lines: string[]) {
+  const kept: string[] = [];
+  let fenced = false;
+  let run = 0;
+  for (const line of lines) {
+    if (line.trimStart().startsWith('```')) fenced = !fenced;
+    run = !fenced && SHOWS_NOTHING.test(line) ? run + 1 : 0;
+    if (run <= MOST_EMPTY_LINES) kept.push(line);
+  }
+  return kept;
+}
+
+/** A quote's lines without the empty ones it starts or ends with. */
+function quoteLines(lines: string[]) {
+  const shown = lines.map((line) => (SHOWS_NOTHING.test(line) ? '' : line));
+  let start = 0;
+  let end = shown.length;
+  while (start < end && !shown[start]) start++;
+  while (end > start && !shown[end - 1]) end--;
+  return shown.slice(start, end);
+}
+
 /**
  * A deliberately small, text-only Markdown projection. React owns escaping;
  * raw HTML is never parsed and only allow-listed link protocols become links.
@@ -251,7 +345,7 @@ export default function SafeMarkdown({
   text: string;
   copyText?: (value: string) => Promise<boolean>;
 }) {
-  const lines = text.replaceAll('\r\n', '\n').split('\n');
+  const lines = withoutBlankRuns(text.replaceAll('\r\n', '\n').split('\n'));
   const blocks: ReactNode[] = [];
   let index = 0;
   while (index < lines.length) {
@@ -282,6 +376,16 @@ export default function SafeMarkdown({
       );
       continue;
     }
+    const math = displayMath(lines, index);
+    if (math) {
+      blocks.push(
+        <div className="math-block" key={`math-${start}`}>
+          <MathTex tex={math.tex} display />
+        </div>,
+      );
+      index = math.next;
+      continue;
+    }
     const heading = /^(#{1,6})\s+(.+)$/.exec(line);
     if (heading) {
       const level = heading[1].length;
@@ -298,9 +402,12 @@ export default function SafeMarkdown({
       continue;
     }
     if (line.trimStart().startsWith('>')) {
-      const quote: string[] = [];
+      const raw: string[] = [];
       while (index < lines.length && lines[index].trimStart().startsWith('>'))
-        quote.push(lines[index++].trimStart().replace(/^>\s?/, ''));
+        raw.push(lines[index++].trimStart().replace(/^>\s?/, ''));
+      // A quote of nothing but empty lines shows nothing, not an empty bar.
+      const quote = quoteLines(raw);
+      if (!quote.length) continue;
       blocks.push(
         <blockquote key={`quote-${start}`}>
           {quote.map((item, quoteIndex) => (
@@ -362,6 +469,7 @@ export default function SafeMarkdown({
       index < lines.length &&
       lines[index].trim() &&
       !lines[index].trimStart().startsWith('```') &&
+      !displayMath(lines, index) &&
       !/^(#{1,6})\s+/.test(lines[index]) &&
       !/^\s*(?:[-*+]\s+|\d+[.)]\s+|>)/.test(lines[index]) &&
       !tableColumns(lines, index)

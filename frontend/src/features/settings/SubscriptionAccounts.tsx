@@ -3,12 +3,13 @@ import { Check, Copy } from 'lucide-react';
 import { writeClipboardText } from '../../platform/clipboard';
 import { RuntimeContext } from '../../runtime';
 import type {
+  ClientError,
   SubscriptionAccountsSnapshot,
   SubscriptionFlowSnapshot,
   SubscriptionActionReview,
 } from '../../api/types';
 import { Button, Field, Input, Select, Skeleton } from '../../ui/primitives';
-import { clientError } from '../../api/errors';
+import { clientError, rejectedBeforeRunning } from '../../api/errors';
 import {
   ProviderSettingsSession,
   useProviderSettingsValue,
@@ -16,8 +17,7 @@ import {
 import { When } from '../../ui/When';
 import { humanizeToken, parseTimestamp } from '../../ui/format';
 
-type Action =
-  'start' | 'check' | 'submit' | 'disconnect' | 'restore' | 'import_token';
+type Action = 'start' | 'check' | 'submit' | 'disconnect' | 'restore';
 type Intent = {
   provider_id: SubscriptionFlowSnapshot['provider_id'];
   provider_revision: string;
@@ -92,7 +92,6 @@ export type SubscriptionAccountsProps = {
 };
 const labels: Record<string, string> = {
   codex: 'ChatGPT / Codex',
-  claude_subscription: 'Claude Subscription',
   xai_oauth: 'xAI Grok',
 };
 /** A sign-in state in words (never the raw state token). */
@@ -112,7 +111,19 @@ export function signInStateLabel(state: SubscriptionFlowSnapshot['state']) {
     }[state] ?? 'Signing in…'
   );
 }
-/** ChatGPT / Codex and xAI can be checked while they wait; Claude needs a pasted code. */
+/**
+ * A refusal that settled the action: the server said no before anything ran,
+ * so nothing is left to check (B413). A Start saves nothing, and a keychain
+ * that refuses the sign-in ends it (B370); any other action keeps its original
+ * request to check, as an exchange may have happened.
+ */
+function settledRefusal(operation: Action, error: ClientError) {
+  return (
+    rejectedBeforeRunning(error) &&
+    (operation === 'start' || error.code === 'subscription_storage_unavailable')
+  );
+}
+/** ChatGPT / Codex and xAI sign-ins are checked while they wait. */
 const POLLED = new Set(['codex', 'xai_oauth']);
 const POLL_MS = 5000;
 function safeLogin(value: string | null) {
@@ -250,9 +261,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
       provider_id: provider,
       provider_revision: snapshot.revision,
       operation,
-      ...(['submit', 'import_token'].includes(operation)
-        ? { value: code }
-        : {}),
+      ...(operation === 'submit' ? { value: code } : {}),
       ...(['check', 'submit'].includes(operation) && flow
         ? { flow_id: flow.flow_id, server_epoch: flow.server_epoch }
         : {}),
@@ -315,14 +324,21 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
           ? result.flow?.state === 'connected'
             ? `Signed in to ${labels[provider]}.`
             : ''
-          : `${labels[provider]} ${operation === 'start' ? 'sign-in started' : operation === 'disconnect' ? 'disconnected' : operation === 'import_token' ? 'setup token saved' : operation === 'submit' ? 'signed in' : 'updated'}.`,
+          : `${labels[provider]} ${operation === 'start' ? 'sign-in started' : operation === 'disconnect' ? 'disconnected' : operation === 'submit' ? 'signed in' : 'updated'}.`,
       );
       if (generation === epoch.current) props.onSaved(result.accounts);
     } catch (cause) {
-      setError(clientError(cause).message);
-      setNotice(
-        "Row-Bot couldn't confirm that. Check again before another action.",
-      );
+      const refused = clientError(cause);
+      setError(refused.message);
+      if (settledRefusal(operation, refused)) {
+        // The server said no and nothing was saved (a locked keychain, say):
+        // only the reason shows, and Connect tries again (B413).
+        setPending(null);
+        session.resolved();
+      } else
+        setNotice(
+          "Row-Bot couldn't confirm that. Check again before another action.",
+        );
     } finally {
       setBusy('');
     }
@@ -570,9 +586,8 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
             )}
             {active && !flow.device_code && provider !== 'codex' && (
               <p className="settings-help">
-                {provider === 'xai_oauth'
-                  ? 'Sign in on the page that opens. If it ends on an error page, copy its address into the field below.'
-                  : 'Sign in on the page that opens, then paste the code it shows below.'}
+                Sign in on the page that opens. If it ends on an error page,
+                copy its address into the field below.
               </p>
             )}
             {active && login && (
@@ -615,18 +630,6 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
             />
           </Field>
         )}
-        {!active &&
-          provider === 'claude_subscription' &&
-          props.initialAction === 'manage' && (
-            <Field label="Claude setup token">
-              <Input
-                type="password"
-                value={code}
-                disabled={locked}
-                onChange={(event) => setCode(event.target.value)}
-              />
-            </Field>
-          )}
         <div className="actions">
           {!active &&
             (props.initialAction === 'connect' || props.signInExpired) && (
@@ -645,16 +648,6 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
               Connect with code
             </Button>
           )}
-          {!active &&
-            provider === 'claude_subscription' &&
-            props.initialAction === 'manage' && (
-              <Button
-                disabled={locked || !code}
-                onClick={() => void performDirect('import_token')}
-              >
-                Import setup token
-              </Button>
-            )}
           {!active &&
             props.initialAction === 'disconnect' &&
             account?.saved_state !== 'disconnected' && (
@@ -794,21 +787,10 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
             Cancel sign-in
           </Button>
         )}
-        {(provider === 'claude_subscription' ||
-          (provider === 'xai_oauth' && active)) && (
-          <Field
-            label={
-              active
-                ? 'Authorization code or callback URL'
-                : 'Claude setup token'
-            }
-          >
+        {provider === 'xai_oauth' && active && (
+          <Field label="Authorization code or callback URL">
             <Input
-              aria-label={
-                active
-                  ? 'Authorization code or callback URL'
-                  : 'Claude setup token'
-              }
+              aria-label="Authorization code or callback URL"
               type="password"
               autoComplete="off"
               value={code}
@@ -827,7 +809,7 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
           >
             Start sign-in
           </Button>
-          {active && provider !== 'claude_subscription' && (
+          {active && (
             <Button
               disabled={locked || flow?.state === 'uncertain'}
               onClick={() => void checkNow()}
@@ -841,14 +823,6 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
               onClick={() => void performDirect('submit')}
             >
               Connect with code
-            </Button>
-          )}
-          {!active && provider === 'claude_subscription' && (
-            <Button
-              disabled={locked || !code}
-              onClick={() => void performDirect('import_token')}
-            >
-              Import setup token
             </Button>
           )}
           <Button

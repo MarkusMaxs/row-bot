@@ -453,6 +453,15 @@ def _no_title_model(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_connection_catalog_refresh(monkeypatch):
+    # Connecting or disconnecting a provider refreshes its model catalog on a background thread
+    # (B411). Tests that connect one script the account, not its catalog: unscripted, the thread
+    # asked the provider for its models after the test. The catalog refresh tests script it.
+    monkeypatch.setattr("row_bot.providers.model_catalog_cache.provider_connection_changed",
+                        lambda _provider_id, **_how: None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_desktop_notification_outputs(monkeypatch):
     # Exercise notification state/toasts normally while keeping deterministic
     # tests from showing OS alerts or playing sounds on the developer's desktop.
@@ -495,7 +504,11 @@ def reload_for_data_dir(monkeypatch: pytest.MonkeyPatch):
     The namespace is recorded through monkeypatch just before the first reload, so
     the undo puts it back in order: after undoing the patches the test made to the
     reloaded module (which would otherwise write the test's values back over it) and
-    before undoing any it made earlier.
+    before undoing any it made earlier. It is recorded with ``setattr``, the stack
+    the test's own attribute patches are on: pytest undoes every ``setattr`` before
+    any ``setitem``, so a namespace kept with ``setitem`` put back a value the test
+    had patched before the reload (``threads.DB_PATH`` stayed on the test's folder
+    while ``threads.checkpointer`` was back on the session's).
     """
     kept: dict[str, tuple[Any, set[str]]] = {}
     first_imported: list[str] = []
@@ -512,7 +525,7 @@ def reload_for_data_dir(monkeypatch: pytest.MonkeyPatch):
                 namespace = vars(module)
                 kept[name] = (module, set(namespace))
                 for key, value in list(namespace.items()):
-                    monkeypatch.setitem(namespace, key, value)
+                    monkeypatch.setattr(module, key, value)
             importlib.reload(importlib.import_module(name))
         return [sys.modules[name] for name in names]
 

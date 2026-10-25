@@ -333,6 +333,22 @@ it.each([
     /^Paused$/,
   ],
   ['a manual workflow', { enabled: true }, /^$/],
+  // U17: a one-off that ran read "Not scheduled" with its switch still on.
+  [
+    'a one-off that has run',
+    {
+      enabled: true,
+      at: '2026-10-01T10:00',
+      last_run: '2026-10-01T10:00:05',
+      next_run: null,
+    },
+    /^Done$/,
+  ],
+  [
+    'a one-off still to run',
+    { enabled: true, at: '2099-10-01T10:00', next_run: '2099-10-01T10:00' },
+    /^Next run /,
+  ],
 ] as const)('shows the next-run column for %s', async (_, overrides, text) => {
   const view = show(vi.fn(async () => pageOf([task('Saved task', overrides)])));
   await screen.findByText('Saved task');
@@ -1254,8 +1270,9 @@ it('names the profile and approvals a run uses on the row, with Auto approvals s
         task('Trusted', {
           notify_only: false,
           agent_profile_id: 'builtin:row_bot_research',
-          approval_mode: 'allow_all',
+          approval_mode: 'auto',
         }),
+        task('Unattended', { notify_only: false, approval_mode: 'full' }),
       ]),
     ),
   );
@@ -1267,7 +1284,11 @@ it('names the profile and approvals a run uses on the row, with Auto approvals s
   );
   const trusted = within(row('Trusted'));
   expect(trusted.getByText('Research')).toBeVisible();
-  expect(trusted.getByText('Auto approvals')).toHaveAttribute(
+  // Reviewed Auto is calm; only Hands-off carries the warning tone.
+  expect(trusted.getByText('Auto approvals')).not.toHaveAttribute(
+    'data-attention',
+  );
+  expect(within(row('Unattended')).getByText('Hands-off')).toHaveAttribute(
     'data-attention',
     'true',
   );

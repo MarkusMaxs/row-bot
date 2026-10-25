@@ -7,15 +7,19 @@ import {
   ShieldAlert,
   TriangleAlert,
 } from 'lucide-react';
-import type { AttentionSnapshot, PendingApprovalPage } from '../../api/types';
+import type {
+  AttentionSnapshot,
+  ConversationView,
+  PendingApprovalPage,
+} from '../../api/types';
 import { Hint } from '../../ui/primitives';
 import { PendingApprovalList } from './InPlaceApproval';
+import { conversationsWaiting, needsCount, useAttention } from './needs';
 import { usePendingApprovals } from './pending-approvals';
 
 const REMINDER_KEY = 'row-bot.update-reminder.v1';
 const REMINDER_EVENT = 'row-bot:update-reminder';
 const REMIND_AFTER_MS = 24 * 60 * 60 * 1000;
-const READ_EVERY_MS = 60_000;
 
 /**
  * "Remind me later" for one update version on this device: the indicator
@@ -50,52 +54,32 @@ export function updateReminderPending(version: string, now = Date.now()) {
 }
 
 /**
- * One sidebar-footer indicator (NiceGUI parity rows 12 and 13). It appears
- * only when something needs attention: waiting approvals open a small list
- * with Approve / Deny in place (B255), problems open Monitor, an update
+ * One sidebar indicator (NiceGUI parity rows 12 and 13). It appears only
+ * when something needs the person, with the same number Home's Needs you
+ * shows (B383): waiting approvals open a small list with Approve / Deny in
+ * place (B255), anything else opens Home, where each has its fix; an update
  * opens Updates ("Restart to update" once it is downloaded and ready). Quiet
  * when everything is healthy; no permanent health dot.
  */
 export default function AttentionIndicator({
   load,
   loadApprovals,
+  conversations = [],
   compact = false,
   onNavigate,
 }: {
   load?: (signal?: AbortSignal) => Promise<AttentionSnapshot>;
   loadApprovals?: (signal?: AbortSignal) => Promise<PendingApprovalPage>;
+  /** The listed conversations: one waiting on the person counts too. */
+  conversations?: readonly ConversationView[];
   /** The collapsed rail: an icon with its words as the name. */
   compact?: boolean;
   onNavigate?: (to: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
-  const [snapshot, setSnapshot] = useState<AttentionSnapshot | null>(null);
+  const snapshot = useAttention(load).value;
   const approvals = usePendingApprovals(loadApprovals);
   const [listOpen, setListOpen] = useState(false);
   const [, setReminded] = useState(0);
-  useEffect(() => {
-    if (!load) return;
-    let abort = new AbortController();
-    const read = () => {
-      if (document.visibilityState === 'hidden') return;
-      abort.abort();
-      abort = new AbortController();
-      const current = abort;
-      load(current.signal).then(
-        (value) => {
-          if (!current.signal.aborted) setSnapshot(value);
-        },
-        () => undefined,
-      );
-    };
-    read();
-    const timer = window.setInterval(read, READ_EVERY_MS);
-    document.addEventListener('visibilitychange', read);
-    return () => {
-      abort.abort();
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', read);
-    };
-  }, [load]);
   useEffect(() => {
     const changed = () => setReminded((value) => value + 1);
     window.addEventListener(REMINDER_EVENT, changed);
@@ -112,15 +96,39 @@ export default function AttentionIndicator({
       : null;
   const waiting = approvals.page?.items ?? [];
   const waitingTotal = approvals.page?.total ?? 0;
+  const total = needsCount({
+    approvals: approvals.page,
+    problems,
+    conversations,
+  });
+  const others = total - waitingTotal;
+  const otherTitles = [
+    ...problems.map((problem) => problem.title),
+    ...conversationsWaiting(conversations, waiting).map(
+      (row) => row.title || 'Untitled conversation',
+    ),
+  ];
   // The list closed with its last approval; the next one doesn't reopen it.
   if (!waitingTotal && listOpen) setListOpen(false);
   // An update keeps its own link beside approvals and problems (B364): "Restart to update" never hides.
   const updateLink = update ? (
     <UpdateLink update={update} compact={compact} onNavigate={onNavigate} />
   ) : null;
+  // Row-Bot's questions (N4) count as things that need the person, in their own words.
+  const asking = waiting.filter((item) => item.kind === 'question').length;
+  const waitingWords = !asking
+    ? `${waitingTotal} ${waitingTotal === 1 ? 'approval is' : 'approvals are'} waiting`
+    : asking === waitingTotal
+      ? waitingTotal === 1
+        ? 'Row-Bot has a question'
+        : `${waitingTotal} questions are waiting`
+      : `${waitingTotal} things need you`;
+  const words = others
+    ? `${total} ${total === 1 ? 'thing needs' : 'things need'} you`
+    : waitingWords;
+  const listTitle = asking ? 'Waiting for you' : 'Waiting for your approval';
   if (waitingTotal) {
-    const words = `${waitingTotal} ${waitingTotal === 1 ? 'approval is' : 'approvals are'} waiting`;
-    const problemWords = `${problems.length} ${problems.length === 1 ? 'thing needs' : 'things need'} attention`;
+    const otherWords = `${others} more ${others === 1 ? 'needs' : 'need'} you`;
     const close = (to: string) => (event: MouseEvent<HTMLAnchorElement>) => {
       setListOpen(false);
       onNavigate?.(to)(event);
@@ -139,7 +147,7 @@ export default function AttentionIndicator({
                 <ShieldAlert size={compact ? 18 : 15} aria-hidden />
                 {compact ? (
                   <span className="nav-attention-count" aria-hidden>
-                    {waitingTotal}
+                    {total}
                   </span>
                 ) : (
                   <span>{words}</span>
@@ -154,9 +162,9 @@ export default function AttentionIndicator({
               align="start"
               sideOffset={8}
               collisionPadding={12}
-              aria-label="Waiting for your approval"
+              aria-label={listTitle}
             >
-              <strong>Waiting for your approval</strong>
+              <strong>{listTitle}</strong>
               <PendingApprovalList
                 items={waiting}
                 onChanged={approvals.refresh}
@@ -167,14 +175,14 @@ export default function AttentionIndicator({
                   The {waiting.length} newest of {waitingTotal} are shown.
                 </small>
               )}
-              {problems.length > 0 && (
+              {others > 0 && (
                 <Link
                   className="button ghost small"
-                  to="/?tab=monitor"
-                  onClick={close('/?tab=monitor')}
+                  to="/"
+                  onClick={close('/')}
                 >
                   <TriangleAlert size={15} aria-hidden />
-                  {problemWords}
+                  {otherWords}
                 </Link>
               )}
             </Popover.Content>
@@ -184,20 +192,25 @@ export default function AttentionIndicator({
       </>
     );
   }
-  if (!problems.length) return updateLink;
-  const words = `${problems.length} ${problems.length === 1 ? 'thing needs' : 'things need'} attention`;
+  if (!total) return updateLink;
   return (
     <>
-      <Hint label={problems.map((problem) => problem.title).join(' · ')}>
+      <Hint label={otherTitles.join(' · ')}>
         <Link
           className={`nav-attention${compact ? ' is-compact button ghost icon-button icon-action icon-action-md' : ''}`}
           data-tone="warning"
-          to="/?tab=monitor"
-          aria-label={`${words}. Open Monitor`}
-          onClick={onNavigate?.('/?tab=monitor')}
+          to="/"
+          aria-label={`${words}. Open Home`}
+          onClick={onNavigate?.('/')}
         >
           <TriangleAlert size={compact ? 18 : 15} aria-hidden />
-          {!compact && <span>{words}</span>}
+          {compact ? (
+            <span className="nav-attention-count" aria-hidden>
+              {total}
+            </span>
+          ) : (
+            <span>{words}</span>
+          )}
         </Link>
       </Hint>
       {updateLink}

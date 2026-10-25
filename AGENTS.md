@@ -20,8 +20,12 @@ Priorities, in order:
 
 ## Ground Rules
 
-- Do not add Row-Bot first-party telemetry, analytics, or hidden phone-home
-  behavior. A third-party dependency with telemetry may be used only when its
+- Do not add Row-Bot first-party analytics or hidden phone-home behavior.
+  The only first-party telemetry is the install count (N6): its fixed payload,
+  on by default, documented on the privacy page and in the release notes, and
+  off in one click in Settings › System › Privacy or with
+  `ROW_BOT_INSTALL_COUNT=0`. Anything more needs the owner's review. A
+  third-party dependency with telemetry may be used only when its
   behavior is reviewed, documented, disclosed before installation or first
   execution, and accepted by the user. Never describe third-party telemetry
   as Row-Bot telemetry, and never allow dependency telemetry to include
@@ -223,7 +227,7 @@ Useful focused tiers: `quality`, `client-foundation`, `python`, `deterministic`,
   relation normalization, recall ranking, deduplication, migration, wiki sync,
   Dream Cycle idle/busy behavior, and repair paths.
 - MCP: use fake stdio/HTTP/SSE transports by default; destructive tools must be
-  approval-gated.
+  approval-gated; only Hands-off, chosen by the person, skips the gate.
 - Developer Studio/shell: classify install, network, delete, git commit, git
   push, and PR actions conservatively; test sandbox import gates.
 - Designer/UI: reuse the React client primitives in `frontend/src/ui` and

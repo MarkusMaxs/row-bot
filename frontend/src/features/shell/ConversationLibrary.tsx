@@ -64,6 +64,17 @@ type PendingRecovery = {
 };
 
 const PAGE_SIZE = 100;
+/**
+ * A helper's own thread is reached from the chat that started it, as in the
+ * sidebar (U12); one whose chat is gone stays listed so it can be found.
+ */
+function withoutHelpers(rows: readonly ConversationView[]) {
+  const present = new Set(rows.map((row) => row.id));
+  return rows.filter(
+    (row) =>
+      !(row.parent_conversation_id && present.has(row.parent_conversation_id)),
+  );
+}
 const RECOVERY_KEY = 'row-bot.conversation-library.pending-delete.v1';
 function readPendingRecovery(): PendingRecovery | null {
   try {
@@ -118,7 +129,30 @@ export type SingleDeleteOutcome =
 /**
  * Delete one conversation with the Library's receipt and recovery rules: an
  * unconfirmed outcome is kept for the Library page to check, never retried.
+ * The server keeps it restorable for a short while (B343), so the notice that
+ * follows can offer Undo (restoreConversation).
  */
+/** Undo a delete the server still holds; throws when it is too late. */
+export async function restoreConversation(
+  controller: Pick<ClientController, 'getSnapshot' | 'command'>,
+  row: Pick<ConversationView, 'id' | 'revision'>,
+): Promise<void> {
+  const session = controller.getSnapshot().handshake?.client_session_id;
+  if (!session) throw { code: 'session_expired' };
+  const key = crypto.randomUUID();
+  await controller.command(
+    row.id,
+    {
+      command_id: key,
+      client_session_id: session,
+      type: 'conversation.restore',
+      expected_revision: row.revision,
+      payload: {},
+    },
+    key,
+  );
+}
+
 export async function deleteOneConversation(
   controller: Pick<ClientController, 'getSnapshot' | 'command'>,
   row: Pick<ConversationView, 'id' | 'revision'>,
@@ -135,7 +169,7 @@ export async function deleteOneConversation(
     client_session_id: session,
     type: 'conversation.delete',
     expected_revision: row.revision,
-    payload: {},
+    payload: { undo: true },
   };
   writePendingRecovery({
     target: row.id,
@@ -222,9 +256,10 @@ export default function ConversationLibrary({
       setFresh(true);
       if (initialSelection.current && initialSelectedId) {
         initialSelection.current = false;
-        const index = inGroupOrder(result, new Date()).findIndex(
-          (row) => row.id === initialSelectedId,
-        );
+        const index = inGroupOrder(
+          withoutHelpers(result),
+          new Date(),
+        ).findIndex((row) => row.id === initialSelectedId);
         setPage(index >= 0 ? Math.floor(index / PAGE_SIZE) : 0);
         setSelected(index >= 0 ? new Set([initialSelectedId]) : new Set());
       } else {
@@ -258,7 +293,7 @@ export default function ConversationLibrary({
 
   const now = new Date();
   const matching = inGroupOrder(
-    (rows ?? []).filter((row) => matchesType(row, filter)),
+    withoutHelpers(rows ?? []).filter((row) => matchesType(row, filter)),
     now,
   );
   const visible = matching.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -968,6 +1003,9 @@ export default function ConversationLibrary({
                             }}
                           >
                             <span className="library-row-title">{title}</span>
+                            {row.incognito && (
+                              <span className="sr-only"> (incognito)</span>
+                            )}
                             {date && (
                               <time
                                 className="library-row-date"

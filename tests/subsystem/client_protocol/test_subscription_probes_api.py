@@ -22,7 +22,7 @@ BASE = "/api/v1/settings/providers/subscriptions/probes"
 def reviewed(client, headers):
     before = config.CONFIG_PATH.read_bytes()
     snapshot = client.get(BASE, headers=headers)
-    assert snapshot.status_code == 200 and len(snapshot.json()["items"]) == 6, snapshot.text
+    assert snapshot.status_code == 200 and len(snapshot.json()["items"]) == 4, snapshot.text
     intent = {"provider_id": "codex", "provider_revision": snapshot.json()["revision"],
               "kind": "tokens", "model_ref": None}
     response = client.post(BASE + "/review", headers=headers, json=intent)

@@ -9,11 +9,22 @@
           "title": "Agent Profile Id",
           "type": "string"
         },
+        "always_ask": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 16,
+          "title": "Always Ask",
+          "type": "array"
+        },
         "approval_mode": {
           "enum": [
             "block",
             "approve",
-            "allow_all"
+            "auto",
+            "full"
           ],
           "title": "Approval Mode",
           "type": "string"
@@ -29,6 +40,15 @@
             }
           ],
           "title": "Concurrency Group"
+        },
+        "missed_runs": {
+          "default": "skip",
+          "enum": [
+            "skip",
+            "run_once"
+          ],
+          "title": "Missed Runs",
+          "type": "string"
         },
         "model_override": {
           "anyOf": [
@@ -66,6 +86,19 @@
           ],
           "title": "Trigger Type",
           "type": "string"
+        },
+        "workspace_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workspace Id"
         }
       },
       "required": [
@@ -103,7 +136,8 @@
           "enum": [
             "block",
             "approve",
-            "allow_all"
+            "auto",
+            "full"
           ],
           "type": "string"
         },
@@ -115,6 +149,11 @@
     },
     "fields": {
       "$ref": "#/$defs/TaskSettingsFields"
+    },
+    "full_autonomy_confirmed": {
+      "default": false,
+      "title": "Full Autonomy Confirmed",
+      "type": "boolean"
     },
     "profile_available": {
       "title": "Profile Available",
@@ -147,6 +186,24 @@
     "webhook_configured": {
       "title": "Webhook Configured",
       "type": "boolean"
+    },
+    "workspace_available": {
+      "default": true,
+      "title": "Workspace Available",
+      "type": "boolean"
+    },
+    "workspace_name": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workspace Name"
     }
   },
   "required": [

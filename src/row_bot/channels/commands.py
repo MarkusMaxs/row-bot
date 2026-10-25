@@ -14,6 +14,7 @@ Supported commands
 ``/help``   — list available commands
 ``/tools``  — list enabled tools
 ``/goal``   — start or control Goal Mode
+``/incognito`` — keep this chat out of memory, or let memory read it again
 ``/stop``   — stop the current generation (if supported)
 """
 
@@ -49,6 +50,7 @@ COMMANDS: list[ChannelCommand] = [
     ChannelCommand("/agents", "Show agent runs for this chat",   "cmd_agents"),
     ChannelCommand("/agent", "Start a child Agent",              "cmd_agent"),
     ChannelCommand("/goal", "Start or control Goal Mode",        "cmd_goal"),
+    ChannelCommand("/incognito", "Keep this chat out of memory (on or off)", "cmd_incognito"),
     ChannelCommand("/skill",  "Use a skill in this conversation", "cmd_skill"),
     ChannelCommand("/skills", "Show active and suggested skills", "cmd_skill"),
     ChannelCommand("/skill-reset", "Reset skills in this conversation", "cmd_skill"),
@@ -73,6 +75,7 @@ AGENTS_COMMAND_TOKENS = {"/agents"}
 AGENT_COMMAND_TOKENS = {"/agent", "/subagent"}
 GOAL_COMMAND_TOKENS = {"/goal"}
 REASONING_COMMAND_TOKENS = {"/reasoning"}
+INCOGNITO_COMMAND_TOKENS = {"/incognito"}
 
 
 def command_token(text: str) -> str:
@@ -94,6 +97,7 @@ def is_thread_scoped_command(text: str) -> bool:
         | AGENT_COMMAND_TOKENS
         | GOAL_COMMAND_TOKENS
         | REASONING_COMMAND_TOKENS
+        | INCOGNITO_COMMAND_TOKENS
     )
 
 
@@ -217,38 +221,70 @@ def cmd_model(channel_name: str, arg: str = "") -> str:
     )
 
 
+_APPROVAL_WORDS = {
+    "block": "nothing that makes changes runs",
+    "approve": "Row-Bot asks you before anything that makes changes",
+    "auto": "a reviewer approves what clearly matches what you asked; anything else asks you",
+    "full": "nothing asks; every action runs and is recorded",
+}
+
+
 def cmd_approval(channel_name: str, arg: str = "", *, thread_id: str | None = None) -> str:
-    """Handle ``/approval [block|ask|auto]`` for channel conversations."""
+    """Handle ``/approval [block|ask|auto]`` for channel conversations.
+
+    Hands-off is never turned on from a channel: the person turns it on in the Row-Bot app, where a
+    dialog says what it skips, and only for their own chats.
+    """
     if not thread_id:
         return f"{channel_name} could not identify the current conversation thread."
     try:
-        from row_bot.approval_policy import approval_label, normalize_approval_mode
+        from row_bot.approval_policy import approval_label, known_approval_mode
         from row_bot.threads import _get_thread_approval_mode, _set_thread_approval_mode
         from row_bot.agent import clear_agent_cache
     except Exception as exc:
         return f"Could not inspect approval mode: {exc}"
 
     raw = str(arg or "").strip().lower()
-    aliases = {
-        "ask": "approve",
-        "approve": "approve",
-        "approval": "approve",
-        "block": "block",
-        "blocked": "block",
-        "auto": "allow_all",
-        "allow": "allow_all",
-        "allow_all": "allow_all",
-        "allow-all": "allow_all",
-    }
+    aliases = {"allow": "auto", "reviewed": "auto"}
     if not raw:
         mode = _get_thread_approval_mode(thread_id)
-        return f"Current approval mode: **{approval_label(mode)}** (`{mode}`)."
-    mode = normalize_approval_mode(aliases.get(raw, raw), "")
-    if mode not in {"block", "approve", "allow_all"}:
+        return f"Approvals here: **{approval_label(mode)}**: {_APPROVAL_WORDS[mode]}."
+    mode = known_approval_mode(aliases.get(raw, raw))
+    if mode == "full":
+        return ("Hands-off can only be turned on in the Row-Bot app, for your own chats. "
+                "Here you can use `/approval block`, `/approval ask`, or `/approval auto`.")
+    if mode not in {"block", "approve", "auto"}:
         return "Usage: `/approval block`, `/approval ask`, or `/approval auto`."
     _set_thread_approval_mode(thread_id, mode)
     clear_agent_cache()
-    return f"Approval mode set to **{approval_label(mode)}** (`{mode}`)."
+    return f"Approvals here: **{approval_label(mode)}**: {_APPROVAL_WORDS[mode]}."
+
+
+INCOGNITO_ON = ("Incognito is on: nothing in this chat is saved to memory unless you say so. "
+                "Memories already saved from it stay; you can review them in Row-Bot under Knowledge.")
+INCOGNITO_OFF = ("Incognito is off: memory reads this chat again from here on. "
+                 "What was said while it was on is never read.")
+
+
+def cmd_incognito(channel_name: str, arg: str = "", *, thread_id: str | None = None) -> str:
+    """Handle ``/incognito [on|off]``: the same as the chat's Incognito switch in the app (N11)."""
+    if not thread_id:
+        return f"{channel_name} could not identify the current conversation thread."
+    raw = str(arg or "").strip().lower()
+    try:
+        from row_bot.threads import incognito_state, set_thread_incognito
+
+        if not raw:
+            if incognito_state(thread_id).incognito:
+                return "Incognito is on here: nothing in this chat is saved to memory unless you say so."
+            return "Incognito is off here. Use `/incognito on` to keep this chat out of memory."
+        if raw not in {"on", "off"}:
+            return "Usage: `/incognito on` or `/incognito off`."
+        state = set_thread_incognito(thread_id, raw == "on")
+    except Exception as exc:
+        log.warning("/incognito failed: %s", exc)
+        return f"Could not change incognito: {exc}"
+    return INCOGNITO_ON if state.incognito else INCOGNITO_OFF
 
 
 def cmd_reasoning(channel_name: str, arg: str = "", *, thread_id: str | None = None) -> str:
@@ -532,6 +568,9 @@ def dispatch(
 
     if cmd in REASONING_COMMAND_TOKENS:
         return cmd_reasoning(channel_name, arg, thread_id=thread_id)
+
+    if cmd in INCOGNITO_COMMAND_TOKENS:
+        return cmd_incognito(channel_name, arg, thread_id=thread_id)
 
     handler = _HANDLER_MAP.get(cmd)
     if handler is None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import threading
@@ -282,6 +283,8 @@ _READ_ONLY_DEFAULT_DENY_TOOLS = {
     "gmail",
     "goal",
     "image_gen",
+    "outlook_calendar",
+    "outlook_mail",
     "row_bot_updater",
     "task",
     "tracker",
@@ -292,6 +295,10 @@ _READ_ONLY_DEFAULT_DENY_TOOLS = {
 
 class AgentRunnerError(ValueError):
     """Raised when a child Agent cannot be created or started."""
+
+
+class HelperReasoningError(AgentRunnerError):
+    """The helper's model does not offer the reasoning level asked for (B386)."""
 
 
 def _short_title(text: str, *, limit: int = 64) -> str:
@@ -400,6 +407,32 @@ def _with_code_folder_reads(
     if not allow or "developer" in allow or "developer" in deny:
         return snapshot
     snapshot["tool_policy_json"] = {**tool_policy, "allow_tools": [*allow, "developer"]}
+    return snapshot
+
+
+def _with_chat_apps(profile_snapshot: Mapping[str, Any], enabled_tool_names: Sequence[str]) -> dict[str, Any]:
+    """A helper keeps the apps of the chat that delegated it (B344).
+
+    The built-in profiles list their tools and none lists the apps, so a research
+    helper could not read the Notion page its chat had on. When the delegating turn
+    has apps, a built-in profile's list gains them: the apps the chat left out stay
+    out (its app scope), and a read-only profile's capability refuses every app tool
+    that isn't a read at dispatch, before any approval. A person's own profile keeps
+    the tool list they chose for it.
+    """
+    snapshot = dict(profile_snapshot)
+    tool_policy = snapshot.get("tool_policy_json")
+    if (
+        "mcp" not in enabled_tool_names
+        or snapshot.get("source") != "builtin"
+        or not isinstance(tool_policy, Mapping)
+    ):
+        return snapshot
+    allow = [str(name) for name in tool_policy.get("allow_tools") or []]
+    deny = [str(name) for name in tool_policy.get("deny_tools") or []]
+    if not allow or "mcp" in deny or any(name == "mcp" or name.startswith("mcp_") for name in allow):
+        return snapshot
+    snapshot["tool_policy_json"] = {**tool_policy, "allow_tools": [*allow, "mcp"]}
     return snapshot
 
 
@@ -526,6 +559,7 @@ def _resume_invoke_agent(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict[str, Any] | None = None,
     stop_event: threading.Event,
 ) -> str | dict:
     from row_bot.agent import resume_invoke_agent
@@ -536,11 +570,81 @@ def _resume_invoke_agent(
         approved,
         interrupt_ids=interrupt_ids,
         stop_event=stop_event,
+        **({"resume_values": resume_values} if resume_values else {}),
     )
 
 
 def _is_task_stopped(exc: BaseException) -> bool:
     return exc.__class__.__name__ == "TaskStoppedError"
+
+
+def _model_reasoning_ref(label: str) -> tuple[str, str, str]:
+    """(canonical reasoning ref, selection ref, model id) for a model choice; blanks if it doesn't resolve."""
+    if not label:
+        return "", "", ""
+    try:
+        from row_bot.providers.reasoning import canonical_reasoning_model_ref
+        from row_bot.providers.resolution import resolve_provider_config
+
+        resolved = resolve_provider_config(label, allow_legacy_local=True)
+        return (
+            canonical_reasoning_model_ref(resolved.provider_id, resolved.runtime_model),
+            resolved.selection_ref,
+            resolved.model_id,
+        )
+    except Exception:
+        logger.debug("Model %s did not resolve for a helper's reasoning", label, exc_info=True)
+        return "", "", label
+
+
+def _helper_reasoning(
+    parent_thread_id: str, parent_model: str, child_model: str, requested: str,
+) -> tuple[str, dict[str, str], Any]:
+    """The helper's reasoning ref, what it runs on and its reasoning, refused before anything starts (B386)."""
+    from row_bot.models import get_current_model
+    from row_bot.providers.reasoning import helper_reasoning
+
+    current = str(get_current_model() or "")
+    parent_ref, _, _ = _model_reasoning_ref(parent_model or current)
+    child_ref, selection_ref, model_id = _model_reasoning_ref(child_model or current)
+    try:
+        chosen = helper_reasoning(parent_thread_id, parent_ref, child_ref, requested)
+    except ValueError as exc:
+        raise HelperReasoningError(str(exc)) from exc
+    runs_on = {"model_ref": selection_ref, "model": model_id, "reasoning": chosen.selection.label,
+               "not_offered": chosen.not_offered}
+    return child_ref, runs_on, chosen
+
+
+def helper_thinking(run_id: str, recorded: Any = None) -> dict[str, str]:
+    """The model and reasoning a helper started with (B386), or {} for an older run.
+
+    ``recorded`` is the event's payload when the caller already read it."""
+    payload = recorded
+    if payload is None:
+        from row_bot.agent_runs import get_agent_events
+
+        payload = next((event.get("payload_json") for event in get_agent_events(run_id, limit=20)
+                        if event.get("type") == "reasoning.chosen"), None)
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = None
+    if not isinstance(payload, Mapping):
+        return {}
+    return {key: str(payload.get(key) or "")[:120]
+            for key in ("model_ref", "model", "reasoning", "not_offered")}
+
+
+def thinking_line(thinking: Mapping[str, str]) -> str:
+    """"claude-opus-4-8 · High", or "… · Provider default: High isn't offered"."""
+    if not thinking:
+        return ""
+    line = " · ".join(value for value in (thinking.get("model"), thinking.get("reasoning")) if value)
+    if thinking.get("not_offered"):
+        line += f": {thinking['not_offered']} isn't offered"
+    return line
 
 
 def _delegating_app_scope(parent_thread_id: str, stored: Mapping[str, Any] | None = None) -> dict | None:
@@ -579,6 +683,7 @@ def _build_child_config(
     profile_snapshot: Mapping[str, Any],
     tool_allowlist: Sequence[str] | None = None,
     app_scope: Mapping[str, Any] | None = None,
+    person_rules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     configurable = {
         "thread_id": child_thread_id,
@@ -605,7 +710,17 @@ def _build_child_config(
         configurable["designer_project_id"] = designer_project_id
     if app_scope:  # The apps the delegating turn left out stay out for its agent too.
         configurable["app_scope"] = dict(app_scope)
+    if person_rules:  # A workflow's "Always ask me" goes with every agent it starts (N9).
+        configurable["person_rules"] = dict(person_rules)
     return {"configurable": configurable}
+
+
+def _delegating_person_rules(given: Mapping[str, Any] | None) -> dict | None:
+    """The "Always ask me" rules an agent starts with: those given, else the running turn's."""
+    if given is not None:
+        return dict(given) if given else None
+    reader = getattr(sys.modules.get("row_bot.agent"), "current_person_rules", None)
+    return reader() if callable(reader) else None
 
 
 def spawn_agent_run(
@@ -631,8 +746,10 @@ def spawn_agent_run(
     orchestration_attempt: int = 1,
     retry_of_run_id: str = "",
     app_scope: Mapping[str, Any] | None = None,
+    reasoning: str = "",
     wait: bool = False,
     timeout: float | None = None,
+    person_rules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create and start a single child Agent run. ``app_scope``: what an earlier run of this work left out
     of the apps (a retry or resume), kept as well as anything the chat leaves out now."""
@@ -703,7 +820,7 @@ def spawn_agent_run(
         get_agent_run,
     )
     from row_bot.agent_settings import load_agent_runtime_settings
-    from row_bot.threads import create_thread, set_thread_skills_override
+    from row_bot.threads import create_thread, incognito_state, set_thread_skills_override
 
     run_id = uuid.uuid4().hex[:12]
     parent_run = get_agent_run(parent_run_id) if parent_run_id else None
@@ -722,6 +839,10 @@ def spawn_agent_run(
         )
     # Read before anything is created, so a refusal leaves nothing behind.
     app_scope = _delegating_app_scope(parent_thread_id, app_scope) if parent_thread_id else None
+    # A helper thinks as the conversation does unless it was given a level (B386).
+    child_model_ref, runs_on, thinking = _helper_reasoning(
+        parent_thread_id, str(parent_defaults["model_override"] or ""), model, reasoning,
+    )
     effective_developer_workspace_id = parent_developer_workspace_id
     workspace_path = ""
     worktree_allocation: dict[str, Any] | None = None
@@ -756,6 +877,7 @@ def spawn_agent_run(
         parent_workspace_id=str(parent_defaults.get("developer_workspace_id") or ""),
         child_workspace_id=effective_developer_workspace_id,
     )
+    profile_snapshot = _with_chat_apps(profile_snapshot, _enabled_tool_names(enabled_tool_names))
 
     packet = build_child_agent_prompt(
         objective=objective,
@@ -782,7 +904,13 @@ def spawn_agent_run(
         agent_profile_id=str(profile_snapshot.get("id") or ""),
         agent_profile_slug=str(profile_snapshot.get("slug") or ""),
         seed_default_skills=False,
+        # A helper started from an incognito chat is incognito too (N11).
+        incognito=bool(parent_thread_id) and incognito_state(parent_thread_id).incognito,
     )
+    if child_model_ref and not thinking.selection.is_default:
+        from row_bot.threads import set_thread_reasoning_selection
+
+        set_thread_reasoning_selection(child_thread_id, child_model_ref, thinking.selection.to_json())
     child_skills = _profile_child_skills(parent_defaults["skills_override"], profile_snapshot)
     set_thread_skills_override(child_thread_id, child_skills)
     if parent_thread_id:
@@ -837,6 +965,7 @@ def spawn_agent_run(
         profile_snapshot=profile_snapshot,
         tool_allowlist=tool_allowlist,
         app_scope=app_scope,
+        person_rules=_delegating_person_rules(person_rules),
     )
     if tool_allowlist:
         try:
@@ -906,6 +1035,12 @@ def spawn_agent_run(
             },
             visibility="user_visible",
         )
+    append_agent_event(
+        run_id,
+        "reasoning.chosen",
+        runs_on,
+        visibility="user_visible",
+    )
     append_agent_event(
         run_id,
         "context.packed",
@@ -1000,8 +1135,15 @@ def _pause_agent_for_approval(
     configurable = config.get("configurable") or {}
     source_label = str(run.get("display_name") or "Child Agent")
     parent_thread_id = str(run.get("parent_thread_id") or "")
+    from row_bot.questions import question_item
+    from row_bot.tasks import PERSON_APPROVAL_TIMEOUT_MINUTES, _person_only_interrupt
+
+    held = _person_only_interrupt(interrupts)
+    # A card only the person answers is asked by itself, as in a chat (B412, B415): the helper's notice
+    # names that one action, and what waits beside it asks again once it is answered.
+    asked = [held] if held and question_item(interrupts) is None else interrupts
     approval_payload = normalize_interrupts(
-        interrupts,
+        asked,
         source_label=source_label,
         agent_run_id=run_id,
         parent_thread_id=parent_thread_id,
@@ -1019,6 +1161,11 @@ def _pause_agent_for_approval(
             if isinstance(item, dict)
         ),
     }
+    if held:
+        # The workflow's own "Always ask me" card (N9): only the person answers it, bound to its details.
+        resume_state["person_binding"] = str(held["binding"])
+        approval_payload = {**approval_payload, "person_only": True, "binding": str(held["binding"]),
+                            "card": held.get("card") or {}}
     resume_token, approval_id = create_approval_request(
         run_id=run_id,
         task_id="",
@@ -1030,6 +1177,7 @@ def _pause_agent_for_approval(
         source_thread_id=str(configurable.get("thread_id") or run.get("thread_id") or ""),
         parent_thread_id=parent_thread_id,
         approval_payload_json=approval_payload,
+        timeout_minutes=PERSON_APPROVAL_TIMEOUT_MINUTES if held else 0,
     )
     resume_state["resume_token"] = resume_token
     resume_state["approval_id"] = approval_id
@@ -1304,14 +1452,34 @@ def _run_agent_thread(
                     _conversation_changed(str((config.get("configurable") or {}).get("thread_id") or ""))
 
 
+def _resume_interrupt_ids(resume_state: Mapping[str, Any]) -> list[str]:
+    """The ids of the interrupts a paused helper waits on, once each, in order."""
+    interrupt_ids: list[str] = []
+    for intr in resume_state.get("interrupts", []):
+        if not isinstance(intr, dict):
+            continue
+        raw_id = intr.get("__interrupt_id") or intr.get("id")
+        if raw_id and str(raw_id) not in interrupt_ids:
+            interrupt_ids.append(str(raw_id))
+    return interrupt_ids
+
+
 def resume_agent_run(
     run_id: str,
     *,
     resume_token: str = "",
     approved: bool = True,
+    resume_values: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Resume or stop an interrupted child Agent after approval response."""
+    """Resume or stop an interrupted child Agent after approval response.
+
+    ``resume_values``: the helper asked a question (N4) and this is the answer (or a skip) for that question's
+    own interrupt. The helper always goes on: skipping a question never stops it, and an action asked beside
+    the question asks again for itself. A card only the person answers (an incognito memory write, N11) is
+    answered for itself the same way when other actions wait beside it.
+    """
     from row_bot.agent_runs import append_agent_event, finish_agent_run, get_agent_run
+    from row_bot.tools.approval_gate import asked_alone, bound_answer
 
     run = get_agent_run(run_id)
     if not run:
@@ -1339,6 +1507,7 @@ def resume_agent_run(
                 str(orchestration["id"]),
                 kind="child_approval_resolved",
                 content=(
+                    f"Child {run_id}'s question was answered." if resume_values else
                     f"Approval for child {run_id} was "
                     f"{'approved' if approved else 'denied'}."
                 ),
@@ -1355,7 +1524,17 @@ def resume_agent_run(
             )
     except Exception:
         logger.debug("Could not publish child approval resolution", exc_info=True)
-    if not approved:
+    resume_state = run.get("resume_state_json") or {}
+    interrupt_ids = _resume_interrupt_ids(resume_state)
+    binding = str(resume_state.get("person_binding") or "")
+    if binding and not resume_values:
+        # A card only the person answers was asked by itself, as in a chat (B412, B415): this answer is that
+        # card's alone, so a Don't save never stops the helper, and what waited beside it (another incognito
+        # memory write, say) asks again for itself, on its own card.
+        alone_id =str((asked_alone(resume_state.get("interrupts")) or {}).get("__interrupt_id") or "")
+        if len(interrupt_ids) > 1 and alone_id in interrupt_ids:
+            resume_values = {alone_id: bound_answer(True, binding) if approved else False}
+    if not approved and not resume_values:
         append_agent_event(
             run_id,
             "approval.resolved",
@@ -1368,7 +1547,6 @@ def resume_agent_run(
         )
         _notify_child_agent_waiters(run_id)
         return run
-    resume_state = run.get("resume_state_json") or {}
     config = resume_state.get("config")
     enabled_tool_names = resume_state.get("enabled_tool_names")
     if not isinstance(config, dict) or not isinstance(enabled_tool_names, list):
@@ -1384,28 +1562,19 @@ def resume_agent_run(
         resume_state.get("external_discovery_active")
     )
     config["configurable"] = configurable
-    interrupt_ids: list[str] = []
-    seen_interrupt_ids: set[str] = set()
-    for intr in resume_state.get("interrupts", []):
-        if not isinstance(intr, dict):
-            continue
-        raw_id = intr.get("__interrupt_id") or intr.get("id")
-        if not raw_id:
-            continue
-        interrupt_id = str(raw_id)
-        if interrupt_id in seen_interrupt_ids:
-            continue
-        seen_interrupt_ids.add(interrupt_id)
-        interrupt_ids.append(interrupt_id)
     append_agent_event(
         run_id,
         "approval.resolved",
-        {"approved": True, "resume_token": resume_token},
+        {"approved": bool(approved), "resume_token": resume_token},
     )
     stop_event = threading.Event()
+    answer: Any = True
+    if binding:
+        # The person's approval of exactly what their card showed (N9).
+        answer = bound_answer(True, binding)
     thread = generation_registry.thread(
         target=_resume_agent_thread,
-        args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event),
+        args=(run_id, enabled_tool_names, config, interrupt_ids, stop_event, resume_values, answer),
         conversation_id=str(config["configurable"]["thread_id"]),
         stop_event=stop_event,
         domain="agent",
@@ -1430,6 +1599,8 @@ def _resume_agent_thread(
     config: dict[str, Any],
     interrupt_ids: list[str],
     stop_event: threading.Event,
+    resume_values: dict[str, Any] | None = None,
+    answer: Any = True,
 ) -> None:
     from row_bot.agent_runs import (
         append_agent_event,
@@ -1459,9 +1630,10 @@ def _resume_agent_thread(
         result = _resume_invoke_agent(
             enabled_tool_names,
             config,
-            True,
+            answer,
             interrupt_ids=interrupt_ids or None,
             stop_event=stop_event,
+            **({"resume_values": resume_values} if resume_values else {}),
         )
         if not stop_event.is_set() and not (
             isinstance(result, dict)

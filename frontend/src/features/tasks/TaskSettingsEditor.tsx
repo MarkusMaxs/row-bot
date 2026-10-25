@@ -1,4 +1,10 @@
-import { useEffect, useId, useRef, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import {
   useTaskEditSession,
   useTaskEditValue,
@@ -9,6 +15,7 @@ import { clientError } from '../../api/errors';
 import {
   Button,
   Combobox,
+  InlineEmpty,
   Input,
   Select,
   SettingRow,
@@ -16,7 +23,14 @@ import {
   Toggle,
   type ComboboxOption,
 } from '../../ui/primitives';
+import { AppIcon } from '../apps/parts';
+import type { StepApp } from './StepApps';
 import { DangerAction, SettingsDangerZone } from '../settings/anatomy';
+import {
+  approvalLevel,
+  useConfirmFullAutonomy,
+  type ApprovalLevel,
+} from '../shell/approval-levels';
 import WebhookAddress, {
   type WebhookAddressProps,
   type WebhookConfiguration,
@@ -36,13 +50,16 @@ export interface TaskSettingsEditorProps {
     revision: string,
     profileRevision: string,
     fields: TaskSettingsFields,
+    /** The person turned Hands-off on in its one-time dialog just now. */
+    confirmFullAutonomy?: boolean,
   ) => Promise<TaskSettingsSnapshot>;
   rotate: (taskId: string, revision: string) => Promise<TaskSettingsSnapshot>;
   download: (taskId: string, revision: string) => Promise<void>;
   onSaved: (snapshot: TaskSettingsSnapshot) => void;
   onCancel: () => void;
   profileOptions?: ReadonlyArray<{ id: string; label: string }>;
-  modelOptions?: ReadonlyArray<{ id: string; label: string }>;
+  /** Favourites first; hidden models carry the group "More models" (F10). */
+  modelOptions?: ReadonlyArray<{ id: string; label: string; group?: string }>;
   /** Shown in the page's one-line description. */
   taskName?: string;
   /** The saved webhook's address and reachability (parity rows 20, 52). */
@@ -52,16 +69,105 @@ export interface TaskSettingsEditorProps {
       revision: string,
     ) => Promise<WebhookConfiguration>;
   };
+  /** Your code folders, for the workflow's own folder (N9). */
+  loadFolders?: (
+    signal?: AbortSignal,
+  ) => Promise<ReadonlyArray<{ id: string; name: string }>>;
+  /** The apps set up here, for "Always ask me" (N9). */
+  loadApps?: (signal?: AbortSignal) => Promise<readonly StepApp[]>;
+  /** Opened to fix one thing: the Code folder a removed folder left (N9). */
+  focus?: 'workspace_id';
+}
+
+/** Load a list once for the editor; null until it is known. */
+function useLoaded<T>(load?: (signal?: AbortSignal) => Promise<T>): T | null {
+  const [value, setValue] = useState<T | null>(null);
+  useEffect(() => {
+    if (!load) return;
+    const abort = new AbortController();
+    load(abort.signal).then(
+      (found) => !abort.signal.aborted && setValue(found),
+      () => undefined,
+    );
+    return () => abort.abort();
+  }, [load]);
+  return value;
+}
+
+/** The apps whose actions always wait for the person's own approval. */
+function AlwaysAskApps({
+  apps,
+  value,
+  onChange,
+}: {
+  apps: readonly StepApp[] | null;
+  value: readonly string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (apps === null) return <Skeleton label="Loading apps" />;
+  const chosen = new Set(value);
+  const known = new Set(apps.map((app) => app.id));
+  // An app that is gone stays listed while it is chosen, so saving never drops it silently.
+  const gone = value.filter((id) => !known.has(id));
+  if (!apps.length && !gone.length)
+    return (
+      <InlineEmpty>
+        No apps are set up yet. A step can still ask you with its own Always ask
+        me switch.
+      </InlineEmpty>
+    );
+  const set = (id: string, on: boolean) =>
+    onChange(
+      on ? [...value, id].slice(0, 16) : value.filter((item) => item !== id),
+    );
+  return (
+    <ul className="step-apps">
+      {apps.map((app) => (
+        <li key={app.id}>
+          <AppIcon icon={app.icon} size={16} />
+          <Toggle
+            label={`Always ask me before ${app.name} acts`}
+            checked={chosen.has(app.id)}
+            disabled={!chosen.has(app.id) && chosen.size >= 16}
+            onChange={(event) => set(app.id, event.target.checked)}
+          />
+          <span>{app.name}</span>
+        </li>
+      ))}
+      {gone.map((id) => (
+        <li key={id}>
+          <Toggle
+            label="Always ask me before an app that was removed acts"
+            checked
+            onChange={() => set(id, false)}
+          />
+          <span>An app that was removed</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** What the saved approvals let this workflow do, in words. */
 function approvalWords(mode: string | null) {
-  return mode === 'block'
-    ? 'Approvals: Block. This workflow can only read; anything that would change something is refused.'
-    : mode === 'approve'
-      ? 'Approvals: Ask. This workflow asks you before anything that changes something.'
-      : 'Approvals: Auto. This workflow makes changes without asking, except where an app always asks.';
+  return {
+    block:
+      'Approvals: Block. This workflow can only read; anything that would change something is refused.',
+    approve:
+      'Approvals: Ask. This workflow asks you before anything that changes something.',
+    auto: "Approvals: Auto. A reviewer approves what matches this workflow's steps; anything else pauses the run for you.",
+    full: 'Approvals: Hands-off. This workflow makes every change without asking; each one is recorded.',
+  }[approvalLevel(mode)];
 }
+
+/** What each level means for a workflow that runs while you're away. */
+const LEVEL_NOTES: Record<ApprovalLevel, string> = {
+  approve:
+    'The run pauses and asks you before anything that changes something.',
+  auto: "A reviewer approves what matches the workflow's steps; anything else pauses the run for you. The profile's limits still apply.",
+  full: 'Nothing pauses for approval; every action runs and is recorded. The profile and sandbox limits still apply.',
+  block: 'Anything that would change something is refused.',
+};
 
 export default function TaskSettingsEditor({
   taskId,
@@ -76,9 +182,14 @@ export default function TaskSettingsEditor({
   modelOptions = [],
   taskName = '',
   webhook,
+  loadFolders,
+  loadApps,
+  focus,
   session: injectedSession,
 }: TaskSettingsEditorProps) {
   const session = useTaskEditSession(injectedSession, 'settings', taskId);
+  const folders = useLoaded(loadFolders);
+  const apps = useLoaded(loadApps);
   // Pick from lists (U41). A saved value that is not offered any more stays
   // visible, so it is never swapped silently.
   const profileChoices = (current: string) =>
@@ -93,6 +204,7 @@ export default function TaskSettingsEditor({
     ...modelOptions.map((option) => ({
       value: option.id,
       label: option.label,
+      ...(option.group ? { group: option.group } : {}),
     })),
     ...(current && !modelOptions.some((option) => option.id === current)
       ? [{ value: current, label: `${current} (not available)` }]
@@ -127,6 +239,13 @@ export default function TaskSettingsEditor({
     true,
   );
   const [reload, setReload] = useTaskEditValue(session, 'reload', 0);
+  // Hands-off was turned on in its dialog during this edit: the save says so once.
+  const [fullConfirmedNow, setFullConfirmedNow] = useTaskEditValue(
+    session,
+    'fullConfirmedNow',
+    false,
+  );
+  const confirmFullAutonomy = useConfirmFullAutonomy();
   const [pendingKind, setPendingKind] = useTaskEditValue<'save' | 'rotate'>(
     session,
     'pendingKind',
@@ -137,6 +256,14 @@ export default function TaskSettingsEditor({
   const reviewAbort = useRef<AbortController | null>(null);
   const effectPending = useRef(false);
   const inputId = useId();
+  const ready = fields !== null;
+  // Opened from a run its removed folder stopped: the Code folder is the one thing to change.
+  useEffect(() => {
+    if (focus !== 'workspace_id' || !ready) return;
+    const field = document.getElementById(`${inputId}-folder`);
+    field?.scrollIntoView?.({ block: 'center' });
+    field?.focus();
+  }, [focus, ready, inputId]);
 
   useEffect(() => {
     const abort = session.beginRead(reload);
@@ -332,6 +459,7 @@ export default function TaskSettingsEditor({
                     snapshot.revision,
                     selected!.profile_revision!,
                     selectedFields,
+                    fullConfirmedNow && selectedFields.approval_mode === 'full',
                   )
                 : rotate(taskId, snapshot.revision),
             );
@@ -459,28 +587,35 @@ export default function TaskSettingsEditor({
             <SettingRow
               label="Approvals"
               htmlFor={`${inputId}-approval`}
-              description={
-                fields.approval_mode === 'allow_all'
-                  ? 'Auto permits actions without asking when the selected profile allows them; apps still ask when their access says to. Existing sandbox limits still apply.'
-                  : 'What happens when a run wants to act.'
-              }
+              description={LEVEL_NOTES[approvalLevel(fields.approval_mode)]}
             >
               <Select
                 id={`${inputId}-approval`}
                 aria-label="Approval policy"
                 value={fields.approval_mode}
-                onChange={(event) =>
-                  change(
-                    'approval_mode',
-                    event.target.value as TaskSettingsFields['approval_mode'],
-                  )
-                }
+                data-level={fields.approval_mode}
+                onChange={(event) => {
+                  const level = event.target.value as ApprovalLevel;
+                  const opener = event.currentTarget;
+                  if (
+                    level !== 'full' ||
+                    snapshot?.full_autonomy_confirmed ||
+                    fullConfirmedNow
+                  ) {
+                    change('approval_mode', level);
+                    return;
+                  }
+                  // The first time on this install: say what it skips, then turn it on.
+                  confirmFullAutonomy(() => {
+                    setFullConfirmedNow(true);
+                    change('approval_mode', 'full');
+                  }, opener);
+                }}
               >
-                <option value="block">Block actions</option>
                 <option value="approve">Ask before actions</option>
-                <option value="allow_all">
-                  Auto — allow actions within the profile policy
-                </option>
+                <option value="auto">Auto, reviewed</option>
+                <option value="full">Hands-off</option>
+                <option value="block">Block actions</option>
               </Select>
             </SettingRow>
             <SettingRow
@@ -497,6 +632,74 @@ export default function TaskSettingsEditor({
           </fieldset>
           <fieldset disabled={locked} className="task-settings-group">
             <legend>Runs</legend>
+            <SettingRow
+              label="Code folder"
+              htmlFor={`${inputId}-folder`}
+              description={
+                fields.workspace_id &&
+                fields.workspace_id === snapshot?.fields.workspace_id &&
+                snapshot?.workspace_available === false
+                  ? `${snapshot.workspace_name ?? 'This folder'} isn't a code folder any more. Choose another, or None.`
+                  : 'Every step works in it. A child agent step can choose its own.'
+              }
+            >
+              <Select
+                id={`${inputId}-folder`}
+                aria-label="Code folder"
+                value={fields.workspace_id ?? ''}
+                data-unavailable={
+                  fields.workspace_id &&
+                  snapshot?.workspace_available === false &&
+                  fields.workspace_id === snapshot.fields.workspace_id
+                    ? 'true'
+                    : undefined
+                }
+                onChange={(event) =>
+                  change('workspace_id', event.target.value || null)
+                }
+              >
+                <option value="">None: the conversation's folder</option>
+                {(folders ?? []).map((folder) => (
+                  <option key={folder.id} value={folder.id}>
+                    {folder.name}
+                  </option>
+                ))}
+                {fields.workspace_id &&
+                  !(folders ?? []).some(
+                    (folder) => folder.id === fields.workspace_id,
+                  ) && (
+                    <option value={fields.workspace_id}>
+                      {snapshot?.workspace_available === false
+                        ? `${snapshot.workspace_name ?? 'Saved folder'} (removed)`
+                        : (snapshot?.workspace_name ?? 'Saved folder')}
+                    </option>
+                  )}
+              </Select>
+            </SettingRow>
+            <SettingRow
+              label="If Row-Bot is closed at a scheduled time"
+              htmlFor={`${inputId}-missed`}
+              description={
+                fields.missed_runs === 'run_once'
+                  ? 'Only the latest missed time runs, once, and says it ran late.'
+                  : 'The missed time is skipped; the next one runs as usual.'
+              }
+            >
+              <Select
+                id={`${inputId}-missed`}
+                aria-label="If Row-Bot is closed at a scheduled time"
+                value={fields.missed_runs ?? 'skip'}
+                onChange={(event) =>
+                  change(
+                    'missed_runs',
+                    event.target.value as TaskSettingsFields['missed_runs'],
+                  )
+                }
+              >
+                <option value="skip">Skip it</option>
+                <option value="run_once">Run once when Row-Bot starts</option>
+              </Select>
+            </SettingRow>
             <SettingRow
               label="Reuse a conversation across runs"
               description="Turning this off keeps existing conversations and their content."
@@ -566,6 +769,19 @@ export default function TaskSettingsEditor({
                 />
               </SettingRow>
             )}
+          </fieldset>
+          <fieldset disabled={locked} className="task-settings-group">
+            <legend>Always ask me</legend>
+            <p className="home-caption">
+              Actions in these apps wait for your own approval on every run,
+              even under Auto or Hands-off. The card shows exactly what will
+              happen.
+            </p>
+            <AlwaysAskApps
+              apps={loadApps ? apps : []}
+              value={fields.always_ask ?? []}
+              onChange={(next) => change('always_ask', next)}
+            />
           </fieldset>
           {reviewed && (
             <p role="status" className="home-caption">

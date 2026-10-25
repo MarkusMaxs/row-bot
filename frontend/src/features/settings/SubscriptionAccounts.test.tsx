@@ -18,17 +18,15 @@ const revision = 'a'.repeat(64);
 const snapshot: SubscriptionAccountsSnapshot = {
   schema_version: 1,
   revision,
-  accounts: ['codex', 'claude_subscription', 'xai_oauth'].map(
-    (provider_id) => ({
-      provider_id,
-      revision,
-      saved_state: 'disconnected',
-      credential_storage: 'unknown',
-      has_recovery: false,
-      expires_at: null,
-      runtime_state: 'unknown',
-    }),
-  ) as SubscriptionAccountsSnapshot['accounts'],
+  accounts: ['codex', 'xai_oauth'].map((provider_id) => ({
+    provider_id,
+    revision,
+    saved_state: 'disconnected',
+    credential_storage: 'unknown',
+    has_recovery: false,
+    expires_at: null,
+    runtime_state: 'unknown',
+  })) as SubscriptionAccountsSnapshot['accounts'],
 };
 const flow: SubscriptionFlowSnapshot = {
   flow_id: '10000000-0000-4000-8000-000000000001',
@@ -257,28 +255,49 @@ it('loads saved state passively and sends one exact command on click', async () 
 });
 it('retains an unsent private code across remount and allows editing', async () => {
   const session = new SubscriptionAccountsSession();
-  const p = props({ session });
+  const xai: SubscriptionFlowSnapshot = {
+    ...flow,
+    provider_id: 'xai_oauth',
+    method: 'loopback',
+    device_code: null,
+  };
+  const p = props({
+    session,
+    apply: vi.fn<SubscriptionAccountsProps['apply']>(
+      async (_intent, _review, commandId) => ({
+        command_id: commandId,
+        status: 'completed',
+        accounts: snapshot,
+        flow: xai,
+      }),
+    ),
+  });
   const view = render(<SubscriptionAccounts {...p} />);
   await screen.findByText(/Saved status:/);
   fireEvent.change(screen.getByLabelText('Subscription provider'), {
-    target: { value: 'claude_subscription' },
+    target: { value: 'xai_oauth' },
   });
-  fireEvent.change(screen.getByLabelText('Claude setup token'), {
-    target: { value: 'synthetic-private-token' },
-  });
+  await startSignIn(p);
+  fireEvent.change(
+    await screen.findByLabelText('Authorization code or callback URL'),
+    { target: { value: 'synthetic-private-code' } },
+  );
   view.unmount();
   render(<SubscriptionAccounts {...p} />);
-  expect(screen.getByLabelText('Claude setup token')).toHaveValue(
-    'synthetic-private-token',
-  );
-  expect(session.hasRetained()).toBe(true);
-  fireEvent.change(screen.getByLabelText('Claude setup token'), {
-    target: { value: 'replacement-token' },
-  });
   expect(
-    screen.getByRole('button', { name: 'Import setup token' }),
+    screen.getByLabelText('Authorization code or callback URL'),
+  ).toHaveValue('synthetic-private-code');
+  expect(session.hasRetained()).toBe(true);
+  fireEvent.change(
+    screen.getByLabelText('Authorization code or callback URL'),
+    {
+      target: { value: 'replacement-code' },
+    },
+  );
+  expect(
+    screen.getByRole('button', { name: 'Connect with code' }),
   ).toBeEnabled();
-  expect(p.apply).not.toHaveBeenCalled();
+  expect(p.apply).toHaveBeenCalledOnce(); // the start; the code was never sent
   session.dispose();
 });
 it('retains an uncertain original receipt and locks input without resending', async () => {
@@ -305,6 +324,68 @@ it('retains an uncertain original receipt and locks input without resending', as
     ),
   );
   expect(p.apply).toHaveBeenCalledTimes(1);
+  expect(session.hasRetained()).toBe(true);
+  session.dispose();
+});
+it('a Start refused by a locked keychain says why and offers Connect and Close again (B413)', async () => {
+  const session = new SubscriptionAccountsSession();
+  const p = props({
+    session,
+    compact: true,
+    initialProvider: 'codex',
+    initialAction: 'connect',
+    apply: vi
+      .fn<SubscriptionAccountsProps['apply']>()
+      .mockRejectedValue({ code: 'subscription_storage_unavailable' }),
+  });
+  const view = render(<SubscriptionAccounts {...p} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    /keychain is locked or unavailable/,
+  );
+  expect(screen.queryByText(/couldn't confirm/)).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled(),
+  );
+  expect(screen.getByRole('button', { name: 'Close' })).toBeEnabled();
+  expect(session.hasRetained()).toBe(false);
+
+  // Closed and opened again (the keychain unlocked meanwhile), Connect tries again.
+  view.unmount();
+  render(<SubscriptionAccounts {...p} />);
+  vi.mocked(p.apply).mockImplementationOnce(
+    async (_intent, _review, commandId) => ({
+      command_id: commandId,
+      status: 'completed',
+      accounts: snapshot,
+      flow,
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  expect(await screen.findByText('Waiting for you to sign in')).toBeVisible();
+  expect(p.apply).toHaveBeenCalledTimes(2);
+  session.dispose();
+});
+it('a Start whose outcome is unknown keeps it to check, with Close held (B413)', async () => {
+  const session = new SubscriptionAccountsSession();
+  const p = props({
+    session,
+    compact: true,
+    initialProvider: 'codex',
+    initialAction: 'connect',
+    apply: vi
+      .fn<SubscriptionAccountsProps['apply']>()
+      .mockRejectedValue({ code: 'network_unavailable' }),
+  });
+  render(<SubscriptionAccounts {...p} />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
+
+  expect(await screen.findByText(/couldn't confirm that/)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled();
   expect(session.hasRetained()).toBe(true);
   session.dispose();
 });

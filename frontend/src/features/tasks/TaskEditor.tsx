@@ -5,7 +5,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { ArrowUp, GitBranch, GripVertical, Plus, X } from 'lucide-react';
+import { ArrowUp, Check, GitBranch, GripVertical, Plus, X } from 'lucide-react';
 import {
   useTaskEditSession,
   useTaskEditValue,
@@ -28,7 +28,9 @@ import {
 } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import PromptTextarea from './PromptTextarea';
-import ScheduleBuilder from './ScheduleBuilder';
+import ScheduleBuilder, { onceAt } from './ScheduleBuilder';
+import { defaultZone } from './schedule-zones';
+import { approvalLevel } from '../shell/approval-levels';
 
 export interface TaskEditorProps {
   session?: TaskEditSession;
@@ -74,10 +76,13 @@ function profileLabel(id: string) {
 }
 
 function approvalLabel(mode: string) {
-  if (mode === 'approve') return 'Ask before actions';
-  if (mode === 'block') return 'Block actions';
-  if (mode === 'allow_all') return 'Auto, within the profile';
-  return mode ? humanizeToken(mode) : 'Default';
+  if (!mode) return 'Default';
+  return {
+    approve: 'Ask before actions',
+    block: 'Block actions',
+    auto: 'Auto, reviewed within the profile',
+    full: 'Hands-off',
+  }[approvalLevel(mode)];
 }
 
 export default function TaskEditor({
@@ -198,7 +203,8 @@ export default function TaskEditor({
     if (
       fields.enabled &&
       fields.at &&
-      new Date(fields.at).getTime() <= Date.now() &&
+      (onceAt(fields.at, fields.timezone || defaultZone())?.getTime() ??
+        Date.now()) <= Date.now() &&
       (!snapshot?.fields.enabled || snapshot.fields.at !== fields.at)
     ) {
       setError(
@@ -415,10 +421,12 @@ export default function TaskEditor({
           {advanced && (
             <p className="task-builder-note">
               This workflow uses branches, approvals or agents. Its steps are
-              kept as they are; change them in the step graph.
+              kept as they are; open the step graph to see or change them.
             </p>
           )}
-          {fields.notify_only ? (
+          {advanced &&
+          !fields.notify_only &&
+          !fields.prompts.length ? null : fields.notify_only ? (
             <Field label="Reminder text">
               <textarea
                 className="input"
@@ -446,6 +454,7 @@ export default function TaskEditor({
               key={`${snapshot?.revision ?? 'new'}:${reload}`}
               schedule={fields.schedule}
               at={fields.at}
+              timezone={fields.timezone ?? null}
               enabled={fields.enabled}
               onChange={(next) =>
                 setFields((current) => ({ ...current, ...next }))
@@ -453,14 +462,21 @@ export default function TaskEditor({
             />
             <div className="task-rail-switch">
               <div>
-                <span id={`${formId}-enabled`}>Enabled</span>
-                <small>
+                <label
+                  id={`${formId}-enabled`}
+                  htmlFor={`${formId}-enabled-switch`}
+                >
+                  Enabled
+                </label>
+                <small id={`${formId}-enabled-help`}>
                   Scheduled runs happen only while this is on. Saving never
                   starts a run.
                 </small>
               </div>
               <Toggle
+                id={`${formId}-enabled-switch`}
                 label="Enabled"
+                aria-describedby={`${formId}-enabled-help`}
                 checked={fields.enabled}
                 onChange={(event) => change('enabled', event.target.checked)}
               />
@@ -477,10 +493,11 @@ export default function TaskEditor({
                 </p>
               ) : (
                 <>
-                  <label className="checkbox-row">
-                    <input type="checkbox" checked disabled />
-                    In this app
-                  </label>
+                  {/* Always on, so a fact with a tick, not a pale locked checkbox (U15). */}
+                  <p className="task-delivery-fixed">
+                    <Check size={14} aria-hidden />
+                    Always in this app
+                  </p>
                   {channelRows.map((row) => (
                     <label className="checkbox-row" key={row.id}>
                       <input

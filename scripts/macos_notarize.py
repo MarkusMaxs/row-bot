@@ -428,9 +428,11 @@ def verify_dmg(dmg: Path, version: str, *, notarized: bool, run: Runner = subpro
     with tempfile.TemporaryDirectory(prefix="row-bot-dmg-") as folder:
         mount = Path(folder) / "volume"
         mount.mkdir()
-        if _call(run, ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", str(mount),
-                       str(dmg)], "hdiutil", capture_output=True, text=True).returncode != 0:
-            return problems + [f"{dmg.name} does not mount"]
+        attached = _call(run, ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", str(mount),
+                               str(dmg)], "hdiutil", capture_output=True, text=True)
+        if attached.returncode != 0:
+            reason = " ".join(((attached.stderr or "") + " " + (attached.stdout or "")).split())[:300]
+            return problems + [f"{dmg.name} does not mount" + (f": {reason}" if reason else "")]
         try:
             app = mount / "Row-Bot.app"
             if team_of(app) != TEAM_ID:
@@ -582,7 +584,9 @@ def main(argv: list[str] | None = None) -> int:
             script = Path(__file__).resolve().parents[1] / "installer" / "build_mac_dmg.sh"
 
             def build_dmg(app: Path, dmg: Path) -> None:
+                # The DMG's layout step installs its two pinned packages with this run's own Python.
                 if subprocess.run(["bash", str(script), str(app), str(dmg), args.identity], check=False,
+                                  env={**os.environ, "DMG_PYTHON": sys.executable},
                                   timeout=TIMEOUTS["hdiutil"] * 2).returncode:
                     raise NotarizeError(f"building {dmg.name} failed")
 

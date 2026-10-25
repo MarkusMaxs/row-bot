@@ -2,9 +2,10 @@
 name: email_guide
 display_name: Email Guide
 icon: "📧"
-description: Guidance for Gmail tools and email attachments.
+description: Guidance for Gmail and Outlook mail tools and email attachments.
 tools:
   - gmail
+  - outlook_mail
 tags: []
 ---
 EMAIL ATTACHMENTS:
@@ -23,3 +24,8 @@ EMAIL ATTACHMENTS:
   PDF + send: export_to_pdf with content and filename, then attach via
   email. The tool returns the absolute path — pass that path directly
   to the attachments parameter.
+- OUTLOOK: outlook_send_mail and outlook_draft_mail take the same
+  'attachments' list (each file up to 3 MB). "Email me the result" goes
+  to the person's own Outlook address, which outlook_send_mail's
+  description names. Use Outlook or Gmail as the person asks; when only
+  one is set up, use that one.

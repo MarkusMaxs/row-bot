@@ -1,9 +1,15 @@
 import { createContext, useContext, useRef, useState } from 'react';
-import { FolderCode, Link2, Palette } from 'lucide-react';
+import {
+  FolderCode,
+  Link2,
+  MessageCircleQuestion,
+  Palette,
+} from 'lucide-react';
 import type {
   EventRecord,
   ResourceView,
   TraceAppRef,
+  TraceQuestionAnswer,
   TranscriptTraceGroup,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
@@ -11,15 +17,23 @@ import { useOverlay } from '../../ui/overlays';
 import { Button, Input } from '../../ui/primitives';
 import ChatConnect from '../apps/ChatConnect';
 import AppViewFrame from '../apps/AppViewFrame';
+import { ProcessCard } from './BackgroundProcess';
+import { RecordingCard } from './RecordingCard';
+import { VideoEditCard } from './VideoEditCard';
+import { DeliveryCard } from './DeliveryCard';
+import { SandboxJobCard } from './SandboxJobCard';
+import { SandboxPrepareOffer } from './SandboxPrepare';
+import { PageCard } from '../pages/PageCard';
 
 /**
  * Cards the assistant leaves in a turn (decision 12): a design or code folder
  * it created, with Open · Rename · Undo, a code folder the person had or
- * cloned (B277), with Open · Undo (it only leaves this conversation), and a
+ * cloned (B277), with Open · Undo (it only leaves this conversation), a
  * Connect card for apps from Row-Bot's catalog the work needs (or, in chats
- * from before apps, an account or channel). Each comes from its tool's
- * reviewed specialization, live from `tool.activity` and settled from the
- * turn's traces.
+ * from before apps, an account or channel), and a background process a step
+ * started, followed live (F1, F6). Each comes from its tool's reviewed
+ * specialization, live from `tool.activity` and settled from the turn's
+ * traces.
  */
 export type TranscriptCard =
   | {
@@ -39,14 +53,47 @@ export type TranscriptCard =
     }
   | { kind: 'apps'; apps: TraceAppRef[] }
   /** A finished step whose app shows a view (MCP Apps). */
-  | { kind: 'view'; callId: string; app: TraceAppRef };
+  | { kind: 'view'; callId: string; app: TraceAppRef }
+  /** A server, watcher or long command a step left running in the background. */
+  | { kind: 'process'; processId: string }
+  /** A recording of Row-Bot's browser or the screen a step started or stopped (F2). */
+  | { kind: 'recording'; recordingId: string }
+  /** A video edit a step started, followed or stopped (F3). */
+  | { kind: 'video_edit'; editId: string }
+  /** Files a step sent to the person's devices or a chat app (F7). */
+  | { kind: 'delivery'; deliveryId: string }
+  /** Prepare sandbox, or the sandbox image's download, a step started (F18). */
+  | { kind: 'sandbox_job'; jobId: string }
+  /** A sandbox test run that couldn't start for want of its tools: Prepare sandbox (F18). */
+  | { kind: 'sandbox_offer'; reason: string }
+  /** A page a step made or changed, with Open (N5). */
+  | { kind: 'page'; pageId: string }
+  /** Row-Bot's question, answered (or skipped), collapsed to what was chosen (N4). */
+  | {
+      kind: 'answer';
+      callId: string;
+      outcome: 'answered' | 'skipped' | 'timed_out';
+      answers: TraceQuestionAnswer[];
+    };
 
 type Specialization = NonNullable<
   TranscriptTraceGroup['items'][number]['specialization']
 >;
 
-export function cardOf(value: Specialization | null | undefined) {
+export function cardOf(value: Specialization | null | undefined, callId = '') {
   if (!value) return null;
+  if (
+    value.kind === 'question_answered' &&
+    (value.outcome === 'answered' ||
+      value.outcome === 'skipped' ||
+      value.outcome === 'timed_out')
+  )
+    return {
+      kind: 'answer',
+      callId,
+      outcome: value.outcome,
+      answers: value.answers ?? [],
+    } satisfies TranscriptCard;
   if (
     (value.kind === 'resource_created' || value.kind === 'resource_bound') &&
     (value.resource_kind === 'design' || value.resource_kind === 'code') &&
@@ -62,6 +109,38 @@ export function cardOf(value: Specialization | null | undefined) {
     } satisfies TranscriptCard;
   if (value.kind === 'connect_apps' && value.apps?.length)
     return { kind: 'apps', apps: value.apps } satisfies TranscriptCard;
+  if (value.kind === 'background_process' && value.process_id)
+    return {
+      kind: 'process',
+      processId: value.process_id,
+    } satisfies TranscriptCard;
+  if (value.kind === 'recording' && value.recording_id)
+    return {
+      kind: 'recording',
+      recordingId: value.recording_id,
+    } satisfies TranscriptCard;
+  if (value.kind === 'delivery' && value.delivery_id)
+    return {
+      kind: 'delivery',
+      deliveryId: value.delivery_id,
+    } satisfies TranscriptCard;
+  if (value.kind === 'sandbox_job' && value.job_id)
+    return {
+      kind: 'sandbox_job',
+      jobId: value.job_id,
+    } satisfies TranscriptCard;
+  if (value.kind === 'sandbox_unprepared')
+    return {
+      kind: 'sandbox_offer',
+      reason: value.error_code ?? '',
+    } satisfies TranscriptCard;
+  if (value.kind === 'page' && value.page_id)
+    return { kind: 'page', pageId: value.page_id } satisfies TranscriptCard;
+  if (value.kind === 'video_edit' && value.edit_id)
+    return {
+      kind: 'video_edit',
+      editId: value.edit_id,
+    } satisfies TranscriptCard;
   if (
     value.kind === 'setup_needed' &&
     (value.settings_page === 'accounts' || value.settings_page === 'channels')
@@ -82,7 +161,23 @@ export function cardKey(card: TranscriptCard) {
       ? `apps:${card.apps.map((app) => app.item_id).join(',')}`
       : card.kind === 'view'
         ? `view:${card.callId}`
-        : `connect:${card.target}`;
+        : card.kind === 'process'
+          ? `process:${card.processId}`
+          : card.kind === 'recording'
+            ? `recording:${card.recordingId}`
+            : card.kind === 'video_edit'
+              ? `video_edit:${card.editId}`
+              : card.kind === 'delivery'
+                ? `delivery:${card.deliveryId}`
+                : card.kind === 'answer'
+                  ? `answer:${card.callId}`
+                  : card.kind === 'page'
+                    ? `page:${card.pageId}`
+                    : card.kind === 'sandbox_job'
+                      ? `sandbox_job:${card.jobId}`
+                      : card.kind === 'sandbox_offer'
+                        ? 'sandbox_offer'
+                        : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -93,12 +188,15 @@ export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
       const card: TranscriptCard | null =
         item.app?.view && item.status === 'succeeded'
           ? { kind: 'view', callId: item.call_id, app: item.app }
-          : cardOf(item.specialization);
+          : cardOf(item.specialization, item.call_id);
       if (!card || seen.has(cardKey(card))) continue;
       seen.add(cardKey(card));
       cards.push(card);
     }
-  return cards;
+  // A step that went on to prepare the sandbox needs no offer to (F18).
+  return cards.some((card) => card.kind === 'sandbox_job')
+    ? cards.filter((card) => card.kind !== 'sandbox_offer')
+    : cards;
 }
 
 /** Cards announced live that no settled row shows yet. */
@@ -110,7 +208,10 @@ export function liveCards(
   const cards: TranscriptCard[] = [];
   for (const record of activity) {
     if (record.event.type !== 'tool.activity') continue;
-    const card = cardOf(record.event.payload.specialization);
+    const card = cardOf(
+      record.event.payload.specialization,
+      record.event.payload.tool_call_id,
+    );
     if (!card) continue;
     const key = cardKey(card);
     if (settled.has(key) || seen.has(key)) continue;
@@ -337,6 +438,57 @@ function AppsCard({
   );
 }
 
+/**
+ * Row-Bot's question once answered: "You chose: Beta.1 now", plain and
+ * quiet, or that it was skipped or had no answer in time (N4).
+ */
+function AnsweredCard({
+  card,
+}: {
+  card: Extract<TranscriptCard, { kind: 'answer' }>;
+}) {
+  const single = card.answers.length === 1;
+  const words =
+    card.outcome === 'skipped'
+      ? 'You skipped the question'
+      : card.outcome === 'timed_out'
+        ? 'No answer in time'
+        : `You chose: ${card.answers
+            .map((item) =>
+              single ? item.answer : `${item.header}: ${item.answer}`,
+            )
+            .join(' · ')}`;
+  return (
+    <div
+      className="transcript-card question-answered"
+      data-outcome={card.outcome}
+      role="group"
+      aria-label={words}
+    >
+      <MessageCircleQuestion className="transcript-card-icon" aria-hidden />
+      <div className="transcript-card-text">
+        {card.outcome !== 'answered' ? (
+          <span>{words}</span>
+        ) : (
+          <span>
+            You chose:{' '}
+            {card.answers.map((item, index) => (
+              <span
+                key={`${index}:${item.header}`}
+                className="question-answered-item"
+              >
+                {index > 0 && ' · '}
+                {!single && <>{item.header}: </>}
+                <strong>{item.answer}</strong>
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TranscriptCards({
   cards,
   live = false,
@@ -355,6 +507,42 @@ export function TranscriptCards({
           <ResourceCard key={cardKey(card)} card={card} live={live} />
         ) : card.kind === 'apps' ? (
           <AppsCard key={cardKey(card)} card={card} />
+        ) : card.kind === 'process' ? (
+          <ProcessCard
+            key={cardKey(card)}
+            processId={card.processId}
+            conversationId={conversation}
+          />
+        ) : card.kind === 'recording' ? (
+          <RecordingCard
+            key={cardKey(card)}
+            recordingId={card.recordingId}
+            conversationId={conversation}
+          />
+        ) : card.kind === 'delivery' ? (
+          <DeliveryCard key={cardKey(card)} deliveryId={card.deliveryId} />
+        ) : card.kind === 'sandbox_job' ? (
+          <SandboxJobCard key={cardKey(card)} jobId={card.jobId} />
+        ) : card.kind === 'sandbox_offer' ? (
+          <SandboxPrepareOffer
+            key={cardKey(card)}
+            conversationId={conversation}
+            reason={card.reason}
+          />
+        ) : card.kind === 'answer' ? (
+          <AnsweredCard key={cardKey(card)} card={card} />
+        ) : card.kind === 'page' ? (
+          <PageCard
+            key={cardKey(card)}
+            pageId={card.pageId}
+            conversationId={conversation}
+          />
+        ) : card.kind === 'video_edit' ? (
+          <VideoEditCard
+            key={cardKey(card)}
+            editId={card.editId}
+            conversationId={conversation}
+          />
         ) : card.kind === 'view' ? (
           conversation ? (
             <AppViewFrame

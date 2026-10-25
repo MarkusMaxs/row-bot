@@ -154,7 +154,8 @@ def test_a_red_check_raises_the_attention_indicator_once(tmp_path, monkeypatch):
     from row_bot.status_checks import CheckResult
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
-    for name in ("_channel_problems", "_tunnel_problems", "_plugin_problems", "_mcp_problems"):
+    for name in ("_channel_problems", "_tunnel_problems", "_plugin_problems", "_app_problems",
+                 "_mcp_problems", "_workflow_problems"):
         monkeypatch.setattr(client_monitor, name, lambda: [])
     monkeypatch.setattr(status_checks, "LOCAL_CHECKS", (
         lambda: CheckResult("Disk", "error", "1.2 GB free (97% used)", settings_tab="System"),
@@ -182,7 +183,9 @@ def test_each_attention_problem_offers_its_one_fix(tmp_path, monkeypatch):
                                is_running=lambda: False, link_status=lambda: {"state": "scan"})
     tunnel = SimpleNamespace(tunnel_manager=SimpleNamespace(status=lambda: ("error", "agent failed")))
     mcp = SimpleNamespace(get_status_summary=lambda: {
-        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1})
+        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1,
+        "servers": {"files": {"enabled": True, "status": "connected"},
+                    "notes": {"enabled": True, "status": "failed"}}})
     monkeypatch.setattr(client_monitor, "_MODULE", {
         "row_bot.channels.registry": SimpleNamespace(all_channels=lambda: [telegram, whatsapp]),
         "row_bot.channels.config": SimpleNamespace(get=lambda _name, _key, _default=None: True),
@@ -199,6 +202,82 @@ def test_each_attention_problem_offers_its_one_fix(tmp_path, monkeypatch):
                               "target": None, "name": "WhatsApp"}),
         ("tunnel", {"kind": "open", "href": "/settings/access#tunnel", "target": None, "name": "Public link"}),
         ("mcp", {"kind": "open", "href": "/settings/apps", "target": None, "name": "Apps"}),
+    ]
+
+
+def test_apps_still_starting_or_connecting_are_not_a_problem(tmp_path, monkeypatch):
+    """B400: just after Row-Bot starts, every app is still starting or connecting. That isn't "An app isn't
+    connected": only an app that tried and failed is."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    statuses = {"files": "not_started", "notes": "connecting", "issues": "connected"}
+
+    def summary():
+        return {"enabled": True, "enabled_server_count": 3,
+                "connected_server_count": list(statuses.values()).count("connected"),
+                "servers": {name: {"enabled": True, "status": state} for name, state in statuses.items()}}
+
+    monkeypatch.setattr(client_monitor, "_MODULE", {"row_bot.mcp_client.runtime": SimpleNamespace(
+        get_status_summary=summary)})
+
+    assert client_monitor.read_attention(include_update=False)["problems"] == []
+
+    statuses.update(files="failed", notes="dependency_missing")
+    problems = client_monitor.read_attention(include_update=False)["problems"]
+    assert [(p["id"], p["title"], p["detail"]) for p in problems] == [
+        ("mcp", "2 apps aren't connected", "2 of 3 apps that are on couldn't connect.")]
+
+
+def test_failed_workflows_and_apps_that_need_you_are_in_the_one_attention_list(tmp_path, monkeypatch):
+    """Home's Needs you and the sidebar count one list (B383): a workflow whose
+    last run failed (not one running again or that succeeded) and an app that
+    is on but signed out or missing its key, each with where to fix it. The
+    apps by name replace "An app isn't connected"; channels keep their own
+    reader; an app that is off needs nothing."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    tasks = SimpleNamespace(iter_task_summary_snapshot=lambda: iter([
+        {"id": "a1b2c3", "name": "Morning report", "last_status": "failed", "active_run_json": None},
+        {"id": "d4e5f6", "name": "Stock check", "last_status": "failed",
+         "active_run_json": '{"status": "running"}'},
+        {"id": "0718ab", "name": "Weekly digest", "last_status": "completed", "active_run_json": None},
+    ]))
+
+    def app(item_id, name, readiness, lifecycle="installed", **extra):
+        return {"id": item_id, "name": name, "readiness": readiness, "lifecycle": lifecycle,
+                "app": None, "blockers": [], "children": [], **extra}
+
+    facts = SimpleNamespace(inventory=lambda: ([
+        app("mcp:linear", "Linear", "needs_sign_in",
+            blockers=[{"message": "Sign in again to keep using Linear."}]),
+        app("mcp:notion", "Notion", "needs_key", lifecycle="off"),
+        app("mcp:files", "Files", "ready"),
+    ], []))
+    builtin = SimpleNamespace(rows=lambda wait=True: [
+        app("builtin:google", "Google", "needs_key", app={"name": "Gmail"}, owner_ref="google"),
+        app("builtin:whatsapp", "WhatsApp", "attention", owner_ref="channel:whatsapp"),
+    ])
+    mcp = SimpleNamespace(get_status_summary=lambda: {
+        "enabled": True, "enabled_server_count": 2, "connected_server_count": 1,
+        "servers": {"files": {"enabled": True, "status": "connected"},
+                    "notes": {"enabled": True, "status": "failed"}}})
+    monkeypatch.setattr(client_monitor, "_MODULE", {
+        "row_bot.tasks": tasks, "row_bot.integrations.facts": facts,
+        "row_bot.integrations.builtin": builtin, "row_bot.mcp_client.runtime": mcp,
+    })
+    monkeypatch.setattr(client_monitor, "_health_problems", lambda: [])
+
+    problems = client_monitor.read_attention(include_update=False)["problems"]
+
+    assert [(p["id"], p["title"], p["detail"], p["place"], p["fix"]["href"]) for p in problems] == [
+        ("app:mcp:linear", "Sign in to Linear", "Sign in again to keep using Linear.", "mcp",
+         "/settings/apps/item?id=mcp:linear&fix=1"),
+        ("app:builtin:google", "Gmail needs its key", "It can't be used until this is fixed.", "mcp",
+         "/settings/apps/item?id=builtin:google&fix=1"),
+        ("workflow:a1b2c3", "Morning report failed", "Run it again, or open it to see why.", "workflows",
+         "/?tab=workflows&workflow=a1b2c3"),
     ]
 
 
@@ -256,7 +335,7 @@ def test_attention_is_quiet_when_healthy_and_names_what_needs_you(tmp_path, monk
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
     for name in ("_channel_problems", "_tunnel_problems", "_plugin_problems",
-                 "_mcp_problems"):
+                 "_app_problems", "_mcp_problems", "_workflow_problems"):
         monkeypatch.setattr(client_monitor, name, lambda: [])
     monkeypatch.setattr(client_monitor, "_available_update", lambda: None)
     assert client_monitor.read_attention(include_update=True) == {
