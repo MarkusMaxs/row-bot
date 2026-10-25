@@ -22,7 +22,12 @@ On what:
 
 The result is counts with their denominators per kind of work, time per task and cloud tokens per
 task, and a plain verdict per kind ("Better", "No clear difference", "Worse"). Training loss is never
-evidence (L2c). It is saved beside the version (``comparison.json``: aggregates only, no hidden task
+evidence (L2c). **Every hidden problem runs 3 times per arm** (O84, O88; visible tasks once, a
+parameter the paper's own runs set to 3), a problem counting as its pass fraction, and
+``evaluation`` adds the pre-registered paired analysis (the mean paired difference with a 95% cluster
+bootstrap interval and a permutation p-value) per kind and overall: visible, hidden, and both
+together. The verdict rule is unchanged (a promotion rule, E4); what the interval would have said is
+kept beside it (``interval_verdict``). It is saved beside the version (``comparison.json``: aggregates only, no hidden task
 or its id) and its test runs in ``learning.db``; the Personal model view shows it as the versions
 table and Overview's Needs you as "Personal model v1 is ready to compare".
 """
@@ -65,6 +70,9 @@ class Plan:
     hidden: bool = True
     replay: bool = True
     task_tokens: int = 150_000
+    # Runs per arm of each visible task and each hidden problem (hidden pack tasks and replay), O88.
+    visible_repeats: int = 1
+    hidden_repeats: int = 3
 
 
 class CompareError(RuntimeError):
@@ -239,6 +247,7 @@ class Comparer:
         client: Any = None,
         record_usage: Callable[..., Any] | None = None,
         busy: Callable[[], bool] | None = None,
+        serving_context: Callable[[str], int | None] | None = None,
     ) -> None:
         self._root = root
         self._store = store
@@ -255,6 +264,7 @@ class Comparer:
         self._client = client
         self._record_usage = record_usage
         self._busy = busy
+        self._serving_context = serving_context
 
     @property
     def root(self) -> Path:
@@ -356,14 +366,14 @@ class Comparer:
         described: list[dict[str, Any]] = []
         if base_ref:
             arms.append(evaluation.Arm(base_key, model_ref=base_ref, subject_kind="release" if base_release else "baseline",
-                                       subject_id=base_release))
+                                       subject_id=base_release, serve_context=self._serves_at(base_ref)))
             described.append({"key": base_key, "label": base_label, "role": "baseline", "model_ref": base_ref})
         arms.append(evaluation.Arm(new_key, model_ref=state.model_ref, subject_kind="release",
-                                   subject_id=state.release_id or None))
+                                   subject_id=state.release_id or None, serve_context=self._serves_at(state.model_ref)))
         described.append({"key": new_key, "label": f"{new_key} (new)", "role": "new", "model_ref": state.model_ref})
         main_unavailable: str | None = None
         if main_ref:
-            arms.append(evaluation.Arm("main", model_ref=main_ref, cache=True))
+            arms.append(evaluation.Arm("main", model_ref=main_ref, cache=True, serve_context=self._serves_at(main_ref)))
             described.append({"key": "main", "label": self._name(main_ref), "role": "main", "model_ref": main_ref})
         else:
             main_unavailable = "no_main_model"
@@ -391,7 +401,8 @@ class Comparer:
         packs = [pack for pack in PACKS if container or pack != "small_coding"]
         hidden_total = evaluation.audit_size(asked_by=ASKED_BY, store=self.store, packs=packs, verifiers=verifiers,
                                              include_replay=self.plan.replay) if self.plan.hidden else 0
-        total = (len(chosen) + hidden_total) * len(arms)
+        total = (len(chosen) * max(1, self.plan.visible_repeats)
+                 + hidden_total * max(1, self.plan.hidden_repeats)) * len(arms)
         self._progress(version, phase="visible", done=0, total=total)
         meter = (self._meter or evaluation.TokenMeter.for_month)()
         budget = evaluation.Budget(task_tokens=self.plan.task_tokens)
@@ -415,7 +426,8 @@ class Comparer:
                                                record_usage=self._record_usage or eval_worker.ledger_recorder(),
                                                unsupported=set(unsupported) & {"main"})
             shown = evaluation.compare(arms, tasks=chosen, runner=runner, cache=cache, meter=meter, store=self.store,
-                                       client=self._client, clock=self.clock, on_case=counted, budget=budget)
+                                       client=self._client, clock=self.clock, on_case=counted, budget=budget,
+                                       repeats=self.plan.visible_repeats, kind_key=family_key)
             hidden = None
             if self.plan.hidden and not shown.stopped:
                 self._progress(version, phase="hidden")
@@ -426,7 +438,8 @@ class Comparer:
                 hidden = evaluation.audit_check(
                     arms, asked_by=ASKED_BY, store=self.store, runner=runner, cache=cache, meter=meter,
                     client=self._client, clock=self.clock, packs=packs, verifiers=verifiers,
-                    include_replay=self.plan.replay, budget=budget, on_progress=hidden_progress)
+                    include_replay=self.plan.replay, budget=budget, on_progress=hidden_progress,
+                    repeats=self.plan.hidden_repeats, combine_with=shown, kind_key=family_key)
             write_backs = list(getattr(worker, "write_backs", []) or [])
         except _Interrupted as interrupted:
             self._progress(version, state="paused" if interrupted.reason == "in_use" else "stopped",
@@ -449,6 +462,22 @@ class Comparer:
         self._progress(version, state="done", done=done[0])
         self._record_tests(state, result)
         return result
+
+    def _serves_at(self, ref: str | None) -> int | None:
+        """The context a local model is served at (its saved one), so replayed decisions reach it in
+        its serving shape (O71); None for a cloud model, asked as captured."""
+
+        if not ref or not self._local(str(ref)):
+            return None
+        if self._serving_context is not None:
+            return self._serving_context(str(ref))
+        try:
+            from row_bot import models
+
+            return int(models.get_context_size(str(ref), allow_probe=False)) or None
+        except Exception:  # noqa: BLE001 - unknown: asked as captured
+            logger.debug("Learning couldn't read a local model's context", exc_info=True)
+            return None
 
     @staticmethod
     def _local(ref: str) -> bool:
@@ -515,6 +544,14 @@ class Comparer:
         rows, overall = summarize(described, by_arm, new=new_key, baseline=base_key,
                                   baseline_label=next((item["label"] for item in described if item["role"] == "baseline"),
                                                       base_label).replace(" (in use)", ""))
+        analysis = _analysis_out(shown, hidden)
+        # What the interval would have said beside the product's own verdict (unchanged, E4): the new
+        # version against its baseline on every problem of the kind, visible and hidden together.
+        both = analysis.get("combined") or analysis.get("visible") or {}
+        mine = both.get(new_key) or {}
+        for row in rows:
+            row["interval_verdict"] = (mine.get("by_kind", {}).get(row["kind"]) or {}).get("interval_verdict")
+        overall["interval_verdict"] = (mine.get("overall") or {}).get("interval_verdict")
         notes_out: list[str] = []
         if not container:
             notes_out.append(CODING_NOTE)
@@ -543,6 +580,9 @@ class Comparer:
             "visible_per_pack": self.plan.visible_per_pack, "hidden": bool(hidden is not None),
             "worker_notes": notes[:8], "write_backs": write_backs[:8], "metric_version": evaluation.METRIC_VERSION,
             "reviewed_at": None,
+            "repeats": {"visible": shown.repeats, "hidden": hidden.repeats if hidden is not None else 0,
+                        "identical": _identical(shown, hidden)},
+            "analysis": analysis,
         }
 
     def _record_tests(self, state: Any, result: Mapping[str, Any]) -> None:
@@ -576,6 +616,43 @@ class Comparer:
                     card.write_text(text, encoding="utf-8", newline="\n")
             except OSError:
                 logger.debug("Learning couldn't update the version's files", exc_info=True)
+
+
+def family_key(label: str) -> str:
+    """A kind of work's label as the rows key it: a pack family, else ``own_work``."""
+
+    families = {name: kind for kind, name in kinds.LABELS.items() if kind != kinds.OTHER}
+    return families.get(label, OWN_WORK)
+
+
+def _analysis_out(shown: Any, hidden: Any) -> dict[str, Any]:
+    """The paired analyses ``evaluation`` made (aggregates only), per arm against the baseline:
+    ``visible``, ``hidden`` and ``combined`` (both), each overall and per kind of work."""
+
+    found: dict[str, Any] = {}
+    for label, comparison, key in (("visible", shown, "arms"), ("hidden", hidden, "arms"),
+                                   ("combined", hidden, "combined")):
+        part = (getattr(comparison, "analysis", None) or {}).get(key) if comparison is not None else None
+        if not part:
+            continue
+        found[label] = {arm: {"overall": value["overall"], "by_kind": dict(value["by_kind"])}
+                        for arm, value in part.items()}
+        found.setdefault("seed", comparison.analysis.get("seed"))
+        found.setdefault("resamples", comparison.analysis.get("resamples"))
+        found.setdefault("permutations", comparison.analysis.get("permutations"))
+    return found
+
+
+def _identical(shown: Any, hidden: Any) -> dict[str, dict[str, int]]:
+    """Per arm, how many repeated problems ran the same every time (greedy decoding shows here)."""
+
+    found: dict[str, dict[str, int]] = {}
+    for comparison in (shown, hidden):
+        for arm, record in (getattr(comparison, "repeated", None) or {}).items():
+            tally = found.setdefault(arm, {"problems": 0, "identical": 0})
+            tally["problems"] += int(record.get("problems") or 0)
+            tally["identical"] += int(record.get("identical") or 0)
+    return found
 
 
 def _day(at: float) -> str:

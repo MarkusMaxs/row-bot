@@ -16,6 +16,7 @@ to train here".
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -322,6 +323,20 @@ def forget_memory_reading() -> None:
         _memory_seen = None
 
 
+def training_need_mib(found: HardwareCheck | None = None) -> int | None:
+    """The memory the recipe this computer trains with needs: its tier's size (the 8 GB recipe,
+    8,192 MiB), or None when there is no recipe for it."""
+
+    from row_bot.learning.training import recipes
+
+    try:
+        recipe = recipes.for_hardware(found if found is not None else peek())
+    except Exception:  # noqa: BLE001 - no recipe: the share of the card decides
+        return None
+    match = re.fullmatch(r"(\d+)gb", str(getattr(recipe, "tier", "") or ""))
+    return int(match.group(1)) * 1024 if match else None
+
+
 def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None = None,
                           clock: Callable[[], float] | None = None) -> bool:
     """Whether the card has the memory free to train now (read at most every 30 s). True when this
@@ -341,7 +356,13 @@ def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None
     free = True
     if reading is not None:
         used, total = reading
-        free = total > 0 and total - used >= TRAINING_FREE_SHARE * total
+        # A recipe for a smaller tier needs only its tier's memory: on a 32 GB card that also drives the
+        # desktop (browsers and apps hold 3-6 GB), the 8 GB recipe trains beside them (L2w).
+        need = TRAINING_FREE_SHARE * total
+        tier = training_need_mib(found)
+        if tier:
+            need = min(need, tier)
+        free = total > 0 and total - used >= need
     with _lock:
         _memory_seen = (now, free)
     if not free:

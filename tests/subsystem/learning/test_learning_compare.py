@@ -72,8 +72,10 @@ def ready(learning_on):
 
 
 def _comparer(root, *, container=False, limit=10_000_000, plan=None, recorded=None):
+    # Hidden problems run once here (the product runs them three times, O88: the tests that need the
+    # repeats ask for them), so these tests stay quick.
     return model_compare.Comparer(
-        root, plan=plan or model_compare.Plan(visible_per_pack=2), worker_factory=FakeWorker,
+        root, plan=plan or model_compare.Plan(visible_per_pack=2, hidden_repeats=1), worker_factory=FakeWorker,
         gather=lambda arms: ([], {"custom_endpoints": [], "local_model_settings": {}}, []),
         tools=lambda: ["filesystem", "calculator", "shell"], container=lambda: container,
         baseline_model=lambda: (BASE, None), main_ref=lambda: MAIN, model_name=lambda ref: "GPT-6.1 Sol",
@@ -153,12 +155,38 @@ def test_the_hidden_split_comes_back_as_counts_only(ready):
     assert any("row_bot.learning.model_compare" in look.asked_by for look in looks)
 
 
+def test_hidden_problems_run_three_times_and_only_the_paired_analysis_comes_back(ready):
+    result = _comparer(ready, plan=model_compare.Plan(visible_per_pack=2)).run(1)
+
+    runs: dict[tuple[str, str], int] = {}
+    for task, arm, _budget in FakeWorker.instances[-1].asked:
+        runs[(task, arm)] = runs.get((task, arm), 0) + 1
+    hidden = {key: count for key, count in runs.items() if key[0].startswith(HIDDEN_IDS)}
+    assert hidden and set(hidden.values()) == {3}  # every hidden problem, three times per model (O88)
+    assert {count for key, count in runs.items() if key not in hidden} == {1}  # visible tasks once
+    # A problem counts once in the table, as its pass fraction; the verdict rule is unchanged.
+    docs = next(row for row in result["rows"] if row["kind"] == "document_lookups")
+    assert docs["total"] == 2 + 8 and docs["verdict"] == "better" and docs["interval_verdict"] == "better"
+    assert result["overall"]["interval_verdict"] in ("better", "unclear", "worse")
+    # The fake answers the same every time, as a greedy runtime would: the result says so.
+    assert result["repeats"]["visible"] == 1 and result["repeats"]["hidden"] == 3
+    assert all(item["identical"] == item["problems"] > 0 for item in result["repeats"]["identical"].values())
+    analysis = result["analysis"]
+    assert set(analysis) >= {"visible", "hidden", "combined", "seed", "resamples", "permutations"}
+    both = analysis["combined"]["v1"]
+    assert both["overall"]["problems"] == 30 and both["by_kind"]["document_lookups"]["problems"] == 10
+    assert both["by_kind"]["document_lookups"]["low"] > 0
+    assert not any(marker in json.dumps(analysis) for marker in HIDDEN_IDS)
+
+
 def test_each_model_says_why_its_tasks_didnt_pass_hidden_ones_as_counts(ready):
-    result = _comparer(ready).run(1)
+    result = _comparer(ready, plan=model_compare.Plan(visible_per_pack=2)).run(1)
 
     arms = {arm["key"]: arm for arm in result["arms"]}
     assert arms["main"]["causes"] == {}
-    failed = {key: sum(row["counted"][key] - row["passed"][key] for row in result["rows"] if key in row["counted"])
+    # Causes count runs: visible tasks ran once, hidden problems three times (O88).
+    failed = {key: sum(total - passed for passed, total in result["details"]["visible"][key].values())
+              + 3 * sum(total - passed for passed, total in result["details"]["hidden"][key].values())
               for key in ("base", "v1")}
     assert arms["v1"]["causes"] == {"wrong_answer": failed["v1"]} and failed["v1"] > 0
     assert arms["base"]["causes"] == {"wrong_answer": failed["base"]}  # visible and hidden together
@@ -211,12 +239,13 @@ def test_a_running_comparison_says_how_far_it_got_with_a_real_denominator(ready)
             seen.append(model_compare.read_progress(1, ready) or {})
             return super().run(task, arm, budget=budget, timeout=timeout)
 
-    comparer = _comparer(ready)
+    comparer = _comparer(ready, plan=model_compare.Plan(visible_per_pack=2))
     comparer._worker_factory = Watching  # noqa: SLF001
     comparer.run(1)
 
-    assert seen[0]["state"] == "running" and seen[0]["total"] == 3 * (6 + 24)
-    assert seen[-1]["done"] == 3 * (6 + 24) - 1
+    # Three models, six visible tasks once and 24 hidden problems three times each (O88).
+    assert seen[0]["state"] == "running" and seen[0]["total"] == 3 * (6 + 24 * 3)
+    assert seen[-1]["done"] == 3 * (6 + 24 * 3) - 1
     assert model_compare.read_progress(1, ready)["state"] == "done"
 
 

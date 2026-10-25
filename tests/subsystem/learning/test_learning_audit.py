@@ -4,6 +4,7 @@ every look logged, refreshed by time, and reached by deletion and opt-out. The s
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -93,15 +94,20 @@ def test_an_audit_check_hands_back_aggregates_only(writer, chats, clock):
     result = evaluation.audit_check([Arm("current"), Arm("candidate", guidance=("Be brief.",))], asked_by="strategy trial",
                                     client=client, meter=TokenMeter(10**9), packs=["document_lookups"], store=store)
 
-    assert result.suite == "audit"
+    assert result.suite == "audit" and result.repeats == 3
     for arm in result.arms:
         assert arm.cases == []  # no task, id or text comes back
-        assert set(arm.by_kind) <= {"Document lookups", "Your work"} and arm.total == 8 + 2
+        # Each problem counts once (its pass fraction); each ran three times (O88).
+        assert set(arm.by_kind) <= {"Document lookups", "Your work"} and sum(
+            total for _, total in arm.by_kind.values()) == 8 + 2
+        assert arm.total == 3 * (8 + 2)
         assert arm.run.source_thread_ids == () and arm.run.suite == "audit"
         body = results_of(store, arm.run)
         assert "cases" not in body and not any(item in str(body) for item in held)
-    # Eight hidden document tasks and two held decisions, for each arm.
-    assert len(client.calls) == 2 * 10
+    # Only aggregates of the paired analysis leave the vault: no problem, id or chat.
+    assert not result.clusters and not any(item in json.dumps(result.analysis) for item in held)
+    # Eight hidden document tasks and two held decisions, three times for each arm.
+    assert len(client.calls) == 2 * 10 * 3
 
 
 def test_a_proposed_practice_task_gets_a_novelty_yes_or_no(writer, chats, clock):

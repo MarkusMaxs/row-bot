@@ -375,6 +375,9 @@ class DataSpec(_Part):
     sources: tuple[DataSource, ...] = _field((), items=8)
     # Providers whose outputs are in the data, for the provider-terms note (D7).
     providers: tuple[str, ...] = _field((), text=64, items=64)
+    # The shape the rows were trained in (O71): "serving-v1@32768" (the serving envelope at that
+    # context; its rows are derived, E3) or "captured" (as the main model was sent them).
+    rendering: str | None = _field(None, text=64)
 
 
 @dataclass(frozen=True)
@@ -747,6 +750,9 @@ class Release(Record):
     way of working (``behaviour``) or a learning method (``strategy``)."""
 
     KIND: ClassVar[str] = "release"
+    # v2 (L2w): the data spec names the rendering its rows had; a v1 release reads as unknown (None).
+    SCHEMA_VERSION: ClassVar[int] = 2
+    MIGRATIONS: ClassVar[Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {1: lambda data: data}
     FORM: ClassVar[Literal["jsonl", "manifest"]] = "manifest"
 
     id: str = _field(pattern="id")

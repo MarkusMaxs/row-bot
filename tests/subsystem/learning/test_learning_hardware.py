@@ -115,6 +115,17 @@ def test_training_waits_while_another_app_holds_the_cards_memory():
         hardware.forget()
 
 
+def test_a_large_card_that_drives_the_desktop_trains_a_smaller_tiers_recipe_beside_it():
+    # The 5090 trains the 8 GB recipe until its own tier is certified: it needs 8 GB free, not 90%.
+    hardware.check(refresh=True, detector=lambda: hardware.classify([hardware.Gpu("NVIDIA RTX 5090", 32607, "610")]))
+    try:
+        assert hardware.training_need_mib() == 8 * 1024
+        assert hardware.gpu_free_for_training(memory=lambda: (5258, 32607), clock=lambda: 1.0) is True  # browsers
+        assert hardware.gpu_free_for_training(memory=lambda: (25000, 32607), clock=lambda: 100.0) is False  # a model
+    finally:
+        hardware.forget()
+
+
 def test_the_check_is_kept_for_the_process_until_asked_again():
     hardware.forget()
     answers = iter([hardware.HardwareCheck("no_gpu"), hardware.classify([hardware.Gpu("NVIDIA RTX A4000", 16376)])])
