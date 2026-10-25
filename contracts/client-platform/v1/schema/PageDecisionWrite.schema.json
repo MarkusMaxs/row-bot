@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "One decision recorded by the page's bridge; a null choice clears it. Nothing is sent.",
+  "properties": {
+    "choice": {
+      "anyOf": [
+        {
+          "maxLength": 40,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Choice"
+    },
+    "id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "label": {
+      "default": "",
+      "maxLength": 200,
+      "title": "Label",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Note",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "PageDecisionWrite",
+  "type": "object"
+}

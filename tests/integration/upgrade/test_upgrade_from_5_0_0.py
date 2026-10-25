@@ -142,7 +142,9 @@ def test_skills_keep_their_on_off_state_pins_and_source(v5):
     off = {name for name, row in library.items() if row["lifecycle"] == "off"}
     saved = json.loads((v5.root / "skills_config.json").read_text(encoding="utf-8"))["skills"]
     assert {"meeting_prep", "pdf_toolkit", "deep_research"} <= on and {"brain_dump", "humanizer"} <= off
-    assert on == {name for name in library if saved[name]} and off == {name for name in library if not saved[name]}
+    kept = {name for name in library if name in saved}
+    assert on & kept == {name for name in kept if saved[name]} and off & kept == {name for name in kept if not saved[name]}
+    assert library.keys() - kept <= on  # Skills bundled since 5.0.0 (Making a page) start as they're shipped.
     assert not {name for name in library if name.endswith("_guide")}  # Tool guides follow their tools, as before.
     assert skills.read_client_skills()["pinned"] == ["proactive_agent", "meeting_prep"]
     # The skill added from a catalog keeps its source, its files and its update check.

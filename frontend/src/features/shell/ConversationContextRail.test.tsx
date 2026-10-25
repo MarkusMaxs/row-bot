@@ -133,7 +133,7 @@ it('projects bounded Developer and Designer summaries from canonical owners', as
     .setup()
     .click(within(rail).getByRole('button', { name: 'Conversation actions' }));
   expect(
-    await screen.findByRole('menuitem', { name: 'Manage browser' }),
+    await screen.findByRole('menuitem', { name: 'Open browser' }),
   ).toBeVisible();
 });
 

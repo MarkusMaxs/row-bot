@@ -64,10 +64,18 @@ export const panelRegistry = {
     compact: 'tab',
   },
   'browser.live': {
-    title: 'Managed browser',
+    title: 'Browser',
     resourceKinds: [],
     requiresResource: false,
     capabilities: ['browser_navigate'],
+    compact: 'tab',
+  },
+  // A page the agent made (N5): its id is the subresource key.
+  'page.view': {
+    title: 'Page',
+    resourceKinds: [],
+    requiresResource: false,
+    capabilities: [],
     compact: 'tab',
   },
   'fake.info': {

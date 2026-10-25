@@ -333,6 +333,22 @@ it.each([
     /^Paused$/,
   ],
   ['a manual workflow', { enabled: true }, /^$/],
+  // U17: a one-off that ran read "Not scheduled" with its switch still on.
+  [
+    'a one-off that has run',
+    {
+      enabled: true,
+      at: '2026-10-01T10:00',
+      last_run: '2026-10-01T10:00:05',
+      next_run: null,
+    },
+    /^Done$/,
+  ],
+  [
+    'a one-off still to run',
+    { enabled: true, at: '2099-10-01T10:00', next_run: '2099-10-01T10:00' },
+    /^Next run /,
+  ],
 ] as const)('shows the next-run column for %s', async (_, overrides, text) => {
   const view = show(vi.fn(async () => pageOf([task('Saved task', overrides)])));
   await screen.findByText('Saved task');

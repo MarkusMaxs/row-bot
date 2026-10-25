@@ -545,6 +545,16 @@ export default function BuddyOverlay({
               : '';
   const actionLabel = approval?.action_label || hint?.action_label || '';
   const argument = keyArgument(approval?.safe_argument_summary);
+  // A memory write in an incognito chat (N11): its own question and the exact text; Save or Don't save.
+  const memory = approval?.memory_text
+    ? { question: approval.question, text: approval.memory_text }
+    : null;
+  const approvalTitle = memory
+    ? memory.question
+    : approvalQuestion(actionLabel, approval?.app);
+  const approvalDetail = memory
+    ? memory.text
+    : argument || approval?.reason || hint?.reason;
 
   return (
     <main
@@ -710,8 +720,8 @@ export default function BuddyOverlay({
           <span
             className="buddy-overlay-approval-text"
             title={[
-              approvalQuestion(actionLabel, approval?.app),
-              argument || approval?.reason || hint?.reason,
+              approvalTitle,
+              approvalDetail,
               // Under Auto: why the reviewer asked, quietly, in the one-line overlay.
               approval?.reviewer_reason &&
                 `The reviewer asked you: ${approval.reviewer_reason}`,
@@ -719,10 +729,8 @@ export default function BuddyOverlay({
               .filter(Boolean)
               .join(' · ')}
           >
-            <strong>{approvalQuestion(actionLabel, approval?.app)}</strong>
-            {(argument || approval?.reason || hint?.reason) && (
-              <span> {argument || approval?.reason || hint?.reason}</span>
-            )}
+            <strong>{approvalTitle}</strong>
+            {approvalDetail && <span> {approvalDetail}</span>}
           </span>
           <button
             type="button"
@@ -730,7 +738,7 @@ export default function BuddyOverlay({
             disabled={!approval || Boolean(resolving)}
             onClick={() => void resolve('reject')}
           >
-            Deny
+            {memory ? 'Don’t save' : 'Deny'}
           </button>
           <button
             type="button"
@@ -743,12 +751,12 @@ export default function BuddyOverlay({
             type="button"
             className="buddy-overlay-text-action"
             data-variant="primary"
-            aria-label="Approve"
+            aria-label={memory ? 'Save' : 'Approve'}
             aria-keyshortcuts="Control+Enter Meta+Enter"
             disabled={!approval || Boolean(resolving)}
             onClick={() => void resolve('approve')}
           >
-            Approve
+            {memory ? 'Save' : 'Approve'}
           </button>
         </aside>
       )}

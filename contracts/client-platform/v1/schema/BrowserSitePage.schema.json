@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "BrowserSite": {
+      "additionalProperties": false,
+      "description": "A site with saved sign-ins (cookies) in Row-Bot's browser.",
+      "properties": {
+        "cookies": {
+          "minimum": 0,
+          "title": "Cookies",
+          "type": "integer"
+        },
+        "site": {
+          "maxLength": 253,
+          "minLength": 1,
+          "title": "Site",
+          "type": "string"
+        }
+      },
+      "required": [
+        "site",
+        "cookies"
+      ],
+      "title": "BrowserSite",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "items": {
+        "$ref": "#/$defs/BrowserSite"
+      },
+      "maxItems": 2000,
+      "title": "Items",
+      "type": "array"
+    }
+  },
+  "required": [
+    "items"
+  ],
+  "title": "BrowserSitePage",
+  "type": "object"
+}

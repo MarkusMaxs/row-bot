@@ -8,16 +8,16 @@ const alwaysReady = {
 };
 
 /**
- * How long a window may take to bind again before it says so: a binding a
- * background check (the lease renewal, Buddy's status) finds lost usually
- * comes back well within it.
+ * How long something the person asked for may wait on the window binding
+ * again before it says so: a binding usually comes back well within it.
  */
 export const RECONNECTING_NOTICE_DELAY_MS = 2000;
 
 /**
- * Says so while a desktop window binds its native features again (B231,
- * B238): attaching, saving and Buddy never fail silently meanwhile. The live
- * region stays mounted so the change is announced.
+ * Says so while something the person asked for (a folder pick, a save,
+ * docking Buddy) waits on a desktop window binding its native features again
+ * (B231, B238). Background reads never show it (B406). The live region stays
+ * mounted so the change is announced.
  */
 export default function DesktopReconnecting({
   platform,
