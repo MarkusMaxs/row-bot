@@ -409,15 +409,31 @@ class LearningStore:
                 raise TypeError("not a Learning record")
         self._writable({item.KIND for item in items})
         saved = 0
+        moved = False
         with self._transaction() as connection:
             for item in items:
                 threads = owner_threads(item)
                 if threads and self._opted_out(connection, threads):
                     logger.debug("Learning skipped a %s from an opted-out chat", item.KIND)
                     continue
+                moved = moved or self._state_moves(connection, item)
                 self._write(connection, item)
                 saved += 1
+        if moved:
+            gate.changed()
         return saved
+
+    @staticmethod
+    def _state_moves(connection: sqlite3.Connection, record: Record) -> bool:
+        """A record other than capture's that is new or changes state (a job planned, running or done; a
+        release or a test run): what the Learning screens show moved on (O127). Progress alone doesn't."""
+
+        if record.KIND in RECORDING_KINDS:
+            return False
+        row = connection.execute(
+            "SELECT status FROM records WHERE kind = ? AND id = ?", (record.KIND, record.id)
+        ).fetchone()
+        return row is None or row[0] != _columns(record)[1]
 
     def _write(self, connection: sqlite3.Connection, record: Record) -> None:
         body = contracts.to_json(record)

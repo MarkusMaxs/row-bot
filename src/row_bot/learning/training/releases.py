@@ -119,6 +119,7 @@ def write_state(folder: Path, state: VersionState) -> VersionState:
     temporary = folder / f".{STATE_FILE}.{uuid.uuid4().hex}.tmp"
     temporary.write_text(json.dumps(state.to_dict(), indent=1, sort_keys=True), encoding="utf-8")
     os.replace(temporary, folder / STATE_FILE)
+    gate.changed()
     return state
 
 

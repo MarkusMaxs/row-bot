@@ -236,6 +236,21 @@ def invalidate() -> None:
     _cache = None
 
 
+def changed() -> None:
+    """Learning's state changed: every open client reads its Learning screens again at once (O127).
+
+    Only the ``learning`` live topic's name and revision go out (B407), never what changed. Called when a
+    setting is saved, a Learning command runs, a job or other Learning record changes state (a version
+    planned, training, finished or failed; the past-chat import starting or done), a version's phase moves
+    (ready, couldn't start), a comparison starts, moves on or finishes, the download changes state, the
+    vault refreshes and a personal model's use is recorded. Capture's own records never call it.
+    """
+
+    from row_bot.application.live_updates import publish
+
+    publish("learning")
+
+
 def settings_saved(field: str, value: Any) -> None:
     """React to one saved Learning setting.
 
@@ -249,6 +264,7 @@ def settings_saved(field: str, value: Any) -> None:
     invalidate()
     if not _PREVIEW:
         return
+    changed()
     if field == "enabled" and value is True:
         try:
             from row_bot.learning.store import LearningStore
@@ -399,6 +415,7 @@ __all__ = [
     "STARTING_MODELS",
     "STORE_FILE",
     "TRAIN_PLACES",
+    "changed",
     "data_dir",
     "folder_path",
     "invalidate",

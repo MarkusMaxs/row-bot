@@ -1392,6 +1392,8 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     try:
         validate()
         summary, signal = _perform(action, command, wire, conversation, signal_id, setup_values)
+        # Every other window reads Learning again (O127); this one gets the snapshot in its receipt.
+        learning.changed()
         validate()
     except ClientPlatformError as error:
         # A refusal is final: the same command answers it again, and the next can run.

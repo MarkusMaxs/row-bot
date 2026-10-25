@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { ClientController } from '../../api/controller';
 import { clientError } from '../../api/errors';
+import type { LiveUpdates } from '../../api/live-updates';
 import type {
   LearningCommand,
   LearningConversation,
@@ -100,12 +101,20 @@ function pageVisible() {
 
 type View = { snapshot: LearningSnapshot | null; error: string };
 
-/** One shared Learning state per connection: Settings, Home and chats see the same. */
+/**
+ * One shared Learning state: Settings, Home and chats see the same. It is read
+ * when a surface first asks on a connection, and again whenever Learning's
+ * state changes on the server (O127: the `learning` live topic; a reconnect
+ * fires it too), so background work (a version ready overnight, a comparison
+ * done) shows at once, without a reload.
+ */
 class LearningStore {
   private view: View = { snapshot: null, error: '' };
   private listeners = new Set<() => void>();
   private identity = '';
   private reading: Promise<LearningSnapshot | null> | null = null;
+  // A change heard while a read was under way: read once more when it ends.
+  private stale = false;
   private readonly controller: ClientController;
 
   constructor(controller: ClientController) {
@@ -130,7 +139,7 @@ class LearningStore {
     this.publish({ snapshot, error: '' });
   }
 
-  /** Read once per connection (a new sign-in or restart reads again). */
+  /** The first read on a connection (a new sign-in or restart reads again). */
   ensure(identity: string) {
     if (identity === this.identity && (this.view.snapshot || this.reading))
       return;
@@ -158,8 +167,19 @@ class LearningStore {
     );
     this.reading = reading.finally(() => {
       this.reading = null;
+      if (this.stale) {
+        this.stale = false;
+        void this.reload();
+      }
     });
     return this.reading;
+  };
+
+  /** Learning changed on the server: read it again (nothing before the first read). */
+  changed = () => {
+    if (!this.identity) return;
+    if (this.reading) this.stale = true;
+    else void this.reload();
   };
 
   run = async (
@@ -324,6 +344,9 @@ function storeFor(controller: ClientController) {
   if (!store) {
     store = new LearningStore(controller);
     stores.set(controller, store);
+    // One subscription per window, whichever surfaces are showing (some test stand-ins have no live).
+    const live: LiveUpdates | undefined = controller.live;
+    live?.subscribe('learning', store.changed);
   }
   return store;
 }

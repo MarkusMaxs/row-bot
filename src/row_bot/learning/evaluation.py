@@ -1605,6 +1605,8 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
                  if decision.id in set(report.added)}
         saved.add_marks([("decision", item, by_id[item].conversation_id if item in by_id else "")
                          for item in report.added], MARK_HELD_OUT)
+    if report.added or report.retired:
+        gate.changed()
     return {"considered": report.considered, "added": len(report.added), "retired": report.retired,
             "held": report.held}
 

@@ -127,6 +127,7 @@ def mark_reviewed(version: int, *, root: Path | None = None, clock: Callable[[],
     if found is not None and not found.get("reviewed_at"):
         found["reviewed_at"] = round(float(clock()), 3)
         _write_json(comparison_path(version, root), found)
+        gate.changed()
 
 
 # ── Verdicts ────────────────────────────────────────────────────────────────
@@ -343,6 +344,9 @@ class Comparer:
             _write_json(progress_path(version, self._root), current)
         except OSError:
             logger.debug("Learning couldn't save the comparison's progress", exc_info=True)
+        if "state" in values or "phase" in values:
+            # Started, a new phase, or ended (done, paused, stopped, failed): the screens read it again (O127).
+            gate.changed()
 
     def run(self, version: int, *, stop: threading.Event | None = None) -> dict[str, Any]:
         """Compare ``version`` now; returns (and saves) the result."""

@@ -143,11 +143,13 @@ class Downloads:
         if state is None:
             path.unlink(missing_ok=True)
             engine_module._tidy(self._root)
+            gate.changed()
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         temporary.write_text(json.dumps({"state": state, "at": time.time(), **fields}), encoding="utf-8")
         os.replace(temporary, path)
+        gate.changed()
 
     def _model(self) -> weights.PinnedModel:
         return weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
