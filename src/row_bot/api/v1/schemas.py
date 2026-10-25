@@ -4033,6 +4033,53 @@ class LearningDownload(WireModel):
     failure: Literal["network", "mismatch", "install_failed", "check_failed", "no_cuda", "refused"] | None = None
 
 
+class LearningRuntime(WireModel):
+    """Where a personal model can run ("Runs in", D10)."""
+
+    id: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    name: str = Field(max_length=64)
+    # Row-Bot registers the model there itself (Ollama); the others are loaded with one command.
+    automated: bool
+    # Whether the runtime is installed here (known for Ollama only).
+    installed: bool | None = None
+
+
+class LearningExamples(WireModel):
+    """How much of the person's work training can use (L2c): "Needs more examples" below ``needed``."""
+
+    examples: int = Field(ge=0)
+    needed: int = Field(ge=1)
+    # Examples the newest version wasn't trained on.
+    new_examples: int = Field(ge=0)
+    left_out: int = Field(ge=0)
+
+
+class LearningVersion(WireModel):
+    """The newest personal-model version after training (L2c): being prepared to run, made ready in
+    its runtime, ready (it then waits for its comparison), or stuck with the way out."""
+
+    version: int = Field(ge=1)
+    phase: Literal["exporting", "export_failed", "making_ready", "ready", "runtime_failed", "waiting_for_you"]
+    # While preparing: merging what it learned, converting, compressing.
+    step: Literal["merge", "convert", "quantize"] | None = None
+    failure: Literal[
+        "not_enough_disk", "adapter_missing", "engine_missing", "tools_missing", "export_failed", "not_installed",
+        "not_running", "not_local", "create_failed", "not_loaded", "probe_failed", "tool_turn_failed",
+    ] | None = None
+    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    quantization: Literal["Q8_0", "Q4_K_M"]
+    file_name: str | None = Field(default=None, max_length=128)
+    file_bytes: int = Field(ge=0)
+    # The version's folder on this computer, and the command that loads it where the person starts
+    # the runtime themselves.
+    folder: str = Field(max_length=1024)
+    command: str | None = Field(default=None, max_length=2048)
+    needs_bytes: int | None = Field(default=None, ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+    trained_at: str | None = Field(default=None, max_length=64)
+    examples: int = Field(ge=0)
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
@@ -4049,6 +4096,12 @@ class LearningPersonalModel(WireModel):
     starting_model_state: Literal["not_downloaded", "downloaded", "damaged"]
     starting_model_bytes: int = Field(ge=0)
     download_state: LearningDownload
+    # Where personal models run (the person's choice) and the choices here.
+    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"] = "ollama"
+    runtimes: list[LearningRuntime] = Field(default_factory=list, max_length=8)
+    # The count of usable examples once the engine is installed; null before.
+    examples: LearningExamples | None = None
+    version: LearningVersion | None = None
 
 
 class LearningData(WireModel):
@@ -4070,6 +4123,7 @@ class LearningRunnerStatus(WireModel):
         "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
         "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
+        "planned", "planning", "up_to_date", "gpu_busy",
     ] | None = None
 
 
@@ -4134,8 +4188,8 @@ class LearningTier(WireModel):
 
 class LearningHardware(WireModel):
     # old_driver: a card that fits, with an NVIDIA driver older than 570 ("Update your NVIDIA
-    # driver to train here").
-    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "unknown"]
+    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46).
+    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "container", "unknown"]
     gpu: LearningGpu | None
     # The certified recipe tier this computer trains with, and larger ones still being measured.
     tier: LearningTier | None
@@ -4185,9 +4239,11 @@ class LearningCommand(WireModel):
         "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
         "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
         "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
-        "remove_engine", "delete_starting_model",
+        "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
     ]
     setup: LearningSetupChoices | None = None
+    # choose_runtime: where personal models run.
+    runtime: Literal["", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
     # The training run a training action is for (the one the person saw).
     job_id: str = Field(default="", max_length=128)
     conversation_id: str = Field(default="", max_length=256)

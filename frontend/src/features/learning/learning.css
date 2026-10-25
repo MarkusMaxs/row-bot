@@ -280,6 +280,27 @@
   height: 6px;
   accent-color: var(--accent-solid);
 }
+/* The one command that loads a version where the person starts the runtime themselves. */
+.learning-command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.learning-command-text {
+  flex: 1 1 280px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font-size: var(--text-12);
+  line-height: var(--leading-13);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .learning-empty-lead {
   display: grid;
   gap: var(--space-2);
@@ -319,6 +340,15 @@
 .learning-facts dd {
   margin: 0;
   min-width: 0;
+}
+.learning-facts dd.learning-fact-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.learning-facts dd.learning-fact-action > .button {
+  margin-block: calc(-1 * var(--space-1));
 }
 @media (max-width: 767px) {
   .learning-facts > div {

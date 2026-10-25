@@ -48,9 +48,10 @@ class StartingModel:
 # in ``weights.py``.
 QWEN35_2B = StartingModel(_weights.QWEN35_2B.id, _weights.QWEN35_2B.name, _weights.QWEN35_2B.licence,
                           _weights.QWEN35_2B.download_bytes)
-# The training engine's download when its lock can't be read (CUDA PyTorch, Unsloth, TRL, PEFT):
-# 2.2 GB on Windows (L0d). The real figure comes from the lock (``engine_download_bytes``).
-ENGINE_DOWNLOAD_BYTES = 2_220_000_000
+# The training engine's download when its lock can't be read (CUDA PyTorch, Unsloth, TRL, PEFT,
+# and llama.cpp's tools for the export): 2.3 GB on Windows (L0d, L2c). The real figure comes from
+# the lock and the pinned tools (``engine_download_bytes``).
+ENGINE_DOWNLOAD_BYTES = 2_280_000_000
 STARTING_MODELS = {QWEN35_2B.id: QWEN35_2B}
 # Drivers (O25): CUDA 13.0 needs 580, CUDA 12.8 needs 570.
 CUDA13_DRIVER = 580
@@ -123,9 +124,10 @@ def engine_variant(gpu: Gpu | None) -> str | None:
 class HardwareCheck:
     """``gpu``: an NVIDIA card a certified recipe fits; ``old_driver``: such a card whose driver
     is older than 570 (O25); ``small_gpu``: one too small to train on; ``no_gpu``: none found;
-    ``unknown``: the check itself failed."""
+    ``container``: Row-Bot's Docker image, which doesn't train in 5.4 (O46); ``unknown``: the check
+    itself failed."""
 
-    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "unknown"]
+    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "container", "unknown"]
     gpu: Gpu | None = None
     # The certified tier this card trains with, and the larger tiers it fits once measured.
     tier: Tier | None = None
@@ -213,8 +215,13 @@ def detect(
     run: Runner = subprocess.run,
     which: Callable[[str], str | None] = shutil.which,
 ) -> HardwareCheck:
-    """Ask ``nvidia-smi`` once. Never raises; ``unknown`` when the check itself failed."""
+    """Ask ``nvidia-smi`` once. Never raises; ``unknown`` when the check itself failed. In Row-Bot's
+    Docker image training is unavailable (GPU containers are out of scope for 5.4, O46)."""
 
+    import os
+
+    if os.environ.get("ROW_BOT_CONTAINERIZED", "").strip() == "1":
+        return HardwareCheck("container")
     command = _command(which)
     if command is None:
         return HardwareCheck("no_gpu")
@@ -263,9 +270,75 @@ def peek() -> HardwareCheck | None:
 def forget() -> None:
     """Drop the kept answer (tests)."""
 
-    global _cached
+    global _cached, _memory_seen
     with _lock:
         _cached = None
+        _memory_seen = None
+
+
+# ── Whether the card's memory is free to train now ──────────────────────────
+# A recipe uses nearly all of the card (W8: capped at 95%). Another app holding its memory (a local
+# model Ollama keeps loaded for half an hour after a chat, a game) would make Windows spill training
+# into system memory and crawl (L2c's e2e: no step in 12 minutes beside a 2.9 GB Ollama model), so
+# training doesn't start until the card is free.
+MEMORY_QUERY = ("--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits")
+TRAINING_FREE_SHARE = 0.9
+MEMORY_SECONDS = 30.0
+_memory_seen: tuple[float, bool] | None = None
+
+
+def gpu_memory(*, run: Runner = subprocess.run, which: Callable[[str], str | None] = shutil.which
+               ) -> tuple[int, int] | None:
+    """(used, total) MiB of the largest NVIDIA card now, or None when it can't be read."""
+
+    command = _command(which)
+    if command is None:
+        return None
+    options: dict[str, Any] = {}
+    if sys.platform == "win32":
+        options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = run([command, *MEMORY_QUERY], capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+                     check=False, **options)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    cards = []
+    for line in str(getattr(result, "stdout", "") or "").splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        try:
+            cards.append((int(float(parts[0])), int(float(parts[1]))))
+        except (ValueError, IndexError):
+            continue
+    if getattr(result, "returncode", 1) != 0 or not cards:
+        return None
+    return max(cards, key=lambda card: card[1])
+
+
+def gpu_free_for_training(*, memory: Callable[[], tuple[int, int] | None] | None = None,
+                          clock: Callable[[], float] | None = None) -> bool:
+    """Whether the card has the memory free to train now (read at most every 30 s). True when this
+    computer has no card the check found, or its memory can't be read: nothing to wait for."""
+
+    global _memory_seen
+    import time
+
+    found = peek()
+    if found is None or found.state != "gpu":
+        return True
+    now = (clock or time.monotonic)()
+    with _lock:
+        if memory is None and _memory_seen is not None and now - _memory_seen[0] < MEMORY_SECONDS:
+            return _memory_seen[1]
+    reading = (memory or gpu_memory)()
+    free = True
+    if reading is not None:
+        used, total = reading
+        free = total > 0 and total - used >= TRAINING_FREE_SHARE * total
+    with _lock:
+        _memory_seen = (now, free)
+    if not free:
+        logger.info("Learning waits for the graphics card: another app is using %s of its %s MiB", *reading)
+    return free
 
 
 __all__ = [
@@ -285,4 +358,6 @@ __all__ = [
     "engine_download_bytes",
     "engine_variant",
     "forget",
+    "gpu_free_for_training",
+    "gpu_memory",
 ]

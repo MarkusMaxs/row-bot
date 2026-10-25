@@ -138,11 +138,13 @@ def read_rows(path: Path, limit: int = 1_000_000) -> list[dict[str, Any]]:
 
 
 def template_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """OpenAI's wire format → what the chat template expects: tool-call arguments as objects."""
+    """OpenAI's wire format → what the chat template expects: tool-call arguments as objects
+    (and no ``weight``: that marks training targets, not content)."""
 
     out = []
     for message in messages:
         message = dict(message)
+        message.pop("weight", None)
         if message.get("tool_calls"):
             calls = []
             for call in message["tool_calls"]:
@@ -182,12 +184,36 @@ def assistant_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def render_and_mask(tokenizer: Any, row: dict[str, Any], max_seq: int) -> dict[str, Any] | None:
-    """One chat → token ids and labels (-100 outside the assistant's turns); None when too long."""
+def target_spans(text: str, messages: list[dict[str, Any]]) -> list[tuple[int, int]] | None:
+    """The spans of the assistant messages that are targets. Messages marked ``"weight": 0`` (an
+    earlier turn's reply, kept as context) carry no loss; None when the rendered turns can't be
+    matched to the messages, so the row is left out rather than trained on the wrong text."""
 
+    spans = assistant_spans(text)
+    weights = [message.get("weight", 1) for message in messages if message.get("role") == "assistant"]
+    if all(weight for weight in weights):
+        return spans
+    if len(spans) != len(weights):
+        return None
+    return [span for span, weight in zip(spans, weights) if weight]
+
+
+def _render(tokenizer: Any, row: dict[str, Any]) -> tuple[str, list[tuple[int, int]] | None]:
     text = tokenizer.apply_chat_template(template_messages(row["messages"]), tools=row.get("tools") or None,
                                          tokenize=False, add_generation_prompt=False)
-    spans = assistant_spans(text)
+    return text, target_spans(text, row["messages"])
+
+
+def render_and_mask(tokenizer: Any, row: dict[str, Any], max_seq: int) -> dict[str, Any] | None:
+    """One chat → token ids and labels (-100 outside the target assistant turns); None when it is
+    too long, has no target, or can't be rendered with the model's chat template."""
+
+    try:
+        text, spans = _render(tokenizer, row)
+    except Exception:  # noqa: BLE001 - a row the template refuses is left out, never trained on
+        return None
+    if spans is None:
+        return None
     encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
     ids, offsets = encoded["input_ids"], encoded["offset_mapping"]
     if len(ids) > max_seq:
@@ -199,6 +225,22 @@ def render_and_mask(tokenizer: Any, row: dict[str, Any], max_seq: int) -> dict[s
     if all(label == -100 for label in labels):
         return None
     return {"input_ids": ids, "labels": labels}
+
+
+def measure_row(tokenizer: Any, row: dict[str, Any]) -> tuple[int, int]:
+    """(tokens, target tokens) of one row as training renders it; (-1, 0) when the chat template
+    refuses it."""
+
+    try:
+        text, spans = _render(tokenizer, row)
+    except Exception:  # noqa: BLE001 - reported to Row-Bot as unrenderable
+        return -1, 0
+    encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    if spans is None:
+        return len(encoded["input_ids"]), 0
+    targets = sum(1 for start, stop in encoded["offset_mapping"]
+                  if stop > start and any(start >= low and stop <= high for low, high in spans))
+    return len(encoded["input_ids"]), targets
 
 
 # ── The backend (Unsloth + TRL) ─────────────────────────────────────────────
@@ -597,17 +639,38 @@ def fit_main(writer: Any, options: dict[str, str]) -> int:
     os._exit(0)
 
 
+def measure_main(writer: Any, options: dict[str, str]) -> int:
+    """Each row's length and target tokens as training would render it (the starting model's own
+    tokenizer and chat template, on the CPU): ``--rows <jsonl> --out <json>`` writes a list of
+    ``[tokens, target_tokens]``, one per row (``[-1, 0]`` for a row the template refuses)."""
+
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(options["model"], local_files_only=True)
+    tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
+    rows = read_rows(Path(options["rows"]))
+    lengths = [list(measure_row(tokenizer, row)) for row in rows]
+    Path(options["out"]).write_text(json.dumps(lengths), encoding="utf-8")
+    writer.write((json.dumps({"ok": True, "rows": len(lengths)}) + "\n").encode("utf-8"))
+    writer.flush()
+    return 0
+
+
+QUANTIZATIONS = ("Q8_0", "Q4_K_M")
+
+
 def export_main(writer: Any, options: dict[str, str]) -> int:
     """Merge the adapter into its 16-bit starting model (on the CPU), convert it to GGUF with
-    llama.cpp's converter and quantize it with ``llama-quantize`` (Q8_0 and Q4_K_M).
+    llama.cpp's converter and quantize it with ``llama-quantize``: ``--quant`` names the kinds
+    (``Q8_0``, ``Q4_K_M``; both when not given, as the GPU check script measures).
 
     ``export.json`` in the output folder records each step's time and size, or the step that failed
-    and its error's type (never its text, which names files)."""
+    and its error's type (never its text, which names files); ``export.step`` says which step runs."""
 
     out = Path(options["out"])
     out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"steps": {}}
-    progress = {"step": "merge"}
+    progress = _Progress(out)
     try:
         _export(options, out, report, progress)
     except BaseException as error:
@@ -623,9 +686,29 @@ def export_main(writer: Any, options: dict[str, str]) -> int:
     return 0
 
 
+class _Progress(dict):
+    """The export's current step, also written to ``export.step`` for Row-Bot to read."""
+
+    def __init__(self, out: Path) -> None:
+        super().__init__()
+        self._file = out / "export.step"
+        self["step"] = "merge"
+
+    def __setitem__(self, key: str, value: str) -> None:
+        super().__setitem__(key, value)
+        try:
+            self._file.write_text(value, encoding="utf-8")
+        except OSError:
+            pass
+
+
 def _export(options: dict[str, str], out: Path, report: dict[str, Any], progress: dict[str, str]) -> None:
+    import shutil
     import subprocess
 
+    kinds = [kind.strip() for kind in options.get("quant", ",".join(QUANTIZATIONS)).split(",") if kind.strip()]
+    if not kinds or any(kind not in QUANTIZATIONS for kind in kinds):
+        raise ValueError("unknown quantization")
     started = time.monotonic()
     import torch
     from peft import PeftModel
@@ -669,14 +752,16 @@ def _export(options: dict[str, str], out: Path, report: dict[str, Any], progress
                    check=True)
     report["steps"]["convert_seconds"] = round(time.monotonic() - started, 1)
     report["steps"]["BF16"] = {"bytes": bf16.stat().st_size}
-    for kind in ("Q8_0", "Q4_K_M"):
+    if options.get("keep_merged") != "1":
+        shutil.rmtree(merged, ignore_errors=True)  # not needed any more: less disk at the peak
+    environment = dict(os.environ)
+    if os.name != "nt":  # the release's shared libraries sit beside llama-quantize
+        environment["LD_LIBRARY_PATH"] = os.pathsep.join(
+            filter(None, (str(quantize.parent), environment.get("LD_LIBRARY_PATH", ""))))
+    for kind in kinds:
         progress["step"] = f"quantize {kind}"
         started = time.monotonic()
         target = out / f"{name}-{kind}.gguf"
-        subprocess.run([str(quantize), str(bf16), str(target), kind], check=True)
+        subprocess.run([str(quantize), str(bf16), str(target), kind], check=True, env=environment)
         report["steps"][kind] = {"bytes": target.stat().st_size, "seconds": round(time.monotonic() - started, 1)}
     bf16.unlink(missing_ok=True)
-    if options.get("keep_merged") != "1":
-        import shutil
-
-        shutil.rmtree(merged, ignore_errors=True)

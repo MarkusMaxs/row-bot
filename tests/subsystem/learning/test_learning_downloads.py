@@ -52,9 +52,10 @@ def test_while_it_downloads_progress_is_bytes_of_the_whole_download(world):
     started = task.start()
     assert started.state == "downloading"
     total = started.total_bytes
-    # Every wheel and every model file (uv is given here, so it isn't downloaded).
+    # Every wheel, llama.cpp's tools and every model file (uv is given here, so it isn't downloaded).
+    plan = lockfile.engine_plan("cu130")
     assert total == sum(item.size for item in world.model.pinned()) + sum(
-        wheel.known_size for wheel in lockfile.engine_plan("cu130").wheels)
+        wheel.known_size for wheel in plan.wheels) + plan.tools_bytes()
     view = _until_model_under_way(task, world)
     assert view.state == "downloading" and view.phase == "model"
     assert 0 < view.done_bytes < view.total_bytes == total

@@ -134,7 +134,8 @@ export const TRAINING_FAILURES: Record<
 };
 
 /** Where the personal model's download comes from, and what is switched off (E14, AGENTS.md). */
-export const ENGINE_SOURCES = 'From PyPI, PyTorch and Hugging Face.';
+export const ENGINE_SOURCES =
+  'From PyPI, PyTorch, Hugging Face and GitHub (llama.cpp).';
 export const ENGINE_TELEMETRY =
   'The training engine’s own usage reporting is switched off.';
 
@@ -156,6 +157,52 @@ export function percentWords(done: number, total: number): string {
   if (!total) return '0%';
   const share = Math.floor((Math.max(0, done) / total) * 100);
   return `${Math.min(done >= total ? 100 : 99, share)}%`;
+}
+
+/** Where a personal model runs ("Runs in", designs/learning-ux.md §5). */
+export const RUNTIME_NAMES: Record<string, string> = {
+  ollama: 'Ollama',
+  lmstudio: 'LM Studio',
+  llama_cpp: 'llama.cpp server',
+  vllm: 'vLLM',
+};
+
+export function runtimeName(runtime: string | null | undefined) {
+  return RUNTIME_NAMES[runtime ?? 'ollama'] ?? 'Ollama';
+}
+
+/** Preparing a version to run: what each of its three steps does. */
+export const EXPORT_STEPS: Record<string, { number: number; text: string }> = {
+  merge: {
+    number: 1,
+    text: 'Combining what it learned with its starting model',
+  },
+  convert: { number: 2, text: 'Building a ready-to-run file' },
+  quantize: { number: 3, text: 'Making the file smaller to run' },
+};
+
+/** Why a version couldn't be prepared or couldn't start (designs/learning-ux.md §9). */
+export const VERSION_FAILURES: Record<string, string> = {
+  not_enough_disk: 'There isn’t enough free disk space to prepare it.',
+  adapter_missing:
+    'The files its training made are missing, so it can’t be prepared.',
+  engine_missing: 'The training engine or starting model is missing.',
+  tools_missing:
+    'The training engine needs an update before it can prepare it.',
+  export_failed: 'Something went wrong while preparing it.',
+  not_installed: 'Ollama isn’t installed on this computer.',
+  not_running: 'Ollama isn’t running. Start it, then try again.',
+  not_local: 'Ollama is set up on another computer; personal models stay here.',
+  create_failed: 'Ollama couldn’t load its file.',
+  not_loaded: 'It isn’t loaded there yet.',
+  probe_failed: 'It loaded, but didn’t pass Row-Bot’s check.',
+  tool_turn_failed:
+    'It started, but couldn’t finish a short task that uses a tool.',
+};
+
+/** "Needs more examples · 46 of 100 so far". */
+export function examplesWords(count: number, needed: number) {
+  return `${count.toLocaleString()} of ${needed.toLocaleString()} so far`;
 }
 
 /** Why the personal model's download stopped (designs/learning-ux.md §9). */

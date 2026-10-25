@@ -141,6 +141,25 @@ def test_a_run_paused_after_train_now_continues_once_the_computer_is_free_at_any
     assert job.steps_done == 6
 
 
+def test_training_waits_while_another_app_holds_the_graphics_cards_memory(setup):
+    job = _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    card = {"free": False}  # a local model still loaded in Ollama, say (L2c)
+    setup.supervisor.gpu_free = lambda: card["free"]
+
+    assert (setup.runner.status().state, setup.runner.status().reason) == ("waiting", "gpu_busy")
+    assert (setup.runner.check().state, setup.runner.check().reason) == ("waiting", "gpu_busy")
+    assert setup.engine.commands == [] and setup.supervisor.jobs.get(job.id).state == "planned"
+    setup.when.now = DAY
+    waiting = setup.supervisor.train_now(job.id)  # Train now waits for the card too
+    assert waiting.state == "waiting" and setup.engine.commands == []
+
+    card["free"] = True
+    setup.supervisor.watch()
+    assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
+
+
 def test_train_now_waiting_for_a_chat_starts_once_it_ends_even_after_a_restart(setup):
     job = _plan(setup)
     setup.when.now = DAY

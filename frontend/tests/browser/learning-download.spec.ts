@@ -123,7 +123,7 @@ test('the download: the ask, downloading, Monitor, paused, not enough disk, fail
   });
   await expect(
     ask.getByText(
-      'From PyPI, PyTorch and Hugging Face. The training engine’s own usage reporting is switched off.',
+      'From PyPI, PyTorch, Hugging Face and GitHub (llama.cpp). The training engine’s own usage reporting is switched off.',
     ),
   ).toBeVisible();
   await shoot(page, info, 'download-ask');
@@ -134,9 +134,13 @@ test('the download: the ask, downloading, Monitor, paused, not enough disk, fail
 
   // Downloading: bytes and percent of the whole download, a real bar, Stop.
   await expect(
-    card(page).getByText('Downloading the training engine'),
+    card(page).getByText(
+      'Downloading the training engine and Qwen3.5 2B · 1.2 of 6.8 GB',
+    ),
   ).toBeVisible();
-  await expect(card(page).getByText('1.2 of 6.8 GB · 17%')).toBeVisible();
+  await expect(
+    card(page).getByText('17% · now the training engine'),
+  ).toBeVisible();
   await expect(
     card(page).getByRole('progressbar', { name: 'Download progress' }),
   ).toHaveAttribute('max', '6789270885');

@@ -337,7 +337,26 @@ def _purge_learning_state(thread_id: str) -> int:
         return 0
     from row_bot.learning.store import LearningStore
 
-    return LearningStore().purge_thread(thread_id).total
+    removed = LearningStore().purge_thread(thread_id).total
+    _forget_in_training_runs([thread_id])
+    return removed
+
+
+def _forget_in_training_runs(thread_ids: list[str]) -> int:
+    """A personal-model run that hasn't finished training on a deleted conversation is discarded
+    (L2c). One path check while there are no runs; nothing else is imported then."""
+
+    from row_bot.data_paths import get_row_bot_data_dir
+
+    if not (get_row_bot_data_dir(create=False) / "learning_models" / "runs").is_dir():
+        return 0
+    try:
+        from row_bot.learning.training.dataset import forget_conversations
+
+        return forget_conversations(thread_ids)
+    except Exception:
+        logger.warning("Learning couldn't check its training runs for a deleted chat", exc_info=True)
+        return 0
 
 
 def _purge_owned_state(thread_id: str) -> tuple[int, tuple[str, ...]]:
@@ -1035,7 +1054,21 @@ def _sweep_orphaned_learning_threads(owners: set[str], *, older_than: float) -> 
         return 0
     from row_bot.learning.store import LearningStore
 
-    return LearningStore().purge_missing_threads(owners, older_than=older_than)
+    purged = LearningStore().purge_missing_threads(owners, older_than=older_than)
+    if purged:
+        from row_bot.data_paths import get_row_bot_data_dir
+
+        runs = get_row_bot_data_dir(create=False) / "learning_models" / "runs"
+        if runs.is_dir():
+            from row_bot.learning.training.dataset import read_manifest
+
+            gone = set()
+            for entry in runs.iterdir():
+                manifest = read_manifest(entry / "data") or {}
+                gone.update(str(item) for item in manifest.get("conversations") or () if str(item) not in owners)
+            if gone:
+                _forget_in_training_runs(sorted(gone))
+    return purged
 
 
 def sweep_orphaned_thread_artifacts(

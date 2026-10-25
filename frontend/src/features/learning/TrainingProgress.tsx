@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { clientError } from '../../api/errors';
-import type { LearningSnapshot, LearningTraining } from '../../api/types';
+import type {
+  LearningPersonalModel,
+  LearningSnapshot,
+  LearningTraining,
+} from '../../api/types';
 import { useNotify, useOverlay } from '../../ui/overlays';
 import { Button } from '../../ui/primitives';
 import type { LearningAction, LearningIO } from './learning-state';
 import {
+  examplesWords,
+  plural,
   quietHoursWords,
   stepWords,
   timeLeftWords,
@@ -35,6 +41,8 @@ const WAITING_FOR: Record<string, string> = {
   indexing: 'Row-Bot is reading documents.',
   dream: 'Dream Cycle is running.',
   in_use: 'You’re using Row-Bot.',
+  gpu_busy:
+    'Another app is using the graphics card’s memory, such as a local model that’s still loaded.',
 };
 
 function name(training: LearningTraining) {
@@ -52,8 +60,14 @@ function capital(text: string) {
  */
 export function trainingView(
   training: LearningTraining,
-  snapshot: Pick<LearningSnapshot, 'quiet_hours'>,
+  snapshot: Pick<LearningSnapshot, 'quiet_hours'> & {
+    personal_model?: Pick<LearningPersonalModel, 'examples' | 'version'>;
+  },
 ): TrainingView | null {
+  const examples = snapshot.personal_model?.examples ?? null;
+  const uses = examples?.examples
+    ? ` · uses ${plural(examples.examples, 'example')}`
+    : '';
   const run = name(training);
   const Run = capital(run);
   const steps = stepWords(training.step, training.steps_total);
@@ -111,14 +125,19 @@ export function trainingView(
         actions: [stop],
         announce: 'Pausing training after this step.',
       };
-    case 'waiting':
+    case 'waiting': {
+      const card = training.runner.reason === 'gpu_busy';
+      const title = card
+        ? `${Run} starts when the graphics card is free.`
+        : `${Run} starts when Row-Bot is free.`;
       return {
-        title: `${Run} starts when Row-Bot is free.`,
+        title,
         detail:
           WAITING_FOR[training.runner.reason ?? 'in_use'] ?? WAITING_FOR.in_use,
         actions: [{ label: 'Cancel', action: 'stop_training' }],
-        announce: `${Run} starts when Row-Bot is free.`,
+        announce: title,
       };
+    }
     case 'paused': {
       const ask: Action[] = [
         { label: 'Continue', action: 'continue_training', primary: true },
@@ -179,9 +198,16 @@ export function trainingView(
       };
     }
     case 'evaluating':
+      // The version's own card says how it is being prepared and made ready.
+      if (
+        training.version &&
+        snapshot.personal_model?.version?.version === training.version
+      )
+        return null;
       return {
         title: `Trained ${training.version ? `v${training.version}` : 'a new version'} · ${(training.steps_total ?? training.step).toLocaleString()} steps.`,
-        detail: 'Row-Bot tests it next, and asks you before using it.',
+        detail:
+          'Row-Bot prepares it to run next, and asks you before using it.',
         actions: [],
         announce: `Finished ${run}.`,
       };
@@ -191,26 +217,61 @@ export function trainingView(
         reason === 'train_off'
           ? `${Run} runs only when you choose Train now: Train during quiet hours is off.`
           : reason === 'after_dream'
-            ? `${Run} runs tonight in quiet hours, after Dream Cycle.`
+            ? `${Run} runs tonight in quiet hours, after Dream Cycle${uses}.`
             : reason === 'now'
-              ? `${Run} starts in a moment.`
-              : `${Run} runs tonight in quiet hours (${hours}).`;
+              ? `${Run} starts in a moment${uses}.`
+              : reason === 'gpu_busy'
+                ? `${Run} starts when the graphics card is free${uses}.`
+                : `${Run} runs tonight in quiet hours (${hours})${uses}.`;
       return {
         title,
-        detail: 'It pauses when you use Row-Bot.',
+        detail:
+          reason === 'gpu_busy'
+            ? `${WAITING_FOR.gpu_busy} It pauses when you use Row-Bot.`
+            : 'It pauses when you use Row-Bot.',
         actions: trainNow,
         announce: `${Run} is planned.`,
       };
     }
-    case 'none':
-      if (training.runner.reason === 'no_data')
+    case 'none': {
+      const reason = training.runner.reason;
+      if (reason === 'no_data' && examples)
+        return {
+          title: `Needs more examples · ${examplesWords(examples.examples, examples.needed)}`,
+          detail: `Training starts once Row-Bot has ${plural(examples.needed, 'example')} of your work it can learn from. Keep using Row-Bot; Teach on a reply that went wrong helps too.`,
+          actions: [],
+          announce: '',
+        };
+      if (reason === 'no_data')
         return {
           title:
             'Nothing to train yet. Training starts once Row-Bot has enough examples from your work.',
           actions: [],
           announce: '',
         };
+      if (reason === 'planning')
+        return {
+          title: examples
+            ? `Getting ${plural(examples.examples, 'example')} ready to train…`
+            : 'Getting your examples ready to train…',
+          detail:
+            'Then it trains tonight in quiet hours, or sooner with Train now.',
+          actions: [],
+          announce: '',
+        };
+      if (reason === 'up_to_date') {
+        const latest = snapshot.personal_model?.version;
+        return {
+          title: latest
+            ? `v${latest.version} has learned from everything so far.`
+            : 'Your personal model has learned from everything so far.',
+          detail: `The next version trains once there are enough new examples${examples ? ` (${examples.new_examples.toLocaleString()} so far)` : ''}.`,
+          actions: [],
+          announce: '',
+        };
+      }
       return null;
+    }
     default:
       return null;
   }

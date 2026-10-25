@@ -56,6 +56,16 @@ FORBIDDEN = frozenset({"wandb", "kernels", "redis", "trackio", "xformers", "come
 # The packages whose import the engine's check proves (training needs each).
 CORE = ("torch", "transformers", "trl", "peft", "accelerate", "unsloth", "unsloth-zoo", "bitsandbytes")
 
+# llama.cpp's own tools build each personal model's GGUF (O26; never Unsloth's GGUF path, which
+# clones, builds and installs): one pinned release, its CPU build for this computer (llama-quantize;
+# converting and quantizing need no graphics card) and the same tag's converter
+# (``convert_hf_to_gguf.py`` with its ``conversion`` and ``gguf-py`` packages, run by the engine's
+# own interpreter). Sizes and SHA-256 as GitHub publishes them for the release's assets; the source
+# archive's as downloaded and checked in L0d.
+LLAMA_CPP_RELEASE = "b11669"
+LLAMA_CPP_COMMIT = "620d2225cc436ab0b001e3200e590e3b286ef9ab"
+_LLAMA_DOWNLOAD = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_RELEASE}"
+
 
 class LockError(ValueError):
     """The lock can't give an install plan here; ``code`` is stable."""
@@ -84,31 +94,78 @@ class LockedWheel:
         return f"{self.name}=={self.version} --hash=sha256:{self.sha256}"
 
 
+# The CPU build of llama.cpp's tools for each platform the engine installs on (by wheel platform).
+LLAMA_CPP_TOOLS: dict[str, LockedWheel] = {
+    "windows-x64": LockedWheel(
+        "llama.cpp-tools", LLAMA_CPP_RELEASE, f"{_LLAMA_DOWNLOAD}/llama-{LLAMA_CPP_RELEASE}-bin-win-cpu-x64.zip",
+        f"llama-{LLAMA_CPP_RELEASE}-bin-win-cpu-x64.zip",
+        "37b3efcf962847ca869745fd4ccf7f5e7e8dacfeff9fa3523b4ca8cdc66d632b", 19_537_886),
+    "linux-x64": LockedWheel(
+        "llama.cpp-tools", LLAMA_CPP_RELEASE, f"{_LLAMA_DOWNLOAD}/llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-x64.tar.gz",
+        f"llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-x64.tar.gz",
+        "cf07c1c112d709bd67e522017471de57ed0ec8bea031d732c5422351c07f65ac", 17_851_611),
+}
+# The converter: the release tag's source archive (only its Python converter is unpacked).
+LLAMA_CPP_SOURCE = LockedWheel(
+    "llama.cpp-converter", LLAMA_CPP_RELEASE,
+    f"https://github.com/ggml-org/llama.cpp/archive/refs/tags/{LLAMA_CPP_RELEASE}.zip",
+    f"llama.cpp-{LLAMA_CPP_RELEASE}-src.zip",
+    "bf22d4717daf6db1ecff37bbe702bb53fcca2b7ab63a103c6d679aa65d5d932e", 40_098_144)
+
+
+def tools_platform(platforms: Iterable[str] | None = None) -> str | None:
+    """Which llama.cpp build fits these wheel platform tags (this computer's by default)."""
+
+    found = list(platforms) if platforms is not None else list(tags.platform_tags())
+    for tag in found:
+        if tag == "win_amd64":
+            return "windows-x64"
+        if tag.endswith("_x86_64") and ("linux" in tag):
+            return "linux-x64"
+    return None
+
+
+def llama_tools(platforms: Iterable[str] | None = None) -> tuple[LockedWheel, ...]:
+    """The pinned llama.cpp files to download for these platform tags: the CPU build, then the converter."""
+
+    platform_id = tools_platform(platforms)
+    build = LLAMA_CPP_TOOLS.get(platform_id or "")
+    if build is None:
+        raise LockError("no_wheel", "llama.cpp tools")
+    return (build, LLAMA_CPP_SOURCE)
+
+
 @dataclass(frozen=True)
 class EnginePlan:
-    """Everything one engine install needs on this computer."""
+    """Everything one engine install needs on this computer: the locked wheels, uv, and llama.cpp's
+    tools for the export."""
 
     variant: str
     python_version: str
     wheels: tuple[LockedWheel, ...]
     uv: LockedWheel
+    tools: tuple[LockedWheel, ...] = ()
 
     @property
     def identity(self) -> str:
-        """Changes whenever what would be installed changes (an app update's new lock)."""
+        """Changes whenever what would be installed changes (an app update's new lock or tools)."""
 
-        text = "\n".join([self.variant, self.python_version, *sorted(w.requirement() for w in self.wheels)])
+        text = "\n".join([self.variant, self.python_version, *sorted(w.requirement() for w in self.wheels),
+                          *sorted(f"{tool.filename} {tool.sha256}" for tool in self.tools)])
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     @property
     def names(self) -> frozenset[str]:
         return frozenset(wheel.name for wheel in self.wheels)
 
+    def tools_bytes(self) -> int:
+        return sum(tool.known_size or 0 for tool in self.tools)
+
     def download_bytes(self) -> int:
-        """About how much downloads: every wheel, uv itself and the interpreter."""
+        """About how much downloads: every wheel, uv itself, the interpreter and llama.cpp's tools."""
 
         sizes = [w.known_size or UNKNOWN_WHEEL_BYTES for w in (*self.wheels, self.uv)]
-        return sum(sizes) + PYTHON_DOWNLOAD_BYTES
+        return sum(sizes) + PYTHON_DOWNLOAD_BYTES + self.tools_bytes()
 
     def requirements(self) -> str:
         """The pins uv installs (with ``--no-deps --require-hashes``), one per line."""
@@ -276,7 +333,8 @@ def engine_plan(
     if forbidden:
         raise LockError("forbidden_package", ",".join(sorted(forbidden)))
     wheels = tuple(sorted((_best_wheel(item, ranking) for item in chosen.values()), key=lambda w: w.name))
-    return EnginePlan(variant, PYTHON_VERSION, wheels, uv_wheel(document, platforms=platforms))
+    return EnginePlan(variant, PYTHON_VERSION, wheels, uv_wheel(document, platforms=platforms),
+                      llama_tools(platforms))
 
 
 _plans: dict[tuple[str, Any], EnginePlan] = {}
@@ -326,6 +384,11 @@ __all__ = [
     "ENGINE_DIR",
     "EnginePlan",
     "FORBIDDEN",
+    "LLAMA_CPP_RELEASE",
+    "LLAMA_CPP_SOURCE",
+    "LLAMA_CPP_TOOLS",
+    "llama_tools",
+    "tools_platform",
     "LOCK_FILE",
     "LockError",
     "LockedWheel",

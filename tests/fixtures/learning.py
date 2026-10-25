@@ -300,6 +300,63 @@ def minimal_records() -> list[contracts.Record]:
     ]
 
 
+# ── Captured work (L2c): real turns through Capture's seams ────────────────
+
+
+class CapturedWork:
+    """Real captured turns (``Capture``'s seams, as the agent calls them): each asks a question,
+    calls the calculator, reads its result and answers. Conversations keep their history."""
+
+    SYSTEM = "You are Row-Bot. Use tools when they help."
+    TOOLS = [{"type": "function", "function": {
+        "name": "calculate", "description": "Evaluate a math expression.",
+        "parameters": {"type": "object", "properties": {"expression": {"type": "string"}},
+                       "required": ["expression"]}}}]
+
+    def __init__(self, writer, chats, clock) -> None:
+        self.writer, self.chats, self.clock = writer, chats, clock
+        from collections import defaultdict
+
+        self.history: dict[str, list] = defaultdict(list)
+        self.count = 0
+
+    def turn(self, thread_id: str, question: str, answer: str, *, model_ref: str = "gpt-5.6-sol",
+             provider_id: str = "openai", end: str = "completed", tool_status: str = "ok",
+             args: dict | None = None, tool: bool = True, raw_answer: str | None = None) -> list[str]:
+        """One turn; returns its model calls' decision ids (the tool step's, then the answer's)."""
+
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+        if thread_id not in self.chats.threads:
+            self.chats.chat(thread_id)
+        self.count += 1
+        number = self.count
+        turn = self.writer.begin_turn(thread_id=thread_id, surface="normal_chat")
+        asked = HumanMessage(content=question, id=f"h{number}")
+        sent = [SystemMessage(content=self.SYSTEM, id="sys"), *self.history[thread_id], asked]
+        ids: list[str] = []
+        added: list = [asked]
+        if tool:
+            call = {"id": f"call_{number}", "name": "calculate", "args": args or {"expression": "6 * 7"}}
+            step = AIMessage(content="", id=f"a{number}", tool_calls=[call])
+            ids.append(self.writer.model_call(turn, messages=sent, response=step, tools=self.TOOLS, model_ref=model_ref,
+                                              provider_id=provider_id))
+            result = ToolMessage(content="6 * 7 = 42", tool_call_id=call["id"], id=f"t{number}",
+                                 status="error" if tool_status != "ok" else "success")
+            self.writer.tool_call(turn, call=call, result=result, status=tool_status)
+            sent = [*sent, step, result]
+            added += [step, result]
+        reply = AIMessage(content=raw_answer if raw_answer is not None else answer, id=f"r{number}")
+        ids.append(self.writer.model_call(turn, messages=sent, response=reply, tools=self.TOOLS, model_ref=model_ref,
+                                          provider_id=provider_id))
+        added.append(AIMessage(content=answer, id=f"r{number}-kept"))
+        self.writer.end_turn(turn, end)
+        self.writer.drain()
+        self.history[thread_id] += added
+        self.clock.advance(60)
+        return ids
+
+
 # ── Training (L2a): the fake trainer, its engine, a dataset and a lease ────────
 
 FAKE_TRAINER = Path(__file__).with_name("learning_trainer.py").resolve()

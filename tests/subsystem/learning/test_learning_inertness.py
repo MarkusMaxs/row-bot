@@ -86,6 +86,22 @@ def test_start_up_sweeps_with_learning_off_leave_no_learning_files(tmp_path, rel
     assert _learning_modules() in ([], ["row_bot.learning"])
 
 
+def test_model_lists_and_local_models_load_nothing_of_learning(data_dir, no_learning_modules):
+    """L2c's hooks in the model paths (personal models kept out of lists, a local model's own
+    serving settings) read no Learning module and no Learning file."""
+
+    from row_bot import models
+    from row_bot.providers import model_visibility
+    from row_bot.providers.runtime import _local_reasoning_default
+
+    assert not model_visibility.withheld("ollama", "qwen3:8b")
+    assert models.local_model_settings("qwen3:8b") == {}
+    assert _local_reasoning_default("qwen3:8b") == {}
+
+    assert learning_files(data_dir) == []
+    assert _learning_modules() in ([], ["row_bot.learning"])
+
+
 def test_deleting_a_conversation_with_learning_off_touches_nothing_of_learning(data_dir, no_learning_modules):
     gone = threads.create_thread("Off", thread_id=f"off-{uuid.uuid4().hex[:10]}", seed_default_skills=False)
     session_files = learning_files(threads.DATA_DIR)

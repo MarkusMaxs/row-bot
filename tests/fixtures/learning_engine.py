@@ -259,6 +259,54 @@ def fake_lock(path: Path, *, common: list[FakeWheel], cu130: list[FakeWheel], cu
     return path
 
 
+# ── llama.cpp's tools (L2c), as tiny stand-ins on the index ──────────────────
+
+LLAMA_TOP = "llama.cpp-b11669"
+
+
+def _zip(entries: Mapping[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, data in entries.items():
+            archive.writestr(zipfile.ZipInfo(path, date_time=(2026, 10, 16, 0, 0, 0)), data)
+    return buffer.getvalue()
+
+
+def fake_llama_archives(*, extra_source: Mapping[str, bytes] | None = None) -> tuple[bytes, bytes]:
+    """(the CPU build, the source archive) of a stand-in llama.cpp release: ``llama-quantize`` and
+    the converter's files, plus source the export never needs (left packed)."""
+
+    build = _zip({"llama-quantize.exe": b"quantize", "llama-quantize": b"quantize",
+                  "llama-quantize-impl.dll": b"impl", "llama-server.exe": b"server"})
+    source = {
+        f"{LLAMA_TOP}/convert_hf_to_gguf.py": b"print('convert')\n",
+        f"{LLAMA_TOP}/conversion/__init__.py": b"",
+        f"{LLAMA_TOP}/gguf-py/gguf/__init__.py": b"",
+        f"{LLAMA_TOP}/LICENSE": b"MIT License\n",
+        f"{LLAMA_TOP}/ggml/src/ggml.c": b"/* not needed for the export */\n",
+    }
+    source.update(extra_source or {})
+    return build, _zip(source)
+
+
+def fake_llama(index: FakeIndex, monkeypatch: Any) -> tuple[Any, Any]:
+    """Pin llama.cpp's tools to stand-ins on ``index`` for every platform (macOS CI included).
+    Returns the two pins (the build, the converter)."""
+
+    from row_bot.learning.training import lockfile
+
+    build, source = fake_llama_archives()
+    pins = []
+    for name, data in (("llama-b11669-bin-test-cpu.zip", build), ("llama.cpp-b11669-src.zip", source)):
+        path = index.add(f"/ggml-org/llama.cpp/releases/download/b11669/{name}", data)
+        pins.append(lockfile.LockedWheel("llama.cpp-tools", "b11669", "https://github.com" + path, name,
+                                         hashlib.sha256(data).hexdigest(), len(data)))
+    monkeypatch.setattr(lockfile, "LLAMA_CPP_TOOLS", {"test": pins[0]})
+    monkeypatch.setattr(lockfile, "LLAMA_CPP_SOURCE", pins[1])
+    monkeypatch.setattr(lockfile, "tools_platform", lambda platforms=None: "test")
+    return pins[0], pins[1]
+
+
 # ── The engine's packages, as tiny stand-ins (for the engine's own check) ─────
 
 _TORCH = '''
@@ -379,6 +427,7 @@ def download_world(root: Path, tmp_path: Path, monkeypatch: Any) -> Iterator[Dow
         lock = fake_lock(tmp_path / "uv.lock", common=common, cu130=cu130, cu128=cu128,
                          uv=wheel(index, "uv", "0.12.22"))
         monkeypatch.setattr(lockfile, "LOCK_FILE", lock)
+        fake_llama(index, monkeypatch)
         files = []
         for name, data in (("LICENSE", FAKE_LICENCE), ("model.safetensors", FAKE_WEIGHTS)):
             digest = hashlib.sha256(data).hexdigest()
@@ -404,6 +453,8 @@ __all__ = [
     "FakeIndex",
     "FakeWheel",
     "fake_engine_site",
+    "fake_llama",
+    "fake_llama_archives",
     "fake_lock",
     "loopback_opener",
     "make_wheel",

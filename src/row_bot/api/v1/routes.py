@@ -390,6 +390,8 @@ _STATUS.update(
         "learning_not_enough_disk": 409,
         "learning_download_busy": 409,
         "learning_download_changed": 409,
+        "learning_version_changed": 409,
+        "learning_version_busy": 409,
         "invalid_plugin_lifecycle_command": 422,
         "plugin_marketplace_unavailable": 409,
         "plugin_marketplace_entry_unavailable": 404,

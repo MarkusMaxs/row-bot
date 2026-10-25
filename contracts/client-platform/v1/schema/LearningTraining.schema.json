@@ -29,7 +29,11 @@
                 "engine_error",
                 "learning_off",
                 "learning_paused",
-                "extraction"
+                "extraction",
+                "planned",
+                "planning",
+                "up_to_date",
+                "gpu_busy"
               ],
               "type": "string"
             },

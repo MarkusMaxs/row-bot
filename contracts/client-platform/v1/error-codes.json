@@ -330,6 +330,8 @@
     "learning_settings_unavailable": 409,
     "learning_training_changed": 409,
     "learning_unavailable": 404,
+    "learning_version_busy": 409,
+    "learning_version_changed": 409,
     "local_address_unavailable": 404,
     "malformed_audio": 422,
     "mcp_auth_address_expired": 409,

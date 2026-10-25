@@ -363,6 +363,11 @@ def set_chat_opt_out(thread_id: str, opted_out: bool, *, store: LearningStore | 
 
     saved = store if store is not None else LearningStore()
     report = saved.set_chat_opt_out(thread_id, opted_out)
+    if opted_out and (saved.root / "learning_models" / "runs").is_dir():
+        # A run not yet trained on this chat is discarded: nothing trains on it (L2c).
+        from row_bot.learning.training.dataset import forget_conversations
+
+        forget_conversations([thread_id], saved.root)
     return report.total if report is not None else 0
 
 

@@ -223,6 +223,46 @@ def test_loss_is_only_on_the_assistants_answers():
     assert trainer.render_and_mask(FakeTokenizer(), row, 20) is None  # longer than the context: left out
 
 
+def _trained_text(encoded) -> str:
+    return "".join(chr(token) for token, label in zip(encoded["input_ids"], encoded["labels"], strict=True)
+                   if label != -100)
+
+
+def test_an_earlier_turns_reply_is_context_and_only_weighted_replies_train():
+    row = {"messages": [
+        {"role": "system", "content": "You are Row-Bot."},
+        {"role": "user", "content": "First"},
+        {"role": "assistant", "content": "Old answer.", "weight": 0},
+        {"role": "user", "content": "Second"},
+        {"role": "assistant", "content": "New answer.", "weight": 1},
+    ]}
+
+    encoded = trainer.render_and_mask(FakeTokenizer(), row, 10_000)
+    tokens, targets = trainer.measure_row(FakeTokenizer(), row)
+
+    assert _trained_text(encoded) == "New answer.<|im_end|>"
+    assert "weight" not in json.dumps(trainer.template_messages(row["messages"]))  # never rendered as content
+    assert tokens == len(encoded["input_ids"]) and targets == len("New answer.<|im_end|>")
+
+
+def test_a_row_the_template_refuses_or_cant_match_is_left_out():
+    class Refuses(FakeTokenizer):
+        def apply_chat_template(self, *args, **kwargs):
+            raise ValueError("System message must be at the beginning.")
+
+    class DropsOne(FakeTokenizer):
+        def apply_chat_template(self, messages, **kwargs):  # renders one assistant turn fewer
+            return super().apply_chat_template(messages[:-1], **kwargs)
+
+    row = {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Old.", "weight": 0},
+                        {"role": "user", "content": "Again"}, {"role": "assistant", "content": "New.", "weight": 1}]}
+
+    assert trainer.render_and_mask(Refuses(), row, 10_000) is None
+    assert trainer.measure_row(Refuses(), row) == (-1, 0)
+    assert trainer.render_and_mask(DropsOne(), row, 10_000) is None  # never trained on the wrong text
+    assert trainer.measure_row(DropsOne(), row)[1] == 0
+
+
 PROBE = '''
 import importlib.util, json, os, sys
 spec = importlib.util.spec_from_file_location("engine_entry", sys.argv[1])

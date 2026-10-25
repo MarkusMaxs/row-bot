@@ -32,8 +32,10 @@ _ACTIONS = frozenset({
     "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
     "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
     "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
-    "remove_engine", "delete_starting_model",
+    "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
 })
+# The personal model's version (L2c): make it ready again (Try again, Check again), or choose where it runs.
+_VERSION_ACTIONS = frozenset({"make_ready", "choose_runtime"})
 # The personal model's download (L2b): the training engine and the starting model.
 _DOWNLOAD_ACTIONS = frozenset({"start_download", "stop_download", "cancel_download", "remove_engine",
                                "delete_starting_model"})
@@ -58,7 +60,13 @@ _RUNNER_REASONS = frozenset({
     "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
     "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
     "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
+    "planned", "planning", "up_to_date", "gpu_busy",
 })
+_VERSION_PHASES = frozenset({"exporting", "export_failed", "making_ready", "ready", "runtime_failed",
+                             "waiting_for_you"})
+_VERSION_FAILURES = frozenset({"not_enough_disk", "adapter_missing", "engine_missing", "tools_missing",
+                               "export_failed", "not_installed", "not_running", "not_local", "create_failed",
+                               "not_loaded", "probe_failed", "tool_turn_failed"})
 _FAILURES = frozenset({"out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"})
 _SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
 # The owner id each channel needs before its direct chats count as the owner's (O2), in words.
@@ -250,6 +258,88 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "starting_model_state": starting if starting in ("downloaded", "damaged") else "not_downloaded",
         "starting_model_bytes": view.model_bytes if view is not None and starting == "downloaded" else 0,
         "download_state": _download_view(None if configured else view),
+        "runtime": settings.serve_runtime,
+        "runtimes": _runtimes(),
+        "examples": _examples(settings, engine == "installed"),
+        "version": _version(),
+    }
+
+
+def _runtimes() -> list[dict[str, Any]]:
+    """Where a personal model can run here, and whether Row-Bot can register it there itself."""
+
+    from row_bot.learning.training import serving
+
+    try:
+        ollama = serving.OllamaRuntime().executable() is not None
+    except Exception:
+        ollama = False
+    shown = []
+    for runtime in serving.available_runtimes():
+        shown.append({
+            "id": runtime, "name": serving.RUNTIME_NAMES[runtime], "automated": runtime == "ollama",
+            "installed": ollama if runtime == "ollama" else None,
+        })
+    return shown
+
+
+def _examples(settings: learning.LearningSettings, engine_installed: bool) -> dict[str, Any] | None:
+    """How many examples of the person's work there are and how many training needs (no store is made)."""
+
+    if not settings.enabled or not engine_installed or not learning.store_exists():
+        return None
+    runner_module = sys.modules.get("row_bot.learning.runner")
+    runner = runner_module.loaded() if runner_module is not None else None
+    planner = getattr(runner, "planner", None)
+    if planner is None:
+        return None
+    try:
+        summary = planner.summary(compute=True)
+    except Exception:
+        logger.debug("Learning could not count its examples", exc_info=True)
+        return None
+    if summary is None:
+        return None
+    return {"examples": max(0, summary.examples), "needed": max(1, summary.needed),
+            "new_examples": max(0, summary.new_examples), "left_out": max(0, summary.left_out)}
+
+
+def _iso(at: float | None) -> str | None:
+    if not at:
+        return None
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(float(at), tz=timezone.utc).isoformat()
+
+
+def _version() -> dict[str, Any] | None:
+    """The newest personal-model version: being made, ready (waiting for its comparison) or stuck."""
+
+    try:
+        from row_bot.learning.training import releases
+
+        state = releases.latest_state()
+    except Exception:
+        logger.debug("Learning could not read its newest version", exc_info=True)
+        return None
+    if state is None or state.phase not in _VERSION_PHASES:
+        return None
+    folder = releases.version_dir(state.version)
+    return {
+        "version": state.version,
+        "phase": state.phase,
+        "step": state.step if state.step in ("merge", "convert", "quantize") else None,
+        "failure": state.failure if state.failure in _VERSION_FAILURES else None,
+        "runtime": state.runtime if state.runtime in learning.SERVE_RUNTIMES else "ollama",
+        "quantization": state.quantization if state.quantization in ("Q8_0", "Q4_K_M") else "Q8_0",
+        "file_name": _text(state.gguf, 128) or None,
+        "file_bytes": max(0, int(state.gguf_bytes or 0)),
+        "folder": _text(str(folder.absolute()), 1024),
+        "command": _text(state.command, 2048) or None,
+        "needs_bytes": state.needs_bytes if isinstance(state.needs_bytes, int) and state.needs_bytes >= 0 else None,
+        "free_bytes": state.free_bytes if isinstance(state.free_bytes, int) and state.free_bytes >= 0 else None,
+        "trained_at": _iso(state.trained_at),
+        "examples": max(0, int(state.examples or 0)),
     }
 
 
@@ -379,7 +469,8 @@ def _control_state(settings: learning.LearningSettings, opted_out: list[str]) ->
         "sources": [settings.my_chats, settings.workflows_and_goals, settings.past_chats],
         "apply_mode": settings.apply_mode,
         "limit": settings.monthly_token_limit,
-        "train": [settings.train_in_quiet_hours, settings.train_where, settings.starting_model],
+        "train": [settings.train_in_quiet_hours, settings.train_where, settings.starting_model,
+                  settings.serve_runtime],
         "download": settings.model_download,
         "opted_out": sorted(opted_out),
     }
@@ -614,6 +705,8 @@ def _target(action: str, command: dict[str, Any]) -> str:
         return "learning:training"
     if action in _DOWNLOAD_ACTIONS:
         return "learning:download"
+    if action in _VERSION_ACTIONS:
+        return "learning:version"
     return "learning:settings"
 
 
@@ -655,6 +748,40 @@ def _train(action: str, job_id: str) -> str:
     # The runner keeps it going (pauses on use, continues when free).
     runner_module.start_background()
     return summary
+
+
+def _version_action(action: str, runtime: str) -> str:
+    """Try again / Check again on the newest version, or choose where personal models run."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import releases, serving
+
+    runner = runner_module.get()
+    maker = runner.releases
+    state = releases.latest_state()
+    job = runner.supervisor.jobs.get(state.job_id) if state is not None and learning.store_exists() else None
+    if action == "choose_runtime":
+        if runtime not in learning.SERVE_RUNTIMES or runtime not in serving.available_runtimes():
+            raise ClientPlatformError("invalid_learning_command")
+        _save({"serve_runtime": runtime})
+        name = serving.RUNTIME_NAMES[runtime]
+        if (state is not None and state.gguf and job is not None and job.state in ("evaluating", "ready")
+                and maker is not None and not maker.busy()):
+            maker.start(job, runtime=runtime)
+            runner_module.start_background()
+            return f"Personal models run in {name}. Making v{state.version} ready there."
+        return f"Personal models run in {name}."
+    if state is None or job is None or job.state not in ("evaluating", "ready") or maker is None:
+        raise ClientPlatformError("learning_version_changed")
+    if maker.busy():
+        raise ClientPlatformError("learning_version_busy")
+    maker.start(job)
+    runner_module.start_background()
+    if state.phase == "export_failed":
+        return f"Preparing v{state.version} again."
+    if state.phase == "waiting_for_you":
+        return f"Checking whether v{state.version} is loaded in {serving.RUNTIME_NAMES.get(state.runtime, 'it')}."
+    return f"Making v{state.version} ready in {serving.RUNTIME_NAMES.get(learning.read_settings().serve_runtime, 'it')}."
 
 
 def _download_words(view: Any, model_name: str) -> str:
@@ -764,6 +891,9 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     job_id = _text(command.get("job_id"), 128)
     if action in _TRAINING_ACTIONS - {"train_now"} and not job_id:
         raise ClientPlatformError("invalid_learning_command")
+    runtime = _text(command.get("runtime"), 32)
+    if action == "choose_runtime" and runtime not in learning.SERVE_RUNTIMES:
+        raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
         "command_id": command["command_id"],
@@ -779,6 +909,7 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "signal_id": signal_id,
         "download": command.get("download"),
         "job_id": job_id,
+        "runtime": runtime,
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -885,6 +1016,8 @@ def _perform(
         summary = "Removed." if removed else "Already removed."
     elif action in _TRAINING_ACTIONS:
         summary = _train(action, wire["job_id"])
+    elif action in _VERSION_ACTIONS:
+        summary = _version_action(action, wire["runtime"])
     else:
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs

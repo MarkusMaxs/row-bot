@@ -23,11 +23,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import threading
 import time
 from pathlib import Path
 
 import pytest
+
+from tests.helpers.learning_connections import Connections
 
 pytestmark = [pytest.mark.e2e]
 
@@ -38,52 +39,6 @@ def _gpu():
     from row_bot.learning.training import hardware
 
     return hardware.detect()
-
-
-class Connections:
-    """Every connection the test process's children (and, with ``me``, the test process itself)
-    hold, sampled about ten times a second (``ticks``: how many times it looked)."""
-
-    def __init__(self, *, me: bool = False) -> None:
-        import psutil
-
-        self._psutil = psutil
-        self._me = me
-        self.ticks = 0
-        self.samples = 0
-        self.sockets: set[tuple] = set()
-        self.remote: set[tuple] = set()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def _run(self) -> None:
-        me = self._psutil.Process(os.getpid())
-        while not self._stop.is_set():
-            self.ticks += 1
-            try:
-                children = me.children(recursive=True)
-            except self._psutil.Error:
-                children = []
-            for child in ([me] if self._me else []) + children:
-                try:
-                    for connection in child.net_connections(kind="inet"):
-                        self.samples += 1
-                        if connection.raddr:
-                            item = (connection.raddr.ip, connection.raddr.port)
-                            self.sockets.add(item)
-                            if not (item[0].startswith("127.") or item[0] == "::1"):
-                                self.remote.add(item)
-                except self._psutil.Error:
-                    continue
-            self._stop.wait(0.1)
-
-    def __enter__(self) -> Connections:
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self._stop.set()
-        self._thread.join(5)
 
 
 @pytest.mark.skipif(not ENABLED, reason="opt-in: set ROW_BOT_LEARNING_ENGINE_E2E=1")
