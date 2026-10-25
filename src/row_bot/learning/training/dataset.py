@@ -183,14 +183,12 @@ def openai_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _page_picture(message: Mapping[str, Any]) -> bool:
-    """The browser's or the computer's picture after an action (5.3, ``browser.model_view``): one extra message,
-    never saved to the conversation, that only a model that sees images is sent with the action's result. A
-    text-only personal model reads the action's result in words instead, so its served rows leave it out."""
+    """The browser's or the computer's picture after an action (``pictures.is_page_picture``): the text-only
+    personal model is served without it, so its served rows leave it out."""
 
-    kind, data = _data(message)
-    content = data.get("content")
-    return (kind in {"human", "user"} and not data.get("id") and isinstance(content, list)
-            and any(isinstance(part, Mapping) and part.get("type") == "image_url" for part in content))
+    from row_bot.learning.pictures import is_page_picture
+
+    return is_page_picture(message)
 
 
 def _is_person(message: Mapping[str, Any]) -> bool:

@@ -105,7 +105,8 @@ def test_only_aggregates_leave_the_freeze_evaluation(vault):
     text = json.dumps(result)
     for secret in (CANARY, "dec_", "thread-", "gpt-", "answer ", *(task.id for task in tasks)):
         assert secret not in text
-    assert result["problems"] == {"real_uncorrected": 9, "real_corrected": 0, "packs": 4, "after_as_of": 0}
+    assert result["problems"] == {"real_uncorrected": 9, "real_corrected": 0, "packs": 4, "after_as_of": 0,
+                                  "untrusted": 0, "with_picture": 0}
     assert result["repeats"] == 3 and result["metric_version"] == evaluation.METRIC_VERSION
     personal = result["arms"]["personal"]["splits"]["real_uncorrected"]
     assert (personal["problems"], personal["counted"], personal["mean"]) == (9, 9, 1.0)

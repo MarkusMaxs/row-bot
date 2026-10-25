@@ -377,7 +377,9 @@ class Comparer:
         described.append({"key": new_key, "label": f"{new_key} (new)", "role": "new", "model_ref": state.model_ref})
         main_unavailable: str | None = None
         if main_ref:
-            arms.append(evaluation.Arm("main", model_ref=main_ref, cache=True, serve_context=self._serves_at(main_ref)))
+            # The main model is asked as it was served: with the page's picture when it was sent one (A8).
+            arms.append(evaluation.Arm("main", model_ref=main_ref, cache=True, serve_context=self._serves_at(main_ref),
+                                       sees_images=True))
             described.append({"key": "main", "label": self._name(main_ref), "role": "main", "model_ref": main_ref})
         else:
             main_unavailable = "no_main_model"

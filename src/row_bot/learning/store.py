@@ -15,6 +15,16 @@
 - **Blobs** are SHA-256 addressed files, written atomically (a temp file, then a replace),
   deduplicated, and reference counted by the records naming them. Purges free the ones
   nothing references; :meth:`LearningStore.gc_blobs` also sweeps leftovers.
+- **Every blob belongs to its chat** (P2). A model call's request names its messages, tools
+  and pictures only inside its manifest blob (and a past chat's request its conversation's
+  blob), so writing the decision records those blobs as the conversation's (``blob_owners``,
+  one row per blob per conversation). Deleting or opting out the conversation frees them
+  once no other conversation or record holds them. A one-off sweep
+  (:meth:`LearningStore.sweep_orphans`) records the owners of what earlier builds wrote and
+  removes blobs nothing references any more (counts only).
+- **Pictures** (``pictures``) are blobs of their own, named by the messages they were in. Past
+  :data:`PICTURE_CAP_BYTES` the oldest go first, never one a vault task's decision used; the
+  decision and its text stay, and the picture is marked dropped.
 - **Deleting or excluding a conversation** purges what it owns (episodes, decisions,
   signals, replay fixtures and their unreferenced blobs) and *marks* the lessons, releases,
   attempts and test runs derived from it (``source_chat_deleted`` / ``source_chat_excluded``)
@@ -30,6 +40,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -62,6 +73,15 @@ MAX_BLOB_BYTES = 64 * 1024 * 1024
 # Leftover blob files (a write cut short) and unreferenced blobs are swept only
 # once they are this old, so a sweep never races a write in progress.
 BLOB_GRACE_SECONDS = 3600.0
+# A captured model call's request (capture writes it): its messages, tools and pictures by hash.
+REQUEST_FORMAT = "row_bot.learning.model_request"
+# How much space pictures may take; past it the oldest go first (never a vault task's).
+PICTURE_CAP_BYTES = 10 * 1024**3
+# The one-off orphan sweep's result (meta), so it runs once per store.
+SWEEP_META_KEY = "blob_sweep_v1"
+# What an orphan was, by its content (the sweep's counts): fixed words, never content.
+ORPHAN_KINDS = ("message", "tool_list", "model_request", "conversation", "past_chat_plan", "tool_call",
+                "approval", "test_results", "pack_task", "picture", "unfinished_write", "other")
 
 # What "recording" means: refused while Learning is off.
 RECORDING_KINDS = frozenset({"episode", "decision", "signal", "blob"})
@@ -77,6 +97,9 @@ MARK_HELD_OUT_CORRECTION = "held_out_correction"
 VAULT_FILE = "audit.db"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+# A blob nothing holds: no record names it, and no conversation owns it (through a request it named).
+_UNREFERENCED = ("NOT EXISTS (SELECT 1 FROM blob_refs r WHERE r.sha256 = b.sha256)"
+                 " AND NOT EXISTS (SELECT 1 FROM blob_owners o WHERE o.sha256 = b.sha256)")
 _LINEAGE_KINDS = ("attempt", "release")
 _CHUNK = 500
 
@@ -132,8 +155,27 @@ def _schema_v1(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _schema_v2(connection: sqlite3.Connection) -> None:
+    statements = (
+        # The conversation each blob belongs to when a record names it only inside another blob (a request's
+        # messages, tools and pictures; a past chat's conversation): deleting or excluding it frees them.
+        "CREATE TABLE blob_owners (sha256 TEXT NOT NULL, thread_id TEXT NOT NULL, PRIMARY KEY (sha256, thread_id))",
+        "CREATE INDEX blob_owners_thread ON blob_owners(thread_id)",
+        # Pictures moved out of captured messages: their size for the cap, and when one was dropped.
+        "CREATE TABLE pictures (sha256 TEXT PRIMARY KEY, size INTEGER NOT NULL, created_at REAL NOT NULL,"
+        " dropped_at REAL)",
+        "CREATE INDEX pictures_age ON pictures(dropped_at, created_at)",
+        # The model calls that sent each picture (a vault task's pictures are never dropped).
+        "CREATE TABLE picture_uses (sha256 TEXT NOT NULL, decision_id TEXT NOT NULL,"
+        " PRIMARY KEY (sha256, decision_id))",
+        "CREATE INDEX picture_uses_decision ON picture_uses(decision_id)",
+    )
+    for statement in statements:
+        connection.execute(statement)
+
+
 # MIGRATIONS[n] takes a store at user_version n to n + 1.
-MIGRATIONS: tuple[Migration, ...] = (_schema_v1,)
+MIGRATIONS: tuple[Migration, ...] = (_schema_v1, _schema_v2)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -152,6 +194,30 @@ class PurgeReport:
 
     def removed_of(self, kind: str) -> int:
         return dict(self.removed).get(kind, 0)
+
+
+@dataclass(frozen=True)
+class SweepReport:
+    """What the orphan sweep removed (or, without removing, found): files and bytes, in all and by kind."""
+
+    files: int = 0
+    bytes: int = 0
+    kinds: tuple[tuple[str, int, int], ...] = ()
+    owners_recorded: int = 0
+
+    def to_dict(self) -> dict[str, object]:
+        return {"files": self.files, "bytes": self.bytes,
+                "kinds": {kind: {"files": files, "bytes": size} for kind, files, size in self.kinds}}
+
+
+@dataclass(frozen=True)
+class PictureStats:
+    """Pictures kept (count, bytes), dropped under the cap, and the cap."""
+
+    stored: int = 0
+    bytes: int = 0
+    dropped: int = 0
+    cap_bytes: int = PICTURE_CAP_BYTES
 
 
 @dataclass(frozen=True)
@@ -233,10 +299,12 @@ class LearningStore:
         *,
         clock: Callable[[], float] = time.time,
         migrations: Sequence[Migration] | None = None,
+        picture_cap: int = PICTURE_CAP_BYTES,
     ) -> None:
         self._data_dir = Path(data_dir) if data_dir is not None else None
         self._clock = clock
         self._migrations = tuple(migrations) if migrations is not None else MIGRATIONS
+        self.picture_cap = max(0, int(picture_cap))
 
     # ── Paths ────────────────────────────────────────────────────────────
 
@@ -468,6 +536,66 @@ class LearningStore:
                 "INSERT OR IGNORE INTO lineage (kind, child_id, parent_id) VALUES (?, ?, ?)",
                 [(*key, parent) for parent in getattr(record, "parent_ids", ())],
             )
+        if isinstance(record, contracts.Decision) and record.request_blob:
+            self._own_request(connection, record)
+
+    def _blob_json(self, sha: object) -> object:
+        data = self.read_blob(sha) if isinstance(sha, str) else None
+        if data is None:
+            return None
+        try:
+            return json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return None
+
+    def _request_blobs(self, sha: str, conversations: dict[str, list[str]] | None = None) -> tuple[
+        list[str], list[str]
+    ]:
+        """The blobs a request manifest names (messages, tools, a past chat's conversation and its messages)
+        and, apart, its pictures. Empty when the manifest is gone or isn't one."""
+
+        manifest = self._blob_json(sha)
+        if not isinstance(manifest, dict) or manifest.get("format") != REQUEST_FORMAT:
+            return [], []
+        names = [str(item) for item in manifest.get("messages") or () if isinstance(item, str)]
+        if isinstance(manifest.get("tools"), str):
+            names.append(manifest["tools"])
+        conversation = manifest.get("messages_of")
+        if isinstance(conversation, str):
+            cached = conversations.get(conversation) if conversations is not None else None
+            if cached is None:
+                body = self._blob_json(conversation)
+                cached = [str(item) for item in (body.get("messages") or ()) if isinstance(item, str)] \
+                    if isinstance(body, dict) else []
+                if conversations is not None:
+                    conversations[conversation] = cached
+            names += [conversation, *cached]
+        found = [str(item) for item in manifest.get("pictures") or () if isinstance(item, str)]
+        return [name for name in names if _SHA256.fullmatch(name)], [name for name in found if _SHA256.fullmatch(name)]
+
+    def _own_request(self, connection: sqlite3.Connection, decision: contracts.Decision,
+                     conversations: dict[str, list[str]] | None = None) -> int:
+        """The blobs a decision's request names become its conversation's; its pictures are counted for the
+        cap and remember the call that sent them. Returns how many owner rows were new."""
+
+        names, found = self._request_blobs(str(decision.request_blob), conversations)
+        owner = decision.conversation_id or decision.thread_id
+        before = connection.total_changes
+        connection.executemany("INSERT OR IGNORE INTO blob_owners (sha256, thread_id) VALUES (?, ?)",
+                               [(sha, owner) for sha in dict.fromkeys([*names, *found])])
+        added = connection.total_changes - before
+        now = float(self._clock())
+        for sha in found:
+            row = connection.execute("SELECT size FROM blobs WHERE sha256 = ?", (sha,)).fetchone()
+            if row is None:
+                continue  # dropped (or never written): nothing to count
+            connection.execute(
+                "INSERT INTO pictures (sha256, size, created_at) VALUES (?, ?, ?) ON CONFLICT(sha256) DO UPDATE"
+                " SET dropped_at = NULL, created_at = CASE WHEN pictures.dropped_at IS NULL THEN pictures.created_at"
+                " ELSE excluded.created_at END", (sha, int(row[0]), now))
+            connection.execute("INSERT OR IGNORE INTO picture_uses (sha256, decision_id) VALUES (?, ?)",
+                               (sha, decision.id))
+        return added
 
     @staticmethod
     def _parse(rows: Iterable[sqlite3.Row]) -> list[Record]:
@@ -511,6 +639,8 @@ class LearningStore:
                 for table in ("owners", "derivations", "blob_refs", "marks"):
                     connection.execute(f"DELETE FROM {table} WHERE kind = ? AND id = ?", (kind, record_id))
                 connection.execute("DELETE FROM lineage WHERE kind = ? AND child_id = ?", (kind, record_id))
+                if kind == "decision":
+                    connection.execute("DELETE FROM picture_uses WHERE decision_id = ?", (record_id,))
             if removed:
                 self._checkpoint()
             if shas:
@@ -749,10 +879,7 @@ class LearningStore:
                     dead = [
                         str(row[0])
                         for row in connection.execute(
-                            "SELECT sha256 FROM blobs b WHERE created_at < ? AND NOT EXISTS"
-                            " (SELECT 1 FROM blob_refs r WHERE r.sha256 = b.sha256)",
-                            (cutoff,),
-                        )
+                            "SELECT sha256 FROM blobs b WHERE created_at < ? AND " + _UNREFERENCED, (cutoff,))
                     ]
                 else:
                     wanted = sorted({sha for sha in candidates if isinstance(sha, str)})
@@ -762,12 +889,13 @@ class LearningStore:
                         dead.extend(
                             str(row[0])
                             for row in connection.execute(
-                                f"SELECT sha256 FROM blobs b WHERE sha256 IN ({marks}) AND NOT EXISTS"
-                                " (SELECT 1 FROM blob_refs r WHERE r.sha256 = b.sha256)",
-                                chunk,
-                            )
+                                f"SELECT sha256 FROM blobs b WHERE sha256 IN ({marks}) AND " + _UNREFERENCED, chunk)
                         )
-                connection.executemany("DELETE FROM blobs WHERE sha256 = ?", [(sha,) for sha in dead])
+                        # A dropped picture of a purged chat: its file is already gone, its row goes too.
+                        connection.execute(
+                            f"DELETE FROM pictures WHERE dropped_at IS NOT NULL AND sha256 IN ({marks}) AND NOT EXISTS"
+                            " (SELECT 1 FROM blob_owners o WHERE o.sha256 = pictures.sha256)", chunk)
+                self._forget_blobs(connection, dead)
                 known = (
                     {str(row[0]) for row in connection.execute("SELECT sha256 FROM blobs")}
                     if candidates is None
@@ -784,23 +912,214 @@ class LearningStore:
                 freed += self._sweep_leftover_files(known, cutoff)
         return freed
 
-    def _sweep_leftover_files(self, known: set[str], cutoff: float) -> int:
-        removed = 0
+    @staticmethod
+    def _forget_blobs(connection: sqlite3.Connection, shas: Sequence[str]) -> None:
+        """Blobs about to be freed leave the tables (a picture's size and uses with them)."""
+
+        rows = [(sha,) for sha in shas]
+        for table in ("blobs", "pictures", "picture_uses", "blob_owners"):
+            connection.executemany(f"DELETE FROM {table} WHERE sha256 = ?", rows)
+
+    def _leftover_files(self, known: set[str], cutoff: float) -> list[Path]:
+        """Blob files no table row knows (a write cut short, a blob freed while its file was busy) and
+        staging files, older than ``cutoff``."""
+
+        found: list[Path] = []
         if not self.blobs_dir.is_dir():
-            return 0
+            return found
         for path in self.blobs_dir.rglob("*"):
             try:
                 if path.is_symlink() or not path.is_file() or path.stat().st_mtime >= cutoff:
                     continue
-                leftover = path.parent.name == "tmp" or (
-                    _SHA256.fullmatch(path.name) is not None and path.name not in known
-                )
-                if leftover:
-                    path.unlink()
-                    removed += 1
+                if path.parent.name == "tmp" or (_SHA256.fullmatch(path.name) is not None and path.name not in known):
+                    found.append(path)
+            except OSError:
+                logger.debug("Learning blob leftover %s is busy", path.name, exc_info=True)
+        return found
+
+    def _sweep_leftover_files(self, known: set[str], cutoff: float) -> int:
+        removed = 0
+        for path in self._leftover_files(known, cutoff):
+            try:
+                path.unlink()
+                removed += 1
             except OSError:
                 logger.debug("Learning blob leftover %s is busy", path.name, exc_info=True)
         return removed
+
+    # ── Pictures: the size cap ───────────────────────────────────────────
+
+    def picture_dropped(self, sha: str) -> bool:
+        """Whether a picture was dropped under the size cap (its message and caption stay)."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return False
+            row = connection.execute("SELECT dropped_at FROM pictures WHERE sha256 = ?", (str(sha),)).fetchone()
+        return row is not None and row[0] is not None
+
+    def picture_stats(self) -> PictureStats:
+        """Pictures kept and the space they take, and how many were dropped under the cap."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return PictureStats(cap_bytes=self.picture_cap)
+            stored, size, dropped = connection.execute(
+                "SELECT COALESCE(SUM(dropped_at IS NULL), 0), COALESCE(SUM(CASE WHEN dropped_at IS NULL THEN size"
+                " ELSE 0 END), 0), COALESCE(SUM(dropped_at IS NOT NULL), 0) FROM pictures").fetchone()
+        return PictureStats(int(stored), int(size), int(dropped), self.picture_cap)
+
+    def keep_pictures_within(self, cap: int | None = None) -> tuple[int, int]:
+        """Past the cap, drop the oldest pictures until they fit, never one a held-out decision (a vault
+        task) sent. The decision and its message stay; the picture is marked dropped. Returns (pictures,
+        bytes) dropped."""
+
+        limit = self.picture_cap if cap is None else max(0, int(cap))
+        if not self.exists():
+            return 0, 0
+        with _LOCK:
+            with self._transaction() as connection:
+                total = int(connection.execute(
+                    "SELECT COALESCE(SUM(size), 0) FROM pictures WHERE dropped_at IS NULL").fetchone()[0])
+                if total <= limit:
+                    return 0, 0
+                drop: list[tuple[str, int]] = []
+                for sha, size in connection.execute(
+                        "SELECT p.sha256, p.size FROM pictures p WHERE p.dropped_at IS NULL AND NOT EXISTS"
+                        " (SELECT 1 FROM picture_uses u JOIN marks m ON m.kind = 'decision' AND m.id = u.decision_id"
+                        " AND m.mark = ? WHERE u.sha256 = p.sha256) ORDER BY p.created_at, p.sha256",
+                        (MARK_HELD_OUT,)):
+                    if total <= limit:
+                        break
+                    drop.append((str(sha), int(size)))
+                    total -= int(size)
+                now = float(self._clock())
+                connection.executemany("UPDATE pictures SET dropped_at = ? WHERE sha256 = ?",
+                                       [(now, sha) for sha, _ in drop])
+                connection.executemany("DELETE FROM blobs WHERE sha256 = ?", [(sha,) for sha, _ in drop])
+            for sha, _ in drop:
+                try:
+                    self._blob_path(sha).unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Learning picture %s is busy; a later sweep removes it", sha[:12])
+        if drop:
+            logger.info("Learning dropped %d old pictures (%d bytes) to stay within its picture limit",
+                        len(drop), sum(size for _, size in drop))
+        return len(drop), sum(size for _, size in drop)
+
+    # ── The one-off orphan sweep (P2) ────────────────────────────────────
+
+    def _orphan_kind(self, path: Path) -> str:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return "other"
+        if path.parent.name == "tmp":
+            return "unfinished_write"
+        if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or data[:4] == b"RIFF":
+            return "picture"
+        try:
+            value = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return "other"
+        if isinstance(value, list):
+            return "tool_list" if all(isinstance(item, dict) and "function" in item for item in value) else "other"
+        if not isinstance(value, dict):
+            return "other"
+        kind = str(value.get("format") or "").rsplit(".", 1)[-1]
+        if kind in ORPHAN_KINDS:
+            return kind
+        if isinstance(value.get("data"), dict) and isinstance(value.get("type"), str):
+            return "message"  # a LangChain message: a request's, an answer, a tool result
+        if "outcome" in value and "decided_by" in value:
+            return "approval"
+        return "other"
+
+    def record_blob_owners(self) -> int:
+        """Record, for every model call already stored, the blobs its request names as its conversation's
+        (what earlier builds wrote without owners). Idempotent; returns how many owner rows were new."""
+
+        if not self.exists():
+            return 0
+        added = 0
+        conversations: dict[str, list[str]] = {}
+        decisions = [item for item in self.find("decision", subkind="model_call", limit=100_000_000)
+                     if isinstance(item, contracts.Decision) and item.request_blob]
+        for start in range(0, len(decisions), _CHUNK):
+            with _LOCK:
+                with self._transaction() as connection:
+                    for decision in decisions[start:start + _CHUNK]:
+                        added += self._own_request(connection, decision, conversations)
+        return added
+
+    def sweep_orphans(self, *, remove: bool = True, grace_seconds: float = BLOB_GRACE_SECONDS) -> SweepReport:
+        """Find (and with ``remove``, delete) every blob no Learning record references any more: named by
+        no record and by no stored request, older than ``grace_seconds`` so a write in progress is never
+        touched. The owners of what earlier builds wrote are recorded first. Counts only: files and bytes,
+        by kind."""
+
+        if not self.exists():
+            return SweepReport()
+        owners = self.record_blob_owners()
+        cutoff = float(self._clock()) - max(0.0, float(grace_seconds))
+        counts: dict[str, list[int]] = {}
+        files = size = 0
+
+        def count(path: Path) -> None:
+            nonlocal files, size
+            try:
+                length = path.stat().st_size
+            except OSError:
+                return
+            entry = counts.setdefault(self._orphan_kind(path), [0, 0])
+            entry[0] += 1
+            entry[1] += length
+            files += 1
+            size += length
+
+        with _LOCK:
+            with self._transaction() as connection:
+                dead = [str(row[0]) for row in connection.execute(
+                    "SELECT sha256 FROM blobs b WHERE created_at < ? AND " + _UNREFERENCED, (cutoff,))]
+                for sha in dead:
+                    count(self._blob_path(sha))
+                if remove:
+                    self._forget_blobs(connection, dead)
+                known = {str(row[0]) for row in connection.execute("SELECT sha256 FROM blobs")}
+            leftovers = self._leftover_files(known, cutoff)
+            for path in leftovers:
+                count(path)
+            if remove:
+                for path in [*(self._blob_path(sha) for sha in dead), *leftovers]:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.debug("Learning blob %s is busy; a later sweep removes it", path.name[:12])
+        kinds = tuple((kind, found[0], found[1]) for kind, found in sorted(counts.items()))
+        return SweepReport(files, size, kinds, owners)
+
+    def sweep_once(self) -> SweepReport | None:
+        """The one-off sweep on this build's first start: runs once per store (its result kept in ``meta``),
+        logging counts only. None when it already ran or there is no store."""
+
+        if not self.exists() or self.meta_value(SWEEP_META_KEY):
+            return None
+        report = self.sweep_orphans()
+        self.set_meta_values({SWEEP_META_KEY: json.dumps(
+            {"at": float(self._clock()), **report.to_dict()}, sort_keys=True)})
+        logger.info("Learning removed %d files (%d bytes) no Learning record referenced any more",
+                    report.files, report.bytes)
+        return report
+
+    def sweep_result(self) -> dict[str, object] | None:
+        """What the one-off sweep removed ({at, files, bytes, kinds}), or None before it ran."""
+
+        text = self.meta_value(SWEEP_META_KEY)
+        try:
+            found = json.loads(text) if text else None
+        except ValueError:
+            return None
+        return found if isinstance(found, dict) else None
 
     # ── Deletion: conversations ──────────────────────────────────────────
 
@@ -824,7 +1143,10 @@ class LearningStore:
                 "SELECT DISTINCT kind, id FROM owners WHERE thread_id = ?", (thread_id,)
             )
         ]
-        shas: set[str] = set()
+        # The blobs its records name only inside other blobs (messages, tools, pictures, a past chat).
+        shas: set[str] = {str(row[0]) for row in connection.execute(
+            "SELECT sha256 FROM blob_owners WHERE thread_id = ?", (thread_id,))}
+        connection.execute("DELETE FROM blob_owners WHERE thread_id = ?", (thread_id,))
         removed: dict[str, int] = {}
         for kind, record_id in owned:
             shas.update(
@@ -839,6 +1161,8 @@ class LearningStore:
             for table in ("owners", "derivations", "blob_refs", "marks"):
                 connection.execute(f"DELETE FROM {table} WHERE kind = ? AND id = ?", (kind, record_id))
             connection.execute("DELETE FROM lineage WHERE kind = ? AND child_id = ?", (kind, record_id))
+            if kind == "decision":
+                connection.execute("DELETE FROM picture_uses WHERE decision_id = ?", (record_id,))
             if deleted:
                 removed[kind] = removed.get(kind, 0) + 1
         derived = [
@@ -1177,8 +1501,14 @@ __all__ = [
     "MAX_BLOB_BYTES",
     "MIGRATIONS",
     "Mark",
+    "ORPHAN_KINDS",
+    "PICTURE_CAP_BYTES",
+    "PictureStats",
     "PurgeReport",
     "RECORDING_KINDS",
+    "REQUEST_FORMAT",
     "ReleaseSummary",
     "SCHEMA_VERSION",
+    "SWEEP_META_KEY",
+    "SweepReport",
 ]
