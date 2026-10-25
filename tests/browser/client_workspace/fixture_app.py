@@ -5108,6 +5108,26 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         now = _time.time()
         LearningStore().put(Job(id=past_chats.JOB_ID, kind="past_chat_import", created_at=now, updated_at=now,
                                 state="running", steps_total=214, steps_done=61))
+    elif action == "pictures":
+        # Browser and computer pictures kept in Learning data (P2): the real store, as capture writes a
+        # browser turn's request (its pictures as their own blobs, named in the request).
+        import hashlib as _hashlib
+        import json as _json
+
+        from row_bot.learning.contracts import Decision
+        from row_bot.learning.store import REQUEST_FORMAT, LearningStore
+        store = LearningStore()
+        now = _time.time()
+        for number in range(3):
+            pictures = [b"\xff\xd8\xff\xe0" + _hashlib.sha256(f"p2-{number}-{part}".encode()).digest() * 5_000
+                        for part in range(2)]
+            shas = store.put_blobs(pictures)
+            request = store.put_blob(_json.dumps({"format": REQUEST_FORMAT, "version": 1, "purpose": "agent",
+                                                  "messages": [], "tools": None, "pictures": sorted(shas)},
+                                                 sort_keys=True).encode())
+            store.put(Decision(id=f"dec_p2_pictures_{number}", episode_id=f"ep_p2_pictures_{number}",
+                               thread_id="p2-pictures", sequence=0, kind="model_call", created_at=now + number,
+                               conversation_id="p2-pictures", fidelity="exact", status="ok", request_blob=request))
     elif action == "restore":
         from row_bot.learning.store import LearningStore
         hardware.check = _l1a_saved["check"]

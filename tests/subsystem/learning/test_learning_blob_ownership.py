@@ -169,3 +169,25 @@ def test_the_sweep_starts_once_in_the_background_on_start_up(learning_on, data_d
 
     assert LearningStore(learning_on).sweep_result() == {"at": pytest.approx(time.time(), abs=60), "files": 0,
                                                           "bytes": 0, "kinds": {}}
+
+
+def test_a_turn_still_running_when_its_chat_is_switched_off_leaves_nothing_after(writer, chats, learning_on, clock):
+    from langchain_core.messages import SystemMessage
+
+    chats.chat("chat-a")
+    turn = writer.begin_turn(thread_id="chat-a", surface="normal_chat")
+    asked = [SystemMessage(content="You are Row-Bot.", id="sys"), HumanMessage(content="Hello", id="h1")]
+    writer.model_call(turn, messages=asked, response=AIMessage(content="", id="a1"), model_ref="gpt-6.1-sol",
+                      provider_id="codex")
+    writer.drain()  # the turn's scope is decided: allowed
+    store = LearningStore(learning_on, clock=clock)
+    scope.set_chat_opt_out("chat-a", True, store=store)
+
+    later = HumanMessage(content=f"Also, {SECRET_WORDS}", id="h2")
+    writer.model_call(turn, messages=[*asked, later], response=AIMessage(content="Noted.", id="a2"),
+                      model_ref="gpt-6.1-sol", provider_id="codex")
+    writer.end_turn(turn, "completed")
+    writer.drain()
+
+    assert SECRET_WORDS.encode() not in b"\n".join(_blobs(learning_on).values())
+    assert store.owned_by("chat-a") == []

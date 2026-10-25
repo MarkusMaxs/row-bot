@@ -727,7 +727,9 @@ class Capture:
         if not sink.records:
             return
         store.put_blobs(list(sink.blobs.values()))
-        store.put_many(sink.records)
+        if store.put_many(sink.records) < len(sink.records):
+            # A chat switched off meanwhile: its records were skipped, so its blobs go too.
+            store.gc_blobs(sink.blobs)
         for turn in sink.turns.values():
             turn.written = True
         if sink.pictures:

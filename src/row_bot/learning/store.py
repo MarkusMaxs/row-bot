@@ -51,7 +51,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from row_bot import learning as gate
@@ -194,6 +194,15 @@ class PurgeReport:
 
     def removed_of(self, kind: str) -> int:
         return dict(self.removed).get(kind, 0)
+
+
+@dataclass
+class _Owning:
+    """What one write already recorded as a conversation's: a turn's calls share their messages, a past
+    chat's turns its conversation, so each (blob, conversation) is recorded once."""
+
+    conversations: dict[str, list[str]] = field(default_factory=dict)
+    owned: set[tuple[str, str]] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -478,6 +487,7 @@ class LearningStore:
         self._writable({item.KIND for item in items})
         saved = 0
         moved = False
+        owning = _Owning()
         with self._transaction() as connection:
             for item in items:
                 threads = owner_threads(item)
@@ -485,7 +495,7 @@ class LearningStore:
                     logger.debug("Learning skipped a %s from an opted-out chat", item.KIND)
                     continue
                 moved = moved or self._state_moves(connection, item)
-                self._write(connection, item)
+                self._write(connection, item, owning)
                 saved += 1
         if moved:
             gate.changed()
@@ -503,7 +513,7 @@ class LearningStore:
         ).fetchone()
         return row is None or row[0] != _columns(record)[1]
 
-    def _write(self, connection: sqlite3.Connection, record: Record) -> None:
+    def _write(self, connection: sqlite3.Connection, record: Record, owning: _Owning | None = None) -> None:
         body = contracts.to_json(record)
         thread_id, status, subkind, kept, memory_id, created_at = _columns(record)
         key = (record.KIND, record.id)
@@ -537,7 +547,7 @@ class LearningStore:
                 [(*key, parent) for parent in getattr(record, "parent_ids", ())],
             )
         if isinstance(record, contracts.Decision) and record.request_blob:
-            self._own_request(connection, record)
+            self._own_request(connection, record, owning or _Owning())
 
     def _blob_json(self, sha: object) -> object:
         data = self.read_blob(sha) if isinstance(sha, str) else None
@@ -573,16 +583,16 @@ class LearningStore:
         found = [str(item) for item in manifest.get("pictures") or () if isinstance(item, str)]
         return [name for name in names if _SHA256.fullmatch(name)], [name for name in found if _SHA256.fullmatch(name)]
 
-    def _own_request(self, connection: sqlite3.Connection, decision: contracts.Decision,
-                     conversations: dict[str, list[str]] | None = None) -> int:
+    def _own_request(self, connection: sqlite3.Connection, decision: contracts.Decision, owning: _Owning) -> int:
         """The blobs a decision's request names become its conversation's; its pictures are counted for the
         cap and remember the call that sent them. Returns how many owner rows were new."""
 
-        names, found = self._request_blobs(str(decision.request_blob), conversations)
+        names, found = self._request_blobs(str(decision.request_blob), owning.conversations)
         owner = decision.conversation_id or decision.thread_id
+        fresh = [(sha, owner) for sha in dict.fromkeys([*names, *found]) if (sha, owner) not in owning.owned]
+        owning.owned.update(fresh)
         before = connection.total_changes
-        connection.executemany("INSERT OR IGNORE INTO blob_owners (sha256, thread_id) VALUES (?, ?)",
-                               [(sha, owner) for sha in dict.fromkeys([*names, *found])])
+        connection.executemany("INSERT OR IGNORE INTO blob_owners (sha256, thread_id) VALUES (?, ?)", fresh)
         added = connection.total_changes - before
         now = float(self._clock())
         for sha in found:
@@ -1042,14 +1052,14 @@ class LearningStore:
         if not self.exists():
             return 0
         added = 0
-        conversations: dict[str, list[str]] = {}
+        owning = _Owning()
         decisions = [item for item in self.find("decision", subkind="model_call", limit=100_000_000)
                      if isinstance(item, contracts.Decision) and item.request_blob]
         for start in range(0, len(decisions), _CHUNK):
             with _LOCK:
                 with self._transaction() as connection:
                     for decision in decisions[start:start + _CHUNK]:
-                        added += self._own_request(connection, decision, conversations)
+                        added += self._own_request(connection, decision, owning)
         return added
 
     def sweep_orphans(self, *, remove: bool = True, grace_seconds: float = BLOB_GRACE_SECONDS) -> SweepReport:
