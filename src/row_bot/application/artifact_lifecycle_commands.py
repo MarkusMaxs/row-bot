@@ -59,11 +59,12 @@ def _running_channel_available() -> bool:
 
 
 def _x_post_available() -> bool:
+    """Posting is turned on and at least one X account is connected (N7)."""
     try:
+        from row_bot import x_accounts
         from row_bot.tools.x_tool import XTool
 
-        operations = XTool().get_config("post_operations", [])
-        return isinstance(operations, list) and "post" in operations
+        return XTool()._is_op_enabled("x_post_tweet") and bool(x_accounts.listed())
     except Exception:
         return False
 
@@ -187,7 +188,7 @@ def read_artifact_lifecycle(
             (
                 "Posting is enabled in the current X tool configuration."
                 if x_post
-                else "Enable X post operations before sharing."
+                else "Connect an X account and turn on posting in Settings › Apps › X before sharing."
             ),
             review=True,
         ),

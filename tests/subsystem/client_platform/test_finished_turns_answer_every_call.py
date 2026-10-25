@@ -134,7 +134,7 @@ def test_a_denied_call_keeps_its_result_and_the_next_turn_pairs_every_call(platf
     assert _unanswered(messages) == []
     result = next(message for message in messages if getattr(message, "type", "") == "tool")
     assert "denied by you" in str(result.content)
-    assert messages[-1].content == "The requested action was denied. No action was taken."
+    assert messages[-1].content == "You said no, so Row-Bot stopped there."
     assert [item["status"] for item in _trace_items(platform)] == ["cancelled"]
 
     second = _submit(platform, turns, "thanks", "Thanks anyway")

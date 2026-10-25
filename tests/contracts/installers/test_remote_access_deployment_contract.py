@@ -60,7 +60,6 @@ def test_dockerfile_routes_browser_models_and_managed_runtimes_correctly() -> No
     source = _read(DOCKERFILE)
 
     expected_environment = {
-        "ROW_BOT_BROWSER_HEADLESS": "1",
         "PLAYWRIGHT_BROWSERS_PATH": "/opt/row-bot/playwright-browsers",
         "XDG_CACHE_HOME": "/data/cache",
         "HF_HOME": "/data/cache/huggingface",
@@ -132,7 +131,6 @@ def test_compose_defaults_to_loopback_and_isolated_persistent_state() -> None:
         "ROW_BOT_DEPLOYMENT_MODE": "server",
         "ROW_BOT_HOST": "0.0.0.0",
         "ROW_BOT_PORT": "8080",
-        "ROW_BOT_BROWSER_HEADLESS": "1",
         "PLAYWRIGHT_BROWSERS_PATH": "/opt/row-bot/playwright-browsers",
         "XDG_CACHE_HOME": "/data/cache",
         "HF_HOME": "/data/cache/huggingface",

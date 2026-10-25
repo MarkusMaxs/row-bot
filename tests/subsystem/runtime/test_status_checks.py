@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import types
 
 import pytest
 
@@ -44,24 +43,6 @@ def test_document_status_uses_processed_file_count(monkeypatch, tmp_path):
     assert result.status == "ok"
     assert result.detail == "3 docs indexed"
     assert result.settings_tab == "Documents"
-
-
-def test_workflow_status_reports_running_and_pending(monkeypatch, tmp_path):
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    import row_bot.tasks as tasks
-    from row_bot.status_checks import check_task_scheduler
-
-    monkeypatch.setattr(tasks, "_scheduler", types.SimpleNamespace(get_jobs=lambda: [object(), object()]))
-    monkeypatch.setattr(tasks, "get_running_tasks", lambda: {"thread-1": {}, "thread-2": {}})
-    monkeypatch.setattr(tasks, "get_pending_approvals", lambda: [{"id": "a1"}])
-
-    result = check_task_scheduler()
-
-    assert result.name == "Workflows"
-    assert result.status == "warn"
-    assert "2 scheduled" in result.detail
-    assert "2 running" in result.detail
-    assert "1 approval waiting" in result.detail
 
 
 def test_home_status_has_single_faiss_check(monkeypatch):

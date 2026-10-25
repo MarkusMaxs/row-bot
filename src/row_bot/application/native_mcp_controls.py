@@ -69,9 +69,11 @@ def _state(saved, *, recovery=False):
 def read_native_mcp_state(*, validate: Callable[[], None] = lambda: None) -> NativeMcpState:
     validate()
     try:
-        saved = configuration.read_saved()
-        recovery = configuration.recovery_required()
-        result = _state(saved, recovery=recovery)
+        # A save in progress holds an unfinished change: read after it, not as a recovery (B408).
+        with configuration.transaction():
+            saved = configuration.read_saved()
+            recovery = configuration.recovery_required()
+            result = _state(saved, recovery=recovery)
     except configuration.ToolConfigurationError:
         result = NativeMcpState(1, None, "unavailable", None, None, False)
     validate()

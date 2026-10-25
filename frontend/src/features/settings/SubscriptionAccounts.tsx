@@ -3,12 +3,13 @@ import { Check, Copy } from 'lucide-react';
 import { writeClipboardText } from '../../platform/clipboard';
 import { RuntimeContext } from '../../runtime';
 import type {
+  ClientError,
   SubscriptionAccountsSnapshot,
   SubscriptionFlowSnapshot,
   SubscriptionActionReview,
 } from '../../api/types';
 import { Button, Field, Input, Select, Skeleton } from '../../ui/primitives';
-import { clientError } from '../../api/errors';
+import { clientError, rejectedBeforeRunning } from '../../api/errors';
 import {
   ProviderSettingsSession,
   useProviderSettingsValue,
@@ -108,6 +109,18 @@ export function signInStateLabel(state: SubscriptionFlowSnapshot['state']) {
       uncertain: "Row-Bot couldn't confirm the sign-in. Check again.",
       draining: 'Finishing…',
     }[state] ?? 'Signing in…'
+  );
+}
+/**
+ * A refusal that settled the action: the server said no before anything ran,
+ * so nothing is left to check (B413). A Start saves nothing, and a keychain
+ * that refuses the sign-in ends it (B370); any other action keeps its original
+ * request to check, as an exchange may have happened.
+ */
+function settledRefusal(operation: Action, error: ClientError) {
+  return (
+    rejectedBeforeRunning(error) &&
+    (operation === 'start' || error.code === 'subscription_storage_unavailable')
   );
 }
 /** ChatGPT / Codex and xAI sign-ins are checked while they wait. */
@@ -315,10 +328,17 @@ export default function SubscriptionAccounts(props: SubscriptionAccountsProps) {
       );
       if (generation === epoch.current) props.onSaved(result.accounts);
     } catch (cause) {
-      setError(clientError(cause).message);
-      setNotice(
-        "Row-Bot couldn't confirm that. Check again before another action.",
-      );
+      const refused = clientError(cause);
+      setError(refused.message);
+      if (settledRefusal(operation, refused)) {
+        // The server said no and nothing was saved (a locked keychain, say):
+        // only the reason shows, and Connect tries again (B413).
+        setPending(null);
+        session.resolved();
+      } else
+        setNotice(
+          "Row-Bot couldn't confirm that. Check again before another action.",
+        );
     } finally {
       setBusy('');
     }

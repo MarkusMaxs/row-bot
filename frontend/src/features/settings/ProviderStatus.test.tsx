@@ -247,6 +247,55 @@ it('says in plain words when a subscription can borrow another app’s sign-in',
   expect(screen.queryByText(/CLI|chat/)).toBeNull();
 });
 
+it('asks for a ChatGPT sign-in, not a key, and names the plan as ChatGPT does (U8)', async () => {
+  const codex = {
+    ...card,
+    provider_id: 'codex',
+    display_name: 'ChatGPT / Codex',
+    group: 'subscription' as const,
+    fingerprint: '',
+    model_count: 9,
+    model_count_source: 'fallback_catalog',
+  };
+  const { unmount } = render(
+    <ProviderStatus
+      load={async () => ({
+        schema_version: 1,
+        providers: [
+          {
+            ...codex,
+            configured: false,
+            runtime_enabled: false,
+            source: '',
+          },
+        ],
+      })}
+      refresh={vi.fn()}
+      refreshState={vi.fn()}
+    />,
+  );
+  expect(
+    await screen.findByText(
+      'Sign in with your ChatGPT account · 9 known models',
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText(/API key/)).toBeNull();
+  unmount();
+  render(
+    <ProviderStatus
+      load={async () => ({
+        schema_version: 1,
+        providers: [{ ...codex, source: 'oauth_device', plan_type: 'pro' }],
+      })}
+      refresh={vi.fn()}
+      refreshState={vi.fn()}
+    />,
+  );
+  expect(
+    await screen.findByText(/^Signed in with ChatGPT · Pro plan · 9 /),
+  ).toBeVisible();
+});
+
 it('a ChatGPT row that says Reconnect offers Reconnect and says the sign-in expired (B342)', async () => {
   const onSubscription = vi.fn();
   render(

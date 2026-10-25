@@ -80,7 +80,7 @@ def notify(
 
     if desktop_enabled():
         # 1. Desktop notification (plyer) — immediate
-        _desktop_notify(title, f"{message} ({timestamp})")
+        _desktop_notify(title, f"{message} ({timestamp})".strip())
 
         # 2. Sound — immediate, non-blocking
         _play_sound(sound)
