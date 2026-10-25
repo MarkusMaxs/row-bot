@@ -9,13 +9,15 @@ import time
 import gc
 import hashlib
 import threading
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.approval_policy import DEFAULT_APPROVAL_MODE, normalize_approval_mode
+from row_bot.application.live_updates import publishes as _publishes_live
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,10 @@ _THREAD_META_COLUMNS = {
     "compaction_failure_json": "TEXT NOT NULL DEFAULT ''",
     # Deleted with Undo on offer (thread_cleanup.hold_thread_deletion): hidden now, removed when Undo ends.
     "deleted_at": "TEXT NOT NULL DEFAULT ''",
+    # Incognito (N11): nothing said here is read for memory, and the agent saves only what the person approves.
+    "incognito": "INTEGER NOT NULL DEFAULT 0",
+    # Where incognito was last turned off (IncognitoBoundary); what came before it is never read for memory.
+    "incognito_boundary_json": "TEXT NOT NULL DEFAULT ''",
 }
 
 THREAD_NAME_SOURCE_AUTO = "auto"
@@ -358,6 +364,7 @@ def _get_thread_project_id(thread_id: str) -> str:
     return row[0] if row else ""
 
 
+@_publishes_live("conversations")
 def _set_thread_type(thread_id: str, thread_type: str) -> None:
     """Set a high-level thread type such as ``code``."""
     _ensure_thread_db()
@@ -502,6 +509,7 @@ def _normalize_thread_name_source(source: str | None) -> str:
     return value if value in _THREAD_NAME_SOURCES else THREAD_NAME_SOURCE_AUTO
 
 
+@_publishes_live("conversations")
 def create_thread(
     name: str,
     *,
@@ -516,8 +524,12 @@ def create_thread(
     agent_profile_slug: str = "",
     name_source: str = THREAD_NAME_SOURCE_AUTO,
     seed_default_skills: bool = True,
+    incognito: bool = False,
 ) -> str:
-    """Create or replace the metadata row for a conversation thread."""
+    """Create or replace the metadata row for a conversation thread.
+
+    Replacing a row never turns incognito off: only ``set_thread_incognito`` does, recording where.
+    """
     _ensure_thread_db()
     tid = str(thread_id or uuid.uuid4().hex[:12])
     from row_bot.thread_cleanup import allow_thread_recreation
@@ -540,8 +552,8 @@ def create_thread(
             "INSERT INTO thread_meta ("
             "thread_id, name, created_at, updated_at, model_override, project_id, "
             "thread_type, developer_workspace_id, project_workspace_id, approval_mode, name_source, "
-            "agent_profile_id, agent_profile_slug"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "agent_profile_id, agent_profile_slug, incognito"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(thread_id) DO UPDATE SET "
             "name = excluded.name, updated_at = excluded.updated_at, "
             "model_override = excluded.model_override, project_id = excluded.project_id, "
@@ -550,7 +562,8 @@ def create_thread(
             "project_workspace_id = excluded.project_workspace_id, "
             "approval_mode = excluded.approval_mode, name_source = excluded.name_source, "
             "agent_profile_id = excluded.agent_profile_id, "
-            "agent_profile_slug = excluded.agent_profile_slug",
+            "agent_profile_slug = excluded.agent_profile_slug, "
+            "incognito = MAX(thread_meta.incognito, excluded.incognito)",
             (
                 tid,
                 safe_name,
@@ -565,6 +578,7 @@ def create_thread(
                 safe_source,
                 str(agent_profile_id or ""),
                 str(agent_profile_slug or ""),
+                1 if incognito else 0,
             ),
         )
         conn.commit()
@@ -580,6 +594,7 @@ def create_thread(
     return tid
 
 
+@_publishes_live("conversations")
 def touch_thread(thread_id: str) -> None:
     """Bump a thread's recency without changing its title."""
     if not thread_id:
@@ -594,6 +609,7 @@ def touch_thread(thread_id: str) -> None:
         conn.commit()
 
 
+@_publishes_live("conversations")
 def set_thread_pinned(thread_id: str, pinned: bool) -> str:
     """Set a thread's pin state without changing its recency timestamp."""
 
@@ -623,6 +639,141 @@ def unpin_thread(thread_id: str) -> None:
     """Clear a thread's pin state."""
 
     set_thread_pinned(thread_id, False)
+
+
+# ── Incognito (N11) ──────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class IncognitoBoundary:
+    """Where incognito was last turned off in a conversation.
+
+    Everything up to and including ``message_id`` (the last message of the
+    conversation's checkpoint then) was said while it was incognito, and is
+    never read for memory. ``message_count`` is how many checkpoint messages
+    there were then: where the boundary falls when that message is gone (a
+    rewound or edited history), so what can't be placed stays unread.
+    """
+
+    message_id: str
+    message_count: int
+    checkpoint_id: str
+    turned_off_at: str
+
+    def readable_from(self, messages: Sequence[object]) -> int:
+        """The index of the first of a checkpoint's *messages* said after incognito was turned off."""
+        if self.message_id:
+            for index in range(len(messages) - 1, -1, -1):
+                if str(getattr(messages[index], "id", "") or "") == self.message_id:
+                    return index + 1
+        return min(max(0, self.message_count), len(messages))
+
+    def as_dict(self) -> dict:
+        return {"message_id": self.message_id, "message_count": self.message_count,
+                "checkpoint_id": self.checkpoint_id, "turned_off_at": self.turned_off_at}
+
+
+@dataclass(frozen=True)
+class IncognitoState:
+    """Whether a conversation is incognito now, and where incognito was last turned off (None: never)."""
+
+    incognito: bool
+    boundary: IncognitoBoundary | None
+
+    def readable_from(self, messages: Sequence[object]) -> int:
+        """The index of the first of a checkpoint's *messages* that may be read for memory (len when none may)."""
+        if self.incognito:
+            return len(messages)
+        return self.boundary.readable_from(messages) if self.boundary else 0
+
+
+def _parse_incognito_boundary(raw: str) -> IncognitoBoundary | None:
+    try:
+        value = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        value = None
+    if not isinstance(value, dict):
+        # A boundary that can't be read hides the whole conversation's past rather than none of it.
+        return IncognitoBoundary("", 1 << 30, "", "") if raw else None
+    try:
+        count = int(value.get("message_count") or 0)
+    except (TypeError, ValueError):
+        count = 1 << 30
+    return IncognitoBoundary(str(value.get("message_id") or ""), count,
+                             str(value.get("checkpoint_id") or ""), str(value.get("turned_off_at") or ""))
+
+
+def incognito_state(thread_id: str) -> IncognitoState:
+    """Whether *thread_id* is incognito, and where incognito was last turned off.
+
+    The one place every reader of conversations for memory (extraction, Dream
+    Cycle, past-conversation search, Learning) asks: an incognito conversation
+    is never read, and one that was is read only after its boundary.
+    """
+    tid = str(thread_id or "").strip()
+    if not tid:
+        return IncognitoState(False, None)
+    _ensure_thread_db()
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        row = conn.execute(
+            "SELECT incognito, incognito_boundary_json FROM thread_meta WHERE thread_id = ?", (tid,)
+        ).fetchone()
+    if row is None:
+        return IncognitoState(False, None)
+    return IncognitoState(bool(row[0]), _parse_incognito_boundary(str(row[1] or "")))
+
+
+def incognito_thread_ids() -> set[str]:
+    """Every conversation that is incognito now (for readers that go through them all)."""
+    _ensure_thread_db()
+    with closing(sqlite3.connect(DB_PATH)) as conn:
+        return {str(row[0]) for row in conn.execute("SELECT thread_id FROM thread_meta WHERE incognito <> 0")}
+
+
+def set_thread_incognito(thread_id: str, incognito: bool) -> IncognitoState:
+    """Turn incognito on or off for a conversation.
+
+    On: from now nothing in it is read for memory; memories already saved
+    from it stay. Off: the boundary is recorded at the conversation's last
+    message, and background extraction starts from there, so the incognito
+    part is never read.
+    """
+    tid = str(thread_id or "").strip()
+    if not tid:
+        raise ValueError("Thread id cannot be empty.")
+    _ensure_thread_db()
+    # Off reads the end under the checkpoint lock, so no message lands between it and the flag going off.
+    with checkpoint_mutation(tid) if not incognito else nullcontext():
+        boundary = ""
+        if not incognito:
+            messages = get_latest_checkpoint_messages(tid)
+            boundary = json.dumps(IncognitoBoundary(
+                message_id=str(getattr(messages[-1], "id", "") or "") if messages else "",
+                message_count=len(messages),
+                checkpoint_id=get_latest_checkpoint_revision(tid),
+                turned_off_at=datetime.now().isoformat(),
+            ).as_dict(), sort_keys=True, separators=(",", ":"))
+        with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+            row = conn.execute("SELECT incognito FROM thread_meta WHERE thread_id = ?", (tid,)).fetchone()
+            if row is None:
+                raise ValueError(f"Thread not found: {tid}")
+            if bool(row[0]) == bool(incognito):
+                changed = False
+            elif incognito:
+                conn.execute("UPDATE thread_meta SET incognito = 1, client_revision = client_revision + 1 "
+                             "WHERE thread_id = ?", (tid,))
+                changed = True
+            else:
+                conn.execute("UPDATE thread_meta SET incognito = 0, incognito_boundary_json = ?, "
+                             "client_revision = client_revision + 1 WHERE thread_id = ?", (boundary, tid))
+                changed = True
+        if changed and not incognito:
+            from row_bot.memory_extraction import read_to_end
+
+            read_to_end(tid)
+    if changed:
+        logger.info("Incognito turned %s for thread %s", "on" if incognito else "off", tid[:8])
+    return incognito_state(tid)
 
 
 def list_developer_workspace_threads(workspace_id: str) -> list[tuple]:
@@ -657,6 +808,7 @@ def _seed_thread_default_skills_safe(thread_id: str, *, surface: str = "chat") -
         )
 
 
+@_publishes_live("conversations")
 def _save_thread_meta(
     thread_id: str,
     name: str,
@@ -833,6 +985,7 @@ def _list_project_thread_ids(project_id: str) -> list[str]:
     return [str(row[0]) for row in rows if str(row[0] or "")]
 
 
+@_publishes_live("conversations")
 def _purge_thread_rows(thread_id: str) -> int:
     """Idempotently remove core metadata, events, checkpoints, and writes."""
 
@@ -1169,6 +1322,7 @@ def set_thread_skills_override(thread_id: str, skill_names: list[str] | None) ->
         conn.commit()
 
 
+@_publishes_live("conversations")
 def bump_thread_client_revision(thread_id: str) -> int:
     """Advance and return the client revision for an external thread-state write."""
 

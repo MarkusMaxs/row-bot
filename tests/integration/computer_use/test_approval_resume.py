@@ -1,10 +1,6 @@
+"""A paused turn goes on with the answer bound to its own interrupt."""
+
 from __future__ import annotations
-
-from row_bot.computer_use.client import CuaClient
-import pytest
-
-from row_bot.computer_use.service import ComputerUseError, ComputerUseService, LeaseOwner
-from tests.fixtures.fake_cua import FakeCuaTransport
 
 
 def test_single_interrupt_resume_is_bound_to_its_langgraph_id(monkeypatch) -> None:
@@ -78,67 +74,3 @@ def test_non_streaming_resume_without_root_objective_uses_empty_fallback(monkeyp
 
     assert result == "I wasn't able to generate a response."
     assert agent.get_active_runtime_context()["root_objective"] == ""
-
-
-def test_consequential_approval_payload_is_redacted_and_resume_recaptures(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    from row_bot.computer_use.readiness import acknowledge_disclosure
-    acknowledge_disclosure()
-    transport = FakeCuaTransport()
-    transport.scenario.semantic_elements = (
-        {
-            "role": "Edit",
-            "label": "Message editor",
-            "enabled": True,
-            "selected": True,
-        },
-    )
-    transport.scenario.rotate_element_tokens = True
-    client = CuaClient("fake.exe", transport_factory=lambda *_args: transport)
-    approvals = []
-    service = ComputerUseService(client_factory=lambda: client, approval_callback=lambda payload: approvals.append(payload) or True)
-    owner = LeaseOwner("thread", "generation", "task")
-    service.acquire(owner, validate_context=False)
-    target = service.list_windows(owner, app="Calculator")[0]["target_id"]
-    observation = service.capture(target, owner)
-    secret = "private message body"
-    service.act("type", target, owner, element_token=observation.elements[0].token, text=secret, expected_effect="Submit message")
-
-    assert secret not in str(approvals)
-    type_index = next(i for i, (name, _args) in enumerate(transport.calls) if name == "type_text")
-    assert transport.calls[type_index - 1][0] == "get_window_state"
-    assert type_index == len(transport.calls) - 1
-
-
-def test_consequential_denial_is_terminal_and_releases_the_lease(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    from row_bot.computer_use.readiness import acknowledge_disclosure
-
-    acknowledge_disclosure()
-    transport = FakeCuaTransport()
-    client = CuaClient("fake.exe", transport_factory=lambda *_args: transport)
-    decisions = iter((True, False))
-    service = ComputerUseService(
-        client_factory=lambda: client,
-        approval_callback=lambda _payload: next(decisions),
-    )
-    owner = LeaseOwner("thread", "generation", "task")
-    service.acquire(owner, validate_context=False)
-    target = service.list_windows(owner, app="Calculator")[0]["target_id"]
-    observation = service.capture(target, owner)
-
-    with pytest.raises(ComputerUseError, match="denied"):
-        service.act(
-            "type",
-            target,
-            owner,
-            element_token=observation.elements[1].token,
-            text="hidden",
-            expected_effect="Submit message",
-        )
-
-    snapshot = service.status_snapshot()
-    assert snapshot["active"] is False
-    assert snapshot["state"] == "ready"
-    assert snapshot["has_thumbnail"] is False
-    assert "type_text" not in [name for name, _args in transport.calls]

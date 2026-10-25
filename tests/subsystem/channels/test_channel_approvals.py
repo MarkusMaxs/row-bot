@@ -51,6 +51,28 @@ def test_channel_approval_helpers_round_trip_interrupt_text() -> None:
     assert is_approval_text(text) is None
 
 
+def test_each_incognito_memory_write_is_asked_and_answered_by_itself_in_a_chat() -> None:
+    """B412: two writes in one step are two prompts; a yes or no goes to the one shown, the other asks next."""
+    from row_bot.channels.approval import extract_interrupt_ids, format_interrupt_text
+    from row_bot.channels.telegram import _extract_interrupt_ids, _format_interrupt
+    from row_bot.tools.approval_gate import INCOGNITO_MEMORY_QUESTION
+
+    def write(interrupt_id: str, text: str) -> dict:
+        return {"__interrupt_id": interrupt_id, "tool": "save_memory", "person_only": True, "binding": interrupt_id,
+                "question": INCOGNITO_MEMORY_QUESTION, "memory_save": {"text": text},
+                "review": {"decision": "ask", "reason": "This chat is incognito: only you can save from it to memory."}}
+
+    waiting = [write("coffee", "Coffee: black, no sugar."), write("tea", "Tea: green, no milk."),
+               {"__interrupt_id": "shell", "tool": "shell", "description": "Run command"}]
+
+    for text, ids in ((format_interrupt_text(waiting), extract_interrupt_ids(waiting)),
+                      (_format_interrupt(waiting), _extract_interrupt_ids(waiting))):
+        assert INCOGNITO_MEMORY_QUESTION in text and "Coffee: black, no sugar." in text
+        assert "Tea" not in text and "Run command" not in text and "reviewer" not in text
+        assert ids == ["coffee"]
+    assert extract_interrupt_ids(waiting[1:]) == ["tea"]  # Then the next write, by itself.
+
+
 def test_child_agent_approval_routes_to_parent_channel(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
     from row_bot.channels import registry

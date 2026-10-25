@@ -1,6 +1,6 @@
 ---
 title: "Settings: Models"
-description: "Choose which model does each job (Brain, Vision, Image, Video), set the reading limit and limits for long work, and pin models from the catalog."
+description: "Choose which model does each job (Brain, Vision, Image, Video), set the reading limit and limits for long work, and star the models you use from the catalog."
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -45,18 +45,23 @@ These limits apply to new runs; work in progress keeps the limits it started wit
 
 ## Catalog
 
-The **Catalog** lists every model your providers offer. Search it, filter by provider and job, and pin the models you use often so they appear first in every picker. **Refresh catalog** asks your providers what is available now.
+The **Catalog** lists every model your providers offer. Search it and filter by provider and job. Each model has the same two buttons as the models on this computer:
+
+- The **star** lists a model first wherever you choose a model: every job's picker and the composer's model picker, for the jobs it can do. A model says **Listed first** when starred, **Listed** when it is in the pickers already, and **Under More models** when hidden.
+- The **eye** hides a model: it waits under **More models** and still works.
+
+The status line at the top says how many models there are to choose from, and from how many providers. **Refresh catalog** asks your providers what is available now.
 
 ## Common Workflow
 
 1. Connect a provider, then choose your **Brain** model.
 2. Choose Vision, Image and Video models if you want those jobs.
-3. Pin one everyday model and one stronger tool-capable model.
+3. Star one everyday model and one stronger tool-capable model.
 4. Keep the recommended limits unless you have a measured reason to change them.
 
 ## What Is Saved
 
-Job models, limits and pins are global preferences. A conversation keeps its own model when you choose one in it.
+Job models, limits, starred and hidden models are global preferences. A conversation keeps its own model when you choose one in it.
 
 ## Privacy And Safety
 

@@ -59,7 +59,7 @@ test('Providers and Models share the contained shell and Models opens without pr
   }
   // One status line, no chip repeating the Brain model (B229).
   await expect(page.locator('.settings-pane-status')).toContainText(
-    /providers? connected/,
+    /models? to choose from \d+ providers?/,
   );
   await expect(page.locator('.settings-summary-chip')).toHaveCount(0);
   await expect(
@@ -200,7 +200,7 @@ test('Vision, media, context, and delegation controls write local settings', asy
   await assertNoOverflow(page);
 });
 
-test('Catalog pin and default actions update the picker through reviewed commands', async ({
+test('Catalog star and default actions update the picker (U10)', async ({
   page,
 }, info) => {
   await seed(page);
@@ -219,10 +219,15 @@ test('Catalog pin and default actions update the picker through reviewed command
     .locator('.settings-model-row-list > li')
     .filter({ hasText: label });
   await expect(row).toBeVisible();
-  await row.getByRole('button', { name: `Pin ${label} for chat` }).click();
+  // One concept: the star lists a model first wherever a model is chosen.
+  await row.getByRole('button', { name: `Add ${label} to favourites` }).click();
   await expect(
-    row.getByRole('button', { name: `Unpin ${label} for chat` }),
+    row.getByRole('button', {
+      name: `Remove ${label} from favourites`,
+      pressed: true,
+    }),
   ).toBeVisible();
+  await expect(row.getByText(/^Listed first · /)).toBeVisible();
   await row
     .getByRole('button', { name: `Set ${label} as chat default` })
     .click();

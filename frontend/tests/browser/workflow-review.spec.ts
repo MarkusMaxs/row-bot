@@ -1,7 +1,7 @@
 import type { Locator, Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
-import { blockFixtureServiceWorkers } from './unified-helpers';
+import { blockFixtureServiceWorkers, dismissNotices } from './unified-helpers';
 
 /*
  * N9 · A workflow's own code folder, its schedule's timezone, what happens to a
@@ -16,8 +16,7 @@ const DESKTOP = { width: 1280, height: 900 };
 const NAME = 'Landing checks';
 
 async function views(page: Page, info: TestInfo, name: string, focus: Locator) {
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(

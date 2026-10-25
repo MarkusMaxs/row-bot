@@ -52,6 +52,28 @@ def test_shell_ask_policy_includes_reason_in_interrupt_payload(tmp_path, monkeyp
     assert captured["args"]["command"] == "python -c \"print('hi')\""
 
 
+def test_a_command_approval_names_the_folder_it_runs_in_by_name_only(tmp_path, monkeypatch, reload_for_data_dir):
+    """U7: Details said "Action: Run a command" and never where."""
+    import json
+
+    from row_bot.application.approval_projection import project_approval_context
+
+    approval_gate, shell_tool = _fresh_shell_modules(tmp_path, reload_for_data_dir)
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "approve")
+    folder = tmp_path / "parent-folder-not-shown" / "tea-shop"
+    monkeypatch.setattr(shell_tool._session_manager, "get_session",
+                        lambda _key, _working_dir: type("S", (), {"cwd": str(folder)})())
+    captured: dict = {}
+    monkeypatch.setattr("langgraph.types.interrupt", lambda payload: captured.update(payload) or False)
+
+    shell_tool.ShellTool().execute("npm test")
+
+    card = project_approval_context(captured)
+    assert card["folder"] == "tea-shop"
+    # Settings names a folder, never its path; the card does the same.
+    assert "parent-folder-not-shown" not in json.dumps(card)
+
+
 def _reviewer(monkeypatch, decision: str):
     from row_bot.approval_review import ReviewVerdict
 
@@ -75,6 +97,8 @@ def test_shell_full_autonomy_and_an_approving_reviewer_run_without_asking(tmp_pa
     seen: list[str] = []
 
     class FakeSession:
+        cwd = str(tmp_path)
+
         def run_command(self, command: str, **_kwargs) -> dict:
             seen.append(command)
             return {
@@ -142,6 +166,8 @@ def test_shell_results_say_whether_approval_was_needed_and_given(
     ran: list[str] = []
 
     class FakeSession:
+        cwd = str(tmp_path)
+
         def run_command(self, command: str, **_kwargs) -> dict:
             ran.append(command)
             return {"output": "done", "exit_code": 0, "duration": 0.24, "cwd": str(tmp_path)}

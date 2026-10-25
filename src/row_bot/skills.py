@@ -81,6 +81,9 @@ class Skill:
     # Linked to tools but marked ``enabled_by_default: false``: a workflow loaded with skill_load
     # while its tools are bound, never injected into every prompt as a tool guide (F34).
     on_demand: bool = False
+    # A tool guide whose rules must be read before its tools act (``inline: true``, such as never
+    # typing a password): sent in full where every other guide is a line of the index.
+    inline: bool = False
 
 
 # ── Parser ───────────────────────────────────────────────────────────────────
@@ -161,6 +164,7 @@ def _parse_skill_text(text: str, filepath: pathlib.Path, source: str = "user") -
         source=source,
         path=filepath.parent,
         on_demand=bool(raw_tools) and explicit_enabled_default and not enabled_by_default,
+        inline=bool(meta.get("inline")),
     )
 
 
@@ -616,12 +620,18 @@ def get_on_demand_tool_skills(active_tool_names: Iterable[str]) -> list[Skill]:
     return [s for s in get_all_skills() if s.on_demand and any(t in active for t in s.tools)]
 
 
-def get_tool_guide_index(active_tool_names: Iterable[str] | None = None, *, loadable: bool = False) -> str:
-    """One line per tool guide for these tools: the small-context version of the guides (WP A5).
+def get_tool_guide_index(
+    active_tool_names: Iterable[str] | None = None,
+    *,
+    loadable: bool = False,
+    skip_inline: bool = False,
+) -> str:
+    """One line per tool guide for these tools, read in full with skill_load (WP A5, A6).
 
     *loadable*: the guides can be read in full with skill_load, so the header says so.
+    *skip_inline*: leave out the guides sent in full (``inline``).
     """
-    guides = active_tool_guides(active_tool_names)
+    guides = [s for s in active_tool_guides(active_tool_names) if not (skip_inline and s.inline)]
     if not guides:
         return ""
     header = "TOOL GUIDES (index): each guide explains how to use its tools well."
@@ -633,6 +643,20 @@ def get_tool_guide_index(active_tool_names: Iterable[str] | None = None, *, load
         lines.append(f"- {skill.name} ({', '.join(skill.tools)}): {description}" if description
                      else f"- {skill.name} ({', '.join(skill.tools)})")
     return "\n".join(lines)
+
+
+def get_tool_guides_prompt(active_tool_names: Iterable[str] | None = None, *, loadable: bool = True) -> str:
+    """The tool guides of a conversation: the ``inline`` guides in full, the rest as an index (WP A6).
+
+    Full guides went with every call (about 9K tokens on a large window); a guide is now read with
+    skill_load before its tools are relied on, as on a small window.
+    """
+    guides = active_tool_guides(active_tool_names)
+    parts = [f"{skill.instructions}\n" for skill in guides if skill.inline]
+    index = get_tool_guide_index(active_tool_names, loadable=loadable, skip_inline=True)
+    if index:
+        parts.append(index)
+    return "\n".join(parts)
 
 
 def estimate_tokens(skill_names: Optional[list[str]] = None) -> int:

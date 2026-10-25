@@ -20,7 +20,6 @@ from fastapi import Header, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from row_bot.server import app
 
-from row_bot.application import client_browser_controls as _browser_controls
 from row_bot.tools import registry as _tool_registry
 from tests.browser.client_platform import fixture_app as predecessor
 from tests.helpers.client_platform_fakes import fixture_id
@@ -35,7 +34,6 @@ _expiry_starts: dict[str, threading.Event] = {}
 _voice_fixture = {"transcriptions": 0, "bytes": 0, "syntheses": 0, "credentials": 0, "exchanges": 0}
 _sharing_fixture: list[dict] = []
 _wiki_fixture: dict[str, str] = {}
-_browser_control_fixture: dict[str, dict] = {}
 
 
 def _mount_static() -> None:
@@ -81,6 +79,13 @@ _claude_plan.discover_claude_plan_models = lambda: _claude_plan.model_infos_from
 ])
 
 
+# Connecting or disconnecting a provider refreshes its model catalog (B411). Specs connect synthetic accounts
+# and keys, so that refresh would ask the real provider for its models: here it never starts.
+from row_bot.providers import model_catalog_cache as _catalog_cache  # noqa: E402
+
+_catalog_cache.provider_connection_changed = lambda _provider_id, **_how: None
+
+
 _capture_cards: list = []
 
 
@@ -118,69 +123,538 @@ def s9_claude_plan(state: str, set_up_again: bool = False, x_fixture_token: str 
     return {"ready": True}
 
 
-class _SyntheticBrowserControlBackend:
-    """Local in-memory managed browser; it never launches or contacts a site."""
-
-    def status(self, conversation_id: str) -> dict:
-        return dict(
-            _browser_control_fixture.get(
-                conversation_id,
-                {
-                    "engine": "browser",
-                    "surface": "browser",
-                    "active": False,
-                    "paused": False,
-                    "thread_id": conversation_id,
-                    "state": "idle",
-                    "url": "",
-                    "last_action": "",
-                    "revision": 0,
-                },
-            )
-        )
-
-    def execute(self, action: str, payload: dict, conversation_id: str) -> None:
-        current = self.status(conversation_id)
-        current["revision"] = int(current.get("revision", 0)) + 1
-        if action == "browser.navigate":
-            current.update(
-                active=True,
-                paused=False,
-                state="observing",
-                url=payload["url"],
-                last_action="Opened reviewed address",
-            )
-        elif action == "browser.take_over":
-            current.update(paused=True, state="waiting_user")
-        elif action == "browser.check":
-            current.update(last_action="Checked current page")
-        elif action == "browser.back":
-            current.update(
-                url="https://example.test/previous",
-                last_action="Went back",
-            )
-        elif action == "browser.end":
-            current.update(
-                active=False,
-                paused=False,
-                state="idle",
-                url="",
-                last_action="",
-            )
-        else:
-            raise AssertionError("Unsupported synthetic browser action")
-        _browser_control_fixture[conversation_id] = current
+# ── N12-A: Row-Bot's browser in the app ──
+# The real Browser pane routes, live stream, input and controls run against a synthetic engine:
+# no Chromium starts. A spec sets what the pane shows (/__n12_fixture/browser) and the picture,
+# which it renders itself from the task suite's fixture pages (/__n12_fixture/site/{page}).
+from row_bot.browser.service import BrowserEngine as _BrowserEngine, BrowserSessionManager as _Manager  # noqa: E402
+from row_bot.browser.service import Frame as _Frame, _Live  # noqa: E402
+from row_bot.tools import browser_tool as _browser_tool  # noqa: E402
 
 
-_browser_controls.CanonicalBrowserControlBackend = (
-    lambda: _SyntheticBrowserControlBackend()
-)
+class _N12Browser(_BrowserEngine):
+    """The engine's own grants, control, viewers and pane state; the page itself is a picture."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.shown: dict[str, dict] = {}
+        self.signed_in = [{"site": "homecover.example", "cookies": 14}, {"site": "github.com", "cookies": 6},
+                          {"site": "google.com", "cookies": 21}]
+
+    def pane_state(self, chat_id: str) -> dict:
+        state = super().pane_state(chat_id)
+        chat = self._chats.get(str(chat_id))
+        if chat is not None:
+            state.update(control=chat.control)
+        state.update(self.shown.get(str(chat_id), {}))
+        return state
+
+    def ensure_started(self) -> None:
+        self._status = "running"
+
+    def restart(self) -> None:
+        self._status = "running"
+        for state in self.shown.values():
+            state["status"] = "running"
+        for chat in list(self.shown):
+            self._publish(chat)
+
+    def person_action(self, chat_id, action, *, url="", tab=""):
+        state = self.shown.setdefault(str(chat_id), {})
+        if action == "navigate":
+            state.update(url=url, site=url.split("//", 1)[-1].split("/", 1)[0], loading=True)
+        if action == "restart":
+            self.restart()
+        self._publish(str(chat_id))
+
+    def person_input(self, chat_id, events):
+        self.take_control(chat_id)
+        return "ok"
+
+    def sites(self):
+        return list(self.signed_in)
+
+    def clear_sites(self, site):
+        before = len(self.signed_in)
+        self.signed_in = [item for item in self.signed_in if site is not None and item["site"] != site]
+        return before - len(self.signed_in)
+
+    def show(self, chat_id: str, state: dict, frame: str | None, width: float, height: float) -> None:
+        self._status = "running" if state.get("status", "running") == "running" else self._status
+        self.shown[chat_id] = dict(state)
+        if frame:
+            live = self._live.setdefault(chat_id, _Live())
+            live.seq += 1
+            live.frame = _Frame(live.seq, frame, width, height)
+        self._publish(chat_id)
+
+
+class _N12Manager(_Manager):
+    def __init__(self) -> None:
+        super().__init__()
+        self._engine = _N12Browser()
+
+    def get_session(self, thread_id: str = "") -> _BrowserEngine:
+        return self._engine
+
+    def kill_all(self) -> None:
+        self._engine = _N12Browser()
+
+
+_browser_tool._session_manager = _N12Manager()
 _original_tool_enabled = _tool_registry.is_enabled
-_tool_registry.is_enabled = lambda name: (
-    True
-    if name in {"browser_navigate", "browser_snapshot", "browser_back"}
-    else _original_tool_enabled(name)
+_tool_registry.is_enabled = lambda name: True if name == "browser" else _original_tool_enabled(name)
+_N12_RELEASE: dict[str, threading.Event] = {}
+# The payment step each held turn asked about: its tool call id and arguments.
+_N12_PENDING: dict[str, tuple[str, dict]] = {}
+
+
+@app.post("/__n12_fixture/browser")
+def n12_browser(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """What the conversation's Browser pane shows: its state and, optionally, a new picture."""
+    predecessor._authorize(x_fixture_token)
+    engine = _browser_tool.get_session_manager().get_session()
+    chat = str(body["conversation_id"])
+    state = dict(body.get("state") or {})
+    record = engine._chat(chat)
+    # Who drives is the engine's own (Take control and Give back in the pane change it).
+    record.control = str(state.pop("control", record.control) or "agent")
+    engine.show(chat, state, body.get("frame"), float(body.get("width") or 1280), float(body.get("height") or 800))
+    return {"ready": True}
+
+
+@app.get("/__n12_fixture/browser/size")
+def n12_browser_size(conversation_id: str, x_fixture_token: str = Header(default="")) -> dict:
+    """The page's size in the engine (the pane's while one shows it), for the spec to picture the page at."""
+    predecessor._authorize(x_fixture_token)
+    engine = _browser_tool.get_session_manager().get_session()
+    width, height, scale = engine.page_metrics(conversation_id)
+    return {"width": width, "height": height, "scale": scale}
+
+
+@app.get("/__n12_fixture/site/{page}")
+def n12_site(page: str):
+    """A still page of the task suite's fixture service, for the spec to picture."""
+    from fastapi.responses import HTMLResponse
+
+    from tests.fixtures.browser_sites import still_page
+
+    return HTMLResponse(still_page(page).decode("utf-8"))
+
+
+@app.post("/__n12_fixture/release")
+def n12_release(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """Let a held browser turn go on to its payment step."""
+    predecessor._authorize(x_fixture_token)
+    _N12_RELEASE.setdefault(str(body["conversation_id"]), threading.Event()).set()
+    return {"released": True}
+
+
+def _n12_stream(text: str, config: dict):
+    """A turn that uses the browser: it opens the site and waits (the spec pictures the pane), then asks to pay."""
+    from row_bot.browser.policy import Consequence, approval_request
+    from row_bot.threads import append_checkpoint_messages
+
+    call = predecessor._record("submit", config, "n12-browser")
+    thread = call["conversation_id"]
+    identity = f"n12:{call['generation_id']}"
+    release = _N12_RELEASE.setdefault(thread, threading.Event())
+    try:
+        args = {"url": "https://homecover.example/account"}
+        tool_id = fixture_id(identity + ":open")
+        result_id = fixture_id(identity + ":open-result")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":open-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "browser_navigate", "args": args}])])
+        # As the agent sends them: the tool's display name, and its own name (U16).
+        yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "🌐 Browser",
+                            "raw_name": "browser_navigate", "runtime_name": "browser_navigate", "args": args}
+        while not release.wait(0.1):
+            pass
+        content = "Opened https://homecover.example/account.\nPage: Your cover (https://homecover.example/account)"
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="browser_navigate",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "🌐 Browser",
+                            "raw_name": "browser_navigate", "args": args, "content": content}
+        pay = {"ref": "e31"}
+        pay_id = fixture_id(identity + ":pay")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":pay-call"), content="",
+            tool_calls=[{"id": pay_id, "name": "browser_click", "args": pay}])])
+        yield "tool_call", {"tool_call_id": pay_id, "name": "🌐 Browser", "raw_name": "browser_click",
+                            "runtime_name": "browser_click", "args": pay}
+        _N12_PENDING[thread] = (pay_id, pay)
+        card = approval_request("browser_click", Consequence("pay", "homecover.example", "Confirm and pay £60"),
+                                url="https://homecover.example/claim/5")
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **card}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n12_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                stop_event=None):
+    """After the payment card: the claim is booked, or the payment didn't happen."""
+    from row_bot.threads import append_checkpoint_messages
+
+    thread = str(config["configurable"]["thread_id"])
+    pending = _N12_PENDING.pop(thread, None)
+    if pending is None:
+        yield from _n4_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                              resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n12-pay")
+    identity = f"n12-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        result_id = fixture_id(identity + ":pay")
+        content = ('Approval: asked; approved by you\nClicked button "Confirm and pay £60".\nPage: Claim booked'
+                   if approved else "The person said no; Row-Bot didn't click it.")
+        call_id, args = pending
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=call_id, name="browser_click",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": call_id, "message_id": result_id, "name": "🌐 Browser",
+                            "raw_name": "browser_click", "args": args, "content": content}
+        final = ("Booked: a plumber comes tomorrow between 8am and 12pm (claim HC-1042). The £60 excess is paid."
+                 if approved else "I didn't pay. The claim is ready at the payment step whenever you want to finish it.")
+        yield from _natural_final(call, thread, final, "n12")
+    finally:
+        call["quiesced"] = True
+
+
+# ── N12-B: computer use, rebuilt ──
+# The real computer tool, service, routes and approval cards run against a fake desktop behind a fake Cua
+# Driver (tests.fixtures.fake_desktop): nothing touches this computer's own screen, and the Stop bar is a
+# fake one. A turn's computer calls run the real tool; its approval and question cards are LangGraph's
+# interrupts, captured here and given back when the person answers.
+import contextlib as _contextlib  # noqa: E402
+import io as _io  # noqa: E402
+from langgraph.errors import GraphBubbleUp as _GraphBubbleUp  # noqa: E402
+
+from row_bot.computer_use import readiness as _cu_readiness  # noqa: E402
+from tests.fixtures.fake_desktop import (  # noqa: E402
+    FakeBar as _FakeBar,
+    FakeControl as _FakeControl,
+    FakeDesktop as _FakeDesktop,
+    FakeWindow as _FakeWindow,
 )
+
+_N12B: dict = {"ready": None, "desktop": None, "before": None}
+_N12B_PENDING: dict[str, dict] = {}
+_N12B_RELEASE: dict[str, threading.Event] = {}
+_original_cu_readiness = _cu_readiness.readiness
+
+
+def _n12b_readiness(*, enabled=None):
+    """Computer use's readiness: as set by the spec while it holds one, else the real one."""
+    code = _N12B["ready"]
+    if code is None:
+        return _original_cu_readiness(enabled=enabled)
+    messages = {"ready": "Cua Driver is ready.", "not_installed": "Cua Driver is not installed."}
+    return _cu_readiness.CuaReadiness(_cu_readiness.ReadinessCode(code), messages.get(code, code),
+                                      version="0.20.0", executable="cua-driver")
+
+
+_cu_readiness.readiness = _n12b_readiness
+
+
+def _n12b_font(size: int):
+    from PIL import ImageFont
+
+    for name in ("segoeui.ttf", "DejaVuSans.ttf", "Arial.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)
+
+
+class _N12bDesktop(_FakeDesktop):
+    """The fake desktop, its windows pictured as a person sees them: a browser window on a claim form."""
+
+    def picture(self, window):
+        from PIL import Image, ImageDraw
+
+        width, height = window.bitmap_size()
+        image = Image.new("RGB", (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, width, 84), fill=(240, 242, 245))
+        draw.rounded_rectangle((12, 8, 360, 40), radius=8, fill=(255, 255, 255))
+        draw.text((28, 14), window.title.split(" - ")[0][:34], fill=(30, 34, 40), font=_n12b_font(16))
+        draw.rounded_rectangle((12, 48, width - 12, 76), radius=14, fill=(255, 255, 255), outline=(220, 224, 230))
+        draw.text((32, 52), "homecover.example/claim", fill=(70, 76, 86), font=_n12b_font(16))
+        draw.rectangle((0, 84, width, 140), fill=(16, 52, 92))
+        draw.text((48, 98), "HomeCover", fill=(255, 255, 255), font=_n12b_font(24))
+        draw.text((48, 170), window.title.split(" - ")[0].split("– ")[-1], fill=(20, 24, 30), font=_n12b_font(34))
+        for control in window.controls:
+            x, y, w, h = control.box
+            if control.role == "RadioButton":
+                draw.ellipse((x, y + h // 2 - 11, x + 22, y + h // 2 + 11), outline=(60, 66, 76), width=2)
+                draw.text((x + 34, y + h // 2 - 12), control.label, fill=(20, 24, 30), font=_n12b_font(20))
+            elif control.role == "Hyperlink":
+                draw.text((x, y + h // 2 - 12), control.label, fill=(25, 90, 180), font=_n12b_font(20))
+                draw.line((x, y + h // 2 + 13, x + 9 * len(control.label), y + h // 2 + 13), fill=(25, 90, 180),
+                          width=2)
+            elif control.role == "ListItem":
+                draw.rounded_rectangle((x, y, x + w, y + h), radius=10, outline=(200, 206, 214), width=2)
+                draw.text((x + 18, y + h // 2 - 12), control.label, fill=(20, 24, 30), font=_n12b_font(20))
+            else:
+                draw.rounded_rectangle((x, y, x + w, y + h), radius=10, fill=(16, 52, 92))
+                draw.text((x + 22, y + h // 2 - 12), control.label, fill=(255, 255, 255), font=_n12b_font(20))
+        out = _io.BytesIO()
+        image.save(out, "PNG")
+        return out.getvalue()
+
+
+def _n12b_page(title: str, controls: list) -> callable:
+    def go(_desktop, window):
+        window.title, window.controls = f"HomeCover – {title} - Microsoft Edge", controls
+
+    return go
+
+
+def _n12b_edge():
+    pay = [
+        _FakeControl("ListItem", "Tuesday 8am to 12pm", (48, 250, 520, 64)),
+        _FakeControl("ListItem", "Tuesday 12pm to 4pm", (48, 330, 520, 64)),
+        _FakeControl("Button", "Confirm and pay £60", (48, 450, 300, 60)),
+    ]
+    claim = [
+        _FakeControl("RadioButton", "Leak", (48, 260, 300, 44)),
+        _FakeControl("RadioButton", "Blocked drain", (48, 320, 300, 44)),
+        _FakeControl("RadioButton", "No hot water", (48, 380, 300, 44)),
+        _FakeControl("Button", "Next", (48, 470, 160, 60), on_click=_n12b_page("Book an engineer", pay)),
+    ]
+    cover = [
+        _FakeControl("Hyperlink", "What am I covered for?", (48, 260, 260, 40)),
+        _FakeControl("Button", "Make a claim", (48, 330, 220, 60), on_click=_n12b_page("Make a claim", claim)),
+    ]
+    return _FakeWindow(pid=2501, window_id=501, process="msedge.exe", title="HomeCover – Your cover - Microsoft Edge",
+                       bounds=(0, 0, 1282, 802), controls=cover)
+
+
+def _n12b_reset() -> None:
+    from row_bot.application.client_platform import client_platform_service
+    from row_bot.computer_use import service as module
+    from row_bot.computer_use.client import CuaClient
+
+    desktop = _N12bDesktop(windows=[_n12b_edge()], apps={2501: "Microsoft Edge"})
+    if _N12B["before"] is None:  # What other specs see, put back by restore.
+        _N12B["before"] = (_cu_readiness.disclosure_acknowledged(), _original_tool_enabled("computer_use"))
+    _cu_readiness.acknowledge_disclosure()  # Computer use is set up on this (fake) desktop.
+    if module._SERVICE is not None:
+        module._SERVICE.stop()
+    service = module.ComputerUseService(
+        client_factory=lambda: CuaClient("cua-driver", transport_factory=lambda *_args: desktop),
+        bar_factory=_FakeBar,
+        stop_turn=client_platform_service.stop_conversation,
+        window_display=desktop.window_display,
+        cursor_position=desktop.cursor_position,
+    )
+    service.SETTLE_SECONDS = 0
+    module._SERVICE = service
+    _N12B.update(desktop=desktop, ready=None)
+    _N12B_PENDING.clear()
+
+
+@app.post("/__n12b_fixture/reset")
+def n12b_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """A fresh fake desktop (Edge on HomeCover's site) and computer use session."""
+    predecessor._authorize(x_fixture_token)
+    _n12b_reset()
+    return {"ready": True}
+
+
+@app.post("/__n12b_fixture/restore")
+def n12b_restore(x_fixture_token: str = Header(default="")) -> dict:
+    """Computer use as it was before the N12-B spec: its notice, its switch and no session."""
+    from row_bot.computer_use import service as module
+
+    predecessor._authorize(x_fixture_token)
+    if module._SERVICE is not None:
+        module._SERVICE.stop()
+        module._SERVICE = None
+    if _N12B["before"] is not None:
+        acknowledged, enabled = _N12B["before"]
+        if not acknowledged:
+            _cu_readiness.cancel_disclosure()
+        _tool_registry.set_enabled("computer_use", enabled)
+    _N12B.update(desktop=None, ready=None, before=None)
+    _N12B_PENDING.clear()
+    return {"restored": True}
+
+
+@app.post("/__n12b_fixture/settings")
+def n12b_settings(x_fixture_token: str = Header(default="")) -> dict:
+    """Computer use set up and on, as Settings › Browser and computer use shows it."""
+    predecessor._authorize(x_fixture_token)
+    _cu_readiness.acknowledge_disclosure()
+    _tool_registry.set_enabled("computer_use", True)
+    _N12B["ready"] = "ready"
+    return {"ready": True}
+
+
+@app.post("/__n12b_fixture/release")
+def n12b_release(body: dict, x_fixture_token: str = Header(default="")) -> dict:
+    """Let a held computer turn go on."""
+    predecessor._authorize(x_fixture_token)
+    _N12B_RELEASE.setdefault(str(body["conversation_id"]), threading.Event()).set()
+    return {"released": True}
+
+
+class _N12bAsked(_GraphBubbleUp):
+    """The turn pauses on a card, as LangGraph's interrupt pauses it."""
+
+    def __init__(self, payload) -> None:
+        super().__init__("asked")
+        self.payload = payload
+
+
+@_contextlib.contextmanager
+def _n12b_turn(thread: str, generation: str, resumes: list):
+    """The tool runs as in a chat turn here: its chat, the Ask level, and LangGraph's pauses."""
+    from unittest import mock
+
+    import langgraph.types
+
+    from row_bot import agent
+    from row_bot.browser import model_view
+    from row_bot.tools import approval_gate
+
+    counter = [0]
+
+    def interrupt(payload):
+        index = counter[0]
+        counter[0] += 1
+        if index < len(resumes):
+            return resumes[index]
+        raise _N12bAsked(payload)
+
+    held = _N12B["ready"]
+    _N12B["ready"] = held or "ready"
+    try:
+        with mock.patch.object(agent, "get_active_runtime_context", lambda: {
+                "thread_id": thread, "generation_id": generation, "runtime_surface": "normal_chat"}), \
+                mock.patch.object(approval_gate, "current_approval_mode", lambda: "approve"), \
+                mock.patch.object(langgraph.types, "interrupt", interrupt), \
+                mock.patch.object(model_view, "model_sees_images", lambda model=None: True):
+            yield
+    finally:
+        _N12B["ready"] = held
+
+
+def _n12b_at(label: str):
+    """Click the control a result lists, at the position it gives (as the model aims)."""
+    import re
+
+    def args(previous: str) -> dict:
+        line = next(line for line in previous.splitlines() if line.startswith("Controls: "))
+        x, y = re.search(r'"' + re.escape(label) + r'" (\d+),(\d+)', line).groups()
+        return {"action": "click", "x": int(x), "y": int(y)}
+
+    return args
+
+
+def _n12b_run(call: dict, thread: str, state: dict):
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools.computer_use_tool import computer
+
+    steps, identity = state["steps"], state["identity"]
+    while state["index"] < len(steps):
+        step = steps[state["index"]]
+        if step == "hold":
+            release = _N12B_RELEASE.setdefault(thread, threading.Event())
+            while not release.wait(0.1):
+                pass
+            release.clear()
+            state["index"] += 1
+            continue
+        if callable(step) and getattr(step, "side_effect", False):
+            step(thread)
+            state["index"] += 1
+            continue
+        args = step(state["previous"]) if callable(step) else dict(step)
+        tool_id = fixture_id(f"{identity}:{state['index']}")
+        result_id = fixture_id(f"{identity}:{state['index']}:result")
+        if not state["resumes"]:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(f"{identity}:{state['index']}:call"),
+                content="", tool_calls=[{"id": tool_id, "name": "computer", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "computer", "args": args}
+        try:
+            with _n12b_turn(thread, call["generation_id"], state["resumes"]):
+                content = computer(**args)
+        except _N12bAsked as asked:
+            _N12B_PENDING[thread] = state
+            yield "interrupt", [{"__interrupt_id": fixture_id(f"{identity}:{state['index']}:{len(state['resumes'])}"),
+                                 **asked.payload}]
+            return
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="computer",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "computer", "args": args,
+                            "content": content}
+        state.update(previous=content, resumes=[], index=state["index"] + 1)
+    yield from _natural_final(call, thread, state["final"], "n12b")
+
+
+def _n12b_person_moves_the_mouse(_thread: str) -> None:
+    _FakeBar.instances[-1].person_moves_the_mouse()
+
+
+_n12b_person_moves_the_mouse.side_effect = True
+
+
+def _n12b_allowed(thread: str) -> None:
+    from row_bot.computer_use.service import get_computer_use_service
+
+    get_computer_use_service().allow(thread, "Microsoft Edge")
+
+
+_n12b_allowed.side_effect = True
+
+
+def _n12b_stream(text: str, config: dict):
+    """A turn that uses Edge on this computer (the fake desktop) through the real computer tool."""
+    call = predecessor._record("submit", config, "n12b-computer")
+    thread = call["conversation_id"]
+    shot = {"action": "screenshot", "app": "Microsoft Edge"}
+    if "carry on" in text:
+        steps = [_n12b_allowed, shot, _n12b_person_moves_the_mouse, _n12b_at("Make a claim"),
+                 _n12b_at("Make a claim")]
+        final = "Your claim form is open: I picked Leak and I'm at the engineer slots."
+    elif "not set up" in text:
+        _N12B["ready"] = "not_installed"
+        steps = [{"action": "list_apps"}]
+        final = ("I can't use your computer yet: Cua Driver isn't installed. Open Settings › System › Browser and "
+                 "computer use › Set up… and install it, then ask me again.")
+    else:
+        steps = [{"action": "list_apps"}, shot, _n12b_at("Make a claim"), _n12b_at("Leak"), "hold",
+                 _n12b_at("Next"), _n12b_at("Tuesday 8am to 12pm"), _n12b_at("Confirm and pay £60")]
+        final = "Booked: a plumber comes on Tuesday between 8am and 12pm (claim HC-1042). The £60 excess is paid."
+    state = {"steps": steps, "index": 0, "resumes": [], "previous": "", "final": final,
+             "identity": f"n12b:{call['generation_id']}"}
+    try:
+        yield from _n12b_run(call, thread, state)
+    finally:
+        if "not set up" in text:
+            _N12B["ready"] = None
+        call["quiesced"] = True
+
+
+def _n12b_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                 stop_event=None):
+    """The person answered a computer card: the same call runs again with the answer, and the turn goes on."""
+    thread = str(config["configurable"]["thread_id"])
+    state = _N12B_PENDING.pop(thread, None)
+    if state is None:
+        yield from _n7_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                              resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n12b-answer")
+    answer = next(iter(resume_values.values())) if resume_values else bool(approved)
+    state["resumes"] = [*state["resumes"], answer]
+    try:
+        yield from _n12b_run(call, thread, state)
+    finally:
+        call["quiesced"] = True
+
+
+_n12b_reset()
 
 
 @app.post("/__p4_fixture/capability-settings")
@@ -500,8 +974,9 @@ _S2_PROGRAMS = {
         "import time\n"
         "for step in ('Compiling 128 modules', 'Bundling', 'Minifying', 'Writing dist/'):\n"
         "    print(step + '...', flush=True)\n"
-        "    time.sleep(1.2)\n"
-        "print('Built in 4.8s', flush=True)\n"
+        # Long enough to be seen running on a busy machine before it finishes (B420).
+        "    time.sleep(3)\n"
+        "print('Built in 12s', flush=True)\n"
     ),
 }
 _S2_LOCK = threading.Lock()
@@ -742,7 +1217,7 @@ def _s3_stream(text: str, config: dict):
         elif "screen recording" in text:
             problem = setup_problem()
             assert problem.startswith("Recording your screen needs Computer use set up."), problem
-            steps = [("computer_use", {"action": "start_recording"}, lambda: (problem, []))]
+            steps = [("computer_record", {"action": "start"}, lambda: (problem, []))]
             final = ("I can't record your screen yet: that needs Computer use set up. Open **Settings › System › "
                      "Browser and computer use**, turn on Computer use and finish its setup, then ask me again. "
                      "I can record Row-Bot's own browser without it.")
@@ -1495,6 +1970,155 @@ def _goal_verifier(goal, _context):
     return {"verdict": "continue", "reason": "Fixture goal: one more step."}
 
 
+# ── N7: Several X accounts, named on every post ────────────────────────────
+# Two X accounts signed in through a fake X API (in-process: nothing reaches X) and the in-memory
+# keychain. The model's x_post calls are scripted; the card is the real one for the call, and once
+# approved the real sender posts to the fake X API (or loses X's answer and finds the post among the
+# account's latest). A call without an account gets the real tool's refusal.
+_N7: dict = {}
+_N7_LAUNCH = ("Row-Bot 5.3 is out. Every post now names the X account it goes out as, and you approve "
+              "the exact words and pictures before anything is sent.\n\nRead what's new: row-bot.ai/5.3")
+_N7_REPLY = "Thanks! It keeps everything on your own computer, and it asks before it posts anywhere."
+
+
+def _n7_picture(path: Path) -> Path:
+    """A synthetic launch card (the post's picture)."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    image = Image.new("RGB", (1200, 675), (17, 24, 39))
+    draw = ImageDraw.Draw(image)
+
+    def font(size: int):
+        try:
+            return ImageFont.load_default(size=size)
+        except TypeError:
+            return ImageFont.load_default()
+    draw.rounded_rectangle([60, 60, 1140, 615], radius=36, fill=(30, 41, 59))
+    draw.ellipse([110, 110, 230, 230], fill=(99, 102, 241))
+    draw.text((270, 120), "Row-Bot 5.3", fill=(255, 255, 255), font=font(64))
+    draw.text((270, 210), "Several X accounts, named on every post", fill=(203, 213, 225), font=font(34))
+    for index, label in enumerate(("@rowbot_ai", "@sidd")):
+        top = 330 + index * 110
+        draw.rounded_rectangle([110, top, 1090, top + 86], radius=20, fill=(51, 65, 85))
+        draw.text((150, top + 22), label, fill=(255, 255, 255), font=font(36))
+    image.save(path, format="PNG")
+    return path
+
+
+@app.post("/__n7_fixture/accounts")
+def n7_accounts(x_fixture_token: str = Header(default="")) -> dict:
+    """@rowbot_ai and @sidd signed in, X on, and a post someone else made to reply to."""
+    import tempfile
+
+    p4_provider_credentials(x_fixture_token)
+    from row_bot import account_tokens, x_accounts
+    from tests.helpers.fake_x_api import PERSONAL, ROWBOT, FakeXApi
+
+    fake = FakeXApi(now="")  # Posts carry the real time, as X's do.
+    x_accounts.transport = fake.transport()
+    os.environ.update(X_CLIENT_ID="fixture-x-client", X_CLIENT_SECRET="fixture-x-secret")
+    _N7.update(api=fake, enabled=_tool_registry.is_enabled("x"),
+               folder=Path(tempfile.mkdtemp(prefix="row-bot-n7-")))
+    _tool_registry.set_enabled("x", True)
+    for user in (ROWBOT, PERSONAL):
+        account = x_accounts.add(fake.sign_in(*user))
+        # Documentation-capture mode (this fixture) never remembers a check; a real sign-in's passes.
+        account_tokens._CHECKS[account.slot] = (account_tokens.digest(account.slot), True)
+    _N7["question"] = fake.post("999", "What does Row-Bot actually do with my data?")
+    _n7_picture(_N7["folder"] / "launch-card.png")
+    return {"accounts": [account.handle for account in x_accounts.listed()]}
+
+
+@app.post("/__n7_fixture/reset")
+def n7_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Remove the accounts, the fake X API and the X app's switch."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import x_accounts
+
+    for account in x_accounts.listed():
+        x_accounts.remove(account.id)
+    x_accounts.transport = None
+    for name in ("X_CLIENT_ID", "X_CLIENT_SECRET"):
+        os.environ.pop(name, None)
+    if "enabled" in _N7:
+        _tool_registry.set_enabled("x", _N7["enabled"])
+    _N7.clear()
+    return {"ok": True}
+
+
+def _n7_stream(text: str, config: dict):
+    from row_bot import x_accounts
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools import x_posting
+    from row_bot.tools.x_tool import XTool
+
+    call = predecessor._record("submit", config, "n7-x")
+    thread = call["conversation_id"]
+    identity = f"n7:{call['generation_id']}"
+    try:
+        if "which" in text:
+            args = {"action": "post", "text": _N7_LAUNCH}
+            steps = [("x_post", args, lambda: (XTool()._x_post(**args), []))]
+            yield from _s3_steps(thread, identity, steps)
+            yield from _natural_final(call, thread, "Which X account should I post this from: @rowbot_ai (Row-Bot) "
+                                      "or @sidd (Sidd)? Nothing has been posted.", "n7-which")
+            return
+        if "reply" in text:
+            args = {"action": "reply", "text": _N7_REPLY, "tweet_id": _N7["question"]["id"], "account": "@rowbot_ai"}
+        else:
+            args = {"action": "post", "text": _N7_LAUNCH, "account": "@rowbot_ai",
+                    "media_paths": [str(_N7["folder"] / "launch-card.png")]}
+        _N7["lose_answer"] = "unsure" in text
+        account = x_accounts.resolve(args["account"], required=True)
+        media = x_posting.media_facts(args.get("media_paths"))
+        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""), media)
+        tool_id = fixture_id(identity + ":tool")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "x_post", "args": args}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": "x_post", "args": args}
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **payload}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n7_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+               stop_event=None):
+    """After the X card: the real sender posts as approved, to the fake X API."""
+    from row_bot import x_accounts
+    from row_bot.threads import append_checkpoint_messages, get_latest_checkpoint_messages
+    from row_bot.tools import x_posting
+    from row_bot.tools.approval_gate import APPROVAL_GIVEN, with_approval
+
+    thread = str(config["configurable"]["thread_id"])
+    last = next((message for message in reversed(get_latest_checkpoint_messages(thread))
+                 if getattr(message, "tool_calls", None)), None)
+    asked = last.tool_calls[0] if last is not None else {}
+    if asked.get("name") != "x_post" or not approved:  # A denied card ends the turn without resuming it.
+        yield from _n12_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                               resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n7-sent")
+    identity = f"n7-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        args = asked.get("args") or {}
+        result_id = fixture_id(identity + ":sent")
+        account = x_accounts.resolve(args["account"], required=True)
+        if _N7.pop("lose_answer", False):
+            _N7["api"].after_send = "timeout"  # X posts it, and its answer is lost on the way back.
+        sent = x_posting.post_as(account, args["action"], args.get("text", ""), args.get("tweet_id", ""),
+                                 x_posting.media_facts(args.get("media_paths")))
+        content = with_approval(APPROVAL_GIVEN, sent.text)
+        final = (f"X didn't confirm it at first, so I checked @rowbot_ai's latest posts: it went out once. {sent.url}"
+                 if sent.text.startswith("Not sure") else f"Done. It's live on @rowbot_ai: {sent.url}")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="x_post",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "x_post",
+                            "args": args, "content": content}
+        yield from _natural_final(call, thread, final, "n7-sent")
+    finally:
+        call["quiesced"] = True
+
+
 # ── N4: Row-Bot asks questions with options, in cards ──────────────────────
 # The real ask_person card and answers: the model's call and the turn's final
 # are scripted; the question's result is the real tool's for the answer given.
@@ -1555,8 +2179,293 @@ def _n4_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         call["quiesced"] = True
 
 
+# ── N5: pages Row-Bot makes for the person ─────────────────────────────────
+# The real page tools on the Making a page skill's own templates; the model's
+# calls and finals are scripted. The person's Send arrives as a real message.
+_N5_SKILL = Path(__file__).resolve().parents[3] / "bundled_skills" / "making_pages" / "SKILL.md"
+_N5_PLAN = {
+    "title": "Beta launch plan",
+    "summary": "Six steps to open the beta to 200 testers on 14 November.",
+    "steps": [
+        {"id": "freeze", "title": "Freeze the release branch",
+         "detail": "Cut beta.1 from main once the two open fixes land.", "status": "done"},
+        {"id": "announce", "title": "Draft the announcement",
+         "detail": "A short blog post and an email to the waitlist.", "status": "doing"},
+        {"id": "invites", "title": "Send invites to the waitlist",
+         "detail": "200 people, in two batches a day apart.", "status": "todo"},
+        {"id": "call", "title": "Book the launch call",
+         "detail": "30 minutes with the first testers on Thursday at 5pm.", "status": "todo"},
+        {"id": "feedback", "title": "Set up the feedback form",
+         "detail": "Five questions, linked from the app's Help menu.", "status": "todo"},
+        {"id": "stickers", "title": "Order stickers for testers",
+         "detail": "Optional: 250 stickers, about £120.", "status": "todo"},
+    ],
+}
+_N5_DASHBOARD = {
+    "title": "Sales by week",
+    "updated": "today at 9:00",
+    "metrics": [{"label": "Revenue, last 8 weeks", "value": "£48,210"}, {"label": "Orders", "value": "1,284"},
+                {"label": "Average order", "value": "£37.55"}, {"label": "Refunds", "value": "1.8%"}],
+    "chart": {"labels": ["4 Sep", "11 Sep", "18 Sep", "25 Sep", "2 Oct", "9 Oct", "16 Oct", "23 Oct"],
+              # £48,210 in all, about £6k a week, split between online and the shops.
+              "series": [{"label": "Online", "values": [4060, 4190, 4290, 4150, 4400, 4560, 4640, 4750]},
+                         {"label": "Shops", "values": [1580, 1630, 1620, 1630, 1650, 1680, 1690, 1690]}],
+              "stacked": True},
+    "columns": [{"key": "product", "label": "Product"}, {"key": "units", "label": "Units", "number": True},
+                {"key": "revenue", "label": "Revenue (£)", "number": True},
+                {"key": "change", "label": "vs last week", "number": True}],
+    "rows": [{"product": "Trail runner", "units": 182, "revenue": 14560, "change": "+9%"},
+             {"product": "City sneaker", "units": 241, "revenue": 13255, "change": "+4%"},
+             {"product": "Rain shell", "units": 96, "revenue": 8640, "change": "+18%"},
+             {"product": "Merino socks", "units": 410, "revenue": 4920, "change": "−2%"},
+             {"product": "Day pack", "units": 74, "revenue": 4440, "change": "+6%"},
+             {"product": "Water bottle", "units": 281, "revenue": 2395, "change": "+1%"}],
+}
+_N5_CHECKLIST = {
+    "title": "Launch day checklist",
+    "sections": [
+        {"title": "The day before", "items": [
+            {"id": "notes", "text": "Write the release notes"},
+            {"id": "status", "text": "Check the status page is green"},
+            {"id": "support", "text": "Brief support on the known issues"}]},
+        {"title": "On the day", "items": [
+            {"id": "publish", "text": "Publish the beta build"},
+            {"id": "email", "text": "Send the waitlist email"},
+            {"id": "social", "text": "Post the announcement"},
+            {"id": "watch", "text": "Watch sign-ups for the first hour"}]},
+    ],
+}
+# Each way a page might try to leave its sandbox, and what it found.
+_N5_PROBE = """<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+</head><body><h1>Sandbox check</h1><ul id="results" class="rb-list"></ul><script>
+const said = (name, value) => { const li = document.createElement('li'); li.textContent = name + ': ' + value;
+  results.append(li); };
+async function probe() {
+  try { await fetch('/api/v1/handshake'); said('fetch', 'reached'); } catch { said('fetch', 'blocked'); }
+  try { said('parent', window.parent.document.title ? 'reached' : 'reached'); } catch { said('parent', 'blocked'); }
+  try { said('cookies', document.cookie === undefined ? 'blocked' : 'reached'); } catch { said('cookies', 'blocked'); }
+  try { const opened = window.open('https://example.com/'); said('popup', opened ? 'reached' : 'blocked'); }
+  catch { said('popup', 'blocked'); }
+  try { window.top.location.href = '/app-v2/'; said('top', 'asked'); } catch { said('top', 'blocked'); }
+  said('rowbot', typeof rowbot.decide === 'function' && typeof rowbot.send === 'undefined' ? 'bridge only' : 'more');
+  document.body.dataset.done = 'yes';
+}
+probe();
+</script></body></html>"""
+
+
+# What the person asks for, as they'd write it: each makes one kind of page.
+_N5_PROMPTS = {
+    "Make me a beta launch plan I can approve step by step": "plan",
+    "Show me sales by week as a dashboard": "dashboard",
+    "Make a launch day checklist for the beta": "checklist",
+    "Make a page that checks its own sandbox": "probe",
+}
+
+
+@app.post("/__n5_fixture/reset")
+def n5_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Delete the chats with pages (and so their pages): each journey starts with only its own."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import pages
+    from row_bot.thread_cleanup import delete_thread
+
+    chats = {page.conversation_id for page in pages.list_pages()}
+    for chat in chats:
+        delete_thread(chat)
+    return {"deleted": len(chats)}
+
+
+def _n5_template(heading: str) -> str:
+    """One template from the Making a page skill, exactly as the model reads it."""
+    text = _N5_SKILL.read_text(encoding="utf-8")
+    start = text.index("```html\n", text.index(heading)) + len("```html\n")
+    return text[start:text.index("\n```", start)]
+
+
+def _n5_page(thread: str, identity: str, name: str, args: dict):
+    from row_bot.tools import pages_tool
+
+    run = pages_tool._page_create if name == "page_create" else pages_tool._page_update
+    yield from _s3_steps(thread, identity, [(name, args, lambda: (_s4_in_thread(thread, lambda: run(**args)), []))])
+
+
+def _n5_stream(text: str, config: dict):
+    call = predecessor._record("submit", config, "n5-page")
+    thread = call["conversation_id"]
+    identity = f"n5:{call['generation_id']}"
+    try:
+        kind = _N5_PROMPTS[text.strip()]
+        if kind == "dashboard":
+            args = {"title": "Sales by week", "html": _n5_template("### A dashboard"), "data": _N5_DASHBOARD,
+                    "libraries": ["charts", "rowbot-style"]}
+            final = "Here's the sales dashboard: revenue by week for online and shops, and every product below."
+        elif kind == "checklist":
+            args = {"title": "Launch day checklist", "html": _n5_template("### A checklist"),
+                    "data": _N5_CHECKLIST, "libraries": ["rowbot-style"]}
+            final = "Here's the launch day checklist. Tick things off as you go; it remembers on every device."
+        elif kind == "probe":
+            args = {"title": "Sandbox check", "html": _N5_PROBE, "libraries": ["rowbot-style"]}
+            final = "Here's the sandbox check."
+        else:
+            args = {"title": "Beta launch plan", "html": _n5_template("### A plan with approvals"),
+                    "data": _N5_PLAN, "libraries": ["rowbot-style"]}
+            final = ("Here's the beta launch plan. Approve, change or skip each step, then send me your "
+                     "decisions and I'll get going.")
+        yield from _n5_page(thread, identity, "page_create", args)
+        yield from _natural_final(call, thread, final, "n5")
+    finally:
+        call["quiesced"] = True
+
+
+# ── N11: incognito chats ───────────────────────────────────────────────────
+# The model's save_memory call is scripted; its card is the real tool's own in
+# an incognito chat (run in a small graph, so it asks as it does in a turn).
+# The answer's result is scripted: nothing is written to memory here.
+_N11_PENDING: dict[str, tuple[str, dict]] = {}
+_N11_COFFEE = {"category": "preference", "subject": "Coffee", "content": "I take it black, no sugar.", "tags": ""}
+_N11_REMEMBER = "Remember that I take my coffee black, no sugar"
+# The person's requests these chats script, and Row-Bot's replies (the save request asks first).
+_N11_REPLIES = {
+    "Find me somewhere quiet for a weekend away":
+        "Here are three quiet places for a weekend away: Hay-on-Wye, Whitby and the Lake District.",
+    "Plan a weekend in Leeds":
+        "Here's a weekend in Leeds: Saturday at the Royal Armouries and Kirkgate Market, "
+        "Sunday in Roundhay Park.",
+    _N11_REMEMBER: "",
+}
+
+
+def _n11_card(thread: str) -> dict | None:
+    """The real save_memory card for *thread*, or None when the chat is not incognito (it would save)."""
+    from typing import TypedDict
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from row_bot.threads import incognito_state
+    from row_bot.tools import memory_tool
+
+    if not incognito_state(thread).incognito:
+        return None
+
+    class State(TypedDict):
+        result: str
+
+    builder = StateGraph(State)
+    builder.add_node("save", lambda _state: {"result": memory_tool._save_memory(**_N11_COFFEE)})
+    builder.add_edge(START, "save")
+    builder.add_edge("save", END)
+    paused = builder.compile(checkpointer=InMemorySaver()).invoke(
+        {"result": ""}, {"configurable": {"thread_id": thread}})
+    [asked] = paused["__interrupt__"]
+    return dict(asked.value)
+
+
+def _n11_stream(text: str, config: dict):
+    from row_bot.threads import append_checkpoint_messages
+
+    call = predecessor._record("submit", config, "n11")
+    thread = call["conversation_id"]
+    identity = f"n11:{call['generation_id']}"
+    try:
+        append_checkpoint_messages(thread, [HumanMessage(
+            content=text, id=call["submission_id"] or fixture_id(identity + ":user"))])
+        card = _n11_card(thread) if text.strip() == _N11_REMEMBER else None
+        if card is None:
+            reply = _N11_REPLIES.get(text.strip()) or "This request saves to memory only in an incognito chat."
+            yield from _natural_final(call, thread, reply, "n11")
+            return
+        tool_id = fixture_id(identity + ":tool")
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": "save_memory", "args": _N11_COFFEE}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": "save_memory", "args": _N11_COFFEE}
+        _N11_PENDING[thread] = (tool_id, _N11_COFFEE)
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **card}]
+    finally:
+        call["quiesced"] = True
+
+
+def _n5_sent(text: str, config: dict):
+    """The person's Send under the plan: Row-Bot answers and moves the plan on with page_update."""
+    from row_bot import pages
+
+    call = predecessor._record("submit", config, "n5-sent")
+    thread = call["conversation_id"]
+    identity = f"n5-sent:{call['generation_id']}"
+    try:
+        page = next((item for item in pages.list_pages(thread) if item.page_id in text.split("\n", 1)[0]), None)
+        if page is not None and page.title == _N5_PLAN["title"]:
+            moved = {"announce": "done", "invites": "doing"}
+            data = {**_N5_PLAN, "steps": [{**step, "status": moved.get(step["id"], step["status"])}
+                                          for step in _N5_PLAN["steps"]]}
+            yield from _n5_page(thread, identity, "page_update", {"page": page.page_id, "data": data})
+        final = ("Thanks. The announcement is ready and the first batch of invites is going out now. I'll move the "
+                 "launch call to Friday at 4pm and update the plan as I go.")
+        yield from _natural_final(call, thread, final, "n5-sent")
+    finally:
+        call["quiesced"] = True
+
+
+def _n11_resume(enabled_tools: list[str], config: dict, approved: bool, *, interrupt_ids=None, resume_values=None,
+                stop_event=None):
+    """Save or Don't save on the incognito card: the call's result, and a short reply."""
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools.memory_tool import INCOGNITO_NOT_SAVED
+
+    thread = str(config["configurable"]["thread_id"])
+    pending = _N11_PENDING.pop(thread, None)
+    if pending is None:
+        yield from _n12b_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
+                                resume_values=resume_values, stop_event=stop_event)
+        return
+    call = predecessor._record("resume", config, "n11-answer")
+    identity = f"n11-resume:{call['generation_id']}:{call['sequence']}"
+    try:
+        tool_id, args = pending
+        content = ("Approval: asked; approved by you\nMemory saved successfully.\nSubject: Coffee\n"
+                   "Content: I take it black, no sugar." if approved
+                   else f"Approval: asked; denied by you — did not run\n{INCOGNITO_NOT_SAVED}")
+        result_id = fixture_id(identity + ":result")
+        append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id, name="save_memory",
+                                                        content=content)])
+        yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "save_memory",
+                            "args": args, "content": content}
+        final = "Saved: you take your coffee black, no sugar." if approved else "Okay, I won't save that."
+        yield from _natural_final(call, thread, final, "n11-answer")
+    finally:
+        call["quiesced"] = True
+
+
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.strip() in _N11_REPLIES:
+        # Incognito chats (N11): a plain reply, or the real save_memory card in an incognito chat.
+        yield from _n11_stream(text, config)
+        return
+    if text.startswith("n7 ") and text.rstrip().endswith("fixture"):
+        # Several X accounts, named on every post (N7): the real card and sender, a fake X API.
+        yield from _n7_stream(text, config)
+        return
+    if text.strip() in _N5_PROMPTS:
+        # Pages (N5): the real page tools on the skill's templates.
+        yield from _n5_stream(text, config)
+        return
+    if text.startswith("[") and "from the page" in text.split("\n", 1)[0]:
+        # The person's Send under a page (N5), as the real message Row-Bot wrote from it.
+        yield from _n5_sent(text, config)
+        return
+    if text.startswith("n12b ") and text.rstrip().endswith("fixture"):
+        # Computer use, rebuilt (N12-B): the real computer tool on a fake desktop.
+        yield from _n12b_stream(text, config)
+        return
+    if text.startswith("n12 ") and text.rstrip().endswith("fixture"):
+        # Row-Bot's browser in the app (N12-A): a turn that uses the browser, then asks to pay.
+        yield from _n12_stream(text, config)
+        return
+    if text.startswith("n10 ") and text.rstrip().endswith("fixture"):
+        # Outlook's own cards (N10): an email to send, or an event that invites people.
+        yield from _n10_stream(text, config)
+        return
     if text.startswith("l1a ") and text.rstrip().endswith("fixture"):
         # Learning (L1a): a reply to Teach on, after a step that failed.
         yield from _l1a_stream(text, config)
@@ -3596,7 +4505,7 @@ def main() -> None:
             streaming=True, credential_status="fixture", capability_source="fixture", confidence="high")
 
     agent.stream_agent = stream
-    agent.resume_stream_agent = _n4_resume
+    agent.resume_stream_agent = _n11_resume
     readiness.evaluate_agent_readiness = fake_agent_readiness
     readiness.evaluate_chat_readiness = fake_chat_readiness
     from row_bot.api.v1 import routes
@@ -3607,7 +4516,7 @@ def main() -> None:
     _p10_install_fakes()
     _p17_install_connection_check_fakes()
     client_platform_service.stream_factory = stream
-    client_platform_service.resume_factory = _n4_resume
+    client_platform_service.resume_factory = _n11_resume
     from row_bot import goals as goal_owner
     # Goals verify with a scripted verdict, never a model call.
     goal_owner._invoke_goal_verifier = _goal_verifier
@@ -4645,6 +5554,346 @@ def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
     finally:
         conn.close()
     _N4_APPROVALS.clear()
+    return {"ok": True}
+
+
+# ── N6: install stats ──
+# Dormant here unless a spec turns it on, so no other spec ever meets it. On, it names a realistic
+# service address and a fake send that only records what would have gone: nothing leaves this
+# computer.
+from row_bot import install_count as _install_count  # noqa: E402
+
+_install_count.COLLECTOR_URL = ""
+# The test matrix turns install stats off for every app it starts; the N6 specs turn it back on here.
+_N6_ENV = os.environ.get(_install_count.ENV)
+_N6_SERVICE = "https://row-bot-count.row-bot.workers.dev"
+_n6_sent: list[dict] = []
+_n6_real_post = _install_count._post
+
+
+def _n6_post(url: str, body: dict, _scope) -> bool:
+    _n6_sent.append({"path": url.removeprefix(_N6_SERVICE), "body": dict(body)})
+    return True
+
+
+# The Privacy screenshots show the sidebar: realistic conversation names while N6 runs.
+_N6_NAMES = {"p1-browser-a": ("Phase 1 conversation A", "Plan the Lisbon offsite"),
+             "p1-browser-b": ("Phase 1 conversation B", "Draft the Q4 board update")}
+
+
+def _n6_name_conversations(realistic: bool) -> None:
+    import sqlite3
+    from row_bot import threads
+
+    with sqlite3.connect(threads.DB_PATH) as conn:
+        for thread_id, names in _N6_NAMES.items():
+            conn.execute("UPDATE thread_meta SET name = ? WHERE thread_id = ?", (names[realistic], thread_id))
+
+
+@app.post("/__n6_fixture/install-count/{state}")
+def n6_install_count(state: str, x_fixture_token: str = Header(default="")) -> dict:
+    """fresh: on by default, nothing sent yet; on/off: one count already sent, then the switch;
+    restore: dormant again."""
+    predecessor._authorize(x_fixture_token)
+    (predecessor.DATA / _install_count.STATE_FILE).unlink(missing_ok=True)
+    _n6_sent.clear()
+    if state == "restore":
+        _install_count.COLLECTOR_URL = ""
+        _install_count._post = _n6_real_post
+        if _N6_ENV is not None:
+            os.environ[_install_count.ENV] = _N6_ENV
+        _n6_name_conversations(False)
+        return {"state": state}
+    if state not in {"fresh", "on", "off"}:
+        raise HTTPException(status_code=404, detail="Unknown install stats state")
+    os.environ.pop(_install_count.ENV, None)
+    _install_count.COLLECTOR_URL = _N6_SERVICE
+    _install_count._post = _n6_post
+    _n6_name_conversations(True)
+    if state != "fresh":
+        _install_count.tick()
+        if state == "off":
+            _install_count.choose(False)
+    return {"state": state, "view": _install_count.view()}
+
+
+@app.get("/__n6_fixture/install-count/sent")
+def n6_install_count_sent(x_fixture_token: str = Header(default="")) -> dict:
+    """What the fake service received, in order (path and body)."""
+    predecessor._authorize(x_fixture_token)
+    return {"sent": list(_n6_sent)}
+
+
+# --- N10: Outlook through your own Microsoft app, and Microsoft 365's tenant (B398) ----------------------
+# The Outlook account's states are seeded in an in-memory keychain (this run's own, restored by reset); a
+# sign-in from another device gets a fixed code and never an answer, so its wait stays on screen. The
+# approval cards come from the real Outlook card writer. Microsoft 365's Registry check answers with the
+# record the catalog lists (or, for the error, as removed); nothing reaches Microsoft or the Registry.
+_N10_CLIENT = "11111111-2222-3333-4444-555555555555"
+_N10_ADDRESS = "you@yourdomain.com"
+_N10_SAVED: dict = {}
+_N10_REGISTRY = {"mode": "same"}
+_N10_WORK_IQ = {"server": {
+    "name": "com.microsoft/workiq-admintools", "title": "Admin MCP Server", "version": "1.0.0",
+    "description": "MCP Server containing tools relating to Microsoft Admin Center",
+    "remotes": [{"type": "streamable-http",
+                 "url": "https://agent365.svc.cloud.microsoft/agents/tenants/{tenant_id}/servers/mcp_AdminTools",
+                 "variables": {"tenant_id": {"description": "Microsoft Entra tenant ID", "isRequired": True}}}]},
+    "_meta": {"io.modelcontextprotocol.registry/official": {"status": "active"}}}
+
+
+def _n10_keychain() -> None:
+    """This run's keychain in memory, readable during capture; reset puts back what was there."""
+    from row_bot import secret_store
+    if "backend" not in _N10_SAVED:
+        _N10_SAVED.update(backend=secret_store._backend_override, capture=secret_store._docs_capture_active)
+    if not isinstance(getattr(secret_store._backend_override, "values", None), dict):
+        class SyntheticSecrets:
+            def __init__(self): self.values = {}
+            def get_password(self, service, account): return self.values.get((service, account))
+            def set_password(self, service, account, value): self.values[service, account] = value
+            def delete_password(self, service, account): self.values.pop((service, account), None)
+        secret_store._backend_override = SyntheticSecrets()
+    secret_store._docs_capture_active = lambda: False
+
+
+def _n10_route(device: bool) -> None:
+    """How this browser signs in: here (the desktop app) or from another device, with a code."""
+    from row_bot import microsoft_account
+    from row_bot.application import client_account_oauth as owner
+    if "route" not in _N10_SAVED:
+        _N10_SAVED.update(route=owner.sign_in_route, start=microsoft_account.device_start,
+                          poll=microsoft_account.device_poll)
+    original = _N10_SAVED["route"]
+
+    def route(account, device_info):
+        if account == "microsoft" and device:
+            return {"sign_in": "device", "sign_in_blocker": None, "callback_url": None}
+        return original(account, device_info)
+    owner.sign_in_route = route
+    microsoft_account.device_start = lambda found, http: microsoft_account.DeviceCode(
+        "fixture-device-code", "ABCD-EFGH", "https://microsoft.com/devicelogin", 900, 5)
+    microsoft_account.device_poll = lambda found, code, http: "authorization_pending"
+
+
+@app.post("/__n10_fixture/outlook/{state}")
+def n10_outlook(state: str, route: str = "desktop", x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    from row_bot import account_tokens, microsoft_account
+    from row_bot.integrations import builtin
+    from row_bot.tools import registry
+    if state not in {"none", "registered", "signed_in", "signed_out"} or route not in {"desktop", "device"}:
+        raise HTTPException(status_code=404, detail="Unknown Outlook state")
+    _n10_keychain()
+    _n10_route(route == "device")
+    for name in ("microsoft", "microsoft_client"):
+        account_tokens.delete(name)
+    if state != "none":
+        microsoft_account.save_client(_N10_CLIENT)
+    if state in {"signed_in", "signed_out"}:
+        account_tokens.write("microsoft", {"refresh_token": "fixture-refresh", "client_id": _N10_CLIENT,
+                                           "tenant": "common", "address": _N10_ADDRESS, "name": "You"})
+        # As the last check left it: working, or turned down by Microsoft.
+        account_tokens._CHECKS["microsoft"] = (account_tokens.digest("microsoft"), state == "signed_in")
+        for tool in ("outlook_mail", "outlook_calendar"):
+            registry.set_enabled(tool, True)
+    builtin.changed()
+    builtin.rows()  # Apps and Needs you read the new state at once.
+    return {"state": microsoft_account.state()}
+
+
+@app.post("/__n10_fixture/registry/{mode}")
+def n10_registry(mode: str, x_fixture_token: str = Header(default="")) -> dict:
+    """What the MCP Registry answers when Microsoft 365's record is checked again: the same record, or removed."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot.mcp_client import marketplace
+    if mode not in {"same", "removed"}:
+        raise HTTPException(status_code=404, detail="Unknown Registry answer")
+    if "fetch" not in _N10_SAVED:
+        _N10_SAVED["fetch"] = marketplace._fetch_json
+        original = marketplace._fetch_json
+
+        def fetch(url, timeout=0):
+            if "workiq-admintools" not in url:
+                return original(url, timeout=timeout)
+            record = json.loads(json.dumps(_N10_WORK_IQ))
+            if _N10_REGISTRY["mode"] == "removed":
+                record["_meta"]["io.modelcontextprotocol.registry/official"]["status"] = "deleted"
+            return record
+        marketplace._fetch_json = fetch
+    if "index" not in _N10_SAVED:
+        # The catalog has no Registry mirror here: one with only this record, removed again by reset.
+        import tempfile
+        from row_bot.integrations import facts, index
+        from row_bot.mcp_client import registry_snapshot
+        _N10_SAVED["index"] = (registry_snapshot.SHIPPED, index.pointer() is not None)
+        if index.pointer() is None:
+            shipped = Path(tempfile.mkdtemp(prefix="row-bot-n10-")) / "registry_snapshot.jsonl.xz"
+            shipped.write_bytes(registry_snapshot.build_snapshot(
+                marketplace.registry_entries({"servers": [_N10_WORK_IQ]}), captured_at=1790800000.0,
+                watermark="2026-10-01T00:00:00Z"))
+            registry_snapshot.SHIPPED = shipped
+            index.ensure()
+            facts.invalidate()
+    _N10_REGISTRY["mode"] = mode
+    return {"mode": mode}
+
+
+@app.post("/__n10_fixture/reset")
+def n10_reset(x_fixture_token: str = Header(default="")) -> dict:
+    """Forget Outlook, any Microsoft 365 connection the spec saved, and put back what the fixture replaced."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import account_tokens, microsoft_account, secret_store
+    from row_bot.application import client_account_oauth as owner
+    from row_bot.integrations import builtin, facts
+    from row_bot.mcp_client import config, marketplace
+    from row_bot.tools import registry
+    with owner._LOCK:
+        for key in [key for key, job in owner._JOBS.items() if job["account"] == "microsoft"]:
+            owner._JOBS[key]["stop"].set()
+            owner._JOBS.pop(key)
+        owner._ACTIVE.discard("microsoft")
+    if "backend" in _N10_SAVED:
+        for name in ("microsoft", "microsoft_client"):
+            account_tokens.delete(name)
+        account_tokens._CHECKS.pop("microsoft", None)
+        for tool in ("outlook_mail", "outlook_calendar"):
+            registry.set_enabled(tool, False)
+        secret_store._backend_override = _N10_SAVED.pop("backend")
+        secret_store._docs_capture_active = _N10_SAVED.pop("capture")
+    if "route" in _N10_SAVED:
+        owner.sign_in_route = _N10_SAVED.pop("route")
+        microsoft_account.device_start = _N10_SAVED.pop("start")
+        microsoft_account.device_poll = _N10_SAVED.pop("poll")
+    if "fetch" in _N10_SAVED:
+        marketplace._fetch_json = _N10_SAVED.pop("fetch")
+    if "index" in _N10_SAVED:
+        from row_bot.integrations import index
+        from row_bot.mcp_client import registry_snapshot
+        registry_snapshot.SHIPPED, had_index = _N10_SAVED.pop("index")
+        if not had_index:
+            (index.folder() / "registry.json").unlink(missing_ok=True)
+            index._READY.clear()
+    saved = config.load_config()
+    servers = saved.get("servers") or {}
+    for name in [name for name, cfg in servers.items()
+                 if str((cfg.get("source") or {}).get("registry_name") or "").startswith("com.microsoft/workiq")]:
+        servers.pop(name)
+    config.save_config(saved)
+    builtin.changed()
+    facts.invalidate()
+    return {"ok": True}
+
+
+_N10_CARDS = {
+    "mail": ("outlook_send_mail", "outlook_mail", {
+        "to": ["amy@contoso.com"], "cc": ["ben@contoso.com"], "subject": "Q3 numbers",
+        "body": "Hi Amy,\n\nThe Q3 numbers are attached. Revenue is up 12% on Q2, mostly from the new plans.\n\n"
+                "Shall we go through them on Thursday?\n\nThanks", "attachments": []}),
+    "event": ("outlook_create_event", "outlook_calendar", {
+        "subject": "Q3 review", "start": "2026-10-29 14:00", "end": "2026-10-29 14:45",
+        "timezone_name": "Europe/London", "location": "Room 4", "attendees": ["amy@contoso.com", "ben@contoso.com"],
+        "online_meeting": True, "body": "Go through the Q3 numbers before the board pack."}),
+}
+
+
+def _n10_stream(text: str, config: dict):
+    """A turn that asks to send an Outlook email or to invite people to an event: the real card's words."""
+    import tempfile
+    from row_bot.integrations import builtin
+    from row_bot.threads import append_checkpoint_messages
+    from row_bot.tools import outlook_tool
+
+    name, parent, args = _N10_CARDS["event" if "event" in text else "mail"]
+    args = json.loads(json.dumps(args))
+    if name == "outlook_send_mail":
+        report = Path(tempfile.mkdtemp(prefix="row-bot-n10-")) / "q3-report.pdf"
+        report.write_bytes(b"%PDF-1.7 Q3 numbers\n" + b"0" * 245_000)
+        args["attachments"] = [str(report)]
+    builtin.remember_tools({name: parent})
+    call = predecessor._record("submit", config, "n10-outlook")
+    thread = call["conversation_id"]
+    identity = f"n10:{call['generation_id']}"
+    tool_id = fixture_id(identity + ":tool")
+    try:
+        append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+            tool_calls=[{"id": tool_id, "name": name, "args": args}])])
+        yield "tool_call", {"tool_call_id": tool_id, "name": name, "args": args}
+        question, description = outlook_tool.approval_card(name, args)
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), "tool": name,
+                             "label": outlook_tool.TITLES[name], "question": question, "description": description,
+                             "args": args}]
+    finally:
+        call["quiesced"] = True
+
+
+
+# B407: a workflow run the scheduler starts in the background, with a step that
+# waits for the person's approval, so a spec sees it reach the sidebar, Home and
+# Monitor without a reload. Synthetic data only; nothing calls a model.
+_B407_TASK = "Morning digest"
+# The seeded conversations, titled as a person's own for screenshots, and back.
+_B407_TITLES = {"p1-browser-a": ("Phase 1 conversation A", "Plan the Lisbon trip"),
+                "p1-browser-b": ("Phase 1 conversation B", "Draft the Q3 board update")}
+
+
+def _b407_titles(realistic: bool) -> None:
+    import sqlite3
+    from row_bot import threads
+    from row_bot.application.live_updates import publish
+
+    with sqlite3.connect(threads.DB_PATH) as conn:
+        for thread_id, (seeded, realistic_title) in _B407_TITLES.items():
+            conn.execute("UPDATE thread_meta SET name=? WHERE thread_id=?",
+                         (realistic_title if realistic else seeded, thread_id))
+    publish("conversations")
+
+
+def _b407_clear() -> None:
+    from row_bot import tasks
+    from row_bot.thread_cleanup import delete_thread
+
+    if not Path(tasks._DB_PATH).resolve().is_relative_to(predecessor.DATA.resolve()):
+        raise HTTPException(status_code=403, detail="Synthetic data scope required")
+    for task in tasks.list_tasks():
+        if task["name"] != _B407_TASK:
+            continue
+        conversations = {run.get("thread_id") for run in tasks.get_run_history(task["id"])}
+        tasks.delete_task(task["id"])
+        for conversation in conversations - {None, ""}:
+            delete_thread(conversation)
+
+
+@app.post("/__b407_fixture/background-run")
+def b407_background_run(x_fixture_token: str = Header(default="")) -> dict:
+    """Start the workflow exactly as its schedule would, in the background."""
+    predecessor._authorize(x_fixture_token)
+    from row_bot import tasks
+
+    _b407_clear()
+    task_id = tasks.create_task(
+        _B407_TASK, description="Gathers the morning's news and asks before it goes to the team.", icon="📰",
+        steps=[{"id": "send", "type": "approval", "message": "Send this morning's digest to the team?"}],
+        channels=[], enabled=False, apply_default_skills=False,
+    )
+    task = tasks.get_task(task_id)
+    thread_id = tasks._prepare_task_thread(task)
+    tasks.run_task_background(task_id, thread_id, [], notification=False)
+    return {"task_id": task_id, "conversation_id": thread_id}
+
+
+@app.post("/__b407_fixture/titles")
+def b407_realistic_titles(x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    _b407_titles(True)
+    return {"ok": True}
+
+
+@app.post("/__b407_fixture/reset")
+def b407_reset(x_fixture_token: str = Header(default="")) -> dict:
+    predecessor._authorize(x_fixture_token)
+    _b407_clear()
+    _b407_titles(False)
     return {"ok": True}
 
 

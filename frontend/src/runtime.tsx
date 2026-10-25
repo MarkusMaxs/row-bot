@@ -28,15 +28,9 @@ import type { PluginSettingsSession } from './features/settings/PluginSettings';
 import type { SkillsSettingsSession } from './features/settings/SkillsSettings';
 import type { GoalProfileSettingsSession } from './features/settings/GoalProfileSettings';
 import type { ConversationActionsSession } from './features/settings/ConversationActions';
-import type { BrowserControlSession } from './features/browser/BrowserLiveControls';
 
 type ConversationActionSessions = {
   get(conversationId: string): ConversationActionsSession | undefined;
-  hasRetained(): boolean;
-  dispose(): void;
-};
-type BrowserControlSessions = {
-  get(conversationId: string): BrowserControlSession | undefined;
   hasRetained(): boolean;
   dispose(): void;
 };
@@ -62,9 +56,6 @@ export const RuntimeContext = createContext<{
   >;
   conversationActionsOwner?: ReturnType<
     typeof createAuthenticatedEditorOwner<ConversationActionSessions>
-  >;
-  browserControlOwner?: ReturnType<
-    typeof createAuthenticatedEditorOwner<BrowserControlSessions>
   >;
   documentUploadOwner?: ReturnType<
     typeof createAuthenticatedEditorOwner<DocumentUploadOwner>

@@ -1,0 +1,32 @@
+# Row-Bot's installation count collector (N6): see README.md for the owner's deploy steps.
+# Nothing here identifies an account or holds a secret. Wrangler takes the account from
+# `wrangler login` (or CLOUDFLARE_ACCOUNT_ID); ID_HMAC_KEY and STATS_TOKEN are set with
+# `wrangler secret put`; database_id comes from `wrangler d1 create row-bot-count`.
+name = "row-bot-count"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+preview_urls = false
+
+# Nothing about a request is kept: no Workers Logs or traces, no Logpush, no source maps.
+logpush = false
+upload_source_maps = false
+
+[observability]
+enabled = false
+
+[triggers]
+# 03:17 UTC every day: the day before's totals, then rows older than 35 days go.
+crons = ["17 3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "row-bot-count"
+database_id = "REPLACE-WITH-THE-ID-FROM-WRANGLER-D1-CREATE"
+migrations_dir = "migrations"
+
+# Requests from one address in a minute, counted by Cloudflare's rate limiter; never stored.
+[[ratelimits]]
+name = "LIMIT"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }

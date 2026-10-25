@@ -101,6 +101,39 @@ it('shows the selection bar above the list on the first tick; Esc and Clear sele
   expect(bar()).toBeNull();
 });
 
+it('leaves a helper’s own thread to the chat that started it, as the sidebar does (U12)', async () => {
+  const transport = new FixtureTransport({ conversationCount: 1 });
+  const controller = new ClientController(transport, () => 1);
+  clients.push(controller);
+  await controller.start();
+  const at = '2026-10-23T09:00:00Z';
+  const row = (id: string, title: string, parent: string | null = null) => ({
+    id,
+    revision: '1',
+    title,
+    pinned: false,
+    updated_at: at,
+    parent_conversation_id: parent,
+  });
+  vi.spyOn(controller, 'readConversationLibrary').mockResolvedValue([
+    row('planets', 'Planet research'),
+    row('mars', 'Mars facts', 'planets'),
+    row('venus', 'Venus facts', 'planets'),
+    // Its chat was deleted: it stays findable.
+    row('pluto', 'Pluto facts', 'gone'),
+  ]);
+  renderLibrary(controller);
+  expect(
+    await screen.findByRole('checkbox', { name: 'Select Planet research' }),
+  ).toBeVisible();
+  expect(
+    screen.getByRole('checkbox', { name: 'Select Pluto facts' }),
+  ).toBeVisible();
+  expect(screen.queryByText('Mars facts')).toBeNull();
+  expect(screen.queryByText('Venus facts')).toBeNull();
+  expect(screen.getByText('2 conversations · newest first')).toBeVisible();
+});
+
 it('selects a range with Shift and ticks the focused row with Space (B270)', async () => {
   await setup(8);
   tick('Sample conversation 2');

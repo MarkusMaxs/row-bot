@@ -36,6 +36,12 @@ _SCHEDULE_FORMATS = (
     "'interval_minutes:M' or 'cron:EXPR' (e.g. 'cron:0 9 * * mon-fri')"
 )
 _TEMPLATE_VARIABLES = "{{date}}, {{day}}, {{time}}, {{month}}, {{year}} and {{task_id}} (this task's own id)"
+# The step format in brief; the whole of it is the Workflow guide (tool_guides/workflow_guide).
+_STEPS_SHORT = (
+    "a list of {'type': 'prompt'|'condition'|'approval'|'subtask'|'notify', ...}, e.g. "
+    "{'type': 'prompt', 'prompt': str}, {'type': 'notify', 'message': str}."
+)
+_STEPS_HELP = " The step format is in the Workflow guide: skill_load('workflow_guide')."
 _TASK_LIST_CHARS = 30_000  # Beyond this the list is saved, and read on with read_tool_output.
 
 
@@ -86,22 +92,8 @@ class _TaskCreateInput(BaseModel):
     steps: list[dict] | None = Field(
         default=None,
         description=(
-            "Pipeline steps instead of prompts, for branching, approvals or notifications. Each step has a "
-            "'type' (prompt|condition|approval|subtask|notify); ids are assigned as {type}_{counter} "
-            "(prompt_1, condition_1). "
-            "prompt: {'prompt': str, 'on_error': 'stop'|'skip', 'max_retries': int, 'apps': ['Notion']}; "
-            "'apps' names the set-up apps a prompt uses (the step uses only those). "
-            "condition: {'condition': str, 'if_true': step_id, 'if_false': step_id}; it checks the previous "
-            "step's output and is one of: " + tasks_db.CONDITION_SYNTAX + " (use llm:<question> for a judgement "
-            "in words, e.g. 'is any item below its reorder level?'). "
-            "approval: {'message': str, 'timeout_minutes': int, 'if_approved': step_id (default: next step), "
-            "'if_denied': step_id or 'end' (default 'end')}. "
-            "subtask: {'task_id': str, 'pass_output': bool}. "
-            "notify: {'message': str, 'channel': 'desktop' or a configured channel name such as 'telegram'}; "
-            "use a notify step, not a prompt step, when the person says 'notify me' or 'tell me'. "
-            "'email' is not a notify channel: send email from a prompt step with the email tool. "
-            "Every step needs its text (a prompt, or a message). Any step may set 'next' (step_id or 'end') "
-            "to change the flow. Pass data with {{prev_output}} and {{step.<id>.output}}."
+            "Pipeline steps instead of prompts, for branching, approvals or notifications: "
+            f"{_STEPS_SHORT} The Workflow guide (skill_load('workflow_guide')) has every field; load it first."
         ),
     )
     approval_mode: ApprovalModeChoice | None = Field(
@@ -278,7 +270,7 @@ def _task_create(
 
         return "\n".join(parts)
     except ValueError as exc:
-        return f"Error creating task: {exc}"
+        return f"Error creating task: {exc}" + (_STEPS_HELP if steps else "")
     except Exception as exc:
         logger.error("task_create error: %s", exc, exc_info=True)
         return f"Error creating task: {exc}"
@@ -504,7 +496,7 @@ class TaskTool(BaseTool):
                     "reminders. Monitoring ('check X and tell me when Y', 'alert me if W changes'): "
                     "schedule='interval_minutes:M', prompts, persistent_thread=true, and a prompt that ends "
                     "it with task_update(task_id='{{task_id}}', enabled=false) once done. "
-                    "Branching, approvals or notifications: steps instead of prompts."
+                    "Branching, approvals or notifications: steps (the Workflow guide has their format)."
                 ),
                 args_schema=_TaskCreateInput,
             ),
