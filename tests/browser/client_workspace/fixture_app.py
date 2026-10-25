@@ -5509,23 +5509,23 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
 
     from row_bot.learning.training import hardware, lockfile, releases, server_files
 
+    patched = (("hardware", "check", hardware), ("hardware", "peek", hardware),
+               ("hardware", "gpu_memory", hardware), ("hardware", "memory_free_for_training", hardware),
+               ("lockfile", "tools_platform", lockfile), ("server_files", "status", server_files))
     if action == "restore":
-        for module, attribute in (("hardware", "check"), ("hardware", "peek"), ("lockfile", "tools_platform"),
-                                  ("server_files", "status")):
+        for module, attribute, owner in patched:
             original = _l2x.pop(f"{module}.{attribute}", None)
             if original is not None:
-                setattr({"hardware": hardware, "lockfile": lockfile, "server_files": server_files}[module],
-                        attribute, original)
+                setattr(owner, attribute, original)
         _l2x.clear()
+        hardware.forget_memory_reading()
         from row_bot.learning import runner as runner_module
         from row_bot.learning import versions as learning_versions
 
         runner_module.forget_card_room()
         learning_versions._needs_path(None).unlink(missing_ok=True)  # O124's dismissed offer, among others
         return {"action": action}
-    for module, attribute, owner in (("hardware", "check", hardware), ("hardware", "peek", hardware),
-                                     ("lockfile", "tools_platform", lockfile),
-                                     ("server_files", "status", server_files)):
+    for module, attribute, owner in patched:
         _l2x.setdefault(f"{module}.{attribute}", getattr(owner, attribute))
     if action == "card":
         # name: 5090 (the 32 GB tier, with 128 GB of RAM and virtual memory), 5090-short (memory that can't
@@ -5542,6 +5542,14 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         found = hardware.classify(gpus, memory)
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found
+        # The fake card's memory now, and this computer's, never the real ones: a busy real card or a
+        # computer short of memory would make training wait in the spec.
+        card = max(gpus, key=lambda gpu: gpu.memory_mib, default=None)
+        reading = (card.used_mib or 0, card.memory_mib) if card else None
+        hardware.gpu_memory = lambda **kwargs: reading
+        memory_free = _l2x["hardware.memory_free_for_training"]
+        hardware.memory_free_for_training = lambda *, reader=None: memory_free(reader=reader or (lambda: memory))
+        hardware.forget_memory_reading()
         lockfile.tools_platform = lambda platforms=None: "windows-x64"  # a build for this computer
     elif action == "starting-model":  # O124: a setup made on another starting model (name: its id)
         from row_bot.application.settings_commands import write_learning_settings
