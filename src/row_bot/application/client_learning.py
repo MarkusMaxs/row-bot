@@ -4,7 +4,8 @@ The same shape as Insights (``client_insights.py``): a snapshot with a revision,
 that carry it, are admitted once (``admissions``) and answer with a receipt that holds the next
 snapshot. Everything here is plumbing for the surfaces (L1a): turning Learning on with the setup
 sheet's choices, off, pause and resume, Teach and its Undo, "Don't learn from this chat", the
-answer to the download ask, and deleting learning data. Nothing here diagnoses, tests or trains.
+answer to the download ask, and deleting learning data; the personal model's training (L2a) and
+its download, Remove engine and Delete starting model (L2b). Nothing here diagnoses or tests.
 
 Without the preview flag (O34) every read and command answers ``learning_unavailable``.
 """
@@ -30,8 +31,20 @@ logger = logging.getLogger(__name__)
 _ACTIONS = frozenset({
     "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
     "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
-    "discard_training", "use_recommended",
+    "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
+    "remove_engine", "delete_starting_model",
 })
+# The personal model's download (L2b): the training engine and the starting model.
+_DOWNLOAD_ACTIONS = frozenset({"start_download", "stop_download", "cancel_download", "remove_engine",
+                               "delete_starting_model"})
+_DOWNLOAD_ERRORS = {
+    "learning_off": "learning_off",
+    "learning_paused": "learning_paused",
+    "unavailable": "learning_download_unavailable",
+    "not_enough_disk": "learning_not_enough_disk",
+    "busy": "learning_download_busy",
+    "changed": "learning_download_changed",
+}
 # The personal model's training (L2a): the person's actions on the current run.
 _TRAINING_ACTIONS = frozenset({"train_now", "stop_training", "continue_training", "discard_training",
                                "use_recommended"})
@@ -44,7 +57,7 @@ _TRAINING_ERRORS = {
 _RUNNER_REASONS = frozenset({
     "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
     "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
-    "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused",
+    "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
 })
 _FAILURES = frozenset({"out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"})
 _SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
@@ -176,25 +189,67 @@ def _past_chats(settings: learning.LearningSettings) -> dict[str, Any]:
     return {"state": state, "total": max(0, found.total), "done": max(0, min(found.done, found.total))}
 
 
+_ENGINE_STATES = {"not_installed": "not_downloaded", "installed": "installed", "damaged": "damaged",
+                  "outdated": "outdated"}
+
+
+def _download_view(view: Any) -> dict[str, Any]:
+    """The download as the client shows it (L2b)."""
+
+    if view is None:
+        return {"state": "none", "phase": None, "done_bytes": 0, "total_bytes": 0, "needs_bytes": None,
+                "free_bytes": None, "failure": None}
+    return {
+        "state": view.state,
+        "phase": view.phase,
+        "done_bytes": max(0, int(view.done_bytes)),
+        "total_bytes": max(0, int(view.total_bytes)),
+        "needs_bytes": None if view.needs_bytes is None else max(0, int(view.needs_bytes)),
+        "free_bytes": None if view.free_bytes is None else max(0, int(view.free_bytes)),
+        "failure": view.failure,
+    }
+
+
+def _downloads_view() -> Any:
+    try:
+        from row_bot.learning.training import downloads
+
+        return downloads.get().view()
+    except Exception:
+        logger.debug("Learning could not read its download", exc_info=True)
+        return None
+
+
 def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
     from row_bot.learning.training import hardware
 
     model = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B)
-    # The engine and its weights are installed by L2b; until then only a configured engine
-    # (the fake trainer in tests and the browser fixture) is ever ready.
+    view = _downloads_view()
+    engine = _ENGINE_STATES.get(view.engine_state, "not_downloaded") if view is not None else "not_downloaded"
+    starting = view.model_state if view is not None else "not_downloaded"
+    # A training engine plugged in for tests and the browser fixture (the fake trainer) counts as
+    # installed with its starting model.
     runner_module = sys.modules.get("row_bot.learning.runner")
     runner = runner_module.loaded() if runner_module is not None else None
     try:
-        installed = runner is not None and bool(runner.supervisor.engine.ready())
+        configured = runner is not None and type(runner.supervisor.engine).__name__ != "LocalEngine" \
+            and bool(runner.supervisor.engine.ready())
     except Exception:
-        installed = False
+        configured = False
+    if configured:
+        engine, starting = "installed", "downloaded"
     return {
         "train_in_quiet_hours": settings.train_in_quiet_hours,
         "train_where": settings.train_where,
         "starting_model": _model_view(model),
         "download": settings.model_download,
-        "engine": "installed" if installed else "not_downloaded",
-        "engine_download_bytes": hardware.ENGINE_DOWNLOAD_BYTES,
+        "engine": engine,
+        "engine_bytes": view.engine_bytes if view is not None and engine == "installed" else 0,
+        "engine_download_bytes": (view.engine_download_bytes if view is not None and view.engine_download_bytes
+                                  else hardware.ENGINE_DOWNLOAD_BYTES),
+        "starting_model_state": starting if starting in ("downloaded", "damaged") else "not_downloaded",
+        "starting_model_bytes": view.model_bytes if view is not None and starting == "downloaded" else 0,
+        "download_state": _download_view(None if configured else view),
     }
 
 
@@ -376,6 +431,16 @@ def read_learning_training(*, validate: Callable[[], None]) -> dict[str, Any]:
     return result
 
 
+def read_learning_download(*, validate: Callable[[], None]) -> dict[str, Any]:
+    """Only the download (Monitor's row and the Personal model view poll this while it runs)."""
+
+    _require_preview()
+    validate()
+    result = _download_view(_downloads_view())
+    validate()
+    return result
+
+
 def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = False) -> dict[str, Any]:
     """What this computer can train (an ``nvidia-smi`` query, kept for the process) and its free space."""
 
@@ -399,7 +464,7 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
         "tier": tier(found.tier) if found.tier else None,
         "larger_tiers": [tier(item) for item in found.larger_tiers],
         "starting_models": [_model_view(item) for item in (found.tier.models if found.tier else ())],
-        "engine_download_bytes": hardware.ENGINE_DOWNLOAD_BYTES,
+        "engine_download_bytes": hardware.engine_download_bytes(found.variant),
         "free_bytes": free,
     }
     validate()
@@ -528,6 +593,18 @@ def _size_words(size: int) -> str:
     return f"{size}\u00a0bytes"
 
 
+def _progress_words(done: int, total: int) -> str:
+    """"3.1 of 4.6 GB" (UX §9): both numbers in the total's unit."""
+
+    giga = total >= 1_000_000_000
+    unit, name = (1_000_000_000, "GB") if giga else (1_000_000, "MB")
+
+    def show(value: int) -> str:
+        return f"{value / unit:.1f}".removesuffix(".0") if giga else str(round(value / unit))
+
+    return f"{show(min(max(0, done), total))} of {show(total)}\u00a0{name}"
+
+
 def _target(action: str, command: dict[str, Any]) -> str:
     if action in {"teach", "opt_out", "opt_in"}:
         return f"learning:chat:{command.get('conversation_id', '')}"
@@ -535,6 +612,8 @@ def _target(action: str, command: dict[str, Any]) -> str:
         return f"learning:signal:{command.get('signal_id', '')}"
     if action in _TRAINING_ACTIONS:
         return "learning:training"
+    if action in _DOWNLOAD_ACTIONS:
+        return "learning:download"
     return "learning:settings"
 
 
@@ -576,6 +655,95 @@ def _train(action: str, job_id: str) -> str:
     # The runner keeps it going (pauses on use, continues when free).
     runner_module.start_background()
     return summary
+
+
+def _download_words(view: Any, model_name: str) -> str:
+    """"Downloading the training engine and Qwen3.5 2B." (what is still missing)."""
+
+    engine = view.engine_state != "installed"
+    model = view.model_state != "downloaded"
+    if engine and model:
+        return f"Downloading the training engine and {model_name}."
+    if engine:
+        return "Downloading the training engine."
+    if model:
+        return f"Downloading {model_name}."
+    return "The training engine and starting model are downloaded."
+
+
+def _training_runs() -> bool:
+    runner_module = sys.modules.get("row_bot.learning.runner")
+    try:
+        return runner_module is not None and bool(runner_module.training_now())
+    except Exception:
+        return False
+
+
+def _download(action: str) -> str:
+    """The person's action on the personal model's download: what happened, in words."""
+
+    from row_bot.learning.training import downloads, engine, hardware, weights
+
+    task = downloads.get()
+    settings = learning.read_settings()
+    model = weights.MODELS.get(settings.starting_model, weights.QWEN35_2B)
+    name = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B).name
+    try:
+        if action == "start_download":
+            if _training_runs():
+                raise downloads.DownloadError("busy")
+            missing = task.view()
+            task.start()
+            return _download_words(missing, name)
+        if action == "stop_download":
+            view = task.stop("you")
+            if view.total_bytes:
+                return f"Download paused at {_progress_words(view.done_bytes, view.total_bytes)}."
+            return "Download paused."
+        if action == "cancel_download":
+            task.cancel()
+            _save({"model_download": "not_now"})
+            return "Download cancelled. What it had downloaded is deleted."
+        if task.running() or _training_runs():
+            raise downloads.DownloadError("busy")
+        if action == "remove_engine":
+            freed = engine.remove()
+            task.forget()
+            if settings.model_download == "waiting":
+                _save({"model_download": "not_now"})
+            return f"Training engine removed. {_size_words(freed)} freed."
+        freed = weights.delete(model)
+        task.forget()
+        if settings.model_download == "waiting":
+            _save({"model_download": "not_now"})
+        return f"{name} deleted. {_size_words(freed)} freed."
+    except downloads.DownloadError as error:
+        raise ClientPlatformError(_DOWNLOAD_ERRORS.get(error.code, "learning_download_changed")) from None
+
+
+def _answer_download(answer: str) -> str:
+    """Download / Not now from the ask: Download starts the download now (L2b)."""
+
+    _save({"model_download": "waiting" if answer == "download" else "not_now"})
+    if answer != "download":
+        return "Not downloading for now."
+    from row_bot.learning.training import downloads, hardware
+
+    settings = learning.read_settings()
+    name = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B).name
+    try:
+        if _training_runs():
+            raise downloads.DownloadError("busy")
+        task = downloads.get()
+        missing = task.view()
+        task.start()
+        return _download_words(missing, name)
+    except downloads.DownloadError as error:
+        if error.code == "not_enough_disk":
+            return "There isn’t enough free disk space for the download yet."
+        if error.code == "learning_paused":
+            return "Ready to download once you resume Learning."
+        return "Ready to download."
 
 
 def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], None]) -> dict:
@@ -678,8 +846,9 @@ def _perform(
         _save({"paused": False})
         summary = "Learning resumed."
     elif action == "answer_download":
-        _save({"model_download": "waiting" if command["download"] == "download" else "not_now"})
-        summary = "Waiting to download." if command["download"] == "download" else "Not downloading for now."
+        summary = _answer_download(command["download"])
+    elif action in _DOWNLOAD_ACTIONS:
+        summary = _download(action)
     elif action in {"opt_out", "opt_in"}:
         from row_bot.learning import scope
         from row_bot.learning.store import LearningStoreError
@@ -764,6 +933,7 @@ __all__ = [
     "execute_learning",
     "read_learning",
     "read_learning_conversation",
+    "read_learning_download",
     "read_learning_hardware",
     "read_learning_lessons",
     "read_learning_receipt",

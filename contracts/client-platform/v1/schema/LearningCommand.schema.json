@@ -92,7 +92,12 @@
         "stop_training",
         "continue_training",
         "discard_training",
-        "use_recommended"
+        "use_recommended",
+        "start_download",
+        "stop_download",
+        "cancel_download",
+        "remove_engine",
+        "delete_starting_model"
       ],
       "title": "Action",
       "type": "string"

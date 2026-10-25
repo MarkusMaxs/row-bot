@@ -4541,6 +4541,8 @@ export class ClientController {
     this.query(() => this.transport.learning?.(signal));
   learningTraining = (signal?: AbortSignal) =>
     this.query(() => this.transport.learningTraining?.(signal));
+  learningDownload = (signal?: AbortSignal) =>
+    this.query(() => this.transport.learningDownload?.(signal));
   learningHardware = (refresh = false, signal?: AbortSignal) =>
     this.query(() => this.transport.learningHardware?.(refresh, signal));
   learningConversation = (conversation: string, signal?: AbortSignal) =>

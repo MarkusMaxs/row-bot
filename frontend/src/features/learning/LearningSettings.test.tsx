@@ -9,7 +9,15 @@ import {
   type SettingsPage,
 } from '../settings/SettingsSnapshotPanels';
 import LearningSettings from './LearningSettings';
-import { fakeIO, GPU_8GB, learningSnapshot, NO_GPU } from './test-data';
+import {
+  downloadState,
+  fakeIO,
+  GPU_8GB,
+  installedModel,
+  learningSnapshot,
+  NO_GPU,
+  personalModel,
+} from './test-data';
 import type { LearningIO } from './learning-state';
 
 function mutation(page: SettingsPage): SettingsMutationIO {
@@ -287,15 +295,15 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
   expect(io.run).toHaveBeenCalledWith('turn_off');
 });
 
-it('a download waiting for the engine says so, and a pairing-only channel is explained', () => {
+it('an earlier Download answer reads as Ready to download, and a pairing-only channel is explained', () => {
   show(
     fakeIO(
       learningSnapshot({
         state: 'paused',
-        personal_model: {
-          ...learningSnapshot().personal_model,
+        personal_model: personalModel({
           download: 'waiting',
-        },
+          download_state: downloadState({ state: 'ready' }),
+        }),
         owner_unset_channels: [
           {
             channel: 'telegram',
@@ -312,10 +320,9 @@ it('a download waiting for the engine says so, and a pairing-only channel is exp
     screen.getByText('Paused: nothing new is recorded, tested or trained'),
   ).toBeVisible();
   expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
-  expect(screen.getAllByText('Waiting to download')).toHaveLength(2);
-  expect(
-    screen.getByText(/The download starts once this preview can install/),
-  ).toBeVisible();
+  expect(screen.getByText('Ready to download')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Download' })).toBeVisible();
+  expect(screen.getAllByText('Not downloaded')).toHaveLength(2);
   expect(
     screen.getByText(
       'Telegram chats are used once your Telegram user ID is set in Settings › Apps › Telegram.',
@@ -342,4 +349,51 @@ it('the hardware check that fails offers Check again', async () => {
     await within(sheet).findByText('NVIDIA GeForce RTX 5070 Laptop (8 GB)'),
   ).toBeVisible();
   expect(io.hardware).toHaveBeenLastCalledWith(true);
+});
+
+it('the engine and starting model on disk show their sizes, and Remove and Delete ask first', async () => {
+  const io = fakeIO(
+    learningSnapshot({ state: 'on', personal_model: installedModel() }),
+  );
+  show(io);
+
+  expect(screen.getByText('Installed, 4 GB')).toBeVisible();
+  expect(screen.getByText('On this computer, 4.6 GB')).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+  const remove = await screen.findByRole('alertdialog', {
+    name: 'Remove the training engine?',
+  });
+  expect(remove).toHaveTextContent('It frees 4 GB.');
+  expect(io.run).not.toHaveBeenCalled();
+  fireEvent.click(
+    within(remove).getByRole('button', { name: 'Remove engine' }),
+  );
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith('remove_engine');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  const remove2 = await screen.findByRole('alertdialog', {
+    name: 'Delete Qwen3.5 2B?',
+  });
+  expect(remove2).toHaveTextContent('It frees 4.6 GB.');
+  fireEvent.click(within(remove2).getByRole('button', { name: 'Delete' }));
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith('delete_starting_model');
+});
+
+it('an NVIDIA driver older than 570 says to update it, in the setup sheet', async () => {
+  const io = fakeIO(learningSnapshot(), {
+    hardware: { ...GPU_8GB, state: 'old_driver' },
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText('Update your NVIDIA driver to train here.'),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
 });

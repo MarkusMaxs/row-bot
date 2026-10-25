@@ -211,3 +211,29 @@ def test_training_starts_nothing_and_loads_nothing_while_learning_is_off(state, 
     started = {thread.name for thread in threading.enumerate()} - before
     assert not [name for name in started if name.startswith("learning-")]
     assert learning_files(data_dir) == settings_file
+
+
+@pytest.mark.parametrize("state", ["off", "paused", "on_without_the_preview_flag"])
+def test_memory_extraction_and_settings_saves_load_no_engine_and_download_nothing_while_off(
+        state, data_dir, no_learning_modules, monkeypatch):
+    """Memory extraction's check of the lease (O41) and a settings save (L2b's download stop):
+    with Learning off, paused, or on without the preview flag, neither loads the training
+    engine, its download or the lease, and nothing appears under the data folder's runtimes."""
+    import row_bot.memory_extraction as extraction
+    import row_bot.models as models
+    from row_bot import learning
+
+    if state == "paused":
+        save_learning_settings(data_dir, enabled=True, paused=True)
+    elif state == "on_without_the_preview_flag":
+        save_learning_settings(data_dir, enabled=True)
+        set_learning_preview(monkeypatch, False)
+    monkeypatch.setattr(models, "get_current_model", lambda: "model:ollama:qwen3:8b")
+    monkeypatch.setattr(extraction, "_read_conversations", lambda *args, **kwargs: 0)
+
+    extraction.run_extraction()
+    learning.settings_saved("paused", True)
+    learning.settings_saved("enabled", False)
+
+    assert _learning_modules() == ["row_bot.learning"]
+    assert not (data_dir / "runtimes").exists()

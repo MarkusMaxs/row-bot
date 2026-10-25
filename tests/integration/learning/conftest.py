@@ -12,6 +12,17 @@ def _learning_preview(monkeypatch):
     set_learning_preview(monkeypatch, True)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_graphics_card():
+    """Never ask the real ``nvidia-smi``: the hardware check reads as "no NVIDIA card"."""
+
+    from row_bot.learning.training import hardware
+
+    hardware.check(refresh=True, detector=lambda: hardware.HardwareCheck("no_gpu"))
+    yield
+    hardware.forget()
+
+
 @pytest.fixture
 def learning_dir(tmp_path, monkeypatch):
     """Learning on in an isolated data folder, with the process's capture writing there."""

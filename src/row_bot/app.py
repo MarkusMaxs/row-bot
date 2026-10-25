@@ -1207,10 +1207,12 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
         return False
     stop_performance_monitor()
     # Learning (preview), only if it ran: the past-chat import stops, training stops with its
-    # whole process tree (it continues from its newest checkpoint next time), and capture
-    # writes what it holds (a few seconds at most) and stops.
+    # whole process tree (it continues from its newest checkpoint next time), a download stops
+    # (it shows as paused next time), and capture writes what it holds (a few seconds at most)
+    # and stops.
     for _learning_name, _learning_stop in (("row_bot.learning.past_chats", "stop_background"),
                                            ("row_bot.learning.runner", "shutdown"),
+                                           ("row_bot.learning.training.downloads", "shutdown"),
                                            ("row_bot.learning.capture", "shutdown")):
         _learning_module = sys.modules.get(_learning_name)
         if _learning_module is not None:

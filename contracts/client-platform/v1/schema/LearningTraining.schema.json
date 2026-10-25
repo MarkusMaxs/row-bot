@@ -28,7 +28,8 @@
                 "data_unreadable",
                 "engine_error",
                 "learning_off",
-                "learning_paused"
+                "learning_paused",
+                "extraction"
               ],
               "type": "string"
             },

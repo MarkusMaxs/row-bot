@@ -2771,6 +2771,22 @@ const CATALOG: Record<string, Entry> = {
     'Training changed meanwhile. Check it and try again.',
     'review',
   ],
+  learning_download_unavailable: [
+    "This computer can't train a personal model, so nothing was downloaded.",
+    'none',
+  ],
+  learning_not_enough_disk: [
+    "There isn't enough free disk space for the download. Free some space, then try again.",
+    'none',
+  ],
+  learning_download_busy: [
+    'Something is downloading or training right now. Stop it first, then try again.',
+    'review',
+  ],
+  learning_download_changed: [
+    'The download changed meanwhile. Check it and try again.',
+    'review',
+  ],
   knowledge_changed: [
     'This memory changed. Try again with its current version.',
     'retry',

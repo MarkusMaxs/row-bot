@@ -4,7 +4,7 @@ import { GraduationCap } from 'lucide-react';
 import { clientError } from '../../api/errors';
 import type { LearningHardware, SettingsSnapshot } from '../../api/types';
 import { Button, Disclosure, Select, Toggle } from '../../ui/primitives';
-import { ModalTask, useNotify } from '../../ui/overlays';
+import { ModalTask, useNotify, useOverlay } from '../../ui/overlays';
 import {
   SettingsGroup,
   SettingsItem,
@@ -20,11 +20,17 @@ import {
   type SettingsMutationIO,
 } from '../settings/SettingsSnapshotPanels';
 import { useDeleteLearningData } from './DeleteLearningData';
-import type { LearningIO } from './learning-state';
+import {
+  useDownloadWatch,
+  type LearningAction,
+  type LearningIO,
+} from './learning-state';
 import { DownloadAsk, LearningSetupSheet } from './LearningSetup';
+import { CancelDownload, downloadView } from './PersonalModelDownload';
 import {
   limitMeaning,
   limitOptions,
+  percentWords,
   quietHoursWords,
   sizeWords,
   tokenWords,
@@ -108,8 +114,10 @@ export default function LearningSettings({
   onOpenLearning: () => void;
 }) {
   const notify = useNotify();
+  const overlay = useOverlay();
   const phone = usePhone();
   const [setupOpen, setSetupOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [askHardware, setAskHardware] = useState<LearningHardware | null>(null);
   const [confirmOff, setConfirmOff] = useState(false);
@@ -117,6 +125,8 @@ export default function LearningSettings({
   const [error, setError] = useState('');
   const deleteData = useDeleteLearningData(io, onSettingsChanged);
   const snapshot = io.snapshot;
+  // The download's progress stays fresh while Settings › Learning is open.
+  useDownloadWatch(io);
   // A saved Learning setting also changes Learning's own state.
   const mutation: SettingsMutationIO = {
     ...learningMutation,
@@ -136,6 +146,18 @@ export default function LearningSettings({
     setSetupOpen(false);
     onSettingsChanged();
     announceOn();
+  }
+
+  async function download(action: LearningAction) {
+    setBusy(true);
+    setError('');
+    try {
+      notify((await io.run(action)).summary);
+    } catch (cause) {
+      setError(clientError(cause).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function command(action: 'turn_off' | 'pause' | 'resume') {
@@ -173,11 +195,9 @@ export default function LearningSettings({
         onOpenChange={setAskOpen}
         io={io}
         hardware={askHardware}
-        onAnswered={(download) => {
+        onAnswered={(_download, summary) => {
           setAskOpen(false);
-          notify(
-            download ? 'Waiting to download.' : 'Not downloading for now.',
-          );
+          notify(summary);
         }}
       />
     </>
@@ -238,8 +258,61 @@ export default function LearningSettings({
   const paused = snapshot.state === 'paused';
   const spending = snapshot.spending;
   const model = snapshot.personal_model;
-  const waiting = model.download === 'waiting';
-  const downloadStatus = waiting ? 'Waiting to download' : 'Not downloaded';
+  const transfer = model.download_state;
+  const view = downloadView(model);
+  const running = transfer.state === 'downloading';
+  const here = learning.train_where === 'this_computer';
+  const openAsk = () => {
+    setAskHardware(null);
+    void io.hardware().then(setAskHardware, () => undefined);
+    setAskOpen(true);
+  };
+  const progress = running
+    ? `Downloading · ${percentWords(transfer.done_bytes, transfer.total_bytes)}`
+    : '';
+  const engineStatus =
+    model.engine === 'installed'
+      ? `Installed, ${sizeWords(model.engine_bytes)}`
+      : running && transfer.phase !== 'model'
+        ? transfer.phase === 'engine'
+          ? progress
+          : 'Installing…'
+        : model.engine === 'damaged'
+          ? 'Damaged'
+          : model.engine === 'outdated'
+            ? 'Needs an update'
+            : transfer.state === 'paused'
+              ? 'Paused'
+              : 'Not downloaded';
+  const modelStatus =
+    model.starting_model_state === 'downloaded'
+      ? `On this computer, ${sizeWords(model.starting_model_bytes)}`
+      : running && transfer.phase === 'model'
+        ? progress
+        : model.starting_model_state === 'damaged'
+          ? 'Damaged'
+          : transfer.state === 'paused'
+            ? 'Paused'
+            : 'Not downloaded';
+  const showDownload = !running && !view && here;
+  const removeEngine = (opener: HTMLElement) =>
+    overlay.open({
+      kind: 'alert',
+      title: 'Remove the training engine?',
+      description: `It frees ${sizeWords(model.engine_bytes)}. Training needs it, so nothing trains until you download it again (${sizeWords(model.engine_download_bytes)}).`,
+      confirmLabel: 'Remove engine',
+      returnFocusTo: opener,
+      onConfirm: () => void download('remove_engine'),
+    });
+  const deleteModel = (opener: HTMLElement) =>
+    overlay.open({
+      kind: 'alert',
+      title: `Delete ${model.starting_model.name}?`,
+      description: `It frees ${sizeWords(model.starting_model_bytes)}. Training starts from it, so nothing trains until you download it again.`,
+      confirmLabel: 'Delete',
+      returnFocusTo: opener,
+      onConfirm: () => void download('delete_starting_model'),
+    });
   return (
     <div className="stack settings-snapshot-page learning-settings">
       {sheets}
@@ -426,33 +499,110 @@ export default function LearningSettings({
         />
         <SettingsItem
           label="Training engine"
-          help={`About ${sizeWords(model.engine_download_bytes)} to download.`}
-          status={<StatusLine>{downloadStatus}</StatusLine>}
-        />
-        <SettingsItem
-          label="Starting model"
-          help={`${model.starting_model.name} · ${model.starting_model.licence} · ${sizeWords(model.starting_model.download_bytes)}`}
-          status={<StatusLine>{downloadStatus}</StatusLine>}
+          anchor="learning-engine"
+          help={
+            model.engine === 'installed'
+              ? 'Trains your personal model on this computer.'
+              : `About ${sizeWords(model.engine_download_bytes)} to download.`
+          }
+          status={
+            <StatusLine
+              tone={model.engine === 'damaged' ? 'warning' : undefined}
+              pulse={running && transfer.phase !== 'model'}
+            >
+              {engineStatus}
+            </StatusLine>
+          }
           trailing={
-            !waiting && learning.train_where === 'this_computer' ? (
+            model.engine === 'installed' ? (
               <Button
                 className="small"
-                onClick={() => {
-                  setAskHardware(null);
-                  void io.hardware().then(setAskHardware, () => undefined);
-                  setAskOpen(true);
-                }}
+                disabled={busy || running}
+                onClick={(event) => removeEngine(event.currentTarget)}
               >
+                Remove
+              </Button>
+            ) : showDownload && model.engine === 'not_downloaded' ? (
+              <Button className="small" onClick={openAsk}>
                 Download…
               </Button>
             ) : undefined
           }
         />
-        {waiting && (
-          <p className="learning-muted learning-group-note">
-            The download starts once this preview can install the training
-            engine. Nothing has been downloaded yet.
-          </p>
+        <SettingsItem
+          label="Starting model"
+          anchor="learning-starting-model"
+          help={`${model.starting_model.name} · ${model.starting_model.licence} · from Hugging Face${
+            model.starting_model_state === 'downloaded'
+              ? ''
+              : ` · ${sizeWords(model.starting_model.download_bytes)}`
+          }`}
+          status={
+            <StatusLine
+              tone={
+                model.starting_model_state === 'damaged' ? 'warning' : undefined
+              }
+              pulse={running && transfer.phase === 'model'}
+            >
+              {modelStatus}
+            </StatusLine>
+          }
+          trailing={
+            model.starting_model_state === 'downloaded' ? (
+              <Button
+                className="small"
+                disabled={busy || running}
+                onClick={(event) => deleteModel(event.currentTarget)}
+              >
+                Delete
+              </Button>
+            ) : showDownload &&
+              model.engine === 'installed' &&
+              model.starting_model_state === 'not_downloaded' ? (
+              <Button className="small" onClick={openAsk}>
+                Download…
+              </Button>
+            ) : undefined
+          }
+        />
+        {view && here && (
+          <SettingsItem
+            label="Download"
+            anchor="learning-download"
+            help={[view.detail, view.note].filter(Boolean).join(' ')}
+            status={
+              <StatusLine
+                tone={
+                  transfer.state === 'failed' ||
+                  transfer.state === 'not_enough_disk'
+                    ? 'warning'
+                    : undefined
+                }
+                pulse={running}
+              >
+                {view.title}
+              </StatusLine>
+            }
+            trailing={
+              <span className="learning-actions-inline">
+                {view.actions.map((item) => (
+                  <Button
+                    key={`${item.action}-${item.label}`}
+                    className="small"
+                    variant={item.primary ? 'primary' : undefined}
+                    disabled={busy}
+                    onClick={() =>
+                      item.action === 'cancel_download'
+                        ? setCancelling(true)
+                        : void download(item.action)
+                    }
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </span>
+            }
+          />
         )}
       </SettingsGroup>
       <SkillsWhileChatting
@@ -479,6 +629,12 @@ export default function LearningSettings({
           }
         />
       </SettingsGroup>
+      <CancelDownload
+        open={cancelling}
+        onOpenChange={setCancelling}
+        bytes={transfer.done_bytes}
+        onConfirm={() => void download('cancel_download')}
+      />
       <ModalTask
         open={confirmOff}
         onOpenChange={setConfirmOff}

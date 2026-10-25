@@ -28,11 +28,14 @@ import {
   ProcessOutputDrawer,
 } from '../shell/BackgroundProcess';
 import {
+  downloadLive,
   learningIsOn,
   trainingLive,
+  useDownloadWatch,
   useTrainingWatch,
   type LearningIO,
 } from '../learning/learning-state';
+import { DownloadMonitorRow } from '../learning/PersonalModelDownload';
 import { TrainingMonitorRow } from '../learning/TrainingMonitorRow';
 
 export type BackgroundProcessesIo = ProcessIo & {
@@ -53,7 +56,7 @@ export default function BackgroundProcesses({
   learning = null,
 }: {
   io: BackgroundProcessesIo;
-  /** Learning (preview), when this build has it: the personal model's training run. */
+  /** Learning (preview), when this build has it: the personal model's training run and download. */
   learning?: LearningIO | null;
 }) {
   const overlay = useOverlay();
@@ -73,7 +76,31 @@ export default function BackgroundProcesses({
       ? training
       : null;
   const [stoppingTraining, setStoppingTraining] = useState(false);
-  const live = running.length + (trainingRow ? 1 : 0);
+  // …and its download (the training engine, the starting model), one row while it runs.
+  useDownloadWatch(learning);
+  const personal = learning?.snapshot?.personal_model;
+  const downloadRow =
+    learning &&
+    personal &&
+    learningIsOn(learning) &&
+    downloadLive(personal.download_state)
+      ? personal
+      : null;
+  const [stoppingDownload, setStoppingDownload] = useState(false);
+  const live = running.length + (trainingRow ? 1 : 0) + (downloadRow ? 1 : 0);
+
+  async function stopDownload() {
+    if (!learning || !downloadRow) return;
+    setStoppingDownload(true);
+    setError('');
+    try {
+      await learning.run('stop_download');
+    } catch (cause) {
+      setError(clientError(cause).message);
+    } finally {
+      setStoppingDownload(false);
+    }
+  }
 
   async function stopTraining() {
     if (!learning || !trainingRow) return;
@@ -182,6 +209,7 @@ export default function BackgroundProcesses({
                   overlay.close();
                   void stop(running);
                   if (trainingRow) void stopTraining();
+                  if (downloadRow) void stopDownload();
                 },
               })
             }
@@ -211,6 +239,14 @@ export default function BackgroundProcesses({
               training={trainingRow}
               busy={stoppingTraining}
               onStop={() => void stopTraining()}
+              onOpen={io.openLearning}
+            />
+          )}
+          {downloadRow && (
+            <DownloadMonitorRow
+              model={downloadRow}
+              busy={stoppingDownload}
+              onStop={() => void stopDownload()}
               onOpen={io.openLearning}
             />
           )}

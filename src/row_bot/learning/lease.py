@@ -12,6 +12,9 @@ other:
 - **Dream Cycle runs first in quiet hours**; training starts after it, and Dream waits
   while training holds the lease (:func:`training_holds`, read by ``dream_cycle``
   through ``sys.modules`` so it costs nothing while Learning never loaded).
+- **Memory extraction on a local model** would share the graphics card (O41): training
+  doesn't start while it runs, and it waits while training holds the lease (it reads
+  :func:`training_holds` the same way). On a cloud model they don't meet.
 - **Training holds the lease** while its worker runs (``claim`` / ``release``).
 
 :class:`ResourceLease` reads what is running from the app's own records (the
@@ -65,6 +68,7 @@ class LeaseState:
     workflow: bool = False  # a workflow running
     indexing: bool = False  # documents being read (embeddings, indexing)
     dream: bool = False  # Dream Cycle running
+    extraction: bool = False  # memory extraction running on a local model (O41)
     # Seconds since the person last sent something or switched conversations (None: unknown).
     since_activity: float | None = None
 
@@ -72,7 +76,8 @@ class LeaseState:
     def busy(self) -> bool:
         """Something heavy is running: training doesn't start (Train now waits for it)."""
 
-        return self.chat_local or self.chat_cloud or self.workflow or self.indexing or self.dream
+        return (self.chat_local or self.chat_cloud or self.workflow or self.indexing or self.dream
+                or self.extraction)
 
     def used_since(self, seconds: float) -> bool:
         """The person did something in the last ``seconds`` (since training started, say)."""
@@ -97,6 +102,8 @@ class LeaseState:
             return "workflow"
         if self.indexing:
             return "indexing"
+        if self.extraction:
+            return "extraction"
         if self.dream:
             return "dream"
         return None
@@ -166,6 +173,17 @@ def _dreaming() -> bool:
         return False
 
 
+def _extracting() -> bool:
+    """Memory extraction runs now on a model that runs on this computer (O41)."""
+
+    extraction = sys.modules.get("row_bot.memory_extraction")
+    try:
+        model = extraction.running_model() if extraction is not None else None
+    except Exception:
+        return False
+    return bool(model) and model_is_local(str(model))
+
+
 def _since_activity() -> float | None:
     extraction = sys.modules.get("row_bot.memory_extraction")
     try:
@@ -185,6 +203,7 @@ class ResourceLease:
         workflows: Callable[[], bool] = _workflows_running,
         indexing: Callable[[], bool] = _indexing,
         dreaming: Callable[[], bool] = _dreaming,
+        extracting: Callable[[], bool] = _extracting,
         since_activity: Callable[[], float | None] = _since_activity,
         indexing_every: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
@@ -194,6 +213,7 @@ class ResourceLease:
         self._workflows = workflows
         self._indexing = indexing
         self._dreaming = dreaming
+        self._extracting = extracting
         self._since_activity = since_activity
         self._indexing_every = indexing_every
         self._clock = clock
@@ -222,6 +242,7 @@ class ResourceLease:
             workflow=bool(self._workflows()),
             indexing=self._indexing_now(),
             dream=bool(self._dreaming()),
+            extraction=bool(self._extracting()),
             since_activity=self._since_activity(),
         )
 
