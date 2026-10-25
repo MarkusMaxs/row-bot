@@ -5,13 +5,18 @@ import {
   ChevronLeft,
   Clapperboard,
   Eye,
+  EyeOff,
   Image,
   MessageSquare,
-  Pin,
   Search,
+  Star,
 } from 'lucide-react';
 import type { ClientController } from '../../api/controller';
-import type { CachedModelPage, ModelCatalogSummary } from '../../api/types';
+import type {
+  CachedModelPage,
+  ModelCatalogSummary,
+  ModelVisibilityState,
+} from '../../api/types';
 import { clientError } from '../../api/errors';
 import {
   Button,
@@ -46,32 +51,45 @@ function reads(tokens: number) {
     : `${Math.round(tokens / 1000)}K`;
 }
 
+type Row = CachedModelPage['items'][number];
+
+/** Where a model is listed, in the words On this computer uses (U10). */
+function listing(model: Row, surface: Surface) {
+  if (model.favourite_rank != null) return 'Listed first';
+  if (model.hidden) return 'Under More models';
+  return model.pinned_surfaces.includes(surface) ? 'Listed' : '';
+}
+
+/** A row with the marks a saved preference gives it. */
+function marked(model: Row, state: ModelVisibilityState): Row {
+  const rank = state.favourites.indexOf(model.selection_ref) + 1;
+  return {
+    ...model,
+    favourite_rank: rank || null,
+    hidden: !rank && state.hidden.includes(model.selection_ref),
+  };
+}
+
 /**
  * Settings › Models › Catalog (B229): search, the job as filter chips, then
- * the providers; a provider (or a search) lists its models with a pin and
- * "use for this job". Rows load only once a provider is opened or a search
- * runs, and then page by page.
+ * the providers; a provider (or a search) lists its models with the same
+ * star and eye as On this computer (U10: a starred model is listed first in
+ * every model list; a hidden one waits under More models) and "use for this
+ * job". Rows load only once a provider is opened or a search runs, and then
+ * page by page.
  */
 export default function ModelCatalog({
   controller,
   initialProvider = '',
   defaults,
   onDefault,
-  onPin,
   onChanged,
   refreshSignal = 0,
 }: {
   controller: ClientController;
   initialProvider?: string;
   defaults: Partial<Record<Surface, string>>;
-  onDefault: (
-    surface: Surface,
-    model: CachedModelPage['items'][number],
-  ) => Promise<void>;
-  onPin: (
-    surface: Surface,
-    model: CachedModelPage['items'][number],
-  ) => Promise<void>;
+  onDefault: (surface: Surface, model: Row) => Promise<void>;
   onChanged: () => Promise<void>;
   refreshSignal?: number;
 }) {
@@ -172,41 +190,45 @@ export default function ModelCatalog({
     }
   }
 
-  async function act(
-    kind: 'default' | 'pin',
-    model: CachedModelPage['items'][number],
-  ) {
+  async function act(kind: 'default' | 'favourite' | 'hide', model: Row) {
     if (busyRef) return;
     setBusyRef(model.selection_ref);
     setError('');
     try {
-      if (kind === 'pin') await onPin(surface, model);
-      else await onDefault(surface, model);
-      await onChanged();
-      setSummaryReload((value) => value + 1);
       // Keep the loaded rows (and the reader's place): refetching would reset
       // to the first page and drop a row reached through "Show more models".
-      // Pin toggles this surface; choosing a default also pins it.
-      const pinned =
-        kind === 'default' || !model.pinned_surfaces.includes(surface);
+      let update: (item: Row) => Row;
+      if (kind === 'default') {
+        await onDefault(surface, model);
+        // Choosing a default also lists the model for that job.
+        update = (item) =>
+          item.selection_ref !== model.selection_ref
+            ? item
+            : {
+                ...item,
+                pinned_surfaces: [
+                  ...new Set([...item.pinned_surfaces, surface]),
+                ],
+              };
+      } else {
+        const favourite = model.favourite_rank != null;
+        const saved = await controller.updateModelVisibility({
+          action:
+            kind === 'favourite'
+              ? favourite
+                ? 'unfavourite'
+                : 'favourite'
+              : model.hidden
+                ? 'show'
+                : 'hide',
+          model_ref: model.selection_ref,
+        });
+        update = (item) => marked(item, saved);
+      }
+      await onChanged();
+      setSummaryReload((value) => value + 1);
       setPage((current) =>
-        current
-          ? {
-              ...current,
-              items: current.items.map((item) =>
-                item.selection_ref !== model.selection_ref
-                  ? item
-                  : {
-                      ...item,
-                      pinned_surfaces: pinned
-                        ? [...new Set([...item.pinned_surfaces, surface])]
-                        : item.pinned_surfaces.filter(
-                            (value) => value !== surface,
-                          ),
-                    },
-              ),
-            }
-          : current,
+        current ? { ...current, items: current.items.map(update) } : current,
       );
     } catch (cause) {
       setError(clientError(cause).message);
@@ -309,7 +331,7 @@ export default function ModelCatalog({
                   <small>
                     {item.total} {surfaceLabel.toLowerCase()} model
                     {item.total === 1 ? '' : 's'} · {item.ready} ready
-                    {item.pinned > 0 ? ` · ${item.pinned} pinned` : ''}
+                    {item.pinned > 0 ? ` · ${item.pinned} listed` : ''}
                   </small>
                 </div>
                 <Button
@@ -369,9 +391,10 @@ export default function ModelCatalog({
                 model.configured &&
                 model.runtime_ready &&
                 model.installed === true;
-              const pinned = model.pinned_surfaces.includes(surface);
+              const favourite = model.favourite_rank != null;
               const isDefault = defaults[surface] === model.selection_ref;
               const meta = [
+                listing(model, surface),
                 model.provider_display_name || humanizeToken(model.provider_id),
                 model.context_window
                   ? `reads ${reads(model.context_window)}`
@@ -421,17 +444,38 @@ export default function ModelCatalog({
                   <div className="settings-model-row-actions">
                     <IconButton
                       size="sm"
-                      label={`${pinned ? 'Unpin' : 'Pin'} ${model.display_name} for ${surface}`}
-                      pressed={pinned}
-                      className="settings-catalog-pin"
-                      disabled={!usable || !!busyRef}
-                      onClick={() => void act('pin', model)}
+                      label={
+                        favourite
+                          ? `Remove ${model.display_name} from favourites`
+                          : `Add ${model.display_name} to favourites`
+                      }
+                      pressed={favourite}
+                      className="settings-model-favourite"
+                      disabled={(!usable && !favourite) || !!busyRef}
+                      onClick={() => void act('favourite', model)}
                     >
-                      <Pin
+                      <Star
                         size={14}
-                        fill={pinned ? 'currentColor' : 'none'}
+                        fill={favourite ? 'currentColor' : 'none'}
                         aria-hidden
                       />
+                    </IconButton>
+                    <IconButton
+                      size="sm"
+                      label={
+                        model.hidden
+                          ? `Show ${model.display_name}`
+                          : `Hide ${model.display_name}`
+                      }
+                      disabled={!!busyRef}
+                      onClick={() => void act('hide', model)}
+                    >
+                      {/* The eye shows the state (open: listed), as on this computer. */}
+                      {model.hidden ? (
+                        <EyeOff size={14} aria-hidden />
+                      ) : (
+                        <Eye size={14} aria-hidden />
+                      )}
                     </IconButton>
                     {surface !== 'voice' && (
                       <IconButton

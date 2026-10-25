@@ -528,7 +528,7 @@ def test_snapshot_rejects_unknown_existing_candidate_without_deleting(snapshot_j
 
 @pytest.fixture
 def processing(tmp_path, monkeypatch):
-    from row_bot import document_jobs as jobs, embedding_providers as embeddings, embedding_config
+    from row_bot import document_index, document_jobs as jobs, embedding_providers as embeddings, embedding_config
     from row_bot.application import document_processing as api, document_upload_commands as uploads
     from row_bot.providers import runtime, auth_store
     from row_bot.runtime import admissions
@@ -542,8 +542,10 @@ def processing(tmp_path, monkeypatch):
     state = {"revoked":False,"secret":"captured-secret"}
     monkeypatch.setattr(runtime,"get_provider_secret",lambda provider:state["secret"])
     monkeypatch.setattr(auth_store,"get_provider_secret",lambda provider:state["secret"])
-    monkeypatch.setattr(embeddings,"get_embedding_config",lambda:dict(cfg))
-    monkeypatch.setattr(embedding_config,"get_embedding_config",lambda:dict(cfg))
+    # Every reader of the settings, each through monkeypatch: a module first imported under the patch would keep
+    # the cloud reader for the rest of the worker (document_index did, and later document searches went cloud).
+    for module in (embeddings, embedding_config, document_index):
+        monkeypatch.setattr(module,"get_embedding_config",lambda:dict(cfg))
     def validate():
         if state["revoked"]:
             raise RuntimeError("session revoked")

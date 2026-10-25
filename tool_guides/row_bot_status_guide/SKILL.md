@@ -13,6 +13,7 @@ ROW-BOT STATUS & SELF-MANAGEMENT:
 QUERYING STATUS (row_bot_status):
 - Use category='overview' for a full summary across all areas.
 - Use category='version' to check the Row-Bot version number.
+- Use category='features' for what Row-Bot can do and how each feature is set up.
 - Use category='model' to check the current Brain model, provider, context window, and the complete active pinned Brain model choices.
 - Use category='channels' to see which messaging channels are running.
 - Use category='memory' for knowledge graph entity/relation counts.

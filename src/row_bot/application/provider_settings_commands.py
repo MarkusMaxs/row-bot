@@ -78,8 +78,12 @@ def execute_provider_settings_command(*, owner_id: str, key: str, command: dict,
     current_authority()
     mapped = {**command, "expected_revision": intent["provider_revision"],
               "wire_expected_revision": command.get("expected_revision")}
-    return credentials.apply_credential_command(intent["provider_id"], owner_id=owner_id, key=key,
+    result = credentials.apply_credential_command(intent["provider_id"], owner_id=owner_id, key=key,
         command=mapped, validate=current_authority, invalidate=invalidate)
+    # A key saved or restored connects the provider, a cleared one disconnects it: Settings › Models shows it (B411).
+    from row_bot.providers.model_catalog_cache import provider_connection_changed
+    provider_connection_changed(intent["provider_id"], connected=intent["operation"] != "clear")
+    return result
 
 
 def read_provider_settings_receipt(provider_id: str, *, owner_id: str, command_id: str,

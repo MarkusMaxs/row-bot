@@ -65,6 +65,33 @@ _MESSAGES = {
     "tools_unreadable": "Row-Bot couldn't read the list of what this app can do, so it can't ask you about it. "
                         "Retry; if it happens again, the app's list is larger or differently shaped than Row-Bot accepts.",
 }
+# What a step was doing, for a failure no message above explains: it says what failed, never only that
+# something did (B398).
+_DOING = {"consent": "add {name}", "inputs": "save {name}'s settings", "runtime": "prepare {name}",
+          "local_app_check": "check that {name} is open", "sign_in": "sign in to {name}",
+          "allow_changes": "let {name} make changes", "test": "check {name}'s connection",
+          "access": "save what {name} can do", "enable": "turn on {name}"}
+# Why, in words, for the problems an owner reports that a person can act on.
+_WHY = {
+    "registry_recipe_changed": "its listing in the MCP Registry changed since you opened it. Start again to see it "
+                               "as it is now.",
+    "registry_entry_removed": "it's no longer listed in the MCP Registry.",
+    "registry_recipe_unsupported": "its listing asks for setup Row-Bot can't do safely.",
+    "registry_identity_missing": "its listing doesn't say which server it is.",
+    "source_unreachable": "Row-Bot couldn't reach the MCP Registry to check its listing. Check your connection, "
+                          "then retry.",
+    "mcp_inputs_required": "a setting it needs is empty. Open its settings and fill it in.",
+    "input_invalid": "one of its settings isn't a value it accepts. Open its settings and check them.",
+}
+_UNEXPECTED = "something unexpected went wrong. Retry; if it happens again, Row-Bot's log has the details."
+
+
+def _failure(record: dict, step: dict | None, code: object) -> str:
+    """A failed step's message when nothing more specific explains it: what failed, and why if known."""
+    doing = _DOING.get(step["type"], "finish this step") if step else "finish setting it up"
+    return f"Couldn't {doing.format(name=record['name'])}: {_WHY.get(str(code).split(':')[0], _UNEXPECTED)}"
+
+
 # A Python server built for an older MCP SDK fails at import with one of these (F22).
 _OLD_SDK = re.compile(r"\b(ImportError|ModuleNotFoundError|AttributeError)\b")
 _CHATS_OFF = "Connected. To use it in chats, turn on Use apps in Apps › Advanced."
@@ -241,13 +268,21 @@ def _fields(cfg: dict, setup: dict, app: apps.App | None) -> list[dict]:
               "default": "", "choices": [], "help_url": help_url, "description": "", "format": "string", "saved": stored}
              for b in setup["bindings"] if b["kind"] != "input"]
     for item in setup["inputs"]:
-        found.append({"key": item["key"], "label": inputs.label(item["label"], keep), "secret": item["secret"],
+        label, description = _shown(item, keep)
+        found.append({"key": item["key"], "label": label, "secret": item["secret"],
                       "required": item["required"], "target": item["target"], "name": item["name"], "template": "",
                       "choices": item["choices"], "default": "" if item["secret"] else str(saved.get(item["key"]) or item["default"]),
                       "help_url": item.get("help_url") or (help_url if item["secret"] else ""),
-                      "description": sources.plain_text(item.get("description", ""), 512), "format": item.get("format", "string"),
+                      "description": description, "format": item.get("format", "string"),
                       "saved": item["secret"] and stored})
     return found[:32]
+
+
+def _shown(item: dict, keep: tuple[str, ...]) -> tuple[str, str]:
+    """A declared input's name and hint as the person reads them: what Row-Bot recognises it as, else its own."""
+    known = inputs.recognised(item)
+    return (known.get("label") or inputs.label(item["label"], keep),
+            known.get("description") or sources.plain_text(item.get("description", ""), 512))
 
 
 def settings(row: dict, cfg: dict) -> list[dict]:
@@ -709,7 +744,7 @@ def _run(ctx: Context, record: dict) -> dict:
             record.update(state="uncertain", pause=None, message=_MESSAGES["change_unconfirmed"])
             _save(record)
         else:
-            message = getattr(error, "message", "") or _MESSAGES.get(code, "This step could not finish. Retry, or open its settings.")
+            message = getattr(error, "message", "") or _MESSAGES.get(code) or _failure(record, step, code)
             if code != "plan_cancelled":  # The code only (never a value): what support needs when the message is general.
                 logger.warning("A %s step stopped: %s", step["type"] if step else "plan", str(code)[:80],
                                exc_info=not isinstance(error, PlanError))
@@ -1081,9 +1116,12 @@ def _save_inputs(ctx: Context, record: dict, step: dict) -> str:
         plain, secret = inputs.values(declared, {**(cfg.get("input_values") or {}), **given})
     except inputs.InputError as error:
         key = str(error).partition(":")[2]
-        label = next((item["label"] for item in declared if item["key"] == key), "a setting")
+        item = next((item for item in declared if item["key"] == key), None)
+        app = apps.match(facts._mcp_refs(cfg))
+        label = _shown(item, (app.name,) if app else ())[0] if item else "a setting"
+        problem = inputs.recognised(item or {}).get("problem") or "it isn't a value this app accepts."
         step["message"] = (f"Add {label} to continue." if str(error).startswith("input_required") else
-                           f"Check {label}: it isn't a value this app accepts.")[:512]
+                           f"Check {label}: {problem}")[:512]
         return "inputs"
     if not keeping and (not all(keys.values()) or (setup["auth_mode"] == "api_key" and not (keys or secret)
                                                     and not setup["credential_configured"])):

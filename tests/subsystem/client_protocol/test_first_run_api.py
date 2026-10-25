@@ -78,17 +78,15 @@ def test_first_pick_becomes_the_default(tmp_path, monkeypatch, fake_ollama):
 
 def test_setup_shows_the_real_state(tmp_path, monkeypatch):
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(client_onboarding, "_developer_enabled", lambda: True)
     (tmp_path / "app_config.json").write_text(json.dumps({
         "setup_complete": True, "onboarding_version": 4,
         "onboarding_completed_steps": ["models", "voice"],
         "onboarding_skipped_steps": ["developer", "channels"],
     }), encoding="utf-8")
     snapshot = client_onboarding.read_onboarding()
-    # Developer tools are on by default (decision 13): done, never "skipped".
-    assert "developer" in snapshot["live_done"]
-    assert "developer" in snapshot["completed_steps"]
-    assert snapshot["skipped_steps"] == ["apps"]  # Channels joined Apps: a step skipped then reads as Apps.
+    # Developer tools being on by default (decision 13) isn't something the person set up.
+    assert "developer" not in snapshot["live_done"]
+    assert snapshot["skipped_steps"] == ["developer", "apps"]  # Channels joined Apps: a step skipped then reads as Apps.
     # "Models" is done only while a default model exists.
     assert "models" not in snapshot["completed_steps"]
     (tmp_path / "model_settings.json").write_text(json.dumps({"model": "model:codex:gpt-5.6-sol"}), encoding="utf-8")
@@ -232,9 +230,9 @@ def test_local_models_carry_favourites_hidden_and_suggested_picks(tmp_path, monk
     fake_ollama.update(running=True, models=[
         "gemma3:4b", "gpt-oss:20b", "llama3.1:8b", "mistral:7b", "nomic-embed-text:latest", "qwen3:32b", "qwen3:8b",
     ])
-    # Nothing chosen: the first three tool-using chat models are suggested.
+    # Nothing chosen: the three largest tool-using chat models are suggested (N16).
     rows = {row["name"]: row for row in client_first_run.detect_local_runtime()["models"]}
-    assert [name for name, row in rows.items() if row.get("recommended")] == ["gpt-oss:20b", "llama3.1:8b", "mistral:7b"]
+    assert [name for name, row in rows.items() if row.get("recommended")] == ["gpt-oss:20b", "llama3.1:8b", "qwen3:32b"]
     assert not any("favourite_rank" in row or "hidden" in row for row in rows.values())
 
     (tmp_path / "model_settings.json").write_text(json.dumps({"model": "model:ollama:qwen3:8b"}), encoding="utf-8")
@@ -244,9 +242,34 @@ def test_local_models_carry_favourites_hidden_and_suggested_picks(tmp_path, monk
     rows = {row["name"]: row for row in client_first_run.detect_local_runtime()["models"]}
     assert rows["gemma3:4b"]["favourite_rank"] == 1
     assert rows["llama3.1:8b"]["hidden"] is True
-    # Hidden models aren't suggested, and the saved default is picked before
-    # the runtime's order would reach it (qwen3:32b misses out).
+    # Hidden models aren't suggested, and the saved default is picked first.
     assert sorted(name for name, row in rows.items() if row.get("recommended")) == [
-        "gpt-oss:20b", "mistral:7b", "qwen3:8b",
+        "gpt-oss:20b", "qwen3:32b", "qwen3:8b",
     ]
     assert "removed:1b" not in rows and "recommended" not in rows["nomic-embed-text:latest"]
+
+
+def test_setup_suggests_the_most_capable_models_and_never_an_uncensored_variant(tmp_path, monkeypatch, fake_ollama):
+    """N16: a fresh profile suggested an "abliterated" DeepSeek and mistral:7b ahead of qwen3.8:27b."""
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    fake_ollama.update(running=True, models=[
+        "gpt-oss:20b", "huihui_ai/deepseek-r1-abliterated:14b", "mistral:7b", "llama3.1:8b-uncensored",
+        "qwen3.8:27b", "qwen3:8b", "nomic-embed-text:latest",
+    ])
+    tools = {"gpt-oss:20b", "huihui_ai/deepseek-r1-abliterated:14b", "mistral:7b", "llama3.1:8b-uncensored",
+             "qwen3.8:27b", "qwen3:8b"}
+    monkeypatch.setattr(models, "is_tool_compatible", lambda name: name in tools)
+
+    rows = {row["name"]: row for row in client_first_run.detect_local_runtime()["models"]}
+
+    assert sorted(name for name, row in rows.items() if row.get("recommended")) == [
+        "gpt-oss:20b", "qwen3.8:27b", "qwen3:8b",
+    ]
+    # They are still listed, under "Show all models".
+    assert "huihui_ai/deepseek-r1-abliterated:14b" in rows and "llama3.1:8b-uncensored" in rows
+
+
+def test_qwen3_8_is_known_to_use_tools():
+    from row_bot.providers.ollama import is_ollama_tool_capable
+
+    assert is_ollama_tool_capable("qwen3.8:27b")

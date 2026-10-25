@@ -391,7 +391,7 @@ describe('ScheduleBuilder', () => {
     ).toEqual(['Manually', 'Once', 'Repeats']);
     expect(screen.getByRole('radio', { name: 'Manually' })).toBeChecked();
     expect(screen.queryByLabelText('Date and time')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Repeats')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('How often')).not.toBeInTheDocument();
     expect(preview()).toHaveTextContent('Runs only when you start it');
     expect(onChange).not.toHaveBeenCalled();
   });
@@ -478,10 +478,10 @@ describe('ScheduleBuilder', () => {
       at: null,
       timezone: ZONE,
     });
-    expect(screen.getByLabelText('Repeats')).toHaveValue('daily');
+    expect(screen.getByLabelText('How often')).toHaveValue('daily');
     expect(
       Array.from(
-        (screen.getByLabelText('Repeats') as HTMLSelectElement).options,
+        (screen.getByLabelText('How often') as HTMLSelectElement).options,
       ).map((option) => option.textContent),
     ).toEqual([
       'Every day',
@@ -520,7 +520,7 @@ describe('ScheduleBuilder', () => {
 
   it('writes weekdays as a named cron range', () => {
     const onChange = renderBuilder({ schedule: 'daily:07:30' });
-    fireEvent.change(screen.getByLabelText('Repeats'), {
+    fireEvent.change(screen.getByLabelText('How often'), {
       target: { value: 'weekdays' },
     });
     expect(onChange).toHaveBeenLastCalledWith({
@@ -537,7 +537,7 @@ describe('ScheduleBuilder', () => {
 
   it('reads 0 8 1 * * as Monthly on the 1st at 08:00 and writes it back unchanged (B345)', () => {
     const onChange = renderBuilder({ schedule: 'cron:0 8 1 * *' });
-    expect(screen.getByLabelText('Repeats')).toHaveValue('monthly');
+    expect(screen.getByLabelText('How often')).toHaveValue('monthly');
     expect(screen.getByLabelText('Day of the month')).toHaveValue('1');
     expect(screen.getByLabelText('Time')).toHaveValue('08:00');
     expect(screen.queryByLabelText('Cron expression')).toBeNull();
@@ -562,7 +562,7 @@ describe('ScheduleBuilder', () => {
 
   it('offers Monthly from Repeats and says when a month lacks the day', () => {
     const onChange = renderBuilder({ schedule: 'daily:07:30' });
-    fireEvent.change(screen.getByLabelText('Repeats'), {
+    fireEvent.change(screen.getByLabelText('How often'), {
       target: { value: 'monthly' },
     });
     expect(onChange).toHaveBeenLastCalledWith({
@@ -584,7 +584,7 @@ describe('ScheduleBuilder', () => {
 
   it('toggles chosen days, never leaving none chosen', () => {
     const onChange = renderBuilder({ schedule: 'daily:09:00' });
-    fireEvent.change(screen.getByLabelText('Repeats'), {
+    fireEvent.change(screen.getByLabelText('How often'), {
       target: { value: 'days' },
     });
     expect(onChange).toHaveBeenLastCalledWith({
@@ -635,7 +635,7 @@ describe('ScheduleBuilder', () => {
 
   it('counts intervals from when the schedule is saved or enabled', () => {
     const onChange = renderBuilder({ schedule: 'daily:09:00' });
-    fireEvent.change(screen.getByLabelText('Repeats'), {
+    fireEvent.change(screen.getByLabelText('How often'), {
       target: { value: 'hours' },
     });
     expect(onChange).toHaveBeenLastCalledWith({
@@ -662,7 +662,7 @@ describe('ScheduleBuilder', () => {
       at: null,
       timezone: ZONE,
     });
-    fireEvent.change(screen.getByLabelText('Repeats'), {
+    fireEvent.change(screen.getByLabelText('How often'), {
       target: { value: 'minutes' },
     });
     const minutes = screen.getByLabelText('Every (minutes)');
@@ -678,7 +678,7 @@ describe('ScheduleBuilder', () => {
 
   it('says an interval starts counting once enabled while disabled', () => {
     renderBuilder({ schedule: 'interval_minutes:30', enabled: false });
-    expect(screen.getByLabelText('Repeats')).toHaveValue('minutes');
+    expect(screen.getByLabelText('How often')).toHaveValue('minutes');
     expect(screen.getByLabelText('Every (minutes)')).toHaveValue(30);
     expect(preview()).toHaveTextContent(
       'Every 30 minutes · counted from when it is enabled',
@@ -687,7 +687,7 @@ describe('ScheduleBuilder', () => {
 
   it('writes a custom cron expression and describes numbered days from Monday = 0', () => {
     const onChange = renderBuilder({ schedule: 'daily:09:00' });
-    fireEvent.change(screen.getByLabelText('Repeats'), {
+    fireEvent.change(screen.getByLabelText('How often'), {
       target: { value: 'cron' },
     });
     const expression = screen.getByLabelText('Cron expression', {
@@ -730,7 +730,7 @@ describe('ScheduleBuilder', () => {
       'weekly:fri:17:00',
       null,
       () => {
-        expect(screen.getByLabelText('Repeats')).toHaveValue('days');
+        expect(screen.getByLabelText('How often')).toHaveValue('days');
         expect(screen.getByRole('button', { name: 'Friday' })).toHaveAttribute(
           'aria-pressed',
           'true',
@@ -747,7 +747,7 @@ describe('ScheduleBuilder', () => {
       'cron:0 9 * * 1',
       null,
       () => {
-        expect(screen.getByLabelText('Repeats')).toHaveValue('cron');
+        expect(screen.getByLabelText('How often')).toHaveValue('cron');
         expect(
           screen.getByLabelText('Cron expression', { exact: false }),
         ).toHaveValue('0 9 * * 1');
@@ -759,7 +759,7 @@ describe('ScheduleBuilder', () => {
       'cron:0 8 * * mon-fri',
       null,
       () => {
-        expect(screen.getByLabelText('Repeats')).toHaveValue('weekdays');
+        expect(screen.getByLabelText('How often')).toHaveValue('weekdays');
         expect(screen.getByLabelText('Time')).toHaveValue('08:00');
       },
     ],

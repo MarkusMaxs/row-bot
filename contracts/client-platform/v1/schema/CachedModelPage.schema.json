@@ -34,6 +34,25 @@
           "title": "Display Name",
           "type": "string"
         },
+        "favourite_rank": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Favourite Rank"
+        },
+        "hidden": {
+          "default": false,
+          "title": "Hidden",
+          "type": "boolean"
+        },
         "input_modalities": {
           "items": {
             "maxLength": 80,

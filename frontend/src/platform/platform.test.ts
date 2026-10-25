@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBrowserPlatform } from './browser';
+import { NATIVE_ACTION_WAIT_MS } from './desktop';
 import { createFakePlatform } from './fake';
 import { selectClientPlatform } from './index';
 import { createPyWebViewPlatform } from './native';
@@ -342,11 +343,10 @@ describe('safe native and fake capabilities', () => {
       },
     });
     // A desktop window never falls back to the browser versions (B238).
-    expect(await mismatched.discover()).toEqual({
+    expect(await mismatched.readBuddyTarget()).toEqual({
       status: 'unavailable',
       reason: 'native_reconnecting',
     });
-    expect(mismatched.nativeConnection?.get()).toBe('reconnecting');
     Reflect.deleteProperty(window, '__ROW_BOT_NATIVE_CLIENT__');
   });
   it('waits for the native loaded event before selecting the authorized adapter', async () => {
@@ -764,10 +764,12 @@ describe('native selection at a cold start (B95)', () => {
     await vi.advanceTimersByTimeAsync(7999);
     expect(chosen).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
-    await expect(chosen!.discover()).resolves.toEqual({
+    await expect(chosen!.buddyPlacement('status')).resolves.toEqual({
       status: 'unavailable',
       reason: 'native_reconnecting',
     });
+    // Nothing the person asked for is waiting: no notice (B406).
+    expect(chosen!.nativeConnection?.get()).toBe('ready');
   });
 
   it('never waits in an ordinary browser, even for the local owner', async () => {
@@ -1049,7 +1051,7 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
   };
   afterEach(() => vi.useRealTimers());
 
-  it('says it is reconnecting while a slow bridge loads, saves into Exports, then binds it', async () => {
+  it('says it is reconnecting only while the person waits on a slow bridge, saves into Exports, then binds it', async () => {
     vi.useFakeTimers();
     const host = desktopWindow();
     const transport = media();
@@ -1063,13 +1065,21 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
       chosen = value;
     });
     await vi.advanceTimersByTimeAsync(8000);
-    expect(chosen!.nativeConnection?.get()).toBe('reconnecting');
-    expect(await chosen!.discover()).toEqual(reconnecting);
+    // A background read answers at once and says nothing (B406).
     expect(await chosen!.buddyPlacement('status')).toEqual(reconnecting);
-    expect(await chosen!.openTerminal(null)).toEqual(reconnecting);
-    // No browser download (the desktop window cancels those): the server
-    // writes the export into Exports and says which file.
-    const saved = await chosen!.save('conversation-1:export-1', 'export.md');
+    expect(chosen!.nativeConnection?.get()).toBe('ready');
+    // The person's own action waits for the bridge, and only then says so.
+    const terminal = chosen!.openTerminal(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chosen!.nativeConnection?.get()).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(NATIVE_ACTION_WAIT_MS);
+    expect(await terminal).toEqual(reconnecting);
+    expect(chosen!.nativeConnection?.get()).toBe('ready');
+    // No browser download (the desktop window cancels those): a save that
+    // still has no Save dialog after its wait goes into Exports.
+    const saving = chosen!.save('conversation-1:export-1', 'export.md');
+    await vi.advanceTimersByTimeAsync(NATIVE_ACTION_WAIT_MS);
+    const saved = await saving;
     expect(saved).toMatchObject({
       status: 'ok',
       value: {
@@ -1093,7 +1103,6 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
     host.__ROW_BOT_NATIVE_CLIENT__ = endpoint;
     host.dispatchEvent(new Event('row-bot-native-ready'));
     await vi.advanceTimersByTimeAsync(0);
-    expect(chosen!.nativeConnection?.get()).toBe('ready');
     expect(await chosen!.discover()).toMatchObject({
       status: 'ok',
       value: { kind: 'pywebview' },
@@ -1117,9 +1126,7 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
       asWindow(host),
       reattest,
     );
-    await vi.waitFor(() =>
-      expect(chosen.nativeConnection?.get()).toBe('ready'),
-    );
+    await vi.waitFor(() => expect(fresh.dispatch).toHaveBeenCalled());
     expect(rebind).toHaveBeenCalledTimes(1);
     expect(fresh.dispatch).toHaveBeenCalledWith('discover', {
       attestation: 'b'.repeat(32),
@@ -1152,10 +1159,10 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
     // The computer slept past the lease: every call answers "proof required".
     first.dispatch.mockResolvedValue(lapsed);
     expect(await chosen.renewNative!('d'.repeat(32))).toEqual(reconnecting);
-    await vi.waitFor(() =>
-      expect(chosen.nativeConnection?.get()).toBe('ready'),
-    );
-    expect(seen).toEqual(['reconnecting', 'ready']);
+    await vi.waitFor(() => expect(second.dispatch).toHaveBeenCalled());
+    await expect(chosen.discover()).resolves.toMatchObject({ status: 'ok' });
+    // The renewal runs in the background: binding again says nothing (B406).
+    expect(seen).toEqual([]);
     expect(rebind).toHaveBeenCalledTimes(1);
     expect(second.dispatch).toHaveBeenCalledWith('discover', {
       attestation: 'c'.repeat(32),
@@ -1191,32 +1198,125 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
       Object.assign(host, { document: page });
       const { chosen, rebind, recover } = await outage(host);
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(chosen.nativeConnection?.get()).toBe('reconnecting');
+      // Binding again in the background never shows the notice (B406).
+      expect(chosen.nativeConnection?.get()).toBe('ready');
       const attempts = rebind.mock.calls.length;
       recover();
       (event === 'focus' ? host : page).dispatchEvent(new Event(event));
       await vi.advanceTimersByTimeAsync(0);
-      expect(chosen.nativeConnection?.get()).toBe('ready');
       expect(rebind).toHaveBeenCalledTimes(attempts + 1);
+      await expect(chosen.discover()).resolves.toMatchObject({ status: 'ok' });
     },
   );
 
-  it('binds again at once when a native operation is wanted while reconnecting', async () => {
-    const { chosen, recover } = await outage(desktopWindow());
+  it('binds again at once when something waits on it, and runs it then', async () => {
+    const { chosen, rebind, recover } = await outage(desktopWindow());
     await vi.advanceTimersByTimeAsync(20_000);
     recover();
+    const attempts = rebind.mock.calls.length;
+    // Background reads do not cut the backoff short; a wait does.
     expect(await chosen.buddyPlacement('status')).toEqual(reconnecting);
+    expect(rebind).toHaveBeenCalledTimes(attempts);
+    const discovered = chosen.discover();
     await vi.advanceTimersByTimeAsync(0);
+    expect(rebind).toHaveBeenCalledTimes(attempts + 1);
+    await expect(discovered).resolves.toMatchObject({ status: 'ok' });
     expect(chosen.nativeConnection?.get()).toBe('ready');
   });
 
   it('binds within 15 s of the host recovering, however long it was lost', async () => {
-    const { chosen, recover } = await outage(desktopWindow());
+    const { chosen, rebind, recover } = await outage(desktopWindow());
     await vi.advanceTimersByTimeAsync(125_000);
-    expect(chosen.nativeConnection?.get()).toBe('reconnecting');
     recover();
+    const attempts = rebind.mock.calls.length;
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(chosen.nativeConnection?.get()).toBe('ready');
+    expect(rebind).toHaveBeenCalledTimes(attempts + 1);
+    await expect(chosen.discover()).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it("says it is reconnecting only while the person's own action waits on the bridge (B406)", async () => {
+    vi.useFakeTimers();
+    const host = desktopWindow();
+    const first = { dispatch: vi.fn().mockResolvedValue(info) };
+    host.__ROW_BOT_NATIVE_CLIENT__ = first;
+    let release = () => {};
+    const rebind = rebindingHost(host, () => ({
+      dispatch: vi.fn(async (operation: string) =>
+        operation === 'select_folder'
+          ? { status: 'ok', value: { reference: 'folder-ref', kind: 'folder' } }
+          : info,
+      ),
+    }));
+    // The host takes its time to bind the window again.
+    const binds = rebind.getMockImplementation() as () => Promise<unknown>;
+    rebind.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return binds();
+    });
+    const chosen = await selectClientPlatform(
+      media(),
+      nativeAdapter,
+      asWindow(host),
+      async () => 'c'.repeat(32),
+    );
+    const seen: string[] = [];
+    chosen.nativeConnection!.subscribe(() =>
+      seen.push(chosen.nativeConnection!.get()),
+    );
+    // The lease lapsed: following a conversation finds it and says nothing.
+    first.dispatch.mockResolvedValue(lapsed);
+    expect(await chosen.publishBuddyTarget('conversation-1')).toEqual(
+      reconnecting,
+    );
+    expect(seen).toEqual([]);
+    // Choosing a folder waits for the bridge, and runs once it is back.
+    const picked = chosen.selectFolder(undefined, {
+      intentId: 'intent',
+      intent: 'workspace',
+      conversationId: 'conversation-1',
+      destination: 'workspace',
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(chosen.nativeConnection?.get()).toBe('reconnecting');
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await picked).toEqual({
+      status: 'ok',
+      value: { reference: 'folder-ref', kind: 'folder' },
+    });
+    expect(seen).toEqual(['reconnecting', 'ready']);
+    expect(rebind).toHaveBeenCalled();
+  });
+
+  it('runs a person action again once after a lapsed proof refused it', async () => {
+    const host = desktopWindow();
+    const first = {
+      dispatch: vi.fn(async (operation: string) =>
+        operation === 'discover' ? info : lapsed,
+      ),
+    };
+    host.__ROW_BOT_NATIVE_CLIENT__ = first;
+    const second = {
+      dispatch: vi.fn(async (operation: string) =>
+        operation === 'managed_window' ? { status: 'ok', value: null } : info,
+      ),
+    };
+    const rebind = rebindingHost(host, () => second);
+    const chosen = await selectClientPlatform(
+      media(),
+      nativeAdapter,
+      asWindow(host),
+      async () => 'd'.repeat(32),
+    );
+    expect(
+      await chosen.managedWindow('/app-v2/browser/conversation-1'),
+    ).toEqual({ status: 'ok', value: null });
+    expect(rebind).toHaveBeenCalledTimes(1);
+    expect(
+      second.dispatch.mock.calls.filter(([op]) => op === 'managed_window'),
+    ).toHaveLength(1);
   });
 
   it('attaches through the browser file input while reconnecting; a folder pick says so', async () => {
@@ -1229,7 +1329,6 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
       nativeAdapter,
       asWindow(host),
     );
-    expect(chosen.nativeConnection?.get()).toBe('reconnecting');
     vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(
       () => undefined,
     );
@@ -1251,9 +1350,15 @@ describe('desktop windows never run the browser versions silently (B231, B238)',
       status: 'ok',
       value: { kind: 'file', files: [file] },
     });
-    expect(
-      await chosen.selectFolder(undefined, { ...intent, intent: 'workspace' }),
-    ).toEqual(reconnecting);
+    // Attaching never waited, so nothing said it was reconnecting.
+    expect(chosen.nativeConnection?.get()).toBe('ready');
+    vi.useFakeTimers();
+    const folder = chosen.selectFolder(undefined, {
+      ...intent,
+      intent: 'workspace',
+    });
+    await vi.advanceTimersByTimeAsync(NATIVE_ACTION_WAIT_MS);
+    expect(await folder).toEqual(reconnecting);
   });
 
   it('reports a native save truthfully and never saves elsewhere after a failed write', async () => {

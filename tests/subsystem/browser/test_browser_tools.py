@@ -1,0 +1,312 @@
+"""The agent's browser tools (N12-A): passwords, approvals (D19), the person's control, local addresses (F4).
+
+Row-Bot never types a password, one-time code or card number. Paying, sending, deleting and the
+rest ask by the approval level: Ask asks the person, Auto the reviewer first, Hands-off runs it,
+Block refuses. While the person has control the agent waits. An address on this computer opens
+once allowed in that chat; the local network and Row-Bot itself never do. Nothing launches a
+browser: the engine's page work is a fake that records what would have run.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from row_bot.approval_review import ReviewVerdict
+from row_bot.browser import guard
+from row_bot.browser import service as service_module
+from row_bot.browser.service import ActionResult, BrowserEngine, BrowserSessionManager
+from row_bot.cancellation import CancellationScope, use_cancellation_scope
+from row_bot.tools import approval_gate, browser_tool
+
+pytestmark = pytest.mark.subsystem
+
+CHECKOUT = {"role": "button", "name": "Confirm and pay £60", "url": "https://www.homeserve.co.uk/claim/5",
+            "secret": "", "card": True, "price": True, "search": False, "submit": "Confirm and pay £60"}
+NEXT = {"role": "button", "name": "Next", "url": "https://www.homeserve.co.uk/claim/1", "secret": "",
+        "card": False, "price": False, "search": False, "submit": "Next"}
+
+
+class FakeEngine(BrowserEngine):
+    """The real engine's grants, control and pane state; page work is recorded, not run."""
+
+    def __init__(self, state) -> None:
+        super().__init__()
+        self.state = state
+
+    def inspect(self, chat_id, ref):
+        return dict(self.state.targets.get(ref, {})) or None
+
+    def act(self, chat_id, label, step, *, settle=True, timeout=120.0):
+        self.state.acts.append((chat_id, label))
+        return ActionResult(f"{label}: done")
+
+    def current_url(self, chat_id="default"):
+        return self.state.url
+
+    def model_picture(self, chat_id):
+        return None
+
+
+@pytest.fixture
+def browser(monkeypatch):
+    monkeypatch.setenv("ROW_BOT_PORT", "8080")
+    state = SimpleNamespace(conversation="conversation-a", acts=[], asked=[], reviewed=[], mode="approve",
+                            answer=True, verdict=ReviewVerdict("approve", "You asked to book the plumber."),
+                            servers=[], targets={}, url="https://www.homeserve.co.uk/claim/5")
+    manager = BrowserSessionManager()
+    engine = FakeEngine(state)
+    manager._engine = engine
+    monkeypatch.setattr(browser_tool, "_session_manager", manager)
+    monkeypatch.setattr(browser_tool, "_get_thread_id", lambda: state.conversation)
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: state.mode)
+    monkeypatch.setattr("langgraph.types.interrupt", lambda payload: state.asked.append(payload) or state.answer)
+    monkeypatch.setattr("row_bot.approval_review.review",
+                        lambda payload, **_kw: state.reviewed.append(payload) or state.verdict)
+    monkeypatch.setattr("row_bot.background_processes.local_servers",
+                        lambda conversation_id=None: [server for server in state.servers
+                                                      if conversation_id in (None, server["conversation_id"])])
+    state.engine = engine
+    yield state
+    engine.close()
+
+
+def _tool(name: str, **arguments) -> str:
+    tools = {tool.name: tool for tool in browser_tool.BrowserTool().as_langchain_tools()}
+    return tools[name].func(**arguments)
+
+
+# ── Passwords, codes and card numbers ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(("secret", "words"), [
+    ("password", "never types passwords"), ("code", "one-time code"), ("card", "never types card numbers")])
+def test_the_agent_never_types_a_password_code_or_card_number(browser, secret, words):
+    browser.targets["e3"] = {**NEXT, "role": "textbox", "name": "Password", "secret": secret}
+
+    result = _tool("browser_type", ref="e3", text="hunter2")
+
+    assert words in result and "ask_person" in result
+    assert browser.acts == []  # Nothing was typed.
+    assert browser.engine.pane_state("conversation-a")["sign_in"] == secret  # The pane says "Sign in here".
+    assert "Row-Bot never" in _tool("browser_press", ref="e3", key="a") or secret == "code"
+    assert browser.acts == []
+    _tool("browser_press", ref="e3", key="Tab")  # Moving on is fine.
+    assert browser.acts == [("conversation-a", "Pressing Tab")]
+
+
+# ── Approvals (D19) ───────────────────────────────────────────────────────────
+
+
+def test_paying_asks_the_person_in_plain_words_and_runs_once_they_say_yes(browser):
+    browser.targets["e9"] = CHECKOUT
+
+    result = _tool("browser_click", ref="e9")
+
+    [card] = browser.asked
+    assert card["question"] == "Pay on homeserve.co.uk?"
+    assert card["description"] == 'Row-Bot will click "Confirm and pay £60" on homeserve.co.uk. This can charge you.'
+    assert result == 'Clicking button "Confirm and pay £60": done'
+
+
+def test_a_payment_the_person_refuses_never_runs(browser):
+    browser.targets["e9"] = CHECKOUT
+    browser.answer = False
+
+    result = _tool("browser_click", ref="e9")
+
+    assert "The person said no" in result
+    assert browser.acts == []
+    assert browser.engine.pane_state("conversation-a")["waiting"] == ""
+
+
+def test_under_auto_the_reviewer_decides_and_asks_the_person_when_unsure(browser):
+    browser.targets["e9"] = CHECKOUT
+    browser.mode = "auto"
+    _tool("browser_click", ref="e9")
+    assert browser.asked == [] and len(browser.reviewed) == 1 and len(browser.acts) == 1
+
+    browser.verdict = ReviewVerdict("ask", "The person asked to check cover, not to pay.")
+    _tool("browser_click", ref="e9")
+    assert len(browser.asked) == 1 and len(browser.acts) == 2
+
+
+def test_hands_off_runs_it_and_block_refuses_it(browser):
+    browser.targets["e9"] = CHECKOUT
+    browser.mode = "full"
+    _tool("browser_click", ref="e9")
+    assert browser.asked == [] and browser.reviewed == [] and len(browser.acts) == 1
+
+    browser.mode = "block"
+    result = _tool("browser_click", ref="e9")
+    assert result.startswith("BLOCKED: Pay on homeserve.co.uk needs approval")
+    assert len(browser.acts) == 1
+
+
+def test_ordinary_steps_run_without_asking(browser):
+    browser.targets["e2"] = NEXT
+    browser.targets["e5"] = {**NEXT, "role": "radio", "name": "Leak"}
+    _tool("browser_click", ref="e5")
+    _tool("browser_click", ref="e2")
+    _tool("browser_select", ref="e7", options=["Kitchen"])
+    assert browser.asked == [] and len(browser.acts) == 3
+
+
+def test_pressing_enter_in_a_message_box_asks_like_its_send_button(browser):
+    browser.targets["e4"] = {**NEXT, "role": "textbox", "name": "Message", "submit": "Send",
+                             "url": "https://mail.example.com/compose"}
+    _tool("browser_type", ref="e4", text="On my way", submit=True)
+    assert browser.asked[-1]["question"] == "Send on mail.example.com?"
+    _tool("browser_type", ref="e4", text="On my way")
+    assert len(browser.asked) == 1  # Typing alone never asks.
+
+
+def test_uploading_a_file_asks_and_names_it(browser, monkeypatch):
+    source = SimpleNamespace(name="leak.jpg", size_bytes=5, mime_type="image/jpeg", ref="chat:1", path=None)
+    monkeypatch.setattr("row_bot.file_deliveries.resolve", lambda files, conversation: [source])
+    monkeypatch.setattr(browser_tool, "_payload", lambda item: {"name": item.name, "mimeType": "image/jpeg",
+                                                                 "buffer": b"12345"})
+    _tool("browser_upload", ref="e12", files=["leak.jpg"])
+    assert browser.asked[-1]["question"] == "Upload to homeserve.co.uk?"
+    assert "leak.jpg" in browser.asked[-1]["description"]
+    assert browser.acts == [("conversation-a", "Uploading leak.jpg")]
+
+
+# ── The person's control ──────────────────────────────────────────────────────
+
+
+def test_while_the_person_has_control_the_agent_waits_then_carries_on(browser):
+    browser.targets["e2"] = NEXT
+    browser.engine.take_control("conversation-a")
+    waiting: list[str] = []
+
+    def give_back() -> None:
+        time.sleep(0.3)
+        waiting.append(browser.engine.pane_state("conversation-a")["waiting"])
+        browser.engine.give_back("conversation-a")
+
+    threading.Thread(target=give_back).start()
+    result = _tool("browser_click", ref="e2")
+
+    assert waiting == ["Waiting for you to give back control"]
+    assert result.endswith(": done") and browser.engine.pane_state("conversation-a")["waiting"] == ""
+
+
+def test_stop_ends_the_wait_for_control(browser):
+    browser.targets["e2"] = NEXT
+    browser.engine.take_control("conversation-a")
+    scope = CancellationScope()
+    threading.Timer(0.2, scope.cancel).start()
+    with use_cancellation_scope(scope):
+        result = _tool("browser_click", ref="e2")
+    assert result == service_module.STOPPED and browser.acts == []
+
+
+def test_the_person_using_the_page_takes_control_but_not_mid_action(browser):
+    engine = browser.engine
+    engine._chat("conversation-a").acting = 'Clicking button "Next"'
+    assert engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}]) == "agent_acting"
+    assert not engine.person_has_control("conversation-a")
+    engine._chat("conversation-a").acting = ""
+    assert engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}]) == "no_page"
+
+
+# ── Addresses on this computer (F4) ───────────────────────────────────────────
+
+
+def test_ask_asks_about_one_address_once_then_it_opens(browser):
+    _tool("browser_navigate", url="localhost:5173")
+    assert browser.asked[-1]["question"] == "Allow Row-Bot's browser to open localhost:5173 in this chat?"
+    assert browser.acts == [("conversation-a", "Opening http://localhost:5173")]
+    _tool("browser_navigate", url="http://localhost:5173/settings")
+    assert len(browser.asked) == 1 and len(browser.acts) == 2
+    [grant] = browser.engine.local_address_grants("conversation-a")
+    assert (grant.address, grant.source) == ("localhost:5173", "you")
+
+
+def test_a_denied_address_never_opens(browser):
+    browser.answer = False
+    result = _tool("browser_navigate", url="http://localhost:5173")
+    assert "didn't allow localhost:5173" in result and browser.acts == []
+
+
+def test_a_grant_covers_one_origin_in_one_conversation(browser):
+    _tool("browser_navigate", url="http://localhost:5173")
+    granted = browser.engine._granted
+    assert guard.allowed("http://localhost:5173/app", "conversation-a", granted)
+    assert guard.allowed("ws://localhost:5173/hmr", "conversation-a", granted)
+    assert guard.allowed("http://localhost:5173/api", "conversation-a", granted, "POST")  # Forms work too.
+    assert not guard.allowed("http://localhost:5174/", "conversation-a", granted)
+    assert not guard.allowed("http://localhost:5173/", "conversation-b", granted)
+    browser.conversation = "conversation-b"
+    _tool("browser_navigate", url="http://localhost:5173")
+    assert len(browser.asked) == 2
+
+
+def test_auto_and_hands_off_allow_it_and_record_who_did(browser):
+    browser.mode = "auto"
+    _tool("browser_navigate", url="http://localhost:5173")
+    browser.mode = "full"
+    _tool("browser_navigate", url="http://localhost:3000")
+    assert browser.asked == []
+    assert [(g.address, g.source) for g in browser.engine.local_address_grants("conversation-a")] == [
+        ("localhost:5173", "reviewer"), ("localhost:3000", "hands_off")]
+
+
+def test_block_refuses_a_local_address(browser):
+    browser.mode = "block"
+    assert _tool("browser_navigate", url="http://localhost:5173").startswith("BLOCKED: Opening localhost:5173")
+    assert browser.acts == []
+
+
+def test_a_server_row_bot_started_in_this_chat_opens_without_asking(browser):
+    browser.servers = [{"origin": "http://localhost:5173", "port": 5173, "process_id": "proc-0000000a",
+                        "conversation_id": "conversation-a", "verified": True}]
+    result = _tool("browser_navigate", url="http://localhost:5173")
+    assert result.startswith("Opened without asking: Row-Bot started the server at localhost:5173")
+    assert browser.asked == []
+
+
+@pytest.mark.parametrize("mode", ["block", "approve", "auto", "full"])
+@pytest.mark.parametrize("url", ["http://192.168.1.1/", "http://10.0.0.20:8080/",
+                                 "http://169.254.169.254/latest/meta-data/", "http://[fd00::1]:3000/",
+                                 "http://printer.local/"])
+def test_the_local_network_never_opens_at_any_level(browser, mode, url):
+    browser.mode = mode
+    result = _tool("browser_navigate", url=url)
+    assert result.startswith("BLOCKED: Row-Bot's browser can't open addresses on your local network")
+    assert browser.asked == [] and browser.reviewed == [] and browser.acts == []
+
+
+@pytest.mark.parametrize("mode", ["approve", "full"])
+def test_row_bot_itself_never_opens_in_its_browser(browser, mode):
+    browser.mode = mode
+    assert _tool("browser_navigate", url="http://localhost:8080/app-v2/").startswith(
+        "BLOCKED: localhost:8080 is Row-Bot itself.")
+    with pytest.raises(ValueError):
+        browser.engine.allow_local_address("conversation-a", "http://127.0.0.1:8080", source="you")
+
+
+def test_a_grant_can_be_removed_runs_out_after_an_hour_and_ends_with_its_conversation(browser, monkeypatch):
+    _tool("browser_navigate", url="http://localhost:5173")
+    _tool("browser_navigate", url="http://localhost:3000")
+    first, second = browser.engine.local_address_grants("conversation-a")
+    assert second.expires_at - second.granted_at == 3600
+    assert browser.engine.revoke_local_address("conversation-b", first.id) is False
+    assert browser.engine.revoke_local_address("conversation-a", first.id) is True
+    assert [g.address for g in browser.engine.local_address_grants("conversation-a")] == ["localhost:3000"]
+
+    now = time.time()
+    monkeypatch.setattr(service_module.time, "time", lambda: now + 3601)
+    assert browser.engine.local_address_grants("conversation-a") == []
+    browser.engine.allow_local_address("conversation-a", "http://localhost:3000", source="you")
+    assert browser.engine.revoke_local_addresses("conversation-a") == 1
+
+
+@pytest.mark.parametrize("url", ["http://0.0.0.0:5173/", "http://[::]:5173/"])
+def test_an_every_address_bind_says_to_open_localhost(browser, url):
+    assert _tool("browser_navigate", url=url).endswith("Open http://localhost:5173 instead.")
+    assert browser.asked == [] and browser.acts == []

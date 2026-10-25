@@ -23,6 +23,8 @@ Vector search uses an embedding model, which is separate from the chat model. Th
 
 The source record matters. A graph relation or memory should remain traceable to the conversation, document, or process that produced it. Correct the underlying Knowledge record before rebuilding derived indexes or Wiki Vault pages.
 
+An [incognito chat](/docs/chat/#incognito-chats) is left out of all this: nothing in it is read for memory, and a memory is saved from it only when you choose **Save** on the card that asks. Row-Bot can still use what it already remembers there.
+
 ## What Dream Cycle Does
 
 Dream Cycle is idle-time knowledge maintenance. When enabled and due, it can examine the local knowledge set, merge high-confidence duplicates, refresh summaries from available source context, infer strongly supported relationships, and prune stale low-confidence inferred relations. It records its history so you can review what happened in Monitor.

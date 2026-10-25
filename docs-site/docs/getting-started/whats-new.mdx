@@ -1,0 +1,41 @@
+---
+title: "What's New In 5.3"
+description: "The highlights of Row-Bot 5.3 with links to each guide, and what to know before upgrading from 5.2."
+---
+
+# What's New In 5.3
+
+Row-Bot 5.3 puts its browser inside the app and rebuilds computer use. It also adds pages and questions, incognito chats, Outlook, several X accounts, reviewed approvals and Hands-off, and background work. This page lists the highlights and links to the guide for each one. The full list is in the [release notes](https://github.com/siddsachar/row-bot/releases).
+
+## Row-Bot Does More Without Being Asked
+
+You don't need to name a feature. Ask in your own words:
+- a plan, checklist, comparison or numbers to track becomes a [page](/docs/chat/#pages);
+- a choice only you can make comes as a [question](/docs/chat/#questions);
+- research on several things goes to [helpers](/docs/profiles-goals-agents/#delegated-agents);
+- a file server or watcher runs [in the background](/docs/chat/tools-approvals-and-terminal#background-processes);
+- "keep me on track" gets a plan and a weekly check-in [workflow](/docs/guides/workflows).
+
+A new chat also starts faster. Row-Bot sends about 40% less to the model before your first message, and with a ChatGPT plan the shared start of each chat comes from the provider's cache.
+
+## Highlights
+
+- **Row-Bot's browser, in the app.** A Browser pane beside the chat shows the page live, with tabs, Take control and Stop. See [Row-Bot's Browser](/docs/chat/tools-approvals-and-terminal#row-bots-browser).
+- **Computer use, rebuilt.** Row-Bot works in an app with your mouse and keyboard while you watch. A Stop bar shows on screen, and Esc ends it. See [Computer Use](/docs/computer-use/).
+- **Pages and questions.** Plans you approve step by step, checklists that remember ticks, and questions with options in a card. See [Pages](/docs/chat/#pages) and [Questions](/docs/chat/#questions).
+- **Incognito chats.** Nothing in them is read for memory. See [Incognito Chats](/docs/chat/#incognito-chats).
+- **Approvals: Ask, Auto, Hands-off, Block.** Auto's reviewer approves what you asked for, and Hands-off asks nothing. **Always ask me** keeps a step or an app asking you whatever the level. See [Approvals](/docs/chat/tools-approvals-and-terminal#approvals).
+- **Outlook and several X accounts.** Outlook works through your own Microsoft app. Each X post names its account. See [Accounts](/docs/integrations/accounts).
+- **Background work.** Servers and long jobs keep running and show in the chat. Video editing, sending files to your devices and code folders work from any device. See [Background Processes](/docs/chat/tools-approvals-and-terminal#background-processes).
+- **Workflows.** Monthly schedules, timezones, missed-run handling, a code folder per workflow, and Always ask me steps. See [Workflows](/docs/guides/workflows).
+- **Claude with your Claude plan,** through your own Claude Code. See [Settings › Providers](/docs/settings/providers).
+
+## Before You Upgrade From 5.2
+
+- **It arrives in the background.** Row-Bot 5.2.1 downloads 5.3 and offers **Restart now**. From 5.1 or 5.0, install 5.2 first with the full installer.
+- **Claude needs setting up again.** The old Claude sign-in is removed on first start. Install and sign in to Claude Code, then choose your Claude plan in Settings › Providers.
+- **Auto may ask a little more.** It now asks about anything that doesn't clearly match your request. Choose Hands-off for a chat or workflow that should never ask.
+- **Workflow schedules keep their times,** in this computer's timezone. Runs missed while Row-Bot was closed are still skipped unless you change that.
+- **Your X account** becomes your first account the next time Row-Bot reaches X.
+- **Windows** may ask once about `Row-Bot Server` in Windows Firewall.
+- **A job started with `&` inside a command** now stops when that command finishes. Ask Row-Bot to start a server instead.
