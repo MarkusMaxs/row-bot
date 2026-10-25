@@ -342,7 +342,10 @@ def install_client_assets(app: FastAPI, *, asset_root: Path | None = None) -> No
             require_authenticated_owner(request.scope)
         except PermissionError:
             return Response("Authentication required", 401, headers={"Cache-Control": "no-store"})
-        return RedirectResponse("/app-v2/", status_code=307, headers={"Cache-Control": "no-store"})
+        # Keep the query: reloading a Home tab ("/app-v2?tab=monitor") stays on it.
+        query = request.url.query
+        return RedirectResponse("/app-v2/" + (f"?{query}" if query else ""), status_code=307,
+                                headers={"Cache-Control": "no-store"})
 
     app.add_api_route("/app-v2", redirect, methods=["GET", "HEAD"], include_in_schema=False)
     app.add_api_route("/app-v2/{path:path}", serve, methods=["GET", "HEAD"], include_in_schema=False)

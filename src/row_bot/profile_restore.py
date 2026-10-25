@@ -35,6 +35,8 @@ SECRET_ENTRIES = frozenset({
     "api_keys.json", "plugin_secrets.json", "secure-secrets", "whatsapp_session",
     "browser_profile", "mobile.db", "gmail", "calendar", "x", "runtime",
     "tailscale_serve_ownership.json",
+    # The installation count's ID and deletion secret belong to this installation (N6).
+    "install_count.json",
 })
 # Rebuildable or machine-local: caches, runtimes, logs and earlier backups. Learning's
 # ``learning_models`` holds re-downloadable or re-trainable bulk (starting-model weights,

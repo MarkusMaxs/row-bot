@@ -171,10 +171,45 @@ def _check_contradiction(old_content: str, new_content: str, subject: str, *, in
         return None
 
 
+# ── Incognito chats (N11) ────────────────────────────────────────────────────
+
+INCOGNITO_NOT_SAVED = "Not saved: this chat is incognito, and the person chose not to save this to memory."
+
+
+def _incognito_hold(tool: str, arguments: dict, text: str) -> str | None:
+    """In an incognito chat only the person saves to memory: a card with the exact text, under every level.
+
+    The reviewer never approves it and Hands-off never skips it. None when the write may go on
+    (the chat is not incognito, or the person chose Save); otherwise what the tool answers.
+    """
+    from row_bot.threads import incognito_state
+    from row_bot.tool_outputs import current_thread_id
+
+    thread_id = current_thread_id()
+    if not thread_id or not incognito_state(thread_id).incognito:
+        return None
+    from row_bot.tools.approval_gate import (
+        INCOGNITO_MEMORY_QUESTION,
+        INCOGNITO_MEMORY_REASON,
+        call_binding,
+        person_approval,
+        with_approval,
+    )
+
+    payload = {"tool": tool, "label": "Save to memory", "description": text, "args": arguments,
+               "question": INCOGNITO_MEMORY_QUESTION, "memory_save": {"text": text}}
+    approved, line = person_approval(payload, binding=call_binding(tool, arguments), reason=INCOGNITO_MEMORY_REASON)
+    return None if approved else with_approval(line, INCOGNITO_NOT_SAVED)
+
+
 # ── Tool functions ───────────────────────────────────────────────────────────
 
 def _save_memory(category: str, subject: str, content: str, tags: str = "") -> str:
     """Save a new memory, or update an existing one if a near-duplicate exists."""
+    held = _incognito_hold("save_memory", {"category": category, "subject": subject, "content": content,
+                                           "tags": tags}, f"{subject.strip()}: {content.strip()}")
+    if held is not None:
+        return held
     try:
         manual_props = memory_evo.merge_properties(
             {},
@@ -341,6 +376,14 @@ def _update_memory(
 ) -> str:
     """Update an existing memory's content and metadata."""
     existing = memory_db.get_memory(memory_id)
+    held = _incognito_hold(
+        "update_memory",
+        {"memory_id": memory_id, "content": content, "subject": subject, "entity_type": entity_type,
+         "aliases": aliases, "tags": tags},
+        f"{(subject or (existing or {}).get('subject') or memory_id).strip()}: {content.strip()}",
+    )
+    if held is not None:
+        return held
     existing_props = existing.get("properties", {}) if existing else {}
     merged_props = memory_evo.merge_properties(
         existing_props,
@@ -403,6 +446,11 @@ def _link_memories(source_id: str, target_id: str, relation_type: str) -> str:
     """Create a relationship between two memories in the knowledge graph."""
     import time
 
+    held = _incognito_hold("link_memories", {"source_id": source_id, "target_id": target_id,
+                                             "relation_type": relation_type},
+                           f"{source_id} {relation_type.replace('_', ' ')} {target_id}")
+    if held is not None:
+        return held
     try:
         # Resolve by name or ID
         source_entity = _resolve_entity(source_id)

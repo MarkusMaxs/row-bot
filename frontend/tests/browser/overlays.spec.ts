@@ -183,26 +183,84 @@ test('settings aliases route to retained unified settings', async ({
   await screenshot(page, testInfo, 'accounts-setting-retained');
 });
 
-test('the desktop reconnecting pill never covers a floating notice (B231)', async ({
+// A desktop window whose bridge is lost: every call answers that its proof
+// lapsed, so the window keeps binding again in the background.
+const lostBridge = () => {
+  if (window !== window.top) return;
+  Object.assign(window, {
+    __ROW_BOT_NATIVE_CLIENT__: {
+      dispatch: async () => ({
+        status: 'unavailable',
+        reason: 'native_proof_required',
+      }),
+    },
+  });
+};
+// Something the person asked for that needs the desktop bridge.
+const chooseFolder = (page: import('@playwright/test').Page) =>
+  page.evaluate(() => {
+    void (window as FixtureWindow).__ROW_BOT_FIXTURE__.platform.selectFolder(
+      undefined,
+      {
+        intentId: '11111111-1111-4111-8111-111111111111',
+        intent: 'workspace',
+        conversationId: 'conversation-a',
+        destination: 'workspace',
+      },
+    );
+  });
+
+test('a reload or refocus binds the desktop bridge again without the reconnecting pill (B406)', async ({
   page,
 }, testInfo) => {
-  await page.addInitScript(() => {
-    if (window !== window.top) return;
-    // A desktop window whose bridge is lost: every call answers that its
-    // proof lapsed, so the window keeps binding again.
-    Object.assign(window, {
-      __ROW_BOT_NATIVE_CLIENT__: {
-        dispatch: async () => ({
-          status: 'unavailable',
-          reason: 'native_proof_required',
-        }),
-      },
-    });
-  });
-  await page.goto('/app-v2/primitives?fixture=normal');
+  await page.addInitScript(lostBridge);
+  await page.goto('/app-v2/?fixture=normal');
+  await page.waitForFunction(
+    () => !!(window as FixtureWindow).__ROW_BOT_FIXTURE__,
+  );
+  const status = page.locator('.desktop-reconnecting');
   const pill = page.getByText('Desktop features are reconnecting…', {
     exact: true,
   });
+  // Binding again in the background never shows the pill, however long it
+  // takes: after loading, after a reload, and on refocus.
+  await page.waitForTimeout(3000);
+  await expect(status).toBeEmpty();
+  await page.reload();
+  await page.waitForFunction(
+    () => !!(window as FixtureWindow).__ROW_BOT_FIXTURE__,
+  );
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(3000);
+  await expect(status).toBeEmpty();
+  await expect(pill).toHaveCount(0);
+  await screenshot(page, testInfo, 'desktop-reload-no-pill');
+  // The person's own action waits on the bridge, and says so after a moment.
+  await chooseFolder(page);
+  await expect(pill).toBeVisible();
+  await writeEvidence(testInfo, 'desktop-reload-no-pill', {
+    pillAfterReload: false,
+    pillWhileThePersonWaits: true,
+  });
+});
+
+test('the desktop reconnecting pill never covers a floating notice (B231)', async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(lostBridge);
+  await page.goto('/app-v2/primitives?fixture=normal');
+  await page.waitForFunction(
+    () => !!(window as FixtureWindow).__ROW_BOT_FIXTURE__,
+  );
+  const pill = page.getByText('Desktop features are reconnecting…', {
+    exact: true,
+  });
+  // Only something the person asked for, waiting on the bridge, shows it.
+  await chooseFolder(page);
   await expect(pill).toBeVisible();
   await page.getByRole('button', { name: 'Show toast', exact: true }).click();
   const notice = page

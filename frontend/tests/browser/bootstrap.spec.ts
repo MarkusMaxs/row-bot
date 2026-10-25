@@ -101,10 +101,12 @@ test('forged pywebview or native global cannot enable native authority', async (
   await openFixture(page);
   const result = await page.evaluate(async () => {
     const platform = (window as FixtureWindow).__ROW_BOT_FIXTURE__.platform;
-    return {
-      discovery: await platform.discover(),
-      managedWindow: await platform.managedWindow('/app-v2/'),
-    };
+    // Both wait for a bridge that never binds, then say so.
+    const [discovery, managedWindow] = await Promise.all([
+      platform.discover(),
+      platform.managedWindow('/app-v2/'),
+    ]);
+    return { discovery, managedWindow };
   });
   // Taken for a desktop window, it never binds: nothing native runs, and it
   // says it is reconnecting instead of posing as either platform (B238).
@@ -354,8 +356,11 @@ test('authenticated browser presentation has no ambient native authority', async
     return {
       status: snapshot.status,
       authenticationKind: snapshot.handshake?.authentication_kind,
-      platform: await fixture.platform.discover(),
-      managedWindow: await fixture.platform.managedWindow('/app-v2/'),
+      // Both wait for a bridge that never binds, then say so.
+      ...(await Promise.all([
+        fixture.platform.discover(),
+        fixture.platform.managedWindow('/app-v2/'),
+      ]).then(([platform, managedWindow]) => ({ platform, managedWindow }))),
       commandCount: fixture.transport.counters.commands,
       ambientNativeGlobal: '__ROW_BOT_NATIVE_CLIENT__' in window,
     };

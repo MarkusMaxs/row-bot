@@ -247,6 +247,20 @@ export async function conversationState(
   return response.json();
 }
 
+/**
+ * Dismisses the notices on screen. A notice can time out between counting it
+ * and clicking it, so each click gives up quietly instead of waiting out the
+ * test, and a notice that will not close stops the loop after a few tries.
+ */
+export async function dismissNotices(page: Page): Promise<void> {
+  const notices = page.getByRole('button', { name: 'Dismiss notification' });
+  for (let tries = 0; tries < 10 && (await notices.count()); tries++)
+    await notices
+      .first()
+      .click({ timeout: 2_000 })
+      .catch(() => undefined);
+}
+
 export function composer(page: Page) {
   return page.getByRole('textbox', {
     name: 'Message',

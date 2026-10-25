@@ -6,7 +6,7 @@ import {
   screenshot,
   test,
 } from './evidence';
-import { blockFixtureServiceWorkers } from './unified-helpers';
+import { blockFixtureServiceWorkers, dismissNotices } from './unified-helpers';
 
 // N2: Home › Overview is one calm column. Each state is staged by answering
 // Home's reads here (what needs you, approvals, workflows, checks, memory,
@@ -297,8 +297,7 @@ const phone = (info: TestInfo) =>
  */
 async function shoot(page: Page, info: TestInfo, name: string) {
   const suffix = phone(info) ? '-phone' : '';
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   const viewport = page.viewportSize()!;
   const column = await page
     .locator('.overview-home')

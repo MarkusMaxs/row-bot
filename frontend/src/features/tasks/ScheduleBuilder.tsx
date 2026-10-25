@@ -330,6 +330,7 @@ export default function ScheduleBuilder({
           <Input
             id={`${id}-at`}
             type="datetime-local"
+            aria-label="Date and time"
             required
             value={draft.at}
             onChange={(event) => update({ at: event.target.value })}
@@ -339,7 +340,7 @@ export default function ScheduleBuilder({
       {draft.mode === 'repeat' && (
         <>
           <label className="schedule-field" htmlFor={`${id}-frequency`}>
-            <span>Repeats</span>
+            <span>How often</span>
             <Select
               id={`${id}-frequency`}
               value={draft.frequency}

@@ -453,6 +453,15 @@ def _no_title_model(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_connection_catalog_refresh(monkeypatch):
+    # Connecting or disconnecting a provider refreshes its model catalog on a background thread
+    # (B411). Tests that connect one script the account, not its catalog: unscripted, the thread
+    # asked the provider for its models after the test. The catalog refresh tests script it.
+    monkeypatch.setattr("row_bot.providers.model_catalog_cache.provider_connection_changed",
+                        lambda _provider_id, **_how: None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_desktop_notification_outputs(monkeypatch):
     # Exercise notification state/toasts normally while keeping deterministic
     # tests from showing OS alerts or playing sounds on the developer's desktop.

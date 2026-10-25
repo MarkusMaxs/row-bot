@@ -235,7 +235,7 @@ def app_for_tool(tool_name: str) -> dict | None:
     if not server:
         parent = builtin.tool_parent(tool_name)
         found = builtin.tool_app(parent) if parent else None
-        return {**found, "tool": ""} if found else None
+        return {**found, "tool": builtin.tool_title(tool_name)} if found else None
     item = next((item for item in _mcp_items() if item["server"] == server), None)
     if item is None:
         return None

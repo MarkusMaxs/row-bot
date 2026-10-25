@@ -44,11 +44,11 @@ test('the sidebar leads with New chat, keeps Home in its header and Agents under
     await page
       .getByRole('button', { name: 'Toggle navigation', exact: true })
       .click();
-  // New chat is the one primary button; ▾ holds the agents.
+  // New chat is the one primary button; ▾ holds incognito and the agents.
   const newChat = nav.getByRole('button', { name: 'New chat', exact: true });
   await expect(newChat).toBeVisible();
   await expect(
-    nav.getByRole('button', { name: 'New chat with an agent…', exact: true }),
+    nav.getByRole('button', { name: 'New chat options', exact: true }),
   ).toBeVisible();
   // Home is an icon in the header row, above New chat (beside Search and
   // collapse on desktop), and current only while Home shows.

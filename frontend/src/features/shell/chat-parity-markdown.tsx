@@ -300,6 +300,40 @@ function displayMath(
   return null;
 }
 
+// A line that shows nothing: blank, a lone hard break ("\"), or quote
+// markers with nothing in them (">", "> >").
+const SHOWS_NOTHING = /^[\s>]*\\?\s*$/;
+// The most of those in a row that are kept (U4).
+const MOST_EMPTY_LINES = 2;
+
+/**
+ * The lines as they render: a run of more than two lines that show nothing
+ * keeps two, so a reply of hundreds of blank hard breaks can't fill the
+ * screen with empty space. Code keeps every line; the stored text is
+ * unchanged.
+ */
+function withoutBlankRuns(lines: string[]) {
+  const kept: string[] = [];
+  let fenced = false;
+  let run = 0;
+  for (const line of lines) {
+    if (line.trimStart().startsWith('```')) fenced = !fenced;
+    run = !fenced && SHOWS_NOTHING.test(line) ? run + 1 : 0;
+    if (run <= MOST_EMPTY_LINES) kept.push(line);
+  }
+  return kept;
+}
+
+/** A quote's lines without the empty ones it starts or ends with. */
+function quoteLines(lines: string[]) {
+  const shown = lines.map((line) => (SHOWS_NOTHING.test(line) ? '' : line));
+  let start = 0;
+  let end = shown.length;
+  while (start < end && !shown[start]) start++;
+  while (end > start && !shown[end - 1]) end--;
+  return shown.slice(start, end);
+}
+
 /**
  * A deliberately small, text-only Markdown projection. React owns escaping;
  * raw HTML is never parsed and only allow-listed link protocols become links.
@@ -311,7 +345,7 @@ export default function SafeMarkdown({
   text: string;
   copyText?: (value: string) => Promise<boolean>;
 }) {
-  const lines = text.replaceAll('\r\n', '\n').split('\n');
+  const lines = withoutBlankRuns(text.replaceAll('\r\n', '\n').split('\n'));
   const blocks: ReactNode[] = [];
   let index = 0;
   while (index < lines.length) {
@@ -368,9 +402,12 @@ export default function SafeMarkdown({
       continue;
     }
     if (line.trimStart().startsWith('>')) {
-      const quote: string[] = [];
+      const raw: string[] = [];
       while (index < lines.length && lines[index].trimStart().startsWith('>'))
-        quote.push(lines[index++].trimStart().replace(/^>\s?/, ''));
+        raw.push(lines[index++].trimStart().replace(/^>\s?/, ''));
+      // A quote of nothing but empty lines shows nothing, not an empty bar.
+      const quote = quoteLines(raw);
+      if (!quote.length) continue;
       blocks.push(
         <blockquote key={`quote-${start}`}>
           {quote.map((item, quoteIndex) => (

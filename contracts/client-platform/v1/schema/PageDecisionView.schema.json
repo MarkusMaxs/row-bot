@@ -1,0 +1,40 @@
+{
+  "additionalProperties": false,
+  "description": "One decision on a page, as the person made it there; ``sent`` once they sent it to the chat.",
+  "properties": {
+    "choice": {
+      "maxLength": 40,
+      "minLength": 1,
+      "title": "Choice",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "label": {
+      "default": "",
+      "maxLength": 200,
+      "title": "Label",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Note",
+      "type": "string"
+    },
+    "sent": {
+      "default": false,
+      "title": "Sent",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "choice"
+  ],
+  "title": "PageDecisionView",
+  "type": "object"
+}

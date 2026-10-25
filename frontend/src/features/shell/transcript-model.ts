@@ -70,6 +70,27 @@ export function turnStarts(items: readonly TranscriptItem[]): boolean[] {
   });
 }
 
+/**
+ * Which rows offer Row-Bot's browser pane (U16): each reply that used the
+ * browser offers it once, at its last row that did.
+ */
+export function browserOffers(items: readonly TranscriptItem[]): boolean[] {
+  const offers = items.map(() => false);
+  let last = -1;
+  items.forEach((item, index) => {
+    if (item.row.role !== 'assistant') {
+      last = -1;
+      return;
+    }
+    if (item.traces.some((group) => group.kind === 'browser')) {
+      if (last >= 0) offers[last] = false;
+      offers[index] = true;
+      last = index;
+    }
+  });
+  return offers;
+}
+
 function hasContent(row: TranscriptRow) {
   return (
     Boolean(row.content_ref && row.content_status === 'lazy') ||
