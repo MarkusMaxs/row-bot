@@ -1107,9 +1107,16 @@ def flush(timeout: float = 10.0) -> bool:
 
 
 def learning_turned_off() -> None:
-    """Learning was turned off: drop what waits to be written."""
+    """Learning was turned off or paused: drop what waits to be written."""
 
     _capture().drop_all()
+
+
+def decision_for_message(message_id: str) -> tuple[str, str] | None:
+    """(episode id, model-call decision id) of a reply this process captured, if it remembers it."""
+
+    found = _capture()._decision_by_message.get(str(message_id or ""))  # noqa: SLF001 - its own map
+    return (str(found[0]), str(found[1])) if found else None
 
 
 def shutdown(timeout: float = 5.0) -> None:
@@ -1129,6 +1136,7 @@ __all__ = [
     "UNTRUSTED_KEY",
     "approval",
     "begin_turn",
+    "decision_for_message",
     "end_turn",
     "flush",
     "learning_turned_off",

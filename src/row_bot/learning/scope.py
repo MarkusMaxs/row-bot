@@ -44,6 +44,7 @@ WORKFLOW = "workflow"
 GOAL = "goal"
 # Denied:
 LEARNING_OFF = "learning_off"
+LEARNING_PAUSED = "learning_paused"
 CHAT_OPTED_OUT = "chat_opted_out"
 UNKNOWN_SOURCE = "unknown_source"
 SHARED_CONVERSATION = "shared_conversation"
@@ -106,6 +107,8 @@ def decide(facts: SourceFacts, settings: ScopeSettings, *, opted_out: bool = Fal
 
     if not settings.enabled:
         return _deny(LEARNING_OFF)
+    if getattr(settings, "paused", False):
+        return _deny(LEARNING_PAUSED)
     if opted_out:
         return _deny(CHAT_OPTED_OUT)
     if facts.conversation not in ("app", "channel", "workflow"):
@@ -315,9 +318,9 @@ def resolve(
     by default)."""
 
     settings = gate.read_settings(root)
-    if not settings.enabled:
-        return _deny(LEARNING_OFF), SourceFacts("unknown", thread_id=str(thread_id or ""), goal=goal,
-                                                historical=historical)
+    if not settings.enabled or settings.paused:
+        return _deny(LEARNING_PAUSED if settings.enabled else LEARNING_OFF), SourceFacts(
+            "unknown", thread_id=str(thread_id or ""), goal=goal, historical=historical)
     facts = describe_thread(
         thread_id, goal=goal, historical=historical, sender_id=sender_id, lookup=lookup
     )
@@ -367,6 +370,7 @@ __all__ = [
     "CHAT_OPTED_OUT",
     "GOAL",
     "LEARNING_OFF",
+    "LEARNING_PAUSED",
     "MY_CHATS_OFF",
     "NOT_OWNER",
     "OWNER_CHANNEL_CHAT",

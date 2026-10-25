@@ -470,6 +470,34 @@ class LearningStore:
         found = self._parse(rows)
         return found[0] if found else None
 
+    def remove(self, kind: str, record_id: str) -> bool:
+        """Delete one record, its links and the blobs only it named (Undo on a Teach).
+
+        Never creates a store; False when there was nothing to remove.
+        """
+
+        if not self.exists():
+            return False
+        with _LOCK:
+            with self._transaction() as connection:
+                shas = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT sha256 FROM blob_refs WHERE kind = ? AND id = ?", (kind, record_id)
+                    )
+                }
+                removed = connection.execute(
+                    "DELETE FROM records WHERE kind = ? AND id = ?", (kind, record_id)
+                ).rowcount
+                for table in ("owners", "derivations", "blob_refs", "marks"):
+                    connection.execute(f"DELETE FROM {table} WHERE kind = ? AND id = ?", (kind, record_id))
+                connection.execute("DELETE FROM lineage WHERE kind = ? AND child_id = ?", (kind, record_id))
+            if removed:
+                self._checkpoint()
+            if shas:
+                self.gc_blobs(shas)
+        return bool(removed)
+
     def find(
         self,
         kind: str,

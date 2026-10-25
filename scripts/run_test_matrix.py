@@ -65,7 +65,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
 # Outlook through your own Microsoft app (its guide, a code from another device, its states and
 # cards) with Microsoft 365's tenant step and a failed step in words,
-# and pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox).
+# pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox),
+# and Learning (preview): turning it on, its tab, Teach and Undo, and a chat switched off.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -98,6 +99,7 @@ BROWSER_SMOKE_SPECS = (
     "outlook",
     "incognito",
     "live-updates",
+    "learning",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
@@ -123,7 +125,7 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility", "settings-claude-plan", "install-count",
+    "model-visibility", "learning", "settings-claude-plan", "install-count",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")
