@@ -42,13 +42,15 @@ A goal is useful when work needs more than one turn. Set it from the conversatio
 
 ## Delegated Agents
 
-A conversation can delegate parts of its work to agents. Each agent works in its own conversation.
+A conversation can delegate parts of its work to agents, which Row-Bot also calls **helpers**. Row-Bot hands work to helpers by itself when a request has several separate parts, such as researching three products, and works on the rest while they run. Each agent works in its own conversation, reached from the conversation that started it: the sidebar, the conversation library and a new chat's **Recent** list show only your own chats. Search still finds an agent's conversation.
 
 - **In the transcript**, the turn that started agents shows a small stub for each one, with its icon, name and live status (working, waiting for you, done, failed or stopped). A failed agent's stub says why. Click a stub to open that agent's conversation.
 - **In the details card**, **Agents** lists them, live and failed ones first. **Message** sends an agent a note it reads at its next step; **Stop** ends its run.
 - **In an agent's own conversation**, the header leads back to the parent conversation.
-- **When an agent needs approval**, the request appears in the parent conversation and everywhere else approvals show. See [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal#approvals).
+- **When an agent needs approval**, the request appears in the parent conversation and everywhere else approvals show. See [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal#approvals).
 - **If work was interrupted** before it finished, for example by a restart, the card and Overview's **Needs you** offer **Resume agent work** or **Dismiss agent work**.
+- **Model and reasoning**: a helper uses the chat's model and reasoning unless you ask otherwise, for example "use a helper on Sonnet at low effort". Its stub and header show which. A helper keeps the chat's apps, and a read-only helper can only read with them. Helper conversations stay out of the Library.
+- **Start one yourself** with `/agent [--worktree] [--model=…] [--reasoning=level] [profile] <task>`, for example `/agent --reasoning low summarise the thread`. Without a profile it uses the general **worker**.
 
 A completed agent's result is evidence for the parent, not automatic permission to write files, send messages, commit code, or publish.
 

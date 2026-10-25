@@ -228,7 +228,6 @@ def container_run_args(
         "ROW_BOT_DEPLOYMENT_MODE=server",
         "ROW_BOT_HOST=0.0.0.0",
         "ROW_BOT_PORT=8080",
-        "ROW_BOT_BROWSER_HEADLESS=1",
         "PLAYWRIGHT_BROWSERS_PATH=/opt/row-bot/playwright-browsers",
         "XDG_CACHE_HOME=/data/cache",
         "HF_HOME=/data/cache/huggingface",
@@ -237,6 +236,8 @@ def container_run_args(
         "UV_CACHE_DIR=/data/cache/uv",
         "TMPDIR=/data/tmp",
         "ROW_BOT_SECRETS_DIR=/run/secrets",
+        # A smoke never sends install stats to the real service.
+        "ROW_BOT_INSTALL_COUNT=0",
     )
     command = [
         "docker",

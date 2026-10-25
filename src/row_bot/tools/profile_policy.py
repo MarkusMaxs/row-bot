@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import inspect
 import sys
+import typing
 from typing import Any
 
 # Reviewed read halves of the existing built-in composite tools. No prefix or
@@ -30,7 +31,7 @@ _READ_OPERATIONS = {
         "developer_preview_patch",
         "developer_list_agent_changes",
     },
-    "browser": {"browser_snapshot"},
+    "browser": {"browser_extract", "browser_wait_for"},
     "row_bot_status": {"row_bot_status"},
     "conversation_search": {"search_conversations", "list_conversations"},
     "calculator": {"calculate"},
@@ -40,6 +41,8 @@ _READ_OPERATIONS = {
     "url_reader": {"read_url"},
     "agents": {"agent_status", "agent_wait", "agent_profiles"},
     "weather": {"get_current_weather", "get_weather_forecast"},
+    "pages": {"page_read"},
+    "x": {"x_accounts"},
 }
 _RETRIEVAL_PARENTS = {
     "arxiv",
@@ -52,12 +55,35 @@ _RETRIEVAL_PARENTS = {
 _BRIDGE_READS = {"tool_search", "skill_search", "skill_load"}
 
 
-def call_arguments(function: Any, args: tuple, kwargs: dict) -> dict | None:
-    """Bind positional calls without guessing a composite action argument."""
+_RUN_PARAMETERS = frozenset({"callbacks", "run_manager"})
+
+
+def _run_parameters(function: Any) -> set[str]:
+    """What LangChain itself hands a tool that takes it: its callbacks, its run manager and the
+    run's config (to the parameter typed ``RunnableConfig``). They belong to the run, not the call."""
     try:
-        return dict(inspect.signature(function).bind_partial(*args, **kwargs).arguments)
+        from langchain_core.runnables import RunnableConfig
+
+        hints = typing.get_type_hints(function)
+    except Exception:
+        hints = {}
+    return set(_RUN_PARAMETERS) | {name for name, hint in hints.items() if hint is RunnableConfig}
+
+
+def call_arguments(function: Any, args: tuple, kwargs: dict) -> dict | None:
+    """What one call was made with, positional calls bound without guessing a composite action argument.
+
+    Never the run's own values (``_run_parameters``): a card can't be saved with them in the run's
+    checkpoint, and they change each time the call runs, so an approval bound to them never held (B417).
+    """
+    try:
+        arguments = dict(inspect.signature(function).bind_partial(*args, **kwargs).arguments)
     except (TypeError, ValueError):
-        return dict(kwargs) if not args else None
+        if args:
+            return None
+        arguments = dict(kwargs)
+    run_parameters = _run_parameters(function)
+    return {name: value for name, value in arguments.items() if name not in run_parameters}
 
 
 def _mcp_effect(runtime_name: str) -> str:
@@ -95,7 +121,7 @@ def action_effect(
         return "unknown"
     if parent in _RETRIEVAL_PARENTS and name == parent:
         return "read_only"
-    if parent == "browser" and name == "browser_tab":
+    if parent == "browser" and name == "browser_tabs":
         return (
             "read_only" if arguments.get("action", "list") == "list" else "interaction"
         )

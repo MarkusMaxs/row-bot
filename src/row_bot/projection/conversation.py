@@ -12,6 +12,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from row_bot.application.live_updates import publish as _publish_live
+
+# What a conversation's own events change in the app-wide lists (B407): it
+# started, waits on the person or settled, so the sidebar and Home show it.
+_LISTED_CHANGES = {
+    "generation.state": ("conversations",),
+    "approval.required": ("conversations", "approvals"),
+}
+
 
 def public_message(message: Any) -> dict | None:
     from row_bot.turn_context import is_turn_context_message
@@ -214,6 +223,8 @@ class ConversationProjection:
                 state.event_bytes -= size
             self._trim_global(conversation_id)
             result = copy.deepcopy(event)
+        if event_type in _LISTED_CHANGES:
+            _publish_live(*_LISTED_CHANGES[event_type])
         if _notify_observers:
             self._notify(conversation_id, result["projection_revision"])
         return result

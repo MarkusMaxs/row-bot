@@ -126,7 +126,7 @@ def _prepare(project_id: str, *, action: str, channel_name: str | None = None,
     indices = _options('html', pages, None, len(project.pages))
     if len(indices) > 200 or action == 'x' and len(indices) > 4:
         raise ArtifactError('sharing_media_limit')
-    if action != 'channel' and (channel_name is not None or target is not None):
+    if action != 'channel' and (channel_name is not None or target is not None and action != 'x'):
         raise ArtifactError('invalid_share')
     if action == 'channel' and delivery not in {'link', 'slides', 'pdf', 'pptx', 'html'}:
         raise ArtifactError('invalid_share')
@@ -150,8 +150,15 @@ def _prepare(project_id: str, *, action: str, channel_name: str | None = None,
         channel_scope = [id(channel), asdict(registry.get_source(channel_name)), config.get_all(channel_name),
                          caps.photo_out, caps.document_out]
     if action == 'x':
+        # The account it goes out as (``target``: its @handle or ID; the only one when just one is connected).
+        from row_bot import x_accounts
         from row_bot.tools.x_tool import XTool
-        channel_scope = XTool().get_config('post_operations', [])
+        try:
+            account = x_accounts.resolve(target, required=True)
+        except x_accounts.XAccountChoice:
+            raise ArtifactError('x_account_required' if x_accounts.listed() else 'x_account_unavailable') from None
+        recipient = account.handle
+        channel_scope = [XTool().get_config('post_operations', []), account.id, account.username]
     source = project.to_dict()
     source.pop('publish_url', None)
     source.pop('published_at', None)
@@ -458,8 +465,9 @@ def execute_share(project_id: str, *, review_id: str, command_id: str,
                     target=review.recipient, text=text, pages=pages, pptx_mode=pptx_mode,
                     validate=guard, checkpoint=progress, directory=directory, strict=True, publisher=publisher)
             else:
-                result = share.share_project_to_x(project, text=text, pages=pages,
+                result = share.share_project_to_x(project, text=text, pages=pages, account=review.recipient,
                     validate=guard, checkpoint=progress, directory=directory, strict=True)
+                result_url = result.get('url') or None  # The post's own link on X.
             if result.get('success') is False:
                 return SharingOutcome('uncertain', 'delivery_unconfirmed', project_id, expected_revision,
                                       result_url, link_kind, submitted, total)

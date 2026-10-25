@@ -335,7 +335,7 @@ it('shows the kept results after leaving the tab, without running anything', asy
   const view = renderMonitor({ loadHealth, onRunDiagnosis: run });
 
   await waitFor(() =>
-    expect(healthTile('System')).toHaveTextContent('1 of 1 OK'),
+    expect(healthTile('System')).toHaveTextContent('1 check OK'),
   );
   expect(healthTile('System')).toHaveTextContent('checked 4 minutes ago');
   expect(healthTile('Model runtime')).toHaveTextContent('Needs attention');
@@ -397,8 +397,25 @@ it('says "Checking…" until the first checks are kept, then shows them', async 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(5_000);
   });
-  expect(healthTile('System')).toHaveTextContent('1 of 1 OK');
+  expect(healthTile('System')).toHaveTextContent('1 check OK');
   expect(healthTile('System')).toHaveTextContent('checked just now');
+});
+
+it('names what is not in use beside what is OK, never "1 of 3 OK" (U18)', async () => {
+  renderMonitor({
+    loadHealth: vi.fn(async () =>
+      diagnosis(
+        check('GitHub', 'ok', 'Connected as fixture', 'Accounts'),
+        check('Slack', 'inactive', 'Not set up', 'Accounts'),
+        check('Telegram', 'inactive', 'Not set up', 'Accounts'),
+      ),
+    ),
+  });
+  await waitFor(() =>
+    expect(healthTile('Apps')).toHaveTextContent('1 check OK · 2 not in use'),
+  );
+  expect(healthTile('Apps')).toHaveTextContent('OK');
+  expect(healthTile('Apps')).not.toHaveTextContent(/of \d+ OK/);
 });
 
 it('marks a stale connection result and checks again on request', async () => {
@@ -475,14 +492,14 @@ it('runs diagnosis on click and presents the new results', async () => {
   );
   expect(screen.getByText('Checked just now')).toBeVisible();
   expect(healthTile('Model runtime')).toHaveTextContent('Needs attention');
-  expect(healthTile('System')).toHaveTextContent('1 of 1 OK');
+  expect(healthTile('System')).toHaveTextContent('1 check OK');
 
   fireEvent.click(healthTile('Model runtime'));
   const drawer = screen.getByRole('dialog', { name: 'Model runtime' });
   fireEvent.click(within(drawer).getByRole('button', { name: 'Run again' }));
   expect(run).toHaveBeenCalledTimes(2);
   expect(await within(drawer).findByText('Server ready')).toBeVisible();
-  expect(healthTile('Model runtime')).toHaveTextContent('1 of 1 OK');
+  expect(healthTile('Model runtime')).toHaveTextContent('1 check OK');
 });
 
 it('sends each check to the settings page that fixes it, by its name', async () => {
@@ -554,7 +571,7 @@ it('shows a safe diagnosis failure, keeps the last results and allows a retry', 
 
   fireEvent.click(screen.getByRole('button', { name: 'Run diagnosis' }));
   await waitFor(() =>
-    expect(healthTile('System')).toHaveTextContent('1 of 1 OK'),
+    expect(healthTile('System')).toHaveTextContent('1 check OK'),
   );
   expect(run).toHaveBeenCalledTimes(3);
   expect(screen.queryByRole('alert')).toBeNull();
@@ -711,7 +728,7 @@ it('adds failed workflows to the kept scheduler result', async () => {
 
   await waitFor(() =>
     expect(healthTile('Scheduler')).toHaveTextContent(
-      '1 workflow failed last time · 1 of 1 OK',
+      '1 workflow failed last time · 1 check OK',
     ),
   );
   expect(healthTile('Scheduler')).toHaveTextContent('Needs attention');

@@ -878,6 +878,11 @@
           "title": "Id",
           "type": "string"
         },
+        "incognito": {
+          "default": false,
+          "title": "Incognito",
+          "type": "boolean"
+        },
         "parent_conversation_id": {
           "anyOf": [
             {
@@ -1973,7 +1978,9 @@
             "delivery",
             "sandbox_job",
             "sandbox_unprepared",
-            "question_answered"
+            "question_answered",
+            "page",
+            "request_corrected"
           ],
           "title": "Kind",
           "type": "string"
@@ -2013,6 +2020,13 @@
             "timed_out"
           ],
           "title": "Outcome",
+          "type": "string"
+        },
+        "page_id": {
+          "default": "",
+          "maxLength": 64,
+          "pattern": "^(page-[0-9a-f]{8})?$",
+          "title": "Page Id",
           "type": "string"
         },
         "process_id": {
@@ -2302,6 +2316,7 @@
                 "continuation",
                 "agent_task",
                 "agent_guidance",
+                "page",
                 "personal_model_fallback"
               ],
               "type": "string"

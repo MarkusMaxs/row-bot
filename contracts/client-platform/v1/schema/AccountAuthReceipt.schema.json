@@ -6,10 +6,24 @@
         "account": {
           "enum": [
             "google",
-            "x"
+            "x",
+            "microsoft"
           ],
           "title": "Account",
           "type": "string"
+        },
+        "address": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Address"
         },
         "configured": {
           "title": "Configured",
@@ -29,6 +43,7 @@
           "enum": [
             "this_computer",
             "link",
+            "device",
             "unavailable"
           ],
           "title": "Sign In",
@@ -66,7 +81,7 @@
           "type": "string"
         },
         "token_files": {
-          "maximum": 2,
+          "maximum": 17,
           "minimum": 0,
           "title": "Token Files",
           "type": "integer"
@@ -83,6 +98,36 @@
       ],
       "title": "AccountAuthSnapshot",
       "type": "object"
+    },
+    "PlanDeviceCode": {
+      "additionalProperties": false,
+      "description": "A code to enter on the service's own page, on any device (RFC 8628).",
+      "properties": {
+        "user_code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "User Code",
+          "type": "string"
+        },
+        "verification_uri": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Verification Uri",
+          "type": "string"
+        },
+        "verification_uri_complete": {
+          "default": "",
+          "maxLength": 2048,
+          "title": "Verification Uri Complete",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_code",
+        "verification_uri"
+      ],
+      "title": "PlanDeviceCode",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -90,7 +135,8 @@
     "account": {
       "enum": [
         "google",
-        "x"
+        "x",
+        "microsoft"
       ],
       "title": "Account",
       "type": "string"
@@ -122,6 +168,31 @@
       "format": "uuid",
       "title": "Command Id",
       "type": "string"
+    },
+    "device_code": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanDeviceCode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "expires_in": {
+      "anyOf": [
+        {
+          "maximum": 3600,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expires In"
     },
     "message": {
       "maxLength": 256,

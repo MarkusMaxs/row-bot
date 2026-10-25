@@ -225,11 +225,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  install-count:
+    name: Install count collector
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.15.0"
+          package-manager-cache: false
+
+      - name: Install the collector's locked test tools
+        working-directory: services/install-count
+        env:
+          npm_config_audit: "false"
+          npm_config_fund: "false"
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Worker tests (workerd with a local D1)
+        run: python scripts/run_test_matrix.py install-count
+
   ci-ok:
     name: ci-ok
     if: always()
     # Browser smoke is not required yet; it joins once it has been green for a week.
-    needs: [quality, client, python, platform]
+    needs: [quality, client, python, platform, install-count]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

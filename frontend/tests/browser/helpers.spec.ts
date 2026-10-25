@@ -3,6 +3,7 @@ import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
 import {
   composer,
+  dismissNotices,
   headerAction,
   newConversation,
   restoreThinkingDefault,
@@ -20,8 +21,7 @@ const DESKTOP = { width: 1280, height: 900 };
 
 async function views(page: Page, info: TestInfo, name: string) {
   // The passing new-approval notice would cover what the shot is of.
-  const notices = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await notices.count()) await notices.first().click();
+  await dismissNotices(page);
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
     await expect(page.locator('html')).toHaveAttribute(
@@ -40,13 +40,15 @@ async function everywhere(
   name: string,
   settle: () => Promise<void> = async () => {},
 ) {
-  await expect(settle).toPass();
+  // Each settle retries on its own (agentsList for 20 s): a failure says so
+  // then, rather than a retry around it toggling the details for 2 minutes (B402).
+  await settle();
   await views(page, info, name);
   await page.setViewportSize(PHONE);
-  await expect(settle).toPass();
+  await settle();
   await views(page, info, `${name}-phone`);
   await page.setViewportSize(DESKTOP);
-  await expect(settle).toPass();
+  await settle();
 }
 
 /** A chat on the model with thinking levels, with three helpers. */
@@ -74,7 +76,9 @@ async function agentsList(page: Page) {
     name: 'Conversation details',
   });
   const sheet = page.getByRole('dialog', { name: 'Conversation details' });
-  const panel = details.or(sheet).first();
+  // The rail and the phone sheet can both be in the page after a resize; the
+  // list is the one on screen, never the hidden one (B402).
+  const panel = details.or(sheet).filter({ visible: true }).first();
   const agents = panel.locator('summary', { hasText: /^Agents/ });
   // The rail can still be opening (or its Agents section loading) just after a
   // reload, when a check sees nothing and the toggle would close it: try again.
@@ -84,7 +88,8 @@ async function agentsList(page: Page) {
     await expect(agents).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 20_000 });
   const section = agents.locator('xpath=..');
-  if ((await section.getAttribute('open')) === null) await agents.click();
+  if ((await section.getAttribute('open', { timeout: 5_000 })) === null)
+    await agents.click();
   return panel.getByRole('region', { name: 'Delegated tasks' });
 }
 
