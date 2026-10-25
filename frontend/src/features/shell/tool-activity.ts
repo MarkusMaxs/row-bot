@@ -18,6 +18,7 @@ import {
   GitPullRequest,
   Globe,
   Image,
+  LayoutTemplate,
   Mail,
   MessageCircleQuestion,
   MessagesSquare,
@@ -35,6 +36,8 @@ import {
   Zap,
   type LucideIcon,
   PackageOpen,
+  Upload,
+  Download,
 } from 'lucide-react';
 import type {
   TranscriptTraceGroup,
@@ -78,10 +81,18 @@ const EXACT: Record<string, Verb> = {
   browser_navigate: verb('Opened page', 'Opening page', Globe),
   browser_click: verb('Clicked in the browser', 'Clicking', MousePointerClick),
   browser_type: verb('Typed in the browser', 'Typing', MousePointerClick),
+  browser_select: verb(
+    'Chose an option',
+    'Choosing an option',
+    MousePointerClick,
+  ),
+  browser_press: verb('Pressed a key', 'Pressing a key', MousePointerClick),
   browser_scroll: verb('Scrolled the page', 'Scrolling', MousePointerClick),
-  browser_snapshot: verb('Read the browser', 'Reading the browser', Globe),
-  browser_back: verb('Went back', 'Going back', Globe),
-  browser_tab: verb('Switched tab', 'Switching tab', Globe),
+  browser_wait_for: verb('Read the page', 'Reading the page', Globe),
+  browser_extract: verb('Read the page', 'Reading the page', Globe),
+  browser_tabs: verb('Used the tabs', 'Using the tabs', Globe),
+  browser_upload: verb('Uploaded a file', 'Uploading a file', Upload),
+  browser_download: verb('Downloaded a file', 'Downloading a file', Download),
   browser_screenshot: verb('Took a screenshot', 'Taking a screenshot', Camera),
   browser_viewport: verb(
     'Changed the page size',
@@ -89,6 +100,11 @@ const EXACT: Record<string, Verb> = {
     Smartphone,
   ),
   browser_record: verb('Recorded the browser', 'Recording the browser', Video),
+  computer: verb('Used the computer', 'Using the computer', Monitor),
+  // A turn's computer steps, grouped ("Computer activity").
+  computer_activity: verb('Used the computer', 'Using the computer', Monitor),
+  computer_record: verb('Recorded the screen', 'Recording the screen', Video),
+  // Conversations from before 5.3.
   computer_use: verb('Used the computer', 'Using the computer', Monitor),
   wikipedia: verb('Searched Wikipedia', 'Searching Wikipedia', BookOpen),
   arxiv: verb('Searched arXiv', 'Searching arXiv', BookOpen),
@@ -154,6 +170,9 @@ const EXACT: Record<string, Verb> = {
     MessageCircleQuestion,
   ),
   export_to_pdf: verb('Exported a PDF', 'Exporting a PDF', FileText),
+  page_create: verb('Wrote a page', 'Writing a page', LayoutTemplate),
+  page_update: verb('Changed a page', 'Changing a page', LayoutTemplate),
+  page_read: verb('Read a page', 'Reading a page', LayoutTemplate),
   save_memory: verb('Saved a memory', 'Saving a memory', Brain),
   search_memory: verb('Searched memory', 'Searching memory', Brain),
   update_memory: verb('Updated a memory', 'Updating a memory', Brain),
@@ -178,6 +197,36 @@ const EXACT: Record<string, Verb> = {
   send_gmail_message: verb('Sent an email', 'Sending an email', Mail),
   create_gmail_draft: verb('Drafted an email', 'Drafting an email', Mail),
   search_gmail: verb('Searched email', 'Searching email', Mail),
+  outlook_search_mail: verb('Searched email', 'Searching email', Mail),
+  outlook_read_mail: verb('Read an email', 'Reading an email', Mail),
+  outlook_draft_mail: verb('Drafted an email', 'Drafting an email', Mail),
+  outlook_send_mail: verb('Sent an email', 'Sending an email', Mail),
+  outlook_reply_mail: verb('Replied to an email', 'Replying to an email', Mail),
+  outlook_forward_mail: verb('Forwarded an email', 'Forwarding an email', Mail),
+  outlook_update_mail: verb('Filed an email', 'Filing an email', Mail),
+  outlook_delete_mail: verb('Deleted an email', 'Deleting an email', Mail),
+  outlook_list_events: verb(
+    'Checked the calendar',
+    'Checking the calendar',
+    Calendar,
+  ),
+  outlook_find_free_times: verb(
+    'Found free times',
+    'Finding free times',
+    Calendar,
+  ),
+  outlook_create_event: verb('Added an event', 'Adding an event', Calendar),
+  outlook_update_event: verb('Changed an event', 'Changing an event', Calendar),
+  outlook_cancel_event: verb(
+    'Cancelled an event',
+    'Cancelling an event',
+    Calendar,
+  ),
+  outlook_respond_event: verb(
+    'Answered an invitation',
+    'Answering an invitation',
+    Calendar,
+  ),
   delegate_work: verb('Delegated work', 'Delegating work', Bot),
   run_command: verb('Ran a command', 'Running a command', Terminal),
   shell: verb('Ran a command', 'Running a command', Terminal),
@@ -287,6 +336,10 @@ const PATTERNS: Array<[RegExp, Verb]> = [
     /^developer_/,
     verb('Worked in the code folder', 'Working in the code folder', GitBranch),
   ],
+  [
+    /^designer_/,
+    verb('Worked on the design', 'Working on the design', Palette),
+  ],
   [/^(wiki|tracker)_/, verb('Updated notes', 'Updating notes', BookOpen)],
   [/memor/, verb('Used memory', 'Using memory', Brain)],
   [/search$/, verb('Searched', 'Searching', Search)],
@@ -387,6 +440,15 @@ function midSentence(label: string) {
     : label;
 }
 
+/**
+ * A tool call the model is still writing (B324), in its step's own words:
+ * "Writing a page · 3 KB", never the tool's display name or its emoji.
+ */
+export function writingLabel(name: string, bytes: number): string {
+  const size = `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${describe(name)?.running ?? 'Preparing the next step'} · ${size}`;
+}
+
 export function stepIcon(name: string): LucideIcon {
   return describe(name)?.icon ?? Wrench;
 }
@@ -481,14 +543,34 @@ export type ActivitySummary = {
   questions?: number;
 };
 
+/** A call the model got wrong and was told to send again (U11): no failure of the turn's. */
+export function isCorrected(step: TranscriptTraceItem) {
+  return step.specialization?.kind === 'request_corrected';
+}
+
+/**
+ * The turn's steps in order, as a person reads them: a corrected call is left
+ * out once the model sent that tool's call again, so only the last one the
+ * model gave up on shows (one quiet line).
+ */
 export function orderedSteps(groups: TranscriptTraceGroup[]) {
-  return [...groups]
+  const steps = [...groups]
     .sort((first, second) => first.group_order - second.group_order)
     .flatMap((group) =>
       [...group.items].sort(
         (first, second) => first.call_order - second.call_order,
       ),
     );
+  return steps.filter(
+    (step, index) =>
+      !isCorrected(step) ||
+      !steps.some(
+        (other, at) =>
+          other !== step &&
+          other.canonical_name === step.canonical_name &&
+          (!isCorrected(other) || at > index),
+      ),
+  );
 }
 
 const ATTENTION = new Set<StepStatus>([
@@ -514,7 +596,9 @@ export function summarizeActivity(
   return {
     total: steps.length,
     failed: steps.filter(
-      (step) => step.status === 'failed' || step.status === 'uncertain',
+      (step) =>
+        (step.status === 'failed' && !isCorrected(step)) ||
+        step.status === 'uncertain',
     ).length,
     skipped: steps.filter(
       (step) => step.status === 'blocked' || step.status === 'cancelled',
@@ -523,8 +607,9 @@ export function summarizeActivity(
     icons,
     current:
       [...steps].reverse().find((step) => step.status === 'pending') ?? null,
-    questions: steps.filter((step) => step.canonical_name === 'ask_person')
-      .length,
+    questions: steps.filter(
+      (step) => step.canonical_name === 'ask_person' && !isCorrected(step),
+    ).length,
   };
 }
 

@@ -15,11 +15,11 @@ import socket
 import ssl
 from urllib.parse import urljoin, urlsplit
 
-from row_bot.browser.network_security import (
-    _canonical_address,
-    _default_resolver,
-    _is_metadata_address,
-    _is_public,
+from row_bot.browser.addresses import (
+    canonical_address as _canonical_address,
+    default_resolver as _default_resolver,
+    is_metadata_address as _is_metadata_address,
+    is_public as _is_public,
 )
 from row_bot.designer.client_service import ArtifactError
 

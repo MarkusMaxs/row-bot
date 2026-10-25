@@ -61,6 +61,34 @@ it('lists recent chats without the never-used ones', () => {
   ).toEqual(['Your Favourite Tea Is Jasmine', 'Three Tips for a Tidy Desk']);
 });
 
+it('leaves helpers’ own threads out of Recent, as the sidebar does (U12)', () => {
+  const row = (id: string, title: string, parent: string | null = null) =>
+    ({
+      id,
+      title,
+      updated_at: '2026-10-10T07:00:00Z',
+      parent_conversation_id: parent,
+    }) as ConversationView;
+  render(
+    <ChatEmpty
+      conversationId="chat"
+      disabled={false}
+      onChoose={vi.fn()}
+      recent={[
+        row('venus', 'Venus facts', 'planets'),
+        row('planets', 'Planet research'),
+        row('mars', 'Mars facts', 'planets'),
+      ]}
+      onOpen={vi.fn()}
+    />,
+  );
+  expect(
+    within(screen.getByRole('navigation', { name: 'Recent conversations' }))
+      .getAllByRole('link')
+      .map((link) => link.textContent),
+  ).toEqual([expect.stringContaining('Planet research')]);
+});
+
 it('keeps the general suggestions, and two more on request, elsewhere', () => {
   render(
     <ChatEmpty

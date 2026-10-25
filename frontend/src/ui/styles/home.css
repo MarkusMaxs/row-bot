@@ -1278,6 +1278,19 @@
   align-items: center;
   font-size: var(--text-13);
 }
+/* In this app is always on: a tick and the words, never a locked checkbox. */
+.task-delivery-fixed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-13);
+}
+.task-delivery-fixed > svg {
+  flex: none;
+  color: var(--accent-solid);
+}
 .task-delivery .field-hint {
   margin: 0;
   color: var(--text-secondary);

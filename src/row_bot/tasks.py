@@ -47,6 +47,7 @@ from row_bot.approval_policy import (
     normalize_approval_mode,
 )
 from row_bot.data_paths import get_tasks_db_path, get_row_bot_data_dir
+from row_bot.application.live_updates import publish as _publish_live, publishes as _publishes_live
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -73,6 +74,8 @@ _WORKFLOW_READ_ONLY_DEFAULT_DENY_TOOLS = {
     "gmail",
     "goal",
     "image_gen",
+    "outlook_calendar",
+    "outlook_mail",
     "row_bot_updater",
     "task",
     "tracker",
@@ -1110,6 +1113,8 @@ def _infer_migrated_profile_capability(tools: Sequence[str], skills: Sequence[st
         "gmail",
         "goal",
         "image_gen",
+        "outlook_calendar",
+        "outlook_mail",
         "row_bot_updater",
         "task",
         "tracker",
@@ -1573,18 +1578,30 @@ def _canonicalize_workflow_model_override(value: str | None) -> str | None:
 
 
 def _approval_detail(intr: dict) -> str:
-    """One step's approval in words, as the chat's approval card reads; never a dump of its arguments (B312)."""
+    """One step's approval in words, as the chat's approval card reads; never a dump of its arguments (B312).
+
+    The words a Row-Bot gate wrote for its card ("Run shell command: mkdir reports", which starts with
+    its label) come first (U19); any other tool's arguments in words, since an app's own description
+    can be a dump of them.
+    """
+    from row_bot.approval_messages import plain_tool_call, reviewer_note
+
     tool_name = intr.get("tool", "unknown tool")
-    if isinstance(intr.get("args"), dict) and intr["args"]:
-        from row_bot.approval_messages import plain_tool_call
-
-        detail = plain_tool_call(tool_name, intr["args"], label=str(intr.get("label") or ""))
+    description = " ".join(str(intr.get("description") or "").split())
+    label = str(intr.get("label") or "").strip()
+    if label and description.startswith(label):
+        detail = description if len(description) <= 220 else description[:217].rstrip() + "..."
+    elif isinstance(intr.get("args"), dict) and intr["args"]:
+        detail = plain_tool_call(tool_name, intr["args"], label=label)
     else:
-        detail = intr.get("description", "") or f"Tool '{tool_name}' needs approval"
-    # Under Auto, why the reviewer asked rather than approving it.
-    from row_bot.approval_messages import reviewer_note
-
-    note = reviewer_note(intr)
+        detail = description or f"Tool '{tool_name}' needs approval"
+    if intr.get("person_only"):
+        # The person's own rule (Always ask me): it says so, never as the reviewer's question.
+        review = intr.get("review") if isinstance(intr.get("review"), dict) else {}
+        note = str(review.get("reason") or "")
+    else:
+        # Under Auto, why the reviewer asked rather than approving it.
+        note = reviewer_note(intr)
     return f"{detail} ({note})" if note else detail
 
 
@@ -2433,6 +2450,7 @@ def sync_task_schedule(task_id: str, *, validate: Callable[[], None] | None = No
 
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def delete_task(task_id: str, *, expected_revision: str | None = None,
                 validate: Callable[[], None] | None = None,
@@ -2769,6 +2787,7 @@ def capture_task_run_review(task_id: str, enabled_tool_names: Sequence[str]) -> 
         conn.close()
 
 
+@_publishes_live("runs", "conversations")
 def claim_reviewed_task_run(
     task_id: str, thread_id: str, run_id: str, *, expected_task_revision: str,
     expected_policy_revision: str, enabled_tool_names: Sequence[str],
@@ -2869,6 +2888,7 @@ def read_task_run(run_id: str) -> dict | None:
         conn.close()
 
 
+@_publishes_live("runs", "conversations")
 def _reviewed_run_enter(
     run_id: str, task_id: str, thread_id: str, captured: dict,
     validate: Callable[[], None] | None,
@@ -2917,6 +2937,7 @@ def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
         conn.close()
 
 
+@_publishes_live("runs", "approvals", "conversations")
 def stop_reviewed_task_run(task_id: str, run_id: str, *, validate: Callable[[], None]) -> tuple[bool, bool]:
     """Request cancellation only for this durable run and its exact producers."""
     from row_bot.runtime.executions import generation_registry
@@ -3019,6 +3040,7 @@ def _mirror_workflow_agent_run_finish(
         logger.debug("Workflow agent-run mirror finish failed for %s", run_id, exc_info=True)
 
 
+@_publishes_live("runs", "conversations")
 @_schema_retry
 def _record_run_start(task_id: str, thread_id: str, steps_total: int,
                       task_name: str = "", task_icon: str = "", late_for: str = "") -> str:
@@ -3102,6 +3124,7 @@ def _record_run_recall_notices(run_id: str, generation_id: str) -> None:
     conn.close()
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def _finish_run(run_id: str, status: str = "completed",
                 status_message: str = "", terminal_reason: str = "", notice: str = "",
@@ -3143,6 +3166,8 @@ def _finish_run(run_id: str, status: str = "completed",
         conn.execute("DELETE FROM pipeline_state WHERE run_id = ?", (run_id,))
     conn.commit()
     conn.close()
+    if status in ("failed", "blocked", "completed_delivery_failed"):
+        _publish_live("monitor")  # A run that went wrong is one of Monitor's problems.
     _mirror_workflow_agent_run_finish(run_id, status, status_message, terminal_reason)
 
 
@@ -3307,6 +3332,7 @@ def stop_task(thread_id: str) -> bool:
     return registered
 
 
+@_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def cleanup_thread_state(thread_id: str) -> dict[str, int]:
     """Remove queued/thread-owned workflow state while retaining run audits."""
@@ -4264,7 +4290,7 @@ def run_task_background(
             if delivery_status == "delivery_failed":
                 _validate_effect()
                 notify(
-                    title="⚠️ Delivery Failed",
+                    title="Delivery failed",
                     message=f"{task['name']} — {delivery_detail}",
                     sound="timer",
                     toast_type="warning",
@@ -4541,6 +4567,7 @@ def run_task_background(
                     step_retry_delay = step.get("retry_delay_seconds", 5)
                     step_attempt = 0
                     step_succeeded = False
+                    step_failure = ""  # Why its last attempt failed, in plain words.
 
                     while step_attempt < step_max_retries:
                         step_attempt += 1
@@ -4767,6 +4794,8 @@ def run_task_background(
                             break
                         except Exception as exc:
                             _task_log(f"✗ Step {step_index + 1} error: {str(exc)[:80]}")
+                            step_failure = (f"Step {step_index + 1} failed: "
+                                            f"{str(exc).lstrip('⚠️ ').strip() or type(exc).__name__}")
                             err_str = str(exc).lower()
                             override = config["configurable"].get("model_override")
                             if (override
@@ -4785,7 +4814,10 @@ def run_task_background(
                                 )
                             try:
                                 from row_bot.agent import repair_orphaned_tool_calls
-                                repair_orphaned_tool_calls(effective_tool_names, config)
+                                # The call it was making is settled: its chat never reads "Running a command".
+                                repair_orphaned_tool_calls(effective_tool_names, config,
+                                                           orphan_message="[Did not finish: the step failed]",
+                                                           marker_message=f"⚠️ *[{step_failure}]*")
                             except _WorkflowEffectDenied:
                                 raise
                             except Exception:
@@ -4808,6 +4840,8 @@ def run_task_background(
                                 "Task '%s' step %d: on_error=stop — halting pipeline",
                                 task["name"], step_index + 1,
                             )
+                            # A step that ended in an error fails the run (B417).
+                            failure_message = failure_message or step_failure
                             stopped = True
                             break
 
@@ -5373,8 +5407,8 @@ def run_task_background(
                     from row_bot.notifications import notify
                     _validate_effect()
                     notify(
-                        title="⏹️ Task Stopped",
-                        message=f"{task['name']} was stopped.",
+                        title=f"{task['name']} stopped",
+                        message="",
                         sound="workflow",
                         source="workflow",
                     )
@@ -5429,15 +5463,12 @@ def run_task_background(
             # Desktop + in-app notification (always)
             if notification:
                 from row_bot.notifications import notify
-                suffix = ""
-                if delivery_status == "delivered":
-                    suffix = f" → {delivery_detail}"
-                elif delivery_status == "delivery_failed":
-                    suffix = f" (⚠️ {delivery_detail})"
                 _validate_effect()
+                # "Tea haiku test finished", named as workflows are elsewhere (U17); where it went, if it
+                # was delivered. A failed delivery has its own notice below.
                 notify(
-                    title="⚡ Task Complete",
-                    message=f"{task['name']} finished ({total} step{'s' if total != 1 else ''}).{suffix}",
+                    title=f"{task['name']} finished",
+                    message=delivery_detail if delivery_status == "delivered" else "",
                     sound="workflow",
                     source="workflow",
                     requested=True,
@@ -5445,7 +5476,7 @@ def run_task_background(
                 if delivery_status == "delivery_failed":
                     _validate_effect()
                     notify(
-                        title="⚠️ Delivery Failed",
+                        title="Delivery failed",
                         message=f"{task['name']} — {delivery_detail}",
                         sound="timer",
                         toast_type="warning",
@@ -5781,6 +5812,7 @@ def _run_waiting_for_approval(task_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+@_publishes_live("runs", "conversations")
 def _skip_scheduled_run(task: dict, waiting: dict) -> None:
     """Record and announce a scheduled run skipped behind a waiting one (B255).
 
@@ -5896,6 +5928,20 @@ def sync_all_jobs() -> None:
     for task in tasks:
         _sync_job(task)
     logger.info("Synced %d task(s) to APScheduler", len(tasks))
+
+
+@_schema_retry
+def count_scheduled_workflows() -> int:
+    """How many workflows are on and run on a schedule: those the scheduler holds a job for (B414).
+
+    One that runs only when started, or a one-time run that has happened, isn't scheduled.
+    """
+    conn = _get_conn()
+    try:
+        rows = conn.execute("SELECT schedule, at, last_run, timezone FROM tasks WHERE enabled = 1").fetchall()
+    finally:
+        conn.close()
+    return sum(1 for row in rows if _build_trigger(dict(row)) is not None)
 
 
 # ── Runs missed while Row-Bot was closed (N9) ─────────────────────────────────
@@ -6326,6 +6372,7 @@ def _load_pipeline_state(resume_token: str) -> dict | None:
     return d
 
 
+@_publishes_live("runs", "conversations")
 @_schema_retry
 def _update_pipeline_status(run_id: str, status: str) -> None:
     """Update the status of a pipeline state entry."""
@@ -6751,6 +6798,7 @@ def _approval_for_token(resume_token: str) -> dict | None:
     return dict(row) if row else None
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def _claim_person_approval(run_id: str, step_id: str, binding: str) -> bool:
     """Use, once, the person's approval of exactly *binding* for this step of this run."""
@@ -6810,6 +6858,7 @@ def _stop_unapproved_run(state: Mapping[str, Any], task: Mapping[str, Any], enab
                                thread_id=str(state.get("thread_id") or ""), label=notice)
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def create_approval_request(
     run_id: str,
@@ -6945,6 +6994,7 @@ def get_pending_approvals(
     return [dict(r) for r in rows]
 
 
+@_publishes_live("approvals", "conversations")
 def cancel_agent_run_approvals(agent_run_id: str) -> int:
     """Withdraw a stopped Agent's pending approvals; its question no longer applies.
 
@@ -6977,6 +7027,7 @@ def cancel_agent_run_approvals(agent_run_id: str) -> int:
     return len(ids)
 
 
+@_publishes_live("approvals", "conversations")
 @_schema_retry
 def respond_to_approval(resume_token: str, approved: bool,
                          note: str = "",
@@ -7136,6 +7187,7 @@ def respond_to_approval(resume_token: str, approved: bool,
     return True
 
 
+@_publishes_live("approvals", "conversations")
 def claim_conversation_approval(approval_id: str, approved: bool, *, expected_payload: str,
                                 expected_timeout: str | None) -> dict | None:
     """CAS the existing approval owner without dispatching a second worker."""
@@ -7228,6 +7280,7 @@ def iter_task_approval_snapshot(task_id: str, run_id: str) -> Iterator[tuple[dic
         conn.close()
 
 
+@_publishes_live("approvals", "conversations")
 def claim_reviewed_task_approval(
     task_id: str, run_id: str, approval_id: str, *, expected_revision: str,
     approved: bool, validate: Callable[[], None],
@@ -7309,6 +7362,8 @@ def _check_approval_timeouts() -> None:
         conn.commit()
     finally:
         conn.close()
+    if claimed:
+        _publish_live("approvals", "conversations")
     for r in claimed:
         try:
             _apply_approval_timeout(r)

@@ -114,9 +114,19 @@ const FILTERS: { value: Filter; label: string }[] = [
 /** Scheduled and Failed filter every saved workflow, read page by page. */
 const CLIENT_FILTER_PAGES = 20;
 
+/** A one-off ("Once") workflow that has run, with nothing left to run: done, not unscheduled (U17). */
+function ranOnce(task: TaskSummary) {
+  return Boolean(
+    task.at &&
+    !task.schedule &&
+    task.last_run &&
+    !parseTimestamp(task.next_run),
+  );
+}
+
 function matchesFilter(task: TaskSummary, filter: Filter) {
   if (filter === 'scheduled')
-    return task.enabled && Boolean(task.schedule || task.at);
+    return task.enabled && Boolean(task.schedule || task.at) && !ranOnce(task);
   if (filter === 'failed')
     return FAILED_RUN_STATUSES.has(
       String(task.last_status ?? '').toLowerCase(),
@@ -905,11 +915,13 @@ export function SavedTasks({
                         </>
                       ) : (
                         <span className="workflow-next-none">
-                          {task.schedule || task.at
-                            ? task.enabled
-                              ? 'Not scheduled'
-                              : 'Paused'
-                            : ''}
+                          {ranOnce(task)
+                            ? 'Done'
+                            : task.schedule || task.at
+                              ? task.enabled
+                                ? 'Not scheduled'
+                                : 'Paused'
+                              : ''}
                         </span>
                       )}
                     </span>

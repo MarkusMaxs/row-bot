@@ -441,12 +441,19 @@ def cancel_auth(*, owner_id: str, command_id: str, validate: Callable[[], None] 
             return result
     with _LOCK:
         flow = _running(owner_id, command_id)
+        # Its own wait ran out and its thread is recording that end right now (macOS CI, B408).
+        ending = flow is not None and flow.state == "expired"
         if flow and flow.state in {"starting", "waiting"}:
             flow.state, flow.authorization_url = "cancelled", ""
             flow.event.set()
             result = _receipt(flow)
         elif not flow and result["state"] == "expired":
             result.update(state="cancelled", message="Interrupted sign-in cancelled. Review the connection before signing in again.")
+    if ending:
+        # Record the same end here, so the change no longer reads as unfinished ("Finishing your last
+        # change") while that thread catches up. Nothing is sent; the thread records it again.
+        _persist(flow, complete=True)
+        return result
     _settle_recovered(owner_id, command_id, result)
     if result["state"] == "cancelled" and flow:
         admissions.complete_command(owner_id, command_id, {k: v for k, v in result.items() if k != "authorization_url"})

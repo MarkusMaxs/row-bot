@@ -1,21 +1,30 @@
-# Computer Use Beta: architecture and security decision
+# Computer Use: architecture and security decision
 
-Status: accepted and implemented for Row-Bot 4.5.0
-Implementation: `src/row_bot/computer_use/`,
-`src/row_bot/tools/computer_use_tool.py`, and
-`src/row_bot/ui/computer_use.py`
+Status: accepted for Row-Bot 4.5.0; rebuilt for 5.3 (N12-B)
+Implementation: `src/row_bot/computer_use/` and
+`src/row_bot/tools/computer_use_tool.py`
 
 ## Decision
 
-Row-Bot will expose an opt-in, provider-neutral `computer_use` tool for native
-desktop applications. Browser remains the preferred and separate DOM-based
-engine for web tasks. Computer Use is restricted to an interactive local UI,
-one exclusive task-scoped session, target-window capture, and an allowlisted
-subset of the unchanged upstream Cua Driver MCP surface.
+Row-Bot exposes an opt-in, provider-neutral `computer` tool (and
+`computer_record` for screen videos) for apps on this computer. Row-Bot's own
+browser remains the preferred engine for websites. Computer use runs only in
+an interactive local chat, one session at a time, in view: Row-Bot brings the
+chosen window to the front and acts on it with real mouse and keyboard input
+through an allowlisted subset of the unchanged upstream Cua Driver MCP surface,
+while a Stop bar shows on screen.
+
+The 5.3 rebuild removed Row-Bot's verdict layer above Cua (take over, verify
+fresh state, escalate, routes, leases, opaque per-capture tokens, background-
+first delivery and the separate Vision step). Safety now comes from
+visibility (the bar, the live picture in the chat), interruption (Esc, Stop,
+and the person's own input pausing Row-Bot), and approvals at the moments
+that matter. The Cua Driver integration, its consent and its telemetry are
+unchanged.
 
 The integration does not add Row-Bot telemetry, a Cua fork, unattended host
 automation, provider-native computer protocols, a generic multimodal MCP
-layer, personal-browser attachment, desktop replay, or a VM backend.
+layer, desktop replay, or a VM backend.
 
 ## Reviewed upstream dependency
 
@@ -76,27 +85,24 @@ bounded recording-usage flag, never the folder path or the video.
 
 The private client permits only:
 
-| Cua tool | Row-Bot use | Policy class |
-|---|---|---|
-| `list_apps`, `list_windows` | private discovery | observation |
-| `get_window_state` | target-window tree and screenshot | observation |
-| `launch_app` | allowlisted display-name launch | routine or consequential |
-| `bring_to_front` | explicit visible focus of the selected app/window | routine unless the expected effect is consequential |
-| `click`, `double_click`, `right_click` | token-first selection | routine or consequential |
-| `type_text`, `set_value`, `press_key`, `hotkey` | non-secret text/input; token-bound `type_text` is Cua's exact focus-and-insert transaction, tokenless `type_text` preserves the current caret/selection, and `set_value` performs exact textual replacement | routine, consequential, or handoff |
-| `scroll`, `drag` | bounded target-window input | routine |
-| `health_report`, `check_permissions` | readiness after disclosure | internal only |
-| `start_session`, `end_session` | private window-scoped lifecycle | internal only |
-| `verify_state` | one bounded service-derived exact postcondition | internal only |
-| `invoke_menu` | exact 1-16-label native menu path | capability-gated and policy-gated |
-| `start_recording`, `stop_recording`, `get_recording_state` | screen recording (F2), only through `CuaClient.call_recording` on a client of its own | approval-gated start; stop needs none |
+| Cua tool | Row-Bot use |
+|---|---|
+| `list_apps`, `list_windows` | the windows a person works in, and the names people know their apps by |
+| `get_window_state` | one window's picture and controls |
+| `launch_app` | open an app by its name (never a path, an address or arguments), after asking |
+| `bring_to_front` | bring the chosen window forward before real input |
+| `click`, `double_click`, `right_click`, `drag`, `scroll` | real pointer input on that window, at a point in its picture, with `delivery_mode: foreground` |
+| `type_text`, `press_key`, `hotkey` | real keyboard input on that window, `delivery_mode: foreground` |
+| `health_report`, `check_permissions` | readiness after disclosure (internal) |
+| `start_session`, `end_session` | the private session lifecycle (internal) |
+| `start_recording`, `stop_recording`, `get_recording_state` | screen recording (F2), only through `CuaClient.call_recording` on a client of its own |
 
 Screen recording never goes through the model's action schema or the generic
 call paths (they keep refusing the recording family). `start_recording` always
 gets exactly one absolute output folder under Row-Bot's data and
 `record_video: true`; nothing else is accepted. The recording runs on its own
-Cua session, so the Computer Use lease, Stop and Take over never end it by
-accident and Computer Use actions aren't written into its folder. Once the
+Cua session, so stopping a computer use session never ends it by
+accident and computer use actions aren't written into its folder. Once the
 video is saved to the conversation (25 MB at most), the whole folder,
 including Cua's per-step pictures and action records, is removed; a folder a
 crash left behind is removed on the next start. On Windows, Cua's video needs
@@ -111,90 +117,45 @@ and maintenance surfaces are forbidden and never model-visible.
 
 ## Security invariants
 
-- Computer Use is off by default and unavailable to schedules, channels,
-  background workflows, child agents, and headless/server callers.
-- The exclusive lease covers discovery, capture, Vision fallback, and input.
-- Stop and Take over cancel queued work before mutation is exposed. Take over
-  retains a paused lease; Resume requires a fresh observation.
-- Target IDs and element tokens are opaque and generation-bound. Target drift,
-  reconnects, approval waits, and takeover invalidate them.
-- Compact native observations retain the existing 80-element and 12 KiB model
-  limits while promoting visible selected elements and reserving a small,
-  deterministic document/grid share. They expose only labels plus useful
-  `selected=true` or `enabled=false` state; values, geometry, and parent trees
-  remain model-hidden.
-- Token-bound `type` passes the latest current token directly to Cua after
-  Row-Bot rejects only explicit disabled, read-only, secure, protected, and
-  clearly structural targets. Combo controls, cells, data items, and unknown
-  interactive roles may reach Cua. Row-Bot does not pre-capture, geometry-
-  rematch, click, focus, or select. Tokenless `type` is one Cua action at the
-  current caret or selection and preserves literal input.
-- Only an explicit pre-dispatch `background_unavailable` refusal permits one
-  foreground `type_text` call. Cua owns focus establishment; Row-Bot never calls
-  `bring_to_front` as hidden preparation and never replays a dispatched
-  unverifiable insertion.
-- `replace_text` sends one current token to Cua `set_value` with no mandatory
-  baseline, geometry rematch, or post-capture. A caller may request at most one
-  later capture. One unique exact native value readback can upgrade an
-  unverifiable result to `verified_scope=exact_value`; web accessibility echo
-  with an unverifiable driver verdict and an unavailable native value remain
-  delivered/unverified. Exact value proves only the control value, never commit,
-  evaluation, navigation, saved state, or overall task completion.
-- Credentials, OTP, CAPTCHA, biometric, UAC/TCC, terminals, password managers,
-  Row-Bot itself, secure desktops, and elevation are handed off or blocked.
-- Routine capture obtains target-window pixels and semantics once but makes no
-  Vision call. Tree-only stale refreshes request no screenshot. Routine type,
-  click, and key actions make one mutation call and no hidden capture; cheap
-  action receipts do not imply a fresh observation.
-- Screenshot bytes are ephemeral. Typed values are excluded from logs,
-  histories, checkpoints, approval payloads, memory, and durable media.
-- Consequential actions require point-of-risk confirmation even in Auto mode.
-  Enter/Return, fresh coordinates, and foregrounding are routine when their
-  semantic target and expected effect are non-consequential; send, submit,
-  purchase, delete, permission, and other external effects still require
-  approval.
-- App-scoped acquisition uses generic normalized identity words and prefers the
-  unique active or visible matching window. It may return at most eight running
-  candidates or opaque same-app targets when real ambiguity remains. It never
-  exposes unrelated titles, uses application-specific aliases, or silently
-  launches a candidate.
-- UI text and accessibility content are untrusted tool output and cannot grant
-  new scope, recipients, secrets, or authority.
-- Prompt-injection pattern matches in native labels and values are advisory
-  evidence, not mutation authorization. Row-Bot scans app-authored fields
-  independently without treating accessibility roles as instructions, then
-  applies the same exact-target, protected-surface, credential, consequential-
-  action, and thread approval policy whether or not an advisory is present.
-  Model-visible diagnostics contain only deduplicated bounded categories such
-  as `explicit_role_marker`, `instruction_override`, `exfiltration_request`,
-  or `hidden_control_anomaly`, never the matching value, identity, title,
-  token, coordinate, or position.
-- Approval interruption emits a privacy-safe pending diagnostic rather than a
-  successful completed-action receipt. Resume can dispatch at most once and
-  emits one final completed, failed, denied, or cancelled receipt without typed
-  text, labels, titles, tokens, coordinates, screenshots, or approval secrets.
-- Compact receipts keep transport acceptance, dispatch, driver verification,
-  verified scope, delivery mode, route, error code, and target independent.
-  `ok=true`, dispatched, and unverified is useful delivery. It does not freeze
-  Enter, navigation, later fields, capture, or the model's truthful final
-  answer. Row-Bot stores no pending mutation, replay state, completion ledger,
-  or Computer-specific failure budget.
-- A stale driver refusal returns the original bounded error plus at most one
-  fresh semantic observation. The refused mutation is not replayed and does not
-  consume session-wide progress state. Stop, cancellation, and takeover never
-  rewrite prior receipts as success.
-- Token-based semantic replacement stays on the native fast path unless
-  `capture_after=true` and one explicit visual question requests exactly one
-  advisory Vision check. Vision is not automatically repeated or parsed as
-  authorization or a Boolean postcondition.
-- Terminal `hard_blocked` results are reserved for concrete protected targets
-  or capabilities and Block approval mode; they remain terminal and must not be
-  bypassed by aliases or alternate Computer actions.
-
-Generic Computer Use is not a substitute for a purpose-built structured or
-application API for large bulk transformations. Row-Bot exposes no
-model-visible clipboard action and does not use hidden shell clipboard commands
-to simulate one.
+- Computer use is off by default and unavailable to schedules, channels,
+  background workflows, helper agents, and headless/server callers. Its picture
+  and Stop in the conversation are on this computer's desktop app only; the
+  chat's Stop works from any signed-in device.
+- One session at a time: it belongs to one chat's turn and ends with it (a turn
+  waiting on the person keeps it). Another chat is told the computer is busy.
+- Input is real and foreground: the window comes to the front, then Cua's
+  foreground delivery acts on it. Cua confirms the target is in front before it
+  sends keyboard input; when Windows keeps another window in front (a locked
+  screen), no input is sent and the result says so.
+- The Stop bar runs in its own helper process, always on top, never activated.
+  Esc or its Stop end the turn at once (as the chat's Stop does). The person's
+  own mouse and keyboard between actions (Windows tells injected input apart
+  exactly; macOS by timing, unverified on a Mac) make the next action ask
+  "Carry on?" on a question card; the action it was about to do is never
+  replayed, and the model gets a fresh picture.
+- Asking first (D19), through the shared approval levels (Ask: the person;
+  Auto: the reviewer may approve what clearly matches the request, otherwise
+  the person; Hands-off: runs; Block: refused; a workflow's "Always ask me":
+  the person): the first use of each app in a chat, and paying, buying, booking
+  with a charge, sending, posting, deleting files and system settings. An
+  action is judged by the control under the pointer (its accessible name and
+  role, as the browser judges a page), the app, and what a key does in that
+  kind of app. The card shows the window with a ring where Row-Bot will click.
+- Row-Bot never types into a password, one-time code or card field (by the
+  field's role and name; also when its label was clicked), and covers those
+  fields in the model's picture. Terminals, password managers, Row-Bot itself,
+  protected system screens, and the keys that open other apps or the secure
+  screen (the Windows key, Spotlight, Ctrl+Alt+Delete) are refused.
+- Pictures are ephemeral: in memory only, never written to media, checkpoints,
+  logs or command receipts. Typed values are excluded from logs, histories,
+  approval payloads, memory, and durable state.
+- UI text and accessibility content are untrusted tool output (fenced as
+  external content) and cannot grant scope, recipients, secrets, or authority.
+- Residual risks: a click where the accessibility tree has no control (canvas,
+  custom-drawn surfaces) can't be classified, so a payment drawn as pixels
+  wouldn't ask; a password field the app doesn't name or mark as secure isn't
+  recognised; real input can be seen by whatever window is truly in front if
+  Windows' foreground state changes between Row-Bot's check and its input.
 
 ## Upstream contract binding
 

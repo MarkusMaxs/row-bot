@@ -1,5 +1,1 @@
-"""Opt-in, task-scoped native desktop control for Row-Bot."""
-
-from row_bot.computer_use.service import ComputerUseService, get_computer_use_service
-
-__all__ = ["ComputerUseService", "get_computer_use_service"]
+"""Computer use: Row-Bot works in an app on this computer with the real mouse and keyboard, in view."""

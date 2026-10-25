@@ -50,15 +50,16 @@ _CONFIG_LOCK = tool_configuration.LOCK
 
 # ── Config persistence ───────────────────────────────────────────────────────
 def _read_config(path: pathlib.Path) -> dict:
-    """Load the persisted config from disk."""
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            logger.warning("Failed to load tools config from %s", path, exc_info=True)
-            return {}
-    return {}
+    """Load the persisted config from disk, never in the middle of a save (B408)."""
+    with _CONFIG_LOCK:
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, OSError):
+                logger.warning("Failed to load tools config from %s", path, exc_info=True)
+                return {}
+        return {}
 
 
 def _load_config() -> dict:
@@ -209,8 +210,9 @@ def read_policy_snapshot() -> dict:
     import inspect
 
     path = get_row_bot_data_dir(create=False) / "tools_config.json"
-    saved = tool_configuration.read_saved(path)
     with _CONFIG_LOCK:
+        # The saved file and the loaded switches as of one moment: a save in between is all or nothing (B408).
+        saved = tool_configuration.read_saved(path)
         if len(_tools) > 10000:
             raise ValueError("tool_policy_unavailable")
         same_scope = path == _active_config_path
