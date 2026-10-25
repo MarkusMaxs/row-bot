@@ -1,8 +1,30 @@
 {
   "$defs": {
+    "ComputerUseProblem": {
+      "additionalProperties": false,
+      "description": "Why computer use couldn't start in this conversation, and how to fix it.",
+      "properties": {
+        "fix": {
+          "maxLength": 240,
+          "title": "Fix",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 240,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "fix"
+      ],
+      "title": "ComputerUseProblem",
+      "type": "object"
+    },
     "ComputerUseSnapshot": {
       "additionalProperties": false,
-      "description": "The conversation's computer-use card: plain state and what it can do.",
+      "description": "The conversation's computer use step: the app, what Row-Bot is doing, Stop.",
       "properties": {
         "active": {
           "title": "Active",
@@ -12,28 +34,6 @@
           "maxLength": 120,
           "title": "App",
           "type": "string"
-        },
-        "approval_id": {
-          "anyOf": [
-            {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9:_-]+$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Approval Id"
-        },
-        "can_pause": {
-          "title": "Can Pause",
-          "type": "boolean"
-        },
-        "can_resume": {
-          "title": "Can Resume",
-          "type": "boolean"
         },
         "can_stop": {
           "title": "Can Stop",
@@ -46,9 +46,24 @@
           "title": "Conversation Id",
           "type": "string"
         },
+        "doing": {
+          "maxLength": 200,
+          "title": "Doing",
+          "type": "string"
+        },
         "has_picture": {
           "title": "Has Picture",
           "type": "boolean"
+        },
+        "problem": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ComputerUseProblem"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "revision": {
           "pattern": "^[0-9a-f]{64}$",
@@ -65,10 +80,14 @@
             "working",
             "paused",
             "waiting_approval",
-            "needs_attention",
             "stopped"
           ],
           "title": "State",
+          "type": "string"
+        },
+        "window": {
+          "maxLength": 200,
+          "title": "Window",
           "type": "string"
         }
       },
@@ -79,10 +98,10 @@
         "active",
         "state",
         "app",
+        "window",
+        "doing",
         "has_picture",
-        "approval_id",
-        "can_pause",
-        "can_resume",
+        "problem",
         "can_stop"
       ],
       "title": "ComputerUseSnapshot",
@@ -92,11 +111,7 @@
   "additionalProperties": false,
   "properties": {
     "action": {
-      "enum": [
-        "computer_use.stop",
-        "computer_use.pause",
-        "computer_use.resume"
-      ],
+      "const": "computer_use.stop",
       "title": "Action",
       "type": "string"
     },

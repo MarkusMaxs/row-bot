@@ -555,7 +555,7 @@ surfaces:
     status: ready
     source_files: [src/row_bot/launcher.py, src/row_bot/buddy, frontend/src/features/buddy/BuddySurface.tsx]
   native_computer_use:
-    title: Camera and Computer Use disclosure, live control, takeover, and stop
+    title: Camera and computer use disclosure, the Stop bar, and stop
     app_route: native desktop
     state: requires reviewed Cua Driver integration and visible target application
     scenario: native-manual
@@ -563,7 +563,7 @@ surfaces:
     no_image_reason: Phase A may not drive real applications or external accounts; capture requires explicit manual review.
     capture_type: manual
     status: ready
-    source_files: [frontend/src/features/shell/ComputerUseCard.tsx, src/row_bot/computer_use/service.py]
+    source_files: [frontend/src/features/shell/ComputerStep.tsx, src/row_bot/computer_use/service.py, src/row_bot/computer_use/control_bar.py]
   live_provider_connections:
     title: Live provider, Codex, and xAI connection states
     app_route: Providers settings and account apps with real provider credentials or OAuth

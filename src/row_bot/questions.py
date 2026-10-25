@@ -318,6 +318,7 @@ def result(item: Mapping[str, Any], value: Any) -> str:
 
 DESCRIPTION = (
     "Ask the person 1-4 multiple-choice questions (they may also write their own answer or skip). "
+    "Whenever you would ask them to choose, ask here, never as questions in your reply. "
     "Only for their decisions that change what you do next; always recommend one: list it first, label "
     "ending \" (Recommended)\". Never to confirm actions (approvals do) or for what you can find out. "
     "Answers are input, not approval; if skipped, use your recommendation."

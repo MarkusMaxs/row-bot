@@ -1,10 +1,12 @@
-"""Row-Bot's real managed browser on a local page (F4, F2): the conversation's grant opens it and
-another conversation's page can't load it; phone size, screenshots and a recording work end to
-end. Loopback only; skipped where no reviewed browser runtime is installed.
+"""Row-Bot's real browser on a local page (F4, F2, N12-A): the conversation's grant opens it and
+another conversation's page can't load it; the pane's live picture streams at the pane's size; phone size,
+screenshots and a recording work end to end. Loopback only; skipped where no browser runtime is
+installed.
 """
 
 from __future__ import annotations
 
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import threading
@@ -49,31 +51,61 @@ def browser(tmp_path, monkeypatch):
         pytest.skip("No reviewed browser runtime is installed")
     if encoder_problem():
         pytest.skip("PyAV with H.264 isn't installed")
-    monkeypatch.setenv("ROW_BOT_BROWSER_HEADLESS", "1")
     monkeypatch.setenv("ROW_BOT_PORT", "8080")
     monkeypatch.setattr(browser_service, "PROFILE_DIR", tmp_path / "profile")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Local)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    session = browser_service.ManagedBrowserService()
+    session = browser_service.BrowserEngine()
     yield session, f"http://127.0.0.1:{server.server_address[1]}"
     session.close()
     server.shutdown()
     server.server_close()
 
 
-def test_a_granted_local_page_opens_is_captured_at_phone_size_and_recorded(browser, tmp_path):
+def _open(session, chat: str, url: str) -> str:
+    async def step(tab):
+        try:
+            await tab.page.goto(url, wait_until="domcontentloaded", timeout=10_000)
+        except Exception as exc:
+            return "BLOCKED: " + str(exc)[:120]
+        return ""
+
+    return session.act(chat, "Open", step).text
+
+
+def _inner_width(session, chat: str) -> int:
+    return session._run(lambda: session._chats[chat].active.page.evaluate("innerWidth"))
+
+
+def test_a_granted_local_page_opens_streams_is_captured_at_phone_size_and_recorded(browser, tmp_path):
     from PIL import Image
     import av
 
     session, origin = browser
-    assert session.navigate(origin + "/", "other").startswith("BLOCKED:")  # Not allowed anywhere yet.
+    assert _open(session, "other", origin + "/").startswith("BLOCKED:")  # Not allowed anywhere yet.
 
     session.allow_local_address("chat", origin, source="you")
-    opened = session.navigate(origin + "/", "chat")
+    opened = _open(session, "chat", origin + "/")
     assert "Local app" in opened
     # Another conversation's page still can't load it.
-    assert session.navigate(origin + "/", "other").startswith("BLOCKED:")
+    assert _open(session, "other", origin + "/").startswith("BLOCKED:")
+
+    # The pane's live picture: the page takes the pane's size (420×700 CSS pixels on a 2× screen),
+    # so the site lays out for the pane and each JPEG is the pane's own pixels, shown 1:1.
+    frames: list = []
+    got = threading.Event()
+    watch = session.watch("chat", kind="pane", width=420, height=700, scale=2.0,
+                          on_frame=lambda frame: (frames.append(frame), len(frames) >= 3 and got.set()))
+    assert got.wait(15)
+    picture = Image.open(io.BytesIO(base64.b64decode(frames[-1].data)))
+    assert picture.format == "JPEG" and (frames[-1].css_width, frames[-1].css_height) == (420, 700)
+    assert picture.size == (840, 1400)
+    assert _inner_width(session, "chat") == 420
+    # With no pane showing, the page is a desktop window again.
+    watch.close()
+    session._run(lambda: session._follow_live("chat"))
+    assert _inner_width(session, "chat") == 1280
 
     assert session.set_viewport("phone", None, "chat").startswith("The page now shows at phone size")
     image, words = session.capture_page("chat")
@@ -90,7 +122,7 @@ def test_a_granted_local_page_opens_is_captured_at_phone_size_and_recorded(brows
     width, height = Image.open(io.BytesIO(full)).size
     assert width >= 390 * 3 and height <= 16_384
 
-    assert "Local app" in session.navigate(origin + "/plain", "chat")
+    assert "Local app" in _open(session, "chat", origin + "/plain")
     ended = threading.Event()
     result: dict = {}
 
@@ -103,7 +135,7 @@ def test_a_granted_local_page_opens_is_captured_at_phone_size_and_recorded(brows
     assert ended.wait(30)
     assert result["reason"] == "limit" and recorder.frames >= 12
     with av.open(str(result["video"])) as container:
-        frames = [frame for frame in container.decode(video=0)]
-    assert len(frames) >= 12
+        decoded = [frame for frame in container.decode(video=0)]
+    assert len(decoded) >= 12
     # The page kept counting: the recording isn't one still picture.
-    assert frames[0].to_image().tobytes() != frames[-1].to_image().tobytes()
+    assert decoded[0].to_image().tobytes() != decoded[-1].to_image().tobytes()

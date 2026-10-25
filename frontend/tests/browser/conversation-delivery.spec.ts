@@ -2,7 +2,7 @@ import type { Browser, Page, TestInfo } from '@playwright/test';
 import fs from 'node:fs/promises';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
-import { composer, newConversation } from './unified-helpers';
+import { composer, dismissNotices, newConversation } from './unified-helpers';
 
 /*
  * F7 · Send a file to your devices or a chat app. The fixture scripts the
@@ -77,8 +77,7 @@ async function phoneOf(page: Page, browser: Browser) {
 /** Notices from earlier work (the last ten minutes) show once on a new device; clear them. */
 async function clearNotices(page: Page) {
   await page.waitForTimeout(800);
-  const dismiss = page.getByRole('button', { name: 'Dismiss notification' });
-  while (await dismiss.count()) await dismiss.first().click();
+  await dismissNotices(page);
 }
 
 test.afterEach(async ({ page }) => {

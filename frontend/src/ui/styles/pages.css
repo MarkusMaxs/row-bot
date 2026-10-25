@@ -1,0 +1,251 @@
+/*
+ * Pages (N5): a page beside its chat (the side panel, full screen on a
+ * phone), its card in the chat, the person's message sent from it, and
+ * Library › Pages. The page itself is in a sandboxed frame; only the thin
+ * toolbar and the decisions footer around it are Row-Bot's.
+ */
+.page-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--canvas);
+}
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: 2px var(--space-2) 2px var(--space-3);
+  border-bottom: 1px solid var(--border-hairline);
+  background: var(--surface);
+}
+.page-toolbar-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+  line-height: var(--type-line-metadata);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-frame-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.page-frame {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--canvas);
+  color-scheme: normal;
+}
+.page-frame-wrap[data-status='loading'] .page-frame {
+  visibility: hidden;
+}
+.page-frame-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: start;
+  padding: var(--space-4);
+}
+
+/* The decisions footer: the person's one action, outside the page. */
+.page-footer {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  padding-bottom: calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface);
+}
+.page-footer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.page-footer-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-13);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+.page-footer-count:hover {
+  background: var(--surface-hover);
+}
+.page-footer-count:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.page-footer-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+  line-height: var(--type-line-metadata);
+}
+.page-footer-send {
+  margin-left: auto;
+}
+.page-decisions {
+  display: grid;
+  gap: 2px;
+  max-height: min(40vh, 240px);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  overflow: auto;
+  list-style: none;
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.page-decisions strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.page-decision-note {
+  color: var(--text-muted);
+}
+.page-footer-notice,
+.page-footer-error {
+  margin: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.page-footer-notice {
+  color: var(--status-success-text);
+}
+.page-footer-error {
+  color: var(--status-danger-text);
+}
+@media (max-width: 767px) {
+  .page-footer-send {
+    flex: 1 1 100%;
+  }
+}
+
+/* In the chat */
+.page-card .transcript-card-text {
+  display: grid;
+}
+.page-card-pending {
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+  line-height: var(--type-line-metadata);
+}
+.message-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+  line-height: var(--type-line-metadata);
+}
+
+/* Library › Pages */
+.library-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.page-library {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.page-library-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+}
+.page-library-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.page-library-row {
+  border-radius: var(--radius-control);
+}
+.page-library-row:is(:hover, :focus-within) {
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+.page-library-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 48px;
+  padding: 6px 10px;
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+.page-library-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+.page-library-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.page-library-title,
+.page-library-chat {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-library-title {
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  font-weight: var(--weight-medium);
+}
+.page-library-chat {
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+  line-height: var(--type-line-metadata);
+}
+.page-library-pending {
+  flex: none;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--status-info-background);
+  color: var(--status-info-text);
+  font-size: var(--type-size-metadata);
+  line-height: 20px;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+/* One small action: it stays beside the title in a narrow chat too. */
+@container transcript (max-width: 520px) {
+  .transcript-card.page-card {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+  }
+  .page-card .transcript-card-actions {
+    grid-column: auto;
+  }
+}

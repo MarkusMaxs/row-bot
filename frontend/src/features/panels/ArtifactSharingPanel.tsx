@@ -72,7 +72,11 @@ export default function ArtifactSharingPanel({
           )}
         </div>
       )}
-      <ArtifactSharing {...props} channels={page?.items ?? []} />
+      <ArtifactSharing
+        {...props}
+        channels={page?.items ?? []}
+        xAccounts={page?.x_accounts ?? []}
+      />
     </div>
   );
 }

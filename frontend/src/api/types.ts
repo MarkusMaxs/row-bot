@@ -12,6 +12,17 @@ export function isCommandReceipt(value: unknown): value is Wire.CommandReceipt {
 
 export type * from '../../../contracts/client-platform/v1/typescript/client';
 
+/**
+ * What a live picture is for: a pane gives its page area in CSS pixels and
+ * the screen's pixel ratio (the page lays out at that size); a thumbnail
+ * gives only the width it shows at.
+ */
+export type BrowserLiveSize = {
+  width: number;
+  height?: number;
+  scale?: number;
+};
+
 /** The one thing a person can do about an error (see `api/errors.ts`). */
 export type ErrorAction =
   | { kind: 'retry' }
@@ -256,25 +267,36 @@ export interface ClientTransport {
     command: Wire.ConversationActionCommand,
     signal?: AbortSignal,
   ): Promise<Wire.ConversationActionReceipt>;
-  browserControls?(
+  /** What the Browser pane shows for a conversation (never starts the browser). */
+  browserPane?(
     conversation: string,
     signal?: AbortSignal,
-  ): Promise<Wire.BrowserControlSnapshot>;
-  reviewBrowserControl?(
+  ): Promise<Wire.BrowserPaneState>;
+  /** The pane's state and live picture while it watches; a pane's size is the page's size. */
+  browserLive?(
     conversation: string,
-    body: Wire.BrowserReviewRequest,
-    signal?: AbortSignal,
-  ): Promise<Wire.BrowserReview>;
-  browserControlReceipt?(
+    view: 'pane' | 'thumb',
+    size: BrowserLiveSize,
+    signal: AbortSignal,
+  ): AsyncGenerator<
+    { state: Wire.BrowserPaneState } | { frame: Wire.BrowserFrame }
+  >;
+  browserInput?(
     conversation: string,
-    command: string,
+    body: Wire.BrowserInput,
     signal?: AbortSignal,
-  ): Promise<Wire.BrowserReceipt>;
-  executeBrowserControl?(
+  ): Promise<Wire.BrowserInputResult>;
+  browserAction?(
     conversation: string,
-    command: Wire.Command,
+    body: Wire.BrowserPaneAction,
     signal?: AbortSignal,
-  ): Promise<Wire.BrowserReceipt>;
+  ): Promise<Wire.BrowserPaneState>;
+  /** Sites with saved sign-ins in Row-Bot's browser (Settings › Browser). */
+  browserSites?(signal?: AbortSignal): Promise<Wire.BrowserSitePage>;
+  clearBrowserSites?(
+    body: Wire.BrowserSitesClear,
+    signal?: AbortSignal,
+  ): Promise<Wire.BrowserSitesCleared>;
   /** The addresses on this computer a conversation's browser may open (F4). */
   browserLocalAddresses?(
     conversation: string,
@@ -878,6 +900,39 @@ export interface ClientTransport {
     deliveryId: string,
     signal?: AbortSignal,
   ): Promise<Wire.DeliveryView>;
+  /** Pages the agent made (N5): every one, or one conversation's. */
+  pages?(conversationId?: string, signal?: AbortSignal): Promise<Wire.PagePage>;
+  page?(pageId: string, signal?: AbortSignal): Promise<Wire.PageView>;
+  /** One frame address for a page in this theme, loaded once in a sandbox. */
+  pageFrame?(
+    pageId: string,
+    theme: Wire.PageTheme,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageFrame>;
+  /** A page's own state, from its bridge. */
+  savePageState?(
+    pageId: string,
+    state: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageView>;
+  /** One decision from a page's bridge; nothing is sent. */
+  savePageDecision?(
+    pageId: string,
+    decision: Wire.PageDecisionWrite,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageView>;
+  /** Download as HTML. */
+  downloadPage?(
+    pageId: string,
+    theme: Wire.PageTheme,
+    signal?: AbortSignal,
+  ): Promise<Wire.PageDownload>;
+  /** Desktop window: the page saved into Exports on this computer. */
+  savePageToExports?(
+    pageId: string,
+    theme: Wire.PageTheme,
+    signal?: AbortSignal,
+  ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
@@ -887,6 +942,12 @@ export interface ClientTransport {
     enabled: boolean,
     signal?: AbortSignal,
   ): Promise<Wire.SystemDiagnosis>;
+  installCount?(signal?: AbortSignal): Promise<Wire.InstallCountSnapshot>;
+  chooseInstallCount?(
+    enabled: boolean,
+    signal?: AbortSignal,
+  ): Promise<Wire.InstallCountSnapshot>;
+  deleteCountedData?(signal?: AbortSignal): Promise<Wire.InstallCountDeletion>;
   updates?(signal?: AbortSignal): Promise<Wire.UpdateSnapshot>;
   updateCommand?(
     command: Wire.UpdateCommand,
@@ -919,21 +980,21 @@ export interface ClientTransport {
     signal?: AbortSignal,
   ): Promise<Wire.GitHubAccessReceipt>;
   accountAuth?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthSnapshot>;
   accountAuthCommand?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     command: Wire.AccountAuthCommand,
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthReceipt>;
   accountAuthReceipt?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthReceipt>;
   cancelAccountAuth?(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ): Promise<Wire.AccountAuthReceipt>;
@@ -948,11 +1009,6 @@ export interface ClientTransport {
     body: Wire.ProviderKeyCheckRequest,
     signal?: AbortSignal,
   ): Promise<Wire.ProviderKeyCheck>;
-  browserPreview?(
-    conversationId: string,
-    revision: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.BrowserPreview>;
   reviewDreamRun?(
     body: Wire.DreamRunRequest,
     signal?: AbortSignal,
@@ -1673,6 +1729,13 @@ export interface ClientTransport {
     signal?: AbortSignal,
     notices?: Wire.NoticePosition,
   ): Promise<Wire.EventPage>;
+  /** App-wide live updates (B407): topic revisions only. */
+  observeLive?(signal: AbortSignal): AsyncIterable<Wire.LiveFrame>;
+  /** The same, long-polled where a proxy holds the stream back. */
+  pollLive?(
+    position: { after: number; epoch: string } | undefined,
+    signal: AbortSignal,
+  ): Promise<Wire.LiveFrame>;
   /** Background notices and start-up warnings (no conversation stream). */
   notices?(
     position?: Wire.NoticePosition,

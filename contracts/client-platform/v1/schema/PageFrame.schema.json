@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "PageDecisionView": {
+      "additionalProperties": false,
+      "description": "One decision on a page, as the person made it there; ``sent`` once they sent it to the chat.",
+      "properties": {
+        "choice": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Choice",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Label",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Note",
+          "type": "string"
+        },
+        "sent": {
+          "default": false,
+          "title": "Sent",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "choice"
+      ],
+      "title": "PageDecisionView",
+      "type": "object"
+    },
+    "PageView": {
+      "additionalProperties": false,
+      "description": "A page the agent made in a chat (N5): what its card, panel and the Library show.",
+      "properties": {
+        "conversation_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Conversation Id",
+          "type": "string"
+        },
+        "conversation_title": {
+          "default": "",
+          "maxLength": 256,
+          "title": "Conversation Title",
+          "type": "string"
+        },
+        "created_at": {
+          "maxLength": 64,
+          "title": "Created At",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/PageDecisionView"
+          },
+          "maxItems": 200,
+          "title": "Decisions",
+          "type": "array"
+        },
+        "libraries": {
+          "items": {
+            "enum": [
+              "charts",
+              "rowbot-style"
+            ],
+            "type": "string"
+          },
+          "maxItems": 2,
+          "title": "Libraries",
+          "type": "array"
+        },
+        "page_id": {
+          "pattern": "^page-[0-9a-f]{8}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "pending": {
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Pending",
+          "type": "integer"
+        },
+        "state_revision": {
+          "minimum": 0,
+          "title": "State Revision",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "updated_at": {
+          "maxLength": 64,
+          "title": "Updated At",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page_id",
+        "conversation_id",
+        "title",
+        "version",
+        "created_at",
+        "updated_at",
+        "state_revision",
+        "pending"
+      ],
+      "title": "PageView",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The page's frame address, served once to a frame with ``sandbox=\"allow-scripts\"``.",
+  "properties": {
+    "frame_url": {
+      "pattern": "^/page-frames/[0-9a-f]{32}$",
+      "title": "Frame Url",
+      "type": "string"
+    },
+    "page": {
+      "$ref": "#/$defs/PageView"
+    }
+  },
+  "required": [
+    "frame_url",
+    "page"
+  ],
+  "title": "PageFrame",
+  "type": "object"
+}

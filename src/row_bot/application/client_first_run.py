@@ -15,6 +15,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -29,6 +30,16 @@ _TEST_TIMEOUT_SECONDS = 180.0
 _KEY_CHECK_TIMEOUT_SECONDS = 20.0
 # Setup suggests at most this many local models before "Show all models" (F10).
 RECOMMENDED_PICKS = 3
+# Variants with their safety training removed are never suggested (N16); they stay under "Show all".
+_UNSUGGESTED_MARKERS = ("abliterated", "uncensored")
+_PARAMETERS = re.compile(r"(?<![a-z0-9.])(\d+(?:\.\d+)?)b(?![a-z])")
+
+
+def _parameters_in_billions(name: str) -> float:
+    """The size a model's tag names ("qwen3.8:27b" is 27), or 0 when it doesn't say."""
+    tag = name.rsplit(":", 1)[1].lower() if ":" in name else ""
+    sizes = [float(size) for size in _PARAMETERS.findall(tag)]
+    return max(sizes) if sizes else 0.0
 
 
 def platform_name() -> str:
@@ -73,14 +84,17 @@ def _recommend(models: list[dict[str, Any]], *, default: str | None, skip: set[s
     """Mark Row-Bot's suggested first picks (F10).
 
     A pick is a chat model that can use Row-Bot's tools (the same judgement as
-    "Chat only"), not an embedding model, and not already a favourite or hidden.
-    The saved default comes first, then the runtime's order.
+    "Chat only"), not an embedding model, not an "abliterated" or "uncensored"
+    variant, and not already a favourite or hidden. The saved default comes
+    first, then the larger models (the most capable one installed), then the
+    runtime's order (N16).
     """
     from row_bot.providers.ollama import is_ollama_chat_candidate
 
     picks = [row for row in models if row["agent_ready"] is True and row["model_ref"] not in skip
-             and is_ollama_chat_candidate(row["name"])]
-    picks.sort(key=lambda row: row["model_ref"] != default)
+             and is_ollama_chat_candidate(row["name"])
+             and not any(marker in row["name"].lower() for marker in _UNSUGGESTED_MARKERS)]
+    picks.sort(key=lambda row: (row["model_ref"] != default, -_parameters_in_billions(row["name"])))
     for row in picks[:RECOMMENDED_PICKS]:
         row["recommended"] = True
 

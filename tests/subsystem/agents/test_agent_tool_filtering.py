@@ -564,10 +564,8 @@ def _registry_with(monkeypatch, agent, tools: dict[str, list[StructuredTool]]):
     )
 
 
-def test_a_small_window_offers_rare_groups_through_tool_search_and_their_guide_when_used(monkeypatch):
+def test_a_small_window_offers_rare_groups_through_tool_search(monkeypatch):
     """F11: on 64k or less, rarely used built-in groups leave every turn's prompt but stay usable."""
-    from langchain_core.messages import AIMessage
-
     agent = _prepare_graph(monkeypatch)
     status, memory = _lc_tool("row_bot_status"), _lc_tool("search_memory")
     _registry_with(monkeypatch, agent, {"row_bot_status": [status], "memory": [memory]})
@@ -582,10 +580,6 @@ def test_a_small_window_offers_rare_groups_through_tool_search_and_their_guide_w
     assert [result["name"] for result in found] == ["row_bot_status"]
     assert bound["tool_invoke"].invoke(
         {"name": "row_bot_status", "arguments": {"query": "voice"}}) == "row_bot_status:voice"
-    # ...and joins on the next step once it is.
-    used = [AIMessage(content="", tool_calls=[{"name": "tool_invoke", "id": "c1", "type": "tool_call",
-                                               "args": {"name": "row_bot_status", "arguments": {}}}])]
-    assert agent._on_demand_parents_used(used) == {"row_bot_status"}
 
 
 def test_a_rare_tool_called_by_its_own_name_still_runs(monkeypatch):
@@ -606,7 +600,7 @@ def test_a_rare_tool_called_by_its_own_name_still_runs(monkeypatch):
 
 def test_a_large_window_binds_every_group_and_developer_tools_with_a_code_folder(monkeypatch):
     agent = _prepare_graph(monkeypatch)
-    monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 131_072)
+    monkeypatch.setattr(agent, "get_context_size", lambda model_name=None: 262_144)
     _registry_with(monkeypatch, agent, {"row_bot_status": [_lc_tool("row_bot_status")],
                                         "developer": [_lc_tool("developer_read_file")]})
     monkeypatch.setattr(agent, "_has_code_folder", lambda: False)

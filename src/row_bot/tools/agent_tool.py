@@ -1041,7 +1041,8 @@ class AgentsTool(BaseTool):
                 name="delegate_work",
                 description=(
                     "Start a child Agent for focused async background work. With wait=false, "
-                    "continue useful independent work, then group-join required work before finalizing."
+                    "continue useful independent work, then group-join required work before finalizing. "
+                    "Use it on your own for research or work on several separate items, one child each."
                 ),
                 args_schema=_DelegateWorkInput,
             ),

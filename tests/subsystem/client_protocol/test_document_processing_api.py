@@ -21,13 +21,15 @@ pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 @pytest.fixture
 def providers(monkeypatch, tmp_path, queue):
     from langchain_core.embeddings import Embeddings
-    from row_bot import embedding_config, embedding_providers, documents, document_jobs, wiki_vault
+    from row_bot import embedding_config, embedding_providers, documents, document_index, document_jobs, wiki_vault
     from row_bot.providers import runtime, auth_store, saved_model_settings
     state = {"secret": "synthetic-processing-credential", "embed": [], "chat": [], "factory": [], "start": [], "usage": []}
     config = {**embedding_config.DEFAULT_CONFIG, "provider": "cloud",
         "cloud_model": "openai:text-embedding-3-small", "dimension": 1536}
-    monkeypatch.setattr(embedding_config, "get_embedding_config", lambda: dict(config))
-    monkeypatch.setattr(embedding_providers, "get_embedding_config", lambda: dict(config))
+    # Every reader of the settings, each through monkeypatch: a module first imported under the patch keeps the
+    # cloud reader for the rest of the worker otherwise (document_index did, and later document searches went cloud).
+    for module in (embedding_config, embedding_providers, document_index):
+        monkeypatch.setattr(module, "get_embedding_config", lambda: dict(config))
     monkeypatch.setattr(runtime, "get_provider_secret", lambda _provider: state["secret"])
     monkeypatch.setattr(auth_store, "get_provider_secret", lambda _provider: state["secret"])
     monkeypatch.setattr(saved_model_settings, "SETTINGS_PATH", tmp_path / "data" / "model_settings.json")
