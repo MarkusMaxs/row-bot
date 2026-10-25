@@ -231,19 +231,28 @@ test('Lessons: in use with how often it was used, a saved one to test; a reply s
   ).toBeVisible();
   await shoot(page, info, 'lessons');
 
-  // Leaving the page cuts its live-updates stream, which Chromium may log once or twice.
-  info.annotations.push({
-    type: 'expected-console-error',
-    description: JSON.stringify({
-      owner: 'learning-changes',
-      fixture:
-        'opening the chat by its address while the live-updates stream is open',
-      signature:
-        'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
-      count: 2,
-      upTo: true,
-    }),
-  });
+  // Leaving the page cuts its live-updates stream, which Chromium may log once or twice; the
+  // fixture's chat (made straight in the thread store) may have no Buddy view yet.
+  for (const [signature, fixture] of [
+    [
+      'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+      'opening the chat by its address while the live-updates stream is open',
+    ],
+    [
+      'Failed to load resource: the server responded with a status of 404 (Not Found)',
+      'the fixture chat has no Buddy view (GET /conversations/l3b-policies/buddy)',
+    ],
+  ] as const)
+    info.annotations.push({
+      type: 'expected-console-error',
+      description: JSON.stringify({
+        owner: 'learning-changes',
+        fixture,
+        signature,
+        count: 2,
+        upTo: true,
+      }),
+    });
   await page.goto('/app-v2/conversations/l3b-policies');
   await expect(page.getByText(/^85 EUR a person, from POL-114/)).toBeVisible();
   await expect(page.getByText('Used a lesson')).toBeVisible();
