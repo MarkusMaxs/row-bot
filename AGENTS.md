@@ -69,9 +69,11 @@ Priorities, in order:
 - `src/row_bot/plugins/`, `skills_hub/`, `skills.py`: plugin and skill systems.
 - `src/row_bot/learning/`: Learning (preview): the switch (`is_enabled`), versioned
   records, the `learning.db` store and blobs, scope (what may be recorded), capture
-  (the seams' queue and writer, with redaction) and the past-chat import. Off by
-  default; while off its seams cost one check, and it creates no file and imports
-  nothing beyond the switch.
+  (the seams' queue and writer, with redaction), the past-chat import, evaluation
+  (replay, task packs in throwaway sandboxes, equal-budget arms), the sealed audit
+  vault (only `evaluation` reads it) and the task packs. Off by default; while off
+  its seams cost one check, and it creates no file and imports nothing beyond the
+  switch.
 - `frontend/`: the React client (the only UI), served at `/app-v2/`.
 - `src/row_bot/server.py` and `src/row_bot/app.py`: the FastAPI app, its
   routes, middleware and start-up sequence, run by uvicorn.
