@@ -114,7 +114,11 @@ it('Overview while reading past chats counts them with a real denominator', () =
 });
 
 it('the … menu pauses, opens settings and deletes learning data after a confirm', async () => {
-  const io = fakeIO(on({ data: { exists: true, bytes: 3_400_000 } }));
+  const io = fakeIO(
+    on({
+      data: { ...learningSnapshot().data, exists: true, bytes: 3_400_000 },
+    }),
+  );
   const { onOpenSettings } = show(io);
   const user = userEvent.setup();
   const more = () => screen.getByRole('button', { name: 'More for Learning' });

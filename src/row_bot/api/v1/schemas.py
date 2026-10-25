@@ -4260,6 +4260,10 @@ class LearningNeedsYou(WireModel):
 class LearningData(WireModel):
     exists: bool
     bytes: int = Field(ge=0)
+    # Of ``bytes``: the pictures kept from browser and computer use, and the most they may take (the
+    # oldest go first past it).
+    picture_bytes: int = Field(ge=0)
+    picture_cap_bytes: int = Field(ge=0)
 
 
 class LearningChannelNote(WireModel):

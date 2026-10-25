@@ -252,7 +252,7 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
   const io = fakeIO(
     learningSnapshot({
       state: 'on',
-      data: { exists: true, bytes: 12_000_000 },
+      data: { ...learningSnapshot().data, exists: true, bytes: 12_000_000 },
       spending: {
         ...learningSnapshot().spending,
         used_tokens: 240_000,
@@ -409,5 +409,21 @@ it('an NVIDIA driver older than 570 says to update it, in the setup sheet', asyn
   ).toBeVisible();
   expect(
     within(sheet).getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
+});
+
+it('the learning data line says how much of it is browser and computer pictures', () => {
+  const data = {
+    ...learningSnapshot().data,
+    exists: true,
+    bytes: 1_240_000_000,
+    picture_bytes: 830_000_000,
+  };
+  show(fakeIO(learningSnapshot({ state: 'on', data })));
+
+  expect(
+    screen.getByText(
+      '1.2 GB, including 830 MB of browser and computer pictures (up to 10 GB; the oldest go first). Turning Learning off keeps it.',
+    ),
   ).toBeVisible();
 });

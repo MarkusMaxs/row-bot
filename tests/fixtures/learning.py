@@ -369,6 +369,60 @@ class CapturedWork:
         return ids
 
 
+BROWSER_TOOLS = [{"type": "function", "function": {
+    "name": "browser_click", "description": "Click something on the page.",
+    "parameters": {"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]}}}]
+
+
+def jpeg_bytes(seed: str, size: int = 4096) -> bytes:
+    """A JPEG-shaped picture whose bytes differ by ``seed`` (the model view never decodes it)."""
+
+    import hashlib
+
+    body = b""
+    while len(body) < size:
+        body += hashlib.sha256(f"{seed}-{len(body)}".encode()).digest()
+    return b"\xff\xd8\xff\xe0" + body[:size]
+
+
+def picture_turn(writer, chats, thread_id: str, picture: bytes, *, question: str = "Open the settings page",
+                 caption: str = "The browser page after that action.", answer: str = "The settings page is open.",
+                 untrusted: bool = False, number: int = 1, clock: FakeClock | None = None) -> tuple[list, list[str]]:
+    """A browser turn as 5.3 runs it for a model that sees images: a click, its result, then the call that
+    gets the page's picture (``browser.model_view.with_page_picture``, the caller makes the model see
+    images). Returns what that call was sent and its two model calls' decision ids."""
+
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+    from row_bot.browser import model_view
+
+    if thread_id not in chats.threads:
+        chats.chat(thread_id)
+    turn = writer.begin_turn(thread_id=thread_id, surface="normal_chat")
+    asked = [SystemMessage(content="You are Row-Bot. Use the browser when it helps.", id="sys"),
+             HumanMessage(content=question, id=f"h-{thread_id}-{number}")]
+    click = {"id": f"c-{thread_id}-{number}", "name": "browser_click", "args": {"target": "Settings"}}
+    step = AIMessage(content="", id=f"a-{thread_id}-{number}", tool_calls=[click])
+    first = writer.model_call(turn, messages=asked, response=step, tools=BROWSER_TOOLS, model_ref="gpt-6.1-sol",
+                              provider_id="codex")
+    result = ToolMessage(content="Settings: theme, language.", tool_call_id=click["id"], id=f"t-{thread_id}-{number}",
+                         additional_kwargs={"row_bot_untrusted": True} if untrusted else {})
+    writer.tool_call(turn, call=click, result=result, untrusted=untrusted)
+    if clock is not None:
+        clock.advance(1)  # the call with the picture comes after the click's
+    model_view.keep(thread_id, picture, caption=caption)
+    try:
+        sent = model_view.with_page_picture([*asked, step, result], thread_id)
+    finally:
+        model_view.forget(thread_id)
+    assert len(sent) == 5, "the model must see images for the picture to be sent"
+    second = writer.model_call(turn, messages=sent, response=AIMessage(content=answer, id=f"r-{thread_id}-{number}"),
+                               tools=BROWSER_TOOLS, model_ref="gpt-6.1-sol", provider_id="codex")
+    writer.end_turn(turn, "completed")
+    writer.drain()
+    return sent, [first, second]
+
+
 # ── Training (L2a): the fake trainer, its engine, a dataset and a lease ────────
 
 FAKE_TRAINER = Path(__file__).with_name("learning_trainer.py").resolve()

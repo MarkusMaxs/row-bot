@@ -580,10 +580,16 @@ def _training(settings: learning.LearningSettings) -> dict[str, Any]:
 
 
 def _data() -> dict[str, Any]:
+    from row_bot.learning.store import PICTURE_CAP_BYTES
+
     if not learning.store_exists():
-        return {"exists": False, "bytes": 0}
+        return {"exists": False, "bytes": 0, "picture_bytes": 0, "picture_cap_bytes": PICTURE_CAP_BYTES}
+    pictures = 0
     try:
-        size = _store().storage_bytes()
+        store = _store()
+        size = store.storage_bytes()
+        # Pictures from browser and computer use (P2): part of the size, kept within their own cap.
+        pictures = store.picture_stats().bytes
         vault = learning.folder_path() / "audit.db"
         if vault.is_file():
             size += vault.stat().st_size
@@ -594,7 +600,8 @@ def _data() -> dict[str, Any]:
             size += sum(path.stat().st_size for path in runs.rglob("*") if path.is_file() and not path.is_symlink())
     except OSError:
         size = 0
-    return {"exists": True, "bytes": max(0, int(size))}
+    return {"exists": True, "bytes": max(0, int(size)), "picture_bytes": max(0, int(pictures)),
+            "picture_cap_bytes": PICTURE_CAP_BYTES}
 
 
 def _owner_unset_channels() -> list[dict[str, str]]:

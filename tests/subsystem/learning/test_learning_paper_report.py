@@ -484,3 +484,116 @@ def test_the_thinking_recheck_keeps_only_aggregates_of_the_ablation(profile, fol
     own = written["thinking_on_vs_off"]["B"]["hidden"]["by_kind"]["own_work"]
     assert (own["difference"], own["low"], own["p_value"]) == (-0.07, -0.15, 0.13)
     assert set(written["arms"]) == {"B-off", "B-on"} and written["training"]["B"]["steps"] == 23
+
+
+# ── P2: pictures, the sweep's counts, and the main model's sign-in ──────────
+
+
+def test_health_counts_pictures_and_what_the_sweep_removed_or_would_remove(profile, folders, writer, chats, tmp_path,
+                                                                          monkeypatch):
+    from row_bot.browser import model_view
+    from tests.fixtures.learning import jpeg_bytes, picture_turn
+
+    monkeypatch.setattr(model_view, "model_sees_images", lambda model=None: True)
+    picture = jpeg_bytes(CANARY)
+    picture_turn(writer, chats, f"thread-{CANARY}-web", picture, question=f"Open {CANARY}.example",
+                 caption=f"The {CANARY} page after that action.")
+    store = LearningStore(profile)
+    leftover = json.dumps({"type": "human", "data": {"content": f"{CANARY} from a chat switched off"}}).encode()
+    store.put_blob(leftover)  # what an earlier build left behind
+    scratch, out = folders
+    ids = _ids(profile)
+
+    assert _run(["--health", "--profile", str(profile), "--scratch", str(scratch), "--out", str(out), "--yes"]) == 0
+
+    first = _written(out)
+    _assert_private(json.dumps(first), profile, scratch, ids)
+    assert first["pictures"] == {"stored": 1, "bytes": len(picture), "dropped": 0, "cap_bytes": 10_000_000_000}
+    assert first["blob_sweep"]["done"] is False
+    assert first["blob_sweep"]["orphans"] == {"files": 1, "bytes": len(leftover),
+                                              "kinds": {"message": {"files": 1, "bytes": len(leftover)}}}
+    assert first["hidden_problems"]["with_picture"] + first["hidden_problems"]["without_picture"] == \
+        first["hidden_problems"]["uncorrected"] + first["hidden_problems"]["corrected"]
+
+    # The build's first start sweeps the profile once; the next health check says what it removed.
+    import time as _time
+
+    LearningStore(profile, clock=lambda: _time.time() + 7_200).sweep_once()
+    again = tmp_path / "out-again"
+    assert _run(["--health", "--profile", str(profile), "--scratch", str(scratch), "--out", str(again), "--yes"]) == 0
+    second = _written(again)
+    assert second["blob_sweep"] == {"done": True, "removed_files": 1, "removed_bytes": len(leftover),
+                                    "orphans": {"files": 0, "bytes": 0, "kinds": {}}}
+
+
+def test_the_main_reference_signs_in_with_the_eval_profile_never_the_copys(profile, folders, tmp_path, monkeypatch):
+    from row_bot import secret_store
+    from row_bot.learning import eval_worker
+    from row_bot.providers import codex
+
+    # The script swaps both for the run; they are put back after this test.
+    monkeypatch.setattr(codex, "save_codex_oauth_tokens", codex.save_codex_oauth_tokens)
+    monkeypatch.setattr(secret_store, "_backend_override", secret_store._backend_override)
+    scratch, out = folders
+    before = _hashes(profile)
+    eval_dir = tmp_path / "eval-profile"
+    _write_json(eval_dir / "providers.json", {"providers": {"codex": {
+        "oauth_bundle_ref": {"values": {"access_token": "ref"}}, "auth_method": "oauth_device",
+        "source": "oauth_device"}}})
+    tokens = {"access_token": "EVAL-ACCESS-1", "refresh_token": "EVAL-REFRESH-1", "id_token": "", "account": "acct",
+              "expires_at": "", "plan_type": "plus", "revision": "rev-1"}
+    asked: list[str] = []
+    written: list[dict[str, Any]] = []
+
+    def bridge(where, command, payload=None):  # the eval profile's own process, faked: a token store
+        assert Path(where) == eval_dir.resolve()
+        asked.append(command)
+        if command == "read":
+            return {"signed_in": True, **tokens}
+        written.append(dict(payload))
+        tokens.update({key: payload[key] for key in ("access_token", "refresh_token")}, revision="rev-2")
+        return {"written": True}
+
+    seen: dict[str, Any] = {}
+
+    def runner(arms):
+        worker_arms = [eval_worker.WorkerArm(arm.name, str(arm.model_ref), arm.serve_context is not None)
+                       for arm in arms]
+        credentials, _providers, unsupported = eval_worker.gather(worker_arms)
+        seen.update(credentials={item.provider: dict(item.values) for item in credentials}, unsupported=unsupported,
+                    main=next(arm for arm in arms if arm.name == "main"))
+        # The sign-in refreshes during the run: the new tokens go back to the eval profile at once.
+        codex.save_codex_oauth_tokens(codex.CodexTokenSet(access_token="EVAL-ACCESS-2",
+                                                          refresh_token="EVAL-REFRESH-2"))
+        return Packs()
+
+    hooks = report.Hooks(prepare=lambda copy, version: report.Prepared(
+        {"start": "model:fake:start", "personal": "model:fake:personal"}, 32768, "ollama"),
+        runner=runner, container=lambda: False, main_ref=lambda: "model:codex:gpt-5.6-sol",
+        client=ScriptedClient(lambda *_: AIMessage(content="no idea"), local=True), bridge=bridge,
+        ask=_never_asked, installed=lambda: False)
+
+    code = report.main(["--freeze", "--as-of", "2030-01-01", "--main-reference", "--eval-profile", str(eval_dir),
+                        "--profile", str(profile), "--scratch", str(scratch), "--out", str(out), "--yes"], hooks=hooks)
+
+    assert code == 0
+    assert seen["credentials"]["codex"]["access_token"] == "EVAL-ACCESS-1" and "main" not in seen["unsupported"]
+    assert seen["main"].sees_images is True  # asked with the page's picture, as it was served
+    assert written and written[-1]["access_token"] == "EVAL-ACCESS-2" and written[-1]["revision"] == "rev-1"
+    assert asked[0] == "read" and "write" in asked
+    assert _hashes(profile) == before  # the profile, and its own sign-in, untouched
+    assert _written(out)["design"]["main_reference"] is True
+    assert "EVAL-ACCESS" not in json.dumps(_written(out))
+
+
+def test_the_main_reference_needs_the_eval_profile(profile, folders, capsys):
+    scratch, out = folders
+
+    with pytest.raises(SystemExit):
+        report.main(["--freeze", "--as-of", "2030-01-01", "--main-reference", "--profile", str(profile),
+                     "--scratch", str(scratch), "--out", str(out), "--yes"])
+    assert "--eval-profile" in capsys.readouterr().err
+    code = report.main(["--freeze", "--as-of", "2030-01-01", "--main-reference", "--eval-profile", str(profile),
+                        "--profile", str(profile), "--scratch", str(scratch), "--out", str(out), "--yes"],
+                       hooks=report.Hooks(ask=_never_asked, installed=lambda: False))
+    assert code == 2 and "must be the eval profile" in capsys.readouterr().out and not out.exists()

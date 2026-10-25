@@ -28,11 +28,17 @@ FREEZE = 1_000.0
 
 
 def _problem(number: int, *, chat: str, at: float, source: str = "captured", fidelity: str = "exact",
-             model: str = "model:codex:gpt-canary-q9z", kind: str = "Document lookups") -> dict[str, Any]:
+             model: str = "model:codex:gpt-canary-q9z", kind: str = "Document lookups", untrusted: bool = False,
+             picture: bool = False) -> dict[str, Any]:
     question = f"Problem {number}: what does {CANARY}-{number}.txt say?"
+    messages: tuple[dict[str, Any], ...] = ({"type": "human", "data": {"content": question}},)
+    if picture:  # the page's picture after a browser action (5.3): one extra message with no id
+        messages += ({"type": "human", "data": {"content": [
+            {"type": "text", "text": "The browser page after that action."},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}]}},)
     case = ReplayCase(f"dec_{CANARY}_{number}", f"thread-{CANARY}-{chat}", f"thread-{CANARY}-{chat}", at, kind,
-                      fidelity, False, ({"type": "human", "data": {"content": question}},), None, model,
-                      Action(text=f"answer {number}"), source, "exact_action", question)
+                      fidelity, untrusted, messages, None, model, Action(text=f"answer {number}"), source,
+                      "exact_action", question)
     return {"id": case.decision_id, "kind_of_work": kind, "thread_id": case.thread_id,
             "conversation_id": case.conversation_id, "created_at": at, **case.to_content()}
 
@@ -165,6 +171,25 @@ def test_the_sensitivity_analyses_are_computed_beside_the_primary_one(vault):
     assert (real["per_main_model"]["model_1"]["problems"], real["per_main_model"]["model_2"]["problems"]) == (2, 2)
     assert set(real["by_kind"]) == {"document_lookups", "tool_workflows"}
     assert result["main_models"] == 2
+
+
+def test_the_freeze_adds_a_trusted_only_and_a_without_pictures_analysis(vault):
+    # A7: problems with untrusted input count in the primary analysis, with a trusted-only one beside it.
+    # A8: problems whose prefix carries a page picture count too (text-only arms are asked without it),
+    # with an analysis without them beside it.
+    replay = [_problem(number, chat=f"c{number}", at=10.0 + number, untrusted=number >= 2, picture=number >= 4)
+              for number in range(6)]
+    vault([], replay)
+
+    result = _freeze(lambda model, number, run: model == "personal" and number >= 4, replay=replay)
+
+    real = result["contrasts"]["personal vs start"]["real_uncorrected"]
+    assert (real["primary"]["problems"], real["primary"]["difference"]) == (6, round(2 / 6, 6))
+    assert (real["trusted_only"]["problems"], real["trusted_only"]["difference"]) == (2, 0.0)
+    assert (real["without_pictures"]["problems"], real["without_pictures"]["difference"]) == (4, 0.0)
+    assert (result["problems"]["untrusted"], result["problems"]["with_picture"]) == (4, 2)
+    personal = result["arms"]["personal"]["splits"]["real_uncorrected"]
+    assert personal["runs"] == {"failed": 12, "passed": 6}  # every problem counted: none "unverified"
 
 
 def test_a_problem_with_no_counted_run_in_one_arm_leaves_the_pair(vault):

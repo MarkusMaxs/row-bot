@@ -511,11 +511,23 @@
         "exists": {
           "title": "Exists",
           "type": "boolean"
+        },
+        "picture_bytes": {
+          "minimum": 0,
+          "title": "Picture Bytes",
+          "type": "integer"
+        },
+        "picture_cap_bytes": {
+          "minimum": 0,
+          "title": "Picture Cap Bytes",
+          "type": "integer"
         }
       },
       "required": [
         "exists",
-        "bytes"
+        "bytes",
+        "picture_bytes",
+        "picture_cap_bytes"
       ],
       "title": "LearningData",
       "type": "object"

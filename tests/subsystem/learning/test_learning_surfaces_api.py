@@ -142,7 +142,7 @@ def test_with_the_preview_flag_the_app_offers_learning_off_with_the_setup_defaul
     model = snapshot["personal_model"]
     assert model["starting_model"]["name"] == "Qwen3.5 2B" and model["download"] == "not_asked"
     assert model["engine"] == "not_downloaded"
-    assert snapshot["data"] == {"exists": False, "bytes": 0}
+    assert snapshot["data"] == {"exists": False, "bytes": 0, "picture_bytes": 0, "picture_cap_bytes": 10_000_000_000}
     # Reading Learning creates nothing.
     assert learning_files(data) == []
 

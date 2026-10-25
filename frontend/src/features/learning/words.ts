@@ -2,7 +2,7 @@
  * Learning's words and numbers, one name per thing (designs/learning-ux.md, "Words").
  * Never shown: self-improvement, RSI, candidate, adapter, LoRA, eval, audit, cron.
  */
-import type { LearningCommand } from '../../api/types';
+import type { LearningCommand, LearningSnapshot } from '../../api/types';
 
 export type TeachCategory = NonNullable<LearningCommand['category']>;
 
@@ -35,6 +35,12 @@ export function sizeWords(bytes: number): string {
   if (value >= 1_000)
     return `${Math.max(1, Math.round(value / 1_000))}\u00a0KB`;
   return value === 1 ? '1\u00a0byte' : `${value}\u00a0bytes`;
+}
+
+/** Of the learning data's size: the pictures kept from browser and computer use, and their limit. */
+export function pictureWords(data: LearningSnapshot['data']): string {
+  if (data.picture_bytes <= 0) return '';
+  return `, including ${sizeWords(data.picture_bytes)} of browser and computer pictures (up to ${sizeWords(data.picture_cap_bytes)}; the oldest go first)`;
 }
 
 /** The monthly limit's choices; the saved value shows even when it isn't one of them. */

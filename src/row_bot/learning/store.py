@@ -76,7 +76,7 @@ BLOB_GRACE_SECONDS = 3600.0
 # A captured model call's request (capture writes it): its messages, tools and pictures by hash.
 REQUEST_FORMAT = "row_bot.learning.model_request"
 # How much space pictures may take; past it the oldest go first (never a vault task's).
-PICTURE_CAP_BYTES = 10 * 1024**3
+PICTURE_CAP_BYTES = 10 * 1000**3
 # The one-off orphan sweep's result (meta), so it runs once per store.
 SWEEP_META_KEY = "blob_sweep_v1"
 # What an orphan was, by its content (the sweep's counts): fixed words, never content.
@@ -1085,7 +1085,8 @@ class LearningStore:
                     count(self._blob_path(sha))
                 if remove:
                     self._forget_blobs(connection, dead)
-                known = {str(row[0]) for row in connection.execute("SELECT sha256 FROM blobs")}
+                # The rows just found count once, as orphans, never again as leftover files.
+                known = {str(row[0]) for row in connection.execute("SELECT sha256 FROM blobs")} | set(dead)
             leftovers = self._leftover_files(known, cutoff)
             for path in leftovers:
                 count(path)

@@ -37,7 +37,7 @@ on :func:`shutdown`. It never keeps a database handle between batches.
   is moved out before redaction (``pictures``): its original bytes are a blob of
   their own, named in the message and in the request (``pictures``), so redaction
   never reads picture data and no message blob holds base64. Past the size cap
-  (:data:`PICTURE_CAP_BYTES`) the oldest pictures are dropped (``store``).
+  (``store.PICTURE_CAP_BYTES``) the oldest pictures are dropped.
 - A batch is written with ``put_blobs`` then ``put_many`` (one transaction each).
   ``LearningStoreError("learning_off")`` drops the queue; records of a chat opted
   out meanwhile are skipped by the store.
@@ -66,7 +66,7 @@ from typing import Any
 from row_bot import learning as gate
 from row_bot.learning import pictures, redaction
 from row_bot.learning.contracts import Decision, Episode, Record, Signal, new_id, valid_thread_id
-from row_bot.learning.store import PICTURE_CAP_BYTES, REQUEST_FORMAT, LearningStore, LearningStoreError
+from row_bot.learning.store import REQUEST_FORMAT, LearningStore, LearningStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -731,7 +731,7 @@ class Capture:
         for turn in sink.turns.values():
             turn.written = True
         if sink.pictures:
-            store.keep_pictures_within(PICTURE_CAP_BYTES)
+            store.keep_pictures_within()
         if any(isinstance(item, _End) for item in items):
             # A finished turn's messages won't be sent again: the cache stays small.
             self._message_cache.clear()

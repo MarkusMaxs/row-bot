@@ -31,6 +31,7 @@ import {
   limitMeaning,
   limitOptions,
   percentWords,
+  pictureWords,
   quietHoursWords,
   sizeWords,
   tokenWords,
@@ -614,7 +615,7 @@ export default function LearningSettings({
           label="Kept on this computer"
           help={
             snapshot.data.exists
-              ? `${sizeWords(snapshot.data.bytes)}. Turning Learning off keeps it.`
+              ? `${sizeWords(snapshot.data.bytes)}${pictureWords(snapshot.data)}. Turning Learning off keeps it.`
               : 'Nothing yet.'
           }
           trailing={

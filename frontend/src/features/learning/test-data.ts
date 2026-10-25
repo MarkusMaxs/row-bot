@@ -37,7 +37,12 @@ export function learningSnapshot(
     past_chats: { state: 'none', total: 0, done: 0 },
     personal_model: personalModel(),
     training: trainingRun(),
-    data: { exists: false, bytes: 0 },
+    data: {
+      exists: false,
+      bytes: 0,
+      picture_bytes: 0,
+      picture_cap_bytes: 10_000_000_000,
+    },
     opted_out_conversations: [],
     owner_unset_channels: [],
     ...overrides,
