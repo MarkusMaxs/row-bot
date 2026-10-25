@@ -336,7 +336,7 @@ export default function ConversationContextRail({
                 onSelect: onManageConversation,
               },
               {
-                label: 'Manage browser',
+                label: 'Open browser',
                 icon: <Globe size={16} />,
                 onSelect: onManageBrowser,
               },

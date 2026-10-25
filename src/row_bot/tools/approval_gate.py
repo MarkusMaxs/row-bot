@@ -6,6 +6,9 @@
   reason on the card.
 - **Hands-off**: approved without asking, and recorded.
 
+Some risks are the person's own under Auto, whatever the reviewer would say:
+setting Git's identity, and posting on X in their name (N7).
+
 A workflow's "Always ask me" rule (N9) makes an action the person's own to
 approve under every level: the reviewer never decides it, Hands-off never skips
 it, and the approval is bound to the exact arguments it was given for
@@ -43,6 +46,9 @@ APPROVAL_CHANGED = "Approval: asked; what you approved has changed since — did
 _APPROVAL_PREFIX = "Approval: "
 # Why a person-only card asks: the person's own rule, set on purpose.
 PERSON_RULE_REASON = "You asked to approve this yourself."
+# An incognito chat's memory write (N11): only the person saves from it, under every level.
+INCOGNITO_MEMORY_QUESTION = "Save to memory? This chat is incognito."
+INCOGNITO_MEMORY_REASON = "This chat is incognito: only you can save from it to memory."
 
 
 
@@ -223,6 +229,18 @@ def person_approval(
     return outcome == "allow", line
 
 
+def asked_alone(interrupt: Any) -> dict[str, Any] | None:
+    """The card a step's waiting approvals ask first and by itself: the first only the person answers.
+
+    Such an answer is bound to exactly what its card showed, so it never shares a card with another
+    action: two memory writes of an incognito chat (N11) made in one step are two cards, one after
+    the other (B412). What waits beside it asks again, each for itself, once it is answered.
+    """
+    items = interrupt if isinstance(interrupt, list) else [interrupt]
+    return next((item for item in items
+                 if isinstance(item, dict) and item.get("person_only") and item.get("binding")), None)
+
+
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict) and _RECORD_KEY in value
 
@@ -389,8 +407,10 @@ def _decide_in_graph(payload: dict[str, Any], *, mode: str, risks: Iterable[str]
 
 
 GIT_IDENTITY_RISK = "sets the name and email Git records on commits, which only the person can choose"
+X_POST_RISK = "posts, replies, quotes or deletes on X as one of the person's accounts, which only the person approves"
 # Risks the Auto reviewer never accepts for the person: they go straight to the person's card.
-_PERSON_ONLY_RISKS = {GIT_IDENTITY_RISK: "Only you can choose the name and email your commits are from."}
+_PERSON_ONLY_RISKS = {GIT_IDENTITY_RISK: "Only you can choose the name and email your commits are from.",
+                      X_POST_RISK: "Only you can approve what goes out on X in your name."}
 
 
 def _decide_afresh(payload: dict[str, Any], *, mode: str, risks: Iterable[str], ask: Callable[[dict[str, Any]], Any],

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from row_bot.application.live_updates import publishes as _publishes_live
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.runtime_paths import app_path
 from row_bot.plugins.manifest import PluginManifest, ManifestError, parse_manifest
@@ -222,6 +223,7 @@ def get_plugin_log_path(plugin_id: str) -> pathlib.Path:
     return PLUGIN_LOGS_DIR / f"{safe_name or 'unknown'}.jsonl"
 
 
+@_publishes_live("monitor")  # A plugin that didn't load is one of Monitor's problems; one that loads clears it.
 def refresh_plugin_runtime(
     reason: str = "",
     *,

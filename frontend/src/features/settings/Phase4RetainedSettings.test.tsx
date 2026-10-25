@@ -132,7 +132,7 @@ const snapshot = {
       platform: 'windows' as const,
       disclosure_acknowledged: true,
       system_binary_configured: false,
-      status_message: 'Computer Use is off.',
+      status_message: 'Computer use is off.',
       remediation: '',
       disclosure_text: 'Cua Driver telemetry notice.',
     },
@@ -288,6 +288,12 @@ const snapshot = {
       read_operations: ['x_search'],
       post_operations: ['x_post_tweet'],
       engage_operations: ['x_like'],
+    },
+    outlook_mail: { ...account, account_id: 'outlook_mail', enabled: false },
+    outlook_calendar: {
+      ...account,
+      account_id: 'outlook_calendar',
+      enabled: false,
     },
   },
   utilities: {
@@ -659,7 +665,7 @@ it('does not expose writable System fields when their tool owner is unavailable'
   );
   expect(screen.getByText('Shell tool not found')).toBeVisible();
   expect(screen.getByText('Browser tool not found')).toBeVisible();
-  expect(screen.getByText('Computer Use unavailable')).toBeVisible();
+  expect(screen.getByText("Computer use isn't available here")).toBeVisible();
   expect(screen.getByText('Filesystem tool unavailable')).toBeVisible();
   expect(screen.queryByLabelText('Blocked commands')).toBeNull();
   expect(
@@ -692,7 +698,7 @@ it('groups available filesystem operations behind Choose each and keeps runtime 
   const setup = openSetup();
   expect(within(setup).getAllByText(/Not checked/).length).toBeGreaterThan(0);
   expect(
-    within(setup).getByText('Computer Use setup details').closest('details'),
+    within(setup).getByText('Setup details').closest('details'),
   ).not.toHaveAttribute('open');
 });
 
@@ -786,7 +792,7 @@ it('shows the Cua disclosure before enabling and accepts it with one toggle', as
   );
   const setup = openSetup();
   expect(within(setup).getByText('Cua Driver telemetry notice.')).toBeVisible();
-  expect(within(setup).queryByLabelText('Computer Use (Beta)')).toBeNull();
+  expect(within(setup).queryByLabelText('Computer use')).toBeNull();
   expect(mutation.review).not.toHaveBeenCalled();
   fireEvent.click(
     within(setup).getByLabelText('Accept Cua Driver telemetry notice'),
@@ -821,11 +827,9 @@ it('runs Computer Use diagnostics only after the explicit click', async () => {
     <SystemSnapshotPanel snapshot={snapshot.system} mutation={mutation} />,
   );
   openSetup();
-  expect(screen.getByText('Computer Use is off.')).toBeVisible();
+  expect(screen.getByText('Computer use is off.')).toBeVisible();
   expect(mutation.review).not.toHaveBeenCalled();
-  fireEvent.click(
-    screen.getByRole('button', { name: 'Check Computer Use setup' }),
-  );
+  fireEvent.click(screen.getByRole('button', { name: 'Check setup' }));
   await waitFor(() =>
     expect(mutation.execute).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -859,9 +863,7 @@ it('says a failed Computer Use install failed, and what to do (B377)', async () 
     <SystemSnapshotPanel snapshot={snapshot.system} mutation={mutation} />,
   );
   openSetup();
-  fireEvent.click(
-    screen.getByRole('button', { name: 'Install Computer Use runtime' }),
-  );
+  fireEvent.click(screen.getByRole('button', { name: 'Install Cua Driver' }));
   expect(
     await screen.findByText(
       /Row-Bot couldn't install Cua Driver\. Check your connection and try again/,
@@ -888,14 +890,10 @@ it('sets up Computer Use from another device, leaving its screen actions to the 
   );
   openSetup();
   // Every signed-in device has the owner's authority over its setup.
+  expect(screen.getByRole('switch', { name: 'Computer use' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Check setup' })).toBeVisible();
   expect(
-    screen.getByRole('switch', { name: 'Computer Use (Beta)' }),
-  ).toBeVisible();
-  expect(
-    screen.getByRole('button', { name: 'Check Computer Use setup' }),
-  ).toBeVisible();
-  expect(
-    screen.getByRole('button', { name: 'Install Computer Use runtime' }),
+    screen.getByRole('button', { name: 'Install Cua Driver' }),
   ).toBeVisible();
   // Testing and the macOS panes happen on that computer's own screen.
   expect(
@@ -946,7 +944,7 @@ it('tests a ready Computer Use runtime and verifies an explicit system binary', 
       expect.any(String),
     ),
   );
-  fireEvent.click(screen.getByText('Advanced system Cua executable'));
+  fireEvent.click(screen.getByText('Use your own Cua Driver'));
   const input = screen.getByLabelText('Verify system Cua executable');
   fireEvent.change(input, {
     target: { value: 'C:\\synthetic\\cua-driver.exe' },
@@ -970,7 +968,7 @@ it('tests a ready Computer Use runtime and verifies an explicit system binary', 
   );
   expect(input).toHaveValue('');
   expect(
-    screen.getByRole('button', { name: 'Use managed Cua runtime' }),
+    screen.getByRole('button', { name: "Use Row-Bot's Cua Driver" }),
   ).toBeVisible();
 });
 
@@ -980,22 +978,16 @@ it('requires confirmation only for removing the managed Computer Use runtime', a
     <SystemSnapshotPanel snapshot={snapshot.system} mutation={mutation} />,
   );
   fireEvent.click(screen.getByText('Danger zone'));
-  fireEvent.click(
-    screen.getByRole('button', { name: 'Remove managed Cua runtime' }),
-  );
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Cua Driver' }));
   expect(mutation.review).not.toHaveBeenCalled();
   expect(
-    screen.getByText(/This deletes the managed runtime files/),
+    screen.getByText(/This deletes Row-Bot's copy of Cua Driver/),
   ).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   expect(mutation.review).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Cua Driver' }));
   fireEvent.click(
-    screen.getByRole('button', { name: 'Remove managed Cua runtime' }),
-  );
-  fireEvent.click(
-    screen
-      .getAllByRole('button', { name: 'Remove managed Cua runtime' })
-      .at(-1)!,
+    screen.getAllByRole('button', { name: 'Remove Cua Driver' }).at(-1)!,
   );
   await waitFor(() =>
     expect(mutation.execute).toHaveBeenCalledWith(
@@ -1553,7 +1545,7 @@ it('renders System, Tracker, Accounts, and Utilities controls from one snapshot'
   const accounts = renderSetting('accounts');
   // One row per account with one status (B263); each setup guide folds.
   expect(accounts.container.querySelectorAll('.settings-account')).toHaveLength(
-    3,
+    4,
   );
   expect(screen.getByText('Not checked yet')).toBeVisible();
   fireEvent.click(screen.getByText('How to set up GitHub'));
@@ -1606,7 +1598,9 @@ it('updates the Accounts header after Check without reloading the page (B263)', 
     revision: 'settings-checked',
     accounts: google('connected'),
   };
-  const auth = (account: 'google' | 'x'): AccountAuthSnapshot => ({
+  const auth = (
+    account: AccountAuthSnapshot['account'],
+  ): AccountAuthSnapshot => ({
     schema_version: 1,
     account,
     revision: 'a'.repeat(64),
@@ -1619,9 +1613,14 @@ it('updates the Accounts header after Check without reloading the page (B263)', 
   const controller = {
     subscribe: () => () => undefined,
     getSnapshot: () => state,
-    accountAuth: vi.fn(async (account: 'google' | 'x') => auth(account)),
+    accountAuth: vi.fn(async (account: AccountAuthSnapshot['account']) =>
+      auth(account),
+    ),
     accountAuthCommand: vi.fn(
-      async (_account: 'google' | 'x', command: AccountAuthCommand) => ({
+      async (
+        _account: AccountAuthSnapshot['account'],
+        command: AccountAuthCommand,
+      ) => ({
         schema_version: 1,
         command_id: command.command_id,
         account: command.account,
@@ -2152,6 +2151,17 @@ it.each<SettingsLeafId>([
       getSnapshot: () => state,
       subscribe: () => () => {},
       settingsSnapshot: async () => everyRow,
+      // System › Privacy reads install stats (N6) on its own.
+      installCount: async () => ({
+        available: true,
+        turned_off_here: false,
+        enabled: true,
+        service: 'row-bot-count.row-bot.workers.dev',
+        version: '5.3.0',
+        os: 'windows',
+        last_sent_on: null,
+        can_delete: false,
+      }),
     };
     // Any other read stays pending: only the page's own rows matter here.
     const pending = (values: Record<string, unknown>) =>

@@ -53,6 +53,8 @@ There is no key to create or environment value to set for the normal Compose pat
 
 ## First Start And Owner Invitation
 
+Like every Row-Bot, the container sends [install stats](/docs/privacy-safety#install-stats) once a day: a random ID, its version and `docker`, nothing else. To turn them off for this deployment, add `ROW_BOT_INSTALL_COUNT: "0"` to the service's `environment` in `compose.yaml` before the first start, or switch off **Share install stats** in Settings › System › Privacy.
+
 A fresh `up` pulls the image only when it is absent locally, creates the data and encryption-key volumes, initializes the key without network access, and starts the foreground server:
 
 ```bash

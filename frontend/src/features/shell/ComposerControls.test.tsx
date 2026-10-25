@@ -136,10 +136,9 @@ it('shows compact current values with only the exact server-supplied Thinking ch
     'aria-description',
     'Model: Exact effort model · Thinking: Provider default',
   );
-  expect(controls.getByRole('button', { name: 'Approvals' })).toHaveAttribute(
-    'aria-description',
-    'Approvals: Ask',
-  );
+  expect(
+    controls.getByRole('button', { name: 'Approvals: Ask' }),
+  ).toHaveAttribute('aria-description', 'Approvals: Ask');
   expect(
     controls.getByRole('button', { name: 'Add files and more' }),
   ).toBeEnabled();
@@ -298,7 +297,7 @@ it('removes old Thinking content immediately after a model switch without sendin
 
 it('keeps approval, runtime and profile distinct in their compact menus', async () => {
   render(<ComposerControls onError={vi.fn()} />);
-  const approvals = await menu('Approvals');
+  const approvals = await menu('Approvals: Ask');
   // Each choice says what it does.
   expect(approvals.getByRole('menuitem', { name: /^Ask/ })).toHaveAttribute(
     'aria-current',
@@ -464,7 +463,7 @@ it('folds the model, approvals and context usage into + on a one-line composer',
     />,
   );
   expect(screen.queryByRole('button', { name: 'Model' })).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Approvals' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Approvals/ })).toBeNull();
   const more = await menu('Add files and more');
   expect(
     more.getByText('Context will appear after the next response'),
@@ -496,7 +495,7 @@ function withApproval(
 
 it('offers the four levels, each with what it does', async () => {
   render(<ComposerControls onError={vi.fn()} />);
-  const approvals = await menu('Approvals');
+  const approvals = await menu('Approvals: Ask');
   const levels = approvals.getAllByRole('menuitem');
   ['Ask', 'Auto', 'Hands-off', 'Block'].forEach((label, index) =>
     expect(levels[index].textContent).toMatch(new RegExp(`^${label}`)),
@@ -522,7 +521,7 @@ it('asks once before Hands-off, then turns it on with the confirmation', async (
       <ComposerControls onError={vi.fn()} />
     </OverlayProvider>,
   );
-  const approvals = await menu('Approvals');
+  const approvals = await menu('Approvals: Ask');
   await act(async () =>
     fireEvent.click(approvals.getByRole('menuitem', { name: /^Hands-off/ })),
   );
@@ -554,7 +553,7 @@ it('never shows the dialog again once Hands-off was turned on', async () => {
       <ComposerControls onError={vi.fn()} />
     </OverlayProvider>,
   );
-  const approvals = await menu('Approvals');
+  const approvals = await menu('Approvals: Auto');
   await act(async () =>
     fireEvent.click(approvals.getByRole('menuitem', { name: /^Hands-off/ })),
   );
@@ -578,6 +577,21 @@ it('reads Hands-off in words while it is on', () => {
   expect(control).toHaveClass('composer-shield-full');
 });
 
+it.each([
+  ['approve', 'Ask'],
+  ['auto', 'Auto'],
+  ['block', 'Block'],
+] as const)(
+  'names the level in the approvals button under %s too (U7)',
+  (mode, level) => {
+    withApproval(mode);
+    render(<ComposerControls onError={vi.fn()} />);
+    expect(
+      screen.getByRole('button', { name: `Approvals: ${level}` }),
+    ).toBeVisible();
+  },
+);
+
 it('keeps Hands-off on view in a one-line composer too', () => {
   withApproval('full', {
     full_autonomy_confirmed: true,
@@ -593,7 +607,7 @@ it('does not offer Hands-off in a conversation other people share', async () => 
     full_autonomy_available: false,
   });
   render(<ComposerControls onError={vi.fn()} />);
-  const approvals = await menu('Approvals');
+  const approvals = await menu('Approvals: Auto');
   const full = approvals.getByRole('menuitem', { name: /^Hands-off/ });
   expect(full).toHaveAttribute('aria-disabled', 'true');
   expect(

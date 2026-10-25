@@ -51,6 +51,10 @@ def _read_stream(client: httpx.Client, url: str, first: threading.Event) -> list
     return received
 
 
+# Nightly only (B395): on a loaded Windows runner the TLS handshake with the loopback provider sometimes never
+# completed (the client's own ConnectTimeout, nothing to do with Stop), failing the PR lane at random. The
+# plain-HTTP cases below keep Stop, waiting for headers and mid-stream, sync and async, in the PR lane.
+@pytest.mark.slow
 @pytest.mark.parametrize("mid_stream", [False, True], ids=["waiting for headers", "mid-stream"])
 def test_stop_ends_a_request_over_tls(mid_stream: bool) -> None:
     reply = Hold(chunks=(b"data: first\n\n",)) if mid_stream else HOLD

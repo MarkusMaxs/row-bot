@@ -51,6 +51,8 @@ class App:
     local_app: str = ""
     local_check: tuple = ()  # (("port", 9876),) or (("process", "blender"),): how to tell the app is open.
     sources: tuple[str, ...] = ()
+    note: str = ""  # What to know before setting it up (an admin it needs, say), on its page.
+    see_also: str = ""  # Another app's id the note points to.
 
     def ref(self, *, verified: bool = False) -> dict:
         """The small public identity carried by every entry of this app."""
@@ -63,7 +65,7 @@ class App:
         from row_bot.integrations.icons import license_of
         return {**self.ref(), "summary": self.summary, "jobs": list(self.jobs), "example_prompts": list(self.example_prompts),
                 "variants": list(self.variants), "auth": self.auth, "docs_url": self.docs_url, "key_url": self.key_url,
-                "icon_license": license_of(self.icon)}
+                "icon_license": license_of(self.icon), "note": self.note, "see_also": self.see_also}
 
 
 def _local_check(check: dict) -> bool:
@@ -107,13 +109,16 @@ def catalog() -> tuple[dict[str, App], dict[str, str]]:
                 or not all(link.startswith("https://") and len(link) <= 512 for link in links)
                 or (app.icon and not re.fullmatch(r"si:[a-z0-9]{1,64}", app.icon))
                 or (app.featured_rank is not None and (app.featured_rank < 1 or app.featured_rank in ranks))
-                or not _local_check(dict(app.local_check))):
+                or not _local_check(dict(app.local_check)) or len(app.note) > 256
+                or (app.see_also and not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", app.see_also))):
             raise ValueError("invalid_app_catalog: " + app.id)
         ranks.add(app.featured_rank)
         apps[app.id] = app
         for ref in app.refs:
             if index.setdefault(ref, app.id) != app.id:
                 raise ValueError("ambiguous_app_reference: " + ref)
+    if any(app.see_also not in apps for app in apps.values() if app.see_also):
+        raise ValueError("invalid_app_catalog: see_also")
     return apps, index
 
 

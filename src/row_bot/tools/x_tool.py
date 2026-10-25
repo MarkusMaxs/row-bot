@@ -1,7 +1,9 @@
-"""X (Twitter) tool — read, post, and engage on X via the X API v2.
+"""X (Twitter) tool — read, post, and engage on X via the X API v2, as one of several accounts.
 
 Uses native httpx against the X API v2 with OAuth 2.0 PKCE authentication.
-No external dependencies (no tweepy, no xurl CLI).
+No external dependencies (no tweepy, no xurl CLI). Each connected account has its own sign-in
+(``x_accounts``); every call names the account it acts as, and posting asks the person
+(``x_posting``).
 """
 
 from __future__ import annotations
@@ -10,7 +12,6 @@ import hashlib
 import html
 import json
 import logging
-import pathlib
 import re
 import secrets
 import time
@@ -20,12 +21,14 @@ from typing import List, Literal, Optional
 from urllib.parse import urlencode, urlparse, parse_qs
 
 from langchain_core.tools import StructuredTool
+from langgraph.errors import GraphBubbleUp
 from pydantic import BaseModel, Field
 
-from row_bot import account_tokens
+from row_bot import account_tokens, x_accounts
 from row_bot.data_paths import get_row_bot_data_dir
 from row_bot.tools.base import BaseTool
-from row_bot.tools import registry
+from row_bot.tools import registry, x_posting
+from row_bot.x_accounts import XAccount, XAccountChoice
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +36,12 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = get_row_bot_data_dir()
 _X_DIR = _DATA_DIR / "x"
 _X_DIR.mkdir(parents=True, exist_ok=True)
-_TIER_PATH = _X_DIR / "tier_info.json"  # The sign-in itself is in the system keychain (account_tokens).
+_TIER_PATH = _X_DIR / "tier_info.json"  # The sign-ins themselves are in the system keychain (x_accounts).
 
 # ── X API v2 base URL ───────────────────────────────────────────────────────
-_API_BASE = "https://api.x.com/2"
+_API_BASE = x_accounts.API_BASE
 _AUTH_URL = "https://x.com/i/oauth2/authorize"
-_TOKEN_URL = "https://api.x.com/2/oauth2/token"
+_TOKEN_URL = x_accounts.TOKEN_URL
 
 # ── OAuth 2.0 scopes ────────────────────────────────────────────────────────
 _SCOPES = (
@@ -63,23 +66,7 @@ _TWEET_FIELDS = "created_at,author_id,public_metrics,conversation_id,in_reply_to
 _USER_FIELDS = "name,username,description,public_metrics,verified,created_at,profile_image_url"
 
 
-# ── Token management ────────────────────────────────────────────────────────
-
-def _load_token() -> dict | None:
-    """The saved X sign-in, from the system keychain."""
-    return account_tokens.read("x")
-
-
-def _save_token(token: dict):
-    """Save the X sign-in in the system keychain only (never a file)."""
-    account_tokens.write("x", token)
-
-
-def _token_expired(token: dict) -> bool:
-    """Check if the access token has expired (with 60s buffer)."""
-    expires_at = token.get("expires_at", 0)
-    return time.time() >= (expires_at - 60)
-
+# ── Sign-ins ────────────────────────────────────────────────────────────────
 
 # Whether a saved sign-in may bind the X tools, decided once per sign-in (WP A5). Building a chat's
 # tools used to ask X (GET /users/me) on every turn, and a timeout or a 5xx dropped the X tools for
@@ -91,37 +78,6 @@ _SIGN_IN_VERDICTS_MAX = 16
 def _sign_in_key(token: dict) -> str:
     raw = f"{token.get('access_token', '')}\n{token.get('refresh_token', '')}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _refresh_token(token: dict, client_id: str, client_secret: str) -> dict | None:
-    """Attempt to refresh the access token using the refresh token."""
-    import httpx
-
-    refresh_tok = token.get("refresh_token")
-    if not refresh_tok:
-        return None
-    try:
-        resp = httpx.post(
-            _TOKEN_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_tok,
-                "client_id": client_id,
-            },
-            auth=(client_id, client_secret),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        new_token = resp.json()
-        new_token["expires_at"] = time.time() + new_token.get("expires_in", 7200)
-    except Exception as exc:
-        logger.error("X token refresh failed: %s", exc)
-        return None
-    try:
-        _save_token(new_token)
-    except account_tokens.AccountTokenError:
-        logger.error("The refreshed X sign-in could not be saved; it is used for this request only")
-    return new_token
 
 
 # ── Rate limit tracking ─────────────────────────────────────────────────────
@@ -224,21 +180,11 @@ def _authorization_url(client_id: str, redirect_uri: str, state: str, code_chall
 
 def _exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str,
                    code_verifier: str, *, http=None) -> dict:
-    """Exchange a sign-in's code for X's tokens (``http``: an httpx client; default, httpx itself)."""
-    import httpx
-
-    resp = (http or httpx).post(
-        _TOKEN_URL,
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": client_id,
-            "code_verifier": code_verifier,
-        },
-        auth=(client_id, client_secret),
-        timeout=15,
-    )
+    """Exchange a sign-in's code for X's tokens (``http``: an httpx client; default, ``x_accounts.send``)."""
+    request = {"data": {"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
+                        "client_id": client_id, "code_verifier": code_verifier},
+               "auth": (client_id, client_secret), "timeout": 15}
+    resp = http.post(_TOKEN_URL, **request) if http is not None else x_accounts.send("POST", _TOKEN_URL, **request)
     if resp.status_code != 200:
         body = resp.text
         logger.error("X token exchange failed (HTTP %d): %s", resp.status_code, body)
@@ -255,8 +201,8 @@ def _exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: 
     return token
 
 
-def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True) -> dict:
-    """Run the full OAuth 2.0 PKCE flow.
+def _run_oauth_flow(client_id: str, client_secret: str) -> dict:
+    """Run the full OAuth 2.0 PKCE flow; the caller saves the sign-in (``x_accounts.add``).
 
     Opens the user's browser to X's authorization page, starts a local
     HTTP server on a fixed port to receive the callback, and exchanges
@@ -324,14 +270,18 @@ def _run_oauth_flow(client_id: str, client_secret: str, *, persist: bool = True)
     if not _OAuthCallbackHandler.auth_code:
         raise RuntimeError("X authentication timed out — no callback received.")
 
-    token = _exchange_code(client_id, client_secret, _OAuthCallbackHandler.auth_code,
-                           _OAUTH_REDIRECT_URI, code_verifier)
-    if persist:
-        _save_token(token)
-    return token
+    return _exchange_code(client_id, client_secret, _OAuthCallbackHandler.auth_code,
+                          _OAUTH_REDIRECT_URI, code_verifier)
 
 
 # ── Pydantic input schemas ──────────────────────────────────────────────────
+
+def _account_field(writes: bool) -> object:
+    return Field(default=None, description=(
+        "The X account to act as: its @handle or numeric ID, as x_accounts lists them. "
+        + ("Required when more than one account is connected; never guess one."
+           if writes else "Needed for 'mentions' and your own 'timeline' when several are connected.")))
+
 
 class _XReadInput(BaseModel):
     action: Literal["search", "read_tweet", "timeline", "mentions", "user_info"] = Field(
@@ -379,6 +329,7 @@ class _XReadInput(BaseModel):
             "start_time. Only used with 'search' action."
         ),
     )
+    account: Optional[str] = _account_field(False)
 
 
 class _XPostInput(BaseModel):
@@ -397,10 +348,11 @@ class _XPostInput(BaseModel):
         default=None,
         description=(
             "Optional list of file paths for media to attach. "
-            "Supports images (JPEG, PNG, GIF) and videos (MP4). "
-            "Max 4 images or 1 video per tweet."
+            "Supports pictures (JPEG, PNG, WebP, GIF) and videos (MP4, MOV). "
+            "Max 4 pictures, or 1 video or GIF, per post."
         ),
     )
+    account: Optional[str] = _account_field(True)
 
 
 class _XEngageInput(BaseModel):
@@ -410,6 +362,11 @@ class _XEngageInput(BaseModel):
     tweet_id: str = Field(
         description="The tweet ID to engage with.",
     )
+    account: Optional[str] = _account_field(True)
+
+
+class _XAccountsInput(BaseModel):
+    pass
 
 
 # ── Formatting helpers ──────────────────────────────────────────────────────
@@ -461,89 +418,6 @@ def _format_user(user: dict) -> str:
     if user.get("created_at"):
         parts.append(f"Joined: {user['created_at']}")
     return "\n".join(parts)
-
-
-# ── Media upload (v1.1 chunked — required for v2 tweet creation) ─────────
-# X API v2 does not have a media upload endpoint; media must be uploaded
-# via the v1.1 media/upload endpoint and then attached to v2 tweets.
-
-_MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
-
-
-def _upload_media(file_path: str, token: dict) -> str | None:
-    """Upload a media file to X and return the media_id string.
-
-    Uses the v1.1 chunked media upload endpoint.
-    Note: Media upload requires OAuth 1.0a or OAuth 2.0 user token with
-    appropriate scopes. For OAuth 2.0 PKCE, the media upload may require
-    additional permissions depending on the app tier.
-    """
-    import httpx
-
-    path = pathlib.Path(file_path)
-    if not path.is_file():
-        logger.warning("Media file not found: %s", file_path)
-        return None
-
-    mime_type, _ = __import__("mimetypes").guess_type(str(path))
-    if not mime_type:
-        mime_type = "application/octet-stream"
-
-    headers = {"Authorization": f"Bearer {token['access_token']}"}
-    file_size = path.stat().st_size
-
-    # INIT
-    init_resp = httpx.post(
-        _MEDIA_UPLOAD_URL,
-        data={
-            "command": "INIT",
-            "total_bytes": str(file_size),
-            "media_type": mime_type,
-        },
-        headers=headers,
-        timeout=30,
-    )
-    if init_resp.status_code != 202 and init_resp.status_code != 200:
-        logger.error("Media upload INIT failed: %s %s",
-                      init_resp.status_code, init_resp.text)
-        return None
-    media_id = init_resp.json().get("media_id_string")
-
-    # APPEND (chunked — 5MB per chunk)
-    chunk_size = 5 * 1024 * 1024
-    with open(path, "rb") as f:
-        segment = 0
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            append_resp = httpx.post(
-                _MEDIA_UPLOAD_URL,
-                data={"command": "APPEND", "media_id": media_id,
-                      "segment_index": str(segment)},
-                files={"media_data": chunk},
-                headers=headers,
-                timeout=60,
-            )
-            if append_resp.status_code not in (200, 202, 204):
-                logger.error("Media upload APPEND failed: %s %s",
-                              append_resp.status_code, append_resp.text)
-                return None
-            segment += 1
-
-    # FINALIZE
-    finalize_resp = httpx.post(
-        _MEDIA_UPLOAD_URL,
-        data={"command": "FINALIZE", "media_id": media_id},
-        headers=headers,
-        timeout=30,
-    )
-    if finalize_resp.status_code not in (200, 201):
-        logger.error("Media upload FINALIZE failed: %s %s",
-                      finalize_resp.status_code, finalize_resp.text)
-        return None
-
-    return media_id
 
 
 # ── Time parsing & query sanitisation ────────────────────────────────────────
@@ -618,7 +492,6 @@ class XTool(BaseTool):
 
     def __init__(self):
         self._rate_limiter = _RateLimiter()
-        self._user_id: str | None = None
         self._tier_info: dict = _load_tier_info()
 
     # ── Identity ─────────────────────────────────────────────────────────────
@@ -634,7 +507,7 @@ class XTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Read, post, and engage on X (Twitter). "
+            "Read, post, and engage on X (Twitter), as one of the person's connected accounts. "
             "Use this when the user asks about tweets, X timelines, "
             "posting on X, liking, reposting, or bookmarking tweets."
         )
@@ -698,128 +571,93 @@ class XTool(BaseTool):
         return bool(self._get_client_id() and self._get_client_secret())
 
     def is_authenticated(self) -> bool:
-        """Whether an X sign-in is saved."""
-        return _load_token() is not None
+        """Whether any X account is signed in (or the one sign-in from before 5.3 waits to become one)."""
+        return bool(x_accounts.listed()) or x_accounts.legacy_pending()
 
     def check_token_health(self) -> tuple[str, str]:
-        """Probe the OAuth token and attempt silent refresh if needed.
+        """Check every connected account, refreshing a sign-in whose access ran out.
 
         Returns (status, detail) where status is one of:
-        - "valid"     — token is fresh and verified against API
-        - "refreshed" — token was expired, silently refreshed
-        - "expired"   — refresh token failed; re-authenticate
-        - "missing"   — no token file
-        - "error"     — unexpected error (e.g. bad credentials)
+        - "valid"     — every account answered X
+        - "refreshed" — every account works; one or more was silently refreshed
+        - "expired"   — an account needs signing in again
+        - "missing"   — no account is connected
+        - "error"     — X couldn't be asked (or the sign-in from before 5.3 couldn't be set up yet)
 
-        Settings › Accounts reports the verdict (B263).
+        Each account's verdict is remembered for Settings › Apps › X (B263). The sign-in from
+        before 5.3 becomes the first account here (x_accounts.migrate).
         """
-        result = self._probe_token_health()
-        account_tokens.record_check("x", result[0])
+        try:
+            x_accounts.migrate()
+        except x_accounts.XAccountError as exc:
+            return ("error", f"Couldn't finish setting up the X account from before: {exc}")
+        accounts = x_accounts.listed()
+        if not accounts:
+            return ("missing", "No X account is connected")
+        results = [(account, self._check_account(account)) for account in accounts]
+        expired = [account.handle for account, (status, _) in results if status in ("expired", "missing")]
+        failed = [detail for _, (status, detail) in results if status == "error"]
+        if expired:
+            return ("expired", f"{x_accounts.names([a for a in accounts if a.handle in expired])} needs "
+                               "signing in again — reconnect in Settings")
+        if failed:
+            return ("error", failed[0])
+        if any(status == "refreshed" for _, (status, _) in results):
+            return ("refreshed", "Token refreshed successfully")
+        return ("valid", "Token is valid")
+
+    def _check_account(self, account: XAccount) -> tuple[str, str]:
+        result = self._probe_account(account)
+        account_tokens.record_check(account.slot, result[0])
         return result
 
-    def _probe_token_health(self) -> tuple[str, str]:
-        token = _load_token()
+    def _probe_account(self, account: XAccount) -> tuple[str, str]:
+        token = x_accounts.token(account)
         if not token:
-            return ("missing", "No token file found")
-
-        if _token_expired(token):
-            from row_bot.docs_capture import is_docs_real_data_capture
-
-            if is_docs_real_data_capture():
-                return ("expired", "Token refresh suppressed during authorized capture")
-            # Try silent refresh
-            new_token = _refresh_token(
-                token, self._get_client_id(), self._get_client_secret()
-            )
-            if new_token:
-                return ("refreshed", "Token refreshed successfully")
-            return ("expired", "Token expired — re-authenticate in Settings")
-
-        # Token not expired — verify it actually works
+            return ("missing", f"{account.handle} has no saved sign-in")
         from row_bot.docs_capture import is_docs_real_data_capture
 
+        if x_accounts.expired(token):
+            if is_docs_real_data_capture():
+                return ("expired", "Token refresh suppressed during authorized capture")
+            if x_accounts.valid_token(account) is not None:
+                return ("refreshed", "Token refreshed successfully")
+            return ("expired", f"{account.handle}'s sign-in expired — re-authenticate in Settings")
         if is_docs_real_data_capture():
             return ("valid", "Saved token present; live verification suppressed during capture")
         try:
-            import httpx
-            resp = httpx.get(
-                f"{_API_BASE}/users/me",
-                headers={"Authorization": f"Bearer {token['access_token']}"},
-                params={"user.fields": "username"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                return ("valid", "Token is valid")
-            if resp.status_code == 429:
-                # Rate limiting is transient and does not indicate an invalid token.
-                return ("valid", "Token is valid (rate limited by X API)")
-            if resp.status_code == 401:
-                return ("expired", "Token rejected by X API — re-authenticate in Settings")
-            return ("error", f"X API returned {resp.status_code}")
+            resp = x_accounts.send("GET", f"{_API_BASE}/users/me", headers=x_accounts.bearer(token),
+                                   params={"user.fields": "name,username"}, timeout=10)
         except Exception as exc:
-            logger.warning("X token health check failed: %s", exc)
-            return ("error", f"Could not verify token: {exc}")
+            logger.warning("Checking %s on X failed (%s)", account.handle, type(exc).__name__)
+            return ("error", f"Could not verify token: {type(exc).__name__}")
+        if resp.status_code == 200:
+            data = resp.json().get("data") or {}
+            if str(data.get("id") or "") != account.id:
+                return ("expired", f"The sign-in kept for {account.handle} is another account's")
+            # A handle or name changed on X since: the list follows.
+            if data.get("username") and (data.get("username"), data.get("name") or "") != (
+                    account.username, account.name):
+                try:
+                    x_accounts.rename(account, str(data["username"]), str(data.get("name") or ""))
+                except ValueError:
+                    pass
+            return ("valid", "Token is valid")
+        if resp.status_code == 429:
+            # Rate limiting is transient and does not indicate an invalid token.
+            return ("valid", "Token is valid (rate limited by X API)")
+        if resp.status_code == 401:
+            return ("expired", f"X turned down {account.handle}'s sign-in — re-authenticate in Settings")
+        return ("error", f"X API returned {resp.status_code}")
 
-    def authenticate(self):
-        """Run the OAuth 2.0 PKCE flow (opens browser)."""
-        token = _run_oauth_flow(self._get_client_id(), self._get_client_secret())
-        # Fetch and cache the authenticated user's ID
-        self._fetch_user_id(token)
-        return token
-
-    def get_authenticated_username(self) -> str | None:
-        """Return the authenticated user's username, or None."""
-        token = self._get_valid_token()
-        if not token:
-            return None
-        try:
-            import httpx
-            resp = httpx.get(
-                f"{_API_BASE}/users/me",
-                headers={"Authorization": f"Bearer {token['access_token']}"},
-                params={"user.fields": "username"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                return resp.json().get("data", {}).get("username")
-        except Exception:
-            pass
-        return None
-
-    def _get_valid_token(self) -> dict | None:
-        """Return a valid token, refreshing if needed."""
-        token = _load_token()
-        if not token:
-            return None
-        if _token_expired(token):
-            token = _refresh_token(
-                token, self._get_client_id(), self._get_client_secret()
-            )
-        return token
-
-    def _fetch_user_id(self, token: dict) -> str | None:
-        """Fetch and cache the authenticated user's ID."""
-        import httpx
-        try:
-            resp = httpx.get(
-                f"{_API_BASE}/users/me",
-                headers={"Authorization": f"Bearer {token['access_token']}"},
-                params={"user.fields": "id,username"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                self._user_id = data.get("id")
-                return self._user_id
-        except Exception as exc:
-            logger.warning("Failed to fetch X user ID: %s", exc)
-        return None
-
-    def _get_user_id(self, token: dict) -> str | None:
-        """Get cached user ID or fetch it."""
-        if self._user_id:
-            return self._user_id
-        return self._fetch_user_id(token)
+    def _signed_in(self, account: str | None, *, required: bool) -> tuple[XAccount, dict]:
+        """The account a call names and its usable sign-in; raises XAccountChoice with what to do."""
+        chosen = x_accounts.resolve(account, required=required)
+        token = x_accounts.valid_token(chosen)
+        if token is None:
+            raise XAccountChoice(f"The sign-in of {chosen.handle} has run out or was removed. The person can "
+                                 "reconnect it in Settings › Apps › X.")
+        return chosen, token
 
     # ── API request helper ───────────────────────────────────────────────────
 
@@ -837,23 +675,13 @@ class XTool(BaseTool):
         Handles rate limiting, tier detection, and common errors.
         Returns the parsed JSON response or raises RuntimeError.
         """
-        import httpx
-
         # Check rate limit before calling
         rate_msg = self._rate_limiter.check(endpoint)
         if rate_msg:
             raise RuntimeError(rate_msg)
 
         url = f"{_API_BASE}/{endpoint.lstrip('/')}"
-        headers = {"Authorization": f"Bearer {token['access_token']}"}
-
-        resp = httpx.request(
-            method, url,
-            headers=headers,
-            params=params,
-            json=json_body,
-            timeout=15,
-        )
+        resp = x_accounts.send(method, url, headers=x_accounts.bearer(token), params=params, json=json_body)
 
         # Update rate limit tracking
         self._rate_limiter.update(endpoint, dict(resp.headers))
@@ -917,17 +745,42 @@ class XTool(BaseTool):
             )
         return None
 
+    # ── Accounts ─────────────────────────────────────────────────────────────
+
+    def _x_accounts(self) -> str:
+        """The connected accounts: handle, name, numeric ID and whether each is signed in."""
+        words = {"connected": "signed in", "invalid": "needs reconnecting", "expired": "needs reconnecting",
+                 "saved_unchecked": "signed in, not checked yet", "not_authenticated": "signed out"}
+        rows = x_accounts.summaries()
+        if not rows:
+            return "No X account is connected. The person can connect one in Settings › Apps › X."
+        lines = []
+        for row in rows:
+            state = words.get(row["state"], "status unknown")
+            if not row["id"]:
+                lines.append(f"- The X account from before (its handle shows once Row-Bot reaches X): {state}")
+            else:
+                name = f" · {row['name']}" if row["name"] else ""
+                lines.append(f"- @{row['username']}{name} (ID {row['id']}): {state}")
+        more = ("" if len(rows) < 2 else
+                "\nWith several accounts, every post, reply, quote, delete, like, repost or bookmark must say "
+                "which with account; ask the person if they haven't said.")
+        return f"Connected X accounts ({len(rows)}):\n" + "\n".join(lines) + more
+
     # ── Read operations ──────────────────────────────────────────────────────
 
     def _x_read(self, action: str, query: str | None = None,
                 tweet_id: str | None = None, username: str | None = None,
                 max_results: int = 10,
                 start_time: str | None = None,
-                end_time: str | None = None) -> str:
-        """Execute a read operation on X."""
-        token = self._get_valid_token()
-        if not token:
-            return "Not authenticated with X. Please authenticate in Settings → Accounts."
+                end_time: str | None = None, *, account: str | None = None) -> str:
+        """Execute a read operation on X, as the account named (or the first one, for a read about others)."""
+        # Mentions and your own timeline are about one account: with several, the call must say which.
+        about_you = action == "mentions" or (action == "timeline" and not username)
+        try:
+            chosen, token = self._signed_in(account, required=about_you)
+        except XAccountChoice as exc:
+            return str(exc)
 
         max_results = max(1, min(max_results, 100))
 
@@ -1011,9 +864,7 @@ class XTool(BaseTool):
                     if not uid:
                         return f"User @{username} not found."
                 else:
-                    uid = self._get_user_id(token)
-                    if not uid:
-                        return "Could not determine your user ID."
+                    uid = chosen.id
 
                 data = self._api_request(
                     "GET", f"users/{uid}/tweets", token,
@@ -1025,13 +876,12 @@ class XTool(BaseTool):
                     },
                 )
                 tweets = data.get("data", [])
+                who = f"@{username}" if username else chosen.handle
                 if not tweets:
-                    who = f"@{username}" if username else "your"
-                    return f"No tweets found in {who} timeline."
+                    return f"No tweets found in {who}'s timeline."
                 includes = data.get("includes", {})
                 results = [_format_tweet(t, includes) for t in tweets]
-                who = f"@{username}'s" if username else "Your"
-                return f"{who} recent tweets ({len(tweets)}):\n\n" + "\n\n---\n\n".join(results)
+                return f"{who}'s recent tweets ({len(tweets)}):\n\n" + "\n\n---\n\n".join(results)
             except RuntimeError as e:
                 return str(e)
 
@@ -1039,11 +889,8 @@ class XTool(BaseTool):
             if not self._is_op_enabled("x_mentions"):
                 return "Mentions is disabled in X tool settings."
             try:
-                uid = self._get_user_id(token)
-                if not uid:
-                    return "Could not determine your user ID."
                 data = self._api_request(
-                    "GET", f"users/{uid}/mentions", token,
+                    "GET", f"users/{chosen.id}/mentions", token,
                     params={
                         "max_results": max_results,
                         "tweet.fields": _TWEET_FIELDS,
@@ -1053,10 +900,11 @@ class XTool(BaseTool):
                 )
                 tweets = data.get("data", [])
                 if not tweets:
-                    return "No recent mentions found."
+                    return f"No recent mentions of {chosen.handle} found."
                 includes = data.get("includes", {})
                 results = [_format_tweet(t, includes) for t in tweets]
-                return f"Your recent mentions ({len(tweets)}):\n\n" + "\n\n---\n\n".join(results)
+                return (f"{chosen.handle}'s recent mentions ({len(tweets)}):\n\n"
+                        + "\n\n---\n\n".join(results))
             except RuntimeError as e:
                 return str(e)
 
@@ -1084,121 +932,56 @@ class XTool(BaseTool):
 
     def _x_post(self, action: str, text: str | None = None,
                 tweet_id: str | None = None,
-                media_paths: list[str] | None = None, *, require_all_media: bool = False) -> str:
-        """Execute a post/write operation on X."""
-        token = self._get_valid_token()
-        if not token:
-            return "Not authenticated with X. Please authenticate in Settings → Accounts."
-
-        if action == "post":
-            if not self._is_op_enabled("x_post_tweet"):
-                return "Post is disabled in X tool settings."
-            if not text:
-                return "Please provide text for the tweet."
-
-            body: dict = {"text": text}
-            if media_paths:
-                media_ids = self._upload_media_files(media_paths, token)
-                if require_all_media and len(media_ids) != len(media_paths):
-                    return "Media upload incomplete; no tweet was posted. Uploaded media may remain."
-                if media_ids:
-                    body["media"] = {"media_ids": media_ids}
-
-            try:
-                data = self._api_request("POST", "tweets", token, json_body=body)
-                tid = data.get("data", {}).get("id", "?")
-                return f"Tweet posted successfully! Tweet ID: {tid}"
-            except RuntimeError as e:
-                return str(e)
-
-        elif action == "reply":
-            if not self._is_op_enabled("x_reply"):
-                return "Reply is disabled in X tool settings."
-            if not text:
-                return "Please provide text for the reply."
-            if not tweet_id:
-                return "Please provide the tweet_id to reply to."
-
-            body = {
-                "text": text,
-                "reply": {"in_reply_to_tweet_id": tweet_id},
-            }
-            if media_paths:
-                media_ids = self._upload_media_files(media_paths, token)
-                if media_ids:
-                    body["media"] = {"media_ids": media_ids}
-
-            try:
-                data = self._api_request("POST", "tweets", token, json_body=body)
-                tid = data.get("data", {}).get("id", "?")
-                return f"Reply posted successfully! Tweet ID: {tid}"
-            except RuntimeError as e:
-                return str(e)
-
-        elif action == "quote":
-            if not self._is_op_enabled("x_quote"):
-                return "Quote is disabled in X tool settings."
-            if not text:
-                return "Please provide text for the quote tweet."
-            if not tweet_id:
-                return "Please provide the tweet_id to quote."
-
-            body = {
-                "text": text,
-                "quote_tweet_id": tweet_id,
-            }
-            if media_paths:
-                media_ids = self._upload_media_files(media_paths, token)
-                if media_ids:
-                    body["media"] = {"media_ids": media_ids}
-
-            try:
-                data = self._api_request("POST", "tweets", token, json_body=body)
-                tid = data.get("data", {}).get("id", "?")
-                return f"Quote tweet posted successfully! Tweet ID: {tid}"
-            except RuntimeError as e:
-                return str(e)
-
-        elif action == "delete":
-            if not self._is_op_enabled("x_delete_tweet"):
-                return "Delete is disabled in X tool settings."
-            if not tweet_id:
-                return "Please provide the tweet_id to delete."
-
-            try:
-                self._api_request("DELETE", f"tweets/{tweet_id}", token)
-                return f"Tweet {tweet_id} deleted successfully."
-            except RuntimeError as e:
-                return str(e)
-
-        else:
+                media_paths: list[str] | None = None, *, account: str | None = None) -> str:
+        """Post, reply, quote or delete as the named account, once the person approves exactly that."""
+        operation = {"post": "x_post_tweet", "reply": "x_reply", "quote": "x_quote",
+                     "delete": "x_delete_tweet"}.get(action)
+        if operation is None:
             return f"Unknown post action: {action}. Use: post, reply, quote, delete"
+        if not self._is_op_enabled(operation):
+            return f"{action.capitalize()} is turned off in Settings › Apps › X."
+        try:
+            words, target = x_posting.check_text(action, text, tweet_id)
+            chosen = x_accounts.resolve(account, required=True)
+            media = x_posting.media_facts(media_paths) if action != "delete" else []
+        except (x_posting.XPostError, XAccountChoice) as exc:
+            return str(exc)
+        target_text = x_posting.read_text(chosen, target) if action == "delete" else ""
+        refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text)
+        if refusal is not None:
+            return refusal
+        from row_bot.tools.approval_gate import with_approval
+
+        try:
+            sent = x_posting.post_as(chosen, action, words, target, media).text
+        except x_posting.XPostError as exc:
+            sent = str(exc)
+        return with_approval(line, sent) if line else sent
 
     # ── Engage operations ────────────────────────────────────────────────────
 
-    def _x_engage(self, action: str, tweet_id: str) -> str:
-        """Execute an engagement operation on X."""
-        token = self._get_valid_token()
-        if not token:
-            return "Not authenticated with X. Please authenticate in Settings → Accounts."
-
-        uid = self._get_user_id(token)
-        if not uid:
-            return "Could not determine your user ID."
+    def _x_engage(self, action: str, tweet_id: str, *, account: str | None = None) -> str:
+        """Like, repost or bookmark (or undo one) as the named account."""
+        try:
+            chosen, token = self._signed_in(account, required=True)
+        except XAccountChoice as exc:
+            return str(exc)
+        uid = chosen.id
+        who = chosen.handle
 
         action_map = {
             "like":       ("x_like",      "POST",   f"users/{uid}/likes",
-                           {"tweet_id": tweet_id}, f"Liked tweet {tweet_id}."),
+                           {"tweet_id": tweet_id}, f"Liked tweet {tweet_id} as {who}."),
             "unlike":     ("x_unlike",    "DELETE", f"users/{uid}/likes/{tweet_id}",
-                           None, f"Unliked tweet {tweet_id}."),
+                           None, f"Unliked tweet {tweet_id} as {who}."),
             "repost":     ("x_repost",    "POST",   f"users/{uid}/retweets",
-                           {"tweet_id": tweet_id}, f"Reposted tweet {tweet_id}."),
+                           {"tweet_id": tweet_id}, f"Reposted tweet {tweet_id} as {who}."),
             "unrepost":   ("x_unrepost",  "DELETE", f"users/{uid}/retweets/{tweet_id}",
-                           None, f"Removed repost of tweet {tweet_id}."),
+                           None, f"Removed {who}'s repost of tweet {tweet_id}."),
             "bookmark":   ("x_bookmark",  "POST",   f"users/{uid}/bookmarks",
-                           {"tweet_id": tweet_id}, f"Bookmarked tweet {tweet_id}."),
+                           {"tweet_id": tweet_id}, f"Bookmarked tweet {tweet_id} as {who}."),
             "unbookmark": ("x_unbookmark", "DELETE", f"users/{uid}/bookmarks/{tweet_id}",
-                           None, f"Removed bookmark of tweet {tweet_id}."),
+                           None, f"Removed {who}'s bookmark of tweet {tweet_id}."),
         }
 
         if action not in action_map:
@@ -1215,75 +998,80 @@ class XTool(BaseTool):
         except RuntimeError as e:
             return str(e)
 
-    # ── Media helpers ────────────────────────────────────────────────────────
-
-    def _upload_media_files(self, paths: list[str], token: dict) -> list[str]:
-        """Upload multiple media files and return their media IDs."""
-        media_ids = []
-        for p in paths[:4]:  # Max 4 media per tweet
-            mid = _upload_media(p, token)
-            if mid:
-                media_ids.append(mid)
-            else:
-                logger.warning("Failed to upload media: %s", p)
-        return media_ids
-
     # ── LangChain tool wrappers ──────────────────────────────────────────────
 
-    def _sign_in_usable(self, token: dict) -> bool:
-        """Whether this saved sign-in binds the X tools.
+    def _sign_in_usable(self) -> bool:
+        """Whether any saved sign-in binds the X tools.
 
         X is asked once per sign-in and the answer is kept, so a chat's tools never wait on X. An
         access token past its time is refreshed by the call that needs it, which also says if X
         refuses. A check that could not reach X keeps the tools bound: the call reports the error.
-        Only X refusing the sign-in leaves them out (until a new sign-in).
+        Only X refusing every sign-in leaves them out (until a new sign-in).
         """
-        key = _sign_in_key(token)
-        known = _SIGN_IN_VERDICTS.get(key)
-        if known is not None:
-            return known
-        if _token_expired(token):
-            return True
-        status, _ = self.check_token_health()
-        usable = status not in ("missing", "expired")
-        current = _load_token() or token  # A refresh during the check saved a new sign-in.
-        for sign_in in {key, _sign_in_key(current)}:
-            _SIGN_IN_VERDICTS[sign_in] = usable
-        while len(_SIGN_IN_VERDICTS) > _SIGN_IN_VERDICTS_MAX:
-            _SIGN_IN_VERDICTS.pop(next(iter(_SIGN_IN_VERDICTS)))
-        return usable
+        sign_ins = [(account, x_accounts.token(account)) for account in x_accounts.listed()]
+        sign_ins = [(account, token) for account, token in sign_ins if token]
+        if not sign_ins:
+            # The sign-in from before 5.3 binds them too; the first call makes it an account.
+            return x_accounts.legacy_pending()
+        for account, token in sign_ins:
+            key = _sign_in_key(token)
+            known = _SIGN_IN_VERDICTS.get(key)
+            if known is None:
+                if x_accounts.expired(token):
+                    return True
+                status, _ = self._check_account(account)
+                known = status not in ("missing", "expired")
+                current = x_accounts.token(account) or token  # A refresh during the check saved a new one.
+                for sign_in in {key, _sign_in_key(current)}:
+                    _SIGN_IN_VERDICTS[sign_in] = known
+                while len(_SIGN_IN_VERDICTS) > _SIGN_IN_VERDICTS_MAX:
+                    _SIGN_IN_VERDICTS.pop(next(iter(_SIGN_IN_VERDICTS)))
+            if known:
+                return True
+        return False
 
     def as_langchain_tools(self) -> list:
         """Return the X tools based on configured operations."""
         if not self.has_credentials():
             return []
-        token = _load_token()
-        if token is None:
-            return []
-        if not self._sign_in_usable(token):
+        if not self._sign_in_usable():
             return []
 
         tools = []
+        tool_instance = self
+
+        def _run_accounts() -> str:
+            return tool_instance._x_accounts()
+
+        tools.append(StructuredTool.from_function(
+            func=_run_accounts,
+            name="x_accounts",
+            description=(
+                "List the connected X accounts: handle, name, numeric ID and whether each is signed in. "
+                "Read-only. Use it to know which account to name in x_post, x_engage and x_read."
+            ),
+            args_schema=_XAccountsInput,
+        ))
 
         # ── x_read ───────────────────────────────────────────────────────
         read_ops = self.get_config("read_operations", _READ_OPS)
         if any(op in read_ops for op in _READ_OPS):
-            tool_instance = self
 
             def _run_read(action: str, query: str | None = None,
                           tweet_id: str | None = None,
                           username: str | None = None,
                           max_results: int = 10,
                           start_time: str | None = None,
-                          end_time: str | None = None) -> str:
+                          end_time: str | None = None,
+                          account: str | None = None) -> str:
                 try:
                     return tool_instance._x_read(
                         action, query, tweet_id, username, max_results,
-                        start_time, end_time
+                        start_time, end_time, account=account
                     )
                 except Exception as exc:
-                    logger.error("x_read error: %s", exc, exc_info=True)
-                    return f"Error in X read: {exc}"
+                    logger.error("x_read error: %s", type(exc).__name__, exc_info=True)
+                    return f"Error in X read: {type(exc).__name__}"
 
             tools.append(StructuredTool.from_function(
                 func=_run_read,
@@ -1293,8 +1081,8 @@ class XTool(BaseTool):
                     "'search' (query required; use start_time/end_time for "
                     "date filtering — do NOT put 'since:' or 'until:' in the query), "
                     "'read_tweet' (tweet_id required), "
-                    "'timeline' (optional username, defaults to your feed), "
-                    "'mentions' (your recent mentions), "
+                    "'timeline' (optional username, defaults to the account's own posts), "
+                    "'mentions' (the account's recent mentions), "
                     "'user_info' (username required)."
                 ),
                 args_schema=_XReadInput,
@@ -1303,53 +1091,58 @@ class XTool(BaseTool):
         # ── x_post ───────────────────────────────────────────────────────
         post_ops = self.get_config("post_operations", _POST_OPS)
         if any(op in post_ops for op in _POST_OPS):
-            tool_instance = self
 
             def _run_post(action: str, text: str | None = None,
                           tweet_id: str | None = None,
-                          media_paths: list[str] | None = None) -> str:
+                          media_paths: list[str] | None = None,
+                          account: str | None = None) -> str:
                 try:
                     return tool_instance._x_post(
-                        action, text, tweet_id, media_paths
+                        action, text, tweet_id, media_paths, account=account
                     )
+                except GraphBubbleUp:
+                    raise  # The approval card: the conversation waits for the person.
                 except Exception as exc:
-                    logger.error("x_post error: %s", exc, exc_info=True)
-                    return f"Error in X post: {exc}"
+                    logger.error("x_post error: %s", type(exc).__name__, exc_info=True)
+                    return f"Error in X post: {type(exc).__name__}"
 
             tools.append(StructuredTool.from_function(
                 func=_run_post,
                 name="x_post",
                 description=(
-                    "Post on X (Twitter). Actions: "
+                    "Post on X (Twitter) as one connected account. Actions: "
                     "'post' (text required, optional media_paths), "
                     "'reply' (text + tweet_id required), "
                     "'quote' (text + tweet_id required), "
                     "'delete' (tweet_id required). "
-                    "⚠️ Post operations require approval."
+                    "Name the account; with several connected a call without one is refused. "
+                    "Every call asks the person on a card with the account, the full text and the media; "
+                    "the result gives the post's link."
                 ),
                 args_schema=_XPostInput,
+                # It asks for its own approval, bound to the account, text and media it sends.
+                metadata={"row_bot_gates_itself": True},
             ))
 
         # ── x_engage ─────────────────────────────────────────────────────
         engage_ops = self.get_config("engage_operations", _ENGAGE_OPS)
         if any(op in engage_ops for op in _ENGAGE_OPS):
-            tool_instance = self
 
-            def _run_engage(action: str, tweet_id: str) -> str:
+            def _run_engage(action: str, tweet_id: str, account: str | None = None) -> str:
                 try:
-                    return tool_instance._x_engage(action, tweet_id)
+                    return tool_instance._x_engage(action, tweet_id, account=account)
                 except Exception as exc:
-                    logger.error("x_engage error: %s", exc, exc_info=True)
-                    return f"Error in X engage: {exc}"
+                    logger.error("x_engage error: %s", type(exc).__name__, exc_info=True)
+                    return f"Error in X engage: {type(exc).__name__}"
 
             tools.append(StructuredTool.from_function(
                 func=_run_engage,
                 name="x_engage",
                 description=(
-                    "Engage with tweets on X (Twitter). Actions: "
+                    "Engage with tweets on X (Twitter) as one connected account. Actions: "
                     "'like', 'unlike', 'repost', 'unrepost', "
                     "'bookmark', 'unbookmark'. "
-                    "Requires tweet_id."
+                    "Requires tweet_id; name the account when several are connected."
                 ),
                 args_schema=_XEngageInput,
             ))
@@ -1357,7 +1150,7 @@ class XTool(BaseTool):
         return tools
 
     def execute(self, query: str) -> str:
-        return "Use the individual X operations (x_read, x_post, x_engage) instead."
+        return "Use the individual X operations (x_accounts, x_read, x_post, x_engage) instead."
 
 
 registry.register(XTool())

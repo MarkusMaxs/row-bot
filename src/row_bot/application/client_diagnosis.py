@@ -6,7 +6,8 @@ internet run hourly while "Check connections every hour" is on, whenever the
 person runs diagnosis, and for the local model right after one of its turns
 failed. The last result of every check is kept on disk with its time, without
 credential values or private paths, for Monitor, Overview and the attention
-indicator. Scheduled runs use the scheduler's worker threads, never a request.
+indicator; the Workflows line is read again each time they are read (B414).
+Scheduled runs use the scheduler's worker threads, never a request.
 """
 
 from __future__ import annotations
@@ -157,16 +158,20 @@ def _save(state: dict[str, Any]) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _entry(result: status_checks.CheckResult, *, network: bool) -> dict[str, Any]:
+    return {
+        "name": str(result.name)[:128],
+        "status": result.status if result.status in _STATUSES else "error",
+        "detail": _safe_detail(result.detail),
+        "checked_at": float(result.checked_at),
+        "settings_tab": str(result.settings_tab)[:64],
+        "network": network,
+    }
+
+
 def _results(checks: Checks, *, network: bool) -> dict[str, dict[str, Any]]:
     return {
-        check_id: {
-            "name": str(result.name)[:128],
-            "status": result.status if result.status in _STATUSES else "error",
-            "detail": _safe_detail(result.detail),
-            "checked_at": float(result.checked_at),
-            "settings_tab": str(result.settings_tab)[:64],
-            "network": network,
-        }
+        check_id: _entry(result, network=network)
         for check_id, result in status_checks.run_checks(checks)
     }
 
@@ -235,6 +240,11 @@ def read_system_health(*, now: float | None = None) -> dict[str, Any]:
     """The last result of every check, as Monitor and Overview show it."""
     now = time.time() if now is None else now
     state = _load()
+    if "workflows" in state["checks"]:
+        # What the person changes from minute to minute (a workflow approval answered, a run started or
+        # ended) is read now, not kept from the last 15-minute run: an answered approval clears its
+        # warning at once (B414). It reads saved workflows and approvals only.
+        state["checks"]["workflows"] = _entry(status_checks.check_task_scheduler(), network=False)
     ordered = sorted(
         state["checks"].items(),
         key=lambda item: status_checks.status_result_order_key(

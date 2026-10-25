@@ -77,12 +77,18 @@ def format_interrupt_text(data: Any) -> str:
     Telegram has its own HTML formatter; use this for text-based channels
     (Slack, Discord, WhatsApp, SMS).
     """
-    items = data if isinstance(data, list) else [data]
+    items = asked_now(data)
     parts: list[str] = []
 
     for item in items:
         if not isinstance(item, dict):
             parts.append(str(item))
+            continue
+        memory = item.get("memory_save")
+        if isinstance(memory, dict) and memory.get("text"):
+            # A memory write in an incognito chat (N11): the exact text, the person's alone to save.
+            parts.append(str(item.get("question") or "Save to memory?"))
+            parts.append(f"  {memory['text']}")
             continue
         tool_name = item.get("tool", item.get("name", "Unknown tool"))
         desc = item.get("description", "")
@@ -104,17 +110,32 @@ def format_interrupt_text(data: Any) -> str:
     return "\n".join(parts)
 
 
+def asked_now(data: Any) -> list[Any]:
+    """The interrupts one answer goes to: all of them, or only a card the person answers by itself.
+
+    A memory write of an incognito chat (N11) is asked and answered on its own, one write at a time
+    (B412); what waits beside it asks again once it is answered. Row-Bot's question (N4) still goes first.
+    """
+    from row_bot.tools.approval_gate import asked_alone
+
+    alone = asked_alone(data) if question_of(data) is None else None
+    if alone is not None:
+        return [alone]
+    return data if isinstance(data, list) else [data]
+
+
 # ── Interrupt ID extraction ──────────────────────────────────────────
 
 def extract_interrupt_ids(data: Any) -> list[str] | None:
     """Extract ``__interrupt_id`` values from interrupt data.
 
-    Returns every explicit ID so even a single nested interrupt resumes by
-    identity instead of relying on scalar interrupt ordering.
+    Returns every explicit ID the answer goes to (``asked_now``) so even a
+    single nested interrupt resumes by identity instead of relying on scalar
+    interrupt ordering.
     """
     if data is None:
         return None
-    items = data if isinstance(data, list) else [data]
+    items = asked_now(data)
     ids = [
         item.get("__interrupt_id")
         for item in items

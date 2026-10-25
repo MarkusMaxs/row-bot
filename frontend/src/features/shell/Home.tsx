@@ -17,6 +17,7 @@ import type {
   TaskSummaryPage,
 } from '../../api/types';
 import { useClientState, useRuntime } from '../../runtime';
+import { useLiveUpdate } from '../../live';
 import { Tabs } from '../../ui/primitives';
 import { useOverlay } from '../../ui/overlays';
 import TaskLibrary from '../tasks/TaskLibrary';
@@ -109,6 +110,24 @@ export default function Home({
   const [startupWarnings, setStartupWarnings] = useState<string[]>([]);
   const [attention, setAttention] = useState<AttentionProblem[]>([]);
   const monitorRead = useRef({ at: 0, key: '' });
+  // What Monitor lists as needing the person changed (a failed run, a
+  // notice; B407): read it again at once, at most once a second, without the
+  // loading state.
+  const liveMonitor = useRef({ at: 0, timer: 0, quiet: false });
+  useLiveUpdate(['monitor'], () => {
+    const pending = liveMonitor.current;
+    if (pending.timer) return;
+    pending.timer = window.setTimeout(
+      () => {
+        pending.timer = 0;
+        pending.at = Date.now();
+        pending.quiet = true;
+        setMonitorReload((value) => value + 1);
+      },
+      Math.max(0, pending.at + 1000 - Date.now()),
+    );
+  });
+  useEffect(() => () => window.clearTimeout(liveMonitor.current.timer), []);
   const [setup, setSetup] = useState<OnboardingSnapshot | null>(null);
   // Until a default model exists, opening Row-Bot opens Setup (decision 10).
   // Only the plain Home address does: a deep link, a Home tab or "Set up
@@ -198,7 +217,8 @@ export default function Home({
     )
       return;
     const abort = new AbortController();
-    setMonitorLoading(true);
+    if (!liveMonitor.current.quiet) setMonitorLoading(true);
+    liveMonitor.current.quiet = false;
     setMonitorError('');
     // Start-up warnings are listed in Monitor as well as shown once.
     controller.notices(abort.signal).then(
@@ -290,6 +310,10 @@ export default function Home({
     },
     [controller, identity],
   );
+  // A run started or ended: the next workflow read is fresh (B407).
+  useLiveUpdate(['runs'], () => {
+    tasksRead.current = null;
+  });
   /** A new design or code folder: set up in a new chat, like its + menu. */
   const newResource = (kind: 'artifact' | 'workspace') =>
     onPanel &&
