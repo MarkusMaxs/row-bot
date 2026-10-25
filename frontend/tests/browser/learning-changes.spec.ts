@@ -20,6 +20,9 @@ const l3b = (page: Page, action: string) =>
   fixture(page, `/__l3b_fixture/learning/${action}`);
 
 test.beforeEach(async ({ page }) => {
+  // A retry after a failed first launch starts from a clean profile too.
+  await l3b(page, 'restore');
+  await l1a(page, 'restore');
   await page.addInitScript(() => {
     if (window !== window.top) return;
     localStorage.setItem(
@@ -75,6 +78,10 @@ async function turnOn(page: Page) {
   await page.goto('/app-v2/settings/learning');
   await page.getByRole('button', { name: 'Turn on Learning' }).click();
   const sheet = page.getByRole('dialog', { name: 'Turn on Learning' });
+  // The graphics card is read first: turning on before it is known skips the download ask.
+  await expect(
+    sheet.getByText('NVIDIA GeForce RTX 5070 Laptop (8 GB)'),
+  ).toBeVisible();
   await sheet.getByRole('button', { name: 'Turn on Learning' }).click();
   const ask = page.getByRole('dialog', {
     name: 'Download the training engine and Qwen3.5 2B?',
@@ -135,7 +142,7 @@ test('a tested change waits in Needs you; its review shows the test; Use this ch
   await sheet.getByRole('button', { name: 'Use this change' }).click();
   await expect(notice(page, 'Now in use.')).toBeVisible();
   await shoot(page, info, 'use-toast');
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(notice(page, /^Undone\./)).toBeVisible();
 
   await open(page, 'changes');
@@ -224,6 +231,17 @@ test('Lessons: in use with how often it was used, a saved one to test; a reply s
   ).toBeVisible();
   await shoot(page, info, 'lessons');
 
+  // Leaving the page cuts its live-updates stream, which Chromium may log once or twice.
+  info.annotations.push({
+    type: 'expected-console-error',
+    description: JSON.stringify({
+      owner: 'learning-changes',
+      fixture: 'opening the chat by its address while the live-updates stream is open',
+      signature: 'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+      count: 2,
+      upTo: true,
+    }),
+  });
   await page.goto('/app-v2/conversations/l3b-policies');
   await expect(page.getByText(/^85 EUR a person, from POL-114/)).toBeVisible();
   await expect(page.getByText('Used a lesson')).toBeVisible();
