@@ -109,3 +109,31 @@ Two lanes besides the API-key providers:
 ```bash
 ROW_BOT_LIVE_EVAL_CODEX_PROFILE=<eval profile> uv run python scripts/live_eval.py plan --tier learning --providers codex
 ```
+
+**Learning release check** (`tests/e2e/learning/seeded/`, PLAN O92): made-up people
+with plain-file data (`people/`) and a deterministic generator (a 30-day past for the
+past-chat import, then a live stream of requests with a hidden intent and a checkable
+right outcome; the past's replies are the main model's own words, written once by
+`phrasing.py` and kept in `people/<id>/past_replies.json`), run one at a time through
+the real runtime in scratch profiles, with a
+simulated person on the ChatGPT lane (the eval profile above) and simulated days and
+nights. One command runs the whole Learning loop and writes `report.md`/`report.json`
+(rates with denominators and 95% intervals, tokens, GPU-hours, survival checks, and the
+stages not built yet); it resumes where it stopped. Its deterministic parts are in
+`tests/subsystem/learning/test_learning_seeded_*.py`.
+
+```bash
+uv run python scripts/learning_release_check.py --plan --out <folder> --scratch <folder>
+uv run python scripts/learning_release_check.py --people all --days 30 --tiers 8gb --out <folder> \
+  --scratch <folder> --eval-profile <eval profile> --runtimes-from <data folder with the engine>
+```
+
+**The paper's report** (`scripts/learning_paper_report.py`, PLAN O83/O109): the script
+the participant runs on their own profile (`--health`, `--freeze --as-of`, `--thinking`);
+it works on a checked scratch copy and writes one JSON of aggregates under a strict
+schema. Its privacy tests run in the PR lane
+(`tests/subsystem/learning/test_learning_paper_report.py`, `test_learning_freeze.py`);
+the opt-in `tests/e2e/learning/test_learning_paper_report_e2e.py` runs it on copies of the
+release check's seeded profiles and cross-checks the freeze against their own benchmark
+(`ROW_BOT_LEARNING_PAPER_E2E=1`, `ROW_BOT_LEARNING_PAPER_PROFILES`,
+`ROW_BOT_LEARNING_PAPER_SCRATCH`; Ollama and the graphics card).

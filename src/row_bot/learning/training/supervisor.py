@@ -382,7 +382,8 @@ class TrainingSupervisor:
         return moved
 
     def request_pause(self, reason: str) -> Job | None:
-        """Ask the live worker to pause at its next step (pause on use, Learning paused)."""
+        """Ask the live worker to pause at its next step (pause on use, Learning paused). Before its first
+        step it ends now: loading the model can take minutes, and it continues from the same checkpoint."""
 
         with self._lock:
             run = self._run
@@ -391,7 +392,7 @@ class TrainingSupervisor:
             job = self.jobs.get(run.job_id)
             if job is None:
                 return None
-            if job.state == "preparing":
+            if job.state == "preparing" or "progress" not in run.messages:
                 return self._end_run(reason)  # nothing to save yet
             if job.state != "running":
                 return job
