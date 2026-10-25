@@ -19,7 +19,7 @@ from typing import Any
 _PUBLIC_REFERENCE = re.compile(r"^[A-Za-z0-9:_-]{1,256}$")
 # Inputs the server started, shown as a short note instead of the person's
 # bubble: a follow-up step, a delegated agent's task and its parent's messages.
-PUBLIC_NOTES = frozenset({"continuation", "agent_task", "agent_guidance"})
+PUBLIC_NOTES = frozenset({"continuation", "agent_task", "agent_guidance", "page"})
 
 
 @dataclass(frozen=True)

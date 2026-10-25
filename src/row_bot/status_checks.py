@@ -373,22 +373,24 @@ def check_github_oauth() -> CheckResult:
 
 
 def check_task_scheduler() -> CheckResult:
-    """Check workflow scheduler, active runs, and pending approvals."""
+    """Workflows on a schedule, workflow runs, and workflow approvals waiting (B414).
+
+    Row-Bot's own upkeep jobs share the scheduler but aren't workflows, and a
+    chat's or a helper's approval waits on its own card in that chat, so
+    neither is counted here.
+    """
     try:
-        from row_bot.tasks import _scheduler, get_pending_approvals, get_running_tasks
+        from row_bot.tasks import _scheduler, count_scheduled_workflows, get_pending_approvals, get_running_tasks
         running = len(get_running_tasks())
-        pending = len(get_pending_approvals())
+        pending = sum(1 for approval in get_pending_approvals()
+                      if str(approval.get("resume_kind") or "") in {"", "workflow"})
+        waiting = f"{pending} approval{'s' if pending != 1 else ''} waiting"
         if _scheduler is None:
             detail = "Scheduler not started"
             if running or pending:
-                detail += f" · {running} running · {pending} approval waiting"
+                detail += f" · {running} running · {waiting}"
             return CheckResult("Workflows", "warn", detail)
-        jobs = _scheduler.get_jobs()
-        parts = [
-            f"{len(jobs)} scheduled",
-            f"{running} running",
-            f"{pending} approval{'s' if pending != 1 else ''} waiting",
-        ]
+        parts = [f"{count_scheduled_workflows()} scheduled", f"{running} running", waiting]
         return CheckResult("Workflows", "warn" if pending else "ok", " · ".join(parts))
     except Exception as exc:
         return CheckResult("Workflows", "error", str(exc))

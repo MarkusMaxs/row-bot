@@ -91,6 +91,8 @@ class ClientSecurity:
         self._lock = threading.RLock()
         self._sessions: dict[str, ClientSession] = {}
         self._subscriptions: dict[str, Subscription] = {}
+        # Open app-wide live streams and long polls, per session (B407).
+        self._live: dict[str, int] = {}
         self._local_group = str(uuid4())
         self._nonces: dict[str, tuple] = {}
         self._native_attestations: dict[str, tuple[str, float, str]] = {}
@@ -429,6 +431,21 @@ class ClientSecurity:
     def leave_stream(self, sub: Subscription) -> None:
         with self._lock:
             sub.streaming = False
+
+    def enter_live(self, session: ClientSession) -> None:
+        """Admit one app-wide live stream or long poll: a few per window's session."""
+        with self._lock:
+            if self._live.get(session.id, 0) >= 4 or sum(self._live.values()) >= 64:
+                raise ProtocolError("rate_limited", 429)
+            self._live[session.id] = self._live.get(session.id, 0) + 1
+
+    def leave_live(self, session: ClientSession) -> None:
+        with self._lock:
+            left = self._live.get(session.id, 0) - 1
+            if left > 0:
+                self._live[session.id] = left
+            else:
+                self._live.pop(session.id, None)
 
     def unsubscribe(self, sub: Subscription) -> None:
         with self._lock:

@@ -4,7 +4,8 @@
     "account": {
       "enum": [
         "google",
-        "x"
+        "x",
+        "microsoft"
       ],
       "title": "Account",
       "type": "string"
@@ -38,6 +39,12 @@
     "expected_revision": {
       "pattern": "^[0-9a-f]{64}$",
       "title": "Expected Revision",
+      "type": "string"
+    },
+    "x_account": {
+      "default": "",
+      "pattern": "^[0-9]{0,20}$",
+      "title": "X Account",
       "type": "string"
     }
   },

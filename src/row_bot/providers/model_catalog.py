@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 import logging
 import time
-from typing import Any, Iterable
+from typing import Any, Collection, Iterable
 
 from row_bot.providers.capabilities import normalize_snapshot, snapshot_supports_surface
 from row_bot.providers.catalog import get_provider_definition, provider_billing
@@ -307,20 +307,28 @@ def project_saved_catalog_readiness(rows: Iterable[CatalogModelRow]) -> list[Cat
     return projected
 
 
-def picker_options(rows: Iterable[Any], surface: str, current: str = "") -> list[dict[str, Any]]:
+def picker_options(
+    rows: Iterable[Any], surface: str, current: str = "", *, favourites: Collection[str] | None = None,
+) -> list[dict[str, Any]]:
     """The one model list and availability rule for every picker and save check.
 
-    A picker lists the models pinned for its surface plus its current value.
-    A pinned model without saved capability metadata stays listed, unavailable
-    with a reason to refresh, instead of vanishing. Rows must carry readiness
-    (``project_saved_catalog_readiness``); nothing here reads a provider.
+    A picker lists the models pinned for its surface, the person's favourites
+    that can do its job (U10: a star always lists a model) and its current
+    value. A pinned model without saved capability metadata stays listed,
+    unavailable with a reason to refresh, instead of vanishing. Rows must carry
+    readiness (``project_saved_catalog_readiness``); nothing here reads a
+    provider. ``favourites`` defaults to the saved preference.
     """
+    if favourites is None:
+        from row_bot.providers.model_visibility import read_model_visibility
+
+        favourites = read_model_visibility().favourites
+    starred = set(favourites)
     options = []
     for row in rows:
         known = bool(row.categories)
-        if row.selection_ref != current and (
-            surface not in row.pinned_surfaces or (known and surface not in row.categories)
-        ):
+        listed = surface in row.pinned_surfaces or (row.selection_ref in starred and surface in row.categories)
+        if row.selection_ref != current and (not listed or (known and surface not in row.categories)):
             continue
         unavailable, reason = None, ""
         if not row.configured:

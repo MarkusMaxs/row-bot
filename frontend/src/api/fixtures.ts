@@ -507,6 +507,7 @@ export class FixtureTransport implements ClientTransport {
         ...base,
         id,
         title: payload.title ?? 'New conversation',
+        incognito: Boolean(payload.incognito),
       });
       this.snapshots.set(id, {
         ...structuredClone(this.snapshots.get(base.id)!),
@@ -536,6 +537,14 @@ export class FixtureTransport implements ClientTransport {
       };
       this.receipts.set(command.command_id, deleted);
       return deleted;
+    }
+    if (command.type === 'conversation.incognito') {
+      const row = this.conversations.find((item) => item.id === target);
+      if (!row) throw { code: 'not_found', status: 404 };
+      if (row.revision !== command.expected_revision)
+        throw { code: 'revision_conflict', status: 409 };
+      row.incognito = (command.payload as wire.IncognitoPayload).incognito;
+      row.revision = String(Number(row.revision) + 1);
     }
     if (command.type === 'conversation.restore') {
       const held = target ? this.heldDeletes.get(target) : undefined;

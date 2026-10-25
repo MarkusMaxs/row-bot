@@ -159,6 +159,10 @@ class Arm:
     # in-process tool loop and replay use ``guidance`` instead.
     lessons: tuple[tuple[str, str], ...] = ()
     ways: tuple[tuple[str, str], ...] = ()
+    # Whether the arm is served the page's picture after a browser or computer action (A8). A text-only
+    # arm (the personal model and its starting model) is asked without it, as training leaves it out; the
+    # main model, asked as captured, gets it as it was sent.
+    sees_images: bool = False
 
 
 @dataclass(frozen=True)
@@ -720,10 +724,18 @@ class ReplayCase:
                 "reference_source": self.reference_source, "check": self.check, "text": self.text,
                 "fidelity": self.fidelity, "untrusted": self.untrusted}
 
+    @property
+    def has_picture(self) -> bool:
+        """Whether its prefix carries the page's picture after a browser or computer action (A8)."""
+
+        from row_bot.learning.pictures import is_page_picture
+
+        return any(is_page_picture(item) for item in self.messages)
+
     @classmethod
     def from_content(cls, data: Mapping[str, Any]) -> ReplayCase:
         tools = data.get("tools")
-        return cls(
+        case = cls(
             decision_id=str(data["id"]), thread_id=str(data.get("thread_id") or ""),
             conversation_id=str(data.get("conversation_id") or ""), created_at=float(data.get("created_at") or 0),
             kind_of_work=str(data.get("kind_of_work") or ""), fidelity=str(data.get("fidelity") or "exact"),
@@ -733,6 +745,9 @@ class ReplayCase:
             reference_source=data.get("reference_source") or "captured", check=data.get("check") or "exact_action",
             text=str(data.get("text") or ""),
         )
+        # A8: a task held before this rule whose prefix carries a page picture took the picture's JSON as its
+        # text; it is read with the person's words.
+        return replace(case, text=_last_person_text(case.messages)[:4_000]) if case.has_picture else case
 
 
 @dataclass
@@ -742,10 +757,24 @@ class ReplaySet:
 
 
 def _last_person_text(messages: Sequence[Mapping[str, Any]]) -> str:
+    """The text of the person's last message: its text parts, never image data, and never the page's
+    picture after a browser or computer action (A8)."""
+
+    from row_bot.learning.pictures import is_page_picture
+
     for item in reversed(messages):
-        if item.get("type") == "human":
-            content = (item.get("data") or {}).get("content")
-            return content if isinstance(content, str) else json.dumps(content, default=str)
+        if item.get("type") != "human" or is_page_picture(item):
+            continue
+        content = (item.get("data") or {}).get("content")
+        if isinstance(content, str):
+            return content
+        parts: list[str] = []
+        for part in content if isinstance(content, list) else ():
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, Mapping) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+        return "\n".join(part for part in parts if part)
     return ""
 
 
@@ -837,6 +866,9 @@ def _case_for(saved: Any, decision: Decision, correction: CorrectedAction | None
         return "purged"
     if request.get("reconstructed") and check == "exact_action":
         return "partial_needs_exact_prefix"
+    if request.get("pictures_dropped"):
+        # A picture it was sent went under the size cap: its starting point can't be rebuilt (§8.6).
+        return "picture_dropped"
     if decision.episode_id not in episodes:
         episode = saved.get("episode", decision.episode_id)
         episodes[decision.episode_id] = str(getattr(episode, "kind_of_work", None) or "Your work")
@@ -910,6 +942,17 @@ def _langchain(system: Sequence[str], messages: Sequence[Mapping[str, Any]]) -> 
     return out
 
 
+def _as_seen(case: ReplayCase, arm: Arm) -> tuple[Mapping[str, Any], ...]:
+    """The case's prefix as ``arm`` is served it (A8): a text-only arm without the page's picture after a
+    browser or computer action, as training leaves it out (the action's result gives it in words)."""
+
+    from row_bot.learning.pictures import is_page_picture
+
+    if arm.sees_images:
+        return case.messages
+    return tuple(item for item in case.messages if not is_page_picture(item))
+
+
 def _served(case: ReplayCase, arm: Arm) -> tuple[list[Any], list[dict[str, Any]] | None, Any] | None:
     """The case as ``arm`` is served (its prefix rendered for ``arm.serve_context``, O71 and §4):
     (messages, tools, the rendered problem), or None when the arm is asked as captured. Raises
@@ -925,7 +968,7 @@ def _served(case: ReplayCase, arm: Arm) -> tuple[list[Any], list[dict[str, Any]]
         return None
     system: list[str] = []
     messages: list[dict[str, Any]] = []
-    for item in case.messages:
+    for item in _as_seen(case, arm):
         converted = dataset_module.openai_message(item)  # raises ValueError on content it can't send
         if converted is None:
             continue
@@ -958,7 +1001,7 @@ def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: 
         return CaseResult(case.decision_id, "replay", case.kind_of_work, "unverified", case.check,
                           detail=UNSERVABLE_DETAIL)
     if served is None:
-        messages, tools, problem = list(messages_from_dict([dict(item) for item in case.messages])), case.tools, None
+        messages, tools, problem = list(messages_from_dict([dict(item) for item in _as_seen(case, arm)])), case.tools, None
     else:
         messages, tools, problem = served
     messages = _with_guidance(messages, arm)
@@ -1575,7 +1618,9 @@ def _vault(store: Any | None = None) -> Any:
 def _eligible_for_audit(store: Any, horizon: float) -> list[audit.ReplayCandidate]:
     newer = [decision for decision in store.find("decision", subkind="model_call", newest_first=True, limit=100_000)
              if decision.created_at > horizon]
-    found = collect_replay(store, refresh=False, decisions=newer, limit=100_000)
+    # Amendment A7: untrusted input doesn't make a decision ineligible for the vault. Replay runs no tools, and each
+    # task keeps its untrusted mark for the trusted-only sensitivity analysis. Visible tests still leave them out (E9).
+    found = collect_replay(store, refresh=False, decisions=newer, limit=100_000, include_untrusted=True)
     return [audit.ReplayCandidate(case.decision_id, case.created_at, case.thread_id,
                                   case.conversation_id or case.thread_id, case.kind_of_work, case.to_content())
             for case in found.cases if case.reference_source == "captured" and case.check == "exact_action"]
@@ -1609,6 +1654,8 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
     stored = vault.correction_ids()
     candidates, missing = _correction_candidates(saved, waiting - stored)
     added = vault.hold_corrections(candidates, asked_by=who) if candidates else ()
+    if report.added or report.retired or retired or added:
+        gate.changed()
     return {"considered": report.considered, "added": len(report.added), "retired": report.retired + retired,
             "held": report.held, "corrections_added": len(added),
             "corrections_held": len(stored) + len(added), "corrections_waiting": missing}
@@ -1856,6 +1903,8 @@ def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseRes
     clusters = {task.id: task.id for task in tasks}
     kind = {task.id: kinds.from_label(task.kind_of_work) for task in tasks}
     exact: set[str] = set()
+    trusted: set[str] = set()
+    pictured: set[str] = set()
     model: dict[str, str] = {}
     ordinals: dict[str, str] = {}
     for case in sorted(replay, key=lambda item: (item.created_at, item.decision_id)):
@@ -1864,6 +1913,10 @@ def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseRes
         kind[case.decision_id] = kinds.from_label(case.kind_of_work)
         if case.fidelity == "exact":
             exact.add(case.decision_id)
+        if not case.untrusted:
+            trusted.add(case.decision_id)
+        if case.has_picture:
+            pictured.add(case.decision_id)
         # The captured main model, named only by its order of first use (no model name leaves).
         model[case.decision_id] = ordinals.setdefault(str(case.model_ref or ""), f"model_{len(ordinals) + 1}")
     by_split = {name: [task for task, found in split.items() if found == name] for name in SPLITS}
@@ -1907,6 +1960,11 @@ def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseRes
             if name != "packs":
                 part["exact_only"] = summary(fractions, base, other, [task for task in problems if task in exact],
                                              clusters)
+                # A7: trusted input only. A8: without the problems whose prefix carries a page picture.
+                part["trusted_only"] = summary(fractions, base, other,
+                                               [task for task in problems if task in trusted], clusters)
+                part["without_pictures"] = summary(fractions, base, other,
+                                                   [task for task in problems if task not in pictured], clusters)
                 part["per_main_model"] = {
                     label: summary(fractions, base, other, [task for task in problems if model[task] == label],
                                    clusters)
@@ -1971,7 +2029,9 @@ def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts:
     return {"metric_version": METRIC_VERSION, "repeats": comparison.repeats, "seed": int(seed),
             "resamples": RESAMPLES, "permutations": PERMUTATIONS, "stopped": bool(comparison.stopped),
             "budget": budget.to_dict(),
-            "problems": {**splits, "packs": len(tasks), "after_as_of": len(everything) - len(replay)}, **found}
+            "problems": {**splits, "packs": len(tasks), "after_as_of": len(everything) - len(replay),
+                         "untrusted": sum(1 for case in replay if case.untrusted),
+                         "with_picture": sum(1 for case in replay if case.has_picture)}, **found}
 
 
 def audit_counts(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
@@ -1984,7 +2044,8 @@ def audit_counts(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
     saved = store if store is not None else LearningStore()
     waiting = holdout.waiting_for_vault(saved) if saved.exists() else set()
     counts = {"vault": 0, "pack_tasks": 0, "uncorrected": 0, "corrected": 0, "exact": 0, "redacted": 0,
-              "retired": 0, "corrections_waiting": len(waiting)}
+              "retired": 0, "corrections_waiting": len(waiting), "trusted": 0, "untrusted": 0, "with_picture": 0,
+              "without_picture": 0}
     if not audit.vault_exists(saved.root):
         return counts
     who = f"{_caller()}: {asked_by}".strip(": ")
@@ -1998,6 +2059,11 @@ def audit_counts(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
         "redacted": sum(1 for case in held if case.fidelity == "redacted"),
         "retired": int(summary.get("retired_replay_tasks", 0)),
         "corrections_waiting": len(waiting - {case.decision_id for case in held}),
+        # A7's and A8's splits of the real hidden problems: trusted or not, with a page picture or not.
+        "untrusted": sum(1 for case in held if case.untrusted),
+        "trusted": sum(1 for case in held if not case.untrusted),
+        "with_picture": sum(1 for case in held if case.has_picture),
+        "without_picture": sum(1 for case in held if not case.has_picture),
     })
     return counts
 

@@ -87,6 +87,7 @@ BOT_COMMANDS = [
     BotCommand("model", "Switch model (cloud/local)"),
     BotCommand("approval", "Switch approval mode"),
     BotCommand("reasoning", "Show or set model reasoning"),
+    BotCommand("incognito", "Keep this chat out of memory (on or off)"),
     BotCommand("tools", "List enabled tools"),
     BotCommand("profiles", "List agents"),
     BotCommand("profile", "Show or set Agent Profile"),
@@ -948,12 +949,20 @@ def _escape_html(text: str) -> str:
 # ──────────────────────────────────────────────────────────────────────
 def _format_interrupt(data) -> str:
     """Format interrupt data (single dict or list of dicts) as HTML."""
-    items = data if isinstance(data, list) else [data]
+    from row_bot.channels.approval import asked_now
+
+    items = asked_now(data)  # A memory write of an incognito chat is asked by itself (B412).
     parts: list[str] = []
 
     for item in items:
         if not isinstance(item, dict):
             parts.append(_escape_html(str(item)))
+            continue
+        memory = item.get("memory_save")
+        if isinstance(memory, dict) and memory.get("text"):
+            # A memory write in an incognito chat (N11): the exact text, the person's alone to save.
+            parts.append(f"<b>{_escape_html(item.get('question') or 'Save to memory?')}</b>")
+            parts.append(f"<i>{_escape_html(str(memory['text']))}</i>")
             continue
         tool_name = item.get("tool", item.get("name", "Unknown tool"))
         desc = item.get("description", "")
@@ -976,8 +985,10 @@ def _format_interrupt(data) -> str:
 
 
 def _extract_interrupt_ids(data) -> list[str] | None:
-    """Extract explicit interrupt IDs for identity-bound resume."""
-    items = data if isinstance(data, list) else [data]
+    """Extract explicit interrupt IDs for identity-bound resume: those the answer goes to."""
+    from row_bot.channels.approval import asked_now
+
+    items = asked_now(data)
     ids = [item.get("__interrupt_id") for item in items
            if isinstance(item, dict) and item.get("__interrupt_id")]
     return ids or None
@@ -1139,6 +1150,17 @@ async def _cmd_reasoning(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     args = (update.message.text or "").split(maxsplit=1)
     arg = args[1] if len(args) > 1 else ""
     response = ch_commands.cmd_reasoning("telegram", arg, thread_id=thread_id)
+    await update.message.reply_text(response)
+
+
+async def _cmd_incognito(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /incognito for this Telegram conversation (N11)."""
+    if not _is_authorised(update):
+        return
+    thread_id = _thread_id_for_command(update, context)
+    args = (update.message.text or "").split(maxsplit=1)
+    arg = args[1] if len(args) > 1 else ""
+    response = ch_commands.cmd_incognito("telegram", arg, thread_id=thread_id)
     await update.message.reply_text(response)
 
 
@@ -2496,6 +2518,7 @@ async def start_bot() -> bool:
     _app.add_handler(CommandHandler("model", _cmd_model))
     _app.add_handler(CommandHandler("approval", _cmd_approval))
     _app.add_handler(CommandHandler("reasoning", _cmd_reasoning))
+    _app.add_handler(CommandHandler("incognito", _cmd_incognito))
     _app.add_handler(CommandHandler("tools", _cmd_tools))
     _app.add_handler(CommandHandler("profiles", _cmd_profiles))
     _app.add_handler(CommandHandler("profile", _cmd_profile))

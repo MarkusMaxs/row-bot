@@ -1,0 +1,19 @@
+{
+  "name": "row-bot-install-count",
+  "private": true,
+  "description": "Row-Bot's installation count collector (N6): a Cloudflare Worker with D1.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0 <25",
+    "npm": ">=11 <12"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.3.7",
+    "vitest": "4.1.12",
+    "wrangler": "4.148.0"
+  }
+}

@@ -78,6 +78,10 @@ class AgentResumeError(RuntimeError):
     """Raised when a paused agent graph cannot resume successfully."""
 
 
+class AgentInvokeError(RuntimeError):
+    """Raised when a workflow step's agent call ends in an error; its message says why, as the person reads it."""
+
+
 class ContextCompactionError(RuntimeError):
     """Raised when an over-limit request cannot be compacted safely."""
 
@@ -2653,6 +2657,24 @@ def _root_system_prompt(small_profile: bool) -> str:
     return get_agent_system_prompt(small_context=True) if accepts else get_agent_system_prompt()
 
 
+def _offered_tool_parents() -> set[str]:
+    """Every tool group the conversation offers, bound or on demand: the same on every turn."""
+    bound = set(_current_effective_tool_parent_names_var.get())
+    return bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
+
+
+def _guides_loadable() -> bool:
+    return any(getattr(record, "source", "") == "guide"
+               for record in (_current_authorized_skill_records_var.get() or ()))
+
+
+def _tool_guides_prompt() -> str:
+    """The tool guides above a small window (WP A6): the ``inline`` ones in full, the rest an index."""
+    from row_bot.skills import get_tool_guides_prompt
+
+    return get_tool_guides_prompt(sorted(_offered_tool_parents()), loadable=_guides_loadable())
+
+
 def _small_profile_tool_guides() -> str:
     """The tool guides on a small window (WP A5): one line per guide, read in full with skill_load
     where the skill bridges are bound; the TASKS and MEMORY guidance in full when those tools are
@@ -2662,11 +2684,8 @@ def _small_profile_tool_guides() -> str:
     from row_bot.skills import get_tool_guide_index
 
     bound = set(_current_effective_tool_parent_names_var.get())
-    offered = bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
-    loadable = any(getattr(record, "source", "") == "guide"
-                   for record in (_current_authorized_skill_records_var.get() or ()))
     parts = [text for parent, text in ROOT_TOOL_GUIDES if parent in bound]
-    index = get_tool_guide_index(sorted(offered), loadable=loadable)
+    index = get_tool_guide_index(sorted(_offered_tool_parents()), loadable=_guides_loadable())
     if index:
         parts.append(index)
     return "\n\n".join(parts)
@@ -2871,15 +2890,7 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
         if small_profile:
             tool_guides_text = _small_profile_tool_guides()
         else:
-            from row_bot.skills import get_skills_prompt
-
-            active_tool_names = tuple(sorted(
-                set(_current_effective_tool_parent_names_var.get()) | _on_demand_parents_used(state["messages"])
-            ))
-            tool_guides_text = get_skills_prompt(
-                [],
-                active_tool_names=active_tool_names,
-            )
+            tool_guides_text = _tool_guides_prompt()
     except Exception as exc:
         logger.debug("Tool-guide injection skipped (non-fatal): %s", exc)
     _section = stable_section(
@@ -4385,6 +4396,16 @@ def _request_after_overflow(exc: BaseException, config: dict | None) -> list | N
     return llm_messages
 
 
+def _is_unparsed_tool_call_error(exc: BaseException) -> bool:
+    """Ollama's parser refused the model's own tool-call text (B418): the model's mistake, not the runtime's.
+
+    It reports "error parsing tool call: …" or, for models whose tool calls are XML (qwen3.8), "XML syntax
+    error …" with status code -1. A provider that is down or refusing the request never says either.
+    """
+    text = str(exc).lower()
+    return "error parsing tool call" in text or ("xml syntax error" in text and "status code: -1" in text)
+
+
 class _AgentModelCall:
     """The Agent graph's model: it binds the tools once, then makes each provider call (WP A4b).
 
@@ -4396,6 +4417,9 @@ class _AgentModelCall:
     * a context-overflow error is followed by one compaction and one retry (F27). The provider
       refused the request before reading it, so the retry costs nothing extra; a second overflow
       stands;
+    * a tool call the local runtime couldn't parse (Ollama's own parser refusing the model's text)
+      is asked for once more, unchanged: the model usually writes it correctly the second time, and
+      a second failure stands (B418);
     * the input the provider reports calibrates the request-size estimate (F29);
     * inline ``<think>`` text is stored as the answer's reasoning (F32).
     """
@@ -4437,7 +4461,8 @@ class _AgentModelCall:
             try:
                 response = model.invoke(messages, run_config)
             except Exception as exc:
-                if not _is_context_overflow_error(exc):
+                unparsed = _is_unparsed_tool_call_error(exc)
+                if not unparsed and not _is_context_overflow_error(exc):
                     if turn is not None:
                         _learning_model_call(turn, sent, inputs=_last_preparation_inputs(config), error=exc,
                                              latency_ms=(time.perf_counter() - started) * 1000, ledger_call_id=ledger_id)
@@ -4446,9 +4471,14 @@ class _AgentModelCall:
                     refused = _learning_model_call(turn, sent, inputs=_last_preparation_inputs(config), error=exc,
                                                    latency_ms=(time.perf_counter() - started) * 1000,
                                                    ledger_call_id=ledger_id)
-                retry = _request_after_overflow(exc, config)
-                if retry is None:
-                    raise
+                if unparsed:
+                    logger.warning("The model's tool call couldn't be parsed by its runtime; asking once more: %s",
+                                   str(exc)[:200])
+                    retry = messages
+                else:
+                    retry = _request_after_overflow(exc, config)
+                    if retry is None:
+                        raise
                 sent, run_config = retry, config
                 if turn is not None:
                     run_config, ledger_id = _learning_ledger_config(config)
@@ -4823,6 +4853,12 @@ def get_current_thread_id() -> str:
     return _current_thread_id_var.get("")
 
 
+def get_current_runtime_surface() -> str:
+    """Return the runtime surface (``normal_chat``, ``workflow`` …) of the active invocation."""
+
+    return _current_runtime_surface_var.get("")
+
+
 def get_active_runtime_context() -> dict:
     """Return lightweight runtime facts for status/introspection tools."""
 
@@ -5058,6 +5094,12 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "delete_calendar_event": "Delete calendar event",
     "move_calendar_event": "Move calendar event",
     "send_gmail_message": "Send email",
+    "outlook_send_mail": "Send email",
+    "outlook_reply_mail": "Reply to email",
+    "outlook_forward_mail": "Forward email",
+    "outlook_delete_mail": "Delete email",
+    "outlook_cancel_event": "Cancel event",
+    "outlook_respond_event": "Answer invitation",
     "delete_memory": "Delete memory",
     "tracker_delete": "Delete tracker / entry",
     "task_delete": "Delete task",
@@ -5128,6 +5170,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                     "and move on."), ""
         # What the person reads names what was given: an option left unset (None) is not part of the action.
         given = {key: value for key, value in kwargs.items() if value is not None}
+        question = ""
         if tool.name.startswith("mcp_"):
             # An app's tool: its card names the app and the tool's own title, so this says only what is sent,
             # as labelled fields with their own line breaks; never its internal name or an escaped dump (B332).
@@ -5145,6 +5188,14 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 if given:
                     args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
             description = _enrich_description(tool.name, label, args_str, kwargs)
+        if tool.name.startswith("outlook_"):
+            # Outlook's card names who it goes to and what it says, or the event's time, attendees and place.
+            try:
+                from row_bot.tools.outlook_tool import approval_card
+
+                question, description = approval_card(tool.name, given)
+            except Exception:
+                logger.warning("Outlook's approval card couldn't be written; it asks with the call itself", exc_info=True)
         try:
             from row_bot.tools.discovery import is_external_discovery_invocation
             external_discovery_active = is_external_discovery_invocation()
@@ -5155,6 +5206,7 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 "tool": tool.name, "label": label, "description": description,
                 "args": kwargs or (args[0] if args else {}),
                 "external_discovery_active": external_discovery_active,
+                **({"question": question} if question else {}),
             },
             approval_mode=mode,
             risks=risks,
@@ -5483,8 +5535,22 @@ def _collect_agent_tool_candidates(
 # profile limits and guides unchanged). On every window, Developer tools come with a code folder (WP A5):
 # without one each of them fails, and their 22 schemas and guide went with every call of every chat.
 SMALL_CONTEXT_TOKENS = 65_536
-ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder", "video_editing",
-                                   "file_delivery"})
+# A local model (Ollama and other on-device runtimes) up to this window gets the middle tier too: its
+# whole prompt is processed on this computer, so every token costs time to the first word.
+LOCAL_MIDDLE_CONTEXT_TOKENS = 131_072
+# The middle tier (64K or less, or local up to 128K) also offers Row-Bot's self-management on demand.
+ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status"})
+# Rarely used on any window: offered through tool search (and by name), not bound to every call.
+# Pages, questions, helpers, processes, tasks, memory and web stay bound: Row-Bot uses them unasked.
+RARELY_USED_TOOL_GROUPS = frozenset({
+    "row_bot_updater", "custom_tool_builder", "video_editing", "file_delivery", "tracker", "wiki", "goal",
+    "youtube", "arxiv", "system_info",
+})
+RARELY_USED_TOOLS = frozenset({
+    "agent_profiles", "agent_profile_save", "agent_promote", "agent_retry",
+    "row_bot_create_skill", "row_bot_patch_skill", "row_bot_send_feedback", "row_bot_apply_proposal",
+    "row_bot_reject_proposal", "row_bot_verify_proposal", "row_bot_review_skill_library",
+})
 _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
     "current_on_demand_tools", default={}
 )
@@ -5504,22 +5570,6 @@ def _has_code_folder() -> bool:
         return bool(get_workspace_id() or infer_workspace_id_from_thread(get_thread_id()))
     except Exception:
         return False
-
-
-def _on_demand_parents_used(messages: list[Any]) -> set[str]:
-    """Groups loaded on demand earlier in this conversation: their guide joins the prompt (F11)."""
-    on_demand = _current_on_demand_tools_var.get()
-    if not on_demand:
-        return set()
-    used: set[str] = set()
-    for message in messages:
-        for call in getattr(message, "tool_calls", None) or ():
-            name = str(call.get("name") or "")
-            if name == "tool_invoke":
-                name = str((call.get("args") or {}).get("name") or "")
-            if name in on_demand:
-                used.add(on_demand[name][0])
-    return used
 
 
 def _activate_agent_cache_metadata(cache_key: frozenset[str]) -> None:
@@ -5947,7 +5997,12 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     is_background = _background_workflow_var.get()
     approval_mode = get_approval_mode()
     effective_context = get_context_size(model_label)
-    small_window = 0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS and normalized_allowlist is None
+    small_window = normalized_allowlist is None and (
+        0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS
+        or (0 < int(effective_context or 0) <= LOCAL_MIDDLE_CONTEXT_TOKENS and not is_cloud_model(model_label))
+    )
+    # A profile's own tool list is bound as chosen; otherwise rarely used tools are offered on demand.
+    defer_rarely_used = normalized_allowlist is None
     # 32K or less: core tools bound, the rest through tool search (WP A5, F43).
     small_profile = _small_context_profile(effective_context)
     defer_to_core = small_profile and normalized_allowlist is None
@@ -6049,7 +6104,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         active_skill_ids,
         skill_discovery_enabled,
         skill_fingerprint,
-    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=small_profile)
+    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=True)
     cache_key = frozenset(enabled_tool_names) | frozenset({
         f"ctx:{effective_context}",
         f"model:{model_label}",
@@ -6093,13 +6148,14 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             # Workflows and chats gate alike: block=strip destructive tools; every other level wraps them,
             # and the gate resolves each call by the level (the person under Ask, the reviewer first under
             # Auto, the level itself under Hands-off). A workflow run pauses when the person is asked.
-            # run_command self-gates at runtime via classify_command.
+            # run_command self-gates at runtime via classify_command, and a tool marked
+            # row_bot_gates_itself (x_post) asks with its own card, bound to exactly what it sends.
             if approval_mode == "block":
                 lc_tools = [t for t in lc_tools
                             if t.name not in destructive_names]
             else:
                 for t in lc_tools:
-                    if t.name in destructive_names:
+                    if t.name in destructive_names and not (t.metadata or {}).get("row_bot_gates_itself"):
                         _wrap_with_interrupt_gate(t, always_ask=t.name in app_asks)
 
             lc_tools = _apply_provider_tool_schema_compatibility(
@@ -6200,6 +6256,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 entry for entry in eager_core_entries
                 if (small_window and entry["parent"] in ON_DEMAND_TOOL_GROUPS)
                 or (defer_to_core and entry["parent"] not in SMALL_PROFILE_CORE_GROUPS)
+                or (defer_rarely_used and (entry["parent"] in RARELY_USED_TOOL_GROUPS
+                                           or str(getattr(entry["tool"], "name", "")) in RARELY_USED_TOOLS))
             ]
             if on_demand_entries:
                 eager_core_entries = [entry for entry in eager_core_entries if entry not in on_demand_entries]
@@ -6583,6 +6641,9 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                     )
                 _notify_api_error(_err_msg)
                 _learning_end_turn("failed", stop_event)
+                if runtime_surface == "workflow":
+                    # The step failed: its run must not read as done with the error as its answer (B417).
+                    raise AgentInvokeError(_err_msg) from exc
                 return _err_msg
 
         # Read final state from checkpoint
@@ -7996,6 +8057,29 @@ def _resume_value(approved: bool, interrupt_ids: list[str] | None,
     return approved
 
 
+def _person_answers(state: Any, resume_val: Any) -> Any:
+    """The person's own approval, from a conversation (the app, Buddy, a channel), of a card only they answer.
+
+    A person-only card (``person_approval``) counts only an answer bound to what it showed, never a plain
+    True. A conversation's approval is always the person's (no level answers for them there), so their
+    approval of such a card is bound to the details its waiting interrupt holds; anything else is kept.
+    """
+    waiting = _waiting_interrupts(state)
+    held = {str(item["__interrupt_id"]): str(item["binding"]) for item in waiting
+            if item.get("person_only") and item.get("binding") and item.get("__interrupt_id")}
+    if not held:
+        return resume_val
+    from row_bot.tools.approval_gate import bound_answer
+
+    if isinstance(resume_val, Mapping):
+        return {key: bound_answer(True, held[key]) if value is True and key in held else value
+                for key, value in resume_val.items()}
+    if resume_val is True and len(waiting) == 1:
+        [(key, binding)] = held.items()
+        return {key: bound_answer(True, binding)}
+    return resume_val
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
                         resume_values: Mapping[str, Any] | None = None,
@@ -8050,7 +8134,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    resume_val = _resume_value(approved, interrupt_ids, resume_values)
+    resume_val = _person_answers(agent.get_state(config), _resume_value(approved, interrupt_ids, resume_values))
     _learning_begin_turn(config.get("configurable"), resumed=True)
     learning_status = "cancelled"
     try:

@@ -204,6 +204,10 @@ _STATUS.update(
         # or the Google client doesn't list its callback.
         "account_callback_unavailable": 409,
         "account_redirect_mismatch": 422,
+        # Outlook: an Application (client) ID or tenant Microsoft can't have issued; no sign-in code from
+        # Microsoft (the app doesn't allow public client flows).
+        "account_microsoft_app_invalid": 422,
+        "account_device_code_unavailable": 409,
     }
 )
 
@@ -419,11 +423,6 @@ _STATUS.update(
     {
         "invalid_computer_use_command": 422,
         "computer_use_local_only": 403,
-        "computer_use_revision_conflict": 409,
-        "computer_use_inactive": 409,
-        "computer_use_busy": 409,
-        "computer_use_not_paused": 409,
-        "computer_use_resume_failed": 409,
         "computer_use_outcome_uncertain": 409,
     }
 )
@@ -551,6 +550,8 @@ _STATUS.update(
         "recipient_unavailable": 409,
         "delivery_unavailable": 409,
         "sharing_media_limit": 413,
+        "x_account_required": 409,
+        "x_account_unavailable": 409,
         "interactive_publish_requires_all_pages": 422,
     }
 )
@@ -1093,6 +1094,9 @@ _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
+# Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
+_STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
+                "chat_page_rate_limited": 429, "chat_page_nothing_to_send": 409})
 # App views in chat: each reaches the client as itself (unlisted, every one read "Part of Row-Bot isn't responding").
 _STATUS.update({"views_off": 403, "view_tool_refused": 403, "view_tool_denied": 403, "view_rate_limited": 429,
                 "view_busy": 409, "view_unavailable": 409, "view_tool_failed": 502})
@@ -5631,6 +5635,100 @@ def create_router(
             raise _delivery_failure(exc) from None
         return await respond(request, dto.DeliveryView, result)
 
+    # Pages the agent made (N5). Every signed-in device is the owner's, so each sees every page. A page's
+    # frame is served once, sandboxed; its state and decisions come from its bridge, checked again here.
+    def _page_id(value: str) -> str:
+        from row_bot.pages import PAGE_ID
+
+        if not PAGE_ID.fullmatch(str(value or "")):
+            raise ProtocolError("chat_page_unavailable", 404)
+        return value
+
+    def _page_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "chat_page_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 404))
+
+    async def _page_call(method: Callable, *args: Any) -> Any:
+        from row_bot.pages import PageError
+
+        try:
+            return await call(method, *args)
+        except PageError as exc:
+            raise _page_failure(exc) from None
+
+    @router.get("/pages")
+    async def pages_list(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.pages import views
+
+        return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/pages/{page_id}")
+    async def page_read(request: Request, page_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.pages import require, view
+
+        found = await _page_call(require, _page_id(page_id))
+        return await respond(request, dto.PageView, await call(view, found))
+
+    @router.post("/pages/{page_id}/frame")
+    async def page_frame(request: Request, page_id: str) -> JSONResponse:
+        """One frame address for the page, in the theme the client shows: loaded once, sandboxed."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        from row_bot.pages import render_frame, require, view
+
+        identifier = _page_id(page_id)
+        frame_url = await _page_call(render_frame, identifier, body.theme.model_dump())
+        found = await _page_call(require, identifier)
+        return await respond(request, dto.PageFrame, {"frame_url": frame_url, "page": await call(view, found)})
+
+    @router.put("/pages/{page_id}/state")
+    async def page_state(request: Request, page_id: str) -> JSONResponse:
+        """The page's own state, from its bridge (at most 256 KB)."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageStateWrite, 320 * 1024)
+        from row_bot.pages import set_state, view
+
+        found = await _page_call(set_state, _page_id(page_id), body.state)
+        return await respond(request, dto.PageView, await call(view, found))
+
+    @router.post("/pages/{page_id}/decisions")
+    async def page_decision(request: Request, page_id: str) -> JSONResponse:
+        """One decision from the page's bridge. It only gathers: the person's Send posts them."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageDecisionWrite, 8 * 1024)
+        from row_bot.pages import decide, view
+
+        found = await _page_call(decide, _page_id(page_id), body.id, body.choice, body.note, body.label)
+        return await respond(request, dto.PageView, await call(view, found))
+
+    def _standalone(page_id: str, theme: dict) -> tuple[str, str]:
+        from row_bot.pages import document, download_name, require
+
+        found = require(page_id)
+        return download_name(found), document(found, theme, standalone=True)
+
+    @router.post("/pages/{page_id}/download")
+    async def page_download(request: Request, page_id: str) -> JSONResponse:
+        """Download as HTML: one file that works on its own in any browser (it saves nothing)."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        name, html = await _page_call(_standalone, _page_id(page_id), body.theme.model_dump())
+        return await respond(request, dto.PageDownload, {"file_name": name, "html": html})
+
+    @router.post("/pages/{page_id}/save")
+    async def page_save(request: Request, page_id: str) -> JSONResponse:
+        """The desktop window can't download (B275): the page is saved into Exports on this computer."""
+        current = await session(request, lane="mutation")
+        require_this_computer(await _context(request))
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        from row_bot.application.export_folder import save_export
+
+        name, html = await _page_call(_standalone, _page_id(page_id), body.theme.model_dump())
+        result = await call(save_export, name, html.encode("utf-8"), validate=dispatch_validation(request, current))
+        return await respond(request, dto.ExportSaved, result)
+
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:
         await session(request, lane="mutation")
@@ -5655,6 +5753,29 @@ def create_router(
 
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
+
+    # Install stats (N6): Settings › System › Privacy.
+    @router.get("/system/install-count")
+    async def install_count_snapshot(request: Request) -> JSONResponse:
+        await session(request)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.view))
+
+    @router.put("/system/install-count")
+    async def install_count_choice(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.InstallCountChoice, 256)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.choose, body.enabled))
+
+    @router.post("/system/install-count/delete")
+    async def install_count_delete(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountDeletion, await call(install_count.delete_counted))
 
     @router.get("/system/updates")
     async def update_snapshot(request: Request) -> JSONResponse:
@@ -5769,6 +5890,7 @@ def create_router(
             credentials_json=body.credentials_json,
             validate=dispatch_validation(request, current),
             device=await account_device(request),
+            x_account=body.x_account,
         )
         return await respond(request, dto.AccountAuthReceipt, result)
 
@@ -10485,6 +10607,9 @@ def create_router(
                 "reviewer_reason",
                 "question",
                 "questions",
+                "memory_text",
+                "folder",
+                "x_post",
                 "policy_revision",
             )
             if k in view
@@ -10695,6 +10820,65 @@ def create_router(
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS
         )
+
+    # App-wide live updates (B407): which background state changed, as topic
+    # names and revisions only; clients read the state itself through the
+    # APIs above. One stream per window, a long poll where a proxy holds the
+    # stream back. Bursts within a tick reach a client as one frame.
+    @router.get("/live")
+    async def live(request: Request) -> StreamingResponse:
+        current = await session(request, lane="observation")
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        async def stream() -> Any:
+            sent: tuple[str, int] | None = None
+            heartbeat = security.clock()
+            try:
+                yield ": connected\n\n"
+                while not await request.is_disconnected():
+                    security.session(await _context(request), current.id, current.csrf)
+                    frame = live_updates.live_updates.frame()
+                    if sent != (frame["epoch"], frame["revision"]):
+                        sent = (frame["epoch"], frame["revision"])
+                        yield "event: live\ndata: " + dto.LiveFrame.model_validate(frame).model_dump_json() + "\n\n"
+                        heartbeat = security.clock()
+                    elif security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+                    await asyncio.sleep(0.25)
+            except ProtocolError:
+                return
+            finally:
+                security.leave_live(current)
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream", headers=HEADERS
+        )
+
+    @router.get("/live/poll")
+    async def live_poll(request: Request, after: int = 0, epoch: str = "") -> JSONResponse:
+        current = await session(request, lane="observation")
+        if after < 0 or len(epoch) > 128:
+            raise ProtocolError("invalid_command", 422)
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        try:
+            # Answer as soon as anything moved on since the client's revision
+            # (at once for another server process), or after 25 s regardless.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 25
+            while True:
+                frame = live_updates.live_updates.frame()
+                if (frame["epoch"] != epoch or frame["revision"] > after or loop.time() >= deadline
+                        or await request.is_disconnected()):
+                    break
+                await asyncio.sleep(0.25)
+            security.session(await _context(request), current.id, current.csrf)
+        finally:
+            security.leave_live(current)
+        return await respond(request, dto.LiveFrame, frame)
 
     @router.get("/choices")
     async def model_choices(request: Request) -> JSONResponse:

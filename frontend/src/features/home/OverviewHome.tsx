@@ -37,6 +37,8 @@ import type {
   TaskSummaryPage,
 } from '../../api/types';
 import { Hint, IconButton } from '../../ui/primitives';
+import { fallbackDue } from '../../api/live-updates';
+import { useLive, useLiveUpdate } from '../../live';
 import { parseTimestamp, relativeTime } from '../../ui/format';
 import { useReducedMotion } from '../buddy/BuddyAvatar';
 import { ConversationGlyph } from '../shell/ConversationGlyph';
@@ -363,6 +365,16 @@ export default function OverviewHome({
     attentionFeed.refresh();
   };
 
+  // A workflow run started, finished or waits (B407): Today shows it at once.
+  const [runsChanged, setRunsChanged] = useState(0);
+  useLiveUpdate(['runs'], () => setRunsChanged((value) => value + 1));
+  // The Workflows check counts runs and their approvals (B414): an answered
+  // approval clears its warning at once.
+  const [workflowsChanged, setWorkflowsChanged] = useState(0);
+  useLiveUpdate(['runs', 'approvals'], () =>
+    setWorkflowsChanged((value) => value + 1),
+  );
+
   useEffect(() => {
     if (!loadHealth) return;
     const abort = new AbortController();
@@ -376,7 +388,7 @@ export default function OverviewHome({
       },
     );
     return () => abort.abort();
-  }, [fixed, loadHealth, refreshKey]);
+  }, [fixed, loadHealth, refreshKey, workflowsChanged]);
 
   useEffect(() => {
     if (!loadTasks) return;
@@ -391,10 +403,11 @@ export default function OverviewHome({
       },
     );
     return () => abort.abort();
-  }, [fixed, loadTasks, refreshKey]);
+  }, [fixed, loadTasks, refreshKey, runsChanged]);
 
   // Listed rows are read when the list loads; approvals and runs change after
   // that. Re-read the live ones on open and while Overview stays open.
+  const live = useLive();
   const liveIds = conversations
     .filter((row) => waitingOnYou(row) || working(row))
     .slice(0, 12)
@@ -408,14 +421,20 @@ export default function OverviewHome({
         liveIds.split('|').map((id) => refreshConversation(id, abort.signal)),
       );
     read();
+    // Rows follow live updates (B407); this is the fallback while the
+    // live stream is down.
+    let readAt = Date.now();
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') read();
+      if (document.visibilityState !== 'visible' || !fallbackDue(live, readAt))
+        return;
+      readAt = Date.now();
+      read();
     }, 15_000);
     return () => {
       abort.abort();
       window.clearInterval(timer);
     };
-  }, [liveIds, refreshConversation]);
+  }, [liveIds, live, refreshConversation]);
 
   // Keep "in 2 hours" and "3 minutes ago" honest while the tab stays open.
   useEffect(() => {

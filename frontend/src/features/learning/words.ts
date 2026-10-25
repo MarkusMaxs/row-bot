@@ -7,6 +7,7 @@ import type {
   LearningCommand,
   LearningKindState,
   LearningOvernight,
+  LearningSnapshot,
 } from '../../api/types';
 
 export type TeachCategory = NonNullable<LearningCommand['category']>;
@@ -42,9 +43,15 @@ export function sizeWords(bytes: number): string {
   return value === 1 ? '1\u00a0byte' : `${value}\u00a0bytes`;
 }
 
+/** Of the learning data's size: the pictures kept from browser and computer use, and their limit. */
+export function pictureWords(data: LearningSnapshot['data']): string {
+  if (data.picture_bytes <= 0) return '';
+  return `, including ${sizeWords(data.picture_bytes)} of browser and computer pictures (up to ${sizeWords(data.picture_cap_bytes)}; the oldest go first)`;
+}
+
 /** The monthly limit's choices; the saved value shows even when it isn't one of them. */
 export const LIMIT_CHOICES = [
-  500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000,
+  500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000, 50_000_000,
 ];
 
 export function limitOptions(saved: number) {

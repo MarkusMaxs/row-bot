@@ -14,6 +14,7 @@ from row_bot.learning import contracts
 from row_bot.learning.store import (
     BLOB_GRACE_SECONDS,
     MARK_CHAT_DELETED,
+    SCHEMA_VERSION,
     LearningStore,
     LearningStoreError,
 )
@@ -75,7 +76,7 @@ def test_turning_learning_on_or_the_first_write_while_on_creates_the_store(learn
     assert store.exists() is False  # on, but nothing written yet
     assert store.put(episode("chat-1")) is True
     assert learning_files(learning_on) == ["learning", "learning.db", "learning/blobs", "learning_config.json"]
-    assert store.schema_version() == 1
+    assert store.schema_version() == SCHEMA_VERSION
 
     other = learning_on.parent / "explicit"
     other.mkdir()
@@ -197,7 +198,7 @@ def test_a_schema_upgrade_runs_once_and_keeps_the_data(learning_on, clock):
 
     upgraded = LearningStore(clock=clock, migrations=[*MIGRATIONS, add_tag_table])
     assert upgraded.get("episode", "ep_1") == episode("chat-1")
-    assert upgraded.schema_version() == 2
+    assert upgraded.schema_version() == SCHEMA_VERSION + 1
     # The older app now refuses the newer store instead of changing it.
     older = LearningStore(clock=clock)
     with pytest.raises(LearningStoreError) as error:
@@ -220,7 +221,7 @@ def test_a_failed_migration_leaves_the_store_as_it_was(learning_on, clock):
     with pytest.raises(RuntimeError):
         LearningStore(clock=clock, migrations=[*MIGRATIONS, broken]).find("episode")
     store = LearningStore(clock=clock)
-    assert store.schema_version() == 1
+    assert store.schema_version() == SCHEMA_VERSION
     assert store.find("episode") == [episode("chat-1")]
     with closing(sqlite3.connect(store.path)) as connection:
         names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}

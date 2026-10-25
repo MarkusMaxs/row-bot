@@ -322,6 +322,44 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A finished turn's browser step (U16): one quiet row that opens the pane. */
+.browser-step-done {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  margin-top: var(--space-2);
+  padding: 6px 10px;
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.browser-step-done .browser-step-title {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+.browser-step-done-icon,
+.browser-step-done-open {
+  flex: none;
+  color: var(--text-muted);
+}
+.browser-step-done:hover {
+  border-color: var(--border-strong);
+}
+.browser-step-done:hover .browser-step-done-open {
+  color: var(--text-link);
+}
+.browser-step-done:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
 .browser-step-open {
   display: inline-flex;
   align-items: center;
@@ -375,6 +413,11 @@
 .approval-card-context .browser-thumb {
   width: min(240px, 100%);
   margin: var(--space-1) 0;
+}
+/* A window's picture is shown whole: Row-Bot's ring may be anywhere in it. */
+.computer-thumb img {
+  object-fit: contain;
+  object-position: center;
 }
 
 /* Signed-in sites (Settings › Browser and the pane's menu). */

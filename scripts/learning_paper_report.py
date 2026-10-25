@@ -430,7 +430,10 @@ EPISODE_STATUS = enum("running", "completed", "failed", "stopped", "cancelled")
 SIGNAL_KINDS = enum("teach", "next_message_correction", "approval_denied", "stop", "retry")
 PURPOSES = enum("learning_diagnosis", "learning_test", "learning_teacher", "learning_meta", "other")
 REPLAY_SKIPS = enum("not_ok", "held_out", "untrusted", "partial_without_correction", "partial_needs_exact_prefix",
-                    "known_bad", "no_reference", "purged", "other")
+                    "known_bad", "no_reference", "purged", "picture_dropped", "other")
+# What the one-off orphan sweep found, by kind (``store.ORPHAN_KINDS``).
+ORPHAN_KINDS = enum("message", "tool_list", "model_request", "conversation", "past_chat_plan", "tool_call", "approval",
+                    "test_results", "pack_task", "picture", "unfinished_write", "other")
 RUN_STATUS = enum("passed", "failed", "budget", "error", "unverified", "skipped", "not_run")
 CAUSES = enum("provider_error", "malformed_call", "harness", "budget", "no_tool", "tool_not_found", "bad_call",
               "file_write", "no_answer", "wrong_answer", "other")
@@ -457,7 +460,15 @@ HEALTH = Obj({
                       "status": Map(DECISION_STATUS, COUNT)}),
     "signals": Obj({"total": COUNT, "withdrawn": COUNT, "kind": Map(SIGNAL_KINDS, COUNT)}),
     "hidden_problems": Obj({key: COUNT for key in ("vault", "pack_tasks", "uncorrected", "corrected", "exact",
-                                                   "redacted", "retired", "corrections_waiting")}),
+                                                   "redacted", "retired", "corrections_waiting", "trusted",
+                                                   "untrusted", "with_picture", "without_picture")}),
+    # Pictures kept as their own blobs (P2): how many, their bytes, how many the size cap dropped, the cap.
+    "pictures": Obj({"stored": COUNT, "bytes": COUNT, "dropped": COUNT, "cap_bytes": COUNT}),
+    # The one-off sweep of blobs no record references (P2): whether it ran on the profile and what it removed,
+    # and what a sweep would find now (counted on the copy).
+    "blob_sweep": Obj({"done": BOOL, "removed_files": COUNT, "removed_bytes": COUNT,
+                       "orphans": Obj({"files": COUNT, "bytes": COUNT,
+                                       "kinds": Map(ORPHAN_KINDS, Obj({"files": COUNT, "bytes": COUNT}))})}),
     "corrections": Obj({"confirmed_live": COUNT, "held_out": COUNT, "counted_for_holding_out": COUNT}),
     "versions": Obj({"total": COUNT, "ready": COUNT, "couldnt_start": COUNT, "not_ready": COUNT, "pilots": COUNT,
                      "list": Seq(VERSION_ROW, 500)}),
@@ -481,7 +492,8 @@ ANALYSIS = Obj({
 SPLIT_ANALYSIS = Obj({
     "primary": ANALYSIS, "majority_vote": ANALYSIS, "unclustered": ANALYSIS, "left_pair": COUNT,
     "by_kind": Map(KINDS, ANALYSIS), "exact_only": ANALYSIS, "per_main_model": Map(Text(pattern=MODEL_ORDINAL), ANALYSIS),
-}, optional=frozenset({"exact_only", "per_main_model"}))
+    "trusted_only": ANALYSIS, "without_pictures": ANALYSIS,
+}, optional=frozenset({"exact_only", "per_main_model", "trusted_only", "without_pictures"}))
 ARM_SPLIT = Obj({"problems": COUNT, "counted": COUNT, "mean": Maybe(SHARE), "runs": Map(RUN_STATUS, COUNT),
                  "causes": Map(CAUSES, COUNT)})
 TEST_PART = Obj({"split": SPLITS, "problems": COUNT, "clusters": COUNT, "difference": Maybe(SIGNED),
@@ -494,7 +506,8 @@ HYPOTHESIS = Obj({
     "superiority": Maybe(TEST_PART), "non_inferiority": Maybe(TEST_PART), "supported": Maybe(BOOL),
     "sensitivity": Maybe(Obj({"exact_only": ANALYSIS, "majority_vote": ANALYSIS, "unclustered": ANALYSIS,
                               "per_main_model": Map(Text(pattern=MODEL_ORDINAL), ANALYSIS),
-                              "corrected_problems": ANALYSIS, "checker_versions": COUNT})),
+                              "corrected_problems": ANALYSIS, "checker_versions": COUNT,
+                              "trusted_only": ANALYSIS, "without_pictures": ANALYSIS})),
     "by_kind": Maybe(Map(KINDS, ANALYSIS)),
     "counts": Maybe(Obj({"lessons_in_use": COUNT, "ways_of_working_in_use": COUNT, "corrected_problems": COUNT})),
 })
@@ -509,7 +522,7 @@ FREEZE = Obj({
     "versions": Obj({"total": COUNT, "pilots": COUNT, "candidates": COUNT, "evaluated": Maybe(COUNT),
                      "trained_on": Maybe(Text(pattern=DAY)), "kept_pass": Maybe(COUNT), "passes": Maybe(COUNT)}),
     "problems": Obj({"real_uncorrected": COUNT, "real_corrected": COUNT, "packs": COUNT, "after_as_of": COUNT,
-                     "main_models": COUNT}),
+                     "main_models": COUNT, "untrusted": COUNT, "with_picture": COUNT}),
     "arms": Map(ARMS, Obj({"tokens": COUNT, "cloud_tokens": COUNT, "seconds": HOURS, "ran": COUNT, "cached": COUNT,
                            "identical": Obj({"problems": COUNT, "identical": COUNT}),
                            "splits": Map(SPLITS, ARM_SPLIT)})),
@@ -646,6 +659,10 @@ def health_report(copy: Path) -> dict[str, Any]:
     behaviours = [item for item in store.find("release", limit=1_000_000)
                   if isinstance(item, Release) and item.kind == "behaviour"]
     replay = evaluation.collect_replay(store, refresh=False, limit=10_000_000)
+    pictures = store.picture_stats()
+    swept = store.sweep_result() or {}
+    # What a sweep would find now, counted on the copy (nothing is in progress there: no grace period).
+    orphans = store.sweep_orphans(remove=False, grace_seconds=0).to_dict()
     return {
         "format": FORMAT, "schema_version": SCHEMA_VERSION, "mode": "health",
         "recording": {
@@ -679,6 +696,13 @@ def health_report(copy: Path) -> dict[str, Any]:
         "lessons": {"total": len(lessons), "in_use": sum(1 for item in lessons if item.status == "in_use")},
         "ways_of_working": {"total": len(behaviours),
                             "in_use": sum(1 for item in behaviours if item.status in ("in_use", "trial"))},
+        "pictures": {"stored": pictures.stored, "bytes": pictures.bytes, "dropped": pictures.dropped,
+                     "cap_bytes": pictures.cap_bytes},
+        "blob_sweep": {"done": bool(swept), "removed_files": int(swept.get("files") or 0),
+                       "removed_bytes": int(swept.get("bytes") or 0),
+                       "orphans": {"files": int(orphans["files"]), "bytes": int(orphans["bytes"]),
+                                   "kinds": {kind: found for kind, found in dict(orphans["kinds"]).items()
+                                             if kind in ORPHAN_KINDS.values}}},
     }
 
 
@@ -777,6 +801,61 @@ class Hooks:
     main_ref: Callable[[], str] | None = None
     ask: Callable[[str], str] = input
     installed: Callable[[], bool] = installed_app_running
+    # The eval profile's sign-in bridge (``tests.e2e.live_eval.eval_profile.run_bridge``); a test passes a fake.
+    bridge: Callable[..., dict[str, Any]] | None = None
+
+
+class EvalSignIn:
+    """``--main-reference``: the main model signs in with the eval profile's ChatGPT sign-in (O126), never the
+    profile copy's, whose refresh would rotate the participant's own tokens and sign their Row-Bot out.
+
+    Only the eval profile's codex tokens are read (through its own bridge process); they live in this
+    process's memory only, and a token the run refreshes is saved back to the eval profile at once, so its
+    sign-in stays valid. Nothing of the profile copy's sign-in is used."""
+
+    def __init__(self, profile: Path, *, bridge: Callable[..., dict[str, Any]] | None = None) -> None:
+        self.profile = profile
+        self.bridge = bridge
+        self.current: Any = None
+        self.write_backs: list[str] = []
+
+    def _runner(self) -> dict[str, Any]:
+        return {"runner": self.bridge} if self.bridge is not None else {}
+
+    def install(self) -> None:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from tests.e2e.live_eval import eval_profile
+
+        from row_bot import secret_store
+        from row_bot.providers import codex
+
+        bundle = eval_profile.read_bundle(self.profile, **self._runner())
+        if bundle is None:
+            raise _ModeFailed("the eval profile has no ChatGPT sign-in (run its sign-in script)")
+        self.current = bundle
+        secret_store.use_memory_backend()  # this process's secrets: memory only, the copy's never read
+        original = codex.save_codex_oauth_tokens
+        original(codex.CodexTokenSet(access_token=bundle.access_token, refresh_token=bundle.refresh_token,
+                                     id_token=bundle.id_token, expires_at=bundle.expires_at,
+                                     account_id=bundle.account, plan_type=bundle.plan_type))
+
+        def saved_and_written_back(token_set: Any, *args: Any, **kwargs: Any) -> Any:
+            result = original(token_set, *args, **kwargs)
+            before = self.current
+            after = eval_profile.CodexBundle(
+                token_set.access_token, token_set.refresh_token or before.refresh_token,
+                token_set.id_token or before.id_token, token_set.account_id or before.account,
+                token_set.expires_at or before.expires_at, token_set.plan_type or before.plan_type, before.revision)
+            try:
+                self.write_backs.append(eval_profile.write_back(self.profile, before, after, **self._runner()))
+                self.current = eval_profile.read_bundle(self.profile, **self._runner()) or after
+            except Exception:  # noqa: BLE001 - the run goes on with the tokens it holds
+                self.write_backs.append("failed")
+                self.current = after
+            return result
+
+        codex.save_codex_oauth_tokens = saved_and_written_back
 
 
 @contextlib.contextmanager
@@ -800,7 +879,7 @@ def _worker_runner(arms: Sequence[Any], copy: Path) -> Iterator[Any]:
 
 
 def freeze_report(copy: Path, as_of: date, *, hooks: Hooks, main_reference: bool = False,
-                  cap_tokens: int = CLOUD_CAP, repeats: int = 3) -> dict[str, Any]:
+                  eval_profile: Path | None = None, cap_tokens: int = CLOUD_CAP, repeats: int = 3) -> dict[str, Any]:
     from row_bot.learning import evaluation
     from row_bot.learning.contracts import LessonRecord, Release
     from row_bot.learning.packs import PACKS
@@ -838,7 +917,11 @@ def freeze_report(copy: Path, as_of: date, *, hooks: Hooks, main_reference: bool
 
                 main = (hooks.main_ref or routing.main_model_ref)()
                 if main:
-                    arms.append(evaluation.Arm("main", model_ref=main, cache=True))
+                    if eval_profile is None:
+                        raise _ModeFailed("--main-reference needs --eval-profile")
+                    EvalSignIn(eval_profile, bridge=hooks.bridge).install()
+                    # Asked as it was served: with the page's picture when it was sent one (A8).
+                    arms.append(evaluation.Arm("main", model_ref=main, cache=True, sees_images=True))
                     contrasts.append(("start", "main"))
             progress = _Progress(started)
             with (contextlib.nullcontext(hooks.runner(arms)) if hooks.runner is not None
@@ -915,6 +998,9 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
                                    contrast["real_uncorrected"]["per_main_model"].items()},
                 "corrected_problems": _summary(contrast["real_corrected"]["primary"]),
                 "checker_versions": 1,
+                # A7: trusted input only. A8: without the problems that carry a page picture.
+                "trusted_only": _summary(contrast["real_uncorrected"]["trusted_only"]),
+                "without_pictures": _summary(contrast["real_uncorrected"]["without_pictures"]),
             },
             "by_kind": {key: _summary(value) for key, value in contrast["real_uncorrected"]["by_kind"].items()},
         })
@@ -961,7 +1047,9 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
                      "passes": newest["passes"] if newest and contrast else None},
         "problems": {"real_uncorrected": int(problems.get("real_uncorrected") or 0), "real_corrected": corrected,
                      "packs": int(problems.get("packs") or 0), "after_as_of": int(problems.get("after_as_of") or 0),
-                     "main_models": int(result.get("main_models") or 0)},
+                     "main_models": int(result.get("main_models") or 0),
+                     "untrusted": int(problems.get("untrusted") or 0),
+                     "with_picture": int(problems.get("with_picture") or 0)},
         "arms": arms, "contrasts": contrasts, "hypotheses": {"H1": h1, "H2": h2},
         "holm": {"family": list(FAMILY), "alpha": ALPHA, "untested_enter_as": 1.0,
                  "adjusted": {"H1": adjusted["H1"] if p_h1 is not None else None, "H2": None}},
@@ -981,6 +1069,8 @@ def _split(part: Mapping[str, Any]) -> dict[str, Any]:
     if "exact_only" in part:
         out["exact_only"] = _summary(part["exact_only"])
         out["per_main_model"] = {key: _summary(value) for key, value in part["per_main_model"].items()}
+        out["trusted_only"] = _summary(part["trusted_only"])
+        out["without_pictures"] = _summary(part["without_pictures"])
     return out
 
 
@@ -1110,7 +1200,14 @@ def parse(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--keep-copy", action="store_true", help="keep the scratch copy (it is deleted otherwise)")
     parser.add_argument("--main-reference", action="store_true",
                         help="--freeze: also score the main model (a reference, not a hypothesis arm; cloud tokens)")
+    parser.add_argument("--eval-profile",
+                        help="--main-reference: the eval profile whose ChatGPT sign-in the main model uses "
+                             "(never the profile's own)")
     args = parser.parse_args(argv)
+    if args.main_reference and not args.eval_profile:
+        parser.error("--main-reference needs --eval-profile (the eval profile's ChatGPT sign-in, never yours)")
+    if args.eval_profile and not args.main_reference:
+        parser.error("--eval-profile goes with --main-reference")
     if args.freeze:
         try:
             args.as_of_date = date.fromisoformat(str(args.as_of or ""))
@@ -1136,6 +1233,9 @@ def main(argv: Sequence[str] | None = None, *, hooks: Hooks | None = None) -> in
     say()
     try:
         check_folders(profile, scratch, out)
+        if args.eval_profile and (_inside(Path(args.eval_profile), profile) or _inside(profile, Path(args.eval_profile))
+                                  or Path(args.eval_profile).resolve() == everyday_profile()):
+            raise Refused("The --eval-profile folder must be the eval profile, not your profile.")
         refuse_if_running(profile, installed=hooks.installed)
         scratch.mkdir(parents=True, exist_ok=True)
         target = scratch / (COPY_PREFIX + datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -1241,7 +1341,8 @@ def _run_mode(mode: str, copy: Path, target: Path, args: argparse.Namespace, hoo
     if not learning.read_settings(copy).enabled:
         raise _ModeFailed("Learning is off in this profile")
     say(f"Running the freeze evaluation on every hidden problem up to {args.as_of_date.isoformat()} ...")
-    return freeze_report(copy, args.as_of_date, hooks=hooks, main_reference=bool(args.main_reference))
+    return freeze_report(copy, args.as_of_date, hooks=hooks, main_reference=bool(args.main_reference),
+                         eval_profile=Path(args.eval_profile).resolve() if args.eval_profile else None)
 
 
 if __name__ == "__main__":

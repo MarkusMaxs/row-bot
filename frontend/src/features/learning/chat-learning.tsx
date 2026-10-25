@@ -145,11 +145,13 @@ function useOptOut(io: LearningIO | null) {
 
 /**
  * "Don't learn from this chat", a check item for a chat's menu while Learning
- * is on; null otherwise. Ticked while the chat is switched off.
+ * is on; null otherwise, and in an incognito chat, which Learning never
+ * records (N11). Ticked while the chat is switched off.
  */
 export function useLearningChatMenu(): (conversation: {
   id: string;
   title: string;
+  incognito?: boolean;
 }) => MenuAction | null {
   const io = useLearning();
   const on = learningIsOn(io);
@@ -157,7 +159,7 @@ export function useLearningChatMenu(): (conversation: {
   const switchedOff = io?.snapshot?.opted_out_conversations;
   return useCallback(
     (conversation) => {
-      if (!on) return null;
+      if (!on || conversation.incognito) return null;
       const checked = Boolean(switchedOff?.includes(conversation.id));
       return {
         label: 'Don’t learn from this chat',

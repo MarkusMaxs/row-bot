@@ -8,7 +8,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 # Environment And Config
 
 <!-- generated-from: src/row_bot/brand.py -->
-<!-- inventory-hash: eb290e7839014a49 -->
+<!-- inventory-hash: e4ef423cb21f6441 -->
 
 <GeneratedNotice source="src/row_bot/brand.py" />
 
@@ -38,6 +38,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 | ROW_BOT_UPDATES_DIR | The folder shared with the host that applies updates (its status.json, Row-Bot's request.json). | `src/row_bot/updates/external.py` |
 | ROW_BOT_UPDATE_FEED | A loopback release feed for rehearsing a background update before it is published. | `src/row_bot/api/v1/schemas.py, src/row_bot/application/client_updates.py, src/row_bot/updater.py, src/row_bot/updates/downloader.py` |
 | ROW_BOT_UPDATE_FEED_TESTING | Set to 1 to let ROW_BOT_UPDATE_FEED replace GitHub; for tests and rehearsals only. | `src/row_bot/updater.py, src/row_bot/updates/downloader.py` |
+| ROW_BOT_INSTALL_COUNT | Set to 0 to turn install stats off on this server: no card, no ID, nothing sent. | `src/row_bot/api/v1/schemas.py, src/row_bot/install_count.py` |
 | ROW_BOT_PLUGIN_INDEX_URL | Override the public plugin marketplace index URL. | `src/row_bot/plugins/marketplace.py` |
 | ROW_BOT_PLUGIN_REPO_URL | Override the plugin repository used by marketplace installs. | `src/row_bot/plugins/installer.py` |
 | ROW_BOT_XAI_OAUTH_CLIENT_ID | Override the xAI OAuth client identifier. | `src/row_bot/application/subscription_options.py, src/row_bot/providers/xai_oauth.py` |

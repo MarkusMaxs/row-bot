@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from typing import Callable
 
 _APP_BOOT_STARTED = time.perf_counter()
 _LAUNCH_SESSION_ID = os.environ.get("ROW_BOT_LAUNCH_SESSION_ID", "")
@@ -307,6 +308,9 @@ async def _auto_start_channel_background(channel) -> None:
         )
         logger.warning("Channel auto-start failed for %s: %s", channel_name, exc)
     finally:
+        from row_bot.integrations import builtin
+
+        builtin.changed()  # Apps and Monitor show the channel as it is now: running, or stopped.
         logger.info(
             "startup.channel.auto_start channel=%s duration_ms=%.1f ok=%s",
             channel_name,
@@ -444,7 +448,8 @@ def _check_oauth_tokens(at_startup: bool = False) -> list[str]:
     from row_bot.tools import registry as _reg
     warnings: list[str] = []
 
-    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)")]:
+    for tool_name, display in [("gmail", "Gmail"), ("calendar", "Calendar"), ("x", "X (Twitter)"),
+                               ("outlook_mail", "Outlook"), ("outlook_calendar", "Outlook calendar")]:
         if not _reg.is_enabled(tool_name):
             continue
         tool = _reg.get_tool(tool_name)
@@ -551,6 +556,20 @@ async def _run_startup_sequence_guarded():
             "startup.phase name=startup_sequence_total duration_ms=%.1f success=true",
             (time.perf_counter() - startup_total_started) * 1000.0,
         )
+
+
+async def _load_cached_model_catalog(set_status: Callable[[str], None]) -> None:
+    """The saved Brain model, once a cloud provider is set up.
+
+    Both steps read provider secrets from the system keychain, which can wait on
+    a dialog (macOS asks again after the app's signature changes). Off the event
+    loop, the server keeps answering meanwhile; on it, the launcher gave up after
+    two minutes with "failed to become ready" (B422).
+    """
+    if await asyncio.to_thread(is_cloud_available):
+        set_status("☁️ Loading cached model catalog...")
+        with _startup_phase("load_cached_model_catalog"):
+            await asyncio.to_thread(get_current_model)
 
 
 async def _run_startup_sequence():
@@ -697,10 +716,7 @@ async def _run_startup_sequence():
     except Exception:
         logger.warning("Could not apply the Developer tool's new default", exc_info=True)
 
-    if is_cloud_available():
-        _set("☁️ Loading cached model catalog...")
-        with _startup_phase("load_cached_model_catalog"):
-            get_current_model()
+    await _load_cached_model_catalog(_set)
 
     _set("🔄 Scheduling memory extraction…")
     with _startup_phase("memory_extraction_scheduler"):
@@ -736,6 +752,8 @@ async def _run_startup_sequence():
         # Training left running when Row-Bot closed pauses at its newest checkpoint; the
         # quiet-hours runner starts (L2a).
         await asyncio.to_thread(_learning.start_runner)
+    # Once per store, in the background: blobs no Learning record references any more go (P2).
+    _learning.start_blob_sweep()
 
     _set("⬆ Starting auto-update scheduler…")
     try:
@@ -744,6 +762,13 @@ async def _run_startup_sequence():
             await asyncio.to_thread(start_update_scheduler)
     except Exception as exc:
         logger.warning("Updater scheduler failed to start (non-fatal): %s", exc)
+
+    # Install stats (N6): its own thread, after a start-up delay; dormant without a collector.
+    try:
+        from row_bot import install_count
+        install_count.start()
+    except Exception as exc:
+        logger.warning("Install stats didn't start (non-fatal): %s", exc)
 
     _set("⚡ Loading workflows…")
     try:
@@ -1101,6 +1126,16 @@ async def _app_view_handler(request: Request) -> Response:
     return Response(html, media_type="text/html; charset=utf-8", headers=headers)
 
 
+async def _page_frame_handler(request: Request) -> Response:
+    """A page (N5), served once to the sandboxed frame it was made for, under its own CSP (sandboxed again)."""
+    from row_bot import pages
+    try:
+        html, headers = pages.frame(str(request.path_params.get("token") or ""))
+    except pages.PageError:
+        return Response("Not found", status_code=404, media_type="text/plain", headers={"Cache-Control": "no-store"})
+    return Response(html, media_type="text/html; charset=utf-8", headers=headers)
+
+
 async def _health_handler(request: Request) -> JSONResponse:  # noqa: ARG001
     """Expose process liveness without provider, route, or user details."""
     return JSONResponse(
@@ -1172,6 +1207,9 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             await asyncio.to_thread(_updater.shutdown_background_update, 15.0)
         except Exception:
             logger.debug("Stopping the background updater failed", exc_info=True)
+    _install_count = sys.modules.get("row_bot.install_count")
+    if _install_count is not None:
+        _install_count.stop()
     from row_bot.application.lifecycle import application_lifecycle
     runtime_shutdown = await application_lifecycle.shutdown()
     if runtime_shutdown["status"] != "quiesced":
@@ -1301,6 +1339,7 @@ app.add_route("/api/launcher-shutdown", _launcher_shutdown_handler, methods=["PO
 app.add_route("/api/launcher-apply-update", _launcher_apply_update_handler, methods=["POST"])
 app.add_route("/api/webhook/{task_id}", _webhook_handler, methods=["POST"])
 app.add_route("/app-views/{render_id}", _app_view_handler, methods=["GET"])
+app.add_route("/page-frames/{token}", _page_frame_handler, methods=["GET"])
 app.add_route("/", _root_handler, methods=["GET"])
 app.add_route("/favicon.ico", _favicon_handler, methods=["GET"])
 app.add_route("/healthz", _health_handler, methods=["GET"])

@@ -37,6 +37,9 @@ def reviewer_reason(item: object) -> str:
     review = item.get("review") if isinstance(item, Mapping) else None
     if not isinstance(review, Mapping) or review.get("decision") != "ask":
         return ""
+    if item.get("person_only"):
+        # The person's own rule (Always ask me, an incognito chat's memory), not the reviewer (U19).
+        return ""
     return sanitize_approval_reason(review.get("reason"), max_chars=200)
 
 
@@ -163,12 +166,14 @@ def normalize_interrupts(
     if asked is not None:
         # A helper's question (N4) is asked, not approved: the notice names the question.
         title, reason, raw_action = f"{source} has a question: {asked['questions'][0]['question']}", "", ""
+    # A memory write of an incognito chat (N11) goes to the person alone: no reviewer asked, as on its card.
+    note = "" if isinstance(first.get("memory_save"), Mapping) else reviewer_note(first)
     return {
         "kind": "agent_run",
         "source_label": source,
         "title": title,
         "reason": reason,
-        "reviewer_note": reviewer_note(first),
+        "reviewer_note": note,
         "tool": tool,
         "action_label": label,
         "raw_action": raw_action,

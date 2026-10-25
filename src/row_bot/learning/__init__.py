@@ -238,6 +238,21 @@ def invalidate() -> None:
     _cache = None
 
 
+def changed() -> None:
+    """Learning's state changed: every open client reads its Learning screens again at once (O127).
+
+    Only the ``learning`` live topic's name and revision go out (B407), never what changed. Called when a
+    setting is saved, a Learning command runs, a job or other Learning record changes state (a version
+    planned, training, finished or failed; the past-chat import starting or done), a version's phase moves
+    (ready, couldn't start), a comparison starts, moves on or finishes, the download changes state, the
+    vault refreshes and a personal model's use is recorded. Capture's own records never call it.
+    """
+
+    from row_bot.application.live_updates import publish
+
+    publish("learning")
+
+
 def settings_saved(field: str, value: Any) -> None:
     """React to one saved Learning setting.
 
@@ -251,6 +266,7 @@ def settings_saved(field: str, value: Any) -> None:
     invalidate()
     if not _PREVIEW:
         return
+    changed()
     if field == "enabled" and value is True:
         try:
             from row_bot.learning.store import LearningStore
@@ -303,6 +319,29 @@ def start_past_chat_import() -> None:
         past_chats.start_background()
     except Exception as exc:
         logger.warning("Learning could not start reading past chats (%s)", type(exc).__name__)
+
+
+def start_blob_sweep() -> Any:
+    """The one-off sweep on this build's first start (P2): in the background, remove the blobs no
+    Learning record references any more (a deleted or switched-off chat's messages and pictures that
+    earlier builds left behind), logging counts only. Learning on or off: it is maintenance on kept
+    data. One path check without a store; once it has run, one value read. Returns the thread, if any."""
+
+    if not store_exists():
+        return None
+    import threading
+
+    def sweep() -> None:
+        try:
+            from row_bot.learning.store import LearningStore
+
+            LearningStore().sweep_once()
+        except Exception as exc:
+            logger.warning("Learning could not sweep its unreferenced files (%s)", type(exc).__name__)
+
+    thread = threading.Thread(target=sweep, name="learning-blob-sweep", daemon=True)
+    thread.start()
+    return thread
 
 
 def start_runner() -> None:
@@ -473,6 +512,7 @@ __all__ = [
     "STORE_FILE",
     "TRAIN_PLACES",
     "WAYS_OF_WORKING_FILE",
+    "changed",
     "data_dir",
     "folder_path",
     "invalidate",

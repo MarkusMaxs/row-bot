@@ -14,6 +14,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { createClientController } from './api';
 import { selectClientPlatform } from './platform';
 import { RuntimeContext } from './runtime';
+import { provideLive } from './live';
 import { bindPageLifecycle } from './page-lifecycle';
 import { PwaStatus } from './pwa';
 import { ThemeProvider } from './ui/theme';
@@ -163,6 +164,8 @@ async function start() {
     browserSessionStorage(),
   );
   await controller.start();
+  // Background state reaches the sidebar, Home and Monitor at once (B407).
+  provideLive(controller.live);
   let platform = await selectClientPlatform(
     controller,
     controller.getSnapshot().handshake,

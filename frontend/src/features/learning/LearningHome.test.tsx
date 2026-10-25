@@ -116,7 +116,11 @@ it('Overview while reading past chats counts them with a real denominator', () =
 });
 
 it('the … menu pauses, opens settings and deletes learning data after a confirm', async () => {
-  const io = fakeIO(on({ data: { exists: true, bytes: 3_400_000 } }));
+  const io = fakeIO(
+    on({
+      data: { ...learningSnapshot().data, exists: true, bytes: 3_400_000 },
+    }),
+  );
   const { onOpenSettings } = show(io);
   const user = userEvent.setup();
   const more = () => screen.getByRole('button', { name: 'More for Learning' });
@@ -436,7 +440,7 @@ it('Personal model: a training run replaces the setup states, and keeps itself f
   expect(
     screen.queryByRole('heading', { name: 'No personal model yet' }),
   ).toBeNull();
-  const facts = screen.getByLabelText('Personal model');
+  const facts = screen.getByLabelText('Personal model', { selector: 'dl' });
   expect(facts).toHaveTextContent(
     'Qwen3.5 2B · Apache 2.0 · On this computer (4.6 GB)',
   );

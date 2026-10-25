@@ -30,6 +30,7 @@ import {
   summarizeActivity,
 } from './tool-activity';
 import {
+  browserOffers,
   buildTranscript,
   finishedLiveSteps,
   liveMedia,
@@ -331,6 +332,28 @@ describe('transcript model', () => {
     ]);
     expect(items[1].embeds).toHaveLength(1);
     expect(items[2].media).toEqual([]);
+  });
+
+  it('offers the browser pane once per reply that used it, at its last row (U16)', () => {
+    const browser = (name: string) => ({
+      ...trace(name),
+      kind: 'browser' as const,
+    });
+    const items = buildTranscript([
+      user('u1'),
+      assistant('a1', 'Opening the page.', [browser('Browser Navigate')]),
+      assistant('a2', 'Clicking through.', [browser('Browser Click')]),
+      assistant('a3', 'Here it is.'),
+      user('u2'),
+      assistant('a4', 'No browser this time.', [trace('web_search')]),
+      user('u3'),
+      assistant('a5', 'Back to it.', [browser('Browser Navigate')]),
+    ]);
+    expect(
+      items
+        .filter((_, index) => browserOffers(items)[index])
+        .map((item) => item.row.id),
+    ).toEqual(['a2', 'a5']);
   });
 
   it('keeps text rows separate and skips empty assistant rows', () => {
