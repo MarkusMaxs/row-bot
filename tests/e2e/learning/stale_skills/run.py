@@ -215,7 +215,8 @@ class StaleRun(PersonRun):
         self._record_recall()
         arm = {"arm": self.arm, "main_ref": self.main_ref, "person_words": codex_ref, "build": self.build,
                "timeline": self.timeline.fingerprint(), "phrasing": self.timeline.phrasing, "seed": self.args.seed}
-        if self.state.data.get("arm") and self.state.data["arm"].get("timeline") != arm["timeline"]:
+        prompts = {item.id: item.prompt for item in self.timeline.runs}
+        if any(prompts.get(item["id"]) != item.get("prompt") for item in self.state.data["runs"]):
             raise ScratchError("this run's state was made from another timeline: start a new run folder")
         self.state.data["arm"] = arm
         self.save()

@@ -60,6 +60,14 @@ def test_the_same_seed_gives_the_same_world_and_another_seed_another():
     assert [(item.id, item.intent) for item in phrased.runs] == [(item.id, item.intent) for item in first.runs]
 
 
+def test_a_shorter_run_lives_the_same_days(timeline):
+    short = world.build(days=60)
+    assert [change.to_dict() for change in short.changes] == [change.to_dict() for change in timeline.changes]
+    for name in ("runs", "tells", "probes"):
+        assert [repr(item) for item in getattr(short, name)] == [repr(item) for item in getattr(timeline, name)
+                                                                  if item.day <= 60]
+
+
 def test_the_world_renders_each_fact_where_the_rule_says(timeline):
     for procedure in world.PROCEDURES:
         runs = _runs_of(timeline, procedure.id)

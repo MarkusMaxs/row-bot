@@ -33,7 +33,7 @@ import json
 import random
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
@@ -368,7 +368,7 @@ class Change:
     old: Value
     new: Value
     channel: str  # "told" (a chat of its own) or "in_passing" (in another request's message that day; drawn, and
-    # "told" when no other request is asked that day)
+    # "told" when no other procedure is asked that weekday)
 
     def to_dict(self) -> dict[str, Any]:
         return {"procedure": self.procedure, "kind": self.kind, "day": self.day, "old": self.old, "new": self.new,
@@ -742,8 +742,11 @@ def build(*, seed: int = SEED, days: int = DAYS, phrasing: Mapping[str, Any] | N
         start[procedure.id] = old
         if procedure.id in by_procedure:
             new = values.choice([item for item in procedure.pool if item != old])
-            changes.append(Change(procedure.id, procedure.kind, by_procedure[procedure.id], old, new,
-                                  "in_passing" if channel_rng.random() < 0.5 else "told"))
+            day = by_procedure[procedure.id]
+            weekday = generator.day_date(day).weekday()
+            hosts = any(weekday in schedule[item.id] for item in PROCEDURES if item.id != procedure.id)
+            drawn = "in_passing" if channel_rng.random() < 0.5 else "told"
+            changes.append(Change(procedure.id, procedure.kind, day, old, new, drawn if hosts else "told"))
     changes.sort(key=lambda item: item.day)
     change_by = {item.procedure: item for item in changes}
 
@@ -776,7 +779,6 @@ def build(*, seed: int = SEED, days: int = DAYS, phrasing: Mapping[str, Any] | N
     words_rng = rng("request_words")
     runs: list[generator.Request] = []
     ran: set[str] = set()
-    told_as: dict[str, str] = {}  # how each change was told in the end (no other request that day: in its own chat)
     for day in range(1, days + 1):
         order = 0
         weekday = generator.day_date(day).weekday()
@@ -803,9 +805,7 @@ def build(*, seed: int = SEED, days: int = DAYS, phrasing: Mapping[str, Any] | N
             hosts = [item.id for item in todays if item.id != change.procedure and item.id not in passing]
             if change.channel == "in_passing" and hosts:
                 passing[hosts[0]] = words
-                told_as[change.procedure] = "in_passing"
             else:
-                told_as[change.procedure] = "told"
                 tells.append(Tell(f"{PERSON}-{RUN_PREFIX}-d{day:03d}-tell-{change.procedure}", day, order,
                                   change.procedure, "change", (words,)))
                 order += 1
@@ -820,7 +820,6 @@ def build(*, seed: int = SEED, days: int = DAYS, phrasing: Mapping[str, Any] | N
                              procedure.id not in ran, phrasings, words_rng, passing.get(procedure.id, "")))
             ran.add(procedure.id)
             order += 1
-    changes = [replace(item, channel=told_as.get(item.procedure, item.channel)) for item in changes]
     timeline = Timeline(person=PERSON, seed=int(seed), days=days, schedule=schedule, changes=tuple(changes),
                         start=start, runs=tuple(runs), tells=tuple(tells), probes=(), consent_run=consent,
                         facts=facts, phrasing=phrasings.label, history=history)
