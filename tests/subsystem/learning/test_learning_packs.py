@@ -52,11 +52,39 @@ def test_every_coding_tasks_tests_pass_its_reference_and_fail_its_decoy(task) ->
 
 
 def test_answers_are_matched_the_way_the_verifiers_say() -> None:
-    lookup = next(task for task in visible_tasks() if task.id == "doc_10")  # number: 52,500
+    lookup = next(task for task in visible_tasks() if task.id == "doc_10")  # number: 52,500; decoy 50,000
     assert verify(lookup, Outcome(answer="**52,500 EUR**")).passed
-    assert not verify(lookup, Outcome(answer="52,500 (the draft said 50,000)")).passed
-    exact = next(task for task in visible_tasks() if task.id == "doc_04")
+    # METRIC_VERSION 2: a sentence that states the value counts, unless it gives the known wrong value first.
+    assert verify(lookup, Outcome(answer="The approved Q1 budget for Operations is 52,500 EUR (the draft said "
+                                         "50,000).")).passed
+    assert not verify(lookup, Outcome(answer="50,000 in the draft, or 52,500")).passed
+    assert not verify(lookup, Outcome(answer="About 50,000 EUR.")).passed
+    exact = next(task for task in visible_tasks() if task.id == "doc_04")  # decoy: Mara Lindqvist
     assert verify(exact, Outcome(answer="ines duarte.")).passed
+    assert verify(exact, Outcome(answer="The supplier review is owned by **Ines Duarte**.")).passed
+    assert not verify(exact, Outcome(answer="Mara Lindqvist owns it; Ines Duarte took over later.")).passed
+    assert not verify(exact, Outcome(answer="Ines Duartes")).passed  # a whole phrase, not a prefix
+    dated = next(task for task in visible_tasks() if task.id == "doc_07")  # 2026-07-14; decoy 2026-06-30
+    assert verify(dated, Outcome(answer="Project Heron's current go-live date is 2026-07-14.")).passed
+    assert not verify(dated, Outcome(answer="It moved from 2026-06-30 to 2026-07-14.")).passed
+
+
+def test_v2_passes_a_list_of_candidates_holding_the_right_one_when_the_known_wrong_value_is_absent() -> None:
+    # Explicit on purpose (O67): v2 doesn't ask a reply to commit to one answer, so enumerating candidates can
+    # pass. L4a adds a "commits to one answer" guard before strategy trials rely on these checks.
+    owner = next(task for task in visible_tasks() if task.id == "doc_04")  # Ines Duarte; decoy Mara Lindqvist
+    assert verify(owner, Outcome(answer="It's either Ines Duarte or Tomas Berg.")).passed
+    assert not verify(owner, Outcome(answer="Mara Lindqvist or Ines Duarte.")).passed
+    dinner = next(task for task in visible_tasks() if task.id == "doc_01")  # 85; decoy 60
+    assert verify(dinner, Outcome(answer="Up to 85 or 90 EUR per person.")).passed
+    assert not verify(dinner, Outcome(answer="60 or 85 EUR per person.")).passed
+
+
+def test_v2_passes_a_reply_that_names_the_known_wrong_value_as_context_after_the_right_one() -> None:
+    policy = next(task for task in visible_tasks() if task.id == "doc_14")  # POL-114; decoy POL-097
+    assert verify(policy, Outcome(answer="POL-114 applies now; POL-097 was superseded by it.")).passed
+    budget = next(task for task in visible_tasks() if task.id == "doc_10")  # 52,500; decoy 50,000
+    assert verify(budget, Outcome(answer="52,500 EUR is approved. The draft (FIN-502) said 50,000.")).passed
     listing = next(task for task in visible_tasks() if task.id == "doc_16")
     assert verify(listing, Outcome(answer='```json\n["FIN-502", "POL-097"]\n```')).passed
     transform = next(task for task in visible_tasks() if task.id == "st_02")

@@ -473,12 +473,15 @@ class Comparer:
             for item in comparison.arms:
                 name = item.arm.name
                 details[label][name] = {kind: list(value) for kind, value in item.by_kind.items()}
-                tally = totals.setdefault(name, {"ran": 0, "seconds": 0.0, "cloud": 0, "cached": 0, "tokens": 0})
+                tally = totals.setdefault(name, {"ran": 0, "seconds": 0.0, "cloud": 0, "cached": 0, "tokens": 0,
+                                                 "causes": {}})
                 tally["ran"] += item.ran
                 tally["seconds"] += item.seconds
                 tally["cloud"] += item.measured_cloud_tokens
                 tally["cached"] += item.cached
                 tally["tokens"] += item.tokens
+                for cause, count in (getattr(item, "causes", None) or {}).items():
+                    tally["causes"][cause] = tally["causes"].get(cause, 0) + int(count)
         new_key = f"v{int(version)}"
         # A model whose every task ended in an error (its runtime, its sign-in, not ready for Agent
         # tasks) is left out and the result says so: never a column of dashes beside real counts.
@@ -506,6 +509,8 @@ class Comparer:
                 "seconds_per_task": round(float(tally.get("seconds") or 0) / ran, 1) if ran else None,
                 "cloud_tokens_per_task": round(float(tally.get("cloud") or 0) / ran) if ran else None,
                 "model_name": item["label"] if item["role"] == "main" else None,
+                # Why its tasks didn't pass (codes and counts, visible and hidden together; L2v).
+                "causes": dict(sorted((tally.get("causes") or {}).items())),
             })
         rows, overall = summarize(described, by_arm, new=new_key, baseline=base_key,
                                   baseline_label=next((item["label"] for item in described if item["role"] == "baseline"),

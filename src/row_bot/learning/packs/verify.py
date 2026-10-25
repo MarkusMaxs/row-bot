@@ -110,6 +110,49 @@ def _text_lines(text: str) -> list[str]:
 # ── Answer, JSON and file checks ────────────────────────────────────────────
 
 
+def _phrase_at(text: str, value: str) -> int:
+    """Where ``value`` stands in ``text`` as a whole phrase (both normalized), or -1."""
+
+    target = normalize(value)
+    if not target:
+        return -1
+    found = re.search(rf"(?<![\w@]){re.escape(target)}(?![\w@-])", normalize(text))
+    return found.start() if found else -1
+
+
+def _number_at(text: str, value: float, tolerance: float) -> int:
+    """Where a number equal to ``value`` first stands in ``text``, or -1."""
+
+    for match in _NUMBER.finditer(str(text or "")):
+        try:
+            if abs(float(match.group(0).replace(",", "")) - value) <= tolerance + 1e-9:
+                return match.start()
+        except ValueError:
+            continue
+    return -1
+
+
+def _states(task: PackTask, answer: str) -> bool:
+    """The reply states the expected value in a sentence and doesn't give the task's known wrong
+    value (its decoy) first (METRIC_VERSION 2): "Old laptops go to Brightside Schools." answers
+    "Who receives old laptops?" as well as "Brightside Schools" does, and "60, or 85 under the new
+    policy" doesn't answer "85"."""
+
+    verifier = task.verifier
+    wrong = str(task.decoy.answer or "")
+    if verifier.match == "number":
+        right = _number_at(answer, float(verifier.expected), verifier.tolerance)
+        wrongs = [_number_at(answer, value, 0.0) for value in numbers_in(wrong)
+                  if abs(value - float(verifier.expected)) > verifier.tolerance + 1e-9]
+    else:
+        values = verifier.expected if verifier.match == "any_of" else [verifier.expected]
+        places = [place for place in (_phrase_at(answer, str(item)) for item in values) if place >= 0]
+        right = min(places) if places else -1
+        wrongs = [_phrase_at(answer, wrong)] if wrong and normalize(wrong) not in {normalize(item) for item in values} \
+            else []
+    return right >= 0 and not any(0 <= place < right for place in wrongs)
+
+
 def _check_answer(task: PackTask, answer: str) -> Verdict:
     verifier = task.verifier
     expected = verifier.expected
@@ -123,6 +166,8 @@ def _check_answer(task: PackTask, answer: str) -> Verdict:
         found = numbers_in(answer)
         target = float(expected)
         ok = bool(found) and all(abs(value - target) <= verifier.tolerance + 1e-9 for value in found)
+    if not ok and verifier.match != "contains":
+        ok = _states(task, answer)
     return Verdict(ok, "answer", "" if ok else f"expected {expected!r}")
 
 
