@@ -236,8 +236,10 @@ test('Lessons: in use with how often it was used, a saved one to test; a reply s
     type: 'expected-console-error',
     description: JSON.stringify({
       owner: 'learning-changes',
-      fixture: 'opening the chat by its address while the live-updates stream is open',
-      signature: 'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+      fixture:
+        'opening the chat by its address while the live-updates stream is open',
+      signature:
+        'Failed to load resource: net::ERR_INCOMPLETE_CHUNKED_ENCODING',
       count: 2,
       upTo: true,
     }),
