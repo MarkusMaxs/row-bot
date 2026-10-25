@@ -288,8 +288,6 @@ class _Sink:
         self.pictures = False
 
     def blob(self, data: bytes) -> str:
-        import hashlib
-
         sha = hashlib.sha256(data).hexdigest()
         self.blobs.setdefault(sha, data)
         return sha

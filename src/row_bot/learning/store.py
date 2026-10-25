@@ -558,11 +558,10 @@ class LearningStore:
         except (UnicodeDecodeError, ValueError):
             return None
 
-    def _request_blobs(self, sha: str, conversations: dict[str, list[str]] | None = None) -> tuple[
-        list[str], list[str]
-    ]:
+    def _request_blobs(self, sha: str, conversations: dict[str, list[str]]) -> tuple[list[str], list[str]]:
         """The blobs a request manifest names (messages, tools, a past chat's conversation and its messages)
-        and, apart, its pictures. Empty when the manifest is gone or isn't one."""
+        and, apart, its pictures. Empty when the manifest is gone or isn't one. ``conversations`` keeps the
+        past chats' conversations already read."""
 
         manifest = self._blob_json(sha)
         if not isinstance(manifest, dict) or manifest.get("format") != REQUEST_FORMAT:
@@ -572,14 +571,11 @@ class LearningStore:
             names.append(manifest["tools"])
         conversation = manifest.get("messages_of")
         if isinstance(conversation, str):
-            cached = conversations.get(conversation) if conversations is not None else None
-            if cached is None:
+            if conversation not in conversations:
                 body = self._blob_json(conversation)
-                cached = [str(item) for item in (body.get("messages") or ()) if isinstance(item, str)] \
-                    if isinstance(body, dict) else []
-                if conversations is not None:
-                    conversations[conversation] = cached
-            names += [conversation, *cached]
+                conversations[conversation] = [str(item) for item in (body.get("messages") or ())
+                                               if isinstance(item, str)] if isinstance(body, dict) else []
+            names += [conversation, *conversations[conversation]]
         found = [str(item) for item in manifest.get("pictures") or () if isinstance(item, str)]
         return [name for name in names if _SHA256.fullmatch(name)], [name for name in found if _SHA256.fullmatch(name)]
 
