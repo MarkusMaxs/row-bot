@@ -125,7 +125,7 @@ function version(page: Page) {
 }
 
 function facts(page: Page) {
-  return page.getByLabel('Personal model', { exact: true });
+  return page.locator('dl[aria-label="Personal model"]');
 }
 
 async function runsIn(page: Page) {
