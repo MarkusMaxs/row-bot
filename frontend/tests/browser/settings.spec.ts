@@ -1590,9 +1590,13 @@ test('Models catalog applies a default and retains it across Providers navigatio
     .locator('.settings-model-row-list > li')
     .filter({ hasText: label });
   await expect(row).toBeVisible();
-  await row.getByRole('button', { name: 'Pin ' + label + ' for chat' }).click();
+  await row
+    .getByRole('button', { name: 'Add ' + label + ' to favourites' })
+    .click();
   await expect(
-    row.getByRole('button', { name: 'Unpin ' + label + ' for chat' }),
+    row.getByRole('button', {
+      name: 'Remove ' + label + ' from favourites',
+    }),
   ).toBeVisible();
   await row
     .getByRole('button', { name: 'Set ' + label + ' as chat default' })
@@ -1656,7 +1660,7 @@ test('Models catalog recovers an expired page cursor only when requested', async
     await expect(
       row
         .getByText('Default', { exact: true })
-        .or(row.getByRole('button', { name: /^Unpin / }))
+        .or(row.getByText(/^Listed( first)? · /))
         .first(),
     ).toBeVisible();
   if (!kept.length)

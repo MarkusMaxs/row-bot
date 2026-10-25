@@ -60,7 +60,8 @@ def test_an_empty_prompt_step_is_refused_and_points_to_a_notify_step(runtime):
     reply = task_tool._task_create(name="Report", steps=_steps(prompt="  "))
 
     assert reply == ("Error creating task: Step 1 (prompt) needs a prompt. "
-                     "To tell the person something, use a notify step with a message.")
+                     "To tell the person something, use a notify step with a message. "
+                     "The step format is in the Workflow guide: skill_load('workflow_guide').")
     task_id = tasks.create_task("Report", steps=_steps())
     with pytest.raises(ValueError, match=r"Step 4 \(notify\) needs a message"):
         tasks.update_task(task_id, steps=[*_steps()[:3], {"type": "notify", "message": ""}])

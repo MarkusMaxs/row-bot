@@ -204,6 +204,10 @@ _STATUS.update(
         # or the Google client doesn't list its callback.
         "account_callback_unavailable": 409,
         "account_redirect_mismatch": 422,
+        # Outlook: an Application (client) ID or tenant Microsoft can't have issued; no sign-in code from
+        # Microsoft (the app doesn't allow public client flows).
+        "account_microsoft_app_invalid": 422,
+        "account_device_code_unavailable": 409,
     }
 )
 
@@ -405,32 +409,15 @@ _STATUS.update(
     {
         "invalid_browser_command": 422,
         "invalid_browser_url": 422,
-        "browser_action_denied": 403,
+        "browser_disabled": 403,
         "browser_navigation_denied": 403,
-        "browser_receipt_unavailable": 404,
-        "browser_revision_conflict": 409,
-        "browser_session_inactive": 409,
-        "browser_window_unavailable": 409,
-        "browser_action_failed": 409,
-        "browser_outcome_uncertain": 409,
-        "browser_status_unavailable": 503,
-        "exact_page_target_contract_required": 409,
-        "exact_page_target_and_hidden_text_contract_required": 409,
-        "semantic_page_observation_contract_required": 409,
-        "owned_tab_identity_contract_required": 409,
-        "private_preview_export_unavailable": 409,
-        "use_computer_use_for_external_browser": 409,
+        "browser_unavailable": 503,
     }
 )
 _STATUS.update(
     {
         "invalid_computer_use_command": 422,
         "computer_use_local_only": 403,
-        "computer_use_revision_conflict": 409,
-        "computer_use_inactive": 409,
-        "computer_use_busy": 409,
-        "computer_use_not_paused": 409,
-        "computer_use_resume_failed": 409,
         "computer_use_outcome_uncertain": 409,
     }
 )
@@ -558,6 +545,8 @@ _STATUS.update(
         "recipient_unavailable": 409,
         "delivery_unavailable": 409,
         "sharing_media_limit": 413,
+        "x_account_required": 409,
+        "x_account_unavailable": 409,
         "interactive_publish_requires_all_pages": 422,
     }
 )
@@ -1100,6 +1089,9 @@ _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
+# Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
+_STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
+                "chat_page_rate_limited": 429, "chat_page_nothing_to_send": 409})
 # App views in chat: each reaches the client as itself (unlisted, every one read "Part of Row-Bot isn't responding").
 _STATUS.update({"views_off": 403, "view_tool_refused": 403, "view_tool_denied": 403, "view_rate_limited": 429,
                 "view_busy": 409, "view_unavailable": 409, "view_tool_failed": 502})
@@ -2610,9 +2602,9 @@ def create_router(
         )
         return await respond(request, dto.ConversationActionReceipt, result)
 
-    async def browser_control_authority(
-        conversation_id: str, request: Request, current: Any
-    ) -> tuple[Callable[[], None], Callable[[str], None], str]:
+    async def browser_authority(conversation_id: str, request: Request, current: Any) -> Callable[[], None]:
+        """The Browser pane is the person's own view: any signed-in device of theirs, for a visible chat."""
+
         await readable_conversation(conversation_id)
         access = dispatch_validation(request, current)
 
@@ -2624,87 +2616,150 @@ def create_router(
             if admissions.deletion_state(conversation_id) != "active":
                 raise ProtocolError("conversation_deleting", 409)
 
-        def validate_action(kind: str) -> None:
-            from row_bot.application.profile_controls import freeze_profile
-            from row_bot.tools import registry as tool_registry
-            from row_bot.tools.profile_policy import dispatch_refusal
+        return validate
 
-            validate()
-            if not tool_registry.is_enabled(kind):
-                raise ProtocolError("browser_action_denied", 403)
-            row = service._metadata(conversation_id)
-            context = {
-                "thread_id": conversation_id,
-                "approval_mode": row.get("approval_mode"),
-                "agent_profile_id": row.get("agent_profile_id") or "",
-            }
-            if "tool_allowlist" in row:
-                context["tool_allowlist"] = row.get("tool_allowlist")
-            freeze_profile(context)
-            allowed = context.get("tool_allowlist")
-            refusal = dispatch_refusal(
-                context["agent_profile_snapshot"],
-                kind,
-                {},
-                source="core",
-                parent="browser",
-                allowlist=tuple(allowed) if allowed is not None else None,
-            )
-            if refusal:
-                raise ProtocolError("browser_action_denied", 403)
-
-        from row_bot.runtime import admissions
-
-        authority_id = admissions.keyed_digest(
-            {
-                "session": current.id,
-                "conversation": conversation_id,
-                "server_epoch": service.server_epoch,
-            },
-            read_only=True,
-        )
-        return validate, validate_action, authority_id
-
+    # The Browser pane (N12-A): state, the live page, the person's input and the pane's controls.
     @router.get("/conversations/{conversation_id}/browser")
-    async def browser_control_snapshot(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
+    async def browser_pane_state(conversation_id: str, request: Request) -> JSONResponse:
         current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_controls
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_state
 
-        result = await call(read_browser_controls, conversation_id, validate=validate)
-        return await respond(request, dto.BrowserControlSnapshot, result)
+        await call(validate)
+        return await respond(request, dto.BrowserPaneState, await call(pane_state, conversation_id))
 
-    @router.get("/conversations/{conversation_id}/browser/preview")
-    async def browser_control_preview(
-        conversation_id: str, request: Request, revision: str
-    ) -> JSONResponse:
-        current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_preview
+    @router.get("/conversations/{conversation_id}/browser/live")
+    async def browser_live(
+        conversation_id: str,
+        request: Request,
+        view: str = "pane",
+        width: int = 1280,
+        height: int = 0,
+        scale: float = 1.0,
+    ) -> StreamingResponse:
+        """The pane's state and live picture as server-sent events, while the client watches.
 
-        result = await call(
-            read_browser_preview,
+        A pane sends its own size (``width`` × ``height`` CSS pixels at ``scale``): the
+        page lays out at that size while it shows, so the picture fills it 1:1.
+        Pictures come at most ``fps`` a second and only the latest is sent, so a
+        slow connection gets fewer pictures rather than a growing queue; a slow
+        connection also gets them smaller and lighter. A hidden pane closes the
+        stream and the screencast stops when nobody watches.
+        """
+
+        current = await session(request, lane="observation")
+        if view not in {"pane", "thumb"} or not 0 <= height <= 4000 or not 1.0 <= scale <= 4.0:
+            raise ProtocolError("invalid_browser_command", 422)
+        validate = await browser_authority(conversation_id, request, current)
+        await call(validate)
+        from row_bot.application.client_browser import _manager, frame_view, pane_state
+
+        engine = _manager().get_session()
+        watch = engine.watch(
             conversation_id,
-            revision,
-            validate=validate,
+            kind=view,
+            width=max(160, min(int(width), 1600)),
+            loop=asyncio.get_running_loop(),
+            height=height if view == "pane" else 0,
+            scale=scale,
         )
-        response = await respond(request, dto.BrowserPreview, result)
-        response.headers["Cache-Control"] = "no-store"
-        return response
+        fps = 12.0 if view == "pane" else 2.0
+
+        async def stream() -> Any:
+            sent_seq, sent_revision = -1, -1
+            heartbeat = security.clock()
+            slow = 0
+            try:
+                yield ": connected\n\n"
+                # The stream ends with the browser too (Row-Bot quitting), so shutdown never waits on it.
+                while not await request.is_disconnected() and not engine.closed:
+                    security.session(await _context(request), current.id, current.csrf)
+                    changed = await watch.changed(timeout=15.0)
+                    state = pane_state(conversation_id)
+                    if state["revision"] != sent_revision:
+                        sent_revision = state["revision"]
+                        yield "event: state\ndata: " + dto.BrowserPaneState.model_validate(state).model_dump_json() + "\n\n"
+                    frame = watch.frame()
+                    if frame is not None and frame.seq != sent_seq and state["status"] == "running":
+                        sent_seq = frame.seq
+                        view_frame = frame_view(frame)
+                        if slow >= 3:
+                            view_frame = await asyncio.to_thread(_lighter, view_frame)
+                        started = security.clock()
+                        yield "event: frame\ndata: " + dto.BrowserFrame.model_validate(view_frame).model_dump_json() + "\n\n"
+                        spent = security.clock() - started
+                        # A send that waits means the connection is slow: lighter pictures until it isn't.
+                        slow = min(6, slow + 1) if spent > 0.25 else max(0, slow - 1)
+                        await asyncio.sleep(max(0.0, 1.0 / fps - spent))
+                    if not changed and security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+            except ProtocolError:
+                return
+            finally:
+                watch.close()
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=HEADERS)
+
+    def _lighter(frame: dict[str, Any]) -> dict[str, Any]:
+        """A smaller, lighter JPEG of one picture, for a slow connection."""
+
+        import base64
+        import io
+
+        from PIL import Image
+
+        try:
+            picture = Image.open(io.BytesIO(base64.b64decode(frame["image_base64"])))
+            picture.thumbnail((max(160, picture.width // 2), max(120, picture.height // 2)))
+            output = io.BytesIO()
+            picture.convert("RGB").save(output, format="JPEG", quality=45)
+            return {**frame, "image_base64": base64.b64encode(output.getvalue()).decode("ascii")}
+        except Exception:
+            return frame
+
+    @router.post("/conversations/{conversation_id}/browser/input")
+    async def browser_input(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserInput, 64 * 1024)
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_input
+
+        await call(validate)
+        events = [event.model_dump(mode="json") for event in body.events]
+        return await respond(request, dto.BrowserInputResult, await call(pane_input, conversation_id, events))
+
+    @router.post("/conversations/{conversation_id}/browser/actions")
+    async def browser_action(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserPaneAction, 16 * 1024)
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_action
+
+        await call(validate)
+        result = await call(pane_action, conversation_id, body.action, url=body.url, tab=body.tab)
+        return await respond(request, dto.BrowserPaneState, result)
+
+    @router.get("/browser/sites")
+    async def browser_sites(request: Request) -> JSONResponse:
+        await session(request, lane="view")
+        from row_bot.application.client_browser import sites
+
+        return await respond(request, dto.BrowserSitePage, await call(sites))
+
+    @router.post("/browser/sites/clear")
+    async def browser_sites_clear(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserSitesClear, 4096)
+        from row_bot.application.client_browser import clear_sites
+
+        return await respond(request, dto.BrowserSitesCleared, await call(clear_sites, body.site))
 
     # Local addresses (F4): what this conversation's browser may open now, and Remove.
     @router.get("/conversations/{conversation_id}/browser/local-addresses")
     async def browser_local_addresses(conversation_id: str, request: Request) -> JSONResponse:
         current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
+        validate = await browser_authority(conversation_id, request, current)
         from row_bot.application.recording_views import read_local_addresses
 
         await call(validate)
@@ -2716,9 +2771,7 @@ def create_router(
         conversation_id: str, grant_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
+        validate = await browser_authority(conversation_id, request, current)
         if len(grant_id or "") != 32 or any(char not in "0123456789abcdef" for char in grant_id):
             raise ProtocolError("local_address_unavailable", 404)
         from row_bot.application.recording_views import remove_local_address
@@ -2728,102 +2781,6 @@ def create_router(
         if result is None:
             raise ProtocolError("local_address_unavailable", 404)
         return await respond(request, dto.LocalAddressPage, result)
-
-    @router.post("/conversations/{conversation_id}/browser/review")
-    async def browser_control_review(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        body = await _body(request, dto.BrowserReviewRequest, 16 * 1024)
-        validate, validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import review_browser_command
-
-        result = await call(
-            review_browser_command,
-            body.action,
-            body.payload,
-            conversation_id,
-            validate=validate,
-        )
-        await call(validate_action, result["policy_action"])
-        result["nonce"] = security.approval_nonce(
-            current,
-            "browser-control:" + conversation_id,
-            result["revision"],
-            result["action_digest"],
-        )
-        return await respond(request, dto.BrowserReview, result)
-
-    @router.get("/conversations/{conversation_id}/browser/commands/{command_id}")
-    async def browser_control_receipt(
-        conversation_id: str, command_id: UUID, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="view")
-        validate, _validate_action, authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_receipt
-
-        result = await call(
-            read_browser_receipt,
-            owner_id=current.id,
-            authority_id=authority_id,
-            conversation_id=conversation_id,
-            command_id=str(command_id),
-            validate=validate,
-        )
-        return await respond(request, dto.BrowserReceipt, result)
-
-    @router.post("/conversations/{conversation_id}/browser/commands")
-    async def browser_control_command(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        body = await _body(request, dto.Command, 32 * 1024)
-        if not body.type.startswith("browser."):
-            raise ProtocolError("invalid_browser_command", 422)
-        if str(body.client_session_id) != current.id:
-            raise ProtocolError("invalid_browser_command", 422)
-        key = request.headers.get("idempotency-key", "")
-        if key != str(body.command_id):
-            raise ProtocolError("idempotency_mismatch", 409)
-        wire = body.model_dump(mode="json")
-        nonce = wire["payload"]["nonce"]
-        validate, validate_action, authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-
-        def validate_review(command: dict[str, Any], review: dict[str, Any]) -> None:
-            validate()
-            if review.get("conversation_id") != conversation_id:
-                raise ProtocolError("browser_action_denied", 403)
-            security.consume_nonce(
-                current,
-                "browser-control:" + conversation_id,
-                review["revision"],
-                review["action_digest"],
-                nonce,
-                str(body.command_id),
-            )
-
-        from row_bot.application.client_browser_controls import (
-            execute_browser_command,
-        )
-
-        result = await call(
-            execute_browser_command,
-            wire,
-            conversation_id,
-            owner_id=current.id,
-            authority_id=authority_id,
-            key=key,
-            validate=validate,
-            validate_action=validate_action,
-            validate_review=validate_review,
-        )
-        return await respond(request, dto.BrowserReceipt, result)
 
     async def computer_control_authority(
         conversation_id: str, request: Request, current: Any
@@ -5671,6 +5628,100 @@ def create_router(
             raise _delivery_failure(exc) from None
         return await respond(request, dto.DeliveryView, result)
 
+    # Pages the agent made (N5). Every signed-in device is the owner's, so each sees every page. A page's
+    # frame is served once, sandboxed; its state and decisions come from its bridge, checked again here.
+    def _page_id(value: str) -> str:
+        from row_bot.pages import PAGE_ID
+
+        if not PAGE_ID.fullmatch(str(value or "")):
+            raise ProtocolError("chat_page_unavailable", 404)
+        return value
+
+    def _page_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "chat_page_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 404))
+
+    async def _page_call(method: Callable, *args: Any) -> Any:
+        from row_bot.pages import PageError
+
+        try:
+            return await call(method, *args)
+        except PageError as exc:
+            raise _page_failure(exc) from None
+
+    @router.get("/pages")
+    async def pages_list(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.pages import views
+
+        return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/pages/{page_id}")
+    async def page_read(request: Request, page_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.pages import require, view
+
+        found = await _page_call(require, _page_id(page_id))
+        return await respond(request, dto.PageView, await call(view, found))
+
+    @router.post("/pages/{page_id}/frame")
+    async def page_frame(request: Request, page_id: str) -> JSONResponse:
+        """One frame address for the page, in the theme the client shows: loaded once, sandboxed."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        from row_bot.pages import render_frame, require, view
+
+        identifier = _page_id(page_id)
+        frame_url = await _page_call(render_frame, identifier, body.theme.model_dump())
+        found = await _page_call(require, identifier)
+        return await respond(request, dto.PageFrame, {"frame_url": frame_url, "page": await call(view, found)})
+
+    @router.put("/pages/{page_id}/state")
+    async def page_state(request: Request, page_id: str) -> JSONResponse:
+        """The page's own state, from its bridge (at most 256 KB)."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageStateWrite, 320 * 1024)
+        from row_bot.pages import set_state, view
+
+        found = await _page_call(set_state, _page_id(page_id), body.state)
+        return await respond(request, dto.PageView, await call(view, found))
+
+    @router.post("/pages/{page_id}/decisions")
+    async def page_decision(request: Request, page_id: str) -> JSONResponse:
+        """One decision from the page's bridge. It only gathers: the person's Send posts them."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageDecisionWrite, 8 * 1024)
+        from row_bot.pages import decide, view
+
+        found = await _page_call(decide, _page_id(page_id), body.id, body.choice, body.note, body.label)
+        return await respond(request, dto.PageView, await call(view, found))
+
+    def _standalone(page_id: str, theme: dict) -> tuple[str, str]:
+        from row_bot.pages import document, download_name, require
+
+        found = require(page_id)
+        return download_name(found), document(found, theme, standalone=True)
+
+    @router.post("/pages/{page_id}/download")
+    async def page_download(request: Request, page_id: str) -> JSONResponse:
+        """Download as HTML: one file that works on its own in any browser (it saves nothing)."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        name, html = await _page_call(_standalone, _page_id(page_id), body.theme.model_dump())
+        return await respond(request, dto.PageDownload, {"file_name": name, "html": html})
+
+    @router.post("/pages/{page_id}/save")
+    async def page_save(request: Request, page_id: str) -> JSONResponse:
+        """The desktop window can't download (B275): the page is saved into Exports on this computer."""
+        current = await session(request, lane="mutation")
+        require_this_computer(await _context(request))
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        from row_bot.application.export_folder import save_export
+
+        name, html = await _page_call(_standalone, _page_id(page_id), body.theme.model_dump())
+        result = await call(save_export, name, html.encode("utf-8"), validate=dispatch_validation(request, current))
+        return await respond(request, dto.ExportSaved, result)
+
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:
         await session(request, lane="mutation")
@@ -5695,6 +5746,29 @@ def create_router(
 
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
+
+    # Install stats (N6): Settings › System › Privacy.
+    @router.get("/system/install-count")
+    async def install_count_snapshot(request: Request) -> JSONResponse:
+        await session(request)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.view))
+
+    @router.put("/system/install-count")
+    async def install_count_choice(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.InstallCountChoice, 256)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.choose, body.enabled))
+
+    @router.post("/system/install-count/delete")
+    async def install_count_delete(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountDeletion, await call(install_count.delete_counted))
 
     @router.get("/system/updates")
     async def update_snapshot(request: Request) -> JSONResponse:
@@ -5809,6 +5883,7 @@ def create_router(
             credentials_json=body.credentials_json,
             validate=dispatch_validation(request, current),
             device=await account_device(request),
+            x_account=body.x_account,
         )
         return await respond(request, dto.AccountAuthReceipt, result)
 
@@ -10514,6 +10589,9 @@ def create_router(
                 "reviewer_reason",
                 "question",
                 "questions",
+                "memory_text",
+                "folder",
+                "x_post",
                 "policy_revision",
             )
             if k in view
@@ -10724,6 +10802,65 @@ def create_router(
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS
         )
+
+    # App-wide live updates (B407): which background state changed, as topic
+    # names and revisions only; clients read the state itself through the
+    # APIs above. One stream per window, a long poll where a proxy holds the
+    # stream back. Bursts within a tick reach a client as one frame.
+    @router.get("/live")
+    async def live(request: Request) -> StreamingResponse:
+        current = await session(request, lane="observation")
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        async def stream() -> Any:
+            sent: tuple[str, int] | None = None
+            heartbeat = security.clock()
+            try:
+                yield ": connected\n\n"
+                while not await request.is_disconnected():
+                    security.session(await _context(request), current.id, current.csrf)
+                    frame = live_updates.live_updates.frame()
+                    if sent != (frame["epoch"], frame["revision"]):
+                        sent = (frame["epoch"], frame["revision"])
+                        yield "event: live\ndata: " + dto.LiveFrame.model_validate(frame).model_dump_json() + "\n\n"
+                        heartbeat = security.clock()
+                    elif security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+                    await asyncio.sleep(0.25)
+            except ProtocolError:
+                return
+            finally:
+                security.leave_live(current)
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream", headers=HEADERS
+        )
+
+    @router.get("/live/poll")
+    async def live_poll(request: Request, after: int = 0, epoch: str = "") -> JSONResponse:
+        current = await session(request, lane="observation")
+        if after < 0 or len(epoch) > 128:
+            raise ProtocolError("invalid_command", 422)
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        try:
+            # Answer as soon as anything moved on since the client's revision
+            # (at once for another server process), or after 25 s regardless.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 25
+            while True:
+                frame = live_updates.live_updates.frame()
+                if (frame["epoch"] != epoch or frame["revision"] > after or loop.time() >= deadline
+                        or await request.is_disconnected()):
+                    break
+                await asyncio.sleep(0.25)
+            security.session(await _context(request), current.id, current.csrf)
+        finally:
+            security.leave_live(current)
+        return await respond(request, dto.LiveFrame, frame)
 
     @router.get("/choices")
     async def model_choices(request: Request) -> JSONResponse:

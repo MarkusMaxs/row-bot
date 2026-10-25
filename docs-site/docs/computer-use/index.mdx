@@ -1,59 +1,63 @@
 ---
 title: "Computer Use"
-description: "Set up and safely use Row-Bot's opt-in native Windows and macOS application control."
+description: "Let Row-Bot work in apps on your Windows or macOS computer with your mouse and keyboard while you watch."
 ---
 
 # Computer Use
 
-Computer Use is Row-Bot's provider-neutral tool for operating native Windows and macOS applications. It is separate from browser automation: use Browser for web pages and Computer Use only when the task must interact with a desktop application window.
+With computer use, Row-Bot works in an app on this computer the way you would: it looks at the app's window, then clicks, types, scrolls and presses keys with your real mouse and keyboard while you watch. Use it for desktop apps, or for your own browser when you ask for it. For websites, Row-Bot's own browser is usually better (see [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal)).
 
-Computer Use is a beta feature. It is off by default, supports one interactive local task at a time, and is unavailable to schedules, channels, background workflows, child agents, plugins, external MCP callers, mobile clients, and headless or server sessions.
+Computer use is off by default. It works only in a chat in Row-Bot on this computer, one chat at a time, and never from schedules, channels, workflows or helper agents.
 
 ## Set It Up
 
-1. Open **Settings › System** and choose **Browser and computer use**.
-2. Under **Desktop apps**, open the **Computer Use (Beta)** setup and read the capability and privacy summary.
-3. Choose **Install**. Row-Bot shows the required Cua Driver telemetry disclosure before it downloads or starts anything.
-4. Choose **Continue** only if you accept the disclosure. Row-Bot downloads the pinned Cua Driver 0.20.0 full archive for your platform, verifies its SHA-256, and extracts it into Row-Bot's private data directory. Upgrading from an older reviewed driver requires accepting the expanded version-2 telemetry notice again.
-5. On macOS, grant Accessibility and Screen Recording to the Row-Bot process when prompted, then choose **Recheck**. Restart the same process after changing permissions if the status asks you to.
-6. Turn on **Computer Use (Beta)** after the setup card reports ready.
+1. Open **Settings › System** and choose **Browser and computer use › Set up…**.
+2. Under **Desktop apps**, read the notice about Cua Driver (the open-source program Row-Bot uses for the mouse, keyboard and window pictures) and accept it if you agree.
+3. Choose **Install Cua Driver**. Row-Bot downloads the reviewed Cua Driver 0.20.0 for your computer, checks its SHA-256 and keeps it in Row-Bot's data folder.
+4. On a Mac, allow Row-Bot in **Accessibility** and **Screen Recording** (the buttons open them), then choose **Check setup**.
+5. Turn on **Computer use**. **Test with Calculator** opens Calculator and takes a picture of it to show it works.
 
-Install, Repair, Reinstall, Remove, and system-binary controls affect only the optional driver. Row-Bot never runs the upstream installer or updater. A custom system binary is accepted only after explicit opt-in and version verification.
+**Use your own Cua Driver** accepts a separately reviewed copy after a version check; **Remove Cua Driver** deletes Row-Bot's copy and turns computer use off.
 
-## Run A Native Task
+## What You See
 
-Ask from a normal local desktop chat and name the application and desired outcome. Row-Bot discovers applications and windows, acquires one exclusive task lease, and binds actions to the selected target window. It can launch an allowlisted application, observe that window, click, type, press keys, scroll, and drag when the current policy permits the operation.
+- **The Stop bar.** While Row-Bot uses an app, a slim bar stays on top of your screen: "Row-Bot is using Microsoft Edge · Esc to stop · **Stop**". Press **Esc** or **Stop** to end the reply at once; the chat's own Stop does the same from any device.
+- **In the chat.** A step shows **Using Microsoft Edge**, the window, what Row-Bot just did ("Clicked "Leak"") and a live picture of the window, with **Stop**. The picture is only on this computer's Row-Bot app and is never saved.
+- **Your hand on the mouse.** If you move the mouse, click or type while Row-Bot works, it pauses before its next step and asks **"Carry on?"** in the chat. Choose **Carry on** and it looks at the screen again; **Stop** ends it. Nothing it was about to do happens without a fresh look.
 
-When accessibility data is insufficient, Row-Bot may send one ephemeral target-window screenshot to the Vision model configured in Settings. The live control card shows sanitized state and a shielded thumbnail; screenshot bytes are not written to chat, durable memory, replay history, logs, or tool results.
+## What Asks First
+
+- **The first use of each app in a chat**: "Let Row-Bot use Microsoft Edge in this chat?". After you allow it, that app doesn't ask again in that chat.
+- **Paying, buying, booking with a charge, sending, posting, deleting files and changing system settings.** The card says what will happen ("Row-Bot will click "Confirm and pay £60" in Microsoft Edge. This can charge you.") and shows the window with a ring where Row-Bot will click.
+
+How each is decided follows the chat's approval level: **Ask** asks you, **Auto**'s reviewer approves what clearly matches your request (otherwise it asks you), **Hands-off** goes ahead, and **Block** refuses.
+
+Row-Bot never types a password, one-time code or card number: it asks you to type it, then carries on. It doesn't control terminals (it runs commands with its own shell tool, which asks first when it should), password managers, Row-Bot itself or protected system screens, and it doesn't press the keys that open other apps (the Windows key, Spotlight, Ctrl+Alt+Delete).
+
+## How It Works
+
+- Each step works on one window: Row-Bot brings it to the front, acts, then takes a new picture. A model that sees images gets that picture with each step and checks it itself; a model without vision gets a list of the window's controls and where they are.
+- Pictures stay in memory. They are never written to the chat, memory, logs or files, and password, code and card fields are covered in the model's picture.
+- If Windows keeps another window in front (for example, the screen is locked), Row-Bot clicks and types nothing and says so.
 
 ## Record The Screen
 
-With Computer Use set up, Row-Bot can record your main screen to a video when you ask. It asks first ("Record your screen?"): the recording shows everything on the screen, including other apps and notifications. The conversation shows **Recording · 0:42** with **Stop**; the video (MP4) is saved to the conversation's files and shows there with a player. It stops when you or Row-Bot stop it, at its time limit (5 minutes unless asked otherwise, at most 10), before it gets too large for the chat, when the conversation is deleted, and when Row-Bot quits.
+With computer use set up, Row-Bot can record your main screen to a video when you ask. It asks first ("Record your screen?"): the recording shows everything on the screen, including other apps and notifications. The conversation shows **Recording · 0:42** with **Stop**; the video (MP4) is saved to the conversation's files and shows there with a player. It stops when you or Row-Bot stop it, at its time limit (5 minutes unless asked otherwise, at most 10), before it gets too large for the chat, when the conversation is deleted, and when Row-Bot quits.
 
-- On Windows, Cua Driver records video with ffmpeg. Row-Bot uses the one on this computer, or asks on the same card to download it first (about 30 MB, from PyPI; see [Video Editing](/docs/chat/tools-approvals-and-terminal)). On macOS it needs macOS 15 or later and Screen Recording permission.
+- On Windows, Cua Driver records video with ffmpeg. Row-Bot uses the one on this computer, or asks on the same card to download it first (about 30 MB, from PyPI; see [ffmpeg](/docs/chat/tools-approvals-and-terminal#ffmpeg)). On macOS it needs macOS 15 or later and Screen Recording permission.
 - The recording runs in a Cua session of its own, into a private folder in Row-Bot's data; the folder (including Cua's per-step pictures) is removed once the video is saved.
-- Without Computer Use set up, Row-Bot says that recording the screen needs it and how to set it up. Its own browser can be recorded without it (see [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal)).
+- Without computer use set up, Row-Bot says that recording the screen needs it and how to set it up. Its own browser can be recorded without it (see [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal)).
 
-## Stop Or Take Over
+## Privacy And Cua Telemetry
 
-- **Stop** cancels queued work and releases the session.
-- **Take over** cancels queued mutation and pauses the lease so you can interact directly.
-- **Resume** requires Row-Bot to observe the target again before it can act.
+The reviewed Cua 0.20.0 telemetry sends pseudonymous installation/process-session identifiers and bounded product, platform, client, tool/outcome, duration/output, aggregate session/config/cursor/recording, permission, and lifecycle categories to Cua's EU PostHog endpoint. Its tagged event builders do not receive prompts, tool arguments/results, typed text, screenshots, accessibility trees, app/window names, URLs, paths, raw config/cursor values, or raw errors. Row-Bot's own telemetry is only install stats (see [Install Stats](/docs/privacy-safety#install-stats)), and Row-Bot keeps its prompts, files, memories, secrets, screenshots, tool arguments, and channel content outside Cua telemetry.
 
-Window replacement, permission loss, target changes, or driver failure invalidates stale state. Row-Bot must reacquire and observe before another mutation.
-
-## Safety Boundaries
-
-Computer Use blocks terminals, password managers, Row-Bot itself, secure desktops, elevation prompts, security settings, and attempts to handle credentials, one-time codes, CAPTCHAs, biometrics, or operating-system permission dialogs. Consequential actions use approval policy at the point of risk, and external handoff flows stay with the user.
-
-The reviewed Cua 0.20.0 telemetry sends pseudonymous installation/process-session identifiers and bounded product, platform, client, tool/outcome, duration/output, aggregate session/config/cursor/recording, permission, and lifecycle categories to Cua's EU PostHog endpoint. Its tagged event builders do not receive prompts, tool arguments/results, typed text, screenshots, accessibility trees, app/window names, URLs, paths, raw config/cursor values, or raw errors. Row-Bot adds no first-party telemetry and keeps its prompts, files, memories, secrets, screenshots, tool arguments, and channel content outside Cua telemetry.
-
-For the exact allowlist and reviewed dependency record, see [Computer Use Beta: architecture and security decision](https://github.com/siddsachar/row-bot/blob/main/docs/COMPUTER_USE_SECURITY.md).
+For the exact allowlist and reviewed dependency record, see [Computer Use: architecture and security decision](https://github.com/siddsachar/row-bot/blob/main/docs/COMPUTER_USE_SECURITY.md).
 
 ## Troubleshooting
 
-- If setup reports an archive or checksum error, choose **Repair** and retry on a trusted network.
-- If macOS reports missing permission, use the provided buttons to open Accessibility and Screen Recording settings, grant the running Row-Bot process, restart it, and recheck.
-- If the requested app is blocked, do not work around the policy with a terminal or generic MCP tool. Operate it manually or use a narrower supported application.
-- If a session is busy, stop or finish the active Computer Use task before starting another.
-- If the target window closes or changes, ask Row-Bot to reacquire it before resuming.
+- **"Computer use isn't set up yet"**: the chat's step links to **Settings › System › Browser and computer use**; finish the setup there.
+- **"Windows didn't let Row-Bot bring … to the front"**: unlock the screen, or click the app's window once, then ask again.
+- **"Row-Bot is using the computer in another chat"**: wait for that reply to finish, or stop it there (or press Esc).
+- **No window found**: Row-Bot lists open windows with their titles; name the app, or words from its window's title. It can open an app by its name after asking.
+- On a Mac, if Row-Bot reports missing permission, allow it in Accessibility and Screen Recording, then **Check setup**.

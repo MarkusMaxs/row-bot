@@ -18,7 +18,7 @@ from typing import Any
 _DESTINATION_KEYS = ("to", "recipient", "recipients", "email", "address", "chat_id", "channel", "target",
                      "destination", "repo", "repository", "url", "page_id", "parent", "path", "file_path")
 _TEXT_KEYS = ("text", "message", "body", "content", "caption", "tweet", "post", "comment", "status",
-              "description", "subject", "title")
+              "description", "subject", "title", "command")
 _MEDIA_KEYS = ("media", "media_paths", "media_path", "attachments", "attachment", "files", "file",
                "image", "image_path", "images", "video", "video_path", "audio", "audio_path")
 _MAX_TEXT = 16384

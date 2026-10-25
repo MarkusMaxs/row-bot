@@ -369,98 +369,118 @@ test('retained settings expose real capability state without leaving the unified
   });
 });
 
-test('managed browser uses one reviewed live-control panel with sanitized recovery state', async ({
+test('the Browser pane is one reviewed live-control panel with a sanitized recovery state', async ({
   page,
-  evidence,
 }, info) => {
   test.setTimeout(180_000);
-  const conversation = await newConversation(page);
-  await composer(page).fill('Retained managed browser draft');
-  await expect(
-    page.getByRole('status').filter({ hasText: /^Draft saved$/ }),
-  ).toBeVisible();
-  await revealContextControl(page, 'Conversation actions');
-  await page
-    .getByRole('button', { name: 'Conversation actions', exact: true })
-    .click();
-  await page
-    .getByRole('menuitem', { name: 'Manage browser', exact: true })
-    .click();
-
-  let browser = page.getByRole('region', {
-    name: 'Managed browser',
-    exact: true,
-  });
-  await expect(browser).toBeVisible();
-  await expect(
-    browser.getByText('No managed-browser activity for this conversation.'),
-  ).toBeVisible();
-  await browser
-    .getByLabel('Address', { exact: true })
-    .fill('https://example.test/start?token=browser-fixture-secret');
-  await browser
-    .getByRole('button', { name: 'Open address', exact: true })
-    .click();
-  await expect(browser.getByText('Open address completed.')).toBeVisible();
-  // The fixture's preview answers 503: wait for that answer, so the count
-  // below never races the request.
-  const unavailable = () =>
-    browser.getByText('Picture unavailable. Refresh browser status to retry.');
-  await expect(unavailable()).toBeVisible();
-  await visualCheck(page, info, 'managed-browser-opened');
-  await expect(browser.getByText(/Site:/)).toBeVisible();
-  await expect(browser).toContainText('https://example.test/start');
-  await expect(browser).not.toContainText('browser-fixture-secret');
-  await browser.getByText('Unavailable browser controls').click();
-  await expect(browser.getByText(/exact page-target contract/)).toBeVisible();
-
-  await page.reload();
-  browser = page.getByRole('region', {
-    name: 'Managed browser',
-    exact: true,
-  });
-  await expect(browser).toBeVisible();
-  await expect(browser).toContainText('example.test');
-  await expect(browser).not.toContainText('browser-fixture-secret');
-  await expect(unavailable()).toBeVisible();
-  if (page.viewportSize()!.width < 1024) {
-    await page
-      .getByRole('button', { name: 'Back to conversation', exact: true })
-      .click();
-  }
-  await expect(composer(page)).toHaveValue('Retained managed browser draft');
-  expect(
-    (await fixtureState(page)).calls.filter(
-      (call) => call.conversation_id === conversation,
-    ),
-  ).toEqual([]);
-  await writeEvidence(info, 'managed-browser-result.json', {
-    conversation,
-    site: 'example.test',
-    query_redacted: true,
-    draft_retained: true,
-    provider_calls: 0,
-  });
-  expect(
-    evidence.network.filter(
-      (entry) =>
-        entry.event === 'response' &&
-        entry.path.endsWith('/browser/preview') &&
-        entry.status === 503,
-    ),
-  ).toHaveLength(2);
   if (info.project.use.browserName === 'chromium')
     info.annotations.push({
       type: 'expected-console-error',
       description: JSON.stringify({
         signature:
-          'Failed to load resource: the server responded with a status of 503 (Service Unavailable)',
-        count: 2,
-        owner: 'Phase 4 managed browser fixture',
+          'Failed to load resource: the server responded with a status of 403 (Forbidden)',
+        count: 1,
+        owner: 'N12-A Browser pane',
         fixture:
-          'Browser preview returns 503 before and after reload; the panel shows a recoverable Picture unavailable state.',
+          'The person types a local-network address; Row-Bot refuses to open it (browser_navigation_denied).',
       }),
     });
+  const conversation = await newConversation(page);
+  await composer(page).fill('Retained browser draft');
+  await expect(
+    page.getByRole('status').filter({ hasText: /^Draft saved$/ }),
+  ).toBeVisible();
+  const phone = page.viewportSize()!.width < 1024;
+  const browser = page.getByRole('region', { name: 'Browser', exact: true });
+  const address = browser.getByRole('textbox', {
+    name: 'Address',
+    exact: true,
+  });
+  const openBrowser = async () => {
+    await revealContextControl(page, 'Conversation actions');
+    await page
+      .getByRole('button', { name: 'Conversation actions', exact: true })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'Open browser', exact: true })
+      .click();
+    await expect(browser).toBeVisible();
+    await expect(browser).toHaveCount(1);
+  };
+  const backToConversation = async () => {
+    if (phone)
+      await page
+        .getByRole('button', { name: 'Back to conversation', exact: true })
+        .click();
+  };
+  await openBrowser();
+  await expect(browser).toContainText('Nothing open yet');
+
+  // Reviewed: Row-Bot checks each address the person types before its
+  // browser opens it, and says why one never opens.
+  await address.fill('http://192.168.1.20/router');
+  await address.press('Enter');
+  await expect(
+    page.locator('.toast').filter({
+      hasText:
+        "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
+    }),
+  ).toBeVisible();
+  await expect(address).toHaveValue('');
+  await expect(browser).toContainText('Nothing open yet');
+  const opened = 'https://example.test/start?token=browser-fixture-secret';
+  await address.fill(opened);
+  await address.press('Enter');
+  await expect(address).toHaveValue(opened);
+  // Opening it again shows the same pane: one live-control panel per chat.
+  await backToConversation();
+  await openBrowser();
+  await expect(address).toHaveValue(opened);
+
+  // The browser stops: the pane offers Restart and shows nothing of the page.
+  const stopped = await page.request.post('/__n12_fixture/browser', {
+    headers: fixtureHeaders(),
+    data: { conversation_id: conversation, state: { status: 'crashed' } },
+  });
+  expect(stopped.ok()).toBe(true);
+  const recovery = browser.getByRole('alert');
+  await expect(recovery).toContainText(
+    "Row-Bot's browser stopped. Restart it?",
+  );
+  await expect(address).toHaveValue('');
+
+  // A reload recovers the pane and its state from Row-Bot: what the page
+  // kept to restore it holds no address, so nothing private comes back.
+  await page.reload();
+  await expect(browser).toHaveCount(1);
+  await expect(recovery).toContainText(
+    "Row-Bot's browser stopped. Restart it?",
+  );
+  await expect(address).toHaveValue('');
+  await expect(browser).not.toContainText('example.test');
+  const kept = await page.evaluate(() =>
+    JSON.stringify([{ ...localStorage }, { ...sessionStorage }]),
+  );
+  expect(kept).not.toContain('example.test');
+  expect(kept).not.toContain('browser-fixture-secret');
+  await visualCheck(page, info, 'browser-recovery');
+  await recovery.getByRole('button', { name: 'Restart', exact: true }).click();
+  await expect(browser.getByRole('alert')).toHaveCount(0);
+
+  await backToConversation();
+  await expect(composer(page)).toHaveValue('Retained browser draft');
+  expect(
+    (await fixtureState(page)).calls.filter(
+      (call) => call.conversation_id === conversation,
+    ),
+  ).toEqual([]);
+  await writeEvidence(info, 'browser-pane-result.json', {
+    conversation,
+    refused_local_network: true,
+    recovered_without_address: true,
+    draft_retained: true,
+    provider_calls: 0,
+  });
 });
 
 test('Developer repository, worktree, and sandbox changes use the bound workspace owner', async ({

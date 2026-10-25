@@ -7,7 +7,7 @@ metadata; the legacy passive Providers view leaves runtime readiness unknown.
 from __future__ import annotations
 
 import base64
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import math
@@ -73,6 +73,10 @@ class CachedModelRow:
     runtime_mode: str
     source: str
     runtime_state: Literal["unknown", "ready", "unavailable"] = "unknown"
+    # The person's marks (F10, U10), on a catalog page only: a favourite is
+    # listed first in every picker for its jobs; a hidden one waits under More models.
+    favourite_rank: int | None = None
+    hidden: bool = False
 
 
 @dataclass(frozen=True)
@@ -266,4 +270,14 @@ def list_cached_models(
             raise ProviderStatusError("cursor_expired") from exc
     end = min(len(matches), offset + limit)
     next_cursor = base64.urlsafe_b64encode(json.dumps([snapshot.revision, provider_id, query, end] + ([surface] if surface else [])).encode()).decode() if end < len(matches) else None
-    return CachedModelPage(1, snapshot.revision, snapshot.generated_at, snapshot.freshness, matches[offset:end], len(matches), next_cursor)
+    return CachedModelPage(1, snapshot.revision, snapshot.generated_at, snapshot.freshness,
+                           _marked(matches[offset:end]), len(matches), next_cursor)
+
+
+def _marked(rows: tuple[CachedModelRow, ...]) -> tuple[CachedModelRow, ...]:
+    """A page's rows with the person's favourite and hidden marks (never part of the revision)."""
+    from row_bot.providers.model_visibility import read_model_visibility
+
+    shown = read_model_visibility()
+    return tuple(replace(row, favourite_rank=shown.rank(row.selection_ref), hidden=shown.is_hidden(row.selection_ref))
+                 for row in rows)
