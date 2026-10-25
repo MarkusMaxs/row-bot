@@ -17,6 +17,17 @@ from tests.e2e.learning.seeded.person import SimulatedPerson, approval_decision,
 pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 
+@pytest.fixture(autouse=True)
+def _a_tier_not_yet_certified(monkeypatch):
+    """These harness tests run the 8 GB tier beside one that isn't certified, which is reported and never run.
+    L2x certified the 32 GB tier, so it stands in for an uncertified one here."""
+
+    real = release_check.ReleaseCheck.tier_status
+    monkeypatch.setattr(release_check.ReleaseCheck, "tier_status",
+                        lambda self, tier: "not certified yet (L2x certifies the larger tiers)" if tier == "32gb"
+                        else real(self, tier))
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     folder = tmp_path / "home"

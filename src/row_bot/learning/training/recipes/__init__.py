@@ -18,6 +18,7 @@ import functools
 import hashlib
 import json
 import math
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Any
 
 FORMAT = "row-bot-recipe"
 FOLDER = Path(__file__).resolve().parent
-ORDER = ("8gb", "12gb", "24gb", "32gb")
+ORDER = ("8gb", "16gb", "24gb", "32gb")
 METHODS = frozenset({"lora_sft"})
 QUANTIZATIONS = frozenset({"Q8_0", "Q4_K_M"})
 # The trainer's own settings (``trainer.DEFAULTS``); anything else in a file is refused.
@@ -36,11 +37,24 @@ SETTING_NAMES = frozenset({
 })
 # O23: Row-Bot's real envelope is 10.75K tokens, so no recipe trains on less than 16K.
 MIN_TRAINING_CONTEXT = 16_384
+# What the CUDA context and its libraries hold on the card beside PyTorch's own memory (measured 410-600 MiB on
+# the RTX 5090): a recipe's need on the card (``memory_mib``) includes it, PyTorch's cap doesn't (O112).
+CONTEXT_MIB = 512
+# O105: the systems a recipe's measured system memory is given for (Windows charges what a run holds on
+# the card to its commit limit too, so its figure is larger than Linux's).
+SYSTEMS = frozenset({"windows", "linux"})
 _KEYS = frozenset({
     "format", "version", "id", "tier", "certified", "title", "starting_model", "method", "evidence", "settings",
     "epochs", "checkpoint_every", "min_examples", "min_new_examples", "validation_share", "serve_context",
-    "quantization", "reasoning",
+    "quantization", "reasoning", "memory_mib", "system_memory_mib",
 })
+
+
+def this_system(platform: str | None = None) -> str:
+    """``windows`` or ``linux`` (or the platform's own name, which no recipe measures)."""
+
+    platform = platform or sys.platform
+    return "windows" if platform == "win32" else "linux" if platform.startswith("linux") else platform
 
 
 class RecipeError(ValueError):
@@ -73,6 +87,18 @@ class Recipe:
     quantization: str
     reasoning: str
     sha256: str
+    # The graphics memory a run needs free to start (its measured peak, rounded up): a card that also
+    # drives the desktop trains when this much is free, not its whole tier (O91, L2x).
+    memory_mib: int = 8192
+    # The computer's memory a run needs free (RAM and virtual memory), per system, measured as the
+    # commit it added at its peak (O105). A system without a figure isn't checked.
+    system_memory_mib: Mapping[str, int] = MappingProxyType({})
+
+    def system_memory_need(self, platform: str | None = None) -> int | None:
+        """MiB of RAM and virtual memory a run needs free on this system, or None (not measured)."""
+
+        value = self.system_memory_mib.get(this_system(platform))
+        return int(value) if value else None
 
     @property
     def name(self) -> str:
@@ -96,11 +122,21 @@ class Recipe:
     def checkpoint_interval(self, steps: int) -> int:
         return max(1, min(self.checkpoint_every, int(steps)))
 
-    def spec(self) -> dict[str, Any]:
+    def spec(self, card_mib: int | None = None) -> dict[str, Any]:
         """The ``recipe`` of a job spec: its name and the trainer's settings (no usage reporting),
-        with its passes (O119)."""
+        with its passes (O119).
 
-        return {"name": self.name, "settings": {**dict(self.settings), "report_to": "none", "passes": self.epochs}}
+        ``card_mib``: the card it trains on. Its cap is then at most the recipe's own need on the card,
+        less the CUDA context's share (O112): training starts when the need is free, so PyTorch never holds
+        more than was free (on Windows more would spill into system memory, W8). On a card the size of
+        its tier (or smaller) the recipe's own certified cap stays."""
+
+        settings = {**dict(self.settings), "report_to": "none", "passes": self.epochs}
+        if card_mib and self.memory_mib and card_mib > int(self.tier.removesuffix("gb")) * 1024:
+            cap = float(settings.get("vram_cap", 0.95))
+            share = (self.memory_mib - CONTEXT_MIB) / float(card_mib)
+            settings["vram_cap"] = round(max(0.2, min(cap, share)), 4)
+        return {"name": self.name, "settings": settings}
 
 
 def _number(value: Any, where: str, *, integer: bool = False, low: float = 0.0, high: float = math.inf) -> Any:
@@ -133,12 +169,20 @@ def parse(text: str, *, source: str = "") -> Recipe:
     for key, value in settings.items():
         _number(value, f"settings.{key}")
     for key in ("id", "tier", "title", "starting_model", "method", "evidence", "quantization", "reasoning"):
-        if not isinstance(data[key], str) or not data[key] or len(data[key]) > 512:
+        # The evidence says what was measured, in full (O105, O111); the other fields are short names.
+        if not isinstance(data[key], str) or not data[key] or len(data[key]) > (2048 if key == "evidence" else 512):
             raise RecipeError("invalid_recipe", key)
     if data["method"] not in METHODS or data["quantization"] not in QUANTIZATIONS or data["reasoning"] != "off":
         raise RecipeError("invalid_recipe", "method, quantization or reasoning")
     if not isinstance(data["certified"], bool):
         raise RecipeError("invalid_recipe", "certified")
+    system = data["system_memory_mib"]
+    if not isinstance(system, dict) or set(system) - SYSTEMS:
+        raise RecipeError("invalid_recipe", "system_memory_mib")
+    for key, value in system.items():
+        _number(value, f"system_memory_mib.{key}", integer=True, low=1024, high=1_048_576)
+    if data["certified"] and "windows" not in system:
+        raise RecipeError("invalid_recipe", "a certified recipe says what it needs of the computer's memory (O105)")
     recipe = Recipe(
         id=data["id"], version=int(data["version"]), tier=data["tier"], certified=data["certified"],
         title=data["title"], starting_model=data["starting_model"], method=data["method"],
@@ -152,6 +196,8 @@ def parse(text: str, *, source: str = "") -> Recipe:
                               high=1_048_576),
         quantization=data["quantization"], reasoning=data["reasoning"],
         sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        memory_mib=_number(data["memory_mib"], "memory_mib", integer=True, low=1024, high=262_144),
+        system_memory_mib=MappingProxyType(dict(system)),
     )
     if recipe.certified and recipe.max_seq_length < MIN_TRAINING_CONTEXT:
         raise RecipeError("invalid_recipe", "a certified recipe trains on at least 16K tokens (O23)")
@@ -190,7 +236,8 @@ def for_hardware(check: Any) -> Recipe | None:
 
     if check is None or not getattr(check, "can_train", False):
         return None
-    tier = getattr(check, "tier", None)
+    # O112: the tier Row-Bot recommends (the largest whose need fits the card's free memory), else the card's.
+    tier = getattr(check, "recommended", None) or getattr(check, "tier", None)
     fits = [tier.id] if tier is not None else []
     fits += [item.id for item in getattr(check, "larger_tiers", ()) or ()]
     chosen: Recipe | None = None
@@ -201,6 +248,44 @@ def for_hardware(check: Any) -> Recipe | None:
     return chosen
 
 
+def fits(recipe: Recipe, check: Any) -> bool:
+    """Whether a certified recipe trains on this computer's card (its tier, or a smaller one)."""
+
+    if not recipe.certified or check is None or not getattr(check, "can_train", False):
+        return False
+    tier = getattr(check, "tier", None)
+    return tier is not None and tier.id in ORDER and ORDER.index(recipe.tier) <= ORDER.index(tier.id)
+
+
+def certified_for(check: Any) -> tuple[Recipe, ...]:
+    """Every certified recipe this computer's card trains, largest tier first."""
+
+    return tuple(recipe for recipe in reversed(all_recipes()) if fits(recipe, check))
+
+
+def for_model(model_id: str, check: Any) -> Recipe | None:
+    """The certified recipe that trains ``model_id`` on this card, or None: the largest one whose need on
+    the card fits what it had free when checked (O112), else the smallest (it waits for room)."""
+
+    found = [recipe for recipe in certified_for(check) if recipe.starting_model == model_id]
+    gpu = getattr(check, "gpu", None)
+    free = getattr(gpu, "free_mib", None) if gpu is not None else None
+    roomy = [recipe for recipe in found if free is None or recipe.memory_mib <= free]
+    return (roomy or found[-1:] or [None])[0]
+
+
+def current(root: Any = None, check: Any = None) -> Recipe:
+    """The recipe the person's choices train with: the one for their starting model when this card
+    trains it, else the card's own (``for_hardware``), else the 8 GB recipe."""
+
+    from row_bot import learning
+    from row_bot.learning.training import hardware
+
+    found = check if check is not None else hardware.peek()
+    chosen = learning.read_settings(root).starting_model
+    return for_model(chosen, found) or for_hardware(found) or default()
+
+
 def default() -> Recipe:
     """The certified 8 GB recipe (used before the hardware check has run)."""
 
@@ -209,13 +294,19 @@ def default() -> Recipe:
 
 __all__ = [
     "FOLDER",
+    "certified_for",
+    "current",
+    "fits",
+    "for_model",
     "MIN_TRAINING_CONTEXT",
     "ORDER",
     "Recipe",
     "RecipeError",
+    "SYSTEMS",
     "all_recipes",
     "default",
     "for_hardware",
     "load",
     "parse",
+    "this_system",
 ]

@@ -160,6 +160,28 @@ def test_training_waits_while_another_app_holds_the_graphics_cards_memory(setup)
     assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
 
 
+def test_training_waits_while_other_apps_hold_the_computers_memory(setup):
+    # O105: Windows charges what a run holds on the card to RAM and virtual memory too; Row-Bot waits for
+    # that memory and never closes another app.
+    job = _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    memory = {"free": False}
+    setup.supervisor.gpu_free = lambda: True
+    setup.supervisor.memory_free = lambda: memory["free"]
+
+    assert (setup.runner.status().state, setup.runner.status().reason) == ("waiting", "memory_busy")
+    assert (setup.runner.check().state, setup.runner.check().reason) == ("waiting", "memory_busy")
+    assert setup.engine.commands == [] and setup.supervisor.jobs.get(job.id).state == "planned"
+    setup.when.now = DAY
+    waiting = setup.supervisor.train_now(job.id)  # Train now waits for the memory too
+    assert waiting.state == "waiting" and setup.engine.commands == []
+
+    memory["free"] = True
+    setup.supervisor.watch()
+    assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
+
+
 def test_train_now_waiting_for_a_chat_starts_once_it_ends_even_after_a_restart(setup):
     job = _plan(setup)
     setup.when.now = DAY
@@ -298,3 +320,32 @@ def test_a_version_that_couldnt_start_lets_the_runner_plan_the_next_one(setup):
     setup.lease.set(since_activity=900.0)
     assert runner.check().state == "training"
     assert [job.version for job in planned] == [2] and setup.supervisor.jobs.get(first.id).state == "evaluating"
+
+
+def test_after_two_quiet_hours_nights_without_room_on_the_card_the_runner_says_so(setup, monkeypatch):
+    # O112: no silent forever-wait. Each night training waited for room on the card is noted once (with
+    # what was free and what it needs); a run that starts forgets them.
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import hardware
+
+    monkeypatch.setattr(hardware, "gpu_memory", lambda **_: (25_000, 32_607))
+    monkeypatch.setattr(hardware, "training_need_mib", lambda found=None: 15_616)
+    job = _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    card = {"free": False}
+    setup.supervisor.gpu_free = lambda: card["free"]
+
+    assert setup.runner.check().reason == "gpu_busy"
+    assert setup.runner.check().reason == "gpu_busy"  # the same night counts once
+    assert runner_module.card_room(setup.root)["nights"] == ["2026-10-16"]
+    setup.when.now = datetime(2026, 10, 17, 2, 30)
+    _journal(setup.root, datetime(2026, 10, 17, 1, 10))
+    setup.runner.check()
+    room = runner_module.card_room(setup.root)
+    assert room["nights"] == ["2026-10-16", "2026-10-17"]
+    assert (room["free_mib"], room["need_mib"], room["model"]) == (7_607, 15_616, "qwen3.5-2b")
+
+    card["free"] = True
+    assert setup.runner.check().state == "training"
+    assert runner_module.card_room(setup.root) is None and setup.supervisor.jobs.get(job.id).state != "planned"

@@ -161,6 +161,7 @@ export function percentWords(done: number, total: number): string {
 
 /** Where a personal model runs ("Runs in", designs/learning-ux.md §5). */
 export const RUNTIME_NAMES: Record<string, string> = {
+  row_bot: 'Row-Bot',
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
   llama_cpp: 'llama.cpp server',
@@ -198,6 +199,13 @@ export const VERSION_FAILURES: Record<string, string> = {
   probe_failed: 'It loaded, but didn’t pass Row-Bot’s check.',
   tool_turn_failed:
     'It started, but couldn’t finish a short task that uses a tool.',
+  server_missing:
+    'Row-Bot needs one more part of the training engine to run it.',
+  server_unavailable:
+    'Row-Bot can run it only on a computer with an NVIDIA graphics card.',
+  server_failed: 'Row-Bot’s runner stopped while starting it.',
+  load_failed:
+    'It didn’t load. The graphics card may not have enough free memory.',
 };
 
 /** "Needs more examples · 46 of 100 so far". */
@@ -268,3 +276,18 @@ export const DOWNLOAD_FAILURES: Record<string, string> = {
   no_cuda:
     'The training engine couldn’t use the graphics card. Update your NVIDIA driver, then try again.',
 };
+
+/** What a tier's training needs of the computer's memory, measured (O105). */
+export function memoryNeedWords(gb: number | null | undefined): string {
+  return gb
+    ? `Training needs about ${gb} GB of this computer’s memory free (RAM and virtual memory).`
+    : '';
+}
+
+/** How to give training more memory on this system (O105): never "close Row-Bot". */
+export function memoryAdvice(system: string | null | undefined): string {
+  if (system === 'windows')
+    return 'Raise Windows’ virtual memory (Advanced system settings › Performance › Virtual memory), then check again.';
+  if (system === 'linux') return 'Add swap space or RAM, then check again.';
+  return 'Add RAM, then check again.';
+}

@@ -28,6 +28,39 @@
       "title": "LearningGpu",
       "type": "object"
     },
+    "LearningMemory": {
+      "additionalProperties": false,
+      "properties": {
+        "free_gb": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Free Gb",
+          "type": "integer"
+        },
+        "limit_gb": {
+          "maximum": 65536,
+          "minimum": 0,
+          "title": "Limit Gb",
+          "type": "integer"
+        },
+        "system": {
+          "enum": [
+            "windows",
+            "linux",
+            "other"
+          ],
+          "title": "System",
+          "type": "string"
+        }
+      },
+      "required": [
+        "limit_gb",
+        "free_gb",
+        "system"
+      ],
+      "title": "LearningMemory",
+      "type": "object"
+    },
     "LearningStartingModel": {
       "additionalProperties": false,
       "properties": {
@@ -64,6 +97,20 @@
     "LearningTier": {
       "additionalProperties": false,
       "properties": {
+        "card_need_gb": {
+          "anyOf": [
+            {
+              "maximum": 4096,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Card Need Gb"
+        },
         "certified": {
           "title": "Certified",
           "type": "boolean"
@@ -82,6 +129,20 @@
           "maxLength": 256,
           "title": "Summary",
           "type": "string"
+        },
+        "system_memory_gb": {
+          "anyOf": [
+            {
+              "maximum": 4096,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Memory Gb"
         }
       },
       "required": [
@@ -96,6 +157,20 @@
   },
   "additionalProperties": false,
   "properties": {
+    "card_free_gb": {
+      "anyOf": [
+        {
+          "maximum": 4096,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Card Free Gb"
+    },
     "engine_download_bytes": {
       "minimum": 0,
       "title": "Engine Download Bytes",
@@ -132,6 +207,36 @@
       "title": "Larger Tiers",
       "type": "array"
     },
+    "memory": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningMemory"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "memory_short": {
+      "items": {
+        "$ref": "#/$defs/LearningTier"
+      },
+      "maxItems": 8,
+      "title": "Memory Short",
+      "type": "array"
+    },
+    "recommended": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningTier"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "starting_models": {
       "items": {
         "$ref": "#/$defs/LearningStartingModel"
@@ -145,6 +250,7 @@
         "gpu",
         "old_driver",
         "small_gpu",
+        "low_memory",
         "no_gpu",
         "container",
         "unknown"

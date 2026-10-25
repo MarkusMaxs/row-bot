@@ -153,6 +153,20 @@ export function downloadView(
         announce: 'The download stopped.',
       };
     case 'ready':
+      if (
+        model.engine === 'installed' &&
+        model.starting_model_state === 'downloaded'
+      )
+        // An engine from before Row-Bot ran personal models itself (O75): only that part is missing.
+        return {
+          title: 'Ready to download',
+          detail: `Row-Bot can now run your personal model itself. It needs one more part of the training engine (${sizeWords(Math.max(0, total - done))}).`,
+          note: 'From GitHub (llama.cpp).',
+          actions: [
+            { label: 'Download', action: 'start_download', primary: true },
+          ],
+          announce: '',
+        };
       return {
         title: 'Ready to download',
         detail: `${capital(sizes(model))}.${

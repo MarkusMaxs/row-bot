@@ -414,20 +414,22 @@ class ReleaseMaker:
 
         model = weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
         found = weights.status(model, self._root)
-        main = next((item for item in model.files if item.name.endswith(".safetensors")), None)
-        return model, found.folder if found.state == "downloaded" else None, main.size if main else model.download_bytes
+        return (model, found.folder if found.state == "downloaded" else None,
+                model.weights_bytes or model.download_bytes)
 
     def recipe(self) -> Any:
         if self._recipe_for is not None:
             return self._recipe_for()
-        from row_bot.learning.training import hardware, recipes
+        from row_bot.learning.training import recipes
 
-        return recipes.for_hardware(hardware.peek()) or recipes.default()
+        return recipes.current(self._root)
 
     def chosen_runtime(self) -> str:
         if self._runtime is not None:
             return self._runtime()
-        return gate.read_settings(self._root).serve_runtime
+        from row_bot.learning.training import serving
+
+        return serving.effective_runtime(gate.read_settings(self._root).serve_runtime)
 
     # ── What is due ─────────────────────────────────────────────────────
 
@@ -598,13 +600,15 @@ class ReleaseMaker:
             self._update_release(state, quantization=result.quantization)
             self._write_card(folder, state, recipe, engine_status)
         self._check()
-        if previous.phase == READY and previous.runtime == "ollama" and runtime != "ollama":
-            # Moved to another runtime: the copy Row-Bot made in Ollama goes (the file stays here).
+        if previous.phase == READY and previous.runtime in serving.AUTOMATED and runtime != previous.runtime:
+            # Moved to another runtime: the copy Row-Bot made in its own server or Ollama goes (the file
+            # stays here).
             try:
-                (self._withdraw or serving.withdraw)("ollama", version, root=self._root,
+                (self._withdraw or serving.withdraw)(previous.runtime, version, root=self._root,
                                                      catalog=serving.refresh_ollama_catalog)
             except Exception:
-                logger.warning("Learning couldn't remove personal model v%d from Ollama", version, exc_info=True)
+                logger.warning("Learning couldn't take personal model v%d out of %s", version, previous.runtime,
+                               exc_info=True)
         if not quiet:
             state = self._save(folder, read_state(folder) or state, phase=MAKING_READY, runtime=runtime, failure=None,
                                command=None)
@@ -662,7 +666,9 @@ class ReleaseMaker:
         parent = max(previous, key=lambda item: item.version) if previous else None
         base = template = tokenizer = None
         if weights_folder is not None:
-            base_file = next((item.name for item in model.files if item.name.endswith(".safetensors")), "")
+            shards = [item.name for item in model.files if item.name.endswith(".safetensors")]
+            # One file of weights is pinned as it is; a model in shards by its index (which names them all).
+            base_file = shards[0] if len(shards) == 1 else "model.safetensors.index.json" if shards else ""
             base = _pin_file(model.repo, weights_folder, base_file, model.revision)
             tokenizer = _pin_file(f"{model.repo} tokenizer", weights_folder, "tokenizer.json", model.revision)
             template = _pin_file(f"{model.repo} chat template", weights_folder, "chat_template.jinja", model.revision)

@@ -35,13 +35,13 @@ _ACTIONS = frozenset({
     "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
     "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
     "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-    "review_version",
+    "review_version", "use_smaller_model",
 })
 # Using the personal model (L2c2): its comparison, trial, keep and undo, Export…, Delete version,
 # Advanced and Retrain without it. Every one of them is the person's own choice (D24).
 _USE_ACTIONS = frozenset({"compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now",
                           "undo_use", "export_version", "delete_version", "save_advanced", "reset_advanced",
-                          "retrain_without", "dismiss", "review_version"})
+                          "retrain_without", "dismiss", "review_version", "use_smaller_model"})
 _KIND_ACTIONS = frozenset({"use_version", "keep_version", "keep_not_now", "undo_use"})
 _VERSION_NUMBER_ACTIONS = frozenset({"compare_version", "use_version", "export_version", "delete_version",
                                      "retrain_without", "review_version"})
@@ -71,13 +71,14 @@ _RUNNER_REASONS = frozenset({
     "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
     "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
     "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-    "planned", "planning", "up_to_date", "gpu_busy", "comparing",
+    "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
 })
 _VERSION_PHASES = frozenset({"exporting", "export_failed", "making_ready", "ready", "runtime_failed",
                              "waiting_for_you"})
 _VERSION_FAILURES = frozenset({"not_enough_disk", "adapter_missing", "engine_missing", "tools_missing",
                                "export_failed", "not_installed", "not_running", "not_local", "create_failed",
-                               "not_loaded", "probe_failed", "tool_turn_failed"})
+                               "not_loaded", "probe_failed", "tool_turn_failed", "server_missing",
+                               "server_unavailable", "server_failed", "load_failed"})
 _FAILURES = frozenset({"out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"})
 _SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
 # The owner id each channel needs before its direct chats count as the owner's (O2), in words.
@@ -269,12 +270,63 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "starting_model_state": starting if starting in ("downloaded", "damaged") else "not_downloaded",
         "starting_model_bytes": view.model_bytes if view is not None and starting == "downloaded" else 0,
         "download_state": _download_view(None if configured else view),
-        "runtime": settings.serve_runtime,
+        "runtime": _runtime_now(settings),
         "runtimes": _runtimes(),
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
+        "room": _room_view(settings),
         **_use_parts(),
     }
+
+
+def _room_view(settings: learning.LearningSettings) -> dict[str, Any] | None:
+    """O112: after two quiet-hours nights without room on the card for this model, what it needs, what the
+    card had, and the next smaller certified model: the largest whose need fits what was free, else the
+    smallest below this one."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import hardware, recipes
+
+    try:
+        found = runner_module.card_room()
+        if not found or len(found["nights"]) < runner_module.ROOM_NIGHTS or found["model"] != settings.starting_model:
+            return None
+        check = hardware.peek()
+        smaller: list[tuple[int, Any]] = []
+        for model in check.starting_models if check is not None else ():
+            recipe = recipes.for_model(model.id, check) if model.id != settings.starting_model else None
+            if recipe is not None and (not found["need_mib"] or recipe.memory_mib < found["need_mib"]):
+                smaller.append((int(recipe.memory_mib), model))
+        roomy = [item for item in smaller if item[0] <= found["free_mib"]]
+        pick = max(roomy, key=lambda item: item[0]) if roomy else min(smaller, key=lambda item: item[0], default=None)
+        return {"nights": len(found["nights"]), "need_gb": round(found["need_mib"] / 1024, 1),
+                "free_gb": round(found["free_mib"] / 1024, 1), "smaller": _model_view(pick[1]) if pick else None}
+    except Exception:
+        logger.debug("Learning could not read the nights it waited for the card", exc_info=True)
+        return None
+
+
+def _use_smaller_model(model_id: str) -> str:
+    """O112: train the smaller model the Personal model view offered (the person tapped it and agreed to its
+    download): it becomes the starting model, a run planned for the larger one that never started is set
+    aside, and its download starts."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import hardware
+
+    offered = (_room_view(learning.read_settings()) or {}).get("smaller") or {}
+    if not model_id or offered.get("id") != model_id:
+        raise ClientPlatformError("learning_training_changed")
+    supervisor = runner_module.get().supervisor
+    if learning.store_exists():
+        job = supervisor.jobs.current()
+        if job is not None and job.state in ("planned", "waiting") and not job.steps_done:
+            supervisor.jobs.move(job.id, "stopped", reason="model_changed")
+    _save({"starting_model": model_id})
+    runner_module.forget_card_room()
+    name = hardware.STARTING_MODELS[model_id].name
+    words = _answer_download("download")
+    return f"Switched to {name}. {words}"
 
 
 def _use_parts() -> dict[str, Any]:
@@ -285,20 +337,45 @@ def _use_parts() -> dict[str, Any]:
             "export_folder": _text(suggested_folder(), 1024)}
 
 
-def _runtimes() -> list[dict[str, Any]]:
-    """Where a personal model can run here, and whether Row-Bot can register it there itself."""
+def _runtime_now(settings: learning.LearningSettings) -> str:
+    """Where new versions run: the person's choice, Row-Bot's own server by default where it can run."""
 
     from row_bot.learning.training import serving
+
+    try:
+        return serving.effective_runtime(settings.serve_runtime)
+    except Exception:
+        logger.debug("Learning could not tell where personal models run", exc_info=True)
+        return "ollama"
+
+
+def _runtimes() -> list[dict[str, Any]]:
+    """Where a personal model can run here, and whether Row-Bot can register it there itself. Row-Bot's
+    own server is listed everywhere, marked not available where it has no build (no NVIDIA card that
+    can train, macOS, Arm); ``installed`` says whether its files are here yet."""
+
+    from row_bot.learning.training import serving, server_files
 
     try:
         ollama = serving.OllamaRuntime().executable() is not None
     except Exception:
         ollama = False
+    here = set(serving.available_runtimes())
     shown = []
-    for runtime in serving.available_runtimes():
+    for runtime in serving.RUNTIMES:
+        if runtime == "vllm" and runtime not in here:
+            continue
+        installed: bool | None = None
+        if runtime == "ollama":
+            installed = ollama
+        elif runtime == serving.ROW_BOT and runtime in here:
+            try:
+                installed = server_files.status(learning.data_dir()).installed
+            except Exception:
+                installed = False
         shown.append({
-            "id": runtime, "name": serving.RUNTIME_NAMES[runtime], "automated": runtime == "ollama",
-            "installed": ollama if runtime == "ollama" else None,
+            "id": runtime, "name": serving.RUNTIME_NAMES[runtime], "automated": runtime in serving.AUTOMATED,
+            "installed": installed, "available": runtime in here,
         })
     return shown
 
@@ -493,9 +570,9 @@ def _advanced_view() -> dict[str, Any] | None:
     """Advanced ›: the next run's settings, the recommended ones and the choices (D9)."""
 
     try:
-        from row_bot.learning.training import advanced, hardware, recipes
+        from row_bot.learning.training import advanced, recipes
 
-        recipe = recipes.for_hardware(hardware.peek()) or recipes.default()
+        recipe = recipes.current()
         found = advanced.view(recipe)
     except Exception:
         logger.debug("Learning could not read its advanced settings", exc_info=True)
@@ -720,15 +797,28 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
         free = None
 
     def tier(value: Any) -> dict[str, Any]:
-        return {"id": value.id, "label": value.label, "certified": value.certified, "summary": value.summary}
+        need = getattr(value, "system_memory_mib", None)
+        card = getattr(value, "need_mib", None)
+        return {"id": value.id, "label": value.label, "certified": value.certified, "summary": value.summary,
+                "system_memory_gb": max(1, -(-int(need) // 1024)) if need else None,
+                "card_need_gb": round(int(card) / 1024, 1) if card else None}
 
+    from row_bot.learning.training import recipes
+
+    memory = found.memory
+    system = recipes.this_system()
     result = {
         "state": found.state,
         "gpu": {"name": _text(found.gpu.name, 128), "memory_gb": found.gpu.memory_gb, "label": _text(found.gpu.label, 160)}
         if found.gpu else None,
         "tier": tier(found.tier) if found.tier else None,
         "larger_tiers": [tier(item) for item in found.larger_tiers],
-        "starting_models": [_model_view(item) for item in (found.tier.models if found.tier else ())],
+        "memory_short": [tier(item) for item in found.memory_short],
+        "memory": {"limit_gb": memory.limit_mib // 1024, "free_gb": memory.free_mib // 1024,
+                   "system": system if system in ("windows", "linux") else "other"} if memory else None,
+        "card_free_gb": round(found.gpu.free_mib / 1024, 1) if found.gpu and found.gpu.free_mib is not None else None,
+        "recommended": tier(found.recommended) if found.recommended else None,
+        "starting_models": [_model_view(item) for item in found.starting_models],
         "engine_download_bytes": hardware.engine_download_bytes(found.variant),
         "free_bytes": free,
     }
@@ -922,6 +1012,17 @@ def found_job_id(found: Any) -> str:
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 
+def _trainable_models() -> set[str]:
+    """The starting models setup may choose: the certified ones this computer's card trains (the 8 GB
+    tier's alone before the card was read, or on a computer that can't train)."""
+
+    from row_bot.learning.training import hardware
+
+    found = hardware.peek()
+    models = {item.id for item in found.starting_models} if found is not None and found.can_train else set()
+    return models or {learning.STARTING_MODELS[0]}
+
+
 def _setup_values(setup: Any) -> dict[str, Any]:
     if not isinstance(setup, dict):
         raise ClientPlatformError("invalid_learning_command")
@@ -935,7 +1036,7 @@ def _setup_values(setup: Any) -> dict[str, Any]:
     limit = setup.get("monthly_token_limit")
     if (setup.get("apply_mode") not in learning.APPLY_MODES
             or setup.get("train_where") not in learning.TRAIN_PLACES
-            or setup.get("starting_model", learning.STARTING_MODELS[0]) not in learning.STARTING_MODELS
+            or setup.get("starting_model", learning.STARTING_MODELS[0]) not in _trainable_models()
             or type(setup.get("train_in_quiet_hours")) is not bool
             or type(limit) is not int or not 0 <= limit <= learning.MAX_MONTHLY_TOKEN_LIMIT):
         raise ClientPlatformError("invalid_learning_command")
@@ -1073,7 +1174,7 @@ def _version_action(action: str, runtime: str) -> str:
         return f"Preparing v{state.version} again."
     if state.phase == "waiting_for_you":
         return f"Checking whether v{state.version} is loaded in {serving.RUNTIME_NAMES.get(state.runtime, 'it')}."
-    return f"Making v{state.version} ready in {serving.RUNTIME_NAMES.get(learning.read_settings().serve_runtime, 'it')}."
+    return f"Making v{state.version} ready in {serving.RUNTIME_NAMES.get(_runtime_now(learning.read_settings()), 'it')}."
 
 
 _VERSION_ERRORS = {
@@ -1092,6 +1193,8 @@ def _use_action(action: str, wire: dict[str, Any]) -> str:
 
     from row_bot.learning import kinds, model_compare, use, versions
 
+    if action == "use_smaller_model":
+        return _use_smaller_model(str(wire.get("model") or ""))
     settings = learning.read_settings()
     version = wire.get("version")
     kind = wire.get("kind") or ""
@@ -1158,9 +1261,9 @@ def _use_action(action: str, wire: dict[str, Any]) -> str:
                     if undone else "")
             return f"v{int(version)} deleted.{freed}{back}"
         if action == "save_advanced":
-            from row_bot.learning.training import advanced, hardware, recipes
+            from row_bot.learning.training import advanced, recipes
 
-            recipe = recipes.for_hardware(hardware.peek()) or recipes.default()
+            recipe = recipes.current()
             advanced.save(wire.get("advanced") or {}, recipe)
             return "Saved. The next training run uses these settings."
         if action == "reset_advanced":
@@ -1266,7 +1369,9 @@ def _download(action: str) -> str:
         if task.running() or _training_runs():
             raise downloads.DownloadError("busy")
         if action == "remove_engine":
-            freed = engine.remove()
+            from row_bot.learning.training import llama_server
+
+            freed = llama_server.remove() + engine.remove()
             task.forget()
             if settings.model_download == "waiting":
                 _save({"model_download": "not_now"})
@@ -1342,6 +1447,9 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     item_id = _text(command.get("item_id"), 128)
     if action == "dismiss" and not item_id:
         raise ClientPlatformError("invalid_learning_command")
+    model_id = _text(command.get("model"), 32)
+    if action == "use_smaller_model" and model_id not in learning.STARTING_MODELS:
+        raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
         "command_id": command["command_id"],
@@ -1363,6 +1471,7 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "folder": folder,
         "advanced": dict(advanced_values) if isinstance(advanced_values, dict) else None,
         "item_id": item_id,
+        "model": model_id,
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -1473,7 +1582,7 @@ def _perform(
         summary = _version_action(action, wire["runtime"])
     elif action in _USE_ACTIONS:
         summary = _use_action(action, wire)
-    else:
+    elif action == "delete_data":
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs
 
@@ -1491,6 +1600,9 @@ def _perform(
         except LearningStoreError:
             raise ClientPlatformError("learning_data_busy") from None
         summary = f"Learning data deleted ({_size_words(report.bytes_freed + runs_bytes)})."
+    else:
+        # An action no branch handles is refused: it never falls through to deleting learning data.
+        raise ClientPlatformError("invalid_learning_command")
     return summary, signal
 
 

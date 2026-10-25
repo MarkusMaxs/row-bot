@@ -70,8 +70,12 @@
           "$ref": "#/$defs/LearningSourcesSnapshot"
         },
         "starting_model": {
-          "const": "qwen3.5-2b",
           "default": "qwen3.5-2b",
+          "enum": [
+            "qwen3.5-2b",
+            "qwen3.5-9b",
+            "qwen3.8-27b"
+          ],
           "title": "Starting Model",
           "type": "string"
         },
@@ -161,7 +165,8 @@
         "reset_advanced",
         "retrain_without",
         "dismiss",
-        "review_version"
+        "review_version",
+        "use_smaller_model"
       ],
       "title": "Action",
       "type": "string"
@@ -269,6 +274,17 @@
       "title": "Message Id",
       "type": "string"
     },
+    "model": {
+      "default": "",
+      "enum": [
+        "",
+        "qwen3.5-2b",
+        "qwen3.5-9b",
+        "qwen3.8-27b"
+      ],
+      "title": "Model",
+      "type": "string"
+    },
     "note": {
       "default": "",
       "maxLength": 2000,
@@ -284,6 +300,7 @@
       "default": "",
       "enum": [
         "",
+        "row_bot",
         "ollama",
         "lmstudio",
         "llama_cpp",

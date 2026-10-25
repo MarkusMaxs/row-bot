@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -59,6 +60,37 @@ def _read_json(path: Path) -> object:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+# O112: quiet-hours nights training waited for room on the graphics card (newest last, a week at most); after
+# ROOM_NIGHTS of them the Personal model view says so and offers the next smaller model. Cleared when a run starts.
+ROOM_FILE = "card_room.json"
+ROOM_NIGHTS = 2
+
+
+def _room_path(root: Path | None = None) -> Path:
+    from row_bot.learning.training import jobs as jobs_module
+
+    return jobs_module.models_dir(root) / ROOM_FILE
+
+
+def card_room(root: Path | None = None) -> dict | None:
+    """The nights training waited for room on the card: ``nights`` (dates), the card's ``free_mib`` and the
+    run's ``need_mib`` when last seen, and the ``model`` it waited to train. None when it never waited."""
+
+    data = _read_json(_room_path(root))
+    if not isinstance(data, dict) or not isinstance(data.get("nights"), list):
+        return None
+    nights = [night for night in data["nights"] if isinstance(night, str)][-7:]
+    return {"nights": nights, "free_mib": int(data.get("free_mib") or 0), "need_mib": int(data.get("need_mib") or 0),
+            "model": str(data.get("model") or "")} if nights else None
+
+
+def forget_card_room(root: Path | None = None) -> None:
+    try:
+        _room_path(root).unlink(missing_ok=True)
+    except OSError:
+        logger.debug("Learning couldn't forget the nights it waited for the card", exc_info=True)
 
 
 class QuietHours:
@@ -226,9 +258,22 @@ class LearningRunner:
         if not act:
             if not self.supervisor.gpu_free():
                 return RunnerStatus("waiting", "gpu_busy")  # another app holds the card's memory
+            if not self.supervisor.memory_free():
+                return RunnerStatus("waiting", "memory_busy")  # other apps hold the computer's memory (O105)
             return RunnerStatus("scheduled", "now")
         if self.comparisons is not None and self.comparisons.running():
             return RunnerStatus("waiting", "comparing")  # a version's comparison has the card
+        # Row-Bot's own model server (O75) gives the card back first: it holds personal models only while
+        # they answer, and nothing answers now (training starts only when no chat runs, the lease).
+        server = sys.modules.get("row_bot.learning.training.llama_server")
+        if server is not None:
+            try:
+                if server.release_card():
+                    from row_bot.learning.training import hardware
+
+                    hardware.forget_memory_reading()
+            except Exception:
+                logger.debug("Learning couldn't stop its model server for training", exc_info=True)
         if (trigger == "quiet_hours" and self.unloader is not None and not self.supervisor.gpu_free()
                 and self.hours.inside()):
             # O51: in quiet hours, with nobody using Row-Bot for 30 minutes, Row-Bot's own resident
@@ -243,10 +288,39 @@ class LearningRunner:
         try:
             self.supervisor.start(job, trigger)
         except TrainingError as error:
-            if error.code == "gpu_busy":
-                return RunnerStatus("waiting", "gpu_busy")
+            if error.code in ("gpu_busy", "memory_busy"):
+                if error.code == "gpu_busy" and trigger == "quiet_hours":
+                    self._note_no_room()
+                return RunnerStatus("waiting", error.code)
             return RunnerStatus("nothing_to_do", "no_data" if error.code == "nothing_to_train" else error.code)
+        forget_card_room(self._root)
         return RunnerStatus("training")
+
+    def _note_no_room(self) -> None:
+        """Tonight training waited for room on the card (O112): noted once a night, with what was free."""
+
+        began = self.hours.started_at()
+        if began is None:
+            return
+        night = began.date().isoformat()
+        found = card_room(self._root) or {"nights": []}
+        if night in found["nights"]:
+            return
+        from row_bot import learning as gate
+        from row_bot.learning import atomic
+        from row_bot.learning.training import hardware
+
+        reading = hardware.gpu_memory()
+        need = hardware.training_need_mib(hardware.peek()) or 0
+        record = {"nights": [*found["nights"], night][-7:],
+                  "free_mib": max(0, reading[1] - reading[0]) if reading else 0, "need_mib": int(need),
+                  "model": gate.read_settings(self._root).starting_model}
+        try:
+            path = _room_path(self._root)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic.write_text(path, json.dumps(record))
+        except OSError:
+            logger.debug("Learning couldn't note a night without room on the card", exc_info=True)
 
     def status(self) -> RunnerStatus:
         """What is due now, without acting (the snapshot reads this)."""

@@ -170,6 +170,47 @@
       "title": "LearningAdvancedValues",
       "type": "object"
     },
+    "LearningCardRoom": {
+      "additionalProperties": false,
+      "properties": {
+        "free_gb": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Free Gb",
+          "type": "number"
+        },
+        "need_gb": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Need Gb",
+          "type": "number"
+        },
+        "nights": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Nights",
+          "type": "integer"
+        },
+        "smaller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningStartingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "nights",
+        "need_gb",
+        "free_gb"
+      ],
+      "title": "LearningCardRoom",
+      "type": "object"
+    },
     "LearningChannelNote": {
       "additionalProperties": false,
       "properties": {
@@ -855,9 +896,21 @@
           "title": "Export Folder",
           "type": "string"
         },
+        "room": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningCardRoom"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "runtime": {
-          "default": "ollama",
+          "default": "row_bot",
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -1016,6 +1069,7 @@
                 "planning",
                 "up_to_date",
                 "gpu_busy",
+                "memory_busy",
                 "comparing"
               ],
               "type": "string"
@@ -1051,14 +1105,20 @@
     },
     "LearningRuntime": {
       "additionalProperties": false,
-      "description": "Where a personal model can run (\"Runs in\", D10).",
+      "description": "Where a personal model can run (\"Runs in\", D10; Row-Bot's own server, O75).",
       "properties": {
         "automated": {
           "title": "Automated",
           "type": "boolean"
         },
+        "available": {
+          "default": true,
+          "title": "Available",
+          "type": "boolean"
+        },
         "id": {
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -1642,7 +1702,11 @@
                 "create_failed",
                 "not_loaded",
                 "probe_failed",
-                "tool_turn_failed"
+                "tool_turn_failed",
+                "server_missing",
+                "server_unavailable",
+                "server_failed",
+                "load_failed"
               ],
               "type": "string"
             },
@@ -1724,6 +1788,7 @@
         },
         "runtime": {
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",

@@ -58,16 +58,18 @@ FOLDER = "learning"
 
 APPLY_MODES = ("ask_first", "automatic")
 TRAIN_PLACES = ("this_computer", "hugging_face")
-# Starting models a personal model can be trained from (``training/hardware.py``
-# describes them); only the certified 8 GB recipe's model so far (O23).
-STARTING_MODELS = ("qwen3.5-2b",)
+# Starting models a personal model can be trained from (``training/hardware.py`` describes them,
+# ``training/weights.py`` pins them): the 8 GB tier's first (the default, O23), then the larger tiers'
+# (L2x, O90). A card trains only the certified ones it fits (``HardwareCheck.starting_models``).
+STARTING_MODELS = ("qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b")
 # The answer to the download ask after turning Learning on: not asked yet, Download
 # ("waiting": the person agreed; L2b downloads when they tap it, and an old answer reads
 # as "Ready to download", O36) or Not now.
 MODEL_DOWNLOADS = ("not_asked", "waiting", "not_now")
-# Where the personal model runs ("Runs in", D10): Ollama by default (automated), or a runtime the
+# Where the personal model runs ("Runs in", D10): Row-Bot's own llama.cpp server by default (O75;
+# Ollama where it has no build, ``serving.effective_runtime``), Ollama (automated), or a runtime the
 # person starts (LM Studio, llama.cpp server, vLLM on Linux) with one command Row-Bot shows.
-SERVE_RUNTIMES = ("ollama", "lmstudio", "llama_cpp", "vllm")
+SERVE_RUNTIMES = ("row_bot", "ollama", "lmstudio", "llama_cpp", "vllm")
 DEFAULT_MONTHLY_TOKEN_LIMIT = 2_000_000
 MAX_MONTHLY_TOKEN_LIMIT = 1_000_000_000
 _MAX_SETTINGS_BYTES = 64 * 1024

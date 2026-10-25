@@ -192,9 +192,12 @@ test('the personal model: needs more examples, training, preparing, making ready
   const sheet = page.getByRole('dialog', {
     name: 'Where your personal model runs',
   });
+  // L2x (O75): Row-Bot's own runner is the recommendation on a computer with an NVIDIA card;
+  // this profile chose Ollama, which stays a choice.
+  await expect(sheet.getByRole('radio', { name: /^Ollama/ })).toBeChecked();
   await expect(
-    sheet.getByRole('radio', { name: /Ollama · recommended/ }),
-  ).toBeChecked();
+    sheet.getByRole('radio', { name: /^Row-Bot · recommended/ }),
+  ).toBeEnabled();
   await shoot(page, info, 'runs-in');
   await sheet.getByRole('radio', { name: /LM Studio/ }).check();
   await sheet.getByRole('button', { name: 'Use LM Studio' }).click();
@@ -269,6 +272,26 @@ test('training waits while another app holds the graphics card', async ({
     ),
   ).toBeVisible();
   await shoot(page, info, 'model-gpu-busy');
+});
+
+test('training waits while other apps hold the computer’s memory (O105)', async ({
+  page,
+}, info) => {
+  await turnOn(page);
+  await l2c(page, 'setup');
+  await l2c(page, 'memory-busy');
+  await openModel(page);
+  await expect(
+    training(page).getByText(
+      'Training v1 starts when this computer has the memory free.',
+    ),
+  ).toBeVisible();
+  await expect(
+    training(page).getByText(
+      /^Other apps are using this computer’s memory \(RAM and virtual memory\)\. Closing some frees it\./,
+    ),
+  ).toBeVisible();
+  await shoot(page, info, 'model-memory-busy');
 });
 
 test('the Docker image says training is unavailable', async ({

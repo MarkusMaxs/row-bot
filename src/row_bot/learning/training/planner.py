@@ -135,9 +135,28 @@ class Planner:
 
         if self._recipe_for is not None:
             return advanced.apply(self._recipe_for(), self._root)
-        from row_bot.learning.training import hardware, recipes
+        from row_bot.learning.training import recipes
 
-        return advanced.apply(recipes.for_hardware(hardware.peek()) or recipes.default(), self._root)
+        return advanced.apply(recipes.current(self._root), self._root)
+
+    def refresh(self, job: Any) -> Any:
+        """A run that hasn't trained a step starts with the recipe as it is now (O117): this computer's
+        recipe with the person's own Advanced choices, not the one current when it was planned (a recipe
+        update would otherwise wait a run). Its steps follow the recipe's passes; its rows stay."""
+
+        plan = self.jobs.plan_of(job)
+        examples = int((plan.get("dataset") or {}).get("examples") or 0)
+        if examples <= 0:
+            return job
+        recipe = self.recipe()
+        steps = recipe.steps_for(examples)
+        spec = recipe.spec(_card_mib())
+        if spec == plan["recipe"] and steps == job.steps_total:
+            return job
+        logger.info("Learning starts personal model v%s with the recipe as it is now (%s, %d steps)", job.version,
+                    recipe.name, steps)
+        return self.jobs.replan(job, steps_total=steps, checkpoint_every=recipe.checkpoint_interval(steps),
+                                recipe=spec)
 
     def refresh(self, job: Any) -> Any:
         """A run that hasn't trained a step starts with the recipe as it is now (O117): this computer's
@@ -245,11 +264,21 @@ class Planner:
             return PlanOutcome(reason="up_to_date", summary=summary)
         steps = recipe.steps_for(compiled.examples)
         job = self.jobs.plan(steps_total=steps, checkpoint_every=recipe.checkpoint_interval(steps),
-                             recipe=recipe.spec(), dataset={"id": compiled.id, "examples": compiled.examples})
+                             recipe=recipe.spec(_card_mib()), dataset={"id": compiled.id, "examples": compiled.examples})
         lease(job, compiled, self.jobs.root)
         logger.info("Learning planned personal model v%s: %d examples, %d steps (%s)", job.version,
                     compiled.examples, steps, recipe.name)
         return PlanOutcome(job=job, summary=summary)
+
+
+def _card_mib() -> int | None:
+    """The graphics card's size, when the hardware check has run (the job's cap follows it, O112)."""
+
+    from row_bot.learning.training import hardware
+
+    found = hardware.peek()
+    gpu = getattr(found, "gpu", None)
+    return int(gpu.memory_mib) if gpu is not None else None
 
 
 def lease(job: Any, compiled: dataset_module.CompiledDataset, root: Path | None = None) -> int:

@@ -291,3 +291,52 @@ it('Personal model: a training run replaces the setup states, and keeps itself f
   unmount();
   expect(stop).toHaveBeenCalledTimes(1);
 });
+
+it('Personal model: after two nights without room on the graphics card it says so and offers a smaller model (O112)', async () => {
+  const snapshot = on();
+  const io = fakeIO({
+    ...snapshot,
+    personal_model: {
+      ...snapshot.personal_model,
+      starting_model: {
+        id: 'qwen3.5-9b',
+        name: 'Qwen3.5 9B',
+        licence: 'Apache 2.0',
+        download_bytes: 19_300_000_000,
+      },
+      room: {
+        nights: 2,
+        need_gb: 15.3,
+        free_gb: 9.2,
+        smaller: {
+          id: 'qwen3.5-2b',
+          name: 'Qwen3.5 2B',
+          licence: 'Apache 2.0',
+          download_bytes: 4_570_000_000,
+        },
+      },
+    },
+  });
+  show(io, 'model');
+
+  const notice = await screen.findByRole('status', {
+    name: 'No room on the graphics card',
+  });
+  expect(notice).toHaveTextContent(
+    'No room on the graphics card for 2 nights. Training Qwen3.5 9B needs about 16 GB free on it; it had about 9 GB (your display and other apps use the rest).',
+  );
+  fireEvent.click(
+    within(notice).getByRole('button', { name: 'Use Qwen3.5 2B instead…' }),
+  );
+  const ask = await screen.findByRole('alertdialog', {
+    name: 'Use Qwen3.5 2B instead?',
+  });
+  expect(ask).toHaveTextContent(
+    'Row-Bot downloads Qwen3.5 2B (4.6 GB) and trains it in quiet hours instead of Qwen3.5 9B.',
+  );
+  fireEvent.click(within(ask).getByRole('button', { name: 'Use Qwen3.5 2B' }));
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith('use_smaller_model', {
+    model: 'qwen3.5-2b',
+  });
+});

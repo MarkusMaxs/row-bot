@@ -4034,14 +4034,16 @@ class LearningDownload(WireModel):
 
 
 class LearningRuntime(WireModel):
-    """Where a personal model can run ("Runs in", D10)."""
+    """Where a personal model can run ("Runs in", D10; Row-Bot's own server, O75)."""
 
-    id: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    id: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
     name: str = Field(max_length=64)
-    # Row-Bot registers the model there itself (Ollama); the others are loaded with one command.
+    # Row-Bot registers the model there itself (its own server, Ollama); the others are loaded with one command.
     automated: bool
-    # Whether the runtime is installed here (known for Ollama only).
+    # Whether the runtime is installed here (known for Row-Bot's own server and Ollama).
     installed: bool | None = None
+    # False where it can't run on this computer (Row-Bot's own server without an NVIDIA card that can train).
+    available: bool = True
 
 
 class LearningExamples(WireModel):
@@ -4065,8 +4067,9 @@ class LearningVersion(WireModel):
     failure: Literal[
         "not_enough_disk", "adapter_missing", "engine_missing", "tools_missing", "export_failed", "not_installed",
         "not_running", "not_local", "create_failed", "not_loaded", "probe_failed", "tool_turn_failed",
+        "server_missing", "server_unavailable", "server_failed", "load_failed",
     ] | None = None
-    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
     quantization: Literal["Q8_0", "Q4_K_M"]
     file_name: str | None = Field(default=None, max_length=128)
     file_bytes: int = Field(ge=0)
@@ -4214,6 +4217,15 @@ class LearningAdvanced(WireModel):
     data_mix: list[LearningDataMixItem] = Field(max_length=4)
 
 
+class LearningCardRoom(WireModel):
+    # O112: training waited for room on the graphics card this many quiet-hours nights; what its run needs
+    # free on the card and what the card had; the next smaller model Row-Bot offers (None: none smaller).
+    nights: int = Field(ge=0, le=7)
+    need_gb: float = Field(ge=0, le=4096)
+    free_gb: float = Field(ge=0, le=4096)
+    smaller: LearningStartingModel | None = None
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
@@ -4231,7 +4243,7 @@ class LearningPersonalModel(WireModel):
     starting_model_bytes: int = Field(ge=0)
     download_state: LearningDownload
     # Where personal models run (the person's choice) and the choices here.
-    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"] = "ollama"
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = "row_bot"
     runtimes: list[LearningRuntime] = Field(default_factory=list, max_length=8)
     # The count of usable examples once the engine is installed; null before.
     examples: LearningExamples | None = None
@@ -4243,6 +4255,8 @@ class LearningPersonalModel(WireModel):
     uses: list[LearningUse] = Field(default_factory=list, max_length=4)
     advanced: LearningAdvanced | None = None
     export_folder: str = Field(default="", max_length=1024)
+    # O112: two or more quiet-hours nights without room on the card (else None).
+    room: LearningCardRoom | None = None
 
 
 class LearningNeedsYou(WireModel):
@@ -4276,7 +4290,7 @@ class LearningRunnerStatus(WireModel):
         "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
         "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-        "planned", "planning", "up_to_date", "gpu_busy", "comparing",
+        "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
     ] | None = None
 
 
@@ -4396,16 +4410,37 @@ class LearningTier(WireModel):
     label: str = Field(max_length=32)
     certified: bool
     summary: str = Field(max_length=256)
+    # The computer's memory (RAM and virtual memory) its training needs free here, as measured (O105).
+    system_memory_gb: int | None = Field(default=None, ge=1, le=4096)
+    # The graphics memory its training needs free on the card (its measured peak with a margin, O112).
+    card_need_gb: float | None = Field(default=None, ge=0, le=4096)
+
+
+class LearningMemory(WireModel):
+    # The most RAM and virtual memory can hold (Windows' commit limit; Linux: RAM and swap), and what is
+    # free of it now; ``system`` words the advice ("raise virtual memory" or "add swap").
+    limit_gb: int = Field(ge=0, le=65536)
+    free_gb: int = Field(ge=0, le=65536)
+    system: Literal["windows", "linux", "other"]
 
 
 class LearningHardware(WireModel):
     # old_driver: a card that fits, with an NVIDIA driver older than 570 ("Update your NVIDIA
-    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46).
-    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "container", "unknown"]
+    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46);
+    # low_memory: a card that could train, on a computer whose RAM and virtual memory can't hold
+    # its smallest tier's training (O105; ``tier`` says what it needs).
+    state: Literal["gpu", "old_driver", "small_gpu", "low_memory", "no_gpu", "container", "unknown"]
     gpu: LearningGpu | None
     # The certified recipe tier this computer trains with, and larger ones still being measured.
     tier: LearningTier | None
     larger_tiers: list[LearningTier] = Field(max_length=8)
+    # Certified larger tiers the card fits but the computer's memory can't hold (O105).
+    memory_short: list[LearningTier] = Field(default_factory=list, max_length=8)
+    memory: LearningMemory | None = None
+    # O112: what the card had free when checked, and the tier Row-Bot recommends for it (the largest whose
+    # need fits; None when the card's free memory couldn't be read).
+    card_free_gb: float | None = Field(default=None, ge=0, le=4096)
+    recommended: LearningTier | None = None
     starting_models: list[LearningStartingModel] = Field(max_length=8)
     engine_download_bytes: int = Field(ge=0)
     free_bytes: int | None = Field(default=None, ge=0)
@@ -4440,7 +4475,7 @@ class LearningSetupChoices(WireModel):
     monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
-    starting_model: Literal["qwen3.5-2b"] = "qwen3.5-2b"
+    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b"] = "qwen3.5-2b"
 
 
 class LearningCommand(WireModel):
@@ -4454,9 +4489,11 @@ class LearningCommand(WireModel):
         "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
         "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
         "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-        "review_version",
+        "review_version", "use_smaller_model",
     ]
     setup: LearningSetupChoices | None = None
+    # use_smaller_model (O112): the smaller starting model the Personal model view offered.
+    model: Literal["", "qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b"] = ""
     # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
     # Needs you line to dismiss.
     version: int | None = Field(default=None, ge=1, le=100_000)
@@ -4465,7 +4502,7 @@ class LearningCommand(WireModel):
     advanced: LearningAdvancedValues | None = None
     item_id: str = Field(default="", max_length=128)
     # choose_runtime: where personal models run.
-    runtime: Literal["", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
+    runtime: Literal["", "row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
     # The training run a training action is for (the one the person saw).
     job_id: str = Field(default="", max_length=128)
     conversation_id: str = Field(default="", max_length=256)

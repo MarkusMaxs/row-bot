@@ -239,3 +239,24 @@ it('Monitor shows one row for the download, with Stop', async () => {
     ),
   ).toBeInTheDocument();
 });
+
+it('offers the part Row-Bot needs to run personal models itself to an engine from before it', () => {
+  // O75 (L2x): the engine and the starting model are here; only Row-Bot's runner is missing.
+  const view = downloadView(
+    installedModel({
+      download_state: downloadState({
+        state: 'ready',
+        done_bytes: 0,
+        total_bytes: 578_117_583,
+      }),
+    }),
+  );
+  expect(view?.title).toBe('Ready to download');
+  expect(view?.detail).toBe(
+    'Row-Bot can now run your personal model itself. It needs one more part of the training engine (578 MB).',
+  );
+  expect(view?.note).toBe('From GitHub (llama.cpp).');
+  expect(view?.actions).toEqual([
+    { label: 'Download', action: 'start_download', primary: true },
+  ]);
+});
