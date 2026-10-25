@@ -39,6 +39,7 @@ from typing import Any
 
 from tests.e2e.learning.seeded import generator
 from tests.e2e.learning.seeded.person import draw
+from tests.e2e.learning.seeded.pilot_timeline import _matching
 
 FORMAT = "row_bot.learning.stale_skills_timeline"
 VERSION = 1
@@ -675,7 +676,7 @@ def _run(procedure: Procedure, day: int, order: int, rng: random.Random, apps: d
         call = {"tool": "calendar_create_event",
                 "args": {"title": title, "date": when.isoformat(), "start": value["start"], "end": value["end"]}}
         where = {"title": {"contains": procedure.keyword}, "date": when.isoformat(), "start": value["start"]}
-        checks = [{"in": "calendar.events", "where": where, "count": 1}]
+        checks = [{"in": "calendar.events", "where": where, "count": _matching(apps, "calendar.events", where) + 1}]
         wrong = (dict(call["args"], start=old["start"], end=old["end"]) if old
                  else dict(call["args"], date=(when + timedelta(days=7)).isoformat()))
         intent = (f"One calendar event '{title}' on {when.isoformat()} from {value['start']} to {value['end']} "
@@ -691,7 +692,8 @@ def _run(procedure: Procedure, day: int, order: int, rng: random.Random, apps: d
         text = body.get(procedure.kind) or f"Hello, {fields.get('n')} {procedure.unit}. Thanks, Mara"
         call = {"tool": "mail_send", "args": {"to": to, "subject": subject, "body": text}}
         where = {"folder": "sent", "to": to, "body": {"contains": must}}
-        checks = [{"in": "mail.messages", "where": where, "count": 1}]
+        # S1's past left sent emails in the apps (its reminders to the volunteers, say): one more than those.
+        checks = [{"in": "mail.messages", "where": where, "count": _matching(apps, "mail.messages", where) + 1}]
         if old and procedure.kind in ("address", "supplier", "role"):
             wrong = dict(call["args"], to=old["email"])
         elif old:

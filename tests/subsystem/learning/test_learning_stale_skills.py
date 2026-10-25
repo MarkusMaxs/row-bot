@@ -92,6 +92,18 @@ def test_the_world_renders_each_fact_where_the_rule_says(timeline):
                                                         timeline.apps_on(change.day - 1)["mail"]["messages"]]
 
 
+def test_each_run_passes_its_check_with_the_right_outcome_and_fails_with_the_decoy(timeline):
+    from row_bot.learning.packs.fake_apps import FakeApps
+    from row_bot.learning.packs.verify import Outcome, verify
+
+    for item in timeline.runs:
+        for solution, wanted in ((item.task.reference, True), (item.task.decoy, False)):
+            apps = FakeApps(item.task.apps)
+            for call in solution.calls:
+                apps.call(call["tool"], call["args"])
+            assert verify(item.task, Outcome("Done.", {}, apps.state()), backend="auto").passed is wanted, item.id
+
+
 def test_probes_take_their_answers_from_the_timeline(timeline):
     assert sorted({probe.day for probe in timeline.probes}) == list(world.PROBE_DAYS)
     for day in world.PROBE_DAYS:
