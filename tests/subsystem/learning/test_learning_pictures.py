@@ -169,3 +169,16 @@ def test_the_vault_keeps_the_picture_and_counts_tasks_with_and_without_one(write
     assert base64.b64encode(picture).decode() in held["messages"][-1]["data"]["content"][1]["image_url"]["url"]
     counts = evaluation.audit_counts(asked_by="test", store=store)
     assert (counts["with_picture"], counts["without_picture"], counts["untrusted"], counts["trusted"]) == (1, 0, 1, 0)
+
+
+def test_a_task_held_before_a8_is_read_with_the_persons_words_not_the_pictures_data(writer, chats, learning_on,
+                                                                                   clock):
+    picture = jpeg_bytes("held-before")
+    _sent, (_first, second) = picture_turn(writer, chats, "chat-1", picture, question="Did the upload finish?")
+    content = _replay_case(LearningStore(learning_on, clock=clock), second).to_content()
+    # What the vault held before A8: the picture message's JSON, base64 and all, as the task's text.
+    content["text"] = json.dumps(content["messages"][-1]["data"]["content"])[:4_000]
+
+    case = evaluation.ReplayCase.from_content({"id": second, **content})
+
+    assert case.text == "Did the upload finish?"

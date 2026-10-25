@@ -779,7 +779,7 @@ class ReplayCase:
     @classmethod
     def from_content(cls, data: Mapping[str, Any]) -> ReplayCase:
         tools = data.get("tools")
-        return cls(
+        case = cls(
             decision_id=str(data["id"]), thread_id=str(data.get("thread_id") or ""),
             conversation_id=str(data.get("conversation_id") or ""), created_at=float(data.get("created_at") or 0),
             kind_of_work=str(data.get("kind_of_work") or ""), fidelity=str(data.get("fidelity") or "exact"),
@@ -789,6 +789,9 @@ class ReplayCase:
             reference_source=data.get("reference_source") or "captured", check=data.get("check") or "exact_action",
             text=str(data.get("text") or ""),
         )
+        # A8: a task held before this rule whose prefix carries a page picture took the picture's JSON as its
+        # text; it is read with the person's words.
+        return replace(case, text=_last_person_text(case.messages)[:4_000]) if case.has_picture else case
 
 
 @dataclass
