@@ -29,6 +29,7 @@ from row_bot.cancellation import current_cancellation_scope
 from row_bot.prompt_cache import conversation_cache_ttl
 from row_bot.providers.transports import prompt_cache_breakpoints as cache_breakpoints
 from row_bot.providers.transports.cancellable_http import (
+    RequestStopped,
     cancellable_async_http_client,
     cancellable_http_client,
 )
@@ -41,6 +42,10 @@ from row_bot.providers.transports.thinking_binding import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class AnthropicRequestStopped(RequestStopped, anthropic.AnthropicError):
+    """Stop ended the request. The Anthropic SDK passes its own errors on without retrying them."""
 
 
 def _http_client_kwargs(client_params: dict[str, Any], anthropic_proxy: str | None) -> dict[str, Any]:
@@ -57,7 +62,7 @@ def _http_client_kwargs(client_params: dict[str, Any], anthropic_proxy: str | No
 
 
 class CancellableChatAnthropic(ChatAnthropic):
-    """``ChatAnthropic`` with HTTP responses registered for Stop cancellation."""
+    """``ChatAnthropic`` whose requests Stop ends at once (``cancellable_http``)."""
 
     thinking_binding: bool = False
     """Apply preserved-thinking compliance (see ``thinking_binding``).
@@ -192,6 +197,7 @@ class CancellableChatAnthropic(ChatAnthropic):
         return anthropic.Client(
             **client_params,
             http_client=cancellable_http_client(
+                stopped=AnthropicRequestStopped,
                 event_hooks={"request": self._request_hooks(asynchronous=False)},
                 **_http_client_kwargs(client_params, self.anthropic_proxy),
             ),
@@ -203,6 +209,7 @@ class CancellableChatAnthropic(ChatAnthropic):
         return anthropic.AsyncClient(
             **client_params,
             http_client=cancellable_async_http_client(
+                stopped=AnthropicRequestStopped,
                 event_hooks={"request": self._request_hooks(asynchronous=True)},
                 **_http_client_kwargs(client_params, self.anthropic_proxy),
             ),

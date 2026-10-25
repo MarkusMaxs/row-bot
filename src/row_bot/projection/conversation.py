@@ -12,6 +12,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from row_bot.application.live_updates import publish as _publish_live
+
+# What a conversation's own events change in the app-wide lists (B407): it
+# started, waits on the person or settled, so the sidebar and Home show it.
+_LISTED_CHANGES = {
+    "generation.state": ("conversations",),
+    "approval.required": ("conversations", "approvals"),
+}
+
 
 def public_message(message: Any) -> dict | None:
     from row_bot.turn_context import is_turn_context_message
@@ -37,6 +46,15 @@ def public_message(message: Any) -> dict | None:
             "tool_call_id": str(getattr(message, "tool_call_id", "") or "")}
 
 
+def _row_text(row: dict) -> str | None:
+    """A row's plain text, for matching a live row to its saved answer (None when it can't be compared).
+    A saved row's blocks are rendered (markdown, with ids); a live row's are plain text."""
+    blocks = row.get("blocks") or []
+    if row.get("content_status") == "lazy" or any(block.get("type") not in {"text", "markdown"} for block in blocks):
+        return None
+    return "".join(str(block.get("text") or "") for block in blocks) or None
+
+
 @dataclass
 class _Conversation:
     revision: int = 0
@@ -44,6 +62,9 @@ class _Conversation:
     checkpoint_revision: str = ""
     generation: dict | None = None
     live_rows: dict[str, dict] = field(default_factory=dict)
+    # Live rows dropped to stay within the content bound while their turn still runs: reads recreate these
+    # from their live text (``ClientPlatformService.snapshot``), and only these.
+    evicted_live: set[str] = field(default_factory=set)
     events: deque = field(default_factory=deque)
     event_bytes: int = 0
     content_bytes: int = 0
@@ -116,6 +137,7 @@ class ConversationProjection:
                     continue
                 content_size -= state.content_bytes
                 state.rows.clear()
+                state.evicted_live.update(state.live_rows)
                 state.live_rows.clear()
                 state.content_bytes = 0
                 state.checkpoint_revision = ""
@@ -170,6 +192,12 @@ class ConversationProjection:
                     next_rows = list(state.rows)
                     while next_rows and self._content_size(next_rows, next_live) > budget:
                         next_rows.pop(0)
+                elif _row_text(live) in self._saved_answers_locked(state):
+                    # The answer was read in before it streamed: its live row would be a twin from the
+                    # start, and a client applying the delta would show it twice until it re-read. It is
+                    # retired instead, and the settle sends clients to re-read.
+                    next_live.pop(row_id)
+                    event_type, payload = "transcript.settled", {"row_id": row_id, "adoption": "no_adoption"}
             # A failed publication cannot allocate a source sequence or revision.
             if len(json.dumps(payload, ensure_ascii=False).encode()) > self.MAX_EVENT_BYTES - 2048:
                 raise ValueError("projection_event_limit")
@@ -183,7 +211,7 @@ class ConversationProjection:
             encoded = len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
             if event_type == "generation.state":
                 state.generation = copy.deepcopy(payload)
-            if event_type == "transcript.delta":
+            if next_live is not state.live_rows:  # a delta, or its twin retired in its place
                 state.rows = next_rows
                 state.live_rows = next_live
                 state.content_bytes = self._content_size(state.rows, next_live)
@@ -195,6 +223,8 @@ class ConversationProjection:
                 state.event_bytes -= size
             self._trim_global(conversation_id)
             result = copy.deepcopy(event)
+        if event_type in _LISTED_CHANGES:
+            _publish_live(*_LISTED_CHANGES[event_type])
         if _notify_observers:
             self._notify(conversation_id, result["projection_revision"])
         return result
@@ -255,6 +285,12 @@ class ConversationProjection:
                                   "checkpoint_revision": state.checkpoint_revision,
                                   "rows": [*state.rows, *state.live_rows.values()], "generation": state.generation})
 
+    def evicted_live_rows(self, conversation_id: str) -> set[str]:
+        """The live rows dropped to stay within the content bound that a read should recreate."""
+        with self._lock:
+            state = self._states.get(conversation_id)
+            return set(state.evicted_live) if state else set()
+
     def settle_live(self, conversation_id: str, row_id: str, *, adopted: bool) -> None:
         with self._lock:
             state = self._states.setdefault(conversation_id, _Conversation())
@@ -262,27 +298,24 @@ class ConversationProjection:
         if event is not None:
             self._notify(conversation_id, event["projection_revision"])
 
+    @staticmethod
+    def _saved_answers_locked(state: _Conversation) -> set[str]:
+        """The text of each plain answer saved in this turn (after the person's last message)."""
+        last_person = max((index for index, row in enumerate(state.rows) if row.get("role") == "user"), default=-1)
+        saved = {_row_text(row) for row in state.rows[last_person + 1:]
+                 if row.get("role") == "assistant" and not row.get("tool_call_ids") and not row.get("tool_calls_ref")}
+        saved.discard(None)
+        return saved
+
     def _retire_saved_twins_locked(self, state: _Conversation, conversation_id: str) -> list[dict]:
         """A live row whose exact answer is already saved in this turn (after the person's last message) is
         that answer, saved a moment before Row-Bot binds the two: it goes now, so no read shows it twice."""
         if not state.live_rows:
             return []
-
-        def text(row: dict) -> str | None:
-            # A saved row's blocks are rendered (markdown, with ids); a live row's are plain text.
-            blocks = row.get("blocks") or []
-            if row.get("content_status") == "lazy" or any(block.get("type") not in {"text", "markdown"}
-                                                         for block in blocks):
-                return None
-            return "".join(str(block.get("text") or "") for block in blocks) or None
-
-        last_person = max((index for index, row in enumerate(state.rows) if row.get("role") == "user"), default=-1)
-        saved = {text(row) for row in state.rows[last_person + 1:]
-                 if row.get("role") == "assistant" and not row.get("tool_call_ids") and not row.get("tool_calls_ref")}
-        saved.discard(None)
+        saved = self._saved_answers_locked(state)
         events = []
         for row_id, live in list(state.live_rows.items()):
-            if text(live) not in saved:
+            if _row_text(live) not in saved:
                 continue
             # Matched by text only, never adopted as exact (a saved answer may carry more than its text).
             event = self._settle_live_locked(state, conversation_id, row_id, False)
@@ -292,6 +325,7 @@ class ConversationProjection:
 
     def _settle_live_locked(self, state: _Conversation, conversation_id: str, row_id: str,
                             adopted: bool) -> dict | None:
+        state.evicted_live.discard(row_id)
         if state.live_rows.pop(row_id, None) is None:
             return None
         state.content_bytes = self._content_size(state.rows, state.live_rows)

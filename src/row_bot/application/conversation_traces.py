@@ -25,9 +25,39 @@ TraceStatus = Literal[
 ]
 TraceGroupKind = Literal["generic", "browser", "computer"]
 TraceSpecializationKind = Literal[
-    "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps"
+    "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
+    "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
+    "question_answered", "page", "request_corrected",
 ]
-CARD_SPECIALIZATIONS = frozenset({"resource_created", "resource_bound", "setup_needed", "connect_apps"})
+CARD_SPECIALIZATIONS = frozenset({
+    "resource_created", "resource_bound", "setup_needed", "connect_apps", "background_process", "recording",
+    "video_edit", "delivery", "sandbox_job", "sandbox_unprepared", "question_answered", "page",
+})
+# A recording of Row-Bot's browser or of the screen a step started or stopped (F2): the result's
+# first line after its approval line names it, and the card follows it by that id.
+# browser_record, computer_record (and computer_use in conversations from before 5.3).
+_RECORDING_TOOLS = frozenset({"Browser Record", "Screen Record", "Computer activity"})
+_RECORDING_LINE = re.compile(r"Recording (rec-[0-9a-f]{8}): ")
+# A video edit a step started or followed (F3): the result's first line after its approval line names it.
+_VIDEO_EDIT_LINE = re.compile(r"Video edit (edit-[0-9a-f]{8}): ")
+# Files a send_file step sent, or couldn't (F7): the result's first line after its approval line names them.
+_DELIVERY_LINE = re.compile(r"Delivery (send-[0-9a-f]{8}): ")
+# A page a step made or changed (N5): the result's first line names it, and the card opens it by that id.
+_PAGE_TOOLS = frozenset({"page_create", "page_update"})
+_PAGE_LINE = re.compile(r"Page (page-[0-9a-f]{8}): ")
+# A call the model got wrong and is told to send again (U11): arguments that didn't fit the tool, a tool
+# that doesn't exist, or a question it worded wrongly. The model reads the whole error; a person sees a
+# quiet line instead, never the arguments or Python.
+_REQUEST_TO_FIX = re.compile(r"Error invoking tool '[^'\n]{1,180}' with kwargs |Error: \S{1,180} is not a valid tool, try one of \[")
+# Prepare sandbox (F18): the job a developer_prepare_sandbox step started or followed, by its handle line;
+# and a sandbox test run that failed for want of its tools, which the chat offers to prepare.
+_SANDBOX_JOB_LINE = re.compile(r"Sandbox job (prep-[0-9a-f]{8}): ")
+_SANDBOX_RUN_TOOLS = frozenset({"developer_run_detected_test", "developer_run_command"})
+_UNPREPARED_LINE = re.compile(r"^Sandbox not ready for tests: (pytest)?", re.MULTILINE)
+# A background process a step started (F1) or a command that carried on in the background (F6):
+# the result's first line after its approval line names it; command output only ever follows.
+_PROCESS_TOOLS = frozenset({"run_command", "start_process"})
+_PROCESS_LINE = re.compile(r"Background process (proc-[0-9a-f]{8}): ")
 # A design or code folder a turn created, or a folder it brought in (B277).
 _RESOURCE_CARDS: dict[tuple[str, str], TraceSpecializationKind] = {
     ("create_design", "resource_created"): "resource_created",
@@ -123,6 +153,21 @@ class TraceSpecialization:
     settings_page: str = ""
     # connect_apps: catalog apps the person may connect, re-read by id (never the model's words).
     apps: tuple[dict, ...] = ()
+    # background_process: the process the card follows live (its status is re-read by id).
+    process_id: str = ""
+    # recording: the recording the card follows live, then shows (re-read by id).
+    recording_id: str = ""
+    # video_edit: the edit the card follows live, then shows (re-read by id).
+    edit_id: str = ""
+    # delivery: the files a send_file step sent to the devices or a chat app (re-read by id).
+    delivery_id: str = ""
+    # sandbox_job: Prepare sandbox, or the sandbox image's download, the card follows (re-read by id).
+    job_id: str = ""
+    # question_answered (N4): how Row-Bot's question ended, and each answer ({header, answer}) when answered.
+    outcome: str = ""
+    answers: tuple[dict, ...] = ()
+    # page: the page a step made or changed (N5), opened by id (its title and decisions are re-read).
+    page_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -242,8 +287,10 @@ def canonical_tool_name(name: Any) -> str:
     clean = _clean_text(name, MAX_TOOL_NAME_CHARS, fallback="tool")
     if clean.startswith("browser_"):
         return clean.replace("browser_", "Browser ").replace("_", " ").title()
-    if clean == "computer_use":
+    if clean in {"computer", "computer_use"}:  # computer_use: the tool's name before 5.3
         return "Computer activity"
+    if clean == "computer_record":
+        return "Screen Record"
     return clean
 
 
@@ -254,7 +301,7 @@ def is_browser_tool_name(name: Any) -> bool:
 
 def is_computer_tool_name(name: Any) -> bool:
     clean = str(name or "").strip().lower()
-    return clean in {"computer_use", "computer activity"} or clean.startswith(
+    return clean in {"computer", "computer_use", "computer activity"} or clean.startswith(
         "computer ·"
     )
 
@@ -586,16 +633,127 @@ def _card_specialization(name: str, payload: dict[str, Any] | None) -> TraceSpec
     return None
 
 
+def _question_specialization(name: str, payload: dict[str, Any] | None) -> TraceSpecialization | None:
+    """Row-Bot's answered (or skipped) question, collapsed to what the person chose (N4)."""
+    if name != "ask_person" or not payload or payload.get("ok") is not True or payload.get("kind") != "question_answered":
+        return None
+    outcome = str(payload.get("outcome") or "")
+    if outcome not in {"answered", "skipped", "timed_out"}:
+        return None
+    raw = payload.get("answers") if isinstance(payload.get("answers"), list) else []
+    answers = []
+    for entry in raw[:4]:
+        if not isinstance(entry, dict):
+            continue
+        header, answer = _clean_text(entry.get("header"), 12), _clean_text(entry.get("answer"), 600)
+        if header and answer:
+            answers.append({"header": header, "answer": answer})
+    if outcome == "answered" and not answers:
+        return None
+    return TraceSpecialization(kind="question_answered", outcome=outcome, answers=tuple(answers))
+
+
+def _process_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """The background process a run_command or start_process step left running, by its handle line."""
+    if name not in _PROCESS_TOOLS or not isinstance(content, str):
+        return None
+    first, _newline, rest = content.partition("\n")
+    if first.startswith("Approval: "):
+        first = rest.partition("\n")[0]
+    match = _PROCESS_LINE.match(first)
+    return TraceSpecialization(kind="background_process", process_id=match.group(1)) if match else None
+
+
+def _recording_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """The recording a browser_record or computer_record step started or stopped, by its handle line."""
+    if canonical_tool_name(name) not in _RECORDING_TOOLS or not isinstance(content, str):
+        return None
+    first, _newline, rest = content.partition("\n")
+    if first.startswith("Approval: "):
+        first = rest.partition("\n")[0]
+    match = _RECORDING_LINE.match(first)
+    return TraceSpecialization(kind="recording", recording_id=match.group(1)) if match else None
+
+
+def _video_edit_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """The video edit an edit_video step started, followed or stopped, by its handle line."""
+    if name != "edit_video" or not isinstance(content, str):
+        return None
+    first, _newline, rest = content.partition("\n")
+    if first.startswith("Approval: "):
+        first = rest.partition("\n")[0]
+    match = _VIDEO_EDIT_LINE.match(first)
+    return TraceSpecialization(kind="video_edit", edit_id=match.group(1)) if match else None
+
+
+def _delivery_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """The files a send_file step sent (or couldn't), by its handle line."""
+    if name != "send_file" or not isinstance(content, str):
+        return None
+    first, _newline, rest = content.partition("\n")
+    if first.startswith("Approval: "):
+        first = rest.partition("\n")[0]
+    match = _DELIVERY_LINE.match(first)
+    return TraceSpecialization(kind="delivery", delivery_id=match.group(1)) if match else None
+
+
+def _page_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """The page a page_create or page_update step made or changed, by its handle line."""
+    if name not in _PAGE_TOOLS or not isinstance(content, str):
+        return None
+    match = _PAGE_LINE.match(content.partition("\n")[0])
+    return TraceSpecialization(kind="page", page_id=match.group(1)) if match else None
+
+
+def _sandbox_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """Prepare sandbox's job by its handle line, or the offer under a test run that lacked its tools."""
+    if not isinstance(content, str):
+        return None
+    if name == "developer_prepare_sandbox":
+        first, _newline, rest = content.partition("\n")
+        if first.startswith("Approval: "):
+            first = rest.partition("\n")[0]
+        match = _SANDBOX_JOB_LINE.match(first)
+        return TraceSpecialization(kind="sandbox_job", job_id=match.group(1)) if match else None
+    if name in _SANDBOX_RUN_TOOLS:
+        match = _UNPREPARED_LINE.search(content[:64_000])
+        if match:
+            return TraceSpecialization(kind="sandbox_unprepared",
+                                       error_code="pytest_missing" if match.group(1) else "packages_missing")
+    return None
+
+
+def request_to_fix(result: Any) -> bool:
+    """Whether a result tells the model to send its call again (U11), so the step is no failure to show."""
+
+    wrapper = result if isinstance(result, dict) else {}
+    content = _content(result)
+    if isinstance(content, str) and _REQUEST_TO_FIX.match(content.lstrip()):
+        return True
+    payload = _bounded_json_object(content)
+    # ask_person answers a wrongly worded question this way, before anything is asked.
+    return wrapper.get("name") == "ask_person" and payload is not None and payload.get("ok") is False
+
+
 def specialize_tool_result(result: Any) -> TraceSpecialization | None:
     """Return only reviewed specialization metadata, never the raw payload."""
 
     wrapper = result if isinstance(result, dict) else {}
     name = _clean_text(wrapper.get("name"), MAX_TOOL_NAME_CHARS)
     payload = _bounded_json_object(_content(result))
+    if request_to_fix(result):
+        return TraceSpecialization(kind="request_corrected")
     return (
-        _skill_specialization(name, payload)
+        _process_specialization(name, _content(result))
+        or _recording_specialization(name, _content(result))
+        or _video_edit_specialization(name, _content(result))
+        or _delivery_specialization(name, _content(result))
+        or _page_specialization(name, _content(result))
+        or _sandbox_specialization(name, _content(result))
+        or _skill_specialization(name, payload)
         or _agent_specialization(name, payload)
         or _card_specialization(name, payload)
+        or _question_specialization(name, payload)
         or _media_specialization(result)
     )
 
@@ -624,7 +782,10 @@ def build_trace_item(
         raise ValueError("group_order_invalid")
     canonical = canonical_tool_name(tool_name)
     group_name, group_kind = canonical_group(canonical)
-    summary, truncated = bounded_safe_summary(result)
+    specialization = None if pending else specialize_tool_result(result)
+    corrected = specialization is not None and specialization.kind == "request_corrected"
+    # A call sent again is one quiet line: neither its error text nor its result body is public.
+    summary, truncated = ("", False) if corrected else bounded_safe_summary(result)
     return TraceItem(
         item_id=_identifier(item_id, "item_id"),
         group_id=_identifier(group_id, "group_id"),
@@ -637,21 +798,24 @@ def build_trace_item(
         canonical_name=canonical,
         group_name=group_name,
         group_kind=group_kind,
-        status=classify_tool_result(
+        status="failed" if corrected else classify_tool_result(
             result, pending=pending, external_outcome=external_outcome
         ),
         safe_input=_clean_text(safe_input, 1024),
         safe_summary=summary,
         summary_truncated=truncated,
-        content_ref=_identifier(content_ref, "content_ref", required=False),
-        specialization=specialize_tool_result(result),
+        content_ref="" if corrected else _identifier(content_ref, "content_ref", required=False),
+        specialization=specialization,
         app=app,
     )
 
 
-def app_of_tool(name: Any, args: Any = None, known: dict[str, dict | None] | None = None) -> dict | None:
+def app_of_tool(name: Any, args: Any = None, known: dict[str, dict | None] | None = None, *,
+                words: bool = False) -> dict | None:
     """The app behind a tool call, by its runtime name (a discovered tool's own name); never fails a read.
-    ``known`` remembers answers across one read, so a transcript looks each tool up once."""
+    ``known`` remembers answers across one read, so a transcript looks each tool up once. ``words``: for
+    what a person reads only (a step row, an approval card), a name this runtime didn't issue may name the
+    one set-up app it can come from (B388, B391); never for the reviewer or for scoping."""
     runtime = str(name or "")
     if runtime == "tool_invoke" and isinstance(args, dict):
         runtime = str(args.get("name") or "")
@@ -660,8 +824,10 @@ def app_of_tool(name: Any, args: Any = None, known: dict[str, dict | None] | Non
     if known is not None and runtime in known:
         return known[runtime]
     try:
-        from row_bot.integrations.scope import app_for_tool
+        from row_bot.integrations.scope import app_for_tool, app_named_by_tool
         found = app_for_tool(runtime)
+        if found is None and words:
+            found = app_named_by_tool(runtime)
     except Exception:
         found = None
     if known is not None:
@@ -733,6 +899,15 @@ def _public_specialization(
             "setup_target": specialization.setup_target,
             "settings_page": specialization.settings_page,
             "apps": [dict(app) for app in specialization.apps],
+            **({"process_id": specialization.process_id} if specialization.process_id else {}),
+            **({"recording_id": specialization.recording_id} if specialization.recording_id else {}),
+            **({"edit_id": specialization.edit_id} if specialization.edit_id else {}),
+            **({"delivery_id": specialization.delivery_id} if specialization.delivery_id else {}),
+            **({"job_id": specialization.job_id} if specialization.job_id else {}),
+            **({"page_id": specialization.page_id} if specialization.page_id else {}),
+            **({"outcome": specialization.outcome,
+                "answers": [dict(answer) for answer in specialization.answers]}
+               if specialization.kind == "question_answered" else {}),
         }
         if specialization.kind in CARD_SPECIALIZATIONS
         else {}
@@ -884,7 +1059,7 @@ def project_assistant_row_traces(
                 "call_order": call_order,
                 "group_order": grouped_orders[group_key],
                 "tool_name": name,
-                "app": app_of_tool(raw_call.get("name"), raw_call.get("args"), known_apps),
+                "app": app_of_tool(raw_call.get("name"), raw_call.get("args"), known_apps, words=True),
                 "safe_input": safe_tool_input(raw_call.get("args")),
                 "parent_id": parent_id,
                 "parent_output_index": len(output) - 1,

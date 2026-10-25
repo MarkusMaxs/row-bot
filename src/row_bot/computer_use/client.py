@@ -1,4 +1,12 @@
-"""Private, allowlisted Cua Driver MCP adapter."""
+"""Row-Bot's private connection to Cua Driver, with a hard tool allowlist.
+
+Cua Driver (the reviewed, opt-in integration) does the input and the
+accessibility reading on Windows and macOS. Row-Bot calls only the tools
+listed here: windows, a window's picture and controls, bringing a window to
+the front, and real mouse and keyboard input. Recording runs on a client of
+its own (``call_recording``); configuration, updates, desktop-wide capture,
+clipboard and process control are never reachable.
+"""
 
 from __future__ import annotations
 
@@ -17,37 +25,31 @@ from row_bot.mcp_client.results import RawCallResult, raw_call_result
 from row_bot.mcp_client.runtime import PrivateMcpSession
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
-MAX_IMAGE_DIMENSION = 1456
+MAX_IMAGE_DIMENSION = 4096
 MAX_ELEMENTS = 2_000
-MAX_TREE_DEPTH = 25
 MAX_FIELD_CHARS = 512
-MAX_SEMANTIC_TEXT = 2 * 1024 * 1024
 MAX_GEOMETRY_ABS = 1_000_000.0
 ALLOWED_IMAGE_MIME = frozenset({"image/png", "image/jpeg"})
 
-MODEL_ACTION_TO_CUA = {
-    "list_apps": "list_apps",
-    "list_windows": "list_windows",
-    "launch_app": "launch_app",
-    "capture": "get_window_state",
-    "focus": "bring_to_front",
-    "click": "click",
-    "double_click": "double_click",
-    "right_click": "right_click",
-    "type": "type_text",
-    "replace_text": "set_value",
-    "key": "press_key",
-    "scroll": "scroll",
-    "drag": "drag",
-}
-
-INTERNAL_TOOLS = frozenset({"set_config", "health_report", "check_permissions", "start_session", "end_session"})
-ALLOWED_CUA_TOOLS = frozenset(MODEL_ACTION_TO_CUA.values()) | INTERNAL_TOOLS | {"hotkey"}
-FORBIDDEN_TOOL_FAMILIES = frozenset({
-    "page", "get_desktop_state", "start_recording", "stop_recording",
-    "get_recording_state", "check_for_update", "install_ffmpeg", "kill_app",
-    "set_agent_cursor", "zoom", "move_cursor", "get_config",
+# What a computer action may call: reading windows and controls, and real input.
+ACTION_TOOLS = frozenset({
+    "list_apps",
+    "list_windows",
+    "launch_app",
+    "get_window_state",
+    "bring_to_front",
+    "click",
+    "double_click",
+    "right_click",
+    "type_text",
+    "press_key",
+    "hotkey",
+    "scroll",
+    "drag",
 })
+INTERNAL_TOOLS = frozenset({"health_report", "check_permissions", "start_session", "end_session"})
+# Screen recording (F2) runs only through ``CuaClient.call_recording`` on a client of its own.
+RECORDING_TOOLS = frozenset({"start_recording", "stop_recording", "get_recording_state"})
 
 
 class CuaTransport(Protocol):
@@ -58,24 +60,14 @@ class CuaTransport(Protocol):
 
 @dataclass(frozen=True)
 class CuaElement:
-    token: str
+    """One control in a window's accessibility tree; ``bounds`` are screen coordinates."""
+
     index: int
     role: str
     label: str
     value: str = field(repr=False)
     bounds: tuple[float, float, float, float]
-    depth: int
-    parent_index: int | None = None
-    visible: bool | None = None
     enabled: bool | None = None
-    selected: bool | None = None
-    checked: bool | None = None
-    expanded: bool | None = None
-    pressed: bool | None = None
-    toggled: bool | None = None
-    editable: bool | None = None
-    read_only: bool | None = None
-    value_available: bool = True
     in_web_content: bool = False
 
 
@@ -86,158 +78,34 @@ class CuaLaunchProfile:
 
 
 def cua_launch_profile() -> CuaLaunchProfile:
-    """Return the reviewed private MCP process profile for this host."""
+    """The reviewed private MCP process profile for this host."""
 
     if platform.system().casefold() == "darwin":
-        return CuaLaunchProfile(
-            argv=("mcp", "--direct"),
-            permission_identity="row_bot_host",
-        )
-    return CuaLaunchProfile(
-        argv=("mcp",),
-        permission_identity="interactive_windows_session",
-    )
+        return CuaLaunchProfile(argv=("mcp", "--direct"), permission_identity="row_bot_host")
+    return CuaLaunchProfile(argv=("mcp",), permission_identity="interactive_windows_session")
 
 
 @dataclass(frozen=True)
 class CuaResponse:
     text: str = ""
     structured: dict[str, Any] = field(default_factory=dict)
-    image_bytes: bytes | None = None
+    image_bytes: bytes | None = field(default=None, repr=False)
     image_mime: str = ""
     image_width: int = 0
     image_height: int = 0
     elements: tuple[CuaElement, ...] = ()
-    snapshot_id: str = ""
-    backend_declared_count: int | None = None
-    backend_filtered_count: int | None = None
-    backend_received_count: int = 0
-    backend_limited: bool | None = None
-    backend_sparse: bool = False
-    locally_filtered_count: int = 0
-    local_limit_reasons: tuple[str, ...] = ()
-    truncated: bool = False
     is_error: bool = False
     error_code: str = ""
 
 
-_MUTATION_ENUM_FIELDS = {
-    "effect": frozenset(
-        {"changed", "confirmed", "partial", "unverifiable", "suspected_noop", "refused"}
-    ),
-    "delivery": frozenset({"background", "foreground", "not_applicable", "unknown"}),
-    "delivery_mode": frozenset(
-        {"background", "foreground", "not_applicable", "unknown"}
-    ),
-    "route": frozenset(
-        {
-            "ax",
-            "uia",
-            "accessibility",
-            "synthetic_events",
-            "global_input",
-            "system_api",
-            "dom",
-            "trusted_input",
-            "pixels",
-            "px",
-            "pixel",
-            "unknown",
-        }
-    ),
-    "path": frozenset(
-        {"ax", "uia", "accessibility", "key_events", "send_input", "unknown"}
-    ),
-    "status": frozenset({"satisfied", "unsatisfied", "unknown"}),
-    "cause": frozenset(
-        {
-            "direct",
-            "driver_verified",
-            "foreground_fallback",
-            "native_dispatch",
-            "semantic_target",
-            "target_disappeared",
-        }
-    ),
-}
-_MUTATION_TOOLS = frozenset(
-    {
-        "bring_to_front",
-        "click",
-        "double_click",
-        "right_click",
-        "type_text",
-        "set_value",
-        "press_key",
-        "hotkey",
-        "scroll",
-        "drag",
-        "invoke_menu",
-    }
-)
-_ESCALATION_RECOMMENDATIONS = frozenset({"foreground", "px", "page"})
-_MUTATION_ERROR_CODES = frozenset(
-    {
-        "background_unavailable",
-        "driver_unavailable",
-        "not_supported",
-        "permission_denied",
-        "stale_element",
-        "temporarily_unavailable",
-        "timeout",
-        "unsupported",
-        "unsupported_capability",
-        "unsupported_role",
-        "value_not_supported",
-        "focus_refused",
-        "foreground_required",
-        "snapshot_expired",
-        "session_ended",
-    }
-)
+def build_cua_environment(
+    session_id: str, environ: dict[str, str] | None = None, *, path_prefix: str = "",
+) -> dict[str, str]:
+    """The deliberately small child environment for Cua.
 
-
-def _normalized_mutation_response(response: CuaResponse) -> CuaResponse:
-    """Project every mutation result to bounded non-content driver facts."""
-
-    structured: dict[str, Any] = {}
-    if isinstance(response.structured.get("verified"), bool):
-        structured["verified"] = response.structured["verified"]
-    for key, allowed in _MUTATION_ENUM_FIELDS.items():
-        raw_value = response.structured.get(key)
-        if key == "delivery" and isinstance(raw_value, dict):
-            raw_value = raw_value.get("mode")
-        value = str(raw_value or "").strip().casefold().replace("-", "_")
-        if value in allowed:
-            structured[key] = value
-    if isinstance(response.structured.get("degraded"), bool):
-        structured["degraded"] = response.structured["degraded"]
-    escalation = response.structured.get("escalation")
-    if isinstance(escalation, dict):
-        recommended = (
-            str(escalation.get("recommended") or "")
-            .strip()
-            .casefold()
-            .replace("-", "_")
-        )
-        if recommended in _ESCALATION_RECOMMENDATIONS:
-            structured["escalation"] = {"recommended": recommended}
-    error_code = str(response.error_code or "").strip().casefold().replace("-", "_")
-    error_code = error_code if error_code in _MUTATION_ERROR_CODES else (
-        "driver_failed" if response.is_error else ""
-    )
-    if error_code:
-        structured["error"] = {"code": error_code}
-    return CuaResponse(
-        text="",
-        structured=structured,
-        is_error=response.is_error,
-        error_code=error_code,
-    )
-
-
-def build_cua_environment(session_id: str, environ: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the deliberately small child environment for Cua."""
+    ``path_prefix`` puts one folder first on PATH: the folder holding only the ffmpeg Row-Bot
+    downloaded, which Cua's screen recording needs on Windows (F3).
+    """
 
     source = dict(os.environ if environ is None else environ)
     common = {"PATH", "Path", "HOME", "USERPROFILE", "TMP", "TEMP", "TMPDIR", "LANG", "LC_ALL"}
@@ -247,30 +115,21 @@ def build_cua_environment(session_id: str, environ: dict[str, str] | None = None
     result = {key: str(value) for key, value in source.items() if key in allowed and value is not None}
     result["CUA_DRIVER_RS_UPDATE_CHECK"] = "0"
     result["ROW_BOT_CUA_SESSION_ID"] = str(session_id)
-    result.pop("CUA_DRIVER_EMBEDDED", None)
-    result.pop("CUA_DRIVER_PARENT_LIVENESS_STDIN", None)
-    result.pop("CUA_DRIVER_HOST_BUNDLE_ID", None)
-    result.pop("CUA_DRIVER_RS_TELEMETRY_ENABLED", None)
-    result.pop("CUA_DRIVER_RS_TELEMETRY_DEBUG", None)
+    for name in ("CUA_DRIVER_EMBEDDED", "CUA_DRIVER_PARENT_LIVENESS_STDIN", "CUA_DRIVER_HOST_BUNDLE_ID",
+                 "CUA_DRIVER_RS_TELEMETRY_ENABLED", "CUA_DRIVER_RS_TELEMETRY_DEBUG"):
+        result.pop(name, None)
+    if path_prefix:
+        key = next((name for name in ("PATH", "Path") if name in result), "PATH")
+        result[key] = path_prefix + (os.pathsep + result[key] if result.get(key) else "")
     return result
 
 
 def _trim(value: Any) -> str:
     text = str(value or "")
-    return text[:MAX_FIELD_CHARS] + ("…" if len(text) > MAX_FIELD_CHARS else "")
+    return text[:MAX_FIELD_CHARS]
 
 
-def _non_negative_int(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def _bounded_geometry(frame: Any) -> tuple[float, float, float, float] | None:
+def _bounds(frame: Any) -> tuple[float, float, float, float] | None:
     source = frame if isinstance(frame, dict) else {}
     try:
         values = (
@@ -281,51 +140,38 @@ def _bounded_geometry(frame: Any) -> tuple[float, float, float, float] | None:
         )
     except (TypeError, ValueError, OverflowError):
         return None
-    x, y, width, height = values
-    if (
-        not all(math.isfinite(value) for value in values)
-        or abs(x) > MAX_GEOMETRY_ABS
-        or abs(y) > MAX_GEOMETRY_ABS
-        or width < 0
-        or height < 0
-        or width > MAX_GEOMETRY_ABS
-        or height > MAX_GEOMETRY_ABS
-    ):
+    if not all(math.isfinite(value) and abs(value) <= MAX_GEOMETRY_ABS for value in values):
+        return None
+    if values[2] < 0 or values[3] < 0:
         return None
     return values
 
 
 def _decode_image(data: str, mime: str) -> tuple[bytes, int, int]:
     if mime not in ALLOWED_IMAGE_MIME:
-        raise ValueError(f"Unsupported Cua image MIME type: {mime or 'missing'}")
+        raise ValueError(f"Unsupported Cua image type: {mime or 'missing'}")
     try:
         decoded = base64.b64decode(data, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise ValueError("Cua returned malformed base64 image data") from exc
+        raise ValueError("Cua returned a malformed image") from exc
     if len(decoded) > MAX_IMAGE_BYTES:
-        raise ValueError("Cua screenshot exceeds the 8 MiB decoded limit")
-    if mime == "image/png" and not decoded.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("Cua screenshot MIME and PNG magic bytes do not agree")
-    if mime == "image/jpeg" and not decoded.startswith(b"\xff\xd8\xff"):
-        raise ValueError("Cua screenshot MIME and JPEG magic bytes do not agree")
-    try:
-        from PIL import Image
+        raise ValueError("Cua's screenshot is larger than 8 MiB")
+    magic = b"\x89PNG\r\n\x1a\n" if mime == "image/png" else b"\xff\xd8\xff"
+    if not decoded.startswith(magic):
+        raise ValueError("Cua's screenshot type and content don't agree")
+    from PIL import Image
 
-        with Image.open(io.BytesIO(decoded)) as image:
-            width, height = image.size
-            actual = (image.format or "").upper()
-            expected = "PNG" if mime == "image/png" else "JPEG"
-            if actual != expected:
-                raise ValueError("Cua screenshot MIME and decoded format do not agree")
-    except ImportError:
-        if mime == "image/png" and len(decoded) >= 24:
-            width = int.from_bytes(decoded[16:20], "big")
-            height = int.from_bytes(decoded[20:24], "big")
-        else:
-            raise ValueError("Pillow is required to validate JPEG Cua screenshots")
+    with Image.open(io.BytesIO(decoded)) as image:
+        width, height = image.size
+        if (image.format or "").upper() != ("PNG" if mime == "image/png" else "JPEG"):
+            raise ValueError("Cua's screenshot type and content don't agree")
     if width <= 0 or height <= 0 or max(width, height) > MAX_IMAGE_DIMENSION:
-        raise ValueError("Cua screenshot dimensions exceed the 1456 pixel limit")
+        raise ValueError("Cua's screenshot size is out of range")
     return decoded, int(width), int(height)
+
+
+def _flag(item: dict[str, Any], name: str) -> bool | None:
+    return bool(item[name]) if name in item and item[name] is not None else None
 
 
 def parse_cua_result(result: Any) -> CuaResponse:
@@ -333,135 +179,51 @@ def parse_cua_result(result: Any) -> CuaResponse:
     texts: list[str] = []
     image_bytes: bytes | None = None
     image_mime = ""
-    image_width = image_height = 0
+    width = height = 0
     for block in raw.content:
         if block.kind == "image" or block.data:
-            if image_bytes is not None:
-                continue
-            image_bytes, image_width, image_height = _decode_image(block.data, block.mime_type)
-            image_mime = block.mime_type
+            if image_bytes is None:
+                image_bytes, width, height = _decode_image(block.data, block.mime_type)
+                image_mime = block.mime_type
         elif block.text:
             texts.append(_trim(block.text))
     structured = raw.structured_content if isinstance(raw.structured_content, dict) else {}
-    elements_raw = structured.get("elements") if isinstance(structured.get("elements"), list) else []
-    received_count = len(elements_raw)
-    declared_count = _non_negative_int(
-        structured.get("total_element_count", structured.get("element_count"))
-    )
-    filtered_count = _non_negative_int(
-        structured.get(
-            "returned_element_count",
-            structured.get("filtered_element_count", received_count),
-        )
-    )
     elements: list[CuaElement] = []
-    local_reasons: set[str] = set()
-    if received_count > MAX_ELEMENTS:
-        local_reasons.add("element_limit")
-    semantic_bytes = 0
-    indexes: set[int] = set()
-    tokens: set[str] = set()
-    depths: dict[int, int] = {}
-    for item in elements_raw:
-        if len(elements) >= MAX_ELEMENTS:
-            local_reasons.add("element_limit")
-            break
+    seen: set[int] = set()
+    rows = structured.get("elements") if isinstance(structured.get("elements"), list) else []
+    for item in rows[:MAX_ELEMENTS]:
         if not isinstance(item, dict):
-            local_reasons.add("invalid_element")
             continue
-        index = _non_negative_int(item.get("element_index"))
-        depth = _non_negative_int(item.get("depth"))
-        token = _trim(item.get("element_token"))
-        parent = _non_negative_int(item.get("parent_index"))
-        if index is None or not token or index in indexes or token in tokens:
-            local_reasons.add("invalid_identity")
+        try:
+            index = int(item.get("element_index"))
+        except (TypeError, ValueError):
             continue
-        if depth is None or depth > MAX_TREE_DEPTH:
-            local_reasons.add("depth_limit")
+        bounds = _bounds(item.get("frame"))
+        if index < 0 or index in seen or bounds is None:
             continue
-        if parent is not None and (parent not in indexes or depths[parent] >= depth):
-            local_reasons.add("invalid_topology")
-            continue
-        bounds = _bounded_geometry(item.get("frame"))
-        if bounds is None:
-            local_reasons.add("invalid_geometry")
-            continue
-        element = CuaElement(
-            token=token,
+        seen.add(index)
+        elements.append(CuaElement(
             index=index,
             role=_trim(item.get("role")),
             label=_trim(item.get("label")),
             value=_trim(item.get("value")),
             bounds=bounds,
-            depth=depth,
-            parent_index=parent,
-            visible=(bool(item["visible"]) if "visible" in item else None),
-            enabled=(bool(item["enabled"]) if "enabled" in item else None),
-            selected=(bool(item["selected"]) if "selected" in item else None),
-            checked=(bool(item["checked"]) if "checked" in item else None),
-            expanded=(bool(item["expanded"]) if "expanded" in item else None),
-            pressed=(bool(item["pressed"]) if "pressed" in item else None),
-            toggled=(bool(item["toggled"]) if "toggled" in item else None),
-            editable=(bool(item["editable"]) if "editable" in item else None),
-            read_only=(
-                bool(item.get("read_only", item.get("readonly")))
-                if "read_only" in item or "readonly" in item
-                else None
-            ),
-            value_available="value" in item and item.get("value") is not None,
+            enabled=_flag(item, "enabled"),
             in_web_content=bool(item.get("in_web_content")),
-        )
-        element_bytes = sum(
-            len(value.encode("utf-8"))
-            for value in (element.token, element.role, element.label, element.value)
-        )
-        if semantic_bytes + element_bytes > MAX_SEMANTIC_TEXT:
-            local_reasons.add("byte_limit")
-            break
-        semantic_bytes += element_bytes
-        indexes.add(index)
-        tokens.add(token)
-        depths[index] = depth
-        elements.append(element)
-    explicit_limited = structured.get("truncated")
-    if isinstance(explicit_limited, bool):
-        backend_limited: bool | None = explicit_limited
-    elif declared_count is not None and declared_count >= MAX_ELEMENTS:
-        backend_limited = True
-    elif structured.get("elements_complete") is True:
-        backend_limited = False
-    else:
-        backend_limited = None
-    backend_sparse = bool(
-        structured.get("degraded")
-        or (declared_count is not None and declared_count > 0 and received_count == 0)
-    )
+        ))
     error = structured.get("error") if isinstance(structured.get("error"), dict) else {}
-    error_code = str(
-        error.get("code")
-        or structured.get("error_code")
-        or (structured.get("code") if raw.is_error else "")
-        or ""
-    )
+    error_code = str(error.get("code") or structured.get("error_code")
+                     or (structured.get("code") if raw.is_error else "") or "")
     return CuaResponse(
-        text="\n".join(texts)[:MAX_SEMANTIC_TEXT],
+        text="\n".join(texts),
         structured=dict(structured),
         image_bytes=image_bytes,
         image_mime=image_mime,
-        image_width=image_width,
-        image_height=image_height,
+        image_width=width,
+        image_height=height,
         elements=tuple(elements),
-        snapshot_id=_trim(structured.get("snapshot_id")),
-        backend_declared_count=declared_count,
-        backend_filtered_count=filtered_count,
-        backend_received_count=received_count,
-        backend_limited=backend_limited,
-        backend_sparse=backend_sparse,
-        locally_filtered_count=max(0, received_count - len(elements)),
-        local_limit_reasons=tuple(sorted(local_reasons)),
-        truncated=backend_limited is True or bool(local_reasons),
         is_error=bool(raw.is_error),
-        error_code=error_code,
+        error_code=error_code.strip().casefold().replace("-", "_"),
     )
 
 
@@ -475,29 +237,22 @@ class CuaClient:
         session_id: str | None = None,
         transport_factory: Callable[[str, str, dict[str, str]], CuaTransport] | None = None,
         contract_version: str = "0.20.0",
-        capabilities: frozenset[str] | None = None,
     ) -> None:
         self.executable = str(Path(executable))
         self.session_id = session_id or f"row-bot-{uuid.uuid4().hex}"
         self._transport_factory = transport_factory or self._default_transport
         self.launch_profile = cua_launch_profile()
         self.contract_version = str(contract_version)
-        self.capabilities = frozenset(capabilities or ())
         self._transport: CuaTransport | None = None
-        self.connection_generation = 0
+        # A folder to put first on Cua's PATH (the screen recording's ffmpeg); empty for every other client.
+        self.path_prefix = ""
 
-    def _default_transport(
-        self,
-        executable: str,
-        _session_id: str,
-        env: dict[str, str],
-    ) -> CuaTransport:
-        return PrivateMcpSession(
-            command=executable,
-            args=list(self.launch_profile.argv),
-            env=env,
-            timeout=120.0,
-        )
+    def _default_transport(self, executable: str, _session_id: str, env: dict[str, str]) -> CuaTransport:
+        return PrivateMcpSession(command=executable, args=list(self.launch_profile.argv), env=env, timeout=120.0)
+
+    @property
+    def started(self) -> bool:
+        return self._transport is not None
 
     def start(self) -> None:
         if self._transport is not None:
@@ -506,13 +261,10 @@ class CuaClient:
 
         require_cua_disclosure()
         transport = self._transport_factory(
-            self.executable,
-            self.session_id,
-            build_cua_environment(self.session_id),
+            self.executable, self.session_id, build_cua_environment(self.session_id, path_prefix=self.path_prefix),
         )
         transport.open()
         self._transport = transport
-        self.connection_generation += 1
         try:
             self.call_internal("start_session", {"session": self.session_id})
         except BaseException:
@@ -532,49 +284,51 @@ class CuaClient:
         transport.close()
 
     def _call(self, tool_name: str, arguments: dict[str, Any]) -> CuaResponse:
-        capability_tool = (
-            tool_name in {"verify_state", "invoke_menu"}
-            and tool_name in self.capabilities
-        )
-        if (
-            (tool_name not in ALLOWED_CUA_TOOLS and not capability_tool)
-            or tool_name in FORBIDDEN_TOOL_FAMILIES
-        ):
-            raise PermissionError(f"Cua tool is not allowlisted: {tool_name}")
         if self._transport is None:
             self.start()
         assert self._transport is not None
-        response = parse_cua_result(self._transport.call_raw(tool_name, arguments))
-        if tool_name in _MUTATION_TOOLS:
-            return _normalized_mutation_response(response)
-        return response
+        return parse_cua_result(self._transport.call_raw(tool_name, arguments))
+
+    def call(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CuaResponse:
+        """One reviewed window, picture or input tool."""
+
+        if tool_name not in ACTION_TOOLS:
+            raise PermissionError(f"Cua tool is not allowlisted: {tool_name}")
+        safe = dict(arguments or {})
+        safe.setdefault("session", self.session_id)
+        return self._call(tool_name, safe)
 
     def call_internal(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CuaResponse:
         if tool_name not in INTERNAL_TOOLS:
             raise PermissionError(f"Cua internal tool is not allowlisted: {tool_name}")
-        if tool_name == "set_config":
-            raise PermissionError("Cua configuration mutation is not approved")
         return self._call(tool_name, dict(arguments or {}))
 
-    def call_action(self, action: str, arguments: dict[str, Any] | None = None) -> CuaResponse:
-        tool_name = MODEL_ACTION_TO_CUA.get(str(action))
-        if not tool_name:
-            raise ValueError(f"Unsupported Computer action: {action}")
-        safe = dict(arguments or {})
-        safe.setdefault("session", self.session_id)
+    def call_recording(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CuaResponse:
+        """Service-only screen recording (F2), on a client of its own.
+
+        Starting always records video into one folder the recording service
+        chose; stopping and reading the state take no arguments.
+        """
+
+        if tool_name not in RECORDING_TOOLS:
+            raise PermissionError(f"Cua recording tool is not approved: {tool_name}")
+        if tool_name == "start_recording":
+            args = dict(arguments or {})
+            output_dir = args.get("output_dir")
+            if set(args) != {"output_dir"} or not isinstance(output_dir, str) or not Path(output_dir).is_absolute():
+                raise PermissionError("Cua recording needs exactly one absolute output folder")
+            safe: dict[str, Any] = {"output_dir": output_dir, "record_video": True}
+        else:
+            safe = {}
         return self._call(tool_name, safe)
 
-    def call_reviewed_driver_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> CuaResponse:
-        """Service-only access to a reviewed input tool not in the model schema."""
 
-        approved = set(MODEL_ACTION_TO_CUA.values()) | {"hotkey"}
-        if tool_name in {"verify_state", "invoke_menu"} and tool_name in self.capabilities:
-            approved.add(tool_name)
-        if tool_name not in approved:
-            raise PermissionError(f"Cua driver tool is not approved for Computer actions: {tool_name}")
-        safe = dict(arguments or {})
-        safe.setdefault("session", self.session_id)
-        return self._call(tool_name, safe)
+def default_client() -> CuaClient:
+    """A client for the installed, reviewed Cua Driver; raises ``RuntimeError`` with the reason."""
 
-    def supports_capability(self, name: str) -> bool:
-        return str(name) in self.capabilities
+    from row_bot.computer_use.readiness import ReadinessCode, load_cua_manifest, readiness
+
+    state = readiness(enabled=True)
+    if state.code not in {ReadinessCode.READY, ReadinessCode.DEGRADED}:
+        raise RuntimeError(state.message)
+    return CuaClient(state.executable, contract_version=str(load_cua_manifest()["version"]))

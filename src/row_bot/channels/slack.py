@@ -202,6 +202,8 @@ def _conversation(
         default_thread_id=_make_thread_id(channel_id, thread_ts),
         name=name,
         target=target,
+        # A thread in a channel (or a group DM) is shared with the people there.
+        shared=bool(thread_ts) or not _is_dm_channel(channel_id),
     )
 
 
@@ -326,6 +328,7 @@ def _resume_agent_sync(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict | None = None,
     event_queue=None,
 ) -> tuple[str, dict | None, list[bytes], list[str]]:
     """Resume a paused agent after interrupt approval/denial."""
@@ -344,7 +347,8 @@ def _resume_agent_sync(
     used_video_gen = False
 
     for event_type, payload in agent_mod.resume_stream_agent(
-        enabled, config, approved, interrupt_ids=interrupt_ids
+        enabled, config, approved, interrupt_ids=interrupt_ids,
+        **({"resume_values": resume_values} if resume_values else {}),
     ):
         if event_type == "token":
             full_answer.append(payload)
@@ -828,6 +832,7 @@ async def _stream_agent_resume_to_slack(
     approved: bool,
     *,
     interrupt_ids: list[str] | None = None,
+    resume_values: dict | None = None,
     thread_ts: str | None = None,
 ) -> tuple[str, dict | None, list[bytes], list[str], ChannelDeliveryResult]:
     stream_config = _slack_stream_config()
@@ -841,6 +846,7 @@ async def _stream_agent_resume_to_slack(
     result, delivery = await consume_channel_producer(
         consumer, lambda sink: _resume_agent_sync(
             config, approved, interrupt_ids=interrupt_ids, event_queue=sink,
+            **({"resume_values": resume_values} if resume_values else {}),
         ),
     )
     answer, interrupt_data, captured_images, captured_video_paths = result
@@ -1024,12 +1030,15 @@ async def _send_slack_interrupt_approval_card(
 ) -> str | None:
     from row_bot.channels import approval as approval_helpers
 
-    detail = approval_helpers.format_interrupt_text(interrupt_data)
+    question = approval_helpers.question_of(interrupt_data) is not None
+    # Row-Bot's question (N4) is numbered text, answered by reply; an approval has its buttons.
+    detail = (approval_helpers.interrupt_prompt(interrupt_data, "") if question
+              else approval_helpers.format_interrupt_text(interrupt_data))
     try:
         resp = await client.chat_postMessage(
             channel=channel_id,
             text=_md_to_mrkdwn(detail),
-            blocks=_slack_interrupt_blocks(interrupt_data),
+            **({} if question else {"blocks": _slack_interrupt_blocks(interrupt_data)}),
             **({"thread_ts": thread_ts} if thread_ts else {}),
         )
         msg_ts = str(resp.get("ts") or "") if isinstance(resp, dict) else ""
@@ -1052,7 +1061,7 @@ async def _send_slack_interrupt_approval_card(
         kwargs: dict[str, Any] = {"channel": channel_id}
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
-        await say(_md_to_mrkdwn(detail) + "\n\nReply *yes* or *no*.", **kwargs)
+        await say(_md_to_mrkdwn(detail) + ("" if question else "\n\nReply *yes* or *no*."), **kwargs)
         return None
 
 
@@ -1258,6 +1267,22 @@ async def _handle_dm(
     with _pending_lock:
         _ts_key = _approval_by_channel.get(approval_key)
         task_approval = _pending_task_approvals.get(_ts_key) if _ts_key else None
+    if task_approval and task_approval.get("data") is not None:
+        # Row-Bot's question from a workflow or a helper (N4): one reply per question, then it goes on.
+        state, value = approval_helpers.question_reply(task_approval, text)
+        if state in {"again", "next"}:
+            await say(_md_to_mrkdwn(value), **reply_kwargs)
+            return
+        with _pending_lock:
+            _pending_task_approvals.pop(_ts_key, None)
+            _approval_by_channel.pop(approval_key, None)
+        from row_bot.tasks import respond_to_approval
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: respond_to_approval(task_approval["resume_token"], state == "answered", answer=value,
+                                              note="Answered via Slack", source="slack"))
+        await say(approval_helpers.answered_text(task_approval["data"], value) if result
+                  else "This question can no longer be answered.", **reply_kwargs)
+        return
     if task_approval:
         decision = approval_helpers.is_approval_text(text)
         if decision is None:
@@ -1315,13 +1340,25 @@ async def _handle_dm(
     )
 
     if interrupt:
-        decision = approval_helpers.is_approval_text(text)
+        resume_values = None
+        where = {"channel": channel_id,
+                 **({"thread_ts": interrupt.get("thread_ts")} if interrupt.get("thread_ts") else {})}
+        if approval_helpers.question_of(interrupt.get("data")) is not None:
+            # Row-Bot's question (N4): one reply per question; only the question goes on with the answer.
+            state, value = approval_helpers.question_reply(interrupt, text)
+            if state in {"again", "next"}:
+                await say(_md_to_mrkdwn(value), **where)
+                return
+            resume_values = approval_helpers.question_resume(interrupt.get("data"), value)
+            chosen = approval_helpers.answered_text(interrupt.get("data"), value)
+            decision = True
+        else:
+            decision = approval_helpers.is_approval_text(text)
         if decision is None:
             await say(
                 "There's a pending approval - please use the approval buttons "
                 "or reply yes/no first.",
-                channel=channel_id,
-                **({"thread_ts": interrupt.get("thread_ts")} if interrupt.get("thread_ts") else {}),
+                **where,
             )
             return
         interrupt = _pop_slack_interrupt(
@@ -1332,6 +1369,8 @@ async def _handle_dm(
         if interrupt is None:
             await say("This approval is no longer pending.", **reply_kwargs)
             return
+        if resume_values is not None:
+            await say(chosen, **where)
         approved = bool(decision)
         config = interrupt.get("config", {})
         interrupt_ids = approval_helpers.extract_interrupt_ids(
@@ -1346,6 +1385,7 @@ async def _handle_dm(
             config,
             approved,
             interrupt_ids=interrupt_ids,
+            resume_values=resume_values,
             thread_ts=thread_ts,
         )
         if answer and not delivery.delivered and not delivery.uncertain:
@@ -2148,12 +2188,18 @@ class SlackChannel(Channel):
         task_name = config.get("task_name", "Unknown task")
         message = config.get("message", "Approval required to continue.")
         resume_token = config.get("resume_token", "")
+        from row_bot.channels import approval as approval_helpers
+
+        question = approval_helpers.question_of(interrupt_data)
         fallback_text = (
             f"⚠️ Approval Required\n"
             f"{subject_label}: {task_name}\n"
             f"{message}"
         )
-        blocks = [
+        if question:
+            # Row-Bot's question (N4): numbered options, answered by reply in the same place.
+            fallback_text = f"{subject_label}: {task_name}\n{approval_helpers.question_prompt(question)}"
+        blocks = None if question else [
             {
                 "type": "section",
                 "text": {
@@ -2202,6 +2248,7 @@ class SlackChannel(Channel):
                     "thread_ts": thread_ts,
                     "lookup_key": lookup_key,
                     "_ts": _time.time(),
+                    **({"data": question} if question else {}),
                 }
                 _approval_by_channel[lookup_key] = msg_ts
             return msg_ts
@@ -2219,7 +2266,9 @@ class SlackChannel(Channel):
                 _approval_by_channel.pop(
                     info.get("lookup_key") or info.get("dm_channel_id", ""), None,
                 )
-        action = "Approved ✅" if status == "approved" else "Denied ❌"
+        from row_bot.channels.approval import resolution_words
+
+        action = resolution_words(status)
         task_name = info["task_name"] if info else "Task"
         msg = f"{action} — {task_name}"
         if source:

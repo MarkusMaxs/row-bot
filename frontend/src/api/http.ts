@@ -99,20 +99,30 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  browserControls(conversation: string, signal?: AbortSignal) {
-    return wire.getBrowserControls(
+  browserPane(conversation: string, signal?: AbortSignal) {
+    return wire.getBrowserPane(this.base, this.session(), conversation, signal);
+  }
+  browserLive(
+    conversation: string,
+    view: 'pane' | 'thumb',
+    size: { width: number; height?: number; scale?: number },
+    signal: AbortSignal,
+  ) {
+    return wire.observeBrowserLive(
       this.base,
       this.session(),
       conversation,
+      view,
+      size,
       signal,
     );
   }
-  reviewBrowserControl(
+  browserInput(
     conversation: string,
-    body: wire.BrowserReviewRequest,
+    body: wire.BrowserInput,
     signal?: AbortSignal,
   ) {
-    return wire.reviewBrowserControl(
+    return wire.sendBrowserInput(
       this.base,
       this.session(),
       conversation,
@@ -120,31 +130,24 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  browserControlReceipt(
+  browserAction(
     conversation: string,
-    command: string,
+    body: wire.BrowserPaneAction,
     signal?: AbortSignal,
   ) {
-    return wire.getBrowserControlReceipt(
+    return wire.sendBrowserAction(
       this.base,
       this.session(),
       conversation,
-      command,
+      body,
       signal,
     );
   }
-  executeBrowserControl(
-    conversation: string,
-    command: wire.Command,
-    signal?: AbortSignal,
-  ) {
-    return wire.sendBrowserControl(
-      this.base,
-      this.session(),
-      conversation,
-      command,
-      signal,
-    );
+  browserSites(signal?: AbortSignal) {
+    return wire.getBrowserSites(this.base, this.session(), signal);
+  }
+  clearBrowserSites(body: wire.BrowserSitesClear, signal?: AbortSignal) {
+    return wire.clearBrowserSites(this.base, this.session(), body, signal);
   }
   computerUse(conversation: string, signal?: AbortSignal) {
     return wire.getComputerUse(this.base, this.session(), conversation, signal);
@@ -199,6 +202,213 @@ export class HttpTransport implements ClientTransport {
   monitorSnapshot(signal?: AbortSignal) {
     return wire.getMonitorSnapshot(this.base, this.session(), signal);
   }
+  backgroundProcesses(conversationId?: string, signal?: AbortSignal) {
+    return wire.getBackgroundProcesses(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  backgroundProcess(processId: string, signal?: AbortSignal) {
+    return wire.getBackgroundProcess(
+      this.base,
+      this.session(),
+      processId,
+      signal,
+    );
+  }
+  backgroundProcessOutput(
+    processId: string,
+    after = 0,
+    limit = 65536,
+    signal?: AbortSignal,
+  ) {
+    return wire.getBackgroundProcessOutput(
+      this.base,
+      this.session(),
+      processId,
+      after,
+      limit,
+      signal,
+    );
+  }
+  stopBackgroundProcess(processId: string, signal?: AbortSignal) {
+    return wire.stopBackgroundProcess(
+      this.base,
+      this.session(),
+      processId,
+      signal,
+    );
+  }
+  recordings(conversationId?: string, signal?: AbortSignal) {
+    return wire.getRecordings(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  stopRecording(recordingId: string, signal?: AbortSignal) {
+    return wire.stopRecording(this.base, this.session(), recordingId, signal);
+  }
+  conversationSandbox(conversationId: string, signal?: AbortSignal) {
+    return wire.getConversationSandbox(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  prepareSandbox(conversationId: string, signal?: AbortSignal) {
+    return wire.prepareConversationSandbox(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  pullSandboxImage(conversationId: string, signal?: AbortSignal) {
+    return wire.pullConversationSandboxImage(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  sandboxJob(jobId: string, signal?: AbortSignal) {
+    return wire.getSandboxJob(this.base, this.session(), jobId, signal);
+  }
+  stopSandboxJob(jobId: string, signal?: AbortSignal) {
+    return wire.stopSandboxJob(this.base, this.session(), jobId, signal);
+  }
+  workspaceFolders(path = '', signal?: AbortSignal) {
+    return wire.getWorkspaceFolders(this.base, this.session(), path, signal);
+  }
+  videoEdits(conversationId?: string, signal?: AbortSignal) {
+    return wire.getVideoEdits(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
+  stopVideoEdit(editId: string, signal?: AbortSignal) {
+    return wire.stopVideoEdit(this.base, this.session(), editId, signal);
+  }
+  delivery(deliveryId: string, signal?: AbortSignal) {
+    return wire.getDelivery(this.base, this.session(), deliveryId, signal);
+  }
+  downloadDelivery(deliveryId: string, index: number, signal?: AbortSignal) {
+    return wire.readDeliveryFile(
+      this.base,
+      this.session(),
+      deliveryId,
+      index,
+      signal,
+    );
+  }
+  saveDelivery(deliveryId: string, index: number, signal?: AbortSignal) {
+    return wire.saveDeliveryFile(
+      this.base,
+      this.session(),
+      deliveryId,
+      index,
+      signal,
+    );
+  }
+  sendDeliveryToDevices(deliveryId: string, signal?: AbortSignal) {
+    return wire.sendDeliveryToDevices(
+      this.base,
+      this.session(),
+      deliveryId,
+      signal,
+    );
+  }
+  pages(conversationId?: string, signal?: AbortSignal) {
+    return wire.getPages(this.base, this.session(), conversationId, signal);
+  }
+  page(pageId: string, signal?: AbortSignal) {
+    return wire.getPage(this.base, this.session(), pageId, signal);
+  }
+  pageFrame(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
+    return wire.createPageFrame(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  savePageState(
+    pageId: string,
+    state: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageState(
+      this.base,
+      this.session(),
+      pageId,
+      { state },
+      signal,
+    );
+  }
+  savePageDecision(
+    pageId: string,
+    decision: wire.PageDecisionWrite,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageDecision(
+      this.base,
+      this.session(),
+      pageId,
+      decision,
+      signal,
+    );
+  }
+  downloadPage(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
+    return wire.downloadPage(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  savePageToExports(
+    pageId: string,
+    theme: wire.PageTheme,
+    signal?: AbortSignal,
+  ) {
+    return wire.savePageToExports(
+      this.base,
+      this.session(),
+      pageId,
+      { theme },
+      signal,
+    );
+  }
+  browserLocalAddresses(conversation: string, signal?: AbortSignal) {
+    return wire.getBrowserLocalAddresses(
+      this.base,
+      this.session(),
+      conversation,
+      signal,
+    );
+  }
+  removeBrowserLocalAddress(
+    conversation: string,
+    grant: string,
+    signal?: AbortSignal,
+  ) {
+    return wire.removeBrowserLocalAddress(
+      this.base,
+      this.session(),
+      conversation,
+      grant,
+      signal,
+    );
+  }
   attention(signal?: AbortSignal) {
     return wire.getAttention(this.base, this.session(), signal);
   }
@@ -221,6 +431,20 @@ export class HttpTransport implements ClientTransport {
       { hourly_network_checks: enabled },
       signal,
     );
+  }
+  installCount(signal?: AbortSignal) {
+    return wire.getInstallCount(this.base, this.session(), signal);
+  }
+  chooseInstallCount(enabled: boolean, signal?: AbortSignal) {
+    return wire.chooseInstallCount(
+      this.base,
+      this.session(),
+      { enabled },
+      signal,
+    );
+  }
+  deleteCountedData(signal?: AbortSignal) {
+    return wire.deleteCountedData(this.base, this.session(), signal);
   }
   updates(signal?: AbortSignal) {
     return wire.getUpdates(this.base, this.session(), signal);
@@ -270,11 +494,11 @@ export class HttpTransport implements ClientTransport {
       signal,
     );
   }
-  accountAuth(account: 'google' | 'x', signal?: AbortSignal) {
+  accountAuth(account: 'google' | 'x' | 'microsoft', signal?: AbortSignal) {
     return wire.getAccountAuth(this.base, this.session(), account, signal);
   }
   accountAuthCommand(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     command: wire.AccountAuthCommand,
     signal?: AbortSignal,
   ) {
@@ -287,7 +511,7 @@ export class HttpTransport implements ClientTransport {
     );
   }
   accountAuthReceipt(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) {
@@ -300,7 +524,7 @@ export class HttpTransport implements ClientTransport {
     );
   }
   cancelAccountAuth(
-    account: 'google' | 'x',
+    account: 'google' | 'x' | 'microsoft',
     commandId: string,
     signal?: AbortSignal,
   ) {
@@ -331,15 +555,6 @@ export class HttpTransport implements ClientTransport {
   }
   checkProviderKey(body: wire.ProviderKeyCheckRequest, signal?: AbortSignal) {
     return wire.checkProviderKey(this.base, this.session(), body, signal);
-  }
-  browserPreview(conversation: string, revision: string, signal?: AbortSignal) {
-    return wire.getBrowserPreview(
-      this.base,
-      this.session(),
-      conversation,
-      revision,
-      signal,
-    );
   }
   reviewDreamRun(body: wire.DreamRunRequest, signal?: AbortSignal) {
     return wire.reviewDreamRun(this.base, this.session(), body, signal);
@@ -1212,6 +1427,19 @@ export class HttpTransport implements ClientTransport {
   }
   cancelInstallPlan(plan: string, signal?: AbortSignal) {
     return wire.cancelInstallPlan(this.base, this.session(), plan, signal);
+  }
+  finishInstallPlanSignIn(
+    plan: string,
+    body: wire.PlanSignInRequest,
+    signal?: AbortSignal,
+  ) {
+    return wire.finishInstallPlanSignIn(
+      this.base,
+      this.session(),
+      plan,
+      body,
+      signal,
+    );
   }
   mcpConfiguration(
     query: string,
@@ -2423,6 +2651,12 @@ export class HttpTransport implements ClientTransport {
   updateModelContext(body: wire.ModelContextMutation, signal?: AbortSignal) {
     return wire.updateModelContext(this.base, this.session(), body, signal);
   }
+  updateModelVisibility(
+    body: wire.ModelVisibilityMutation,
+    signal?: AbortSignal,
+  ) {
+    return wire.updateModelVisibility(this.base, this.session(), body, signal);
+  }
   agentRuntimeSettings(signal?: AbortSignal) {
     return wire.getAgentRuntimeSettings(this.base, this.session(), signal);
   }
@@ -2876,6 +3110,15 @@ export class HttpTransport implements ClientTransport {
   }
   notices(position?: wire.NoticePosition, signal?: AbortSignal) {
     return wire.getNotices(this.base, this.session(), position, signal);
+  }
+  observeLive(signal: AbortSignal) {
+    return wire.observeLive(this.base, this.session(), signal);
+  }
+  pollLive(
+    position: { after: number; epoch: string } | undefined,
+    signal: AbortSignal,
+  ) {
+    return wire.pollLive(this.base, this.session(), position, signal);
   }
   acknowledge(subscription: string, cursor: string, signal?: AbortSignal) {
     return wire.acknowledge(

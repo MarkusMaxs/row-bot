@@ -9,6 +9,7 @@ import threading
 import time
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Any, Iterator
 
 from row_bot.models import get_llm, get_llm_for, get_context_policy, get_context_size, get_current_model, is_model_local, is_cloud_model, get_cloud_provider, set_active_model_override, _active_model_override
@@ -72,6 +73,10 @@ class TaskStoppedError(Exception):
 
 class AgentResumeError(RuntimeError):
     """Raised when a paused agent graph cannot resume successfully."""
+
+
+class AgentInvokeError(RuntimeError):
+    """Raised when a workflow step's agent call ends in an error; its message says why, as the person reads it."""
 
 
 class ContextCompactionError(RuntimeError):
@@ -1090,6 +1095,9 @@ def _friendly_api_error(exc_str: str, model_name: str | None = None) -> str:
     s = exc_str.lower()
     if _is_transient_stream_disconnect(exc_str):
         return PROVIDER_CUT_MESSAGE
+    if "isn't available with your chatgpt plan" in s:
+        # The ChatGPT transport already says it in plain words (B394).
+        return f"⚠️ {exc_str}"
     if "recursion" in s or "recursion limit" in s:
         return "⚠️ I got stuck in a tool loop and had to stop. Try rephrasing your request or starting a new conversation."
     if "insufficient_quota" in s or "exceeded your current quota" in s:
@@ -2597,6 +2605,24 @@ def _root_system_prompt(small_profile: bool) -> str:
     return get_agent_system_prompt(small_context=True) if accepts else get_agent_system_prompt()
 
 
+def _offered_tool_parents() -> set[str]:
+    """Every tool group the conversation offers, bound or on demand: the same on every turn."""
+    bound = set(_current_effective_tool_parent_names_var.get())
+    return bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
+
+
+def _guides_loadable() -> bool:
+    return any(getattr(record, "source", "") == "guide"
+               for record in (_current_authorized_skill_records_var.get() or ()))
+
+
+def _tool_guides_prompt() -> str:
+    """The tool guides above a small window (WP A6): the ``inline`` ones in full, the rest an index."""
+    from row_bot.skills import get_tool_guides_prompt
+
+    return get_tool_guides_prompt(sorted(_offered_tool_parents()), loadable=_guides_loadable())
+
+
 def _small_profile_tool_guides() -> str:
     """The tool guides on a small window (WP A5): one line per guide, read in full with skill_load
     where the skill bridges are bound; the TASKS and MEMORY guidance in full when those tools are
@@ -2606,11 +2632,8 @@ def _small_profile_tool_guides() -> str:
     from row_bot.skills import get_tool_guide_index
 
     bound = set(_current_effective_tool_parent_names_var.get())
-    offered = bound | {str(parent) for parent, _tool in _current_on_demand_tools_var.get().values()}
-    loadable = any(getattr(record, "source", "") == "guide"
-                   for record in (_current_authorized_skill_records_var.get() or ()))
     parts = [text for parent, text in ROOT_TOOL_GUIDES if parent in bound]
-    index = get_tool_guide_index(sorted(offered), loadable=loadable)
+    index = get_tool_guide_index(sorted(_offered_tool_parents()), loadable=_guides_loadable())
     if index:
         parts.append(index)
     return "\n\n".join(parts)
@@ -2815,15 +2838,7 @@ def _collect_agent_complete_input(state: dict, *, policy: Any = None, pressure: 
         if small_profile:
             tool_guides_text = _small_profile_tool_guides()
         else:
-            from row_bot.skills import get_skills_prompt
-
-            active_tool_names = tuple(sorted(
-                set(_current_effective_tool_parent_names_var.get()) | _on_demand_parents_used(state["messages"])
-            ))
-            tool_guides_text = get_skills_prompt(
-                [],
-                active_tool_names=active_tool_names,
-            )
+            tool_guides_text = _tool_guides_prompt()
     except Exception as exc:
         logger.debug("Tool-guide injection skipped (non-fatal): %s", exc)
     _section = stable_section(
@@ -3999,6 +4014,8 @@ def _prepare_with_compaction(inputs: PreparationInputs, *, force: bool = False) 
                 thread_id,
                 next_state,
                 expected_revision=inputs.checkpoint_revision or "",
+                # This turn's own checkpoint, written in the background, may land meanwhile.
+                messages=list(inputs.raw_messages),
             ):
                 # A concurrent winner may already have produced a valid state.
                 concurrent = _validated_summary_for_inputs(inputs)
@@ -4209,6 +4226,9 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             _emit_context_event("platform_segment", {"segment_id": segment_id})
     llm_messages, created, inputs, prepared = _prepare_agent_request(state, config)
     _remember_request_estimate(config, getattr(prepared, "raw_estimated_input_tokens", 0))
+    # A model that sees images gets the browser page's picture right after the action that took it.
+    from row_bot.browser.model_view import with_page_picture
+    llm_messages = with_page_picture(llm_messages, str(((config or {}).get("configurable") or {}).get("thread_id") or ""))
     if execution is not None:
         generation_registry.check_dispatch(execution)
         from row_bot.application.client_queue import acknowledge_consumed
@@ -4318,6 +4338,16 @@ def _request_after_overflow(exc: BaseException, config: dict | None) -> list | N
     return llm_messages
 
 
+def _is_unparsed_tool_call_error(exc: BaseException) -> bool:
+    """Ollama's parser refused the model's own tool-call text (B418): the model's mistake, not the runtime's.
+
+    It reports "error parsing tool call: …" or, for models whose tool calls are XML (qwen3.8), "XML syntax
+    error …" with status code -1. A provider that is down or refusing the request never says either.
+    """
+    text = str(exc).lower()
+    return "error parsing tool call" in text or ("xml syntax error" in text and "status code: -1" in text)
+
+
 class _AgentModelCall:
     """The Agent graph's model: it binds the tools once, then makes each provider call (WP A4b).
 
@@ -4329,6 +4359,9 @@ class _AgentModelCall:
     * a context-overflow error is followed by one compaction and one retry (F27). The provider
       refused the request before reading it, so the retry costs nothing extra; a second overflow
       stands;
+    * a tool call the local runtime couldn't parse (Ollama's own parser refusing the model's text)
+      is asked for once more, unchanged: the model usually writes it correctly the second time, and
+      a second failure stands (B418);
     * the input the provider reports calibrates the request-size estimate (F29);
     * inline ``<think>`` text is stored as the answer's reasoning (F32).
     """
@@ -4364,12 +4397,17 @@ class _AgentModelCall:
             try:
                 response = model.invoke(messages, config)
             except Exception as exc:
-                if not _is_context_overflow_error(exc):
+                if _is_unparsed_tool_call_error(exc):
+                    logger.warning("The model's tool call couldn't be parsed by its runtime; asking once more: %s",
+                                   str(exc)[:200])
+                    response = model.invoke(messages, config)
+                elif not _is_context_overflow_error(exc):
                     raise
-                retry = _request_after_overflow(exc, config)
-                if retry is None:
-                    raise
-                response = model.invoke(retry, config)
+                else:
+                    retry = _request_after_overflow(exc, config)
+                    if retry is None:
+                        raise
+                    response = model.invoke(retry, config)
             _observe_request_size(config, response)
             inputs = _last_preparation_inputs(config)
             return _with_inline_thinking_moved(response, getattr(inputs, "provider_id", None))
@@ -4502,6 +4540,17 @@ _current_external_discovery_active_var: _contextvars.ContextVar[bool] = _context
 _current_app_scope_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
     "current_app_scope", default=None
 )
+# A workflow run's "Always ask me" rules (N9): {"step": bool, "items": [app or tool ids]}. An
+# action they cover waits for the person under every approval level (see _person_rule_refusal).
+_current_person_rules_var: _contextvars.ContextVar[dict | None] = _contextvars.ContextVar(
+    "current_person_rules", default=None
+)
+
+
+def current_person_rules() -> dict | None:
+    """The running workflow's "Always ask me" rules (N9), for an agent it starts: they go with it."""
+    rules = _current_person_rules_var.get(None)
+    return dict(rules) if rules else None
 
 
 def current_app_scope() -> dict | None:
@@ -4589,6 +4638,12 @@ def get_current_thread_id() -> str:
     return _current_thread_id_var.get("")
 
 
+def get_current_runtime_surface() -> str:
+    """Return the runtime surface (``normal_chat``, ``workflow`` …) of the active invocation."""
+
+    return _current_runtime_surface_var.get("")
+
+
 def get_active_runtime_context() -> dict:
     """Return lightweight runtime facts for status/introspection tools."""
 
@@ -4633,6 +4688,7 @@ def _set_active_runtime_context(
     agent_run_id: str = "",
     external_discovery_active: bool = False,
     app_scope: dict | None = None,
+    person_rules: dict | None = None,
 ) -> None:
     _current_thread_id_var.set(thread_id or "")
     _current_runtime_surface_var.set(runtime_surface or "")
@@ -4656,6 +4712,7 @@ def _set_active_runtime_context(
     _current_agent_run_id_var.set(agent_run_id or "")
     _current_external_discovery_active_var.set(bool(external_discovery_active))
     _current_app_scope_var.set(dict(app_scope) if isinstance(app_scope, dict) else None)
+    _current_person_rules_var.set(dict(person_rules) if isinstance(person_rules, dict) else None)
     _current_authorized_skill_records_var.set(None)
     _current_effective_tool_parent_names_var.set(())
     _current_bound_tool_schema_tokens_var.set(0)
@@ -4821,6 +4878,12 @@ _DESTRUCTIVE_LABELS: dict[str, str] = {
     "delete_calendar_event": "Delete calendar event",
     "move_calendar_event": "Move calendar event",
     "send_gmail_message": "Send email",
+    "outlook_send_mail": "Send email",
+    "outlook_reply_mail": "Reply to email",
+    "outlook_forward_mail": "Forward email",
+    "outlook_delete_mail": "Delete email",
+    "outlook_cancel_event": "Cancel event",
+    "outlook_respond_event": "Answer invitation",
     "delete_memory": "Delete memory",
     "tracker_delete": "Delete tracker / entry",
     "task_delete": "Delete task",
@@ -4865,33 +4928,33 @@ def _enrich_description(tool_name: str, label: str, args_str: str, kwargs: dict)
 
 
 def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
-    """Keep sync and async targets behind the same current approval decision. ``always_ask``: an app tool
-    its app's access says to ask about (a routine change without Full access, or a high-impact one) asks even
-    under Allow all."""
+    """Keep sync and async targets behind the same current approval decision, resolved by the approval level
+    (``approval_gate``): the person under Ask, the reviewer first under Auto, the level itself under Hands-off.
+    ``always_ask``: an app tool its app's access says to ask about (a routine change without Full access, or a
+    high-impact one); the reviewer is told so, and decides as for any other action."""
     from functools import wraps
-    from row_bot.tools.approval_gate import (
-        APPROVAL_DENIED, APPROVAL_GIVEN, APPROVAL_NOT_NEEDED_AUTO, with_approval,
-    )
+    from row_bot.tools.approval_gate import resolve_approval_line, with_approval
 
     label = _DESTRUCTIVE_LABELS.get(tool.name, tool.name)
+    risks = ("changes or deletes something",) + (
+        ("its app's access says to ask first (a high-impact change, or one without Full access)",)
+        if always_ask else ())
     # BaseTool's default async implementation delegates to its own _run. Keep
     # that delegate on an unwrapped copy so async calls ask exactly once.
     original = tool.model_copy()
 
     def refusal(args, kwargs) -> tuple[str | None, str]:
         """The refusal (None when the call may run) and its result's approval line."""
-        decision = decision_for_action(get_approval_mode())
-        if always_ask and decision == "allow":
-            decision = "ask"
+        mode = get_approval_mode()
+        decision = decision_for_action(mode)
         if decision == "block":
             return (f"BLOCKED: '{label}' is unavailable while this "
                     "thread is in Block approval mode. Do NOT retry this "
                     "tool. Inform the user that this action was skipped "
                     "and move on."), ""
-        if decision == "allow":
-            return None, APPROVAL_NOT_NEEDED_AUTO
         # What the person reads names what was given: an option left unset (None) is not part of the action.
         given = {key: value for key, value in kwargs.items() if value is not None}
+        question = ""
         if tool.name.startswith("mcp_"):
             # An app's tool: its card names the app and the tool's own title, so this says only what is sent,
             # as labelled fields with their own line breaks; never its internal name or an escaped dump (B332).
@@ -4909,20 +4972,34 @@ def _wrap_with_interrupt_gate(tool, *, always_ask: bool = False) -> None:
                 if given:
                     args_str += ", " + ", ".join(f"{key}={_argument(value)}" for key, value in given.items())
             description = _enrich_description(tool.name, label, args_str, kwargs)
+        if tool.name.startswith("outlook_"):
+            # Outlook's card names who it goes to and what it says, or the event's time, attendees and place.
+            try:
+                from row_bot.tools.outlook_tool import approval_card
+
+                question, description = approval_card(tool.name, given)
+            except Exception:
+                logger.warning("Outlook's approval card couldn't be written; it asks with the call itself", exc_info=True)
         try:
             from row_bot.tools.discovery import is_external_discovery_invocation
             external_discovery_active = is_external_discovery_invocation()
         except Exception:
             external_discovery_active = False
-        approval = interrupt({
-            "tool": tool.name, "label": label, "description": description,
-            "args": kwargs or (args[0] if args else {}),
-            "external_discovery_active": external_discovery_active,
-            **({"always_ask": True} if always_ask else {}),
-        })
-        if approval:
-            return None, APPROVAL_GIVEN
-        return with_approval(APPROVAL_DENIED, "Action cancelled by user."), ""
+        outcome, line = resolve_approval_line(
+            {
+                "tool": tool.name, "label": label, "description": description,
+                "args": kwargs or (args[0] if args else {}),
+                "external_discovery_active": external_discovery_active,
+                **({"question": question} if question else {}),
+            },
+            approval_mode=mode,
+            risks=risks,
+            # This module's own name, so a test can stand in for the person.
+            approval_callback=lambda payload: interrupt(payload),
+        )
+        if outcome == "allow":
+            return None, line
+        return with_approval(line, "Action cancelled by user."), ""
 
     sync_target = getattr(original, "func", None) or original._run
     async_target = getattr(original, "coroutine", None) or original._arun
@@ -5242,7 +5319,22 @@ def _collect_agent_tool_candidates(
 # profile limits and guides unchanged). On every window, Developer tools come with a code folder (WP A5):
 # without one each of them fails, and their 22 schemas and guide went with every call of every chat.
 SMALL_CONTEXT_TOKENS = 65_536
-ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status", "row_bot_updater", "custom_tool_builder"})
+# A local model (Ollama and other on-device runtimes) up to this window gets the middle tier too: its
+# whole prompt is processed on this computer, so every token costs time to the first word.
+LOCAL_MIDDLE_CONTEXT_TOKENS = 131_072
+# The middle tier (64K or less, or local up to 128K) also offers Row-Bot's self-management on demand.
+ON_DEMAND_TOOL_GROUPS = frozenset({"row_bot_status"})
+# Rarely used on any window: offered through tool search (and by name), not bound to every call.
+# Pages, questions, helpers, processes, tasks, memory and web stay bound: Row-Bot uses them unasked.
+RARELY_USED_TOOL_GROUPS = frozenset({
+    "row_bot_updater", "custom_tool_builder", "video_editing", "file_delivery", "tracker", "wiki", "goal",
+    "youtube", "arxiv", "system_info",
+})
+RARELY_USED_TOOLS = frozenset({
+    "agent_profiles", "agent_profile_save", "agent_promote", "agent_retry",
+    "row_bot_create_skill", "row_bot_patch_skill", "row_bot_send_feedback", "row_bot_apply_proposal",
+    "row_bot_reject_proposal", "row_bot_verify_proposal", "row_bot_review_skill_library",
+})
 _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]] = _contextvars.ContextVar(
     "current_on_demand_tools", default={}
 )
@@ -5262,22 +5354,6 @@ def _has_code_folder() -> bool:
         return bool(get_workspace_id() or infer_workspace_id_from_thread(get_thread_id()))
     except Exception:
         return False
-
-
-def _on_demand_parents_used(messages: list[Any]) -> set[str]:
-    """Groups loaded on demand earlier in this conversation: their guide joins the prompt (F11)."""
-    on_demand = _current_on_demand_tools_var.get()
-    if not on_demand:
-        return set()
-    used: set[str] = set()
-    for message in messages:
-        for call in getattr(message, "tool_calls", None) or ():
-            name = str(call.get("name") or "")
-            if name == "tool_invoke":
-                name = str((call.get("args") or {}).get("name") or "")
-            if name in on_demand:
-                used.add(on_demand[name][0])
-    return used
 
 
 def _activate_agent_cache_metadata(cache_key: frozenset[str]) -> None:
@@ -5494,18 +5570,43 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
         except Exception:
             return 'BLOCKED: The selected Agent Profile policy is unavailable.'
 
+    from contextlib import nullcontext
+
+    from row_bot.tools.approval_gate import approved_by_person, collect_decisions, with_decisions
+
+    def person_rule(function, args, kwargs) -> tuple[str | None, str]:
+        arguments = call_arguments(argument_function or function, args, kwargs)
+        return _person_rule_refusal(tool.name, arguments, source=source, parent=parent)
+
     def sync(function):
         @wraps(function)
         def guarded(*args, **kwargs):
             blocked = refusal(function, args, kwargs)
-            return blocked if blocked is not None else function(*args, **kwargs)
+            if blocked is not None:
+                return blocked
+            # Every approval decided while it runs is recorded on its result (the activity shows it).
+            with collect_decisions() as decisions:
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = function(*args, **kwargs)
+            return with_decisions(decisions, result)
         return guarded
 
     def asynchronous(function):
         @wraps(function)
         async def guarded(*args, **kwargs):
             blocked = refusal(function, args, kwargs)
-            return blocked if blocked is not None else await function(*args, **kwargs)
+            if blocked is not None:
+                return blocked
+            with collect_decisions() as decisions:
+                held, binding = person_rule(function, args, kwargs)
+                if held is not None:
+                    return with_decisions(decisions, held)
+                with approved_by_person(binding) if binding else nullcontext():
+                    result = await function(*args, **kwargs)
+            return with_decisions(decisions, result)
         return guarded
 
     updates = {}
@@ -5518,6 +5619,62 @@ def _bind_profile_tool(tool: Any, *, source: str, parent: str,
     else:
         updates['_arun'] = asynchronous(tool._arun)
     return tool.model_copy(update=updates)
+
+
+PERSON_RULE_REFUSAL = (
+    "The person didn't approve this action, so it did not run. Don't try to do it another way; "
+    "say what you would have done."
+)
+
+
+def _person_rule_covers(rules: dict, name: str, *, source: str, parent: str) -> bool:
+    """Whether a workflow's "Always ask me" rules name this tool: its step's rule, the tool or
+    tool group, or the app it belongs to."""
+    if rules.get("step"):
+        return True
+    items = {str(item) for item in rules.get("items") or []}
+    if not items:
+        return False
+    if name in items or parent in items:
+        return True
+    try:
+        from row_bot.integrations.scope import app_for_tool
+
+        app = app_for_tool(name)
+    except Exception:
+        logger.debug("The app of %s can't be told", name, exc_info=True)
+        app = None
+    return bool(app and app.get("item_id") in items)
+
+
+def _person_rule_refusal(name: str, arguments: dict | None, *, source: str, parent: str) -> tuple[str | None, str]:
+    """(refusal, binding) for one call under a workflow's "Always ask me" rules (N9).
+
+    An action the rules cover (anything but a read) waits for the person under every level, on a
+    card that says exactly what will happen; it runs only with the arguments they approved. The
+    binding is returned when they approved, so what the tool asks inside counts as approved.
+    """
+    rules = _current_person_rules_var.get(None)
+    if not rules:
+        return None, ""
+    from row_bot.tools.profile_policy import action_effect
+
+    if action_effect(name, arguments, source=source, parent=parent) == "read_only":
+        return None, ""
+    if not _person_rule_covers(rules, name, source=source, parent=parent):
+        return None, ""
+    from row_bot.approval_messages import plain_tool_call
+    from row_bot.tools.action_card import describe_action
+    from row_bot.tools.approval_gate import call_binding, person_approval, with_approval
+
+    card = describe_action(name, arguments, source=source, parent=parent)
+    binding = call_binding(name, arguments, (item["fingerprint"] for item in card["media"]))
+    payload = {"tool": name, "label": card["action"][:120], "description": plain_tool_call(name, arguments or {}),
+               "args": arguments or {}, "card": card}
+    approved, line = person_approval(payload, binding=binding)
+    if approved:
+        return None, binding
+    return with_approval(line, PERSON_RULE_REFUSAL), ""
 
 
 def _tool_left_out(name: str, source: str, parent: str, servers: set[str], parents: set[str]) -> bool:
@@ -5625,7 +5782,12 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     is_background = _background_workflow_var.get()
     approval_mode = get_approval_mode()
     effective_context = get_context_size(model_label)
-    small_window = 0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS and normalized_allowlist is None
+    small_window = normalized_allowlist is None and (
+        0 < int(effective_context or 0) <= SMALL_CONTEXT_TOKENS
+        or (0 < int(effective_context or 0) <= LOCAL_MIDDLE_CONTEXT_TOKENS and not is_cloud_model(model_label))
+    )
+    # A profile's own tool list is bound as chosen; otherwise rarely used tools are offered on demand.
+    defer_rarely_used = normalized_allowlist is None
     # 32K or less: core tools bound, the rest through tool search (WP A5, F43).
     small_profile = _small_context_profile(effective_context)
     defer_to_core = small_profile and normalized_allowlist is None
@@ -5642,13 +5804,12 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     # when called (_turn_scope_refusal), so the tool list is the same on every turn (WP A5).
     app_scope = _current_app_scope_var.get(None) or {}
     eager_core_entries, external_entries = _apply_app_scope(eager_core_entries, external_entries, app_scope)
-    # App tools that ask even under Allow all: each one its app's access says to ask about (a routine change
-    # unless the app has Full access or that tool may run without asking; high-impact and unknown ones always).
+    # App tools their app's access says to ask about (a routine change unless the app has Full access or that
+    # tool may run without asking; high-impact and unknown ones always): the reviewer is told so under Auto.
     # Standalone connections ("mcp") and those a plugin brings ("plugin:<id>:mcp:<server>") alike.
     app_entries = [entry for entry in eager_core_entries + external_entries
                    if entry["source"] == "mcp" or ":mcp:" in str(entry["source"])]
-    app_asks = ({str(getattr(entry["tool"], "name", "") or "") for entry in app_entries} & destructive_names
-                if approval_mode == "allow_all" else set())
+    app_asks = {str(getattr(entry["tool"], "name", "") or "") for entry in app_entries} & destructive_names
     # Which built-in tool each chat tool came from, so its app is named later without building any tool.
     from row_bot.integrations.builtin import remember_tools
     remember_tools({str(getattr(entry["tool"], "name", "") or ""): str(entry["parent"])
@@ -5728,7 +5889,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
         active_skill_ids,
         skill_discovery_enabled,
         skill_fingerprint,
-    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=small_profile)
+    ) = _call_with_tool_parents(_build_runtime_skill_snapshot, offered_parents, guides=True)
     cache_key = frozenset(enabled_tool_names) | frozenset({
         f"ctx:{effective_context}",
         f"model:{model_label}",
@@ -5769,37 +5930,18 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             lc_tools = eager_core_tools + external_tools
 
             # Append tools from enabled plugins (totally separate registry)
-            if is_background:
-                # BG gating: block=strip destructive tools; approve=wrap
-                # via interrupt() for pause-and-approve; allow_all=keep
-                # everything, but app tools whose access says ask still ask.
-                # run_command self-gates at runtime via classify_command.
-                if approval_mode == "block":
-                    lc_tools = [t for t in lc_tools
-                                if t.name not in destructive_names]
-                elif approval_mode == "approve":
-                    for t in lc_tools:
-                        if t.name in destructive_names:
-                            _wrap_with_interrupt_gate(t)
-                else:
-                    for t in lc_tools:
-                        if t.name in app_asks:
-                            _wrap_with_interrupt_gate(t, always_ask=True)
+            # Workflows and chats gate alike: block=strip destructive tools; every other level wraps them,
+            # and the gate resolves each call by the level (the person under Ask, the reviewer first under
+            # Auto, the level itself under Hands-off). A workflow run pauses when the person is asked.
+            # run_command self-gates at runtime via classify_command, and a tool marked
+            # row_bot_gates_itself (x_post) asks with its own card, bound to exactly what it sends.
+            if approval_mode == "block":
+                lc_tools = [t for t in lc_tools
+                            if t.name not in destructive_names]
             else:
-                # Interactive sessions use the same app-wide approval mode:
-                # block=hide destructive tools; approve=wrap with interrupt();
-                # allow_all=keep everything; app tools whose access says ask still ask.
-                if approval_mode == "block":
-                    lc_tools = [t for t in lc_tools
-                                if t.name not in destructive_names]
-                elif approval_mode == "approve":
-                    for t in lc_tools:
-                        if t.name in destructive_names:
-                            _wrap_with_interrupt_gate(t)
-                else:
-                    for t in lc_tools:
-                        if t.name in app_asks:
-                            _wrap_with_interrupt_gate(t, always_ask=True)
+                for t in lc_tools:
+                    if t.name in destructive_names and not (t.metadata or {}).get("row_bot_gates_itself"):
+                        _wrap_with_interrupt_gate(t, always_ask=t.name in app_asks)
 
             lc_tools = _apply_provider_tool_schema_compatibility(
                 lc_tools,
@@ -5899,6 +6041,8 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 entry for entry in eager_core_entries
                 if (small_window and entry["parent"] in ON_DEMAND_TOOL_GROUPS)
                 or (defer_to_core and entry["parent"] not in SMALL_PROFILE_CORE_GROUPS)
+                or (defer_rarely_used and (entry["parent"] in RARELY_USED_TOOL_GROUPS
+                                           or str(getattr(entry["tool"], "name", "")) in RARELY_USED_TOOLS))
             ]
             if on_demand_entries:
                 eager_core_entries = [entry for entry in eager_core_entries if entry not in on_demand_entries]
@@ -5983,6 +6127,16 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     )
                     _install_custom_tool_validation_repair(reader, readiness.provider_id)
                     lc_tools.extend(reader)
+                # Asking the person a question with options (N4): every agent can, under every approval level;
+                # a question is never an action to approve, so no level or profile takes it away.
+                from row_bot.questions import QUESTION_TOOL, build_tool as build_question_tool
+
+                if QUESTION_TOOL not in {str(getattr(tool, "name", "") or "") for tool in lc_tools}:
+                    asker = _apply_provider_tool_schema_compatibility(
+                        [build_question_tool()], readiness, has_explicit_allowlist=False
+                    )
+                    _install_custom_tool_validation_repair(asker, readiness.provider_id)
+                    lc_tools.extend(asker)
 
             from row_bot.tools.discovery import estimate_bound_tool_schema_tokens
 
@@ -6037,13 +6191,33 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
     return _agent_cache[cache_key]
 
 
-def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
-    """Return normalized interrupt data from a paused LangGraph state."""
+def _paused_at_a_question(state: Any) -> bool:
+    """Whether a LangGraph state is paused at a question (an ``interrupt()``).
 
-    if not state or not getattr(state, "next", None):
-        return None
-    all_interrupts: list[dict[str, Any]] = []
+    ``state.next`` alone misses a tool that asks again once answered: LangGraph
+    counts the answers it keeps for that tool call as writes, and leaves the
+    call out of ``next`` although it is waiting.
+    """
+
+    if not state:
+        return False
+    if getattr(state, "next", None):
+        return True
+    return any(getattr(task, "interrupts", None) for task in getattr(state, "tasks", ()) or ())
+
+
+def _waiting_interrupts(state: Any) -> list[dict[str, Any]]:
+    """The questions a paused state waits on, each with its ``__interrupt_id``.
+
+    A tool call that went on with its own answer while a call beside it still
+    waits (Row-Bot's question, N4) keeps its old question in the saved writes:
+    a call with a result is finished, so it waits on nothing.
+    """
+
+    waiting: list[dict[str, Any]] = []
     for task in getattr(state, "tasks", ()) or ():
+        if getattr(task, "result", None):
+            continue
         for intr in getattr(task, "interrupts", ()) or ():
             value = getattr(intr, "value", None)
             item = (
@@ -6052,7 +6226,16 @@ def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
                 else {"description": str(value)}
             )
             item["__interrupt_id"] = str(getattr(intr, "id", "") or "")
-            all_interrupts.append(item)
+            waiting.append(item)
+    return waiting
+
+
+def _graph_interrupt_result(state: Any) -> dict[str, Any] | None:
+    """Return normalized interrupt data from a paused LangGraph state."""
+
+    if not _paused_at_a_question(state):
+        return None
+    all_interrupts = _waiting_interrupts(state)
     if not all_interrupts:
         return None
     return {"type": "interrupt", "interrupts": all_interrupts}
@@ -6167,6 +6350,7 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _log_runtime_decision(
@@ -6239,6 +6423,9 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                         exc_info=True,
                     )
                 _notify_api_error(_err_msg)
+                if runtime_surface == "workflow":
+                    # The step failed: its run must not read as done with the error as its answer (B417).
+                    raise AgentInvokeError(_err_msg) from exc
                 return _err_msg
 
         # Read final state from checkpoint
@@ -6894,6 +7081,7 @@ def stream_chat_only(
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(model_label)
     _current_prompt_cache_ttl_var.set(_prompt_cache_ttl_for(configurable))
@@ -7302,6 +7490,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     # A chat on another of the owner's devices runs like one on this computer.
     auto_allowed = runtime_mode == "auto" and runtime_surface in {"normal_chat", "remote_client", "channel"}
@@ -7404,6 +7593,7 @@ def stream_agent(user_input: str, enabled_tool_names: list[str], config: dict,
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     _graph_build_started = time.perf_counter()
@@ -7522,10 +7712,47 @@ def repair_orphaned_tool_calls(enabled_tool_names: list[str] | None = None,
         return None
 
 
+def _resume_value(approved: bool, interrupt_ids: list[str] | None,
+                  resume_values: Mapping[str, Any] | None) -> Any:
+    """What ``Command(resume=...)`` carries: an approval for each waiting id, or a question's answer by its id."""
+    if resume_values:
+        return dict(resume_values)
+    if interrupt_ids:
+        return {iid: approved for iid in interrupt_ids}
+    return approved
+
+
+def _person_answers(state: Any, resume_val: Any) -> Any:
+    """The person's own approval, from a conversation (the app, Buddy, a channel), of a card only they answer.
+
+    A person-only card (``person_approval``) counts only an answer bound to what it showed, never a plain
+    True. A conversation's approval is always the person's (no level answers for them there), so their
+    approval of such a card is bound to the details its waiting interrupt holds; anything else is kept.
+    """
+    waiting = _waiting_interrupts(state)
+    held = {str(item["__interrupt_id"]): str(item["binding"]) for item in waiting
+            if item.get("person_only") and item.get("binding") and item.get("__interrupt_id")}
+    if not held:
+        return resume_val
+    from row_bot.tools.approval_gate import bound_answer
+
+    if isinstance(resume_val, Mapping):
+        return {key: bound_answer(True, held[key]) if value is True and key in held else value
+                for key, value in resume_val.items()}
+    if resume_val is True and len(waiting) == 1:
+        [(key, binding)] = held.items()
+        return {key: bound_answer(True, binding)}
+    return resume_val
+
+
 def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None):
     """Resume an interrupted agent graph after user approval/denial.
+
+    ``resume_values`` (a question's answer, by its interrupt id) resumes only
+    those interrupts, in place of ``approved``: anything else waiting asks again.
 
     Yields the same ``(event_type, payload)`` tuples as ``stream_agent``.
     """
@@ -7553,6 +7780,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7571,10 +7799,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
     except InvalidExecutionBudget as exc:
         yield ("error", f"This paused agent run cannot be resumed safely: {exc}")
         return
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _person_answers(agent.get_state(config), _resume_value(approved, interrupt_ids, resume_values))
     try:
         for event in _stream_graph(
             agent,
@@ -7606,6 +7831,7 @@ def resume_stream_agent(enabled_tool_names: list[str], config: dict, approved: b
 
 def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, approved: bool,
                                *, interrupt_ids: list[str] | None = None,
+                               resume_values: Mapping[str, Any] | None = None,
                                stop_event: threading.Event | None = None) -> str | dict:
     """Resume an interrupted agent graph (non-streaming, for tasks).
 
@@ -7614,7 +7840,8 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
     approval).
 
     Chained interrupts are handled after ``Command(resume=...)`` by checking
-    ``state.next`` and returning ``{"type": "interrupt", ...}``.
+    whether the graph is paused at a question (``_paused_at_a_question``) and
+    returning ``{"type": "interrupt", ...}``.
     """
     config = _normalize_agent_config(config)
     configurable = config.get("configurable") or {}
@@ -7641,6 +7868,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
         agent_run_id=str(configurable.get("agent_run_id") or ""),
         external_discovery_active=bool(configurable.get("external_discovery_active")),
         app_scope=configurable.get("app_scope"),
+        person_rules=configurable.get("person_rules"),
     )
     set_active_model_override(_model_ov or "")
     try:
@@ -7660,10 +7888,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
             f"This paused agent run cannot be resumed safely: {exc}"
         ) from exc
 
-    if interrupt_ids:
-        resume_val = {iid: approved for iid in interrupt_ids}
-    else:
-        resume_val = approved
+    resume_val = _resume_value(approved, interrupt_ids, resume_values)
 
     try:
         for _event in agent.stream(
@@ -7694,14 +7919,8 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
 
     # Check for another interrupt (agent may call a second dangerous tool)
     state = agent.get_state(config)
-    if state and state.next:
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+    if _paused_at_a_question(state):
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             return {"type": "interrupt", "interrupts": all_interrupts}
 
@@ -7717,6 +7936,7 @@ def _resume_invoke_agent_graph(enabled_tool_names: list[str], config: dict, appr
 
 def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: bool,
                         *, interrupt_ids: list[str] | None = None,
+                        resume_values: Mapping[str, Any] | None = None,
                         stop_event: threading.Event | None = None) -> str | dict:
     """Resume the shared graph and apply the durable orchestration guard."""
 
@@ -7725,6 +7945,7 @@ def resume_invoke_agent(enabled_tool_names: list[str], config: dict, approved: b
         config,
         approved,
         interrupt_ids=interrupt_ids,
+        resume_values=resume_values,
         stop_event=stop_event,
     )
     _complete_unified_parent_pass(result, enabled_tool_names, config)
@@ -8190,9 +8411,11 @@ def _stream_graph(agent, input_data, config: dict,
         _current_provider_call = None
 
     # Domain-specific Browser protection remains separate from the global
-    # exact-repeat guard enforced at the tool invocation boundary.
+    # exact-repeat guard enforced at the tool invocation boundary. A real task
+    # (a multi-step form) takes dozens of page actions; this only stops a
+    # runaway loop.
     _loop_detected = False
-    _BROWSER_TOOL_LIMIT = 14
+    _BROWSER_TOOL_LIMIT = 80
     _browser_tool_count = 0
     _recent_browser_actions: list[str] = []
     _browser_budget_exceeded = False
@@ -8354,9 +8577,10 @@ def _stream_graph(agent, input_data, config: dict,
                                 _browser_tool_count += 1
                                 _recent_browser_actions.append(_browser_action_name(runtime_tool_name))
                                 _recent_browser_actions = _recent_browser_actions[-8:]
-                                _snapshot_heavy = len(_recent_browser_actions) >= 6 and all(
-                                    action in {"snapshot", "take_screenshot", "navigate", "navigate_back", "back"}
-                                    for action in _recent_browser_actions[-6:]
+                                # Only looking, never acting, many times in a row: stuck.
+                                _snapshot_heavy = len(_recent_browser_actions) >= 8 and all(
+                                    action in {"snapshot", "take_screenshot", "screenshot", "wait_for"}
+                                    for action in _recent_browser_actions[-8:]
                                 )
                                 if _browser_tool_count >= _BROWSER_TOOL_LIMIT or _snapshot_heavy:
                                     _browser_budget_exceeded = True
@@ -8645,7 +8869,7 @@ def _stream_graph(agent, input_data, config: dict,
 
     # Check if the graph paused due to an interrupt (destructive tool gate)
     state = agent.get_state(config)
-    if state and state.next:
+    if _paused_at_a_question(state):
         _log_stream_completion(
             config=config,
             answer_chars=_answer_chars,
@@ -8661,13 +8885,7 @@ def _stream_graph(agent, input_data, config: dict,
             latest_ai_message=_latest_ai_message_from_state(agent, config),
             phase_timings=phase_timings,
         )
-        all_interrupts: list[dict] = []
-        for task in state.tasks:
-            if hasattr(task, "interrupts") and task.interrupts:
-                for intr in task.interrupts:
-                    item = dict(intr.value) if isinstance(intr.value, dict) else {"description": str(intr.value)}
-                    item["__interrupt_id"] = intr.id
-                    all_interrupts.append(item)
+        all_interrupts = _waiting_interrupts(state)
         if all_interrupts:
             yield ("interrupt", all_interrupts)
             return

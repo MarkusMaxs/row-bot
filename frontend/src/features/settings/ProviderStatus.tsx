@@ -5,6 +5,7 @@ import {
   LogIn,
   MoreHorizontal,
   RefreshCw,
+  SquareTerminal,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type {
@@ -31,6 +32,11 @@ import { ModalTask } from '../../ui/overlays';
 import ProviderSettingsPanel from './ProviderSettingsPanel';
 import type { createProviderSettingsSessions } from './provider-settings-sessions';
 import { BillingTag } from '../shell/ModelList';
+import ClaudePlanSetup, {
+  CLAUDE_PLAN_SUMMARY,
+  CLAUDE_PLAN_TITLE,
+  claudePlanSummary,
+} from './ClaudePlanSetup';
 
 const groups = {
   local: 'On this device',
@@ -60,8 +66,16 @@ const sourceLabels: Record<string, string> = {
 /** The app whose sign-in a subscription can borrow. */
 const cliApps: Record<string, string> = {
   codex: 'Codex',
-  claude_subscription: 'Claude Code',
 };
+/** The account a subscription signs in with (no key involved). */
+const subscriptionAccounts: Record<string, string> = {
+  codex: 'ChatGPT',
+};
+function notConnectedDetail(card: ProviderLiveCard) {
+  if (card.group !== 'subscription') return 'Needs an API key';
+  const account = subscriptionAccounts[card.provider_id] ?? card.display_name;
+  return `Sign in with your ${account} account`;
+}
 function sourceLabel(card: ProviderLiveCard) {
   const app = cliApps[card.provider_id] ?? 'its own app';
   if (card.source === 'external_cli') return `Uses your ${app} sign-in`;
@@ -87,6 +101,14 @@ function needsReconnect(card: ProviderLiveCard) {
   );
 }
 function cardState(card: ProviderLiveCard) {
+  // Claude runs the person's own Claude Code: its state is what Claude Code says.
+  if (card.claude_plan) {
+    const plan = claudePlanSummary(card.claude_plan);
+    return {
+      label: plan.label,
+      tone: plan.tone === 'success' ? 'enabled' : plan.tone,
+    };
+  }
   if (needsReconnect(card)) return { label: 'Reconnect', tone: 'warning' };
   if (card.configured && card.source === 'external_cli')
     return { label: 'Linked', tone: 'saved' };
@@ -102,10 +124,6 @@ function canConnect(card: ProviderLiveCard) {
     return (
       card.source !== 'oauth_device' || !card.configured || needsReconnect(card)
     );
-  if (card.provider_id === 'claude_subscription')
-    return (
-      card.source !== 'oauth_pkce' || !card.configured || needsReconnect(card)
-    );
   if (card.provider_id === 'xai_oauth')
     return (
       card.oauth_client_id_configured &&
@@ -116,30 +134,33 @@ function canConnect(card: ProviderLiveCard) {
 function canDisconnect(card: ProviderLiveCard) {
   return (
     card.configured ||
-    (['codex', 'claude_subscription'].includes(card.provider_id) &&
-      card.source === 'external_cli')
+    (card.provider_id === 'codex' && card.source === 'external_cli')
   );
 }
 function cardDetail(card: ProviderLiveCard) {
+  if (card.claude_plan) {
+    const details = [claudePlanSummary(card.claude_plan).detail];
+    if (card.claude_plan.state === 'ready') {
+      if (card.claude_plan.plan) details.push(card.claude_plan.plan);
+      if (card.model_count) details.push(`${card.model_count} models`);
+    }
+    return details.join(' · ');
+  }
   const source =
     card.configured && card.provider_id === 'codex' && !card.runtime_enabled
       ? 'Reconnect ChatGPT to use Codex models in chat'
       : card.configured &&
-          card.provider_id === 'claude_subscription' &&
+          card.provider_id === 'xai_oauth' &&
           !card.runtime_enabled
-        ? 'Claude Code login found, but Row-Bot runtime is not connected'
-        : card.configured &&
-            card.provider_id === 'xai_oauth' &&
-            !card.runtime_enabled
-          ? 'Reconnect xAI Grok to use its models in chat'
-          : card.provider_id === 'xai_oauth' && !card.configured
-            ? card.oauth_client_id_configured
-              ? 'Ready to sign in with your xAI account'
-              : 'Needs an xAI client ID first: ⋯ › Set up xAI sign-in'
-            : sourceLabel(card) ||
-              (card.configured ? 'Connected' : 'Needs an API key');
+        ? 'Reconnect xAI Grok to use its models in chat'
+        : card.provider_id === 'xai_oauth' && !card.configured
+          ? card.oauth_client_id_configured
+            ? 'Ready to sign in with your xAI account'
+            : 'Needs an xAI client ID first: ⋯ › Set up xAI sign-in'
+          : sourceLabel(card) ||
+            (card.configured ? 'Connected' : notConnectedDetail(card));
   const details = [source];
-  if (card.plan_type) details.push(`${card.plan_type} plan`);
+  if (card.plan_type) details.push(`${humanizeToken(card.plan_type)} plan`);
   if (card.model_count !== null)
     details.push(
       `${card.model_count} ${card.model_count_source.includes('fallback') ? 'known models' : 'models'}`,
@@ -181,6 +202,7 @@ export default function ProviderStatus({
 }) {
   const [snapshot, setSnapshot] = useState<ProviderLiveSnapshot | null>(null);
   const [selected, setSelected] = useState('');
+  const [claudeOpen, setClaudeOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState('');
   const [testing, setTesting] = useState('');
@@ -273,16 +295,12 @@ export default function ProviderStatus({
     const state = cardState(card);
     const detail = folded ? '' : cardDetail(card);
     const menu: MenuAction[] = [];
-    if (
-      card.group === 'subscription' &&
-      card.provider_id === 'claude_subscription' &&
-      onSubscription
-    )
+    const claude = card.claude_plan;
+    if (claude?.state === 'ready')
       menu.push({
-        label: 'Import Claude setup token',
-        icon: <KeyRound size={16} />,
-        onSelect: () =>
-          onSubscription(card.provider_id, 'manage', needsReconnect(card)),
+        label: 'Check Claude Code',
+        icon: <SquareTerminal size={16} />,
+        onSelect: () => setClaudeOpen(true),
       });
     if (
       card.group === 'subscription' &&
@@ -296,7 +314,7 @@ export default function ProviderStatus({
       });
     if (
       card.group === 'subscription' &&
-      ['codex', 'claude_subscription'].includes(card.provider_id) &&
+      card.provider_id === 'codex' &&
       card.external_reference_exists &&
       !card.configured &&
       onSubscriptionOption
@@ -311,7 +329,7 @@ export default function ProviderStatus({
       card.runtime_enabled &&
       card.configured &&
       testRuntime &&
-      ['claude_subscription', 'xai_oauth'].includes(card.provider_id)
+      card.provider_id === 'xai_oauth'
     )
       menu.push({
         label: `Test ${card.display_name} runtime`,
@@ -319,7 +337,12 @@ export default function ProviderStatus({
         disabled: !!testing,
         onSelect: () => void runtimeTest(card),
       });
-    if (card.group === 'subscription' && canDisconnect(card) && onSubscription)
+    if (
+      card.group === 'subscription' &&
+      !claude &&
+      canDisconnect(card) &&
+      onSubscription
+    )
       menu.push({
         label: `Disconnect ${card.display_name}`,
         icon: <Link2Off size={16} />,
@@ -362,6 +385,14 @@ export default function ProviderStatus({
               onClick={() => setSelected(card.provider_id)}
             >
               <KeyRound size={16} aria-hidden />
+            </CompactAction>
+          )}
+          {claude && claude.state !== 'ready' && (
+            <CompactAction
+              label="Set up Claude"
+              onClick={() => setClaudeOpen(true)}
+            >
+              <LogIn size={16} aria-hidden />
             </CompactAction>
           )}
           {card.group === 'subscription' &&
@@ -500,6 +531,29 @@ export default function ProviderStatus({
             );
           })}
         </>
+      )}
+      {claudeOpen && (
+        <ModalTask
+          open
+          title={CLAUDE_PLAN_TITLE}
+          description={CLAUDE_PLAN_SUMMARY}
+          ariaLabel={CLAUDE_PLAN_TITLE}
+          onOpenChange={(open) => {
+            if (!open) setClaudeOpen(false);
+          }}
+        >
+          <div className="settings-provider-dialog-content">
+            <ClaudePlanSetup
+              plan={
+                cards.find((card) => card.provider_id === 'claude_subscription')
+                  ?.claude_plan
+              }
+              checking={loading}
+              onCheck={() => setReload((value) => value + 1)}
+              onDone={() => setClaudeOpen(false)}
+            />
+          </div>
+        </ModalTask>
       )}
       {selected && owner && (
         <ModalTask

@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from typing import Any
+from row_bot.application.live_updates import publishes as _publishes_live
 
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,24 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.tool_outputs import delete_thread_outputs
 
     removed += delete_thread_outputs(thread_id)  # Long tool results saved for paging.
+    from row_bot.background_processes import delete_conversation_logs
+
+    removed += delete_conversation_logs(thread_id)  # Its background processes' logs.
+    from row_bot.recordings import delete_conversation as delete_recordings
+
+    removed += delete_recordings(thread_id)  # Its recordings' records (the videos are its media).
+    from row_bot.video_edits import delete_conversation as delete_video_edits
+
+    removed += delete_video_edits(thread_id)  # Its video edits' records (the results are its media).
+    from row_bot.developer.sandbox_prepare import delete_conversation as delete_sandbox_jobs
+
+    removed += delete_sandbox_jobs(thread_id)  # Its Prepare sandbox records (the packages stay in the sandbox).
+    from row_bot.file_deliveries import delete_conversation as delete_deliveries
+
+    removed += delete_deliveries(thread_id)  # Files it sent to the devices, and the records of its sends.
+    from row_bot.pages import delete_conversation as delete_pages
+
+    removed += delete_pages(thread_id)  # Its pages, their versions, state and decisions (N5).
     return removed
 
 
@@ -213,6 +232,34 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
         logger.debug("Could not stop Agent work for %s", thread_id, exc_info=True)
 
     try:
+        from row_bot.background_processes import stop_conversation
+
+        stop_conversation(thread_id)  # Each with everything it started; waits for them to end.
+    except Exception:
+        logger.debug("Could not stop background processes for %s", thread_id, exc_info=True)
+
+    try:
+        from row_bot import recordings
+
+        recordings.stop_conversation(thread_id)  # Its recordings stop with it (F2).
+    except Exception:
+        logger.debug("Could not stop recordings for %s", thread_id, exc_info=True)
+
+    try:
+        from row_bot import video_edits
+
+        video_edits.stop_conversation(thread_id)  # Its video edits stop with it (F3).
+    except Exception:
+        logger.debug("Could not stop video edits for %s", thread_id, exc_info=True)
+
+    try:
+        from row_bot.developer import sandbox_prepare
+
+        sandbox_prepare.stop_conversation(thread_id)  # Prepare sandbox stops with it, network off (F18).
+    except Exception:
+        logger.debug("Could not stop sandbox jobs for %s", thread_id, exc_info=True)
+
+    try:
         from row_bot.tools.shell_tool import clear_shell_history, get_session_manager
 
         get_session_manager().kill_session(thread_id)
@@ -230,11 +277,18 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
         logger.debug("Could not clear browser state for %s", thread_id, exc_info=True)
 
     try:
+        from row_bot.tools.browser_tool import get_session_manager as get_browser_session_manager
+
+        get_browser_session_manager().revoke_local_addresses(thread_id)  # Its local-address grants (F4).
+    except Exception:
+        logger.debug("Could not remove local-address grants for %s", thread_id, exc_info=True)
+
+    try:
         from row_bot.computer_use.service import get_computer_use_service
 
-        get_computer_use_service().close_for_thread(thread_id)
+        get_computer_use_service().forget(thread_id)  # Its session, and the apps it was allowed to use.
     except Exception:
-        logger.debug("Could not clear Computer Use state for %s", thread_id, exc_info=True)
+        logger.debug("Could not clear computer use state for %s", thread_id, exc_info=True)
 
     return active
 
@@ -393,6 +447,7 @@ def _deferred_finish(thread_id: str, token: str) -> None:
         time.sleep(0.25)
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def delete_thread(thread_id: str) -> ThreadDeletionResult:
     clean = normalize_thread_id(thread_id)
     from row_bot import threads
@@ -510,6 +565,7 @@ def delete_thread(thread_id: str) -> ThreadDeletionResult:
     )
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def delete_threads(thread_ids: Iterable[str]) -> BulkThreadDeletionResult:
     results: list[ThreadDeletionResult] = []
     failures: list[tuple[str, str]] = []
@@ -580,6 +636,113 @@ def compact_sqlite_database(
         result["error"] = str(exc)
         logger.info("SQLite compaction deferred for %s: %s", path, exc)
     return result
+
+
+# A delete with Undo (B343) takes effect at once: the conversation leaves every
+# list, takes no new turns and is removed for good when the window ends. Undo
+# inside the window brings it back as it was. The window outlasts the client's
+# Undo notice, so a late click still lands.
+UNDO_DELETE_SECONDS = 30.0
+_purging: set[str] = set()
+
+
+def _held_rows(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [(str(row[0]), str(row[1])) for row in conn.execute(
+        "SELECT thread_id, deleted_at FROM thread_meta WHERE COALESCE(deleted_at, '') <> ''")]
+
+
+def _start_purge_timer(delay: float) -> None:
+    timer = threading.Timer(delay, finish_held_deletions)
+    timer.daemon = True
+    timer.name = "row-bot-held-deletes"
+    timer.start()
+
+
+@_publishes_live("conversations", "runs", "approvals")
+def hold_thread_deletion(thread_id: str) -> None:
+    """Delete a conversation now with Undo on offer (the caller has stopped its work)."""
+
+    clean = normalize_thread_id(thread_id)
+    from contextlib import closing
+    from datetime import timezone
+    from row_bot import threads
+
+    threads._ensure_thread_db()  # noqa: SLF001
+    with _deletion_lock, closing(sqlite3.connect(threads.DB_PATH)) as conn, conn:
+        conn.execute("UPDATE thread_meta SET deleted_at=? WHERE thread_id=? AND COALESCE(deleted_at, '')=''",
+                     (datetime.now(timezone.utc).isoformat(), clean))
+    _start_purge_timer(UNDO_DELETE_SECONDS + 1)
+
+
+@_publishes_live("conversations", "runs", "approvals")
+def restore_held_thread(thread_id: str) -> bool:
+    """Undo a held delete; False once its removal has begun or it was never held."""
+
+    clean = normalize_thread_id(thread_id)
+    from contextlib import closing
+    from row_bot import threads
+    from row_bot.runtime import admissions
+
+    with _deletion_lock:
+        if clean in _purging or clean in _deleting_threads:
+            return False
+        if admissions.deletion_state(clean) not in {"active", "admission_closed"}:
+            return False
+        with closing(sqlite3.connect(threads.DB_PATH)) as conn, conn:
+            restored = conn.execute("UPDATE thread_meta SET deleted_at='' WHERE thread_id=? AND COALESCE(deleted_at, '')<>''",
+                                    (clean,)).rowcount
+        if restored:
+            admissions.reopen_admission(clean)
+        return bool(restored)
+
+
+def finish_held_deletions(*, now: datetime | None = None) -> int:
+    """Remove every held conversation whose Undo window has ended; returns how many."""
+
+    from contextlib import closing
+    from datetime import timezone
+    from row_bot import threads
+
+    threads._ensure_thread_db()  # noqa: SLF001
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=UNDO_DELETE_SECONDS)
+    with closing(sqlite3.connect(threads.DB_PATH)) as conn:
+        held = _held_rows(conn)
+    removed = 0
+    for thread_id, deleted_at in held:
+        try:
+            due = datetime.fromisoformat(deleted_at) <= cutoff
+        except ValueError:
+            due = True
+        if not due:
+            continue
+        with _deletion_lock:
+            if thread_id in _purging:
+                continue
+            with closing(sqlite3.connect(threads.DB_PATH)) as conn:
+                if (thread_id, deleted_at) not in _held_rows(conn):
+                    continue  # Undone meanwhile.
+            _purging.add(thread_id)
+        try:
+            removed += int(delete_thread(thread_id).deleted)
+        except Exception:
+            logger.warning("A deleted conversation could not be removed yet: %s", thread_id, exc_info=True)
+        finally:
+            with _deletion_lock:
+                _purging.discard(thread_id)
+    return removed
+
+
+def resume_held_deletions() -> None:
+    """At start-up, finish (off the start-up path) the deletes held when the app last stopped."""
+
+    from contextlib import closing
+    from row_bot import threads
+
+    threads._ensure_thread_db()  # noqa: SLF001
+    with closing(sqlite3.connect(threads.DB_PATH)) as conn:
+        held = _held_rows(conn)
+    if held:
+        _start_purge_timer(UNDO_DELETE_SECONDS + 1)
 
 
 def _thread_ids() -> set[str]:
@@ -973,6 +1136,7 @@ def run_idle_maintenance() -> dict[str, Any]:
     try:
         from row_bot import tasks, threads
 
+        finish_held_deletions()  # Any a busy conversation held back.
         checkpoint_stats = threads.cleanup_old_checkpoints()
         orphan_stats = sweep_orphaned_thread_artifacts()
         compaction = []

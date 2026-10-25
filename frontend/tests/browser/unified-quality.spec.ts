@@ -21,7 +21,7 @@ import {
 } from './unified-helpers';
 
 // A denial ends the turn without asking the model again (B199).
-const DENIED_REPLY = 'The requested action was denied. No action was taken.';
+const DENIED_REPLY = 'You said no, so Row-Bot stopped there.';
 
 test.use({ serviceWorkers: 'allow' });
 test.beforeEach(async ({ context }) => blockFixtureServiceWorkers(context));

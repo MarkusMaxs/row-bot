@@ -11,52 +11,39 @@ from row_bot.mcp_client import requirements
 pytestmark = pytest.mark.platform
 
 
-def test_local_calculator_test_stops_only_its_acquired_session(tmp_path, monkeypatch) -> None:
+def test_the_settings_test_opens_calculator_as_the_persons_own_action(tmp_path, monkeypatch) -> None:
     from row_bot.computer_use import service as service_module
+    from row_bot.computer_use.client import CuaClient
+    from row_bot.computer_use.service import ComputerUseService
+    from tests.fixtures.fake_desktop import FakeBar, FakeControl, FakeDesktop, FakeWindow
 
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     acknowledge_disclosure()
-    calls = []
+    desktop = FakeDesktop()
+    desktop.launchable["Calculator"] = lambda _desktop: FakeWindow(
+        3101, 801, "ApplicationFrameHost.exe", "Calculator", (100, 100, 400, 600),
+        controls=[FakeControl("Button", "Seven", (20, 300, 80, 60))])
+    service = ComputerUseService(client_factory=lambda: CuaClient("cua", transport_factory=lambda *_a: desktop),
+                                 bar_factory=FakeBar, stop_turn=lambda _thread: None,
+                                 window_display=desktop.window_display,
+                                 cursor_position=desktop.cursor_position)
+    monkeypatch.setattr(service_module, "_SERVICE", service)
+    marked = []
+    monkeypatch.setattr(readiness_module, "mark_cua_observation_verified", lambda: marked.append(True))
+    monkeypatch.setattr("row_bot.tools.approval_gate.current_approval_mode",
+                        lambda: pytest.fail("the person pressed Test: nothing more to ask"))
 
-    class FakeService:
-        def acquire(self, owner, *, validate_context):
-            assert validate_context is False
-            calls.append("acquire")
-
-        def grant_app_permission_for_local_ui(self, owner, app):
-            assert app == "Calculator"
-            calls.append("grant")
-
-        def launch_app(self, app, owner, *, approval_mode):
-            assert app == "Calculator" and approval_mode == "allow_all"
-            calls.append("launch")
-            return [{"target_id": "calculator"}]
-
-        def current_observation(self, target_id):
-            assert target_id == "calculator"
-            calls.append("observe")
-            return object()
-
-        def stop(self):
-            calls.append("stop")
-
-    monkeypatch.setattr(service_module, "get_computer_use_service", FakeService)
-    monkeypatch.setattr(readiness_module, "mark_cua_observation_verified", lambda: calls.append("mark"))
     readiness_module.test_local_computer_use()
-    assert calls == ["acquire", "grant", "launch", "observe", "mark", "stop"]
 
-    def busy():
-        class Busy(FakeService):
-            def acquire(self, owner, *, validate_context):
-                raise RuntimeError("busy")
+    assert marked == [True]
+    assert [name for name, _args in desktop.calls if name in {"launch_app", "get_window_state"}] == [
+        "launch_app", "get_window_state"]
+    assert service.status_snapshot()["active"] is False  # The test's session ended with it.
 
-        return Busy()
-
-    calls.clear()
-    monkeypatch.setattr(service_module, "get_computer_use_service", busy)
-    with pytest.raises(RuntimeError, match="busy"):
+    service.begin("busy-chat", "turn")
+    with pytest.raises(RuntimeError, match="another chat"):
         readiness_module.test_local_computer_use()
-    assert calls == []
+    assert service.status_snapshot()["thread_id"] == "busy-chat"
 
 
 def test_disclosure_acknowledgement_is_local_and_versioned(tmp_path, monkeypatch) -> None:

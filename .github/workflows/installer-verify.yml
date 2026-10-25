@@ -45,6 +45,8 @@ concurrency:
 env:
   WINDOWS_PYTHON_VERSION: "3.13.2"
   ROW_BOT_STARTUP_TIMEOUT: "180"
+  # Every Row-Bot these jobs start keeps install stats off: nothing reaches the real stats service.
+  ROW_BOT_INSTALL_COUNT: "0"
 
 jobs:
   preflight:

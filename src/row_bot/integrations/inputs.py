@@ -35,6 +35,27 @@ class InputError(ValueError):
     pass
 
 
+# Inputs Row-Bot recognises by what their declaration says they are, whatever a listing calls the variable: a
+# clearer name, where to find the value, and its shape. The Microsoft 365 (Work IQ) servers' addresses need the
+# tenant's ID, a GUID, which the Registry declares only as "Microsoft Entra tenant ID" (B398).
+_GUID = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+_RECOGNISED = {
+    "microsoft entra tenant id": {
+        "label": "Microsoft Entra tenant ID",
+        "description": "Microsoft Entra admin center › Overview › Tenant ID",
+        "pattern": _GUID,
+        "problem": "a tenant ID looks like 1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f. Copy it from Microsoft Entra admin "
+                   "center › Overview.",
+    },
+}
+
+
+def recognised(item: dict) -> dict:
+    """What Row-Bot knows about a declared input from its description (``label``, ``description``, ``pattern``,
+    ``problem``), or {}."""
+    return _RECOGNISED.get(" ".join(str(item.get("description") or "").casefold().split()).rstrip("."), {})
+
+
 def key_of(name: str) -> str:
     """An input key from a header or variable name: ``X-API-Key`` gives ``x_api_key``."""
     key = re.sub(r"[^A-Za-z0-9_]+", "_", str(name)).strip("_").lower()[:64] or "value"
@@ -193,6 +214,8 @@ def values(declared: list[dict], given: dict) -> tuple[dict, dict]:
         if item.get("format") == "boolean" and value not in {"true", "false"}:
             raise InputError("input_invalid:" + item["key"])
         if item["target"] == "url_variable" and not re.fullmatch(r"[A-Za-z0-9._~-]{1,256}", value):
+            raise InputError("input_invalid:" + item["key"])
+        if recognised(item).get("pattern") and not re.fullmatch(recognised(item)["pattern"], value):
             raise InputError("input_invalid:" + item["key"])
         (secret if item["secret"] else plain)[item["key"]] = value
     return plain, secret

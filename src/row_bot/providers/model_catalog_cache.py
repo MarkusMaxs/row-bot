@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from row_bot.application.live_updates import publish as _publish_live
 from row_bot.data_paths import get_row_bot_data_dir
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,8 @@ _refresh_state: dict[str, Any] = {
     "reason": "",
     "last_result": None,
 }
+# Providers that changed while a refresh was running: refreshed again once it ends (id -> reason).
+_follow_ups: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -200,10 +203,19 @@ def start_model_catalog_refresh_background(
     reason: str = "manual",
     force: bool = False,
     provider_id: str | None = None,
+    follow_up: bool = False,
 ) -> bool:
-    """Start a coalesced daemon-thread refresh. Returns False if one is already running."""
+    """Start a coalesced daemon-thread refresh. Returns False if one is already running.
+
+    ``follow_up``: *provider_id* has just changed, so a refresh already running may
+    have read it before the change. It is then refreshed again as soon as that
+    one ends, instead of not at all. Every finished refresh publishes the
+    ``models`` live topic, so an open Models page reads the catalog again.
+    """
     with _refresh_state_lock:
         if _refresh_state.get("running"):
+            if follow_up and provider_id:
+                _follow_ups[provider_id] = reason
             return False
         _refresh_state.update({
             "running": True,
@@ -214,36 +226,65 @@ def start_model_catalog_refresh_background(
         })
 
     def _runner() -> None:
-        result: dict[str, Any]
-        if not _refresh_lock.acquire(blocking=False):
-            result = {"ok": False, "coalesced": True, "message": "Refresh already running"}
-        else:
-            try:
-                snapshot = refresh_model_catalog_cache(reason=reason, force=force, provider_id=provider_id)
-                result = {
-                    "ok": True,
-                    "rows": snapshot.total_rows,
-                    "warnings": list(snapshot.warnings),
-                    "provider_status": snapshot.provider_status,
-                    "provider_id": provider_id or "",
-                    "generated_at": snapshot.generated_at,
-                    "reason": reason,
-                }
-            except Exception as exc:
-                logger.warning("Background model catalog refresh failed", exc_info=True)
-                result = {"ok": False, "message": str(exc), "reason": reason}
-            finally:
-                _refresh_lock.release()
-        with _refresh_state_lock:
-            _refresh_state.update({
-                "running": False,
-                "finished_at": time.time(),
-                "last_result": result,
-            })
+        request: tuple[str, bool, str | None] | None = (reason, force, provider_id)
+        while request is not None:
+            result = _refresh_once(*request)
+            with _refresh_state_lock:
+                if _follow_ups:
+                    target, why = _follow_ups.popitem()
+                    request = (why, True, target)
+                    _refresh_state.update({"reason": why, "last_result": result})
+                else:
+                    request = None
+                    _refresh_state.update({
+                        "running": False,
+                        "finished_at": time.time(),
+                        "last_result": result,
+                    })
+            _publish_live("models")
 
     thread = threading.Thread(target=_runner, name="model-catalog-refresh", daemon=True)
     thread.start()
     return True
+
+
+def _refresh_once(reason: str, force: bool, provider_id: str | None) -> dict[str, Any]:
+    if not _refresh_lock.acquire(blocking=False):
+        return {"ok": False, "coalesced": True, "message": "Refresh already running"}
+    try:
+        snapshot = refresh_model_catalog_cache(reason=reason, force=force, provider_id=provider_id)
+        return {
+            "ok": True,
+            "rows": snapshot.total_rows,
+            "warnings": list(snapshot.warnings),
+            "provider_status": snapshot.provider_status,
+            "provider_id": provider_id or "",
+            "generated_at": snapshot.generated_at,
+            "reason": reason,
+        }
+    except Exception as exc:
+        logger.warning("Background model catalog refresh failed", exc_info=True)
+        return {"ok": False, "message": str(exc), "reason": reason}
+    finally:
+        _refresh_lock.release()
+
+
+def provider_connection_changed(provider_id: str, *, connected: bool) -> None:
+    """A provider was signed in to or given a key, or disconnected: Settings › Models shows it at once (B411).
+
+    A connection refreshes that provider's catalog in the background, so its models
+    are listed without the person pressing Refresh. A disconnect asks nobody: every
+    catalog read assesses readiness from local state, so open pages only read again.
+    The connection changed either way, so a refresh that can't start is logged, never raised.
+    """
+    if not connected:
+        _publish_live("models")
+        return
+    try:
+        start_model_catalog_refresh_background(reason="provider_connection", force=True,
+                                               provider_id=provider_id, follow_up=True)
+    except Exception:
+        logger.warning("Could not start refreshing the %s model catalog", provider_id, exc_info=True)
 
 
 def model_catalog_refresh_state() -> dict[str, Any]:

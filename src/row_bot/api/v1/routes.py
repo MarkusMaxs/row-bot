@@ -78,6 +78,15 @@ _SCREEN_SETTINGS_ACTIONS = frozenset({
     ("system", "computer_use.open_accessibility"),
     ("system", "computer_use.open_screen_recording"),
 })
+
+
+def _schedule_zone_name() -> str:
+    """The computer's IANA zone, as a new workflow schedule starts with it."""
+    from row_bot.schedule_zones import local_zone_name
+
+    return local_zone_name()
+
+
 _STATUS = {
     "not_found": 404,
     "cursor_expired": 410,
@@ -100,6 +109,7 @@ _STATUS.update(
     {
         "approval_required": 409,
         "conversation_deleting": 409,
+        "restore_expired": 409,
         "reasoning_model_mismatch": 422,
         "invalid_reasoning_selection": 422,
         "reasoning_capabilities_changed": 409,
@@ -117,6 +127,7 @@ _STATUS.update(
         "agent_run_finished": 409,
         "agent_work_not_resumable": 409,
         "agent_resume_unavailable": 409,
+        "helper_reasoning_unavailable": 422,
         "media_scope_conflict": 403,
         "media_type_conflict": 422,
         "media_destination_unavailable": 409,
@@ -187,6 +198,10 @@ _STATUS.update(
         # or the Google client doesn't list its callback.
         "account_callback_unavailable": 409,
         "account_redirect_mismatch": 422,
+        # Outlook: an Application (client) ID or tenant Microsoft can't have issued; no sign-in code from
+        # Microsoft (the app doesn't allow public client flows).
+        "account_microsoft_app_invalid": 422,
+        "account_device_code_unavailable": 409,
     }
 )
 
@@ -369,32 +384,15 @@ _STATUS.update(
     {
         "invalid_browser_command": 422,
         "invalid_browser_url": 422,
-        "browser_action_denied": 403,
+        "browser_disabled": 403,
         "browser_navigation_denied": 403,
-        "browser_receipt_unavailable": 404,
-        "browser_revision_conflict": 409,
-        "browser_session_inactive": 409,
-        "browser_window_unavailable": 409,
-        "browser_action_failed": 409,
-        "browser_outcome_uncertain": 409,
-        "browser_status_unavailable": 503,
-        "exact_page_target_contract_required": 409,
-        "exact_page_target_and_hidden_text_contract_required": 409,
-        "semantic_page_observation_contract_required": 409,
-        "owned_tab_identity_contract_required": 409,
-        "private_preview_export_unavailable": 409,
-        "use_computer_use_for_external_browser": 409,
+        "browser_unavailable": 503,
     }
 )
 _STATUS.update(
     {
         "invalid_computer_use_command": 422,
         "computer_use_local_only": 403,
-        "computer_use_revision_conflict": 409,
-        "computer_use_inactive": 409,
-        "computer_use_busy": 409,
-        "computer_use_not_paused": 409,
-        "computer_use_resume_failed": 409,
         "computer_use_outcome_uncertain": 409,
     }
 )
@@ -503,6 +501,7 @@ _STATUS.update(
         "invalid_task_settings": 422,
         "task_settings_profile_conflict": 409,
         "task_settings_profile_unavailable": 409,
+        "task_settings_folder_unavailable": 409,
         "task_settings_model_unavailable": 409,
         "task_settings_unavailable": 409,
         "task_settings_too_large": 413,
@@ -521,6 +520,8 @@ _STATUS.update(
         "recipient_unavailable": 409,
         "delivery_unavailable": 409,
         "sharing_media_limit": 413,
+        "x_account_required": 409,
+        "x_account_unavailable": 409,
         "interactive_publish_requires_all_pages": 422,
     }
 )
@@ -1004,6 +1005,25 @@ _STATUS.update(
     {
         "process_policy_denied": 403,
         "process_unavailable": 404,
+        "recording_unavailable": 404,
+        "local_address_unavailable": 404,
+        "video_edit_unavailable": 404,
+        "sent_file_unavailable": 404,
+        "sent_file_expired": 410,
+        "sent_files_gone": 409,
+        # The workspace root's folder browser (F19) and a clone's network check.
+        "workspace_folder_refused": 403,
+        "workspace_folder_unavailable": 404,
+        "workspace_folder_root": 422,
+        "clone_blocked": 403,
+        "clone_confirmation_required": 409,
+        # Prepare sandbox and the sandbox image (F18).
+        "sandbox_unavailable": 404,
+        "sandbox_job_unavailable": 404,
+        "sandbox_docker_required": 409,
+        "sandbox_nothing_to_install": 409,
+        "sandbox_runtime_unavailable": 409,
+        "sandbox_prepare_blocked": 403,
         "process_history_unavailable": 503,
         "process_limit": 429,
     }
@@ -1033,11 +1053,20 @@ _STATUS.update(
 
 
 _STATUS.update(dict.fromkeys(('plan_changed', 'plan_unsupported', 'plan_not_resumable', 'invalid_access_preset', 'invalid_integration_query', 'invalid_mcp_auth', 'invalid_mcp_target', 'mcp_auth_busy', 'mcp_auth_callback_invalid', 'mcp_auth_callback_unavailable', 'mcp_auth_configuration_changed', 'mcp_auth_connection_unavailable', 'mcp_auth_denied', 'mcp_auth_expired', 'mcp_auth_flow_unavailable', 'mcp_auth_not_completed', 'mcp_auth_state_invalid', 'mcp_oauth_http_required', 'mcp_auth_endpoint_invalid', 'mcp_auth_issuer_mismatch', 'mcp_auth_origin_mismatch', 'mcp_auth_redirect_refused', 'mcp_credentials_endpoint_changed', 'mcp_credentials_too_large', 'mcp_credentials_unavailable', 'invalid_credential_reference', 'mcp_durable_storage_required', 'mcp_sign_in_required', 'mcp_package_recipe_unsupported', 'mcp_package_install_scripts_unsupported', 'mcp_package_locked_dependencies_required', 'mcp_package_integrity_required', 'mcp_package_integrity_changed', 'mcp_package_invalid', 'mcp_package_node_required', 'mcp_package_preparation_required', 'mcp_package_preview_capacity', 'mcp_package_preview_expired', 'mcp_package_source_invalid', 'mcp_package_too_large', 'package_link_or_collision', 'unsafe_package_path', 'hermes_recipe_unsupported', 'package_download_too_large', 'package_preview_changed', 'package_preview_expired', 'package_source_not_supported', 'package_source_removed', 'plugin_child_owned', 'plugin_child_parent_owned', 'plugin_child_source_immutable', 'plugin_mcp_state_unavailable', 'plugin_package_state_unavailable'), 409))
+# An address pasted back to finish a sign-in from another device: not that address, another sign-in's, already
+# used, or its sign-in has ended.
+_STATUS.update({"mcp_auth_address_invalid": 422, "mcp_auth_address_other": 409, "mcp_auth_address_used": 409,
+                "mcp_auth_address_expired": 409})
 
 _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 'unsupported_upload', 'unsafe_upload',
                               'bundle_signature_invalid', 'bundle_unsupported'), 422))
 _STATUS['upload_too_large'] = 413
+# An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
+_STATUS['question_answer_invalid'] = 422
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
+# Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
+_STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
+                "chat_page_rate_limited": 429, "chat_page_nothing_to_send": 409})
 # App views in chat: each reaches the client as itself (unlisted, every one read "Part of Row-Bot isn't responding").
 _STATUS.update({"views_off": 403, "view_tool_refused": 403, "view_tool_denied": 403, "view_rate_limited": 429,
                 "view_busy": 409, "view_unavailable": 409, "view_tool_failed": 502})
@@ -1196,23 +1225,28 @@ def cached_choices() -> dict:
     """Read existing caches/catalogues; opening a client never refreshes a provider."""
     from row_bot.providers.model_catalog_cache import read_model_catalog_cache
     from row_bot.providers.client_status import picker_choices
+    from row_bot.providers.model_visibility import annotate
     from row_bot.tools import registry as tool_registry
     from row_bot.plugins import registry as plugin_registry, state as plugin_state
     from row_bot.mcp_client.runtime import get_catalog_snapshot
 
     snapshot = read_model_catalog_cache()
-    # The composer offers the Brain picker's list, judged by the same rule.
-    models = [
-        {
-            "provider_id": option["provider_id"],
-            "model_ref": option["selection_ref"],
-            "label": option["label"],
-            "available": option["available"],
-            "unavailable_reason": option["unavailable_reason"],
-            "billing": option["billing"],
-        }
-        for option in picker_choices("chat")
-    ]
+    # The composer offers the Brain picker's list, judged by the same rule,
+    # with each person's favourites and hidden models marked (F10).
+    models = annotate(
+        (
+            {
+                "provider_id": option["provider_id"],
+                "model_ref": option["selection_ref"],
+                "label": option["label"],
+                "available": option["available"],
+                "unavailable_reason": option["unavailable_reason"],
+                "billing": option["billing"],
+            }
+            for option in picker_choices("chat")
+        ),
+        key="model_ref",
+    )
     capabilities = []
 
     def add(identifier: str, enabled: bool, destructive: bool) -> None:
@@ -1501,6 +1535,8 @@ def create_router(
                 "server_utc_offset_minutes": round(
                     datetime.now().astimezone().utcoffset().total_seconds() / 60
                 ),
+                # A new schedule keeps its times in this zone unless another is chosen (N9).
+                "server_timezone": _schedule_zone_name(),
                 "native_adapter": {
                     "available": local_owner,
                     "proof_required": True,
@@ -2539,9 +2575,9 @@ def create_router(
         )
         return await respond(request, dto.ConversationActionReceipt, result)
 
-    async def browser_control_authority(
-        conversation_id: str, request: Request, current: Any
-    ) -> tuple[Callable[[], None], Callable[[str], None], str]:
+    async def browser_authority(conversation_id: str, request: Request, current: Any) -> Callable[[], None]:
+        """The Browser pane is the person's own view: any signed-in device of theirs, for a visible chat."""
+
         await readable_conversation(conversation_id)
         access = dispatch_validation(request, current)
 
@@ -2553,175 +2589,171 @@ def create_router(
             if admissions.deletion_state(conversation_id) != "active":
                 raise ProtocolError("conversation_deleting", 409)
 
-        def validate_action(kind: str) -> None:
-            from row_bot.application.profile_controls import freeze_profile
-            from row_bot.tools import registry as tool_registry
-            from row_bot.tools.profile_policy import dispatch_refusal
+        return validate
 
-            validate()
-            if not tool_registry.is_enabled(kind):
-                raise ProtocolError("browser_action_denied", 403)
-            row = service._metadata(conversation_id)
-            context = {
-                "thread_id": conversation_id,
-                "approval_mode": row.get("approval_mode"),
-                "agent_profile_id": row.get("agent_profile_id") or "",
-            }
-            if "tool_allowlist" in row:
-                context["tool_allowlist"] = row.get("tool_allowlist")
-            freeze_profile(context)
-            allowed = context.get("tool_allowlist")
-            refusal = dispatch_refusal(
-                context["agent_profile_snapshot"],
-                kind,
-                {},
-                source="core",
-                parent="browser",
-                allowlist=tuple(allowed) if allowed is not None else None,
-            )
-            if refusal:
-                raise ProtocolError("browser_action_denied", 403)
-
-        from row_bot.runtime import admissions
-
-        authority_id = admissions.keyed_digest(
-            {
-                "session": current.id,
-                "conversation": conversation_id,
-                "server_epoch": service.server_epoch,
-            },
-            read_only=True,
-        )
-        return validate, validate_action, authority_id
-
+    # The Browser pane (N12-A): state, the live page, the person's input and the pane's controls.
     @router.get("/conversations/{conversation_id}/browser")
-    async def browser_control_snapshot(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
+    async def browser_pane_state(conversation_id: str, request: Request) -> JSONResponse:
         current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_controls
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_state
 
-        result = await call(read_browser_controls, conversation_id, validate=validate)
-        return await respond(request, dto.BrowserControlSnapshot, result)
+        await call(validate)
+        return await respond(request, dto.BrowserPaneState, await call(pane_state, conversation_id))
 
-    @router.get("/conversations/{conversation_id}/browser/preview")
-    async def browser_control_preview(
-        conversation_id: str, request: Request, revision: str
-    ) -> JSONResponse:
-        current = await session(request, lane="view")
-        validate, _validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_preview
+    @router.get("/conversations/{conversation_id}/browser/live")
+    async def browser_live(
+        conversation_id: str,
+        request: Request,
+        view: str = "pane",
+        width: int = 1280,
+        height: int = 0,
+        scale: float = 1.0,
+    ) -> StreamingResponse:
+        """The pane's state and live picture as server-sent events, while the client watches.
 
-        result = await call(
-            read_browser_preview,
+        A pane sends its own size (``width`` × ``height`` CSS pixels at ``scale``): the
+        page lays out at that size while it shows, so the picture fills it 1:1.
+        Pictures come at most ``fps`` a second and only the latest is sent, so a
+        slow connection gets fewer pictures rather than a growing queue; a slow
+        connection also gets them smaller and lighter. A hidden pane closes the
+        stream and the screencast stops when nobody watches.
+        """
+
+        current = await session(request, lane="observation")
+        if view not in {"pane", "thumb"} or not 0 <= height <= 4000 or not 1.0 <= scale <= 4.0:
+            raise ProtocolError("invalid_browser_command", 422)
+        validate = await browser_authority(conversation_id, request, current)
+        await call(validate)
+        from row_bot.application.client_browser import _manager, frame_view, pane_state
+
+        engine = _manager().get_session()
+        watch = engine.watch(
             conversation_id,
-            revision,
-            validate=validate,
+            kind=view,
+            width=max(160, min(int(width), 1600)),
+            loop=asyncio.get_running_loop(),
+            height=height if view == "pane" else 0,
+            scale=scale,
         )
-        response = await respond(request, dto.BrowserPreview, result)
-        response.headers["Cache-Control"] = "no-store"
-        return response
+        fps = 12.0 if view == "pane" else 2.0
 
-    @router.post("/conversations/{conversation_id}/browser/review")
-    async def browser_control_review(
-        conversation_id: str, request: Request
+        async def stream() -> Any:
+            sent_seq, sent_revision = -1, -1
+            heartbeat = security.clock()
+            slow = 0
+            try:
+                yield ": connected\n\n"
+                # The stream ends with the browser too (Row-Bot quitting), so shutdown never waits on it.
+                while not await request.is_disconnected() and not engine.closed:
+                    security.session(await _context(request), current.id, current.csrf)
+                    changed = await watch.changed(timeout=15.0)
+                    state = pane_state(conversation_id)
+                    if state["revision"] != sent_revision:
+                        sent_revision = state["revision"]
+                        yield "event: state\ndata: " + dto.BrowserPaneState.model_validate(state).model_dump_json() + "\n\n"
+                    frame = watch.frame()
+                    if frame is not None and frame.seq != sent_seq and state["status"] == "running":
+                        sent_seq = frame.seq
+                        view_frame = frame_view(frame)
+                        if slow >= 3:
+                            view_frame = await asyncio.to_thread(_lighter, view_frame)
+                        started = security.clock()
+                        yield "event: frame\ndata: " + dto.BrowserFrame.model_validate(view_frame).model_dump_json() + "\n\n"
+                        spent = security.clock() - started
+                        # A send that waits means the connection is slow: lighter pictures until it isn't.
+                        slow = min(6, slow + 1) if spent > 0.25 else max(0, slow - 1)
+                        await asyncio.sleep(max(0.0, 1.0 / fps - spent))
+                    if not changed and security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+            except ProtocolError:
+                return
+            finally:
+                watch.close()
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=HEADERS)
+
+    def _lighter(frame: dict[str, Any]) -> dict[str, Any]:
+        """A smaller, lighter JPEG of one picture, for a slow connection."""
+
+        import base64
+        import io
+
+        from PIL import Image
+
+        try:
+            picture = Image.open(io.BytesIO(base64.b64decode(frame["image_base64"])))
+            picture.thumbnail((max(160, picture.width // 2), max(120, picture.height // 2)))
+            output = io.BytesIO()
+            picture.convert("RGB").save(output, format="JPEG", quality=45)
+            return {**frame, "image_base64": base64.b64encode(output.getvalue()).decode("ascii")}
+        except Exception:
+            return frame
+
+    @router.post("/conversations/{conversation_id}/browser/input")
+    async def browser_input(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserInput, 64 * 1024)
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_input
+
+        await call(validate)
+        events = [event.model_dump(mode="json") for event in body.events]
+        return await respond(request, dto.BrowserInputResult, await call(pane_input, conversation_id, events))
+
+    @router.post("/conversations/{conversation_id}/browser/actions")
+    async def browser_action(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserPaneAction, 16 * 1024)
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.client_browser import pane_action
+
+        await call(validate)
+        result = await call(pane_action, conversation_id, body.action, url=body.url, tab=body.tab)
+        return await respond(request, dto.BrowserPaneState, result)
+
+    @router.get("/browser/sites")
+    async def browser_sites(request: Request) -> JSONResponse:
+        await session(request, lane="view")
+        from row_bot.application.client_browser import sites
+
+        return await respond(request, dto.BrowserSitePage, await call(sites))
+
+    @router.post("/browser/sites/clear")
+    async def browser_sites_clear(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.BrowserSitesClear, 4096)
+        from row_bot.application.client_browser import clear_sites
+
+        return await respond(request, dto.BrowserSitesCleared, await call(clear_sites, body.site))
+
+    # Local addresses (F4): what this conversation's browser may open now, and Remove.
+    @router.get("/conversations/{conversation_id}/browser/local-addresses")
+    async def browser_local_addresses(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request, lane="view")
+        validate = await browser_authority(conversation_id, request, current)
+        from row_bot.application.recording_views import read_local_addresses
+
+        await call(validate)
+        result = await call(read_local_addresses, conversation_id)
+        return await respond(request, dto.LocalAddressPage, result)
+
+    @router.post("/conversations/{conversation_id}/browser/local-addresses/{grant_id}/remove")
+    async def remove_browser_local_address(
+        conversation_id: str, grant_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        body = await _body(request, dto.BrowserReviewRequest, 16 * 1024)
-        validate, validate_action, _authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import review_browser_command
+        validate = await browser_authority(conversation_id, request, current)
+        if len(grant_id or "") != 32 or any(char not in "0123456789abcdef" for char in grant_id):
+            raise ProtocolError("local_address_unavailable", 404)
+        from row_bot.application.recording_views import remove_local_address
 
-        result = await call(
-            review_browser_command,
-            body.action,
-            body.payload,
-            conversation_id,
-            validate=validate,
-        )
-        await call(validate_action, result["policy_action"])
-        result["nonce"] = security.approval_nonce(
-            current,
-            "browser-control:" + conversation_id,
-            result["revision"],
-            result["action_digest"],
-        )
-        return await respond(request, dto.BrowserReview, result)
-
-    @router.get("/conversations/{conversation_id}/browser/commands/{command_id}")
-    async def browser_control_receipt(
-        conversation_id: str, command_id: UUID, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="view")
-        validate, _validate_action, authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-        from row_bot.application.client_browser_controls import read_browser_receipt
-
-        result = await call(
-            read_browser_receipt,
-            owner_id=current.id,
-            authority_id=authority_id,
-            conversation_id=conversation_id,
-            command_id=str(command_id),
-            validate=validate,
-        )
-        return await respond(request, dto.BrowserReceipt, result)
-
-    @router.post("/conversations/{conversation_id}/browser/commands")
-    async def browser_control_command(
-        conversation_id: str, request: Request
-    ) -> JSONResponse:
-        current = await session(request, lane="mutation")
-        body = await _body(request, dto.Command, 32 * 1024)
-        if not body.type.startswith("browser."):
-            raise ProtocolError("invalid_browser_command", 422)
-        if str(body.client_session_id) != current.id:
-            raise ProtocolError("invalid_browser_command", 422)
-        key = request.headers.get("idempotency-key", "")
-        if key != str(body.command_id):
-            raise ProtocolError("idempotency_mismatch", 409)
-        wire = body.model_dump(mode="json")
-        nonce = wire["payload"]["nonce"]
-        validate, validate_action, authority_id = await browser_control_authority(
-            conversation_id, request, current
-        )
-
-        def validate_review(command: dict[str, Any], review: dict[str, Any]) -> None:
-            validate()
-            if review.get("conversation_id") != conversation_id:
-                raise ProtocolError("browser_action_denied", 403)
-            security.consume_nonce(
-                current,
-                "browser-control:" + conversation_id,
-                review["revision"],
-                review["action_digest"],
-                nonce,
-                str(body.command_id),
-            )
-
-        from row_bot.application.client_browser_controls import (
-            execute_browser_command,
-        )
-
-        result = await call(
-            execute_browser_command,
-            wire,
-            conversation_id,
-            owner_id=current.id,
-            authority_id=authority_id,
-            key=key,
-            validate=validate,
-            validate_action=validate_action,
-            validate_review=validate_review,
-        )
-        return await respond(request, dto.BrowserReceipt, result)
+        await call(validate)
+        result = await call(remove_local_address, conversation_id, grant_id)
+        if result is None:
+            raise ProtocolError("local_address_unavailable", 404)
+        return await respond(request, dto.LocalAddressPage, result)
 
     async def computer_control_authority(
         conversation_id: str, request: Request, current: Any
@@ -3239,6 +3271,7 @@ def create_router(
         validate_access = dispatch_validation(request, current)
         folder = None
         native_folder_scope = None
+        root_folder: tuple[str, bool] | None = None
         if (
             body.type == "resource.setup"
             and body.payload.get("intent") == "new_conversation"
@@ -3246,6 +3279,25 @@ def create_router(
         ):
             # A saved-workspace conversation never consumes a folder capability.
             raise ProtocolError("invalid_command", 422)
+        if body.type in {"resource.setup", "resource.continue"} and body.payload.get(
+            "root_folder"
+        ) is not None:
+            # A folder chosen in the workspace root's folder browser (F19), from any signed-in
+            # device: checked against the root here and again just before the setup runs.
+            from row_bot.developer import workspace_folders
+
+            root_folder = (
+                str(body.payload["root_folder"]),
+                body.type == "resource.continue"
+                or body.payload.get("clone_workspace") is not None
+                or body.payload.get("empty_workspace") is not None,
+            )
+            try:
+                folder = await call(
+                    workspace_folders.authorize, root_folder[0], parent=root_folder[1]
+                )
+            except workspace_folders.FolderRefused as exc:
+                raise ProtocolError(exc.code, _STATUS[exc.code]) from None
         if body.type in {"resource.setup", "resource.continue"} and body.payload.get(
             "folder_grant"
         ):
@@ -3290,7 +3342,16 @@ def create_router(
                     body.payload["nonce"],
                     str(body.command_id),
                 )
-            if folder is not None:
+            if root_folder is not None:
+                from row_bot.developer import workspace_folders
+
+                try:
+                    again = workspace_folders.authorize(root_folder[0], parent=root_folder[1])
+                except workspace_folders.FolderRefused as exc:
+                    raise ProtocolError(exc.code, _STATUS[exc.code]) from None
+                if again.path != folder.path or again.scope_root != folder.scope_root:
+                    raise ProtocolError("workspace_folder_refused", 403)
+            elif folder is not None:
                 if native_folder_scope is not None:
                     validate_native_folder(native_folder_scope)
                     if not folder.path.is_dir():
@@ -4432,7 +4493,7 @@ def create_router(
         except ValueError:
             redirect = ""
         return Context(owner_id=await integration_owner(request), mcp_owner_id=security.instance_id,
-            validate=dispatch_validation(request, current),
+            validate=dispatch_validation(request, current), remote=not on_this_computer(await _context(request)),
             redirect_uri=redirect, runtimes=runtime_installations, read_policy=installation_policy, **fields)
 
     @router.get("/integrations/sources")
@@ -4688,6 +4749,16 @@ def create_router(
                                      review_digest=body.review_digest)
         result = await call(resume, context, str(plan_id), preset=body.preset,
             overrides=None if body.overrides is None else dict(body.overrides), background=True)
+        return await respond(request, dto.InstallPlan, result)
+
+    @router.post("/integrations/plans/{plan_id}/sign-in")
+    async def integration_plan_sign_in(plan_id: UUID, request: Request) -> JSONResponse:
+        """Finish this plan's sign-in from another device with the address its browser ended on. The address is
+        only read (its state and code), never fetched; the session that sends it must be signed in."""
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.PlanSignInRequest, 16384)
+        from row_bot.integrations.plans import finish_sign_in
+        result = await call(finish_sign_in, await plan_context(request, current), str(plan_id), body.address)
         return await respond(request, dto.InstallPlan, result)
 
     @router.post("/integrations/plans/{plan_id}/cancel")
@@ -5218,6 +5289,412 @@ def create_router(
         result = await call(read_monitor_logs, limit=limit)
         return await respond(request, dto.MonitorLogs, result)
 
+    # Background processes (F1, F6): a person sees and stops every one, whichever
+    # conversation started it; stopping one Row-Bot started needs no approval.
+    def _process_id(value: str) -> str:
+        from row_bot.background_processes import PROCESS_ID
+
+        if not PROCESS_ID.fullmatch(str(value or "")):
+            raise ProtocolError("process_unavailable", 404)
+        return value
+
+    @router.get("/processes")
+    async def list_background_processes(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.background_process_views import read_background_processes
+
+        result = await call(read_background_processes, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.BackgroundProcessPage, result)
+
+    @router.get("/processes/{process_id}")
+    async def background_process(request: Request, process_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.background_process_views import read_background_process
+
+        result = await call(read_background_process, _process_id(process_id))
+        if result is None:
+            raise ProtocolError("process_unavailable", 404)
+        return await respond(request, dto.BackgroundProcessView, result)
+
+    @router.get("/processes/{process_id}/output")
+    async def background_process_output(
+        request: Request, process_id: str, after: int = 0, limit: int = 65536
+    ) -> JSONResponse:
+        await session(request)
+        from row_bot.application.background_process_views import read_background_process_output
+
+        if after < 0 or not 1 <= limit <= 65536:
+            raise ProtocolError("process_cursor_invalid", 422)
+        result = await call(read_background_process_output, _process_id(process_id), after, limit)
+        if result is None:
+            raise ProtocolError("process_unavailable", 404)
+        return await respond(request, dto.BackgroundProcessOutput, result)
+
+    @router.post("/processes/{process_id}/stop")
+    async def stop_background_process_route(request: Request, process_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.background_process_views import stop_background_process
+
+        result = await call(stop_background_process, _process_id(process_id))
+        if result is None:
+            raise ProtocolError("process_unavailable", 404)
+        return await respond(request, dto.BackgroundProcessView, result)
+
+    # Recordings (F2): a person sees and stops every one; stopping needs no approval.
+    def _recording_id(value: str) -> str:
+        from row_bot.recordings import RECORDING_ID
+
+        if not RECORDING_ID.fullmatch(str(value or "")):
+            raise ProtocolError("recording_unavailable", 404)
+        return value
+
+    @router.get("/recordings")
+    async def list_recordings(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.recording_views import read_recordings
+
+        result = await call(read_recordings, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.RecordingPage, result)
+
+    @router.get("/recordings/{recording_id}")
+    async def recording(request: Request, recording_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.recording_views import read_recording
+
+        result = await call(read_recording, _recording_id(recording_id))
+        if result is None:
+            raise ProtocolError("recording_unavailable", 404)
+        return await respond(request, dto.RecordingView, result)
+
+    @router.post("/recordings/{recording_id}/stop")
+    async def stop_recording_route(request: Request, recording_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.recording_views import stop_recording
+
+        result = await call(stop_recording, _recording_id(recording_id))
+        if result is None:
+            raise ProtocolError("recording_unavailable", 404)
+        return await respond(request, dto.RecordingView, result)
+
+    # Video edits (F3): a person sees and stops every one; stopping needs no approval.
+    def _edit_id(value: str) -> str:
+        from row_bot.video_edits import EDIT_ID
+
+        if not EDIT_ID.fullmatch(str(value or "")):
+            raise ProtocolError("video_edit_unavailable", 404)
+        return value
+
+    # The Developer workspace root's folders (F19): folders only, for attaching a code folder
+    # from a device with no folder picker. Every path is checked against the root.
+    @router.get("/workspace-folders")
+    async def workspace_folder_page(request: Request, path: str = "") -> JSONResponse:
+        await session(request)
+        from row_bot.developer import workspace_folders
+
+        try:
+            result = await call(workspace_folders.browse, path[:1025])
+        except workspace_folders.FolderRefused as exc:
+            raise ProtocolError(exc.code, _STATUS[exc.code]) from None
+        return await respond(request, dto.WorkspaceFolderPage, result)
+
+    # Prepare sandbox and the sandbox image (F18). The person's own start is confirmed in the app;
+    # Block refuses it. A person sees and stops every job; stopping needs no approval.
+    def _sandbox_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "sandbox_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 409))
+
+    def _sandbox_job_id(value: str) -> str:
+        from row_bot.developer.sandbox_prepare import JOB_ID
+
+        if not JOB_ID.fullmatch(str(value or "")):
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return value
+
+    @router.get("/conversations/{conversation_id}/sandbox")
+    async def conversation_sandbox(request: Request, conversation_id: str) -> JSONResponse:
+        await session(request)
+        await readable_conversation(conversation_id)
+        from row_bot.application.sandbox_views import SandboxViewError, read_status
+
+        try:
+            result = await call(read_status, conversation_id)
+        except SandboxViewError as exc:
+            raise _sandbox_failure(exc) from None
+        return await respond(request, dto.SandboxStatusView, result)
+
+    async def _start_sandbox_job(request: Request, conversation_id: str, kind: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        await readable_conversation(conversation_id)
+        await _body(request, dto.SandboxStartPayload, 1024)
+        from row_bot.application.sandbox_views import SandboxViewError, start_job
+
+        try:
+            result = await call(start_job, conversation_id, kind)
+        except SandboxViewError as exc:
+            raise _sandbox_failure(exc) from None
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.post("/conversations/{conversation_id}/sandbox/prepare")
+    async def prepare_conversation_sandbox(request: Request, conversation_id: str) -> JSONResponse:
+        return await _start_sandbox_job(request, conversation_id, "prepare")
+
+    @router.post("/conversations/{conversation_id}/sandbox/pull")
+    async def pull_conversation_sandbox_image(request: Request, conversation_id: str) -> JSONResponse:
+        return await _start_sandbox_job(request, conversation_id, "pull")
+
+    @router.get("/sandbox-jobs")
+    async def list_sandbox_jobs(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.sandbox_views import read_jobs
+
+        result = await call(read_jobs, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.SandboxJobPage, result)
+
+    @router.get("/sandbox-jobs/{job_id}")
+    async def sandbox_job(request: Request, job_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.sandbox_views import read_job
+
+        result = await call(read_job, _sandbox_job_id(job_id))
+        if result is None:
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.post("/sandbox-jobs/{job_id}/stop")
+    async def stop_sandbox_job(request: Request, job_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.sandbox_views import stop_job
+
+        result = await call(stop_job, _sandbox_job_id(job_id))
+        if result is None:
+            raise ProtocolError("sandbox_job_unavailable", 404)
+        return await respond(request, dto.SandboxJobView, result)
+
+    @router.get("/video-edits")
+    async def list_video_edits(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_edit_views import read_video_edits
+
+        result = await call(read_video_edits, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.VideoEditPage, result)
+
+    @router.get("/video-edits/{edit_id}")
+    async def video_edit(request: Request, edit_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_edit_views import read_video_edit
+
+        result = await call(read_video_edit, _edit_id(edit_id))
+        if result is None:
+            raise ProtocolError("video_edit_unavailable", 404)
+        return await respond(request, dto.VideoEditView, result)
+
+    @router.post("/video-edits/{edit_id}/stop")
+    async def stop_video_edit_route(request: Request, edit_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_edit_views import stop_video_edit
+
+        result = await call(stop_video_edit, _edit_id(edit_id))
+        if result is None:
+            raise ProtocolError("video_edit_unavailable", 404)
+        return await respond(request, dto.VideoEditView, result)
+
+    # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
+    # so each sees every delivery; a download needs the session and ends when its copy expires.
+    def _delivery(value: str, index: str | None = None) -> tuple[str, int]:
+        from row_bot.file_deliveries import DELIVERY_ID
+
+        if not DELIVERY_ID.fullmatch(str(value or "")):
+            raise ProtocolError("sent_file_unavailable", 404)
+        if index is None:
+            return value, -1
+        if not str(index).isdigit() or len(str(index)) > 2:
+            raise ProtocolError("sent_file_unavailable", 404)
+        return value, int(index)
+
+    def _delivery_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "sent_file_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 404))
+
+    @router.get("/deliveries")
+    async def list_deliveries(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.delivery_views import read_deliveries
+
+        result = await call(read_deliveries, (conversation_id or "")[:256] or None)
+        return await respond(request, dto.DeliveryPage, result)
+
+    @router.get("/deliveries/{delivery_id}")
+    async def delivery(request: Request, delivery_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.application.delivery_views import read_delivery
+
+        result = await call(read_delivery, _delivery(delivery_id)[0])
+        if result is None:
+            raise ProtocolError("sent_file_unavailable", 404)
+        return await respond(request, dto.DeliveryView, result)
+
+    @router.get("/deliveries/{delivery_id}/files/{index}")
+    async def delivery_file(request: Request, delivery_id: str, index: str) -> Response:
+        current = await session(request)
+        from urllib.parse import quote
+
+        from row_bot.file_deliveries import CHUNK_BYTES, DeliveryError, open_file
+
+        identifier, number = _delivery(delivery_id, index)
+        try:
+            name, size, handle = await call(open_file, identifier, number)
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+
+        async def chunks() -> Any:
+            try:
+                while True:
+                    # The person's session is checked again for every part sent.
+                    security.session(await _context(request), current.id, current.csrf)
+                    data = await call(handle.read, CHUNK_BYTES)
+                    if not data:
+                        return
+                    yield data
+            except ProtocolError:
+                return
+            finally:
+                handle.close()
+
+        return StreamingResponse(
+            chunks(),
+            # Never shown in the page: always a download, whatever the file is.
+            media_type="application/octet-stream",
+            headers={
+                **HEADERS,
+                "Content-Length": str(size),
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Content-Disposition": "attachment; filename*=UTF-8''" + quote(name, safe=""),
+            },
+        )
+
+    @router.post("/deliveries/{delivery_id}/files/{index}/save")
+    async def delivery_file_save(request: Request, delivery_id: str, index: str) -> JSONResponse:
+        """The desktop window can't download (B275): the file is saved into Exports on this computer."""
+        current = await session(request, lane="mutation")
+        require_this_computer(await _context(request))
+        from row_bot.application.export_folder import save_export
+        from row_bot.file_deliveries import DeliveryError, read_file
+
+        identifier, number = _delivery(delivery_id, index)
+        try:
+            name, data = await call(read_file, identifier, number)
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+        result = await call(save_export, name, data, validate=dispatch_validation(request, current))
+        return await respond(request, dto.ExportSaved, result)
+
+    @router.post("/deliveries/{delivery_id}/to-devices")
+    async def delivery_to_devices(request: Request, delivery_id: str) -> JSONResponse:
+        """The person's own "Send to your devices instead": no approval (their own devices)."""
+        await session(request, lane="mutation")
+        from row_bot.application.delivery_views import send_to_devices_instead
+        from row_bot.file_deliveries import DeliveryError
+
+        try:
+            result = await call(send_to_devices_instead, _delivery(delivery_id)[0])
+        except DeliveryError as exc:
+            raise _delivery_failure(exc) from None
+        return await respond(request, dto.DeliveryView, result)
+
+    # Pages the agent made (N5). Every signed-in device is the owner's, so each sees every page. A page's
+    # frame is served once, sandboxed; its state and decisions come from its bridge, checked again here.
+    def _page_id(value: str) -> str:
+        from row_bot.pages import PAGE_ID
+
+        if not PAGE_ID.fullmatch(str(value or "")):
+            raise ProtocolError("chat_page_unavailable", 404)
+        return value
+
+    def _page_failure(exc: Exception) -> ProtocolError:
+        code = getattr(exc, "code", "chat_page_unavailable")
+        return ProtocolError(code, _STATUS.get(code, 404))
+
+    async def _page_call(method: Callable, *args: Any) -> Any:
+        from row_bot.pages import PageError
+
+        try:
+            return await call(method, *args)
+        except PageError as exc:
+            raise _page_failure(exc) from None
+
+    @router.get("/pages")
+    async def pages_list(request: Request, conversation_id: str | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.pages import views
+
+        return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/pages/{page_id}")
+    async def page_read(request: Request, page_id: str) -> JSONResponse:
+        await session(request)
+        from row_bot.pages import require, view
+
+        found = await _page_call(require, _page_id(page_id))
+        return await respond(request, dto.PageView, await call(view, found))
+
+    @router.post("/pages/{page_id}/frame")
+    async def page_frame(request: Request, page_id: str) -> JSONResponse:
+        """One frame address for the page, in the theme the client shows: loaded once, sandboxed."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        from row_bot.pages import render_frame, require, view
+
+        identifier = _page_id(page_id)
+        frame_url = await _page_call(render_frame, identifier, body.theme.model_dump())
+        found = await _page_call(require, identifier)
+        return await respond(request, dto.PageFrame, {"frame_url": frame_url, "page": await call(view, found)})
+
+    @router.put("/pages/{page_id}/state")
+    async def page_state(request: Request, page_id: str) -> JSONResponse:
+        """The page's own state, from its bridge (at most 256 KB)."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageStateWrite, 320 * 1024)
+        from row_bot.pages import set_state, view
+
+        found = await _page_call(set_state, _page_id(page_id), body.state)
+        return await respond(request, dto.PageView, await call(view, found))
+
+    @router.post("/pages/{page_id}/decisions")
+    async def page_decision(request: Request, page_id: str) -> JSONResponse:
+        """One decision from the page's bridge. It only gathers: the person's Send posts them."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageDecisionWrite, 8 * 1024)
+        from row_bot.pages import decide, view
+
+        found = await _page_call(decide, _page_id(page_id), body.id, body.choice, body.note, body.label)
+        return await respond(request, dto.PageView, await call(view, found))
+
+    def _standalone(page_id: str, theme: dict) -> tuple[str, str]:
+        from row_bot.pages import document, download_name, require
+
+        found = require(page_id)
+        return download_name(found), document(found, theme, standalone=True)
+
+    @router.post("/pages/{page_id}/download")
+    async def page_download(request: Request, page_id: str) -> JSONResponse:
+        """Download as HTML: one file that works on its own in any browser (it saves nothing)."""
+        await session(request, lane="mutation")
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        name, html = await _page_call(_standalone, _page_id(page_id), body.theme.model_dump())
+        return await respond(request, dto.PageDownload, {"file_name": name, "html": html})
+
+    @router.post("/pages/{page_id}/save")
+    async def page_save(request: Request, page_id: str) -> JSONResponse:
+        """The desktop window can't download (B275): the page is saved into Exports on this computer."""
+        current = await session(request, lane="mutation")
+        require_this_computer(await _context(request))
+        body = await _body(request, dto.PageFrameRequest, 16 * 1024)
+        from row_bot.application.export_folder import save_export
+
+        name, html = await _page_call(_standalone, _page_id(page_id), body.theme.model_dump())
+        result = await call(save_export, name, html.encode("utf-8"), validate=dispatch_validation(request, current))
+        return await respond(request, dto.ExportSaved, result)
+
     @router.post("/monitor/diagnosis")
     async def monitor_diagnosis(request: Request) -> JSONResponse:
         await session(request, lane="mutation")
@@ -5242,6 +5719,29 @@ def create_router(
 
         result = await call(set_hourly_network_checks, body.hourly_network_checks)
         return await respond(request, dto.SystemDiagnosis, result)
+
+    # Install stats (N6): Settings › System › Privacy.
+    @router.get("/system/install-count")
+    async def install_count_snapshot(request: Request) -> JSONResponse:
+        await session(request)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.view))
+
+    @router.put("/system/install-count")
+    async def install_count_choice(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.InstallCountChoice, 256)
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountSnapshot, await call(install_count.choose, body.enabled))
+
+    @router.post("/system/install-count/delete")
+    async def install_count_delete(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import install_count
+
+        return await respond(request, dto.InstallCountDeletion, await call(install_count.delete_counted))
 
     @router.get("/system/updates")
     async def update_snapshot(request: Request) -> JSONResponse:
@@ -5356,6 +5856,7 @@ def create_router(
             credentials_json=body.credentials_json,
             validate=dispatch_validation(request, current),
             device=await account_device(request),
+            x_account=body.x_account,
         )
         return await respond(request, dto.AccountAuthReceipt, result)
 
@@ -6348,14 +6849,9 @@ def create_router(
         provider_id: str, request: Request
     ) -> JSONResponse:
         current = await session(request, lane="mutation")
-        if provider_id == "claude_subscription":
-            from row_bot.providers.claude_subscription import (
-                run_claude_subscription_runtime_probe as probe,
-            )
-        elif provider_id == "xai_oauth":
-            from row_bot.providers.xai_oauth import run_xai_oauth_runtime_probe as probe
-        else:
+        if provider_id != "xai_oauth":
             raise ProtocolError("not_found", 404)
+        from row_bot.providers.xai_oauth import run_xai_oauth_runtime_probe as probe
         await call(dispatch_validation(request, current))
         try:
             result = await call(probe)
@@ -7905,6 +8401,29 @@ def create_router(
         except ValueError as exc:
             raise ProtocolError(str(exc), 422) from None
         return await respond(request, dto.ModelsSettingsState, result)
+
+    @router.post("/settings/models/visibility")
+    async def models_visibility_update(request: Request) -> JSONResponse:
+        # A display preference (F10): favourites first, hidden models under
+        # "More models". It never changes which model a chat uses.
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.ModelVisibilityMutation, 2048)
+        from row_bot.providers.config import ProviderConfigError
+        from row_bot.providers.model_visibility import update_model_visibility
+
+        try:
+            result = await call(
+                update_model_visibility,
+                body.action,
+                body.model_ref,
+                validate=dispatch_validation(request, current),
+            )
+        except ProviderConfigError as exc:
+            # The settings file can't be read or written right now.
+            raise ProtocolError(exc.code, 503) from None
+        except ValueError as exc:
+            raise ProtocolError(str(exc), 422) from None
+        return await respond(request, dto.ModelVisibilityState, result.as_dict())
 
     @router.get("/settings/models/agents")
     async def models_agent_settings(request: Request) -> JSONResponse:
@@ -9932,6 +10451,12 @@ def create_router(
                 "setup",
                 "app",
                 "repeatable",
+                "reviewer_reason",
+                "question",
+                "questions",
+                "memory_text",
+                "folder",
+                "x_post",
                 "policy_revision",
             )
             if k in view
@@ -10142,6 +10667,65 @@ def create_router(
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS
         )
+
+    # App-wide live updates (B407): which background state changed, as topic
+    # names and revisions only; clients read the state itself through the
+    # APIs above. One stream per window, a long poll where a proxy holds the
+    # stream back. Bursts within a tick reach a client as one frame.
+    @router.get("/live")
+    async def live(request: Request) -> StreamingResponse:
+        current = await session(request, lane="observation")
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        async def stream() -> Any:
+            sent: tuple[str, int] | None = None
+            heartbeat = security.clock()
+            try:
+                yield ": connected\n\n"
+                while not await request.is_disconnected():
+                    security.session(await _context(request), current.id, current.csrf)
+                    frame = live_updates.live_updates.frame()
+                    if sent != (frame["epoch"], frame["revision"]):
+                        sent = (frame["epoch"], frame["revision"])
+                        yield "event: live\ndata: " + dto.LiveFrame.model_validate(frame).model_dump_json() + "\n\n"
+                        heartbeat = security.clock()
+                    elif security.clock() - heartbeat >= 15:
+                        yield ": heartbeat\n\n"
+                        heartbeat = security.clock()
+                    await asyncio.sleep(0.25)
+            except ProtocolError:
+                return
+            finally:
+                security.leave_live(current)
+
+        return StreamingResponse(
+            stream(), media_type="text/event-stream", headers=HEADERS
+        )
+
+    @router.get("/live/poll")
+    async def live_poll(request: Request, after: int = 0, epoch: str = "") -> JSONResponse:
+        current = await session(request, lane="observation")
+        if after < 0 or len(epoch) > 128:
+            raise ProtocolError("invalid_command", 422)
+        security.enter_live(current)
+        from row_bot.application import live_updates
+
+        try:
+            # Answer as soon as anything moved on since the client's revision
+            # (at once for another server process), or after 25 s regardless.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 25
+            while True:
+                frame = live_updates.live_updates.frame()
+                if (frame["epoch"] != epoch or frame["revision"] > after or loop.time() >= deadline
+                        or await request.is_disconnected()):
+                    break
+                await asyncio.sleep(0.25)
+            security.session(await _context(request), current.id, current.csrf)
+        finally:
+            security.leave_live(current)
+        return await respond(request, dto.LiveFrame, frame)
 
     @router.get("/choices")
     async def model_choices(request: Request) -> JSONResponse:

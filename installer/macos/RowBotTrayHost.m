@@ -19,6 +19,7 @@
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
+#import <glob.h>
 #import <signal.h>
 
 static NSString * const RowBotBundleIdentifier = @"ai.row-bot.assistant";
@@ -463,6 +464,41 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     return NO;
 }
 
+// Opening Row-Bot again while it runs (Finder, Spotlight, the Dock) shows it (B382).
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    (void)flag;
+    RowBotLog(self.dataDir, @"reopen");
+    [self openRowBot:nil];
+    return NO;
+}
+
+// macOS quitting the app (System Settings' "Quit & Reopen", logging out) stops
+// the Python launcher first, which stops the server and the window: quitting
+// only this host would leave them running without it (B382).
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    (void)sender;
+    NSTask *task = self.pythonTask;
+    if (!task.running) {
+        return NSTerminateNow;
+    }
+    if (!self.quitting) {
+        RowBotLog(self.dataDir, @"terminate_requested");
+        self.quitting = YES;
+        [self terminateWindowIfKnown];
+        [task terminate];
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        for (int waited = 0; task.running && waited < 120; waited++) {
+            [NSThread sleepForTimeInterval:0.25];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp replyToApplicationShouldTerminate:YES];
+        });
+    });
+    return NSTerminateLater;
+}
+
 // -- Move to Applications ---------------------------------------------------
 
 - (BOOL)shouldOfferMoveToApplications {
@@ -728,6 +764,8 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     [env setObject:@"utf-8" forKey:@"PYTHONIOENCODING"];
     [env setObject:@"1" forKey:@"PYTHONDONTWRITEBYTECODE"];
     [env setObject:@"1" forKey:@"ROW_BOT_NATIVE_TRAY_HOST"];
+    // The launcher runs the window and the splash with this, as Row-Bot (B385).
+    [env setObject:[[NSBundle mainBundle] executablePath] forKey:@"ROW_BOT_HOST_EXECUTABLE"];
 
     NSString *bundledBrowsers = [self.versionDir stringByAppendingPathComponent:@"python/playwright-browsers"];
     BOOL isDir = NO;
@@ -821,12 +859,9 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     [self launchPrimary];
 }
 
+// A Row-Bot that is still running (one quitting after its host went) is left to
+// the Python launcher: it shows that one, or takes over once it has stopped (B382).
 - (void)startPrimaryLauncherIfNeeded {
-    NSInteger port = [self activePort];
-    if (port > 0) {
-        RowBotLog(self.dataDir, @"server_already_active port=%ld", (long)port);
-        return;
-    }
     if (self.pythonTask && self.pythonTask.running) {
         RowBotLog(self.dataDir, @"primary_launcher_already_running pid=%d", self.pythonTask.processIdentifier);
         return;
@@ -906,6 +941,9 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
     }
 }
 
+// Quit stops the whole app: this host's launcher (which stops the server and the
+// window), or the launcher a host before this one left running (B382). The
+// launcher clears launcher_state.json itself as it stops.
 - (void)quitRowBot:(id)sender {
     (void)sender;
     RowBotLog(self.dataDir, @"quit_requested");
@@ -916,17 +954,25 @@ static NSString *RowBotOriginalBundlePath(NSString *path) {
         RowBotHTTP(url, @"POST", 2.5);
     }
     [self terminateWindowIfKnown];
-    [[NSFileManager defaultManager] removeItemAtPath:self.launcherStatePath error:nil];
     if (self.pythonTask && self.pythonTask.running) {
         [self.pythonTask terminate];
+    } else if (port > 0) {
+        [self terminateOtherLauncherOnPort:port];
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (self.pythonTask && self.pythonTask.running) {
-            [self.pythonTask terminate];
-        }
         [[NSStatusBar systemStatusBar] removeStatusItem:self.statusItem];
         [NSApp terminate:nil];
     });
+}
+
+// The launcher named by launcher_state.json, when its server is the one answering.
+- (void)terminateOtherLauncherOnPort:(NSInteger)port {
+    NSDictionary *state = [self launcherState];
+    NSInteger pid = RowBotIntegerValue([state objectForKey:@"pid"]);
+    if (pid > 1 && pid != getpid() && RowBotIntegerValue([state objectForKey:@"port"]) == port) {
+        kill((pid_t)pid, SIGTERM);
+        RowBotLog(self.dataDir, @"launcher_terminate_requested pid=%ld", (long)pid);
+    }
 }
 
 @end
@@ -967,8 +1013,66 @@ static int RowBotSelfTest(void) {
     return 1;
 }
 
+// --run-python HOME: whether HOME is a Row-Bot Python, the bundle's or a staged version's.
+static BOOL RowBotIsRowBotPython(NSString *home) {
+    NSString *real = [home stringByResolvingSymlinksInPath];
+    NSString *seed = [[[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"python"]
+                      stringByResolvingSymlinksInPath];
+    if ([real isEqualToString:seed]) {
+        return YES;
+    }
+    NSString *versions = [[RowBotInstallRoot() stringByAppendingPathComponent:@"versions"] stringByResolvingSymlinksInPath];
+    NSString *version = [real stringByDeletingLastPathComponent];
+    return [[real lastPathComponent] isEqualToString:@"python"] &&
+           [[version stringByDeletingLastPathComponent] isEqualToString:versions] &&
+           RowBotIsVersionName([version lastPathComponent]);
+}
+
+// row-bot --run-python HOME [python arguments]: runs that Python inside this
+// program, so a process that opens windows (the app window, the splash) is
+// Row-Bot to macOS: the Dock, Cmd-Tab and Force Quit show Row-Bot and its icon
+// rather than the bundled interpreter (B385). sys.executable stays HOME's python3.
+static int RowBotRunPython(int argc, const char *argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "usage: row-bot --run-python HOME [arguments]\n");
+        return 2;
+    }
+    NSString *home = [[NSString stringWithUTF8String:argv[2]] stringByStandardizingPath];
+    if (!RowBotIsRowBotPython(home)) {
+        fprintf(stderr, "row-bot: %s is not Row-Bot's Python\n", argv[2]);
+        return 2;
+    }
+    NSString *pattern = [home stringByAppendingPathComponent:@"lib/libpython3.*.dylib"];
+    glob_t found;
+    if (glob(pattern.fileSystemRepresentation, 0, NULL, &found) != 0 || found.gl_pathc == 0) {
+        fprintf(stderr, "row-bot: no libpython in %s\n", home.fileSystemRepresentation);
+        return 2;
+    }
+    void *library = dlopen(found.gl_pathv[0], RTLD_NOW | RTLD_GLOBAL);
+    globfree(&found);
+    int (*bytesMain)(int, char **) = library ? (int (*)(int, char **))dlsym(library, "Py_BytesMain") : NULL;
+    if (!bytesMain) {
+        fprintf(stderr, "row-bot: could not load Python: %s\n", dlerror());
+        return 2;
+    }
+    setenv("PYTHONHOME", home.fileSystemRepresentation, 1);
+    setenv("PYTHONEXECUTABLE", [home stringByAppendingPathComponent:@"bin/python3"].fileSystemRepresentation, 1);
+    char **arguments = calloc((size_t)argc - 1, sizeof(char *));
+    if (!arguments) {
+        return 2;
+    }
+    arguments[0] = (char *)argv[0];
+    for (int index = 3; index < argc; index++) {
+        arguments[index - 2] = (char *)argv[index];
+    }
+    return bytesMain(argc - 2, arguments);
+}
+
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
+        if (argc > 1 && strcmp(argv[1], "--run-python") == 0) {
+            return RowBotRunPython(argc, argv);
+        }
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--") == 0) {
                 break;

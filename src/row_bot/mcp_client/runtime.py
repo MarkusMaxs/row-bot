@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from row_bot.application.live_updates import publish as _publish_live
 from row_bot.cancellation import current_cancellation_scope
 from row_bot.mcp_client import config as mcp_config
 from row_bot.mcp_client.logging import log_event, redact
@@ -415,9 +416,15 @@ def _future_result_with_generation_cancellation(
         unregister()
 
 
+def _problem(status: McpServerStatus) -> tuple:
+    """What an app's Monitor and Apps problems are read from: on, its state, why it failed, changed tools."""
+    return status.enabled, status.status, status.last_error, dict(status.tools_changed)
+
+
 def _update_status(name: str, **updates: Any) -> None:
     with _runtime_lock:
         status = _statuses.get(name)
+        before = _problem(status) if status else None
         if not status:
             server = _get_effective_server_config(name)
             status = McpServerStatus(
@@ -430,6 +437,9 @@ def _update_status(name: str, **updates: Any) -> None:
         for key, value in updates.items():
             if hasattr(status, key):
                 setattr(status, key, value)
+        moved = _problem(status) != before
+    if moved:
+        _publish_live("monitor")  # An app connected, failed or stopped: Monitor reads its problems again.
 
 
 def _tool_attr(tool: Any, *names: str, default: Any = None) -> Any:
@@ -1802,7 +1812,8 @@ def get_destructive_tool_names(
     *,
     source_plugin_id: str | None = None,
 ) -> set[str]:
-    """App tools whose access says ask (and every locked one): they ask in Ask and in Allow all alike."""
+    """App tools whose access says ask (and every locked one): they need approval at every level but Block,
+    which leaves them out (the person under Ask, the reviewer first under Auto, the level itself under Hands-off)."""
     allow = _allow_names_set(allow_names)
     _sync_catalog_from_config()
     with _runtime_lock:

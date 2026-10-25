@@ -2,7 +2,11 @@ import { useSyncExternalStore } from 'react';
 import type { ClientController } from '../../api/controller';
 import type { ConversationView } from '../../api/types';
 import type { NoticeAction, NoticeTone } from '../../ui/overlays';
-import { deleteOneConversation } from './ConversationLibrary';
+import { clientError } from '../../api/errors';
+import {
+  deleteOneConversation,
+  restoreConversation,
+} from './ConversationLibrary';
 
 type Notify = (
   message: string,
@@ -38,11 +42,10 @@ export function useDeletingConversations(): ReadonlySet<string> {
 
 /**
  * Delete one conversation after the person confirmed it, with Undo. It
- * leaves the lists at once (the caller first leaves it if it is open) and
- * "Deleted '…'." offers Undo. The delete is sent only when that notice ends
- * (it timed out or was dismissed); Undo brings the conversation back. A page
- * that goes away first sends nothing (its connection closes as it hides, so
- * the outcome could not be confirmed): the conversation simply stays.
+ * leaves the lists at once (the caller first leaves it if it is open) and the
+ * delete is sent at once: the server hides it and removes it for good once its
+ * Undo window ends, so a page that closes first can't bring it back (B343).
+ * "Deleted '…'." then offers Undo, which asks the server to restore it.
  */
 export function deleteWithUndo(
   controller: Pick<
@@ -57,27 +60,31 @@ export function deleteWithUndo(
   const title = conversation.title || 'this conversation';
   setWaiting(new Set(waiting).add(id));
   controller.forgetConversation(id);
-  notify(`Deleted '${title}'.`, undefined, {
-    label: 'Undo',
-    onAction: () => {
-      release(id);
-      void controller.loadMoreConversations(true);
-    },
-    onEnd: () => {
-      // The id and revision confirmed: a conversation changed since is
-      // refused by the server, never something else deleted.
-      void deleteOneConversation(controller, conversation)
-        .then((outcome) => {
-          if (outcome.status === 'deleted') {
-            controller.forgetConversation(id);
-            if (outcome.notice) notify(`Deleted '${title}'. ${outcome.notice}`);
-          } else notify(outcome.message);
-        })
-        .catch(() => notify(`Couldn't delete '${title}'. Try again.`))
-        .finally(() => {
-          release(id);
-          void controller.loadMoreConversations(true);
-        });
-    },
-  });
+  const settle = () => {
+    release(id);
+    void controller.loadMoreConversations(true);
+  };
+  // The id and revision confirmed: a conversation changed since is refused by
+  // the server, never something else deleted.
+  void deleteOneConversation(controller, conversation)
+    .then((outcome) => {
+      if (outcome.status !== 'deleted') {
+        notify(outcome.message);
+        settle();
+        return;
+      }
+      notify(`Deleted '${title}'.`, undefined, {
+        label: 'Undo',
+        onAction: () => {
+          void restoreConversation(controller, conversation)
+            .catch((cause) => notify(clientError(cause).message))
+            .finally(settle);
+        },
+        onEnd: settle,
+      });
+    })
+    .catch(() => {
+      notify(`Couldn't delete '${title}'. Try again.`);
+      settle();
+    });
 }

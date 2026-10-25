@@ -135,6 +135,25 @@
           "default": null,
           "title": "Billing"
         },
+        "favourite_rank": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Favourite Rank"
+        },
+        "hidden": {
+          "default": false,
+          "title": "Hidden",
+          "type": "boolean"
+        },
         "label": {
           "maxLength": 256,
           "title": "Label",
@@ -341,6 +360,19 @@
       "pattern": "^[A-Za-z0-9:_-]+$",
       "title": "Server Epoch",
       "type": "string"
+    },
+    "server_timezone": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Server Timezone"
     },
     "server_utc_offset_minutes": {
       "anyOf": [

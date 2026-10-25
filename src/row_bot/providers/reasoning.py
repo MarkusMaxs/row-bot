@@ -416,6 +416,52 @@ def apply_reasoning_command(thread_id: str, canonical_model_ref: str, argument: 
     return f"Reasoning for {canonical_model_ref}: {selection.label}."
 
 
+@dataclass(frozen=True)
+class HelperReasoning:
+    """What a delegated helper thinks at, chosen once when it starts (B386)."""
+
+    selection: ReasoningSelection = ReasoningSelection()
+    # Set when the conversation's level could not carry over to another model.
+    not_offered: str = ""
+
+
+def helper_reasoning(
+    parent_thread_id: str,
+    parent_model_ref: str,
+    child_model_ref: str,
+    requested: str = "",
+) -> HelperReasoning:
+    """A helper follows the conversation's reasoning unless it is given its own.
+
+    ``requested`` uses the /reasoning words; a level the helper's model does not
+    offer raises ValueError naming the valid choices. Without one, the helper
+    keeps the conversation's level when its model offers it, else the model's
+    default, saying which level did not carry over.
+    """
+    caps = resolve_reasoning_capabilities_for_ref(child_model_ref) if child_model_ref else None
+    if str(requested or "").strip():
+        if caps is None or not caps.controllable:
+            selection = selection_from_command(requested)
+            if selection.is_default:
+                return HelperReasoning(selection)
+            raise ValueError(f"Reasoning controls are not available for {child_model_ref or 'this model'}.")
+        try:
+            return HelperReasoning(validate_reasoning_selection(selection_from_command(requested), caps))
+        except ValueError as exc:
+            raise ValueError(
+                f"{exc} Valid choices for {child_model_ref}: {format_reasoning_choices(caps)}."
+            ) from exc
+    if not parent_model_ref:
+        return HelperReasoning()
+    inherited = request_plan_for(parent_thread_id or None, parent_model_ref).selection
+    if inherited.is_default or child_model_ref == parent_model_ref:
+        return HelperReasoning(inherited)
+    try:
+        return HelperReasoning(validate_reasoning_selection(inherited, caps))
+    except ValueError:
+        return HelperReasoning(ReasoningSelection(), not_offered=inherited.label)
+
+
 _reasoning_notices: dict[str, list[dict[str, Any]]] = {}
 _suppressed_overrides: set[tuple[str, str]] = set()
 

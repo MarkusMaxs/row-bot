@@ -26,6 +26,10 @@ concurrency:
   group: nightly-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 
+env:
+  # Every Row-Bot these jobs start keeps install stats off: nothing reaches the real stats service.
+  ROW_BOT_INSTALL_COUNT: "0"
+
 jobs:
   python-full:
     name: Full suite (${{ matrix.os }})

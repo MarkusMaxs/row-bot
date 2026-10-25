@@ -14,6 +14,7 @@ import type {
   AgentRuntimeSettingsState,
   CachedModelPage,
   DefaultModelSnapshot,
+  LocalRuntimeSnapshot,
   ModelPickerOption,
   ModelsSettingsState,
 } from '../../api/types';
@@ -29,6 +30,7 @@ import {
 } from '../../ui/primitives';
 import { useNotify } from '../../ui/overlays';
 import { relativeTime } from '../../ui/format';
+import { useLiveUpdate } from '../../live';
 import {
   SettingsAdvanced,
   SettingsGroup,
@@ -40,10 +42,11 @@ import {
 import { type DefaultModelSession } from './DefaultModelSettings';
 import { useProviderSettingsValue } from './provider-settings-sessions';
 import ModelCatalog from './ModelCatalog';
+import LocalModelSettings from './LocalModelSettings';
 
-/** The pickers list pinned models only; the Catalog below is where more come from. */
-const PINNED_NOTE =
-  'Pinned models are listed here. Pin more in the Catalog below.';
+/** A star lists a model in every picker, first (U10); the Catalog below has the rest. */
+const LISTED_NOTE =
+  'Starred models come first. Star more in the Catalog below.';
 import DefaultModelPicker from './DefaultModelPicker';
 import { modelRefName, splitModelLabel } from '../shell/model-choices';
 
@@ -184,6 +187,10 @@ export default function ModelsPanel({
   const [cameras, setCameras] = useState<number[] | null>(null);
   // "Get models for this computer" only when Ollama isn't running (B117).
   const [ollamaRunning, setOllamaRunning] = useState<boolean | null>(null);
+  // The local models, for On this computer (F10): undefined while read.
+  const [localRuntime, setLocalRuntime] = useState<
+    LocalRuntimeSnapshot | null | undefined
+  >(undefined);
   const [catalogRefresh, setCatalogRefresh] = useState(0);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -217,10 +224,13 @@ export default function ModelsPanel({
     const abort = new AbortController();
     controller.localRuntime(abort.signal).then(
       (runtime) => {
-        if (!abort.signal.aborted && runtime)
-          setOllamaRunning(runtime.state === 'running');
+        if (abort.signal.aborted) return;
+        setLocalRuntime(runtime ?? null);
+        if (runtime) setOllamaRunning(runtime.state === 'running');
       },
-      () => undefined,
+      () => {
+        if (!abort.signal.aborted) setLocalRuntime(null);
+      },
     );
     return () => abort.abort();
   }, [controller]);
@@ -233,9 +243,21 @@ export default function ModelsPanel({
   }, [contextSelectedCap]);
 
   async function reload() {
-    const updated = await controller.modelsSettings();
+    // A star or an eye saves beside the default model (U10): read its
+    // revision again too, so the next Brain save isn't refused as stale.
+    const [updated, defaultModel] = await Promise.all([
+      controller.modelsSettings(),
+      controller.defaultModel(),
+    ]);
     setState(updated);
+    if (!session.get('pending', null)) setSnapshot(defaultModel);
   }
+  // The catalog changed in the background, as when a provider was signed in
+  // to or disconnected (B411): it shows without pressing Refresh.
+  useLiveUpdate(['models'], () => {
+    void reload().catch(() => undefined);
+    setCatalogRefresh((value) => value + 1);
+  });
   function brainSaved(ref: string, previous: string) {
     const name = state ? optionName(state.brain.options, ref) : ref;
     notify(
@@ -409,7 +431,7 @@ export default function ModelsPanel({
         pinPending.commandId,
       );
       if (result.status === 'uncertain')
-        setCatalogNote('The original pin change is still unconfirmed.');
+        setCatalogNote('The model list change is still unconfirmed.');
       else {
         setPinPending(null);
         session.resolved();
@@ -628,7 +650,8 @@ export default function ModelsPanel({
   const brainName = currentBrain
     ? splitModelLabel(currentBrain.label).name
     : modelRefName(state.brain.current_ref);
-  // One status line (B229): who is connected and how much there is to choose.
+  // One status line (B229): how much there is to choose, and from how many
+  // providers; Providers counts every connection, so it says what it counts (U10).
   const choices = [state.brain, state.vision, state.image, state.video]
     .flatMap((picker) => picker.options)
     .filter((option) => option.available);
@@ -669,11 +692,9 @@ export default function ModelsPanel({
       className="stack settings-snapshot-page settings-models-page"
       aria-label="Models settings"
     >
-      <SettingsStatus
-        tone={brainReady ? 'success' : 'warning'}
-        more={[`${models} model${models === 1 ? '' : 's'} to choose from`]}
-      >
-        {providers} provider{providers === 1 ? '' : 's'} connected
+      <SettingsStatus tone={brainReady ? 'success' : 'warning'}>
+        {models} model{models === 1 ? '' : 's'} to choose from {providers}{' '}
+        provider{providers === 1 ? '' : 's'}
       </SettingsStatus>
       <SettingsPageMenu label="More model actions" actions={menu} />
       {error && (
@@ -705,7 +726,7 @@ export default function ModelsPanel({
               disabled={locked}
               onChoose={(ref) => void brainDefault(ref).catch(() => {})}
               onRefresh={() => void refreshCatalog()}
-              note={PINNED_NOTE}
+              note={LISTED_NOTE}
             />
           }
         >
@@ -760,7 +781,7 @@ export default function ModelsPanel({
                     disabled={!!busy || !on}
                     onChoose={(ref) => void saveMedia(surface, 'default', ref)}
                     onRefresh={() => void refreshCatalog()}
-                    note={PINNED_NOTE}
+                    note={LISTED_NOTE}
                   />
                 </>
               }
@@ -884,6 +905,12 @@ export default function ModelsPanel({
           </SettingsItem>
         </Disclosure>
       </SettingsGroup>
+      <LocalModelSettings
+        controller={controller}
+        runtime={localRuntime}
+        pickerOptions={state.brain.options}
+        onChanged={() => void reload().catch(() => undefined)}
+      />
       <SettingsAdvanced
         summary="Limits for long work"
         anchor="long-work"
@@ -943,6 +970,7 @@ export default function ModelsPanel({
       <SettingsGroup
         title="Catalog"
         anchor="model-catalog"
+        note="A starred model is listed first wherever you choose a model. Hidden models wait under More models and still work."
         meta={
           <>
             <span role="status">{catalogStatus}</span>
@@ -975,7 +1003,6 @@ export default function ModelsPanel({
             else if (surface !== 'voice')
               await saveMedia(surface, 'default', model.selection_ref);
           }}
-          onPin={pin}
           onChanged={reload}
         />
         {(pinPending || catalogNote) && (

@@ -29,7 +29,14 @@ import {
   stepVerb,
   summarizeActivity,
 } from './tool-activity';
-import { buildTranscript, liveMedia } from './transcript-model';
+import {
+  browserOffers,
+  buildTranscript,
+  finishedLiveSteps,
+  liveMedia,
+  settleFinishedSteps,
+} from './transcript-model';
+import { cardKey, liveCards } from './TranscriptCards';
 import { stoppedMarker } from './TranscriptMessage';
 import { turnError } from './turn-errors';
 
@@ -143,7 +150,38 @@ describe('tool activity', () => {
     // An app's tool reads as a verb only when its title begins with one.
     const app = { item_id: 'mcp:x', name: 'GitHub', icon: 'letter:G' };
     expect(approvalQuestion('mcp_x', { ...app, tool: 'Get commit' })).toBe(
-      'Allow GitHub to get commit?',
+      'Allow GitHub to get a commit?',
+    );
+    expect(approvalQuestion('mcp_x', { ...app, tool: 'List commits' })).toBe(
+      'Allow GitHub to list commits?',
+    );
+    expect(approvalQuestion('mcp_x', { ...app, tool: 'Get data' })).toBe(
+      'Allow GitHub to get data?',
+    );
+    expect(
+      approvalQuestion('mcp_x', { ...app, tool: 'Add issue comment' }),
+    ).toBe('Allow GitHub to add issue comment?');
+    // The server names an app tool's app; one it can't reads in words, never "MCP" or its raw name, and
+    // never guesses an app (two connections can make one name) (B388).
+    expect(
+      approvalQuestion('mcp_stripe_create_product', {
+        ...app,
+        name: 'Stripe',
+        tool: 'Create product',
+      }),
+    ).toBe('Allow Stripe to create a product?');
+    expect(approvalQuestion('mcp_stripe_create_product')).toBe(
+      'Allow “Stripe create product”?',
+    );
+    expect(approvalAction('mcp_stripe_create_product')).toBe(
+      'Stripe create product',
+    );
+    // Its step row too, never "Running MCP stripe create product" (B391).
+    expect(stepVerb('mcp_stripe_create_product', 'pending')).toBe(
+      'Running stripe create product',
+    );
+    expect(stepVerb('mcp_stripe_create_product', 'failed')).toBe(
+      'Stripe create product failed',
     );
     expect(
       approvalQuestion('mcp_x', { ...app, name: 'Counter', tool: 'Counter' }),
@@ -296,6 +334,28 @@ describe('transcript model', () => {
     expect(items[2].media).toEqual([]);
   });
 
+  it('offers the browser pane once per reply that used it, at its last row (U16)', () => {
+    const browser = (name: string) => ({
+      ...trace(name),
+      kind: 'browser' as const,
+    });
+    const items = buildTranscript([
+      user('u1'),
+      assistant('a1', 'Opening the page.', [browser('Browser Navigate')]),
+      assistant('a2', 'Clicking through.', [browser('Browser Click')]),
+      assistant('a3', 'Here it is.'),
+      user('u2'),
+      assistant('a4', 'No browser this time.', [trace('web_search')]),
+      user('u3'),
+      assistant('a5', 'Back to it.', [browser('Browser Navigate')]),
+    ]);
+    expect(
+      items
+        .filter((_, index) => browserOffers(items)[index])
+        .map((item) => item.row.id),
+    ).toEqual(['a2', 'a5']);
+  });
+
   it('keeps text rows separate and skips empty assistant rows', () => {
     const items = buildTranscript([
       user('u1'),
@@ -319,6 +379,45 @@ describe('transcript model', () => {
     expect(
       liveMedia([record('a'), record('b'), record('b')], new Set(['a'])),
     ).toEqual([{ reference: 'b', mime: 'image/png' }]);
+  });
+
+  it('settles a question answered in the live turn in its own row, before the reply (N4)', () => {
+    const answered = {
+      kind: 'question_answered',
+      outcome: 'answered',
+      answers: [{ header: 'Beta timing', answer: 'Beta.1 now' }],
+    } as const;
+    const done = {
+      cursor: '2',
+      event: {
+        type: 'tool.activity',
+        event_id: 'done',
+        payload: {
+          state: 'tool_done',
+          tool_call_id: 'call-ask_person',
+          tool_name: 'ask_person',
+          status: 'succeeded',
+          safe_summary: 'You chose: Beta.1 now',
+          specialization: answered,
+        },
+      },
+    } as unknown as EventRecord;
+    const rows = [
+      user('u1'),
+      assistant('a1', '', [trace('ask_person', 'pending')]),
+    ];
+    const finished = finishedLiveSteps([done]);
+    const items = buildTranscript(settleFinishedSteps(rows, finished));
+    const step = items[1].traces[0].items[0];
+    expect(step.status).toBe('succeeded');
+    expect(activityLabel(summarizeActivity(items[1].traces))).toBe(
+      'Asked you a question',
+    );
+    expect(items[1].cards.map(cardKey)).toEqual(['answer:call-ask_person']);
+    // The live copy after the reply gives way to the one in place.
+    expect(liveCards([done], new Set(items[1].cards.map(cardKey)))).toEqual([]);
+    // Nothing finished live: the saved rows are used as they are.
+    expect(settleFinishedSteps(rows, new Map())).toBe(rows);
   });
 
   it('turns the runtime stop marker into a chip label', () => {

@@ -135,15 +135,14 @@ test('context card and composer stay compact through panels, narrowing, keyboard
     name: 'Conversation details',
   });
   await expect(card).toBeVisible();
-  const height = await card.evaluate((element) => ({
-    card: element.getBoundingClientRect().height,
-    workspace: element.closest('.chat-workspace')!.getBoundingClientRect()
-      .height,
-    scroll: getComputedStyle(element.querySelector('.context-rail-body')!)
-      .overflowY,
-  }));
-  expect(height.card).toBeLessThan(height.workspace * 0.8);
-  expect(height.scroll).toBe('auto');
+  // The rail's sections scroll inside it.
+  expect(
+    await card.evaluate(
+      (element) =>
+        getComputedStyle(element.querySelector('.context-rail-body')!)
+          .overflowY,
+    ),
+  ).toBe('auto');
   await expectSingleToolbarRow(page);
   await screenshot(page, info, 'slice6-wide');
 
@@ -258,7 +257,7 @@ test('context card and composer stay compact through panels, narrowing, keyboard
   await screenshot(page, info, 'slice6-zoom-200');
 });
 
-test('Conversation details floats beside the reading column at desktop widths (B221)', async ({
+test('Conversation details keep a rail beside the reading column at desktop widths, and open on demand in a narrower chat (U3)', async ({
   page,
 }, info) => {
   test.skip(
@@ -293,7 +292,7 @@ test('Conversation details floats beside the reading column at desktop widths (B
     name: 'Conversation details',
     exact: true,
   });
-  for (const width of [1280, 1440, 1920]) {
+  for (const width of [1024, 1280, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(card).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
@@ -312,37 +311,55 @@ test('Conversation details floats beside the reading column at desktop widths (B
         card: box(document.querySelector('.context-card')!),
         composer: box(document.querySelector('.composer')!),
         buttonsBottom: Math.max(...buttons.map((button) => button.bottom)),
-        lastButtonRight: Math.max(...buttons.map((button) => button.right)),
         texts: Array.from(
           document.querySelectorAll('.transcript .message-text'),
         ).map(box),
       };
     });
-    // The scroller spans the conversation: its scrollbar is at the app's edge.
-    expect(
-      Math.abs(layout.transcript.right - layout.conversation.right),
-    ).toBeLessThanOrEqual(1);
-    // The card sits under the header's buttons, its right edge on the last
-    // one's, left of the scrollbar and above the composer.
+    // The rail is anchored: under the header's buttons, flush with the
+    // conversation's right edge and down to its foot.
     expect(layout.card.top).toBeGreaterThanOrEqual(layout.buttonsBottom);
     expect(
-      Math.abs(layout.card.right - layout.lastButtonRight),
+      Math.abs(layout.card.right - layout.conversation.right),
     ).toBeLessThanOrEqual(1);
-    expect(layout.card.right).toBeLessThanOrEqual(
-      layout.transcript.right - layout.scrollbar,
-    );
-    expect(layout.card.bottom).toBeLessThanOrEqual(layout.composer.top);
-    // No message text runs under the card.
+    expect(
+      Math.abs(layout.card.bottom - layout.conversation.bottom),
+    ).toBeLessThanOrEqual(1);
+    // The transcript's scroller ends at the rail; the composer stays left of it.
+    expect(
+      Math.abs(layout.transcript.right - layout.card.left),
+    ).toBeLessThanOrEqual(1);
+    expect(layout.composer.right).toBeLessThanOrEqual(layout.card.left + 1);
+    // The reading column centres in the width left beside the rail.
     expect(layout.texts.length).toBeGreaterThan(0);
-    for (const text of layout.texts)
-      expect(
-        text.right > layout.card.left &&
-          text.left < layout.card.right &&
-          text.bottom > layout.card.top &&
-          text.top < layout.card.bottom,
-      ).toBe(false);
-    await screenshot(page, info, `b221-details-${width}`);
+    const text = layout.texts[0];
+    const left = text.left - layout.transcript.left;
+    const right = layout.transcript.right - layout.scrollbar - text.right;
+    expect(Math.min(left, right)).toBeGreaterThan(0);
+    await screenshot(page, info, `u3-details-${width}`);
   }
+  // A 900px window leaves no room for the rail beside a comfortable column:
+  // the transcript keeps the width and the details open on demand.
+  await page.setViewportSize({ width: 900, height: 768 });
+  await expect(card).toBeHidden();
+  const narrow = await page.evaluate(() => ({
+    conversation: document
+      .querySelector('.chat-workspace')!
+      .getBoundingClientRect(),
+    transcript: document.querySelector('.transcript')!.getBoundingClientRect(),
+  }));
+  expect(
+    Math.abs(narrow.transcript.right - narrow.conversation.right),
+  ).toBeLessThanOrEqual(1);
+  await toggle.click();
+  const opened = card
+    .or(page.getByRole('dialog', { name: 'Conversation details' }))
+    .first();
+  await expect(opened).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(opened).toBeHidden();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(card).toBeVisible();
   // The toggle hides the card (the column re-centres) and brings it back.
   await toggle.click();
   await expect(card).toBeHidden();

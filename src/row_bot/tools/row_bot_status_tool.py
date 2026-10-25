@@ -30,6 +30,7 @@ _DATA_DIR = get_row_bot_data_dir()
 def _approval_gate_bool(payload: dict, *, blocked_message: str) -> bool:
     return gate_action(
         payload,
+        risks=("changes a Row-Bot setting",),
         blocked_message=blocked_message,
         cancelled_message="",
     ) is None
@@ -1680,6 +1681,11 @@ def _query_version() -> str:
     return f"**Row-Bot Version**: v{__version__}"
 
 
+def _query_features() -> str:
+    from row_bot.self_knowledge import features_text
+    return features_text()
+
+
 def _query_designer() -> str:
     try:
         from row_bot.designer.storage import list_projects
@@ -1701,6 +1707,7 @@ def _query_designer() -> str:
 _QUERY_HANDLERS = {
     "overview": _query_overview,
     "version": _query_version,
+    "features": _query_features,
     "model": _query_model,
     "channels": _query_channels,
     "memory": _query_memory,

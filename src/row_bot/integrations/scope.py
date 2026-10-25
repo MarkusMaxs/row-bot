@@ -207,6 +207,25 @@ def step_scope(item_ids: list[str] | tuple[str, ...] | None) -> dict | None:
             "focus": wanted, "skills": []}
 
 
+def apps_named(names: list[str] | tuple[str, ...]) -> list[str]:
+    """The set-up apps a workflow step names, by the names the composer shows (B345), as item ids.
+    A name that matches no set-up app is refused with the names that would."""
+    ready = [item for item in _items() if item["lifecycle"] == "installed" and item["readiness"] == "ready"]
+    known: dict[str, list[str]] = {}
+    for item, shown in zip(ready, _shown(ready)):
+        for name in {shown, _name(item)}:
+            known.setdefault(name.casefold(), []).append(item["id"])
+    found: list[str] = []
+    for raw in names:
+        name = str(raw or "").strip().lstrip("@")
+        ids = known.get(name.casefold())
+        if not ids:
+            choices = ", ".join(sorted(_shown(ready))) or "none are set up"
+            raise ValueError(f"No set-up app is called {name!r}. Apps: {choices}.")
+        found.extend(item for item in ids if item not in found)
+    return found[:MAX_FOCUS]
+
+
 def app_for_tool(tool_name: str) -> dict | None:
     """The app a chat tool belongs to (``{item_id, name, icon, tool}``, ``tool`` being the tool's readable
     title), from its exact runtime name; None for Row-Bot's own and for a name no app issued."""
@@ -216,13 +235,34 @@ def app_for_tool(tool_name: str) -> dict | None:
     if not server:
         parent = builtin.tool_parent(tool_name)
         found = builtin.tool_app(parent) if parent else None
-        return {**found, "tool": ""} if found else None
+        return {**found, "tool": builtin.tool_title(tool_name)} if found else None
     item = next((item for item in _mcp_items() if item["server"] == server), None)
     if item is None:
         return None
     from row_bot.integrations import views
     return {"item_id": item["id"], "name": _name(item)[:128], "icon": item["icon"], "tool": runtime.tool_title(tool_name),
             "view": views.has_view(tool_name, item)}
+
+
+def app_named_by_tool(tool_name: str) -> dict | None:
+    """For an approval's words only (B388): the one set-up app whose connection an ``mcp_<server>_`` runtime
+    name starts with, when this runtime never issued that name (an approval still waiting from before a
+    restart). A name two connections could make names neither: "Counter" + "update_counter" and "Counter
+    update" + "counter" look alike. Never used to scope or allow tools."""
+    if not tool_name.startswith("mcp_"):
+        return None
+    from row_bot.mcp_client.safety import sanitize_name_component
+    found = []
+    for item in _mcp_items():
+        prefix = f"mcp_{sanitize_name_component(item['server'])}_"
+        words = " ".join(tool_name[len(prefix):].replace("_", " ").replace("-", " ").split())
+        if tool_name.startswith(prefix) and words:
+            found.append((item, words))
+    if len(found) != 1:
+        return None
+    item, words = found[0]
+    return {"item_id": item["id"], "name": _name(item)[:128], "icon": item["icon"],
+            "tool": (words[:1].upper() + words[1:])[:128]}
 
 
 MAX_SUGGESTIONS = 3

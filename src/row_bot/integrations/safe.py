@@ -147,7 +147,8 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
           exact_redirects: Mapping[str, str] | None = None, meta: dict | None = None,
           refused: str = "package_source_not_supported", too_large: str = "package_download_too_large",
           method: str = "GET", check: Callable[[], None] | None = None,
-          duration: float | None = None) -> bytes:
+          duration: float | None = None,
+          progress: Callable[[int, int | None], None] | None = None) -> bytes:
     """Bounded https GET without automatic redirects.
 
     ``hosts`` is a reviewed allow-list; ``None`` admits any public name. A direct
@@ -162,7 +163,9 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
     as the per-read ``timeout``. ``meta``
     receives the final response's status and headers. ``check`` (or the one set by
     ``checked``) runs before each hop and about four times a second while reading,
-    and stops the fetch by raising. ``HEAD`` returns no body.
+    and stops the fetch by raising. ``progress`` is told the bytes read so far and
+    the length the final response announced (None when it announced none) as often,
+    and once at the end. ``HEAD`` returns no body.
     """
     check = check or _CHECK.get() or (lambda: None)
     if method not in {"GET", "HEAD"}:
@@ -200,6 +203,8 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
                     meta.update(status=response.status_code, headers={k.lower(): v for k, v in response.headers.items()})
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
                     raise ValueError(refused)
+                announced = response.headers.get("content-length", "").strip()
+                total = int(announced) if announced.isdigit() else None
                 data, checked_at = bytearray(), time.monotonic()
                 for chunk in response.iter_bytes() if method == "GET" else ():  # Identity only: nothing is decompressed.
                     data.extend(chunk)
@@ -209,8 +214,12 @@ def fetch(url: str, *, hosts: Iterable[str] | None, max_bytes: int, timeout: flo
                         raise TimeoutError("source_timeout")
                     if time.monotonic() - checked_at >= 0.25:
                         check()
+                        if progress is not None:
+                            progress(len(data), total)
                         checked_at = time.monotonic()
                 check()
+                if progress is not None:
+                    progress(len(data), total)
                 return bytes(data)
 
 

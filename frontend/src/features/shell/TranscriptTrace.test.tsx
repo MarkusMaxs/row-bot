@@ -7,6 +7,7 @@ import type {
   TranscriptTraceItem,
 } from '../../api/types';
 import TranscriptTrace, { type LiveActivity } from './TranscriptTrace';
+import { writingLabel } from './tool-activity';
 import { answerStreaming } from './transcript-model';
 
 const messageText = vi.fn();
@@ -133,7 +134,7 @@ it('shows live shimmer text for the running step and an approval hold', () => {
   );
   expect(row()).toHaveAttribute('data-trace-status', 'pending');
   expect(
-    within(row()).getByText('Searching the web “local embedding models”'),
+    within(row()).getByText('Searching the web · “local embedding models”'),
   ).toHaveAttribute('data-live', 'true');
   rerender(
     <TranscriptTrace
@@ -163,6 +164,66 @@ it('shows live shimmer text for the running step and an approval hold', () => {
   expect(screen.getByRole('status')).toHaveTextContent(
     'Paused while you use the computer',
   );
+});
+
+it('says in plain words what a computer step in progress is doing', () => {
+  const computing: TranscriptTraceGroup[] = [
+    {
+      ...groups[0],
+      status: 'pending',
+      items: [
+        {
+          ...groups[0].items[0],
+          canonical_name: 'Computer activity',
+          safe_input: '{"action": "type", "text": "Leak under the sink"}',
+          status: 'pending',
+          content_ref: '',
+        },
+      ],
+    },
+  ];
+  const line = () => row().querySelector('.activity-summary-text');
+  // Another device knows only that the computer is in use.
+  const { rerender } = render(
+    <TranscriptTrace conversation="conversation-a" groups={computing} />,
+  );
+  expect(line()).toHaveTextContent(/^Using the computer$/);
+  // The computer's owner sees the app, and the card waiting on them.
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={computing}
+      computer="Using Microsoft Edge"
+    />,
+  );
+  expect(line()).toHaveTextContent(/^Using Microsoft Edge$/);
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={computing}
+      computer="Waiting for your OK"
+      live={{ running: true, waiting: true }}
+    />,
+  );
+  expect(line()).toHaveTextContent(/^Waiting for your OK$/);
+  expect(line()).toHaveAttribute('data-live', 'true');
+  expect(screen.getByRole('status')).toHaveTextContent('Waiting for your OK');
+  // Between steps the turn is still using the app.
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={[
+        {
+          ...computing[0],
+          status: 'succeeded',
+          items: [{ ...computing[0].items[0], status: 'succeeded' }],
+        },
+      ]}
+      computer="Using Microsoft Edge"
+      live={{ running: true }}
+    />,
+  );
+  expect(line()).toHaveTextContent(/^Using Microsoft Edge$/);
 });
 
 it('loads the first public page on step expansion and copies the visible result', async () => {
@@ -620,7 +681,7 @@ it('thinks only until the answer starts, then settles without ticking under the 
     ),
   );
   expect(
-    within(row()).getByText('Running a command New-Item notes.txt'),
+    within(row()).getByText('Running a command · New-Item notes.txt'),
   ).toHaveAttribute('data-live', 'true');
   expect(screen.getByRole('status')).toHaveTextContent(/^Running a command$/);
   expect(screen.queryByText(/Thought for/)).toBeNull();
@@ -715,11 +776,213 @@ it('says which tool call is being written while a long one streams', () => {
       live={{
         running: true,
         thinking: true,
-        writing: 'Writing Designer update page · 12 KB',
+        writing: writingLabel('page_create', 3 * 1024),
       }}
     />,
   );
+  expect(screen.getByText('Writing a page · 3 KB…')).toBeInTheDocument();
+});
+
+it.each([
+  ['delegate_work', 1024, 'Delegating work · 1 KB'],
+  ['analyze_image', 200, 'Looking at an image · 1 KB'],
+  ['designer_update_page', 12 * 1024, 'Working on the design · 12 KB'],
+  // A display name with its emoji, or a tool with no words, never shows as itself.
+  ['📁 Pages', 3 * 1024, 'Preparing the next step · 3 KB'],
+  ['mcp_linear_save_issue', 2048, 'Preparing the next step · 2 KB'],
+])('words a call %s being written as its step does', (name, bytes, words) => {
+  expect(writingLabel(name, bytes)).toBe(words);
+});
+
+function corrected(callId: string, name = 'ask_person'): TranscriptTraceItem {
+  return {
+    ...groups[0].items[0],
+    item_id: callId,
+    call_id: callId,
+    canonical_name: name,
+    status: 'failed',
+    safe_input: '',
+    safe_summary: '',
+    summary_truncated: false,
+    content_ref: '',
+    specialization: { kind: 'request_corrected' },
+  };
+}
+
+it('leaves out a call the model got wrong and sent again (U11)', () => {
+  const asked: TranscriptTraceItem = {
+    ...groups[0].items[0],
+    item_id: 'ask-4',
+    call_id: 'ask-4',
+    canonical_name: 'ask_person',
+    safe_input: '',
+    safe_summary: 'You chose: Green',
+    specialization: null,
+  };
+  render(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={[
+        {
+          ...groups[0],
+          status: 'failed',
+          items: [
+            corrected('ask-1'),
+            { ...corrected('ask-2'), call_order: 1 },
+            { ...corrected('ask-3'), call_order: 2 },
+            { ...asked, call_order: 3 },
+          ],
+        },
+      ]}
+    />,
+  );
+  // Nothing red: the question was asked and answered.
+  expect(row()).toHaveAttribute('data-trace-status', 'succeeded');
   expect(
-    screen.getByText('Writing Designer update page · 12 KB…'),
-  ).toBeInTheDocument();
+    within(row()).getByText('Asked you a question', {
+      selector: '.activity-summary-text',
+    }),
+  ).toBeVisible();
+  openRow();
+  expect(within(row()).getAllByRole('listitem')).toHaveLength(1);
+  expect(screen.queryByText("Couldn't wait for your answer")).toBeNull();
+  expect(screen.queryByText('Row-Bot corrected its request')).toBeNull();
+});
+
+it('shows a call the model gave up on as one quiet line, never its error (U11)', () => {
+  render(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={[
+        {
+          ...groups[0],
+          status: 'failed',
+          items: [corrected('ask-1'), { ...corrected('ask-2'), call_order: 1 }],
+        },
+      ]}
+    />,
+  );
+  expect(row()).toHaveAttribute('data-trace-status', 'succeeded');
+  expect(within(row()).getByText('Used 1 tool')).toBeVisible();
+  openRow();
+  const steps = within(row()).getAllByRole('listitem');
+  expect(steps).toHaveLength(1);
+  expect(steps[0]).toHaveTextContent(/^Row-Bot corrected its request$/);
+  // One line with nothing to open: no tool name, arguments or result.
+  expect(steps[0].querySelector('details')).toBeNull();
+});
+
+it('keeps a step’s detail apart from its verb for screen readers', () => {
+  const memory: TranscriptTraceGroup[] = [
+    {
+      ...groups[0],
+      items: [
+        {
+          ...groups[0].items[0],
+          canonical_name: 'save_memory',
+          safe_input: '{"category":"person"}',
+          specialization: null,
+        },
+      ],
+    },
+  ];
+  render(<TranscriptTrace conversation="conversation-a" groups={memory} />);
+  expect(
+    screen.getByText('Saved a memory').closest('summary'),
+  ).toHaveTextContent('Saved a memory · person');
+});
+
+it.each([
+  [
+    'Approval: approved by the reviewer: You asked to make the notes file\n$ New-Item notes.txt',
+    'Reviewer approved',
+    'Approved by the reviewer: You asked to make the notes file',
+  ],
+  [
+    'Approval: allowed by Hands-off\n$ New-Item notes.txt',
+    'Hands-off',
+    'Allowed by Hands-off',
+  ],
+])(
+  'records who let a step run without asking you (A0): %#',
+  (summary, tag, line) => {
+    render(
+      <TranscriptTrace
+        conversation="conversation-a"
+        groups={command({
+          call_id: `call-${tag}`,
+          status: 'succeeded',
+          safe_summary: summary,
+        })}
+      />,
+    );
+    openRow();
+    const ran = screen.getByText('Ran a command').closest('details')!;
+    // A quiet tag on the step's row, and the full line in its details.
+    expect(within(ran).getByText(tag)).toBeVisible();
+    fireEvent.click(within(ran).getByText('Ran a command'));
+    expect(within(ran).getByText(line)).toBeVisible();
+  },
+);
+
+const browserTurn: TranscriptTraceGroup[] = [
+  {
+    ...groups[0],
+    group_id: 'browser',
+    name: 'Browser activity',
+    kind: 'browser',
+    items: [
+      {
+        ...groups[0].items[0],
+        canonical_name: 'Browser Navigate',
+        group_name: 'Browser activity',
+        group_kind: 'browser',
+        safe_input: '',
+        safe_summary:
+          'Opened https://www.wikipedia.org/wiki/Tea.\nPage: Tea - Wikipedia (https://www.wikipedia.org/wiki/Tea)',
+        specialization: null,
+      },
+    ],
+  },
+];
+
+it('lets a finished turn that used the browser open its pane (U16)', async () => {
+  const { onBrowserPaneRequest } = await import('../browser/open-pane');
+  const opened: string[] = [];
+  const stop = onBrowserPaneRequest((conversation) =>
+    opened.push(conversation),
+  );
+  try {
+    render(
+      <TranscriptTrace
+        conversation="conversation-a"
+        groups={browserTurn}
+        offerBrowser
+      />,
+    );
+    const step = screen.getByRole('button', {
+      name: 'Open the browser: wikipedia.org',
+    });
+    expect(step).toHaveTextContent('Used the browser · wikipedia.org');
+    fireEvent.click(step);
+    expect(opened).toEqual(['conversation-a']);
+  } finally {
+    stop();
+  }
+});
+
+it('offers the browser only on the row the turn names, never beside the live step', () => {
+  const { rerender } = render(
+    <TranscriptTrace conversation="conversation-a" groups={browserTurn} />,
+  );
+  expect(screen.queryByRole('button', { name: /Open the browser/ })).toBeNull();
+  rerender(
+    <TranscriptTrace
+      conversation="conversation-a"
+      groups={browserTurn}
+      offerBrowser
+      live={{ running: true }}
+    />,
+  );
+  expect(screen.queryByRole('button', { name: /Open the browser/ })).toBeNull();
 });

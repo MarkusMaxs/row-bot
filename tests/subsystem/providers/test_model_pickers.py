@@ -46,8 +46,11 @@ STATUSES = {
     "openai": {"configured": False, "runtime_enabled": False},
 }
 SOL, LUNA = "model:codex:gpt-5.6-sol", "model:codex:gpt-5.6-luna"
-SONNET, MYSTERY = "model:claude_subscription:claude-sonnet-5", "model:claude_subscription:claude-mystery"
+# Any Claude model name is Claude Code's to accept, so the model without saved metadata is a Codex one.
+SONNET, MYSTERY = "model:claude_subscription:claude-sonnet-5", "model:codex:gpt-mystery"
 UNCONNECTED = "model:openai:gpt-unconnected"
+# In the catalog, never pinned.
+TERRA = "model:codex:gpt-5.6-terra"
 
 
 def _pin(provider: str, model: str, name: str, snapshot: dict) -> dict:
@@ -84,7 +87,7 @@ def saved_state(tmp_path, monkeypatch):
             _pin("codex", "gpt-5.6-sol", "GPT-5.6 Sol (ChatGPT)", CODEX_FULL),
             _pin("codex", "gpt-5.6-luna", "GPT-5.6 Luna (ChatGPT)", CODEX_FULL),
             _pin("claude_subscription", "claude-sonnet-5", "Claude Sonnet 5", DOCUMENTED_CLAUDE),
-            _pin("claude_subscription", "claude-mystery", "Claude Mystery", {}),
+            _pin("codex", "gpt-mystery", "GPT Mystery", {}),
             _pin("openai", "gpt-unconnected", "GPT Unconnected", SEEING_CHAT),
         ],
     }), encoding="utf-8")
@@ -93,6 +96,7 @@ def saved_state(tmp_path, monkeypatch):
     cache.write_model_catalog_cache(cache.CatalogCacheSnapshot(1, 1000.0, {
         SOL: _saved("gpt-5.6-sol", "GPT-5.6 Sol (ChatGPT)", CODEX_FULL),
         LUNA: _saved("gpt-5.6-luna", "GPT-5.6 Luna (ChatGPT)", CODEX_FULL),
+        TERRA: _saved("gpt-5.6-terra", "GPT-5.6 Terra (ChatGPT)", CODEX_FULL),
         UNCONNECTED: _saved("gpt-unconnected", "GPT Unconnected", SEEING_CHAT, provider="openai"),
     }, [], {}, (), "fixture"))
     settings_path = tmp_path / "model_settings.json"
@@ -104,7 +108,7 @@ def saved_state(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "provider_status", lambda provider_id, **_kwargs: dict(STATUSES.get(provider_id, {})))
     selection._provider_status_picker_cache.clear()
     for module, name in ((codex, "fetch_codex_model_infos"),
-                         (claude_subscription, "fetch_claude_subscription_model_infos"),
+                         (claude_subscription, "discover_claude_plan_models"),
                          (cache, "start_model_catalog_refresh_background"),
                          (cache, "refresh_model_catalog_cache")):
         monkeypatch.setattr(module, name, lambda *_a, **_kw: pytest.fail("a picker read contacted a provider"))
@@ -214,3 +218,70 @@ def test_the_composer_offers_the_brain_list_with_the_same_availability(saved_sta
     assert composer[SOL]["billing"] == "subscription"
     assert composer[MYSTERY]["unavailable_reason"] == "metadata_missing"
     assert composer[UNCONNECTED]["unavailable_reason"] == "configuration_required"
+
+
+def test_every_picker_marks_favourites_and_hidden_models_alike(saved_state, monkeypatch, tmp_path):
+    """F10: one preference for every list; the options themselves don't change."""
+    from row_bot.providers import model_visibility
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    before = _options("brain")
+    model_visibility.update_model_visibility("favourite", SONNET)
+    model_visibility.update_model_visibility("favourite", LUNA)
+    model_visibility.update_model_visibility("hide", SOL)
+    brain, vision = _options("brain"), _options("vision")
+
+    assert set(brain) == set(before)
+    for options in (brain, vision):
+        assert options[SONNET]["favourite_rank"] == 1 and options[LUNA]["favourite_rank"] == 2
+        assert options[SOL]["hidden"] is True and options[SOL]["available"] is True
+    assert "favourite_rank" not in brain[MYSTERY] and "hidden" not in brain[MYSTERY]
+    # A hidden model can still be chosen.
+    owner.update_model_surface("vision", "default", selection_ref=SOL, validate=lambda: None)
+    assert saved_state.model == SOL
+
+
+def test_a_starred_model_is_listed_in_every_picker_for_its_jobs_and_unstarring_takes_it_out(
+    saved_state, monkeypatch, tmp_path,
+):
+    """U10: one concept. A star lists a model wherever a model is chosen; pins still list theirs."""
+    from row_bot.api.v1.routes import cached_choices
+    from row_bot.mcp_client import runtime as mcp_runtime
+    from row_bot.plugins import registry as plugin_registry
+    from row_bot.providers import client_status, model_visibility
+    from row_bot.tools import registry as tool_registry
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(tool_registry, "get_all_tools", lambda: [])
+    monkeypatch.setattr(plugin_registry, "get_loaded_manifests", lambda: [])
+    monkeypatch.setattr(mcp_runtime, "get_catalog_snapshot", lambda: {})
+    pinned = set(_options("brain"))
+    assert TERRA not in pinned
+
+    model_visibility.update_model_visibility("favourite", TERRA)
+    brain, vision = _options("brain"), _options("vision")
+    composer = {model["model_ref"]: model for model in cached_choices()["models"]}
+    for options in (brain, vision):
+        assert options[TERRA]["available"] is True and options[TERRA]["favourite_rank"] == 1
+    assert composer[TERRA]["favourite_rank"] == 1
+    assert set(brain) == pinned | {TERRA}  # every pinned model stays listed
+    assert _review(TERRA)["model_id"] == "gpt-5.6-terra"
+    # An agent may be started on it, as on a pinned model.
+    from row_bot.providers.selection import resolve_catalog_model_selection
+
+    agent = resolve_catalog_model_selection(TERRA, surface="chat", require_agent_ready=True, require_pinned=True)
+    assert agent.ref == TERRA
+    owner.update_model_surface("vision", "default", selection_ref=TERRA, validate=lambda: None)
+    assert saved_state.model == TERRA
+    # The Catalog shows the star on the row and counts it as listed.
+    page = client_status.list_cached_models(provider_id="codex", surface="chat")
+    row = next(item for item in page.items if item.selection_ref == TERRA)
+    assert row.favourite_rank == 1 and row.hidden is False
+    summary = owner.catalog_provider_summary("chat")
+    # Sol and Luna pinned, Terra starred (Mystery has no saved details for chat yet).
+    assert next(item for item in summary["providers"] if item["provider_id"] == "codex")["pinned"] == 3
+
+    model_visibility.update_model_visibility("unfavourite", TERRA)
+    assert TERRA not in _options("brain")
+    # Vision still lists it while it is Vision's current model.
+    assert TERRA in _options("vision")

@@ -1,6 +1,6 @@
 ---
 title: "Chat"
-description: "Use Row-Bot conversations: the composer, models, attachments, context and token usage, apps and skills in a chat, tools, approvals in place, the details card, names, and the conversation library."
+description: "Use Row-Bot conversations: the composer, models, incognito chats, attachments, pages, questions, context and token usage, apps and skills in a chat, approvals, the details card, and the conversation library."
 ---
 
 import Screenshot from '@site/src/components/Screenshot';
@@ -18,18 +18,46 @@ A conversation is the main place to work with Row-Bot. It can stay a simple chat
 
 A new conversation is named from the first words of your first message straight away, then gets a short name of its own after the first reply. Click the name in the header to rename it; a name you choose is kept.
 
+You don't need to name a feature to use it. Ask in your own words, and Row-Bot picks the right tool:
+- a plan, checklist or comparison becomes a [page](#pages);
+- a choice only you can make comes as a [question](#questions);
+- research on several things goes to helpers;
+- a server or watcher runs in the background;
+- "keep me on track" gets a plan and a weekly check-in.
+
+## Incognito Chats
+
+An incognito chat keeps what you say in it out of Row-Bot's memory.
+
+- Start one with **New chat ▾ › New incognito chat**, or switch the open chat with the **⋯ › Incognito** in its header. In a messaging channel, send `/incognito on` or `/incognito off`.
+- The header shows an incognito mark, and the composer reads "Message Row-Bot (incognito)". Hover the mark for "Incognito: nothing here is saved to memory".
+- Row-Bot and its helpers can still use what they already remember. Nothing in the chat is read for memory, and nothing is saved unless you choose **Save** on the card that asks. That card appears at every approval level, Hands-off too, and for a helper's saves as well.
+- Turning incognito on keeps memories already saved from this chat. The notice offers **Review**, which opens [Settings › Memory](/docs/settings/knowledge). Turning it off never reaches back: memory reads the chat only from then on.
+- Searching your past conversations never finds an incognito chat.
+
 ## The Conversation
 
 - **Header**: the conversation's name, **Find** to search it (⌘F / Ctrl+F), **Export**, and **Conversation details** (⌘. / Ctrl+.).
 - **Transcript**: your messages and Row-Bot's replies, each with a small speaker mark (your Buddy's picture for Row-Bot), plus tool steps, how long Row-Bot thought, charts, images, generated media, approval cards and the agents a turn started.
 - **Composer**: type the next request. Enter sends and Shift+Enter adds a line. **Send** becomes **Stop** while Row-Bot replies. A message you type while the previous one is still being sent stays in the composer on its own.
 - **Retry** and **Send again** run your last message again in place of its answer, without a second copy of the message, when nothing is running or waiting for an approval. A turn that already used tools stays on record, so its retry is sent as a new message.
+- **Maths** in a reply is typeset:
+  - `\( … \)` and `$ … $` inline (`$` only where it can't be a price);
+  - `\[ … \]` and `$$ … $$` on their own line.
+
+  The typesetting ships with Row-Bot and loads only for a message that has maths.
 
 ## Composer Controls
 
 - **Model** chooses the model for this conversation. See [Model Picker](/docs/chat/model-picker).
 - **Thinking** appears beside the model only when that exact model exposes supported reasoning choices. See [Reasoning Controls](/docs/chat/reasoning-controls).
-- **Approvals** sets how actions are reviewed in this conversation, and its menu says what each mode does: **Ask** asks before anything that makes changes, **Auto** runs routine actions while risky ones still ask, and **Block** runs nothing that makes changes.
+- **Approvals** sets how actions are reviewed in this conversation, and its menu says what each level does:
+  - **Ask** asks before anything that makes changes;
+  - **Auto**: a reviewer approves what you asked for, and the rest asks;
+  - **Hands-off**: nothing asks, and every action runs and is recorded. You confirm it once for a chat;
+  - **Block**: nothing that makes changes runs.
+
+  See [Approvals](/docs/chat/tools-approvals-and-terminal).
 - The **+** menu (**Add files and more**) holds **Attach file**, **Add resource…** (a design or code folder), **Skills…**, **Apps**, **Agent** (each agent with a line on what it does), and **Mode**: **Agent** uses tools and agents, **Chat only** answers without tools.
 - **Skill chips** above the composer show the skills in use, including default ones; × removes one from this conversation. **Skills…** (or `/skills`) opens **Smart Skills**, which ends with **Find more skills** to open Settings › Skills.
 - **Voice** buttons use Dictate or Talk when voice is set up.
@@ -71,6 +99,29 @@ Some apps can show a result as an interactive view, such as a chart, a form or a
 - Turn views off for every app with **Settings › Apps › Advanced › Show app views in chat**, or for one app with **Show views in chat** on its page. Both are on for apps whose setup included a view.
 - If a view doesn't open, **Open again** tries again. "Views from this app are off. Turn them on from its page in Apps." means a switch is off: the app's **Show views in chat**, the one in Apps › Advanced, or the app in this chat's **+ › Apps**.
 
+## Pages
+
+Ask for something you'll use rather than read: a plan to approve step by step, a checklist, a dashboard, options to compare, a form or a small calculator. Row-Bot makes it as a **page**, and the chat shows a card such as "Launch plan · page" with **Open**. You don't have to ask for a page: when the answer is a plan, a checklist, a comparison or numbers to track, Row-Bot makes one by itself and keeps its reply short.
+
+- On a computer the page opens beside the chat; on a phone it fills the screen, with **Back** to the chat.
+- Approve, change (with a note) or skip steps right in the page. Your decisions gather under it: "3 decisions · Send to Row-Bot". Click the count to see them in words. **Send to Row-Bot** posts them to the chat as one message, marked "Sent from a page". Nothing is sent until you click it, and a decision never approves a tool call: anything that needs approval still asks.
+- What a page remembers, such as the ticks on a checklist, is saved with the chat on every device you're signed in on.
+- Row-Bot keeps a page current as it works, with progress or fresh numbers; an open page shows the new version. The last 10 versions are kept.
+- **Download as HTML** saves a copy that works on its own in any browser (in the desktop app it goes to Row-Bot's Exports folder).
+- **Library › Pages** lists every page with its chat.
+
+A page runs apart from Row-Bot: it has no internet, can't see your chats, files or settings, and can't call tools or send anything by itself. Deleting a chat deletes its pages.
+
+## Questions
+
+When the best answer depends on a choice only you can make, such as your budget, a date or what you'll use something for, Row-Bot asks in a card titled **Row-Bot has a question**.
+
+- Each option has a line of description, and Row-Bot tags the one it recommends **Recommended**. **Other…** opens **Write your answer**.
+- Several questions show as steps in one card, then **Answer**. Keys 1–4 pick an option and Enter answers.
+- **Skip** lets Row-Bot carry on with its recommendation.
+- Questions can come from a chat, a helper or a workflow. In Telegram, Discord, Slack and WhatsApp, tap an option, or reply with its number or your own words.
+- An answer is never an approval: anything that needs approval still asks.
+
 ## Attachments
 
 Attach files with **+ › Attach file**, by dropping them on the conversation, or by pasting. Each file shows as a small tile above the text: pictures show a preview, other files their type, name and size. Tiles show upload progress and offer **Retry** if an upload fails. You can keep adding files while others upload; **Send** waits for them. Click a tile to preview it, or × to remove it.
@@ -93,18 +144,18 @@ Compaction starts near the end of the model's window, leaving room for the reply
 
 ## The Details Card
 
-**Conversation details** sits beside the conversation on a wide screen. It shows:
+**Conversation details** stays open in a rail along the conversation's right edge on a wide screen, and the conversation centres in the space beside it. In a narrower window it opens from the header's **Conversation details** button instead. It shows:
 
 - **Working on**: the designs and code folders bound to this conversation. Choose one to open its panel, or unbind it from its **⋯** menu. **Add resource** binds another.
 - **Outputs**: images and videos the conversation made, linked to where they appear.
 - **Goal**: the conversation's goal and its progress. Without one, the card shows only a small **Set a goal**. See [Profiles, Goals, And Agents](/docs/profiles-goals-agents/).
 - **Agents**: the agents this conversation started, each with its status, **Message** and **Stop**.
 
-Its **⋯** menu offers **Manage conversation**, **Manage browser** and **Delete conversation**. After you confirm, **Undo** stays in the notice for a few seconds; the delete happens when the notice goes.
+Its **⋯** menu offers **Manage conversation**, **Open browser** and **Delete conversation**. After you confirm, the conversation is deleted at once, and **Undo** in the notice brings it back for a few seconds.
 
 ## Approvals
 
-When Row-Bot needs your decision, an approval card appears in the conversation with **Approve** and **Deny**. When the action belongs to an app, the card shows the app's logo and name, and so does the tool step for anything an app did. Approvals wait until you answer, and they also show in the sidebar's attention indicator, on Overview and in Buddy, so you can decide from wherever you are. See [Tools, Approvals, And Terminal](/docs/chat/tools-approvals-and-terminal).
+When Row-Bot needs your decision, an approval card appears in the conversation with **Approve** and **Deny**. When the action belongs to an app, the card shows the app's logo and name, and so does the tool step for anything an app did. Approvals wait until you answer, and they also show in the sidebar's attention indicator, on Overview and in Buddy, so you can decide from wherever you are. See [Tools, Approvals And Background Work](/docs/chat/tools-approvals-and-terminal).
 
 ## Beginner Workflow
 
@@ -132,7 +183,7 @@ In the native Windows and macOS apps, drag Buddy from the sidebar onto the deskt
 
 - **Export** in the header opens the conversation's actions: change its **Name**, **Pin** it to the top of the sidebar, or **Export** it as **Markdown** or **PDF**, then **Save export** to choose where the file goes.
 - A sidebar row's **⋯** menu exports or deletes one conversation too.
-- **Conversation library**, at the end of the sidebar's list, lists every conversation.
+- **Conversation library**, at the end of the sidebar's list, lists every conversation; its **Pages** view lists every page Row-Bot made.
 
 <Screenshot id="conversation-library" alt="Row-Bot conversation library with search, the type filter and selected conversations." caption="The conversation library searches titles and messages, filters by type, and acts on a selection from the bar at the top." />
 

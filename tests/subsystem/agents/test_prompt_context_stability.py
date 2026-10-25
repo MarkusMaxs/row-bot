@@ -115,7 +115,7 @@ def test_plugin_skill_prompt_is_not_injected_wholesale(tmp_path, monkeypatch, re
 def test_tool_guides_follow_effective_authorization_not_global_parent_names(tmp_path, monkeypatch, reload_for_data_dir):
     agent = _fresh_agent(tmp_path, reload_for_data_dir)
 
-    def fake_guides(_manual_names, *, active_tool_names=None) -> str:
+    def fake_guides(active_tool_names=None, *, loadable=True) -> str:
         active = set(active_tool_names or ())
         return "\n".join(
             sentinel
@@ -133,7 +133,7 @@ def test_tool_guides_follow_effective_authorization_not_global_parent_names(tmp_
     monkeypatch.setattr(agent, "is_background_workflow", lambda: False)
     monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block", lambda: "")
     monkeypatch.setattr("row_bot.self_knowledge.build_dynamic_self_knowledge_block", lambda: "")
-    monkeypatch.setattr("row_bot.skills.get_skills_prompt", fake_guides)
+    monkeypatch.setattr("row_bot.skills.get_tool_guides_prompt", fake_guides)
 
     def rendered_for(effective_parents: tuple[str, ...], budget_id: str):
         agent._set_active_runtime_context(
@@ -167,8 +167,8 @@ def test_deferred_skill_prompt_failure_is_closed_without_dropping_core_guides(tm
     monkeypatch.setattr("row_bot.self_knowledge.build_static_self_knowledge_block", lambda: "")
     monkeypatch.setattr("row_bot.self_knowledge.build_dynamic_self_knowledge_block", lambda: "")
     monkeypatch.setattr(
-        "row_bot.skills.get_skills_prompt",
-        lambda _manual_names, *, active_tool_names=None: "CORE_GUIDE_SENTINEL",
+        "row_bot.skills.get_tool_guides_prompt",
+        lambda active_tool_names=None, *, loadable=True: "CORE_GUIDE_SENTINEL",
     )
     monkeypatch.setattr(
         "row_bot.skill_discovery.render_active_skills_prompt",

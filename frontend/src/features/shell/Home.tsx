@@ -16,6 +16,7 @@ import type {
   TaskSummaryPage,
 } from '../../api/types';
 import { useClientState, useRuntime } from '../../runtime';
+import { useLiveUpdate } from '../../live';
 import { Tabs } from '../../ui/primitives';
 import { useOverlay } from '../../ui/overlays';
 import TaskLibrary from '../tasks/TaskLibrary';
@@ -25,13 +26,13 @@ import KnowledgeHome, {
 } from '../home/KnowledgeHome';
 import type { KnowledgeLifecycleAction } from '../home/KnowledgeReview';
 import MonitorHome from '../home/MonitorHome';
+import type { BackgroundProcessesIo } from '../home/BackgroundProcesses';
 import InsightsHome from '../home/InsightsHome';
 import OverviewHome from '../home/OverviewHome';
 import { BuddyPortrait } from '../buddy/BuddySurface';
 import ResourceSetup from './ResourceSetup';
 import { setupDeferred } from './FirstRun';
 import KnowledgeEditorDialog from '../knowledge/KnowledgeEditorDialog';
-import { idPath } from '../apps/parts';
 import { neverUsed } from './new-chat';
 
 const homeTabs = ['overview', 'workflows', 'knowledge', 'monitor', 'insights'];
@@ -41,26 +42,6 @@ const REUSE_MS = 20_000;
 // in well under a second) and "Show all" reads up to the server's 5,000 (B251).
 const GRAPH_DEFAULT_LIMIT = 2000;
 const GRAPH_ALL_LIMIT = 5000;
-/** Overview's Memory card pictures the few most connected memories. */
-const OVERVIEW_GRAPH_LIMIT = 8;
-
-/** One read shared by every reader for a short while; a failed one is dropped. */
-function useSharedRead<T>(read: () => Promise<T>, key: string) {
-  const cache = useRef<{ at: number; key: string; value: Promise<T> } | null>(
-    null,
-  );
-  return useCallback(() => {
-    const cached = cache.current;
-    if (cached && cached.key === key && Date.now() - cached.at < REUSE_MS)
-      return cached.value;
-    const value = read();
-    cache.current = { at: Date.now(), key, value };
-    value.catch(() => {
-      if (cache.current?.value === value) cache.current = null;
-    });
-    return value;
-  }, [read, key]);
-}
 
 export default function Home({
   onAsk,
@@ -84,6 +65,18 @@ export default function Home({
   );
   const overlay = useOverlay();
   const navigate = useNavigate();
+  const processes = useMemo<BackgroundProcessesIo>(
+    () => ({
+      load: (conversation, signal) =>
+        controller.backgroundProcesses(conversation, signal),
+      output: (process, after, limit, signal) =>
+        controller.backgroundProcessOutput(process, after, limit, signal),
+      stop: (process) => controller.stopBackgroundProcess(process),
+      openConversation: (conversation) =>
+        navigate(`/conversations/${encodeURIComponent(conversation)}`),
+    }),
+    [controller, navigate],
+  );
   const [search, setSearch] = useSearchParams();
   const requestedTab = search.get('tab')?.toLowerCase() ?? '';
   const tab = homeTabs.includes(requestedTab) ? requestedTab : 'overview';
@@ -102,6 +95,24 @@ export default function Home({
   const [startupWarnings, setStartupWarnings] = useState<string[]>([]);
   const [attention, setAttention] = useState<AttentionProblem[]>([]);
   const monitorRead = useRef({ at: 0, key: '' });
+  // What Monitor lists as needing the person changed (a failed run, a
+  // notice; B407): read it again at once, at most once a second, without the
+  // loading state.
+  const liveMonitor = useRef({ at: 0, timer: 0, quiet: false });
+  useLiveUpdate(['monitor'], () => {
+    const pending = liveMonitor.current;
+    if (pending.timer) return;
+    pending.timer = window.setTimeout(
+      () => {
+        pending.timer = 0;
+        pending.at = Date.now();
+        pending.quiet = true;
+        setMonitorReload((value) => value + 1);
+      },
+      Math.max(0, pending.at + 1000 - Date.now()),
+    );
+  });
+  useEffect(() => () => window.clearTimeout(liveMonitor.current.timer), []);
   const [setup, setSetup] = useState<OnboardingSnapshot | null>(null);
   // Until a default model exists, opening Row-Bot opens Setup (decision 10).
   // Only the plain Home address does: a deep link, a Home tab or "Set up
@@ -191,7 +202,8 @@ export default function Home({
     )
       return;
     const abort = new AbortController();
-    setMonitorLoading(true);
+    if (!liveMonitor.current.quiet) setMonitorLoading(true);
+    liveMonitor.current.quiet = false;
     setMonitorError('');
     // Start-up warnings are listed in Monitor as well as shown once.
     controller.notices(abort.signal).then(
@@ -256,29 +268,6 @@ export default function Home({
     (signal?: AbortSignal) => controller.systemHealth(signal),
     [controller],
   );
-  const loadApps = useCallback(
-    async (signal?: AbortSignal) => {
-      const read = (cursor?: string) =>
-        controller.integrationItems(
-          { scope: 'installed', kind: 'app', cursor },
-          signal,
-        );
-      let page = await read();
-      const items = [...page.items];
-      // Every app, not just the first page, so none that needs you is missed.
-      for (let more = 0; page.next_cursor && more < 8; more += 1) {
-        page = await read(page.next_cursor);
-        items.push(...page.items);
-      }
-      return { ...page, items };
-    },
-    [controller],
-  );
-  const openApp = useCallback(
-    (itemId: string, fix = false) =>
-      navigate(`${idPath('app', itemId)}${fix ? '&fix=1' : ''}`),
-    [navigate],
-  );
   const refreshConversation = useCallback(
     (id: string, signal: AbortSignal) =>
       controller.refreshListedConversation(id, signal),
@@ -306,18 +295,10 @@ export default function Home({
     },
     [controller, identity],
   );
-  // Overview's Memory card, read again after a change in Knowledge.
-  const loadMemory = useSharedRead(
-    useCallback(
-      () => controller.knowledgeGraph(OVERVIEW_GRAPH_LIMIT),
-      [controller],
-    ),
-    `${identity}:${knowledgeReload}`,
-  );
-  const loadInsights = useSharedRead(
-    useCallback(() => controller.insights(), [controller]),
-    identity ?? '',
-  );
+  // A run started or ended: the next workflow read is fresh (B407).
+  useLiveUpdate(['runs'], () => {
+    tasksRead.current = null;
+  });
   /** A new design or code folder: set up in a new chat, like its + menu. */
   const newResource = (kind: 'artifact' | 'workspace') =>
     onPanel &&
@@ -572,14 +553,11 @@ export default function Home({
                 monitor={monitor}
                 loadTasks={identity ? loadTasks : undefined}
                 loadHealth={identity ? loadHealth : undefined}
-                loadApps={identity ? loadApps : undefined}
-                onOpenApp={openApp}
                 onRunDiagnosis={() => controller.systemDiagnosis()}
                 loadApprovals={
                   identity ? controller.pendingApprovals : undefined
                 }
-                loadMemory={identity ? loadMemory : undefined}
-                loadInsights={loadInsights}
+                loadAttention={identity ? controller.attention : undefined}
                 buddy={<BuddyPortrait />}
                 onAsk={onAsk}
                 asking={asking}
@@ -696,6 +674,7 @@ export default function Home({
                 onFixed={() => setMonitorReload((value) => value + 1)}
                 loadLogs={loadLogs}
                 loadTasks={identity ? loadTasks : undefined}
+                processes={identity ? processes : undefined}
               />
             ),
           },

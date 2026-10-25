@@ -60,11 +60,17 @@ def capture_chat_runtime(
     plan = deepcopy(_validated_runtime_reasoning_plan(reasoning_plan, resolved.selection_ref))
     oauth_snapshot, headers = None, {}
     context_size = None
-    if provider in {"codex", "claude_subscription", "xai_oauth"}:
+    if provider == "claude_subscription":
+        # Claude Code signs in by itself: nothing to capture but a Claude Code that can take the call.
+        from row_bot.providers.claude_subscription import claude_plan_status
+        if not claude_plan_status().ready:
+            raise ValueError("document_provider_unavailable")
+        return CapturedChatRuntime(replace(resolved, base_url=""), "", plan, None, capabilities=capabilities)
+    if provider in {"codex", "xai_oauth"}:
         from row_bot.providers.auth_store import read_provider_oauth_bundle_snapshot
-        from row_bot.providers import codex, claude_subscription, xai_oauth
+        from row_bot.providers import codex, xai_oauth
         oauth_snapshot = deepcopy(read_provider_oauth_bundle_snapshot(provider))
-        owner = {"codex":codex,"claude_subscription":claude_subscription,"xai_oauth":xai_oauth}[provider]
+        owner = {"codex":codex,"xai_oauth":xai_oauth}[provider]
         credentials = getattr(owner, provider + "_runtime_credentials")(refresh_if_needed=False, _snapshot=oauth_snapshot)
         credential = credentials.access_token
         if not credential or (provider == "codex" and not credentials.account_id):
@@ -77,9 +83,6 @@ def capture_chat_runtime(
             base = xai_oauth._validated_xai_base_url(str(oauth_snapshot[1].get("base_url") or xai_oauth.XAI_OAUTH_BASE_URL))
             resolved = replace(resolved, base_url=base)
             headers = {"User-Agent":xai_oauth.xai_oauth_user_agent()}
-        elif provider == "claude_subscription":
-            resolved = replace(resolved, base_url=claude_subscription.CLAUDE_SUBSCRIPTION_API_ROOT_URL)
-            headers = claude_subscription.claude_subscription_oauth_headers(accept="",allow_cli_probe=False)
     elif provider == "ollama":
         from row_bot.models import _ollama_base_url, _ollama_runtime_model_name, get_context_size
         resolved = replace(resolved, base_url=_ollama_base_url(),
@@ -368,6 +371,18 @@ def captured_chat_model(
     provider = resolved.provider_id
     transport = str(getattr(resolved.transport, "value", resolved.transport))
     validate()
+    if provider == "claude_subscription":
+        # No HTTP client: each call runs the person's Claude Code, which makes its own requests.
+        from row_bot.providers.transports.claude_plan_cli import ChatClaudePlan
+        from row_bot.providers.usage_ledger import attach_usage_ledger, with_usage_purpose
+
+        model = ChatClaudePlan(model_name=resolved.runtime_model, reasoning_plan=capture.reasoning_plan)
+        attach_usage_ledger(model, provider_id=provider, model_name=resolved.runtime_model)
+        invoked = (with_usage_purpose(model, usage_purpose, thread_id=usage_thread_id)
+                   if usage_purpose else model)
+        validate()
+        yield _CapturedChatInvocation(invoked, validate)
+        return
     with captured_http_clients(resolved.base_url, validate) as (sync, asynchronous):
         if provider in {"opencode_zen", "opencode_go"}:
             from row_bot.providers.opencode import add_opencode_request_headers, add_opencode_request_headers_async
@@ -399,14 +414,6 @@ def captured_chat_model(
             model = Transport(model_name=resolved.runtime_model,base_url=resolved.base_url,
                 http_client=sync,reasoning_plan=capture.reasoning_plan)
             model.bind_captured_credentials(capture.oauth_snapshot,validate,headers=capture.headers)
-        elif provider == "claude_subscription":
-            import anthropic
-            from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
-            root = anthropic.Anthropic(api_key="",auth_token=capture.credential,
-                base_url=resolved.base_url,default_headers=capture.headers,max_retries=0,http_client=sync)
-            model = ChatClaudeSubscriptionMessages(model_name=resolved.runtime_model,
-                base_url=resolved.base_url,anthropic_client=root,reasoning_plan=capture.reasoning_plan)
-            model.bind_captured_credentials(capture.oauth_snapshot,validate)
         elif transport == "openai_chat" and (is_custom_openai_provider(provider) or provider in {"opencode_zen","opencode_go"}):
             from row_bot.providers.transports.openai_compatible import ChatOpenAICompatible
             model = ChatOpenAICompatible(model_name=resolved.runtime_model,api_key=capture.credential,
@@ -620,60 +627,9 @@ def provider_status(provider_id: str, *, refresh_tokens: bool = True) -> dict:
             "last_error": provider_cfg.get("last_error") or "",
         }
     if provider_id == "claude_subscription":
-        from row_bot.providers.claude_subscription import (
-            CLAUDE_SUBSCRIPTION_PROVIDER_ID,
-            check_claude_subscription_token_health,
-            discover_claude_subscription_credentials,
-        )
-        from row_bot.providers.config import load_provider_config
+        from row_bot.providers.claude_subscription import claude_plan_provider_status
 
-        token_health_started = time.perf_counter()
-        token_health = check_claude_subscription_token_health(refresh_if_needed=refresh_tokens)
-        token_health_ms = (time.perf_counter() - token_health_started) * 1000.0
-        token_status = provider_secret_status(CLAUDE_SUBSCRIPTION_PROVIDER_ID, "access_token")
-        provider_cfg = load_provider_config().get("providers", {}).get(CLAUDE_SUBSCRIPTION_PROVIDER_ID, {})
-        external_configured = bool(
-            provider_cfg.get("source") == "external_cli"
-            and provider_cfg.get("external_reference_exists")
-        )
-        discovered = discover_claude_subscription_credentials()
-        configured = bool(token_status.get("configured") or external_configured)
-        source = ""
-        if token_status.get("configured"):
-            source = str(provider_cfg.get("source") or token_status.get("source") or "keyring")
-        elif external_configured:
-            source = "external_cli"
-        elif provider_cfg.get("source") == "external_cli":
-            source = "external_cli"
-        elif discovered.get("exists") or discovered.get("cli_installed"):
-            source = "external_cli_detected"
-        return {
-            "provider_id": provider_id,
-            "configured": configured,
-            "source": source,
-            "fingerprint": token_status.get("fingerprint") or provider_cfg.get("fingerprint") or "",
-            "auth_method": provider_cfg.get("auth_method") or "",
-            "expires_at": provider_cfg.get("expires_at") or discovered.get("expires_at") or "",
-            "account_id_hash": provider_cfg.get("account_id_hash") or discovered.get("account_id_hash") or "",
-            "user_hash": provider_cfg.get("user_hash") or discovered.get("user_hash") or "",
-            "plan_type": provider_cfg.get("plan_type") or "",
-            "external_reference_label": provider_cfg.get("external_reference_label") or discovered.get("label") or "",
-            "external_reference_path_hash": provider_cfg.get("external_reference_path_hash") or discovered.get("path_hash") or "",
-            "external_reference_exists": bool(provider_cfg.get("external_reference_exists") or discovered.get("exists")),
-            "external_reference_source": provider_cfg.get("external_reference_source") or "claude_code",
-            "external_reference_metadata_only": True,
-            "cli_installed": bool(provider_cfg.get("cli_installed") or discovered.get("cli_installed")),
-            "cli_version": provider_cfg.get("cli_version") or discovered.get("cli_version") or "",
-            "auth_status": provider_cfg.get("auth_status") or discovered.get("auth_status") or "",
-            "runtime_enabled": token_health.runnable,
-            "token_health": token_health.status,
-            "token_health_detail": token_health.detail,
-            "token_refresh_allowed": bool(refresh_tokens),
-            "token_health_refreshed": token_health.status == "refreshed",
-            "token_health_ms": round(token_health_ms, 3),
-            "last_runtime_probe": dict(provider_cfg.get("last_runtime_probe") or {}),
-            "last_error": provider_cfg.get("last_error") or "",
-        }
+        return claude_plan_provider_status()
     if provider_id == "xai_oauth":
         from row_bot.providers.config import load_provider_config
         from row_bot.providers.xai_oauth import (
@@ -903,6 +859,7 @@ def _create_chat_model(
                 cancellable_async_http_client,
                 cancellable_http_client,
             )
+            from row_bot.providers.transports.openai_direct import OpenAIRequestStopped
 
             kwargs = _reasoning_constructor_kwargs(reasoning_plan, provider=provider, responses=True)
             return ChatOpenAI(
@@ -913,9 +870,11 @@ def _create_chat_model(
                 output_version="responses/v1",
                 # A custom http_client silently turns stream usage off.
                 stream_usage=True,
-                http_client=cancellable_http_client(event_hooks={"request": [add_opencode_request_headers]}),
+                http_client=cancellable_http_client(
+                    stopped=OpenAIRequestStopped, event_hooks={"request": [add_opencode_request_headers]},
+                ),
                 http_async_client=cancellable_async_http_client(
-                    event_hooks={"request": [add_opencode_request_headers_async]},
+                    stopped=OpenAIRequestStopped, event_hooks={"request": [add_opencode_request_headers_async]},
                 ),
                 **kwargs,
             )
@@ -953,12 +912,13 @@ def _create_chat_model(
         if endpoint.get("transport") == "openai_responses":
             from langchain_openai import ChatOpenAI
             from row_bot.providers.transports.cancellable_http import cancellable_http_client
+            from row_bot.providers.transports.openai_direct import OpenAIRequestStopped
 
             kwargs = {
                 "model": model_name,
                 "api_key": api_key,
                 "base_url": endpoint["base_url"],
-                "http_client": cancellable_http_client(),
+                "http_client": cancellable_http_client(stopped=OpenAIRequestStopped),
                 # A custom http_client silently turns stream usage off.
                 "stream_usage": True,
             }
@@ -990,16 +950,11 @@ def _create_chat_model(
             )
         return ChatCodexResponses(model_name=model_name, reasoning_plan=reasoning_plan)
     if provider == "claude_subscription":
-        from row_bot.providers.claude_subscription import claude_subscription_runtime_available
-        from row_bot.providers.transports.claude_subscription_messages import ChatClaudeSubscriptionMessages
+        from row_bot.providers.claude_subscription import require_claude_plan
+        from row_bot.providers.transports.claude_plan_cli import ChatClaudePlan
 
-        if not claude_subscription_runtime_available():
-            raise ProviderSignInRequired(
-                "claude_subscription", "Claude Subscription",
-                "Claude Subscription runtime needs Row-Bot-owned OAuth tokens. "
-                "Connect Claude Subscription in Settings -> Providers, then try the provider-qualified model again."
-            )
-        return ChatClaudeSubscriptionMessages(model_name=model_name, reasoning_plan=reasoning_plan)
+        require_claude_plan()
+        return ChatClaudePlan(model_name=model_name, reasoning_plan=reasoning_plan)
     if provider == "xai_oauth":
         from row_bot.providers.transports.xai_oauth_responses import ChatXAIOAuthResponses
         from row_bot.providers.xai_oauth import xai_oauth_runtime_available
@@ -1013,7 +968,11 @@ def _create_chat_model(
         return ChatXAIOAuthResponses(model_name=model_name, reasoning_plan=reasoning_plan)
     if provider == "openai":
         from row_bot.providers.transports.cancellable_http import cancellable_http_client
-        from row_bot.providers.transports.openai_direct import DirectChatOpenAI, stateless_responses_kwargs
+        from row_bot.providers.transports.openai_direct import (
+            DirectChatOpenAI,
+            OpenAIRequestStopped,
+            stateless_responses_kwargs,
+        )
         api_key = get_provider_secret("openai")
         if not api_key:
             raise ValueError("OpenAI API key not configured. Set it in Settings → Providers.")
@@ -1021,7 +980,7 @@ def _create_chat_model(
         kwargs = {
             "model": model_name,
             "api_key": api_key,
-            "http_client": cancellable_http_client(),
+            "http_client": cancellable_http_client(stopped=OpenAIRequestStopped),
             "stream_usage": True,
         }
         if openai_model_uses_responses_api(model_name):
@@ -1065,6 +1024,7 @@ def _create_chat_model(
         from langchain_xai import ChatXAI
         from row_bot.providers.cache_affinity import conversation_header_hook
         from row_bot.providers.transports.cancellable_http import cancellable_http_client
+        from row_bot.providers.transports.openai_direct import OpenAIRequestStopped
         api_key = get_provider_secret("xai")
         if not api_key:
             raise ValueError("xAI API key not configured. Set it in Settings → Providers.")
@@ -1073,6 +1033,7 @@ def _create_chat_model(
             api_key=api_key,
             # Chat Completions takes the conversation key as a header: one server, and its cache, per conversation.
             http_client=cancellable_http_client(
+                stopped=OpenAIRequestStopped,
                 event_hooks={"request": [conversation_header_hook(XAI_CONVERSATION_HEADER, "xai")]},
             ),
             **_reasoning_constructor_kwargs(reasoning_plan, provider="xai"),
@@ -1177,7 +1138,7 @@ def _reasoning_constructor_kwargs(
             return {"reasoning": {"enabled": selection.kind == "on"}}
         if selection.kind == "budget":
             return {"reasoning": {"max_tokens": selection.budget}}
-    if provider in {"anthropic", "claude_subscription", "minimax"} or style == "anthropic":
+    if provider in {"anthropic", "minimax"} or style == "anthropic":
         kwargs: dict[str, Any] = {}
         if selection.kind == "effort":
             kwargs["effort"] = selection.effort

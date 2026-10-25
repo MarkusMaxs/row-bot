@@ -9,6 +9,7 @@ state can only remain active while the owning fact is still active.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from dataclasses import dataclass, replace
 from typing import Any
@@ -42,6 +43,10 @@ _EVENT_REACTIONS: dict[BuddyEventType, tuple[BuddyMood, str, int, int, int, str]
     BuddyEventType.WORKFLOW_DONE: (BuddyMood.PROUD, "celebrate_big", 90, 25, 0, "Workflow done"),
     BuddyEventType.WORKFLOW_ERROR: (BuddyMood.CONCERNED, "worry", 40, 52, 92, "Workflow error"),
     BuddyEventType.WORKFLOW_CANCELLED: (BuddyMood.CONCERNED, "pause", 48, 38, 24, "Workflow cancelled"),
+    # A long command carrying on in the background (F6); servers the agent started are not "working".
+    BuddyEventType.BACKGROUND_COMMAND: (BuddyMood.FOCUSED, "step_check", 68, 58, 0, "Command running"),
+    # Row-Bot's browser or the screen being recorded (F2): watchful while it lasts.
+    BuddyEventType.RECORDING: (BuddyMood.FOCUSED, "listen", 70, 60, 6, "Recording"),
     BuddyEventType.NOTIFICATION: (BuddyMood.EXCITED, "ping", 80, 35, 36, "Notification"),
     BuddyEventType.VOICE_LISTENING: (BuddyMood.CURIOUS, "listen", 78, 62, 8, "Listening"),
     BuddyEventType.IDLE: (BuddyMood.CURIOUS, "idle_breathe", 64, 20, 0, "Idle"),
@@ -50,7 +55,7 @@ _EVENT_REACTIONS: dict[BuddyEventType, tuple[BuddyMood, str, int, int, int, str]
 _IDLE_GRACE_SECONDS = 2.0
 _STALE_ACTIVITY_SECONDS = 120.0
 _DURABLE_RECONCILE_SECONDS = 5.0
-_ACTIVE_PRIORITY = ("approval", "tool", "generation", "orchestration", "workflow", "voice")
+_ACTIVE_PRIORITY = ("approval", "tool", "generation", "orchestration", "workflow", "voice", "recording", "command")
 _ACTIVITY_STARTS: dict[BuddyEventType, str] = {
     BuddyEventType.GENERATION_STARTED: "generation",
     BuddyEventType.THINKING: "generation",
@@ -394,21 +399,27 @@ class BuddyBrain:
                 approval_owners.pop(owner_id, None)
             elif _is_durable_approval_activity(active) and not _approval_activity_is_pending(active, pending):
                 approval_owners.pop(owner_id, None)
+        from row_bot.questions import stored_question
+
         for approval in pending:
             owner_id = str(approval.get("id") or approval.get("resume_token") or "approval")
+            # Row-Bot's question (N4) says so, wherever it was asked.
+            asking = stored_question(approval.get("approval_payload_json")) is not None
+            label = "Row-Bot has a question" if asking else str(approval.get("task_name") or "Needs approval")
             approval_owners[owner_id] = _Activity(
                 kind="approval",
                 event_type=BuddyEventType.APPROVAL_NEEDED,
                 owner_id=owner_id,
                 source="tasks.reconcile",
-                label=str(approval.get("task_name") or "Needs approval"),
+                label=label,
                 payload={
                     "approval_id": owner_id,
                     "resume_token": str(approval.get("resume_token") or ""),
                     "run_id": str(approval.get("run_id") or ""),
                     "task_id": str(approval.get("task_id") or ""),
                     "step_id": str(approval.get("step_id") or ""),
-                    "label": str(approval.get("task_name") or "Needs approval"),
+                    "label": label,
+                    **({"question": True} if asking else {}),
                 },
                 updated_at=now,
                 reconciled=True,
@@ -484,6 +495,43 @@ class BuddyBrain:
             )
         if not orchestration_owners:
             self._active.pop("orchestration", None)
+
+        # Long commands carrying on in the background (F6), while Row-Bot runs any.
+        command_owners = self._active.setdefault("command", {})
+        command_owners.clear()
+        processes = sys.modules.get("row_bot.background_processes")
+        for record in processes.running_commands() if processes is not None else ():
+            command_owners[record.process_id] = _Activity(
+                kind="command",
+                event_type=BuddyEventType.BACKGROUND_COMMAND,
+                owner_id=record.process_id,
+                source="background_processes.reconcile",
+                label="Command running",
+                payload={"process_id": record.process_id, "label": "Command running"},
+                updated_at=now,
+                reconciled=True,
+            )
+        if not command_owners:
+            self._active.pop("command", None)
+
+        # Recordings of Row-Bot's browser or the screen (F2), while one runs.
+        recording_owners = self._active.setdefault("recording", {})
+        recording_owners.clear()
+        recordings = sys.modules.get("row_bot.recordings")
+        for record in recordings.active_recordings() if recordings is not None else ():
+            label = "Recording the screen" if record.kind == "screen" else "Recording the browser"
+            recording_owners[record.recording_id] = _Activity(
+                kind="recording",
+                event_type=BuddyEventType.RECORDING,
+                owner_id=record.recording_id,
+                source="recordings.reconcile",
+                label=label,
+                payload={"recording_id": record.recording_id, "label": label},
+                updated_at=now,
+                reconciled=True,
+            )
+        if not recording_owners:
+            self._active.pop("recording", None)
 
     def tick(self) -> BuddyState:
         events = get_buddy_event_bus().recent(after_id=self._last_event_id, limit=512)

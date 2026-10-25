@@ -1,13 +1,13 @@
 ---
 title: "Accounts And Authorisation"
-description: "Connect your GitHub, Google and X accounts as apps, set Google up with your own OAuth client, and keep scopes, tokens and data flow understandable."
+description: "Connect your GitHub, Google, Outlook and X accounts as apps, set Google and Outlook up with your own app, use several X accounts, and keep scopes, tokens and data flow understandable."
 ---
 
 # Accounts And Authorisation
 
-Accounts let selected tools act through services such as GitHub, Google, or X. A model provider account supplies models; an integration account supplies service access. They are configured separately.
+Accounts let selected tools act through services such as GitHub, Google, Outlook or X. A model provider account supplies models; an integration account supplies service access. They are configured separately.
 
-Each account is an app in **Settings › Apps**: **GitHub**, **Google** and **X**. On the app's page the account is a **Built in** way to connect, and it is set up in its own settings, which show only that account.
+Each account is an app in **Settings › Apps**: **GitHub**, **Google**, **Outlook** and **X**. On the app's page the account is a **Built in** way to connect, and it is set up in its own settings, which show only that account.
 
 ## Connect Safely
 
@@ -54,6 +54,25 @@ When the sign-in expires, Row-Bot shows it: **Apps › Google** says **Sign in n
 
 To stop it, publish your app: in Google Cloud, open **Audience** and choose **Publish app**, so its status is **In production**, then sign in again. Because Gmail and Calendar access are sensitive or restricted Google scopes and your app isn't verified by Google, Google then shows its unverified-app warning when you sign in; continuing is fine for an app you made for yourself. An unverified app can be used by at most 100 people, and you don't need Google's verification for your own use.
 
+## Outlook
+
+Row-Bot connects Outlook through a Microsoft app you register yourself, with no client secret. It works with a work or school mailbox, Microsoft 365, and personal outlook.com addresses. **Settings › Apps › Outlook** has the guide:
+
+1. In Microsoft Entra, open **App registrations** and choose **New registration**. Name it Row-Bot.
+2. Under **Supported account types**, choose accounts in any organisational directory and personal Microsoft accounts.
+3. Under **Redirect URI**, choose **Public client/native (mobile & desktop)** and enter `http://localhost`. Then, in **Authentication**, turn on **Allow public client flows**, so you can also sign in with a code from another device.
+4. In **API permissions**, add these Microsoft Graph delegated permissions: `User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite offline_access`.
+5. Paste the **Application (client) ID** from the app's Overview. Add the **Directory (tenant) ID** only to keep sign-in to your own organisation.
+6. **Sign in with Microsoft** in your browser, or **Sign in with a code**: enter the code Row-Bot shows on Microsoft's page, on this device or any other.
+
+**Outlook mail access** and **Outlook calendar access** choose what Row-Bot may do. Row-Bot can:
+- search, read, draft, move and flag email;
+- list events, find free times, and create and change events.
+
+Sending, replying, forwarding, deleting, cancelling an event and answering an invitation always ask first.
+
+Microsoft's hosted Microsoft 365 server (Work IQ) is listed on Outlook's page as another way to connect. It needs your tenant ID, an administrator's consent and Copilot Credits.
+
 ## X
 
 1. In the X developer portal (**Open the developer portal**), create a project and an app, with OAuth 2.0 read and write turned on.
@@ -62,6 +81,18 @@ To stop it, publish your app: in Google Cloud, open **Audience** and choose **Pu
 4. **Connect X**, then finish signing in in your browser.
 
 **X access** chooses what Row-Bot may do. Posting and deleting ask first.
+
+### Several X Accounts
+
+**Settings › Apps › X** lists each account you've connected, with its handle, name, status and **Remove**. To add another:
+1. Switch to that account on x.com in your browser.
+2. Choose **Add another account**.
+
+- Every post, reply, quote and delete names its account. The approval card shows the account, the full text and each picture or video.
+- With several accounts, a post that names no account is refused, and Row-Bot asks which one to use.
+- On Auto, only you can approve a post: the reviewer never does. Hands-off is still your own choice.
+- If X doesn't confirm a post, Row-Bot checks the account's latest posts to find it, and never sends it again.
+- An X sign-in from before 5.3 becomes your first account the next time Row-Bot reaches X. Until then it shows as "Your X account · Signed in before Row-Bot 5.3".
 
 ## Sign In From Another Device
 

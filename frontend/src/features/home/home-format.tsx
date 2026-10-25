@@ -62,11 +62,33 @@ export function cronDays(field: string): string[] | null {
 }
 
 /** Describe the common 5-field cron shapes; null when it is not one. */
+/** 1 → "1st", 22 → "22nd", 13 → "13th". */
+export function ordinal(value: number): string {
+  const tens = value % 100;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : (({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[
+          value % 10
+        ] ?? 'th');
+  return `${value}${suffix}`;
+}
+
 function cronWords(expression: string): string | null {
   const fields = expression.trim().split(/\s+/);
   if (fields.length !== 5) return null;
   const [minute, hour, dom, month, dow] = fields;
   if (!/^\d{1,2}$/.test(minute) || Number(minute) > 59) return null;
+  if (
+    /^\d{1,2}$/.test(dom) &&
+    Number(dom) >= 1 &&
+    Number(dom) <= 31 &&
+    month === '*' &&
+    dow === '*' &&
+    /^\d{1,2}$/.test(hour) &&
+    Number(hour) < 24
+  )
+    return `Monthly on the ${ordinal(Number(dom))} at ${clockTime(Number(hour), Number(minute))}`;
   if (dom !== '*' || month !== '*') return null;
   if (hour === '*') {
     return dow === '*' ? `Every hour at :${minute.padStart(2, '0')}` : null;
@@ -156,12 +178,6 @@ export const FAILED_RUN_STATUSES = new Set([
   'completed_delivery_failed',
 ]);
 
-export const WAITING_RUN_STATUSES = new Set([
-  'paused',
-  'waiting_approval',
-  'approval_pending',
-]);
-
 export function plural(count: number, one: string, many = `${one}s`) {
   return `${count.toLocaleString()} ${count === 1 ? one : many}`;
 }
@@ -173,12 +189,4 @@ export function greeting(now: Date) {
   if (hour < 12) return 'Good morning';
   if (hour < 18) return 'Good afternoon';
   return 'Good evening';
-}
-
-/** Start of "overnight": 6 PM yesterday, local time. */
-export function overnightStart(now: Date) {
-  const start = new Date(now);
-  start.setDate(start.getDate() - 1);
-  start.setHours(18, 0, 0, 0);
-  return start;
 }
