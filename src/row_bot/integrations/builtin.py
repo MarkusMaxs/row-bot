@@ -17,6 +17,7 @@ import threading
 import time
 
 from row_bot import secret_store
+from row_bot.application.live_updates import publish as _publish_live
 from row_bot.integrations import apps, facts
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ MAX_AGE = 60.0  # A snapshot older than this is still served, and refreshed in t
 
 # Account id -> (name, the chat tools it powers).
 ACCOUNTS = {"github": ("GitHub account", ()), "google": ("Google account", ("gmail", "calendar")),
-            "x": ("X account", ("x",))}
+            "x": ("X account", ("x",)), "microsoft": ("Outlook account", ("outlook_mail", "outlook_calendar"))}
 # Key-based tools: tool id -> (name, keychain key names, what it does). Named as in Settings › Tools, where the
 # same switch and key are: "Tavily web search" is Row-Bot's own search with a Tavily key, not Tavily's server.
 TOOLS = {"web_search": ("Tavily web search", ("TAVILY_API_KEY",),
@@ -56,9 +57,11 @@ def _tool_on(tool: str) -> bool:
     registry = sys.modules.get("row_bot.tools.registry")
     if registry is not None and registry.get_tool(tool) is not None:
         return bool(registry.is_enabled(tool))
+    from row_bot import tool_configuration
     from row_bot.data_paths import get_row_bot_data_dir
     try:
-        saved = json.loads((get_row_bot_data_dir(create=False) / "tools_config.json").read_text(encoding="utf-8"))
+        with tool_configuration.transaction():  # Never in the middle of a save (B408).
+            saved = json.loads((get_row_bot_data_dir(create=False) / "tools_config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         saved = {}
     saved = saved if isinstance(saved, dict) else {}
@@ -97,7 +100,9 @@ def _accounts(only: str = "") -> list[dict]:
         found.append(_row("account:" + account, name, app_ref="account:" + account, lifecycle=lifecycle, blockers=blockers,
                           tools=tools, description={"github": "Lets Row-Bot work with GitHub for skills and Developer.",
                                                     "google": "Gmail and Calendar through your own Google sign-in.",
-                                                    "x": "Read and post on X through your own app."}[account]))
+                                                    "x": "Read and post on X through your own app.",
+                                                    "microsoft": "Outlook mail and calendar through your own Microsoft "
+                                                                 "app."}[account]))
     return found
 
 
@@ -159,9 +164,11 @@ def _now_generation() -> tuple[int, int]:
 
 def changed(*_: object) -> None:
     """An owner changed something a way reads (a key, a sign-in, a channel, a tool switch): the next
-    read builds the snapshot again."""
+    read builds the snapshot again, and Monitor reads its problems again (a channel stopped, an account
+    signed out)."""
     global _generation
     _generation += 1
+    _publish_live("monitor")
 
 
 def _key() -> str:
@@ -253,6 +260,13 @@ def remember_tools(bound: Mapping[str, str]) -> None:
     its tools. Building a tool can sign in or check a token over the network, so a read never does."""
     parents = set(_parents())
     _PARENTS.update({str(name): str(parent) for name, parent in bound.items() if parent in parents and name})
+
+
+def tool_title(name: str) -> str:
+    """A built-in chat tool's own title for its app's cards ("Send an email"); "" for one shown by its name.
+    Outlook's tools name themselves (the module is loaded whenever they were bound; a read never loads it)."""
+    module = sys.modules.get("row_bot.tools.outlook_tool")
+    return module.TITLES.get(name, "") if module is not None else ""
 
 
 def tool_parent(name: str) -> str | None:

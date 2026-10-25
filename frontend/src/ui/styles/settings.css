@@ -4838,6 +4838,24 @@ button.settings-mcp-server-name:hover {
 .settings-account-confirm > p {
   margin: 0;
 }
+/* X's connected accounts (N7), indented under the row like its switches. */
+.settings-x-accounts {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 12px 62px;
+}
+.settings-x-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: var(--text-12);
+}
+@container settings-page (max-width: 560px) {
+  .settings-x-accounts {
+    padding-inline-start: 16px;
+  }
+}
 .settings-page-content
   .settings-account-guide.settings-group-disclosure
   > .disclosure-summary {
@@ -4858,5 +4876,67 @@ button.settings-mcp-server-name:hover {
   }
   .settings-account-guide .connect-sheet {
     padding-inline-start: 16px;
+  }
+}
+
+/* N6: install stats in Settings › System › Privacy. What is sent sits behind
+   "Details", closed until asked for. */
+.install-count-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+.install-count-facts > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 28%) 1fr;
+  gap: 2px 12px;
+}
+.install-count-facts dt {
+  color: var(--text-muted);
+  font-size: var(--text-13);
+}
+.install-count-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-13);
+}
+.install-count-service {
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+}
+.install-count-details .disclosure-body {
+  display: grid;
+  gap: 10px;
+  padding-top: 6px;
+}
+.install-count-delete {
+  justify-self: start;
+}
+.privacy-contacts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0 16px;
+  list-style: none;
+  font-size: var(--text-13);
+  color: var(--text-secondary);
+}
+.privacy-contacts strong {
+  margin-inline-end: 4px;
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.privacy-contacts a {
+  color: var(--text-link);
+  white-space: nowrap;
+}
+.privacy-contacts-row .disclosure-body > .settings-help {
+  margin: 0;
+  padding: 8px 16px 14px;
+}
+@media (max-width: 560px) {
+  .install-count-facts > div {
+    grid-template-columns: 1fr;
   }
 }

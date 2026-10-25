@@ -1,8 +1,8 @@
 """Record a conversation's page in Row-Bot's managed browser to an MP4 (F2).
 
-Chromium's screencast (CDP ``Page.startScreencast``) sends a JPEG each time the page repaints.
-The browser's Playwright thread receives them and keeps only the latest; an encoder thread
-writes that frame at a steady rate into an H.264 MP4 through PyAV (installed with Row-Bot's
+The browser's live picture (the same screencast the Browser pane shows) offers each new JPEG;
+the recorder keeps only the latest, and an encoder thread writes that frame at a steady rate into
+an H.264 MP4 through PyAV (installed with Row-Bot's
 voice support; recording says plainly when it isn't there). Pages with a password, one-time
 code or card field, and anything shown while the person has taken over the browser, are
 recorded as a blank "hidden" frame, as the live preview hides them.
@@ -10,7 +10,6 @@ recorded as a blank "hidden" frame, as the live preview hides them.
 
 from __future__ import annotations
 
-import base64
 import io
 import logging
 import threading
@@ -53,8 +52,8 @@ def _even(value: float) -> int:
 class PageRecorder:
     """One recording of one conversation's page.
 
-    The CDP side (``attach``, ``detach``, ``pump``) runs on the browser's Playwright thread;
-    the encoder runs on its own thread and calls ``on_end(reason, path)`` once when it stops.
+    The browser offers frames (``offer_frame``) and sets ``shielded``; the encoder runs on its
+    own thread and calls ``on_end(reason, path)`` once when it stops.
     """
 
     def __init__(
@@ -78,52 +77,12 @@ class PageRecorder:
         self._stop = threading.Event()
         self._reason = ""
         self.shielded = False
-        self.page: Any = None
-        self._cdp: Any = None
-        self.checked_at = 0.0
+        # The browser's live-picture subscription that feeds this recording.
+        self.watch: Any = None
         self.frames = 0
         self.bytes_written = 0
         self.started_at = 0.0
         self._thread = threading.Thread(target=self._run, daemon=True, name="row-bot-browser-recording")
-
-    # ---- Playwright thread ----------------------------------------------------------
-
-    def attach(self, page: Any, cdp: Any) -> None:
-        """Follow this page: start its screencast."""
-
-        self.page, self._cdp = page, cdp
-        cdp.on("Page.screencastFrame", self._on_frame)
-        cdp.send("Page.startScreencast", {
-            "format": "jpeg", "quality": 70, "maxWidth": MAX_SIDE, "maxHeight": MAX_SIDE, "everyNthFrame": 1,
-        })
-
-    def detach(self) -> None:
-        cdp, self._cdp, self.page = self._cdp, None, None
-        if cdp is None:
-            return
-        try:
-            cdp.send("Page.stopScreencast")
-        except Exception:
-            pass
-        try:
-            cdp.detach()
-        except Exception:
-            pass
-
-    def _on_frame(self, params: dict[str, Any]) -> None:
-        try:
-            data = base64.b64decode(str(params.get("data") or ""), validate=True)
-        except Exception:
-            data = b""
-        if data:
-            with self._lock:
-                self._frame = data
-        cdp = self._cdp
-        if cdp is not None:
-            try:
-                cdp.send("Page.screencastFrameAck", {"sessionId": params.get("sessionId")})
-            except Exception:
-                pass
 
     # ---- Control ----------------------------------------------------------------------
 
@@ -145,7 +104,7 @@ class PageRecorder:
         return not self._thread.is_alive()
 
     def offer_frame(self, data: bytes) -> None:
-        """A frame from outside the screencast (tests, and the first picture)."""
+        """The page's latest picture (a JPEG)."""
 
         with self._lock:
             self._frame = bytes(data)

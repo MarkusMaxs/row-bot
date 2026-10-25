@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from typing import Any
+from row_bot.application.live_updates import publishes as _publishes_live
 
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,9 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.file_deliveries import delete_conversation as delete_deliveries
 
     removed += delete_deliveries(thread_id)  # Files it sent to the devices, and the records of its sends.
+    from row_bot.pages import delete_conversation as delete_pages
+
+    removed += delete_pages(thread_id)  # Its pages, their versions, state and decisions (N5).
     return removed
 
 
@@ -282,9 +286,9 @@ def _request_thread_cancellation(thread_id: str, *, deletion_token: str = "",
     try:
         from row_bot.computer_use.service import get_computer_use_service
 
-        get_computer_use_service().close_for_thread(thread_id)
+        get_computer_use_service().forget(thread_id)  # Its session, and the apps it was allowed to use.
     except Exception:
-        logger.debug("Could not clear Computer Use state for %s", thread_id, exc_info=True)
+        logger.debug("Could not clear computer use state for %s", thread_id, exc_info=True)
 
     return active
 
@@ -482,6 +486,7 @@ def _deferred_finish(thread_id: str, token: str) -> None:
         time.sleep(0.25)
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def delete_thread(thread_id: str) -> ThreadDeletionResult:
     clean = normalize_thread_id(thread_id)
     from row_bot import threads
@@ -599,6 +604,7 @@ def delete_thread(thread_id: str) -> ThreadDeletionResult:
     )
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def delete_threads(thread_ids: Iterable[str]) -> BulkThreadDeletionResult:
     results: list[ThreadDeletionResult] = []
     failures: list[tuple[str, str]] = []
@@ -691,6 +697,7 @@ def _start_purge_timer(delay: float) -> None:
     timer.start()
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def hold_thread_deletion(thread_id: str) -> None:
     """Delete a conversation now with Undo on offer (the caller has stopped its work)."""
 
@@ -706,6 +713,7 @@ def hold_thread_deletion(thread_id: str) -> None:
     _start_purge_timer(UNDO_DELETE_SECONDS + 1)
 
 
+@_publishes_live("conversations", "runs", "approvals")
 def restore_held_thread(thread_id: str) -> bool:
     """Undo a held delete; False once its removal has begun or it was never held."""
 

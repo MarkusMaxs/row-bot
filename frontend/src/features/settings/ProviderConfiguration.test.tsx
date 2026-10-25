@@ -342,7 +342,7 @@ it('keeps unknown readiness truthful and preserves provider-qualified model pick
   fireEvent.change(screen.getByLabelText('Picker'), {
     target: { value: 'vision' },
   });
-  await save('Pin model');
+  await save('List model');
   await waitFor(() =>
     expect(props.apply).toHaveBeenCalledWith(
       'provider.model.pin',

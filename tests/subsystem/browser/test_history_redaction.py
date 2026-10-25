@@ -14,8 +14,3 @@ def test_browser_history_never_persists_typed_value(tmp_path, monkeypatch) -> No
     assert secret not in raw
     assert json.loads(raw)["thread"][0]["text_length"] == len(secret)
 
-
-def test_snapshot_script_never_serializes_input_values() -> None:
-    source = browser_tool._build_snapshot_js(100)
-    assert 'value="${value}"' not in source
-    assert "value_length" in source

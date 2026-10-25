@@ -1841,6 +1841,43 @@ it('names a built-in way as itself, not as the app it is one way to', async () =
   expect(screen.queryByRole('button', { name: 'Try it' })).toBeNull();
 });
 
+it('says an Outlook account works through the person’s own Microsoft app, never a key (U8)', async () => {
+  const outlook = entry({
+    id: 'builtin:account:microsoft',
+    kind: 'builtin',
+    name: 'Outlook account',
+    description: 'Outlook mail and calendar through your own Microsoft app.',
+    app: {
+      id: 'outlook',
+      name: 'Outlook',
+      publisher: 'Microsoft',
+      category: 'productivity',
+      icon: 'si:microsoftoutlook',
+      verified: true,
+      featured_rank: 7,
+    },
+    source: 'builtin',
+    method: 'built_in',
+    publisher: 'Row-Bot',
+    installed: true,
+    enabled: true,
+    lifecycle: 'installed',
+    readiness: 'ready',
+    next_action: { kind: 'none', label: '' },
+  });
+  show('/settings/apps/item?id=builtin%3Aaccount%3Amicrosoft', {
+    integrationDetail: vi.fn(async () =>
+      detail({ entry: outlook, plan: null }),
+    ),
+  });
+  expect(
+    await screen.findByText(
+      'Part of Row-Bot: it works through your own Microsoft app and sign-in.',
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText(/sign-in or key/)).toBeNull();
+});
+
 it('sets up a built-in way in its own settings, scoped to it, with no plan of its own', async () => {
   const google = entry({
     id: 'builtin:account:google',

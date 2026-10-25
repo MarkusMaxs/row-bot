@@ -14,6 +14,8 @@ frontend/test-results/
 src/row_bot/static/client-v2/
 channels/whatsapp_bridge/node_modules/
 src/row_bot/channels/whatsapp_bridge/node_modules/
+services/install-count/node_modules/
+services/install-count/.wrangler/
 
 # Secrets
 api_keys.json
