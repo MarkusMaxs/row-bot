@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest';
 import type { ClientController } from '../../api/controller';
 import { LiveUpdates } from '../../api/live-updates';
 import type { LiveFrame } from '../../api/types';
+import { provideLive } from '../../live';
 import { createFakePlatform } from '../../platform/fake';
 import { RuntimeContext } from '../../runtime';
 import { OverlayProvider } from '../../ui/overlays';
@@ -84,8 +85,8 @@ it('a version made ready in the background shows at once, without a reload (O127
     learningTraining: vi.fn(async () => trainingRun()),
     learningDownload: vi.fn(async () => downloadState()),
     learningHardware: vi.fn(async () => NO_GPU),
-    live,
   } as unknown as ClientController;
+  provideLive(live);
   live.start();
   try {
     render(
