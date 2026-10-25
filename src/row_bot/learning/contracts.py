@@ -407,9 +407,17 @@ class Episode(Record):
     ``conversation_id`` is the conversation it belongs to (for a delegated
     Agent's thread, its parent conversation); deleting or excluding that
     conversation purges the episode.
+
+    ``follows_decision_id`` (v2) is a next-message marker: the reply (a model
+    call decision) that the person's message starting this episode came after.
+    It says only that the message followed the reply; whether it corrected the
+    reply is decided later, never at capture.
     """
 
     KIND: ClassVar[str] = "episode"
+    SCHEMA_VERSION: ClassVar[int] = 2
+    # v1 had no next-message marker: it reads as None.
+    MIGRATIONS: ClassVar[Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {1: lambda data: data}
     FORM: ClassVar[Literal["jsonl", "manifest"]] = "jsonl"
 
     id: str = _field(pattern="id")
@@ -430,6 +438,7 @@ class Episode(Record):
     historical: bool = False
     # The capture queue was full and something was dropped (L0b).
     incomplete: bool = False
+    follows_decision_id: str | None = _field(None, pattern="id")
 
     def __post_init__(self) -> None:
         if self.conversation_id == "":

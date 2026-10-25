@@ -76,6 +76,73 @@ def learning_files(*roots: Path) -> list[str]:
     return sorted(found)
 
 
+class FakeThreads:
+    """A scope lookup (``scope.ThreadLookup``) over fixed conversations and channel owners."""
+
+    def __init__(self, threads: dict[str, Any] | None = None, owners: dict[str, str] | None = None) -> None:
+        from row_bot.learning.scope import ThreadInfo
+
+        self.threads: dict[str, Any] = dict(threads or {})
+        self.owners = dict(owners or {})
+        self.reads = 0
+        self._info = ThreadInfo
+
+    def chat(self, thread_id: str) -> FakeThreads:
+        """Add a chat in the app (its owner's)."""
+
+        self.threads[thread_id] = self._info(exists=True)
+        return self
+
+    def child(self, thread_id: str, parent: str) -> FakeThreads:
+        """Add a delegated Agent's thread started from ``parent``."""
+
+        self.threads[thread_id] = self._info(exists=True, thread_type="agent_child", parent_thread_id=parent)
+        return self
+
+    def channel(self, thread_id: str, channel: str, target: str, *, shared: bool = False) -> FakeThreads:
+        self.threads[thread_id] = self._info(exists=True, channel=channel, channel_target=target, shared=shared)
+        return self
+
+    def thread(self, thread_id: str) -> Any:
+        self.reads += 1
+        return self.threads.get(thread_id) or self._info(exists=False)
+
+    def owner_identity(self, channel: str) -> str:
+        return self.owners.get(channel, "")
+
+
+def all_blob_text(root: Path) -> str:
+    """Every blob in a data folder's Learning store, as text (to look for what must not be there)."""
+
+    folder = Path(root) / "learning" / "blobs"
+    if not folder.is_dir():
+        return ""
+    return "\n".join(path.read_bytes().decode("utf-8", "replace") for path in sorted(folder.rglob("*"))
+                     if path.is_file())
+
+
+def all_record_text(root: Path) -> str:
+    """Every record in a data folder's ``learning.db`` as text."""
+
+    import sqlite3
+
+    path = Path(root) / "learning.db"
+    if not path.is_file():
+        return ""
+    connection = sqlite3.connect(path)
+    try:
+        return "\n".join(str(row[0]) for row in connection.execute("SELECT body FROM records"))
+    finally:
+        connection.close()
+
+
+def read_json_blob(store: Any, sha: str | None) -> Any:
+    """A JSON blob's value (None when missing)."""
+
+    data = store.read_blob(sha or "")
+    return None if data is None else json.loads(data.decode("utf-8"))
+
+
 def episode(thread_id: str, record_id: str = "ep_1", **fields: Any) -> contracts.Episode:
     fields.setdefault("source", "my_chat")
     fields.setdefault("started_at", START)

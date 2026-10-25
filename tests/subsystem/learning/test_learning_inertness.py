@@ -110,3 +110,57 @@ def test_deleting_a_memory_with_learning_off_touches_nothing_of_learning(
 
     assert learning_files(tmp_path / "row-bot-data") == []
     assert _learning_modules() in ([], ["row_bot.learning"])
+
+
+def test_full_turns_with_learning_off_capture_nothing_load_nothing_and_start_nothing(
+    data_dir, no_learning_modules, monkeypatch
+):
+    """Model calls, tool calls, an approval, a Stop and a Retry pass every capture seam: with
+    Learning off each costs one check and nothing else happens."""
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool
+
+    from tests.helpers.learning_turns import AgentTurns, ScriptedModel, asks, call, says
+
+    stop = threading.Event()
+
+    @tool
+    def read_note(name: str) -> str:
+        """Read a note."""
+        return f"The {name} note."
+
+    @tool
+    def delete_file(path: str) -> str:
+        """Delete a file (asks first)."""
+        from row_bot.tools import approval_gate
+
+        return approval_gate.gate_action({"tool": "delete_file", "label": "Delete", "description": path}) or "Deleted."
+
+    @tool
+    def slow_search(query: str) -> str:
+        """Search slowly."""
+        stop.set()  # the person presses Stop meanwhile
+        return "partial"
+
+    session_files = learning_files(threads.DATA_DIR)
+    before = {thread.name for thread in threading.enumerate()}
+    model = ScriptedModel(responses=[
+        asks(call("read_note", "r1", name="home")), asks(call("delete_file", "d1", path="old.txt")), says("Done."),
+        asks(call("slow_search", "s1", query="flights")), says("Hi there."),
+    ], seen=[])
+    turns = AgentTurns(monkeypatch, model, [read_note, delete_file, slow_search])
+
+    first = turns.send("Read my home note, then delete old.txt")
+    assert [kind for kind, _ in first if kind == "interrupt"]
+    assert ("done", "Done.") in turns.answer(True, first)
+    turns.send("Search flights", stop_event=stop)
+    assert ("done", "Hi there.") in turns.send("Say hi")
+    assert threads.append_checkpoint_messages(  # Retry in place
+        turns.thread_id, [HumanMessage(content="Say hi", id=f"retry-{uuid.uuid4().hex[:6]}")], retry_text="Say hi")
+
+    assert len(model.seen) == 5
+    assert learning_files(data_dir) == []
+    assert learning_files(threads.DATA_DIR) == session_files
+    assert _learning_modules() == ["row_bot.learning"]
+    started = {thread.name for thread in threading.enumerate()} - before
+    assert not [name for name in started if name.startswith("learning-")]

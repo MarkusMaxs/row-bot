@@ -176,3 +176,20 @@ def test_saved_values_that_cant_be_read_fall_back_to_the_safe_choice(data_dir):
         "ask_first", "this_computer", 2_000_000,
     )
     assert (settings.my_chats, settings.workflows_and_goals, settings.train_in_quiet_hours) == (False, True, False)
+
+
+def test_turning_learning_on_reads_past_chats_only_when_that_box_is_ticked(api, monkeypatch):
+    from row_bot.learning import past_chats
+
+    started: list[bool] = []
+    monkeypatch.setattr(past_chats, "start_background", lambda: started.append(True) or True)
+    client, headers, _data, _ = api
+
+    _save(client, headers, "sources.past_chats", False)
+    _save(client, headers, "enabled", True)
+    assert started == []
+    _save(client, headers, "sources.past_chats", True)  # ticked later: read them now
+    assert started == [True]
+    _save(client, headers, "enabled", False)
+    _save(client, headers, "enabled", True)  # on again: an unfinished import carries on
+    assert started == [True, True]

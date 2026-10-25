@@ -12,6 +12,11 @@ turned on: ``learning.db`` and ``learning/blobs/`` are created by the first
 enable or by the first write while it is on (``store.py``). Turning it off keeps
 the data until the person deletes it.
 
+The capture seams (``agent``, the approval gate, Retry, the Slack and Discord
+handlers) call :func:`is_enabled` first and import ``capture`` only when it is on;
+:func:`note_retry` and :func:`note_channel_sender` are those guards for the
+seams outside the Agent.
+
 Settings live in ``learning_config.json`` in the data folder::
 
     {"enabled": false,
@@ -25,6 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -178,8 +185,10 @@ def invalidate() -> None:
 def settings_saved(field: str, value: Any) -> None:
     """React to one saved Learning setting.
 
-    Turning Learning on creates its store. Turning it off keeps the data. A store
-    that can't be created now is created by the first write while Learning is on.
+    Turning Learning on creates its store and, when "Also learn from the last 30 days
+    of chats" is ticked, starts reading past chats in the background (D26). Turning it
+    off keeps the data and stops capture and the import. A store that can't be created
+    now is created by the first write while Learning is on.
     """
 
     invalidate()
@@ -190,6 +199,55 @@ def settings_saved(field: str, value: Any) -> None:
             LearningStore().create()
         except Exception:
             logger.warning("Learning is on but its store could not be created yet", exc_info=True)
+    if field == "enabled" and value is not True:
+        capture = sys.modules.get("row_bot.learning.capture")
+        if capture is not None:
+            capture.learning_turned_off()
+    if (field == "enabled" and value is True) or (field == "sources.past_chats" and value is True):
+        start_past_chat_import()
+
+
+def start_past_chat_import() -> None:
+    """Read past chats in the background when Learning and "past chats" are on (D26).
+
+    Resumes an unfinished import (after a restart, say); never starts a second one.
+    """
+
+    try:
+        if not is_enabled() or not read_settings().past_chats:
+            return
+        from row_bot.learning import past_chats
+
+        past_chats.start_background()
+    except Exception as exc:
+        logger.warning("Learning could not start reading past chats (%s)", type(exc).__name__)
+
+
+def note_retry(thread_id: str, replaced: Iterable[Any]) -> None:
+    """Retry ran the person's last message again in place: an implicit signal. Off: nothing."""
+
+    if not is_enabled():
+        return
+    try:
+        from row_bot.learning import capture
+
+        capture.retry(thread_id, [str(getattr(message, "id", "") or "") for message in replaced
+                                  if str(getattr(message, "type", "") or "") == "ai"])
+    except Exception as exc:
+        logger.debug("Learning did not see a retry (%s)", type(exc).__name__)
+
+
+def note_channel_sender(thread_id: str, sender_id: object) -> None:
+    """Who sent a Slack or Discord message, so scope can tell the owner's DM (O3). Off: nothing."""
+
+    if not is_enabled():
+        return
+    try:
+        from row_bot.learning import capture
+
+        capture.note_channel_sender(thread_id, str(sender_id or ""))
+    except Exception as exc:
+        logger.debug("Learning did not see a channel sender (%s)", type(exc).__name__)
 
 
 __all__ = [
@@ -206,9 +264,12 @@ __all__ = [
     "folder_path",
     "invalidate",
     "is_enabled",
+    "note_channel_sender",
+    "note_retry",
     "read_settings",
     "settings_path",
     "settings_saved",
+    "start_past_chat_import",
     "store_exists",
     "store_path",
 ]
