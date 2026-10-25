@@ -118,7 +118,7 @@ function training(page: Page) {
 }
 
 function facts(page: Page) {
-  return page.getByLabel('Personal model', { exact: true });
+  return page.locator('dl[aria-label="Personal model"]');
 }
 
 test('the personal model: needs more examples, training, preparing, making ready, ready to compare, Runs in, and the ways out', async ({
