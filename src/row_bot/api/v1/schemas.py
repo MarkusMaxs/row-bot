@@ -1240,6 +1240,26 @@ class PreferenceSettingsSnapshot(WireModel):
     migration: MigrationSettingsSnapshot
 
 
+class LearningSourcesSnapshot(WireModel):
+    my_chats: bool
+    workflows_and_goals: bool
+    past_chats: bool
+
+
+class LearningSettingsSnapshot(WireModel):
+    """Learning (preview): saved settings only; nothing acts on most of them yet."""
+
+    availability: Literal["available", "unavailable"]
+    enabled: bool
+    sources: LearningSourcesSnapshot
+    apply_mode: Literal["ask_first", "automatic"]
+    monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
+    train_in_quiet_hours: bool
+    train_where: Literal["this_computer", "hugging_face"]
+    # Learning data is on this computer (kept after Learning is turned off).
+    has_data: bool
+
+
 SettingsMutationPage = Literal[
     "voice",
     "system",
@@ -1250,6 +1270,7 @@ SettingsMutationPage = Literal[
     "accounts",
     "utilities",
     "preferences",
+    "learning",
 ]
 SettingsMutationValue = str | bool | int | float | list[str] | None
 
@@ -1269,6 +1290,7 @@ class SettingsSnapshot(WireModel):
     utilities: UtilitySettingsSnapshot
     plugins: SettingsPluginSummary
     preferences: PreferenceSettingsSnapshot
+    learning: LearningSettingsSnapshot
     # Per page, what each saved field reads on a fresh profile; clients show
     # a "modified" mark and a reset for fields that differ.
     defaults: dict[SettingsMutationPage, dict[str, SettingsMutationValue]] = Field(
