@@ -5534,7 +5534,8 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         # recommends the 2B, O112) or none (no NVIDIA card: not on this computer)
         needs = sorted(tier.system_memory_mib for tier in hardware.TIERS if tier.certified and tier.system_memory_mib)
         # 5090-short: room for the smallest tier only (the next one would offer a larger model).
-        limit = {"5090-short": needs[1] - 1024, "4060-low": needs[0] - 3072}.get(name, 131_072)
+        # Looked up only for the cards that need it: an OS with fewer measured tiers has fewer needs.
+        limit = needs[1] - 1024 if name == "5090-short" else needs[0] - 3072 if name == "4060-low" else 131_072
         memory = hardware.SystemMemory(limit_mib=limit, free_mib=min(limit, 90_000) // 2)
         gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08", 300)]
                 if name == "4060-low" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 6_600)]
