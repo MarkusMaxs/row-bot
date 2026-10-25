@@ -8,6 +8,8 @@
   :meth:`AuditVault.refresh`.
 - Held-out corrections (O87): every 2nd confirmed correction (``holdout``), with its
   corrected action as the reference, copied in by :meth:`AuditVault.hold_corrections`.
+- Only the main model's work (amendment A5): evaluation never offers a decision the personal
+  model made, and :meth:`AuditVault.retire_personal` retires one held before that rule.
 
 **Where**: its own file, ``learning/audit.db`` in the data folder (never ``learning.db``),
 created only while Learning is on. ``secure_delete`` is on, so purged tasks are
@@ -428,6 +430,31 @@ class AuditVault:
                     f" AND id IN ({marks})", (now, *chunk)).rowcount
             if retired:
                 _log(connection, now, asked_by, caller, "refresh", f"retired {retired} corrected later", retired)
+        return retired
+
+    def retire_personal(self, decision_ids: Iterable[str], *, asked_by: str) -> int:
+        """Retire held tasks of any origin that rest on the personal model's work (amendment A5: the vault's
+        references are the main model's). They keep the ``personal`` origin, so they are never taken again,
+        and their decisions stay held out. Returns how many were retired now."""
+
+        caller = require_reader(_SEAL, "retire_personal")
+        wanted = sorted({str(item) for item in decision_ids if item})
+        if not wanted or not vault_exists(self._root):
+            return 0
+        now = float(self._clock())
+        retired = 0
+        with self._open() as connection:
+            for start in range(0, len(wanted), 400):
+                chunk = wanted[start:start + 400]
+                marks = ", ".join("?" for _ in chunk)
+                retired += connection.execute(
+                    f"UPDATE tasks SET origin = 'personal', retired_at = ?, content = NULL"
+                    f" WHERE retired_at IS NULL AND id IN ({marks})", (now, *chunk)).rowcount
+                # One the size cap retired before keeps its time; it is marked too, so it is never taken again.
+                connection.execute(f"UPDATE tasks SET origin = 'personal' WHERE origin != 'personal' AND id IN ({marks})",
+                                   chunk)
+            if retired:
+                _log(connection, now, asked_by, caller, "refresh", f"retired {retired} personal model", retired)
         return retired
 
     def replay_tasks(self, *, asked_by: str, origin: str | None = None) -> list[dict[str, Any]]:

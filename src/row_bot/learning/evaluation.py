@@ -1615,11 +1615,38 @@ def _vault(store: Any | None = None) -> Any:
     return audit.AuditVault(root)
 
 
-def _eligible_for_audit(store: Any, horizon: float) -> list[audit.ReplayCandidate]:
+#: When this build first applied the vault's rules (A4: pushed-back turns aren't uncorrected work; A5: references
+#: are the main model's), kept in ``learning.db``'s meta (``holdout.record_rules``).
+AUDIT_RULES_KEY = "audit.rules"
+AUDIT_RULES = ("A4", "A5")
+
+
+def _personal_model_decisions(store: Any) -> set[str]:
+    """Model calls the personal model made, and every later call of a turn it took part in (amendment A5): its
+    actions are in their prefix, so none of them is the main model's own work."""
+
+    from row_bot.learning import holdout
+
+    calls = store.find("decision", subkind="model_call", limit=100_000)
+    first: dict[str, float] = {}
+    for decision in calls:
+        if holdout.personal(decision):
+            at = first.get(decision.episode_id)
+            first[decision.episode_id] = decision.created_at if at is None else min(at, decision.created_at)
+    return {decision.id for decision in calls
+            if decision.episode_id in first and decision.created_at >= first[decision.episode_id]}
+
+
+def _eligible_for_audit(store: Any, horizon: float, personal: set[str] | None = None) -> list[audit.ReplayCandidate]:
+    # Amendment A5: a decision the personal model answered is never a reference (it would make the personal model's
+    # own action the answer H1 scores it against); only the main model's work is offered.
+    personal = _personal_model_decisions(store) if personal is None else personal
     newer = [decision for decision in store.find("decision", subkind="model_call", newest_first=True, limit=100_000)
-             if decision.created_at > horizon]
+             if decision.created_at > horizon and decision.id not in personal]
     # Amendment A7: untrusted input doesn't make a decision ineligible for the vault. Replay runs no tools, and each
     # task keeps its untrusted mark for the trusted-only sensitivity analysis. Visible tests still leave them out (E9).
+    # Amendment A8: a decision whose picture went under the size cap can't be rebuilt (``picture_dropped``), so it
+    # isn't offered; one with its picture is held with it and asked as each arm is served.
     found = collect_replay(store, refresh=False, decisions=newer, limit=100_000, include_untrusted=True)
     return [audit.ReplayCandidate(case.decision_id, case.created_at, case.thread_id,
                                   case.conversation_id or case.thread_id, case.kind_of_work, case.to_content())
@@ -1639,9 +1666,12 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
     from row_bot.learning import holdout
 
     holdout.mark_corrections(saved)
+    if saved.exists():
+        holdout.record_rules(saved, AUDIT_RULES, key=AUDIT_RULES_KEY)
     vault = _vault(saved)
     who = f"{_caller()}: {asked_by}".strip(": ")
-    report = vault.refresh(_eligible_for_audit(saved, vault.horizon()), asked_by=who)
+    personal_calls = _personal_model_decisions(saved)
+    report = vault.refresh(_eligible_for_audit(saved, vault.horizon(), personal_calls), asked_by=who)
     if report.added:
         by_id = {decision.id: decision for decision in saved.find("decision", subkind="model_call", limit=100_000)
                  if decision.id in set(report.added)}
@@ -1651,17 +1681,45 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
     # A task held as uncorrected that the person corrected, stopped or retried later has no reference
     # any more (O19: no signal); one held out as a correction becomes a correction task below.
     retired = vault.retire_corrected(_signalled(saved) - waiting, asked_by=who)
+    # A5: a task already held whose reference is the personal model's (held before this rule, of any origin) is
+    # retired and counted; it stays held out of training and drafting.
+    personal = vault.retire_personal(personal_calls | _personal_corrections(saved, waiting, personal_calls),
+                                     asked_by=who)
     stored = vault.correction_ids()
-    candidates, missing = _correction_candidates(saved, waiting - stored)
+    candidates, missing = _correction_candidates(saved, waiting - stored, personal_calls)
     added = vault.hold_corrections(candidates, asked_by=who) if candidates else ()
-    if report.added or report.retired or retired or added:
+    if report.added or report.retired or retired or personal or added:
         gate.changed()
-    return {"considered": report.considered, "added": len(report.added), "retired": report.retired + retired,
-            "held": report.held, "corrections_added": len(added),
-            "corrections_held": len(stored) + len(added), "corrections_waiting": missing}
+    return {"considered": report.considered, "added": len(report.added),
+            "retired": report.retired + retired + personal, "retired_personal": personal, "held": report.held,
+            "corrections_added": len(added), "corrections_held": len(stored) + len(added),
+            "corrections_waiting": missing}
 
 
-def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.ReplayCandidate], int]:
+def _personal_corrections(saved: Any, waiting: set[str], personal: set[str]) -> set[str]:
+    """Held-out corrections that would rest on the personal model's work (A5): the call they correct was the
+    personal model's (``personal``), or the redo the person accepted started with its move."""
+
+    if not waiting:
+        return set()
+    from row_bot.learning import corrections, holdout
+
+    book = corrections.Book(saved)
+    found: set[str] = set()
+    for decision_id in waiting:
+        decision = book.decisions.get(decision_id)
+        if decision is None:
+            continue
+        problem = corrections.problem_call(book, decision)
+        redo = corrections.accepted_redo(saved, decision, book=book)
+        first = corrections.first_call(book, redo) if redo is not None else None
+        if (problem is not None and problem.id in personal) or (first is not None and holdout.personal(first)):
+            found.add(decision_id)
+    return found
+
+
+def _correction_candidates(saved: Any, waiting: set[str],
+                          personal: set[str] | None = None) -> tuple[list[audit.ReplayCandidate], int]:
     """Held-out corrections (O87) ready for the vault, each with its corrected action: the first move of
     the redo the person accepted (``corrections.accepted_redo``), or, when they didn't redo a reply they
     taught about, the answer they said it should have given (Teach's "What should it have done?", L3b,
@@ -1669,19 +1727,24 @@ def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.Re
 
     if not waiting:
         return [], 0
-    from row_bot.learning import corrections
+    from row_bot.learning import corrections, holdout
 
     book = corrections.Book(saved)
     bad = _signalled(saved)
     answers = _taught_answers(saved)
+    personal = _personal_model_decisions(saved) if personal is None else personal
     episodes: dict[str, str] = {}
     found: list[audit.ReplayCandidate] = []
     missing = 0
     for decision_id in sorted(waiting):
         decision = book.decisions.get(decision_id)
         problem = corrections.problem_call(book, decision) if decision is not None else None
+        if problem is not None and problem.id in personal:
+            continue  # A5: the personal model's reply is never a hidden problem (it stays held out)
         redo = corrections.accepted_redo(saved, decision, book=book) if decision is not None else None
         first = corrections.first_call(book, redo) if redo is not None else None
+        if first is not None and holdout.personal(first):
+            continue  # A5: a redo the personal model gave is never the reference
         action = _action_of(saved, first) if first is not None else None
         check: Check = "exact_action"
         if action is None and problem is not None and decision is not None and decision.kind == "model_call":
@@ -1691,7 +1754,7 @@ def _correction_candidates(saved: Any, waiting: set[str]) -> tuple[list[audit.Re
         if problem is None or action is None:
             missing += 1
             continue
-        case = _case_for(saved, problem, CorrectedAction(action.tool_calls, action.text), include_untrusted=False,
+        case = _case_for(saved, problem, CorrectedAction(action.tool_calls, action.text), include_untrusted=True,
                          bad=bad, episodes=episodes, case_id=decision_id)
         if isinstance(case, str) or case.check != "exact_action":
             missing += 1
