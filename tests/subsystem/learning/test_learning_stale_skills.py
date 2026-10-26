@@ -190,8 +190,12 @@ def test_probe_scoring(timeline):
              "wrong": [json.dumps({"email": "old@x.example"})]}
     assert scorer.score_probe(probe, "It's new@x.example now.") == "right"
     assert scorer.score_probe(probe, "It's old@x.example.") == "old"
-    assert scorer.score_probe(probe, "It moved from old@x.example to new@x.example.") == "both"
-    assert scorer.score_probe(probe, "I don't have that saved anywhere.") == "abstained"
+    assert scorer.score_probe(probe, "It moved from old@x.example to new@x.example.") == "right"
+    assert scorer.score_probe(probe, "I don’t have that saved anywhere.") == "abstained"
+    as_of = {**probe, "category": "as_of", "expected": probe["wrong"], "wrong": probe["expected"]}
+    assert scorer.score_probe(as_of, "Back then it was old@x.example.") == "right"
+    assert scorer.score_probe(as_of, "It was new@x.example, after the move from old@x.example.") == "both"
+    assert scorer.score_probe(as_of, "It was new@x.example.") == "current_instead"
     assert scorer.score_probe({**probe, "category": "update"}, "It changed from old@x.example to new@x.example.") \
         == "right"
     assert scorer.score_probe({**probe, "category": "update", "expected": probe["expected"] + probe["wrong"]},

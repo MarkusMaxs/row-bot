@@ -181,30 +181,31 @@ def probe_states(kind: str, expected: str, text: str) -> bool:
 
 
 def score_probe(probe: world.Probe | Mapping[str, Any], answer: str) -> str:
-    """A probe's verdict from the reply:
+    """A probe's verdict from the reply (revised 26 Oct after the first probe day's hand check, before any report):
 
     - abstention: ``right`` if the reply says it doesn't know, else ``wrong`` (a guess);
     - update detection: ``right`` if it states both the old and the new value, ``partial`` if only the new;
-    - as-of: ``right`` if it states the value then (the old one), else ``wrong``;
-    - current, alias and homonym: ``right`` if it states the expected value and no value it must not;
-      ``old`` if only a value it must not (an older, misstated or the other Sam's); ``both`` if both;
+    - as-of: ``right`` if it states the value then (the old one) and not the later one; ``both`` if it states both
+      (it can't be told which it gives as the answer); ``current_instead`` if only the later one;
+    - current, alias and homonym: ``right`` if it states the expected value (saying what it replaced is fine);
+      ``old`` if it states only a value it must not (an older, misstated or the other Sam's);
       ``abstained`` if it says it doesn't know; else ``wrong``."""
 
     item = probe if isinstance(probe, Mapping) else probe.to_dict()
-    text = str(answer or "")
+    text = str(answer or "").replace("\u2019", "'")
     category, kind = item["category"], item["kind"]
     if category == "abstention":
         return "right" if ABSTAIN.search(text) else "wrong"
     expected = [probe_states(kind, value, text) for value in item["expected"]]
+    wrong = any(probe_states(kind, value, text) for value in item["wrong"])
     if category == "update":
         return "right" if all(expected) else "partial" if expected and expected[0] else "wrong"
     if category == "as_of":
-        return "right" if all(expected) else "wrong"
-    wrong = any(probe_states(kind, value, text) for value in item["wrong"])
-    if all(expected) and not wrong:
+        if all(expected):
+            return "both" if wrong else "right"
+        return "current_instead" if wrong else "abstained" if ABSTAIN.search(text) else "wrong"
+    if all(expected):
         return "right"
-    if all(expected) and wrong:
-        return "both"
     if wrong:
         return "old"
     return "abstained" if ABSTAIN.search(text) else "wrong"

@@ -50,6 +50,8 @@ from tests.e2e.learning.stale_skills import scorer, world
 logger = logging.getLogger("row_bot.seeded.stale_skills")
 
 EXIT_LIMIT = 76
+#: The latest request slot of a day (S1's clock: 08:30 plus 95 minutes a slot, so 22:45).
+MAX_ORDER = 9
 STAGES = ("profile", "past", "days")
 STAND_INS = ("calendar", "gmail", "outlook_calendar", "outlook_mail")
 #: Tool calls that act on the world for each procedure's action (the acting step's tool).
@@ -344,7 +346,7 @@ class StaleRun(PersonRun):
                 self._morning(day)
             elif what in ("tell", "run", "probe"):
                 item = items[step_id]
-                self.clock.request_time(day, item.order)
+                self.clock.request_time(day, min(item.order, MAX_ORDER))  # probes come last, by 22:45
                 self.state.data["in_progress"] = [step_id]
                 self.save()
                 record = getattr(self, f"_{what}")(item)
