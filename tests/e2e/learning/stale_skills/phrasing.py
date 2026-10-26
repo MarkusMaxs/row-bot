@@ -62,7 +62,7 @@ def keeps(template: str, variant: str) -> bool:
     if set(_FIELD.findall(variant)) != set(_FIELD.findall(template)) or len(_FIELD.findall(variant)) != len(
             _FIELD.findall(template)):
         return False
-    return not _FACTLIKE.search(_FIELD.sub("", variant))
+    return not _FACTLIKE.search(_FIELD.sub("", variant)) and world.keeps_meaning(template, variant)
 
 
 def prompt_for(person: Mapping[str, Any], template: str) -> str:

@@ -110,6 +110,18 @@ def quiet_soon(now: datetime | None = None) -> str | None:
     return None
 
 
+def simulated_datetime(now: Any) -> type[datetime]:
+    """A ``datetime`` class whose ``now()`` is ``now()`` (the simulated clock), for the turn context."""
+
+    class SimulatedNow(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # noqa: D102
+            moment = now()
+            return moment.astimezone(tz) if tz is not None else moment
+
+    return SimulatedNow
+
+
 # ── Steps and resuming (pure) ────────────────────────────────────────────────
 
 
@@ -216,9 +228,12 @@ class StaleRun(PersonRun):
             self.main_ref = f"model:ollama:{self.args.local_model}"
             models.adopt_saved_default(self.main_ref)
         self.sim.model_ref = codex_ref  # the person's words: the same lane in both arms
+        if self.args.sim_date:
+            self._show_simulated_date()
         self._watch_limits()
         self._record_recall()
         arm = {"arm": self.arm, "main_ref": self.main_ref, "person_words": codex_ref, "build": self.build,
+               "simulated_date": bool(self.args.sim_date),
                "timeline": self.timeline.fingerprint(), "phrasing": self.timeline.phrasing, "seed": self.args.seed}
         prompts = {item.id: item.prompt for item in self.timeline.runs}
         if any(prompts.get(item["id"]) != item.get("prompt") for item in self.state.data["runs"]):
@@ -247,6 +262,15 @@ class StaleRun(PersonRun):
             return memories, block
 
         agent._turn_recall = recording  # noqa: SLF001
+
+    def _show_simulated_date(self) -> None:
+        """The turn context's date and time from the simulated clock (Row-Bot otherwise says the real date: the
+        first main run's memories said "from 26 October" on simulated 22 November). Only the turn context's clock
+        is moved; nothing else in Row-Bot reads it."""
+
+        from row_bot import agent
+
+        agent._datetime = simulated_datetime(self.clock.now)  # noqa: SLF001 - harness only, this process only
 
     def _watch_limits(self) -> None:
         """Keep each turn's error payloads (to stop on a usage or rate-limit error), and the simulated person's."""
@@ -508,6 +532,7 @@ class StaleRun(PersonRun):
         record["skill_loaded"] = bool(skill.get("name")) and any(skill["name"] in ref for ref in first["skill_loads"])
         record["any_skill_loaded"] = bool(first["skill_loads"])
         record["reads_before_acting"] = reads_before(procedure, first["calls"])
+        record["asked_first"] = "ask_person" in record["reads_before_acting"]
         self.clock.advance(minutes=2)
         self._consent(request, procedure, thread_id, record)
         made = sorted(set(self._user_skills()) - set(skills_before) - set(
@@ -654,7 +679,7 @@ class StaleRun(PersonRun):
             "runs": [{key: item.get(key) for key in ("id", "day", "procedure", "passed_first", "passed_final",
                                                      "recalled_new", "recalled_old", "auto_recall_new",
                                                      "skill_loaded", "any_skill_loaded", "reads_before_acting",
-                                                     "tokens")}
+                                                     "asked_first", "tokens")}
                      | {"score": item["score"], "skill": {key: (item.get("skill") or {}).get(key)
                                                           for key in ("name", "source", "names_start", "names_new")},
                         "tools": item["attempts"][0]["tools"],
@@ -700,6 +725,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spent-before", type=int, default=0)
     parser.add_argument("--gpu-booking", default="")
     parser.add_argument("--stages", default=",".join(STAGES))
+    parser.add_argument("--sim-date", action="store_true", help="the turn context says the simulated date")
     args = parser.parse_args(argv)
     args.arm = "local" if args.model == "local" else "main"
     # S1's PersonRun reads these; this run trains nothing and runs no crash or comparison checks.

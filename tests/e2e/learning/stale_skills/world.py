@@ -274,10 +274,12 @@ PREFERENCES: tuple[dict[str, Any], ...] = (
      "values": ("a short paragraph", "a bullet list"), "markers": ("paragraph", "bullet"),
      "say_first": "I like weekly summaries as {value}.",
      "say_change": "Actually, I'd rather have weekly summaries as {value} from now on."},
-    {"id": "pref_calls", "fact": "which day Mara makes her supplier calls",
-     "values": ("Tuesdays", "Thursdays"), "markers": ("tuesday", "thursday"),
-     "say_first": "I do my supplier calls on {value}, so don't book anything for me then.",
-     "say_change": "I've moved my supplier calls to {value} from now on."},
+    # (A preference that touched the calendar, "supplier calls on Tuesdays, don't book anything for me then",
+    # made the main model refuse calendar procedures on Tuesdays in the first main run: replaced 26 Oct.)
+    {"id": "pref_tea", "fact": "which tea Mara likes at trustee meetings",
+     "values": ("peppermint", "rooibos"), "markers": ("peppermint", "rooibos"),
+     "say_first": "For the record, I drink {value} tea at the trustee meetings.",
+     "say_change": "I've gone off peppermint - it's {value} tea for me at trustee meetings now."},
 )
 #: Misstated, then corrected in the next message (declarative; probed).
 MISSTATED: tuple[dict[str, Any], ...] = (
@@ -614,8 +616,23 @@ class Phrasings:
         kept = (self.data.get("slots") or {}).get(slot) or {}
         if kept.get("template") != template:
             return [template]  # the template changed since the variants were written: they don't apply
-        variants = [item for item in kept.get("variants") or () if _placeholders(item) == _placeholders(template)]
+        variants = [item for item in kept.get("variants") or ()
+                    if _placeholders(item) == _placeholders(template) and keeps_meaning(template, item)]
         return [template, *variants]
+
+
+#: Words that turn a request into another one (a question, a draft, a check) when the template doesn't have them:
+#: the first main run's phrasings had "Find out from finance how much ..." and "Draft a maintenance summary ...".
+_OTHER_ACTION = re.compile(r"\b(draft|write up|put together|find out|check|what|how much|confirm|look up|update the|"
+                           r"add to the|let \{alias\} know)\b", re.IGNORECASE)
+
+
+def keeps_meaning(template: str, variant: str) -> bool:
+    """Whether a phrasing keeps the request's action: no word that asks for something else, unless the template
+    has it too."""
+
+    lowered = template.lower()
+    return not any(match.group(0).lower() not in lowered for match in _OTHER_ACTION.finditer(variant))
 
 
 def slots() -> dict[str, str]:

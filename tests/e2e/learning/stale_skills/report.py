@@ -63,9 +63,12 @@ def arm_summary(data: dict[str, Any], state: dict[str, Any], timeline: world.Tim
     gpu = round(float((data.get("gpu") or {}).get("seconds") or 0) / 3600, 2)
     skills = data.get("skills") or {}
     metrics, probes = rescore(timeline, state)
+    asked = sum(1 for item in state.get("runs") or () if item["score"]["in_window"] and item.get("asked_first", any(
+        call["name"] == "ask_person" for call in item["attempts"][0]["calls"])))
     return {"model": (data.get("arm") or {}).get("arm"), "main_ref": (data.get("arm") or {}).get("main_ref"),
             "build": (data.get("arm") or {}).get("build"), "days_done": data.get("days_done"),
-            "metrics": metrics, "probes": probes,
+            "metrics": metrics, "probes": probes, "asked_first_window": asked,
+            "simulated_date": bool((data.get("arm") or {}).get("simulated_date")),
             "skills": {"made_by_consent": sorted(key for key, value in skills.items() if value.get("source") != "seeded"),
                        "seeded": sorted(key for key, value in skills.items() if value.get("source") == "seeded"),
                        "names_fact": sorted(key for key, value in skills.items() if value.get("names_fact")),
@@ -103,6 +106,7 @@ def markdown(summary: dict[str, Any]) -> str:
     row("recall didn't", lambda a: _frac(a["metrics"]["stale_recall_did_not_surface_new"]))
     row("all runs after a change", lambda a: _frac(a["metrics"]["stale_all_after_change"]))
     row("only window runs that acted (not pre-registered)", lambda a: _frac(a["metrics"]["stale_among_acted"]))
+    row("window runs that asked the person before acting", lambda a: str(a["asked_first_window"]))
     row("window verdicts", lambda a: ", ".join(f"{k} {v}" for k, v in a["metrics"]["window_verdicts"].items()))
     row("**Unchanged procedures**: first acting step right", lambda a: _frac(a["metrics"]["unchanged_success"]))
     row("unchanged: first attempt passed (verifier and value)",

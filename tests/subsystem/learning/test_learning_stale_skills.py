@@ -248,10 +248,19 @@ def test_phrasing_keeps_only_variants_that_add_no_fact():
     assert not phrasing.keeps(template, "Send {alias} the order: {n} loaves to orders@x.example.")
     assert not phrasing.keeps(template, "Send {alias} 20 loaves.")
     assert not phrasing.keeps(template, "Send the bakery {n} large loaves.")
-    kept = phrasing.load(world.PERSON, "main")
-    for slot, template in world.slots().items():
-        for variant in (kept or {}).get("slots", {}).get(slot, {}).get("variants", []):
-            assert phrasing.keeps(template, variant)
+    # A variant that asks for something else (a question, a draft) is dropped, unless the template asks it too.
+    assert not phrasing.keeps("Ask finance for the van's fuel allowance for the week of {date}.",
+                              "Find out from finance how much the van's fuel allowance is for the week of {date}.")
+    assert not phrasing.keeps("Maintenance summary to the building manager - {n} open tickets.",
+                              "Draft a maintenance summary for the building manager - {n} open tickets.")
+    assert phrasing.keeps("Rota reminder please - remind them how much notice a swap needs.",
+                          "Remind the volunteers how much notice a swap needs, please.")
+    # The world uses only the variants that keep the request (a file written before a rule tightened included).
+    for model in ("main", "qwen3.8:27b"):
+        options = world.Phrasings(phrasing.load(world.PERSON, model))
+        for slot, template in world.slots().items():
+            for variant in options.options(slot, template)[1:]:
+                assert phrasing.keeps(template, variant)
 
 
 def test_the_quiet_hours_stop_new_days_before_00_40():
@@ -262,3 +271,13 @@ def test_the_quiet_hours_stop_new_days_before_00_40():
     assert run.quiet_soon(datetime(2026, 10, 26, 5, 0)) is None
     assert run.quiet_soon(datetime(2026, 10, 25, 23, 50)) is None
     assert run.limit_error("⚠️ Rate limit reached — please wait") and not run.limit_error("recursion limit")
+
+
+def test_the_turn_context_can_say_the_simulated_date():
+    from datetime import datetime, timezone
+
+    moment = datetime(2026, 12, 1, 9, 30)
+    simulated = run.simulated_datetime(lambda: moment)
+    assert simulated.now() == moment
+    assert simulated.now().astimezone().date() == moment.date()
+    assert simulated.now(timezone.utc) == moment.astimezone(timezone.utc)
