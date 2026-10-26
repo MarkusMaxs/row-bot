@@ -710,6 +710,10 @@ def _proposal_is_obsolete_for_insight(proposal: dict[str, Any], insight: dict[st
     if proposal_type not in SKILL_MUTATION_TYPES:
         return False
     if not insight:
+        if not proposal.get("insight_ids"):
+            # Drafted in chat at the person's request, not routed from an insight: the person approves it,
+            # and a skill naming its tools or the errors it handles is ordinary, not system maintenance.
+            return False
         payload = _safe_payload(proposal.get("payload"))
         candidate = {
             "category": "skill_proposal",

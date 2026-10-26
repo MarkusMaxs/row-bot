@@ -268,6 +268,33 @@ def test_create_skill_proposal_requires_apply_before_mutation(evolution_env):
     assert run["result"] == "success"
 
 
+def test_a_skill_drafted_in_chat_that_names_its_tools_is_saved(evolution_env):
+    ev = evolution_env.evolution
+    skills = evolution_env.skills
+
+    # The skill guidance asks for the tools a workflow uses; naming them, or what to do when a step failed,
+    # doesn't make a person's own workflow "system maintenance".
+    proposal = ev.build_create_skill_proposal(
+        {
+            "name": "weekly_bread_order",
+            "display_name": "Weekly bread order",
+            "icon": "sparkles",
+            "description": "Send the weekly bread order to the bakery.",
+            "instructions": (
+                "Use the mail tool to send the order to the bakery's order address. "
+                "If sending failed, say so and offer to try again; never report it as sent."
+            ),
+            "tags": ["orders"],
+        },
+        rationale="Requested through row_bot_create_skill.",
+    )
+
+    result = ev.apply_proposal(proposal["id"], require_approval=False, approved_by_user=True)
+
+    assert result["ok"] is True, result["message"]
+    assert skills.get_skill("weekly_bread_order") is not None
+
+
 def test_a_review_only_proposal_is_never_marked_applied(evolution_env):
     """B124: a kind Row-Bot can't carry out (here the skill-overlap review)
     stays a proposal: applying it changes nothing and says so."""
