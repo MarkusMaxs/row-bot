@@ -25,6 +25,7 @@ import type {
   TaskSummaryPage,
 } from '../../api/types';
 import { provideLive } from '../../live';
+import { OverlayProvider } from '../../ui/overlays';
 import OverviewHome, { type OverviewHomeProps } from './OverviewHome';
 import AttentionIndicator from '../shell/AttentionIndicator';
 
@@ -274,16 +275,18 @@ function show(props: Partial<OverviewHomeProps> = {}) {
     props.loadTasks ?? vi.fn().mockResolvedValue(page([] as TaskSummary[]));
   const view = render(
     <MemoryRouter>
-      <OverviewHome
-        conversations={[]}
-        setup={null}
-        monitor={null}
-        loadTasks={loadTasks}
-        now={now}
-        {...handlers}
-        {...props}
-      />
-      <Where />
+      <OverlayProvider>
+        <OverviewHome
+          conversations={[]}
+          setup={null}
+          monitor={null}
+          loadTasks={loadTasks}
+          now={now}
+          {...handlers}
+          {...props}
+        />
+        <Where />
+      </OverlayProvider>
     </MemoryRouter>,
   );
   return { ...view, loadTasks };
@@ -530,20 +533,22 @@ it('shows the same number on Home and in the sidebar for the same items, without
   );
   render(
     <MemoryRouter>
-      <AttentionIndicator
-        load={loadAttention}
-        loadApprovals={loadApprovals}
-        conversations={conversations}
-      />
-      <OverviewHome
-        conversations={conversations}
-        setup={setupSnapshot()}
-        monitor={null}
-        loadApprovals={loadApprovals}
-        loadAttention={loadAttention}
-        now={now}
-        {...handlers}
-      />
+      <OverlayProvider>
+        <AttentionIndicator
+          load={loadAttention}
+          loadApprovals={loadApprovals}
+          conversations={conversations}
+        />
+        <OverviewHome
+          conversations={conversations}
+          setup={setupSnapshot()}
+          monitor={null}
+          loadApprovals={loadApprovals}
+          loadAttention={loadAttention}
+          now={now}
+          {...handlers}
+        />
+      </OverlayProvider>
     </MemoryRouter>,
   );
   const sidebar = await screen.findByRole('button', {
@@ -565,7 +570,7 @@ it('shows the same number on Home and in the sidebar for the same items, without
 
 // Needs you ------------------------------------------------------------------
 
-it('answers waiting approvals in place and re-reads them after a decision', async () => {
+it('lists waiting approvals and opens each on its card', async () => {
   const loadApprovals = vi
     .fn()
     .mockResolvedValueOnce(
@@ -605,31 +610,19 @@ it('answers waiting approvals in place and re-reads them after a decision', asyn
     within(post).getByRole('link', { name: 'Open the workflow' }),
   ).toHaveAttribute('href', '/?tab=workflows&workflow=task-specials');
   expect(summary()).toBe('2 things need you.');
+  // Each opens on its own card, with what exactly will happen; nothing is approved from the row (F31).
+  expect(within(mail).queryByRole('button', { name: 'Approve' })).toBeNull();
   await act(async () =>
     fireEvent.click(
-      within(
-        within(mail).getByRole('group', {
-          name: 'Answer: Send an email to Riverside Flour',
-        }),
-      ).getByRole('button', { name: 'Approve' }),
+      within(mail).getByRole('button', {
+        name: 'Review: Send an email to Riverside Flour',
+      }),
     ),
   );
-  expect(runtime.approval).toHaveBeenCalledWith('approval-mail');
-  expect(runtime.intent).toHaveBeenCalledWith(
-    'approval-mail',
-    'approval.resolve',
-    { decision: 'approve', nonce: 'nonce-mail' },
-    '0',
-  );
-  expect(loadApprovals).toHaveBeenCalledTimes(2);
   expect(
-    await screen.findByRole('button', {
-      name: 'Review approval in Supplier price check',
-    }),
-  ).toBeVisible();
-  expect(
-    screen.queryByText('Send an email to Riverside Flour'),
-  ).not.toBeInTheDocument();
+    screen.getByRole('dialog', { name: 'Review and approve' }),
+  ).toBeInTheDocument();
+  expect(runtime.intent).not.toHaveBeenCalled();
 });
 
 it('shows three waiting items at first and the rest behind "more waiting"', async () => {

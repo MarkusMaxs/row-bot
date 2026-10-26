@@ -24,7 +24,7 @@ import {
   type ComboboxOption,
 } from '../../ui/primitives';
 import { AppIcon } from '../apps/parts';
-import type { StepApp } from './StepApps';
+export type StepApp = { id: string; name: string; icon: string };
 import { DangerAction, SettingsDangerZone } from '../settings/anatomy';
 import {
   approvalLevel,
@@ -699,33 +699,6 @@ export default function TaskSettingsEditor({
                 <option value="skip">Skip it</option>
                 <option value="run_once">Run once when Row-Bot starts</option>
               </Select>
-            </SettingRow>
-            <SettingRow
-              label="Reuse a conversation across runs"
-              description="Turning this off keeps existing conversations and their content."
-            >
-              <Toggle
-                label="Reuse a conversation across runs"
-                checked={fields.persistent_enabled}
-                onChange={(event) =>
-                  change('persistent_enabled', event.target.checked)
-                }
-              />
-            </SettingRow>
-            <SettingRow
-              label="Queue name"
-              htmlFor={`${inputId}-group`}
-              description="Workflows with the same queue name run one at a time; the next waits. Leave it empty to let Row-Bot decide."
-            >
-              <Input
-                id={`${inputId}-group`}
-                aria-label="Queue name"
-                maxLength={128}
-                value={fields.concurrency_group ?? ''}
-                onChange={(event) =>
-                  change('concurrency_group', event.target.value || null)
-                }
-              />
             </SettingRow>
             <SettingRow
               label="Trigger"

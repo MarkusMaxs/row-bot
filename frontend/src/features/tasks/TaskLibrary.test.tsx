@@ -1002,16 +1002,14 @@ it('keeps the enable switch read-only without a toggle owner', async () => {
   ).toBeDisabled();
 });
 
-it('offers run history, step, settings and conversation actions in the row menu', async () => {
+it('offers run history, settings and conversation actions in the row menu', async () => {
   const user = userEvent.setup();
   const runs = vi.fn();
-  const graph = vi.fn();
   const settings = vi.fn();
   const conversation = vi.fn();
   const load = vi.fn(async () => pageOf([task('Digest', { enabled: true })]));
   show(load, {
     onRuns: runs,
-    onGraph: graph,
     onSettings: settings,
     onOpenConversation: conversation,
     onDuplicate: vi.fn(),
@@ -1027,7 +1025,6 @@ it('offers run history, step, settings and conversation actions in the row menu'
       .map((item) => item.textContent),
   ).toEqual([
     'Run history',
-    'Edit workflow steps',
     'Workflow settings',
     'Open conversation',
     'Duplicate workflow',
@@ -1035,7 +1032,6 @@ it('offers run history, step, settings and conversation actions in the row menu'
   ]);
   for (const [label, callback, args] of [
     ['Run history', runs, ['Digest', 'Digest']],
-    ['Edit workflow steps', graph, ['Digest', 'Digest']],
     ['Workflow settings', settings, ['Digest', 'Digest']],
     ['Open conversation', conversation, ['conversation-one']],
   ] as const) {

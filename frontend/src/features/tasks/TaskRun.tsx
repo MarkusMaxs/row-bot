@@ -1,9 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type {
-  TaskApprovalCard,
-  TaskApprovalPage,
-  TaskApprovalResult,
-  TaskApprovalReview,
   TaskRunPage,
   TaskRunResult,
   TaskRunReview,
@@ -12,23 +8,17 @@ import type {
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import {
-  File,
-  Film,
+  ExternalLink,
   Folder,
   FolderOpen,
-  Image,
-  Music,
   Play,
   RefreshCw,
-  UserCheck,
 } from 'lucide-react';
 import { Button, IconButton, InlineEmpty, Skeleton } from '../../ui/primitives';
 import { humanizeToken } from '../../ui/format';
 import { When, runStatus } from '../home/home-format';
 import ApprovalCard from '../shell/ApprovalCard';
-import { WaitingSince } from '../shell/InPlaceApproval';
 import { approvalTag } from '../shell/approval-levels';
-import { formatBytes } from '../shell/MediaPreview';
 import { wallTimeOf } from './schedule-zones';
 
 export interface TaskRunProps {
@@ -40,16 +30,6 @@ export interface TaskRunProps {
     cursor?: string,
     signal?: AbortSignal,
   ) => Promise<TaskRunPage>;
-  loadApprovals: (
-    taskId: string,
-    runId: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ) => Promise<TaskApprovalPage>;
-  respondApproval: (
-    approval: TaskApprovalReview,
-    approved: boolean,
-  ) => Promise<TaskApprovalResult>;
   stop: (taskId: string, runId: string) => Promise<TaskStopResult>;
   /** Re-read one run; the drawer follows a run that is still going (B121). */
   loadRun?: (
@@ -81,6 +61,9 @@ const terminal = new Set([
   'stopped',
   'blocked',
   'skipped',
+  'denied',
+  'expired',
+  'unsure',
 ]);
 
 export default function TaskRun({
@@ -88,8 +71,6 @@ export default function TaskRun({
   loadReview,
   run,
   loadHistory,
-  loadApprovals,
-  respondApproval,
   stop,
   loadRun,
   openConversation,
@@ -99,16 +80,13 @@ export default function TaskRun({
   const [review, setReview] = useState<TaskRunReview | null>(null);
   const [history, setHistory] = useState<TaskRunPage | null>(null);
   const [selected, setSelected] = useState<TaskRunSummary | null>(null);
-  const [approvals, setApprovals] = useState<TaskApprovalPage | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadingApprovals, setLoadingApprovals] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [reload, setReload] = useState(0);
   const [earlierRows, setEarlierRows] = useState(0);
   const [stale, setStale] = useState(false);
-  const [actionUnconfirmed, setActionUnconfirmed] = useState(false);
   const epoch = useRef(0);
   const pending = useRef(false);
   const more = useRef<AbortController | null>(null);
@@ -120,11 +98,9 @@ export default function TaskRun({
     setReview(null);
     setHistory(null);
     setSelected(null);
-    setApprovals(null);
     setLoading(true);
     setError('');
     setStale(false);
-    setActionUnconfirmed(false);
     setEarlierRows(0);
     Promise.all([
       loadReview(taskId, abort.signal),
@@ -152,28 +128,6 @@ export default function TaskRun({
 
   const selectedId = selected?.id ?? null;
   const selectedState = selected?.status ?? null;
-  useEffect(() => {
-    const abort = new AbortController();
-    setApprovals(null);
-    if (!selectedId || !selectedState || terminal.has(selectedState)) {
-      setLoadingApprovals(false);
-      return () => abort.abort();
-    }
-    setLoadingApprovals(true);
-    loadApprovals(taskId, selectedId, undefined, abort.signal).then(
-      (page) => {
-        if (abort.signal.aborted) return;
-        setApprovals(page);
-        setLoadingApprovals(false);
-      },
-      (cause: unknown) => {
-        if (abort.signal.aborted) return;
-        setError(clientError(cause).message);
-        setLoadingApprovals(false);
-      },
-    );
-    return () => abort.abort();
-  }, [taskId, selectedId, selectedState, loadApprovals]);
 
   // B121: a run that is still going is read again every couple of seconds
   // until it ends; then the drawer reviews again, so Run now is ready.
@@ -218,7 +172,6 @@ export default function TaskRun({
         if (ticket !== epoch.current) return;
         setReview(next);
         setStale(false);
-        setActionUnconfirmed(false);
       },
       () => {},
     );
@@ -251,18 +204,14 @@ export default function TaskRun({
         setError(failure.message);
         if (
           kind === 'run' ||
-          kind === 'approval' ||
           [
             'task_revision_conflict',
             'task_policy_revision_conflict',
-            'task_approval_revision_conflict',
             'task_run_unconfirmed',
-            'task_approval_unconfirmed',
             'operation_uncertain',
           ].includes(failure.code)
         ) {
           setStale(true);
-          setActionUnconfirmed(true);
         }
       }
     } finally {
@@ -330,8 +279,9 @@ export default function TaskRun({
   }
 
   const selectedStatus = selected ? runView(selected) : null;
+  // A run of one message is one turn: only a run of several says which it is on.
   const progress =
-    selected && selected.steps_total > 0
+    selected && selected.steps_total > 1 && !terminal.has(selected.status)
       ? Math.min(1, selected.steps_done / selected.steps_total)
       : null;
   return (
@@ -343,7 +293,7 @@ export default function TaskRun({
             <span>
               {review.notify_only
                 ? 'Reminder'
-                : `${review.steps_total} ${review.steps_total === 1 ? 'step' : 'steps'}`}
+                : `${review.steps_total} ${review.steps_total === 1 ? 'message' : 'messages'}`}
             </span>
             <span aria-hidden>·</span>
             <span>Profile {profileWords(review.agent_profile_id)}</span>
@@ -352,7 +302,8 @@ export default function TaskRun({
           </p>
         ) : (
           <p className="task-run-facts">
-            Uses the saved steps, profile, approvals and delivery.
+            Sends its messages to its own conversation, with its approvals and
+            delivery.
           </p>
         )}
         <div className="task-run-actions">
@@ -425,8 +376,30 @@ export default function TaskRun({
                   {wallTimeOf(selected.late_for)}.
                 </p>
               )}
-              {selected.notice && terminal.has(selected.status) && (
+              {selected.notice && selected.status !== 'waiting' && (
                 <p className="task-run-notice">{selected.notice}</p>
+              )}
+              {(selected.actions?.length ?? 0) > 0 && (
+                <ul className="task-run-actions-list" aria-label="What it did">
+                  {(selected.actions ?? []).map((action, index) => (
+                    <li key={index}>
+                      <span className="task-run-action-title">
+                        {action.title}
+                      </span>
+                      <span>{action.result}</span>
+                      {action.link && (
+                        <a
+                          href={action.link}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          aria-label={`Open: ${action.result}`}
+                        >
+                          <ExternalLink size={13} aria-hidden />
+                        </a>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
               {progress !== null && (
                 <div className="task-run-progress">
@@ -436,8 +409,9 @@ export default function TaskRun({
                     aria-label="Run progress"
                   />
                   <span>
-                    {selected.steps_done} of {selected.steps_total}{' '}
-                    {selected.steps_total === 1 ? 'step' : 'steps'}
+                    Message{' '}
+                    {Math.min(selected.steps_done + 1, selected.steps_total)} of{' '}
+                    {selected.steps_total}
                   </span>
                 </div>
               )}
@@ -454,12 +428,7 @@ export default function TaskRun({
                   confirmed.
                 </p>
               )}
-              {selected.status === 'skipped' && (
-                <p className="home-caption">
-                  This scheduled run was skipped: an earlier run still waited
-                  for your approval.
-                </p>
-              )}
+
               <div className="task-run-actions">
                 {selected.fix === 'choose_folder' && onChooseFolder && (
                   <Button
@@ -501,148 +470,13 @@ export default function TaskRun({
                   </Button>
                 )}
               </div>
-              {loadingApprovals && (
-                <Skeleton label="Loading pending approvals" />
-              )}
-              {approvals?.items.map((approval) =>
-                approval.kind === 'question' ? (
-                  // Row-Bot's question (N4): answered on its own card, never approved.
-                  <article
-                    className="task-run-approval"
-                    key={approval.id}
-                    aria-label="Row-Bot has a question"
-                  >
-                    <ApprovalCard
-                      id={approval.id}
-                      notice
-                      onResolved={() => setReload((value) => value + 1)}
-                    />
-                    {approval.expires_at && (
-                      <p className="home-caption">
-                        If nobody answers, Row-Bot goes on with its
-                        recommendation <When value={approval.expires_at} />.
-                      </p>
-                    )}
-                  </article>
-                ) : (
-                  <article
-                    className="task-run-approval"
-                    key={approval.id}
-                    aria-label="Pending task approval"
-                    data-person-only={approval.person_only || undefined}
-                  >
-                    {approval.person_only ? (
-                      <>
-                        <h3>
-                          <UserCheck size={14} aria-hidden />
-                          Only you can approve this
-                        </h3>
-                        <p className="home-caption">
-                          You asked to approve this yourself, so Auto and
-                          Hands-off never answer it for you.
-                        </p>
-                      </>
-                    ) : (
-                      <h3>Approval needed</h3>
-                    )}
-                    {approval.card ? (
-                      <ActionCard card={approval.card} />
-                    ) : (
-                      <p className="task-approval-message">
-                        {approval.message}
-                      </p>
-                    )}
-                    <p className="home-caption">
-                      <WaitingSince value={approval.requested_at} />
-                    </p>
-                    {approval.expires_at && (
-                      <p className="home-caption">
-                        Expires <When value={approval.expires_at} />
-                      </p>
-                    )}
-                    {approval.message_truncated && (
-                      <p role="status">
-                        This review is too large to show completely. Open the
-                        existing conversation approval surface to review it.
-                      </p>
-                    )}
-                    {!approval.response_available &&
-                      !approval.message_truncated && (
-                        <p className="home-caption">
-                          This approval uses its existing conversation controls,
-                          or the workflow is still finishing its pause. Open the
-                          conversation or refresh after it finishes.
-                        </p>
-                      )}
-                    <div className="task-run-actions">
-                      {[false, true].map((approved) => (
-                        <Button
-                          key={String(approved)}
-                          variant={approved ? 'primary' : 'secondary'}
-                          className="small"
-                          disabled={
-                            !!busy ||
-                            !approval.response_available ||
-                            actionUnconfirmed
-                          }
-                          onClick={() => {
-                            const ticket = epoch.current;
-                            void actOnRun('approval', async () => {
-                              const result = await respondApproval(
-                                approval,
-                                approved,
-                              );
-                              if (ticket !== epoch.current) return;
-                              setApprovals(null);
-                              updateRun(result.run);
-                              setNotice(
-                                approved
-                                  ? 'Approval recorded.'
-                                  : 'Rejection recorded.',
-                              );
-                            });
-                          }}
-                        >
-                          {approved ? 'Approve' : 'Reject'}
-                        </Button>
-                      ))}
-                    </div>
-                  </article>
-                ),
-              )}
-              {approvals && approvals.total > approvals.items.length && (
-                <p className="home-caption">
-                  Showing {approvals.items.length} of {approvals.total} pending
-                  approvals on this page.
-                </p>
-              )}
-              {approvals?.next_cursor && (
-                <Button
-                  className="small"
-                  disabled={!!busy || actionUnconfirmed}
-                  onClick={() => {
-                    const ticket = epoch.current;
-                    const abort = new AbortController();
-                    more.current = abort;
-                    void actOnRun('approval-page', async () => {
-                      const page = await loadApprovals(
-                        taskId,
-                        selected.id,
-                        approvals.next_cursor ?? undefined,
-                        abort.signal,
-                      );
-                      if (ticket !== epoch.current || abort.signal.aborted)
-                        return;
-                      if (page.revision !== approvals.revision)
-                        throw { code: 'task_approval_revision_conflict' };
-                      setApprovals(page);
-                    }).finally(() => {
-                      if (more.current === abort) more.current = null;
-                    });
-                  }}
-                >
-                  Next approvals
-                </Button>
+              {selected.status === 'waiting' && selected.approval_id && (
+                // The run waits on this card: the exact action, account or recipient and full text.
+                <ApprovalCard
+                  key={selected.approval_id}
+                  id={selected.approval_id}
+                  onResolved={() => setReload((value) => value + 1)}
+                />
               )}
             </section>
           )}
@@ -674,9 +508,9 @@ export default function TaskRun({
                       <span className="task-run-row-time">
                         <When value={item.started_at} fallback="Unknown time" />
                       </span>
-                      {item.steps_total > 0 && (
+                      {item.notice && (
                         <span className="task-run-row-steps">
-                          {item.steps_done}/{item.steps_total}
+                          {item.notice}
                         </span>
                       )}
                     </button>
@@ -703,59 +537,6 @@ export default function TaskRun({
         </>
       )}
     </section>
-  );
-}
-
-const MEDIA_ICONS = { image: Image, video: Film, audio: Music, file: File };
-
-/** Exactly what a person-only approval lets happen (N9). */
-function ActionCard({ card }: { card: TaskApprovalCard }) {
-  const media = card.media ?? [];
-  return (
-    <dl className="task-action-card">
-      <dt>Action</dt>
-      <dd>{card.action}</dd>
-      {card.destination && (
-        <>
-          <dt>To</dt>
-          <dd>{card.destination}</dd>
-        </>
-      )}
-      {card.account && (
-        <>
-          <dt>As</dt>
-          <dd>{card.account}</dd>
-        </>
-      )}
-      {card.text && (
-        <>
-          <dt>Text</dt>
-          <dd className="task-action-text">{card.text}</dd>
-        </>
-      )}
-      {media.length > 0 && (
-        <>
-          <dt>{media.length === 1 ? 'File' : 'Files'}</dt>
-          <dd>
-            <ul className="task-action-media">
-              {media.map((item) => {
-                const Icon = MEDIA_ICONS[item.kind];
-                return (
-                  <li key={`${item.name}-${item.fingerprint}`}>
-                    <Icon size={14} aria-hidden />
-                    <span className="task-action-media-name">{item.name}</span>
-                    <span>{formatBytes(item.size)}</span>
-                    <code title="Fingerprint of its contents">
-                      {item.fingerprint}
-                    </code>
-                  </li>
-                );
-              })}
-            </ul>
-          </dd>
-        </>
-      )}
-    </dl>
   );
 }
 

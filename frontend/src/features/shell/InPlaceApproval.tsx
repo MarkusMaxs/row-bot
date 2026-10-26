@@ -1,23 +1,15 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowUpRight, Check, X } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import type { PendingApproval } from '../../api/types';
-import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
 import { useOverlay } from '../../ui/overlays';
-import { Button, Hint, IconButton, InlineEmpty } from '../../ui/primitives';
+import { Button, Hint, InlineEmpty } from '../../ui/primitives';
 import ApprovalCard from './ApprovalCard';
 import { unannounced, usePendingApprovals } from './pending-approvals';
 import { WaitingSince } from './waiting-since';
 
 export { WaitingSince, waitingSince } from './waiting-since';
-
-/** A request that is no longer waiting: someone answered it elsewhere. */
-const ANSWERED = new Set([
-  'approval_expired',
-  'approval_already_resolved',
-  'not_found',
-]);
 
 const SOURCE_WORDS: Record<PendingApproval['source'], string> = {
   workflow: 'Workflow',
@@ -33,27 +25,34 @@ export function waitingWords(item: Pick<PendingApproval, 'title' | 'kind'>) {
 }
 
 /**
- * Answer for Row-Bot's question where it waits in a list (N4): the question
- * card, in a dialog, with Answer and Skip. Never Approve / Deny.
+ * Where a waiting approval or question is listed, it opens on its own card in a
+ * dialog: an action's card shows exactly what will happen (account or recipient,
+ * full text, files) with Approve and Deny; Row-Bot's question has Answer and Skip
+ * (N4). Nothing is approved from a one-line summary (F31).
  */
-function QuestionDecision({
+export function ApprovalDecision({
   approvalId,
   subject,
   onResolved,
+  kind = 'approval',
 }: {
   approvalId: string;
+  /** What waits, for the button's name. */
   subject: string;
+  /** After it was answered (here or, as it turned out, elsewhere). */
   onResolved?: () => void;
+  kind?: PendingApproval['kind'];
 }) {
   const overlay = useOverlay();
+  const question = kind === 'question';
   return (
     <Button
       variant="primary"
       className="small"
-      aria-label={`Answer: ${subject}`}
+      aria-label={`${question ? 'Answer' : 'Review'}: ${subject}`}
       onClick={(event) =>
         overlay.open({
-          title: 'Row-Bot has a question',
+          title: question ? 'Row-Bot has a question' : 'Review and approve',
           description: subject,
           returnFocusTo: event.currentTarget,
           content: (
@@ -69,127 +68,15 @@ function QuestionDecision({
         })
       }
     >
-      Answer
+      {question ? 'Answer' : 'Review'}
     </Button>
   );
 }
 
 /**
- * Approve / Deny for one pending approval, in place (B255; Phase 18 puts it
- * on Overview). It sends the same reviewed command as the approval card: a
- * fresh view binds this session to the exact stored action, then
- * `approval.resolve` answers it.
- */
-export function ApprovalDecision({
-  approvalId,
-  subject,
-  onResolved,
-  kind = 'approval',
-}: {
-  approvalId: string;
-  /** What is being approved, for the buttons' group name. */
-  subject: string;
-  /** After it was answered (here or, as it turned out, elsewhere). */
-  onResolved?: () => void;
-  /** Row-Bot's question is answered on its card, never approved (N4). */
-  kind?: PendingApproval['kind'];
-}) {
-  if (kind === 'question')
-    return (
-      <QuestionDecision
-        approvalId={approvalId}
-        subject={subject}
-        onResolved={onResolved}
-      />
-    );
-  return (
-    <ApprovalButtons
-      approvalId={approvalId}
-      subject={subject}
-      onResolved={onResolved}
-    />
-  );
-}
-
-function ApprovalButtons({
-  approvalId,
-  subject,
-  onResolved,
-}: {
-  approvalId: string;
-  subject: string;
-  onResolved?: () => void;
-}) {
-  const { controller } = useRuntime();
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState('');
-  const [error, setError] = useState('');
-  async function decide(decision: 'approve' | 'reject') {
-    if (busy || done) return;
-    setBusy(true);
-    setError('');
-    try {
-      const view = await controller.approval(approvalId);
-      await controller.intent(
-        approvalId,
-        'approval.resolve',
-        { decision, nonce: view.nonce },
-        view.revision,
-      );
-      setDone(decision === 'approve' ? 'Approved' : 'Denied');
-      onResolved?.();
-    } catch (cause) {
-      const failure = clientError(cause);
-      if (ANSWERED.has(failure.code)) {
-        setDone('Already answered');
-        onResolved?.();
-      } else setError(failure.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  if (done)
-    return (
-      <p role="status" className="approval-decision-done">
-        {done}
-      </p>
-    );
-  return (
-    <div
-      className="approval-decision"
-      role="group"
-      aria-label={`Answer: ${subject}`}
-    >
-      <IconButton
-        label="Deny"
-        size="sm"
-        disabled={busy}
-        onClick={() => void decide('reject')}
-      >
-        <X size={16} aria-hidden />
-      </IconButton>
-      <IconButton
-        label="Approve"
-        size="sm"
-        variant="primary"
-        disabled={busy}
-        onClick={() => void decide('approve')}
-      >
-        <Check size={16} aria-hidden />
-      </IconButton>
-      {error && (
-        <p role="alert" className="approval-decision-error">
-          {error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
- * Every waiting approval with Approve / Deny in place, what it is, since
- * when it waits, and a link to where it was asked. Row-Bot's questions have
- * Answer instead (N4).
+ * Every waiting approval with Review (its card), what it is, since when it
+ * waits, and a link to where it was asked. Row-Bot's questions have Answer
+ * instead (N4).
  */
 export function PendingApprovalList({
   items,
@@ -317,7 +204,7 @@ export function useApprovalNotices(openConversationId: string | null): void {
         onAction: () =>
           latest.current.overlay.open({
             title: 'Waiting for your approval',
-            description: 'Approve or deny here, or open where it was asked.',
+            description: 'Review each on its card, or open where it was asked.',
             content: <PendingApprovalsReview />,
           }),
       },

@@ -53,7 +53,7 @@ function fixture(capacity = 8) {
     retryCommand: vi.fn(),
     receipt: vi.fn(),
     taskEditor: vi.fn().mockResolvedValue(saved),
-    taskGraph: vi.fn(),
+
     taskSettings: vi.fn(),
   };
   const owner = createTaskEditSessions(
@@ -69,15 +69,15 @@ function fixture(capacity = 8) {
   };
 }
 
-it('keeps independent bounded task, graph and settings drafts through close and re-open', () => {
+it('keeps independent bounded task and settings drafts through close and re-open', () => {
   const { owner } = fixture();
   const editor = owner.open('task', 'task')!;
   editor.session.get('fields', fields);
   editor.session.set('fields', { ...fields, name: 'Retained' }, true);
   owner.close();
-  const graph = owner.open('graph', 'task')!;
-  graph.session.get('steps', []);
-  graph.session.set('steps', [{ id: 'stable' }], true);
+  const settings = owner.open('settings', 'task')!;
+  settings.session.get('fields', {});
+  settings.session.set('fields', { always_ask: ['x'] }, true);
   expect(owner.open('task', 'task')).toBe(editor);
   expect(editor.session.get('fields', fields).name).toBe('Retained');
   expect(owner.getSnapshot().drafts).toHaveLength(2);
@@ -130,12 +130,12 @@ it('never evicts dirty or uncertain sessions at capacity and exposes explicit re
   await expect(
     second.session.run(() => second.edits.save('second', 'old', fields)),
   ).rejects.toThrow();
-  expect(owner.open('graph', 'third')).toBeNull();
+  expect(owner.open('settings', 'third')).toBeNull();
   expect(owner.getSnapshot().capacity).toBe(true);
   expect(first.session.get('draft', '')).toBe('Private draft');
   expect(owner.discard()).toBe(false);
   expect(owner.discard(JSON.stringify(['task', 'first']))).toBe(true);
-  expect(owner.open('graph', 'third')).not.toBeNull();
+  expect(owner.open('settings', 'third')).not.toBeNull();
   expect(owner.getSnapshot().capacity).toBe(false);
   owner.dispose();
 });
@@ -177,7 +177,7 @@ it('holds private download admission until actual completion without retaining s
   const operation = entry.session.run(() => result.promise, true);
   expect(owner.hasRetained()).toBe(true);
   expect(owner.discard()).toBe(false);
-  expect(owner.open('graph', 'other')).toBeNull();
+  expect(owner.open('settings', 'other')).toBeNull();
   result.reject(new TypeError('download lost'));
   await expect(operation).rejects.toThrow();
   expect(entry.session.getMeta().uncertain).toBe(false);
@@ -191,7 +191,7 @@ it('holds private download admission until actual completion without retaining s
 
 it('enforces bounded draft state without truncating the retained content and aborts reads on disposal', () => {
   const { owner, listeners } = fixture();
-  const entry = owner.open('graph', 'task')!;
+  const entry = owner.open('settings', 'task')!;
   entry.session.get('draft', '');
   entry.session.set('draft', 'Retained', true);
   entry.session.set('draft', 'x'.repeat(2 * 1024 * 1024 + 1), true);
@@ -209,9 +209,9 @@ it('forgets every draft of a deleted workflow, even one still waiting (B122)', (
   const editor = owner.open('task', 'gone')!;
   editor.session.get('fields', fields);
   editor.session.set('fields', { ...fields, name: 'Unsaved' }, true);
-  const graph = owner.open('graph', 'gone')!;
-  graph.session.get('steps', []);
-  graph.session.set('steps', [{ id: 'stable' }], true);
+  const settings = owner.open('settings', 'gone')!;
+  settings.session.get('fields', {});
+  settings.session.set('fields', { always_ask: ['x'] }, true);
   const other = owner.open('task', 'kept')!;
   other.session.get('fields', fields);
   other.session.set('fields', { ...fields, name: 'Other' }, true);
