@@ -324,6 +324,11 @@ def settings_saved(field: str, value: Any) -> None:
         start_past_chat_import()
     if (field == "enabled" and value is True) or (field == "paused" and value is False):
         start_runner()
+    if field == "train_where" and runner is not None:
+        try:
+            runner.place_changed(str(value))
+        except Exception:
+            logger.warning("Learning could not set aside a run planned for the other place", exc_info=True)
 
 
 def start_past_chat_import() -> None:

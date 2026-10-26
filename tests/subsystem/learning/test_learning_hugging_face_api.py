@@ -155,3 +155,18 @@ def test_lost_contact_reads_as_checking_never_failed(hf):
     assert (training["state"], training["remote"]["lost"], training["failure"]) == ("unknown_remote", True, None)
     checked = _ok(_command(client, headers, "hf_check_now", job_id=job.id))
     assert checked["snapshot"]["training"]["state"] == "running"
+
+
+def test_changing_where_to_train_sets_aside_a_run_planned_for_the_other_place(hf):
+    from row_bot.application.settings_commands import write_learning_settings
+
+    client, headers, data, _hub, _sign_in, trainer = hf
+    write_learning_settings({"train_where": "this_computer"})
+    local = trainer.jobs.plan(steps_total=12, checkpoint_every=4)
+
+    write_learning_settings({"train_where": "hugging_face"})
+
+    assert trainer.jobs.get(local.id).state == "stopped"  # its rows are planned again for Hugging Face
+    remote = _plan(data, trainer)
+    write_learning_settings({"train_where": "this_computer"})
+    assert trainer.jobs.get(remote.id).state == "stopped"  # never uploaded: nothing on Hugging Face to undo

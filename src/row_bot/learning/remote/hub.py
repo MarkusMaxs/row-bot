@@ -109,6 +109,8 @@ class Hub(Protocol):
 
     def read_text(self, repo_id: str, kind: str, path: str) -> str: ...
 
+    def read_bytes(self, repo_id: str, kind: str, path: str) -> bytes: ...
+
     def download_address(self, repo_id: str, kind: str, path: str) -> str: ...
 
 
@@ -215,11 +217,16 @@ class HfHub:
             job_id=job_id, follow=False, tail=tail, namespace=self._namespace() if self._namespace else None)))]
 
     def read_text(self, repo_id: str, kind: str, path: str) -> str:
+        return self.read_bytes(repo_id, kind, path).decode("utf-8")
+
+    def read_bytes(self, repo_id: str, kind: str, path: str) -> bytes:
+        """A small file of a private repository (a manifest, an adapter's settings), whole."""
+
         import tempfile
 
         with tempfile.TemporaryDirectory(prefix="row-bot-hf-") as folder:
             found = self._call(lambda api: api.hf_hub_download(repo_id, path, repo_type=kind, local_dir=folder))
-            return Path(found).read_text(encoding="utf-8")
+            return Path(found).read_bytes()
 
     def download_address(self, repo_id: str, kind: str, path: str) -> str:
         """Where one file of a private repository can be fetched now: Hugging Face answers its ``resolve`` address

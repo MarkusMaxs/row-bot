@@ -492,7 +492,9 @@ function PersonalModel({
   const training = snapshot.training;
   const downloaded =
     model.engine === 'installed' && model.starting_model_state === 'downloaded';
-  const download = downloadView(model);
+  // Training on Hugging Face needs no engine or starting model here (C1): no download is offered.
+  const download =
+    model.train_where === 'hugging_face' ? null : downloadView(model);
   // A run (or an engine with nothing to train yet) takes the place of the setup states.
   const showTraining =
     training.state !== 'none' ||
@@ -592,12 +594,16 @@ function PersonalModel({
           onRunsIn={() => setRunsInOpen(true)}
         />
       )}
-      {model.train_where === 'hugging_face' && model.hugging_face && (
-        <HuggingFaceCard io={io} hugging={model.hugging_face} />
-      )}
       <UsesSection io={io} model={model} mainName={mainName} />
       <VersionsSection io={io} model={model} onReview={onReview} />
       {state}
+      {model.train_where === 'hugging_face' && model.hugging_face && (
+        <HuggingFaceCard
+          io={io}
+          hugging={model.hugging_face}
+          running={training.state !== 'none'}
+        />
+      )}
       <dl className="learning-facts" aria-label="Personal model">
         {(downloaded || model.version) && (
           <div>
@@ -621,16 +627,21 @@ function PersonalModel({
             <dd>{versionFileWords(model.version)}</dd>
           </div>
         )}
-        <div>
-          <dt>Starting model</dt>
-          <dd>
-            {starting.name} · {starting.licence} · {startingModelFact(model)}
-          </dd>
-        </div>
-        <div>
-          <dt>Training engine</dt>
-          <dd>{engineFact(model)}</dd>
-        </div>
+        {model.train_where !== 'hugging_face' && (
+          <>
+            <div>
+              <dt>Starting model</dt>
+              <dd>
+                {starting.name} · {starting.licence} ·{' '}
+                {startingModelFact(model)}
+              </dd>
+            </div>
+            <div>
+              <dt>Training engine</dt>
+              <dd>{engineFact(model)}</dd>
+            </div>
+          </>
+        )}
         <div>
           <dt>Train during quiet hours</dt>
           <dd>{model.train_in_quiet_hours ? 'On' : 'Off'}</dd>

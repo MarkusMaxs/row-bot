@@ -124,6 +124,13 @@ class FakeHub:
         except KeyError as error:
             raise HubError("not_found", 404) from error
 
+    def read_bytes(self, repo_id: str, kind: str, path: str) -> bytes:
+        self._check("read_bytes")
+        try:
+            return self.repos[repo_id]["files"][path]
+        except KeyError as error:
+            raise HubError("not_found", 404) from error
+
     def download_address(self, repo_id: str, kind: str, path: str) -> str:
         self._check("download_address")
         if path not in self.repos.get(repo_id, {}).get("files", {}):

@@ -208,10 +208,10 @@ export function HuggingFaceModels({
   }
 
   return (
-    <fieldset className="learning-choices" disabled={busy}>
+    <fieldset className="learning-fieldset" disabled={busy}>
       <legend className="learning-label">Model to train</legend>
       {models.map((model) => (
-        <label key={model.id} className="learning-choice">
+        <label key={model.id} className="check-field learning-check">
           <input
             type="radio"
             name={name}
@@ -220,13 +220,17 @@ export function HuggingFaceModels({
             onChange={() => void choose(model.id)}
           />
           <span>
-            {model.name} · {model.licence}
-            {model.recommended ? ' · Recommended' : ''}
-            <small>
-              {model.runs_here_gb
-                ? `Runs on this computer after: needs about ${Math.ceil(model.runs_here_gb)} GB of the graphics card · ${sizeWords(model.download_bytes)} download`
-                : ''}
-            </small>
+            <span>
+              {model.name} · {model.licence}
+              {model.recommended ? ' · Recommended' : ''}
+            </span>
+            {model.runs_here_gb ? (
+              <small>
+                Runs on this computer after: needs about{' '}
+                {Math.ceil(model.runs_here_gb)} GB of the graphics card ·{' '}
+                {sizeWords(model.download_bytes)} download
+              </small>
+            ) : null}
           </span>
         </label>
       ))}
@@ -410,9 +414,12 @@ export function HuggingFaceQuoteSheet({
 export function HuggingFaceCard({
   io,
   hugging,
+  running = false,
 }: {
   io: LearningIO;
   hugging: LearningHuggingFace;
+  /** A run is planned or under way: the account line is short, the run's own card says the rest. */
+  running?: boolean;
 }) {
   const signedIn = hugging.sign_in.state === 'signed_in';
   const last = hugging.last_run;
@@ -441,7 +448,7 @@ export function HuggingFaceCard({
             )}
           </div>
         )}
-        <HuggingFaceSignIn io={io} hugging={hugging} />
+        <HuggingFaceSignIn io={io} hugging={hugging} compact={running} />
         {signedIn && <HuggingFaceModels io={io} hugging={hugging} />}
         {signedIn && (
           <dl className="learning-facts" aria-label="Hugging Face spending">
@@ -463,6 +470,13 @@ export function HuggingFaceCard({
                     ? `${durationWords(last.minutes * 60).replace('about ', '')} · `
                     : ''}
                   {moneyWords(last.cost_usd)}
+                  {last.outcome === 'canceled'
+                    ? ' · cancelled'
+                    : last.outcome === 'error'
+                      ? ' · stopped with an error'
+                      : last.outcome === 'not_started'
+                        ? ' · didn’t start'
+                        : ''}
                   {last.cleaned
                     ? ' · its uploaded examples and files are deleted from Hugging Face'
                     : last.cleanup_failed

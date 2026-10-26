@@ -54,8 +54,8 @@ DREAM_GRACE_SECONDS = 45 * 60.0
 class RunnerStatus:
     """What the runner would do now, and why not (a reason code the client words)."""
 
-    # off · paused · training · waiting (for the computer) · scheduled (quiet hours)
-    # · held (Continue or Discard) · failed · trained · nothing_to_do
+    # off Â· paused Â· training Â· waiting (for the computer) Â· scheduled (quiet hours)
+    # Â· held (Continue or Discard) Â· failed Â· trained Â· nothing_to_do
     state: str
     reason: str | None = None
 
@@ -271,7 +271,7 @@ class NightLook:
         store.set_meta_values({MORNING_KEY: night})
         if not parts:
             return None
-        text = "Overnight: " + " · ".join(parts)
+        text = "Overnight: " + " Â· ".join(parts)
         if notify is not None:
             notify(text)
         else:
@@ -478,11 +478,18 @@ class LearningRunner:
             return RunnerStatus("waiting", "hf_first_run")  # the first run always asks (its quote's Start)
         if not settings.train_in_quiet_hours:
             return RunnerStatus("nothing_to_do", "train_off")
+        from row_bot.learning.remote.training import RemoteError
+
+        try:
+            examples, size = remote._upload_size(job)  # noqa: SLF001 - the rows leased for this run
+            if not remote.quote(examples=examples, upload_bytes=size, steps=job.steps_total).fits_cap:
+                return RunnerStatus("waiting", "hf_over_cap")  # it waits for the cap, said plainly (O132)
+        except RemoteError as error:
+            return RunnerStatus("waiting", f"hf_{error.code}")
         if not self.hours.inside():
             return RunnerStatus("scheduled", "quiet_hours")
         if not self.hours.dream_done():
             return RunnerStatus("scheduled", "after_dream")
-        from row_bot.learning.remote.training import RemoteError
 
         if not act:
             return RunnerStatus("scheduled", "now")
@@ -575,7 +582,7 @@ class LearningRunner:
         with self._lock:
             if self.look is not None:
                 try:
-                    self.look.tick()  # Dream → the night's look and its tests → training
+                    self.look.tick()  # Dream â†’ the night's look and its tests â†’ training
                     self.look.morning()
                 except Exception:
                     logger.exception("Learning's look for things to improve failed")
@@ -601,7 +608,7 @@ class LearningRunner:
             return self._last
 
 
-# ── The app's runner ────────────────────────────────────────────────────────
+# â”€â”€ The app's runner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 _lock = threading.RLock()
 _runner: LearningRunner | None = None
@@ -756,6 +763,27 @@ def learning_turned_off() -> None:
         if runner.comparisons is not None:
             runner.comparisons.stop()
     _stop.set()
+
+
+def place_changed(where: str) -> None:
+    """The person changed where to train (C1): a run planned for the other place that never trained a step there
+    is set aside (its rows are planned again for the new place); one under way carries on where it is."""
+
+    runner = loaded()
+    if runner is None or not gate.store_exists():
+        return
+    jobs = runner.supervisor.jobs
+    other = "local" if where == "hugging_face" else "hugging_face"
+    for job in jobs.all():
+        if job.backend != other or runner.supervisor.live_job_id() == job.id:
+            continue
+        if job.state in ("planned", "waiting") or (job.state == "paused" and other == "local"):
+            try:
+                jobs.move(job.id, "stopped", reason="place_changed")
+                jobs_module.remove_run(job.id, jobs.root)
+            except jobs_module.JobStateError:
+                continue
+    gate.changed()
 
 
 def learning_paused() -> None:

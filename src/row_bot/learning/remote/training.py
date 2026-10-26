@@ -34,6 +34,7 @@ Nothing here runs unless the person turned on Learning, chose Hugging Face and s
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -70,6 +71,8 @@ TIMEOUT_FACTOR = 1.5
 TIMEOUT_MARGIN_SECONDS = 1200
 # Model download speed inside a job (bytes a second), for the quote: measured on Hugging Face (C1).
 MODEL_BYTES_PER_SECOND = 150_000_000
+# Files up to this size are read whole (Hugging Face serves small files itself, without a storage address).
+SMALL_FILE_BYTES = 20_000_000
 
 
 class RemoteError(RuntimeError):
@@ -340,7 +343,9 @@ class RemoteTrainer:
             return self._card_mib()
         from row_bot.learning.training import hardware
 
-        found = hardware.peek()
+        # The card decides what can run here after (O131): asked once a process (``nvidia-smi``, at most a few
+        # seconds), then kept.
+        found = hardware.check()
         gpu = getattr(found, "gpu", None)
         return int(gpu.memory_mib) if gpu is not None else None
 
@@ -852,8 +857,7 @@ class RemoteTrainer:
                     continue
                 parts = name.split("/")
                 folder = run / "checkpoints" / (parts[1] if parts[1] != "final" else "")
-                url = hub.download_address(record.output_repo, "model", name)
-                self.fetcher().fetch(fetch.Pinned(url, parts[-1], str(item["sha256"]), int(item["size"])), folder)
+                self._fetch(hub, record, item, folder, parts[-1])
         except (HubError, fetch.FetchError, ValueError, KeyError, OSError) as error:
             code = getattr(error, "code", "download_failed")
             logger.warning("Learning couldn't download a Hugging Face run's adapters (%s)", code)
@@ -875,6 +879,27 @@ class RemoteTrainer:
         if record.base_gguf:
             self._download_base(record)
 
+    def _fetch(self, hub: Any, record: RunRecord, item: Mapping[str, Any], folder: Path, name: str,
+               check: Callable[[], None] = lambda: None) -> Path:
+        """One file of the run's results into ``folder``, checked against the manifest: a small one read whole,
+        a large one through Row-Bot's resumable downloader from Hugging Face's signed storage address."""
+
+        from row_bot.learning.training import fetch
+
+        size, digest = int(item["size"]), str(item["sha256"])
+        if size <= SMALL_FILE_BYTES:
+            data = hub.read_bytes(record.output_repo, "model", str(item["name"]))
+            if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+                raise fetch.FetchError("mismatch")
+            target = Path(folder) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(f".{name}.part")
+            temporary.write_bytes(data)
+            atomic.replace(temporary, target)
+            return target
+        url = hub.download_address(record.output_repo, "model", str(item["name"]))
+        return self.fetcher().fetch(fetch.Pinned(url, name, digest, size), Path(folder), check=check)
+
     def _download_base(self, record: RunRecord) -> None:
         """The untouched starting model's GGUF the job built (v1 is compared with it), into its usual folder."""
 
@@ -886,8 +911,7 @@ class RemoteTrainer:
         target = base_model.folder(record.model_id, self._root)
         name = f"{record.model_id}-{record.quantization}.gguf"
         try:
-            url = self.hub().download_address(record.output_repo, "model", "gguf/base.gguf")
-            self.fetcher().fetch(fetch.Pinned(url, name, str(item["sha256"]), int(item["size"])), target)
+            self._fetch(self.hub(), record, item, target, name)
         except (HubError, fetch.FetchError, OSError):
             logger.warning("Learning couldn't download the starting model's file a Hugging Face run built")
             return
@@ -935,8 +959,6 @@ def download_gguf(job_id: str, number: int, folder: Path, *, trainer: RemoteTrai
     """The release maker's export for a Hugging Face version: the GGUF the job built for pass ``number`` (0: a
     run of one pass), downloaded and checked against the run's manifest. Returns (file, size, sha256)."""
 
-    from row_bot.learning.training import fetch
-
     trainer = trainer or get()
     record = read_record(job_id, trainer._root)  # noqa: SLF001
     if record is None:
@@ -946,9 +968,7 @@ def download_gguf(job_id: str, number: int, folder: Path, *, trainer: RemoteTrai
     if item is None:
         raise RemoteError("nothing_to_train")
     target = f"personal-model-{record.quantization}.gguf"
-    url = trainer.hub().download_address(record.output_repo, "model", name)
-    found = trainer.fetcher().fetch(fetch.Pinned(url, target, str(item["sha256"]), int(item["size"])),
-                                    Path(folder), check=check)
+    found = trainer._fetch(trainer.hub(), record, item, Path(folder), target, check=check)  # noqa: SLF001
     return found, int(item["size"]), str(item["sha256"])
 
 
