@@ -78,19 +78,21 @@ def used_this_month(
     now: float | None = None,
     path: Path | None = None,
     local: Callable[[str], bool] = is_local_provider,
+    purposes: tuple[str, ...] = LEARNING_PURPOSES,
 ) -> int:
-    """Tokens Learning's own calls used this month, local models left out."""
+    """Tokens Learning's own calls used this month, local models left out (``purposes``: only those, e.g. the
+    strategy trials' ``learning_meta``)."""
 
     ledger = path if path is not None else _ledger_path()
-    if not ledger.is_file():
+    if not ledger.is_file() or not purposes:
         return 0
-    marks = ", ".join("?" for _ in LEARNING_PURPOSES)
+    marks = ", ".join("?" for _ in purposes)
     try:
         with closing(sqlite3.connect(f"{ledger.resolve().as_uri()}?mode=ro", uri=True, timeout=5)) as connection:
             rows = connection.execute(
                 "SELECT provider, COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)"
                 f" FROM model_usage WHERE created_at >= ? AND purpose IN ({marks}) GROUP BY provider",
-                (month_start(now), *LEARNING_PURPOSES),
+                (month_start(now), *purposes),
             ).fetchall()
     except sqlite3.Error:
         logger.debug("Learning could not read the usage ledger", exc_info=True)

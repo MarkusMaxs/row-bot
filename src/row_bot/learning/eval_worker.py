@@ -1206,7 +1206,7 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
     local = sum(row["input"] + row["output"] for row in rows if is_local_provider(row["provider"]))
     if gate.estimated and tokens < gate.spent and is_local_provider(_provider_of(str(arm["model_ref"]))):
         tokens = local = gate.spent  # a local runtime that reports no usage: what was sent (estimated)
-    status, detail = "failed", ""
+    status, detail, guarded = "failed", "", False
     if gate.refused == "limit":
         status, detail = "not_run", "limit"
     elif gate.refused == "task":
@@ -1228,7 +1228,7 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
             verdict = verify(task, Outcome(outcome["final"] or outcome["answer"], workspace_files(workspace),
                                            _CURRENT.apps.state()),
                              backend=str(spec.get("code_backend") or "container"))
-            status, detail = ("passed" if verdict.passed else "failed"), verdict.detail
+            status, detail, guarded = ("passed" if verdict.passed else "failed"), verdict.detail, verdict.guarded
         except Exception as error:  # noqa: BLE001 - the check couldn't run
             status, detail = "error", f"the check could not run ({type(error).__name__})"
     else:
@@ -1237,7 +1237,8 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
     case = {"task_id": task.id, "suite": "pack", "kind_of_work": task.kind_of_work, "status": status,
             "check": task.verifier.kind, "tokens": tokens, "local_tokens": local, "steps": int(outcome["calls"]),
             "seconds": round(time.monotonic() - started, 3), "detail": detail[:300],
-            "cause": failure_cause(status, detail, record, task_tools=task.tools, check=task.verifier.kind)}
+            "cause": failure_cause(status, detail, record, task_tools=task.tools, check=task.verifier.kind),
+            "guarded": bool(guarded)}
     frame = {"type": "result", "id": message["id"], "case": case, "usage": rows}
     if record.keep:
         frame["trace"] = record.events
@@ -1381,7 +1382,8 @@ class RuntimeRunner:
                           status if status in ("passed", "failed", "budget", "error") else "error",  # type: ignore[arg-type]
                           str(case.get("check") or task.verifier.kind), tokens, local_tokens,
                           int(case.get("steps") or 0), float(case.get("seconds") or 0.0),
-                          str(case.get("detail") or "")[:300], cause if cause in CAUSES else "")
+                          str(case.get("detail") or "")[:300], cause if cause in CAUSES else "",
+                          bool(case.get("guarded")) and status == "failed")
 
 
 def ledger_recorder(purpose: str = "learning_test") -> Callable[[Sequence[Mapping[str, Any]]], None]:

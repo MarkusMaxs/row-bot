@@ -552,3 +552,57 @@ def test_a_tested_change_is_reviewed_used_and_undone_through_the_api(api, no_cha
     assert undone["snapshot"]["changes"][0]["not_used"] == "undone"
     refused = _command(client, headers, "use_change", change_id=change)
     assert refused.status_code == 409 and refused.json()["code"] == "learning_change_changed"
+
+
+def test_how_row_bot_learns_shows_the_method_its_trials_and_history_and_undoes_a_switch(api, no_channels):
+    # L4a (designs/learning-ux.md §6): the method in use in plain words, each trial with its denominators, the
+    # history, and Undo of the last switch a trial made (then nothing more to undo).
+    from dataclasses import replace
+
+    from row_bot.learning.improver import archive
+    from row_bot.learning.improver import strategy as strategy_module
+
+    client, headers, data, _ = api
+    _turn_on(client, headers)
+    store = LearningStore(data)
+    assert _snapshot(client, headers)["method"]["version"] == 1  # the first method, before anything is kept
+    first = archive.ensure_first(store)
+    tried = archive.add(store, replace(first.strategy, budget=replace(first.strategy.budget, tests=4)), parents=(first.id,))
+    archive.set_status(store, tried, "not_used")
+    archive.record_trial(store, {"id": "trial_1", "at": START, "finished_at": START + 60, "problems": 30,
+                                 "arm_tokens": 2_000_000, "incumbent": first.id, "control": first.id,
+                                 "winner": first.id, "switched": False, "arms": [
+                                     {"role": "incumbent", "release": first.id, "version": 1, "accepted": 1,
+                                      "better": 0, "tokens": 900_000, "yield": 0.0},
+                                     {"role": "challenger", "release": tried.id, "version": 2, "accepted": 2,
+                                      "better": 0, "tokens": 1_200_000, "yield": 0.0}]})
+    won = archive.add(store, replace(first.strategy, methods=strategy_module.MethodChoice(("way_of_working", "lesson"))),
+                      parents=(first.id,))
+    archive.switch(store, won, by="trial", trial="trial_2", at=START + 7200)
+    archive.record_trial(store, {"id": "trial_2", "at": START + 3600, "finished_at": START + 7200, "problems": 31,
+                                 "arm_tokens": 1_500_000, "incumbent": first.id, "control": first.id,
+                                 "winner": won.id, "switched": True, "arms": [
+                                     {"role": "incumbent", "release": first.id, "version": 1, "accepted": 1,
+                                      "better": 0, "tokens": 1_000_000, "yield": 0.0},
+                                     {"role": "challenger", "release": won.id, "version": 3, "accepted": 2,
+                                      "better": 1, "tokens": 500_000, "yield": 2.0}]})
+
+    method = _snapshot(client, headers)["method"]
+
+    assert method["version"] == 3 and method["can_undo"]
+    assert method["description"].startswith("Looks first at mistakes you corrected, tries a way of working before a lesson")
+    latest = method["trials"][0]
+    assert (latest["outcome"], latest["problems"], latest["to_version"]) == ("switched", 31, 3)
+    assert [(arm["version"], arm["accepted"], arm["better"], arm["per_million"]) for arm in latest["arms"]] == \
+        [(1, 1, 0, 0.0), (3, 2, 1, 2.0)]
+    events = [(step["event"], step["version"], step["can_undo"]) for step in method["history"]]
+    assert events == [("switched", 3, True), ("tried", 2, False), ("first", 1, False)]
+    assert method["history"][0]["words"] == "tries a way of working first"
+    assert method["history"][1]["words"] == "tests a different number of ideas a night" and method["history"][1]["against"] == 1
+    assert method["next_trial"] == {"state": "waiting", "fresh": 0, "needed": 30}
+
+    undone = _ok(_command(client, headers, "undo_method"))
+    assert undone["summary"] == "Back to learning method v1."
+    assert undone["snapshot"]["method"]["version"] == 1 and not undone["snapshot"]["method"]["can_undo"]
+    refused = _command(client, headers, "undo_method")
+    assert refused.status_code == 409 and refused.json()["code"] == "learning_method_changed"

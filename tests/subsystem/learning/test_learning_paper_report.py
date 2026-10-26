@@ -597,3 +597,154 @@ def test_the_main_reference_needs_the_eval_profile(profile, folders, capsys):
                         "--profile", str(profile), "--scratch", str(scratch), "--out", str(out), "--yes"],
                        hooks=report.Hooks(ask=_never_asked, installed=lambda: False))
     assert code == 2 and "must be the eval profile" in capsys.readouterr().out and not out.exists()
+
+
+# ── H2 and H3 (L4a) ─────────────────────────────────────────────────────────
+
+
+def _corrected(count: int) -> list[dict[str, Any]]:
+    found = []
+    for number in range(count):
+        question = f"Corrected {number}: {CANARY}"
+        case = ReplayCase(f"cor_{number}", f"chat-c{number}", f"chat-c{number}", 10.0 + number, "Document lookups",
+                          "exact", False, ({"type": "human", "data": {"content": question}},), None, "model:x:y",
+                          Action(text="right"), "corrected", "exact_action", question)
+        found.append({"id": case.decision_id, "kind_of_work": "Document lookups", "thread_id": case.thread_id,
+                      "conversation_id": case.thread_id, "created_at": case.created_at, **case.to_content()})
+    return found
+
+
+class MainPacks:
+    signature = "fake-packs-main"
+
+    def run(self, task, arm, *, budget, meter, arm_left):
+        return CaseResult(task.id, "pack", task.kind_of_work, "passed", "answer", tokens=400, steps=2)
+
+
+def _h2_result(monkeypatch, count: int) -> dict[str, Any]:
+    uncorrected = _problems(30, personal_passes=0)
+
+    class Vault:
+        def hidden_tasks(self, *, asked_by, packs=None):
+            return [task for task in visible_tasks() if task.pack == "document_lookups"][:4]
+
+        def replay_tasks(self, *, asked_by):
+            return uncorrected + _corrected(count)
+
+    monkeypatch.setattr(evaluation, "_vault", lambda _store=None: Vault())
+
+    def respond(messages, _tools, model):
+        # The main model repeats its own uncorrected work; only with the lessons in use does it get the corrected
+        # problems right.
+        guided = any("Guidance from earlier work" in str(item.content) for item in messages)
+        if model != "main":
+            return AIMessage(content="no")
+        corrected = str(messages[-1].content).startswith("Corrected")
+        return AIMessage(content="right" if corrected and guided else "yes")
+
+    arms = [Arm("start", model_ref="start"), Arm("personal", model_ref="personal"), Arm("main", model_ref="main"),
+            Arm("learning", model_ref="main", guidance=("Answer from the current rota.",))]
+    return evaluation.freeze_check(arms, as_of=1e9, asked_by="test",
+                                   contrasts=[("start", "personal"), ("main", "learning")],
+                                   client=ScriptedClient(respond, local=True), runner=MainPacks(),
+                                   meter=TokenMeter(10**9), store=LearningStore())
+
+
+def _run_line(built: dict[str, Any]) -> dict[str, Any]:
+    built["run"] = {"on": "2026-11-03", "build": None, "build_clean": True, "script_sha256": "0" * 64,
+                    "code_sha256": "1" * 64, "code_files": 1, "copy": {"files": 1, "bytes": 1, "links_skipped": 0},
+                    "minutes": 1.0}
+    report.validate(built, report.FREEZE)
+    return built
+
+
+def test_h2_compares_the_main_model_with_and_without_what_learning_put_in_use(learning_on, monkeypatch):
+    built = _run_line(report.assemble_freeze(
+        _h2_result(monkeypatch, 30), as_of=date(2026, 11, 2), versions=[], newest=None,
+        prepared=report.Prepared({"start": "s", "personal": "p"}, 32768, "ollama"), refreshed={}, container=False,
+        main_reference=False, lessons=2, behaviours=1, hours=0.1))
+
+    h2 = built["hypotheses"]["H2"]
+    assert (h2["state"], h2["reason"]) == ("tested", None)
+    assert h2["superiority"]["split"] == "real_corrected" and h2["superiority"]["problems"] == 30
+    assert h2["superiority"]["difference"] == 1.0 and h2["superiority"]["met"] is True
+    assert h2["non_inferiority"]["split"] == "real_uncorrected" and h2["non_inferiority_packs"]["split"] == "packs"
+    assert h2["non_inferiority"]["met"] is True and h2["non_inferiority_packs"]["met"] is True and h2["supported"]
+    # §7: H2 also under version 2 of the checker; Holm across {H1, H2} in v1.
+    assert h2["sensitivity"]["checker_versions"] == 2 and h2["sensitivity"]["metric_v2"]["difference"] == 1.0
+    assert built["holm"]["family"] == ["H1", "H2"] and built["holm"]["adjusted"]["H2"] is not None
+    assert built["hypotheses"]["H1"]["sensitivity"]["metric_v2"] is not None
+
+    few = report.assemble_freeze(_h2_result(monkeypatch, 29), as_of=date(2026, 11, 2), versions=[], newest=None,
+                                 prepared=report.Prepared({"start": "s", "personal": "p"}, 32768, "ollama"),
+                                 refreshed={}, container=False, main_reference=False, lessons=2, behaviours=0,
+                                 hours=0.1)["hypotheses"]["H2"]
+    assert (few["state"], few["reason"]) == ("not_tested", "too_few_problems")
+    unrun = report.assemble_freeze({}, as_of=date(2026, 11, 2), versions=[], newest=None,
+                                   prepared=report.Prepared({}, None, "ollama", reason="no_version"), refreshed={},
+                                   container=False, main_reference=False, lessons=1, behaviours=0,
+                                   hours=0.1)["hypotheses"]["H2"]
+    assert (unrun["state"], unrun["reason"]) == ("not_testable", "not_run")
+
+
+def _h3_world(monkeypatch, generations: int, *, final: bool = True, problems: int = 30) -> LearningStore:
+    from row_bot.learning.improver import archive
+
+    store = LearningStore()
+    first = archive.ensure_first(store)
+    judged: dict[str, dict[str, list]] = {}
+
+    class Vault:
+        def judgments(self, trial):
+            return judged.get(trial, {})
+
+    monkeypatch.setattr(evaluation, "_vault", lambda _store=None: Vault())
+    rows = [(f"p{index}", f"chat{index % 10}", "document_lookups", 0.0, 1.0) for index in range(problems)]
+    side = {"changes": [["better", "document_lookups"]], "tokens": 500_000, "release": first.id}
+    control = {"changes": [], "tokens": 1_000_000, "release": first.id}
+    arm = {"role": "incumbent", "release": first.id, "version": 1, "accepted": 1, "better": 1, "tokens": 500_000,
+           "yield": 2.0}
+    for number in range(generations + 1 - int(final)):
+        summary = {"id": f"t{number}", "at": 1.0, "incumbent": first.id, "control": first.id, "winner": first.id,
+                   "arms": [arm], "arm_tokens": 2_000_000, "problems": problems}
+        if number:
+            summary["judged"] = {"inherited": side, "control": control, "same": False}
+            judged[f"t{number}"] = {"better": rows}
+        archive.record_trial(store, summary)
+    if final:
+        archive.record_trial(store, {"id": "final", "final": True, "at": 1.0, "problems": problems,
+                                     "arm_tokens": 2_000_000, "incumbent": first.id, "control": first.id,
+                                     "judged": {"inherited": side, "control": control, "same": False}, "arms": [arm]})
+        judged["final"] = {"better": rows}
+    return store
+
+
+def test_h3_needs_three_generations_each_judged_on_thirty_fresh_problems_and_joins_holm_in_v2(learning_on,
+                                                                                            monkeypatch):
+    h3 = report.h3_report(_h3_world(monkeypatch, 3), final_state="done", ran_final=True)
+
+    assert (h3["state"], h3["reason"], h3["trials"]) == ("tested", None, 3)
+    assert [row["difference"] for row in h3["generations"]] == [2.0, 2.0, 2.0]
+    assert h3["estimate"] == 2.0 and h3["low"] == 2.0 and h3["p_value"] == 0.0
+    assert h3["final_set"]["problems"] == 30 and h3["final_set"]["arms"][0]["yield"] == 2.0
+
+    nothing = report.Prepared({}, None, "ollama", reason="no_version")
+    v2 = _run_line(report.assemble_freeze({}, as_of=date(2026, 11, 12), versions=[], newest=None, prepared=nothing,
+                                          refreshed={}, container=False, main_reference=False, lessons=0,
+                                          behaviours=0, hours=0.1, paper="v2", h3=h3))
+    assert v2["holm"]["family"] == ["H1", "H2", "H3"] and v2["holm"]["adjusted"]["H3"] == 0.0
+    assert v2["hypotheses"]["H3"]["met"] is True and v2["design"]["paper"] == "v2"
+    v1 = _run_line(report.assemble_freeze({}, as_of=date(2026, 11, 2), versions=[], newest=None, prepared=nothing,
+                                          refreshed={}, container=False, main_reference=False, lessons=0,
+                                          behaviours=0, hours=0.1, h3=h3))
+    assert v1["holm"]["family"] == ["H1", "H2"] and v1["hypotheses"]["H3"]["p_holm"] is None
+
+
+@pytest.mark.parametrize(("generations", "final", "problems", "reason"), [
+    (2, True, 30, "too_few_generations"), (3, True, 29, "too_few_problems"), (3, False, 30, "final_set_not_run"),
+])
+def test_h3_below_the_minimum_is_not_tested(learning_on, monkeypatch, generations, final, problems, reason):
+    h3 = report.h3_report(_h3_world(monkeypatch, generations, final=final, problems=problems), final_state=None,
+                          ran_final=False)
+
+    assert (h3["state"], h3["reason"], h3["p_value"]) == ("not_tested", reason, None)

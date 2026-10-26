@@ -20,6 +20,11 @@ Stages:
   runner (training, a version made ready, the comparison), on the simulated clock. The first
   training is crashed at a checkpoint (this process exits at once; the release check starts it
   again and the person presses Continue) and paused by use (a request sent while it trains).
+- ``generations`` (L4a, O109): how Row-Bot learns, over three inherited generations in simulated time. The
+  person's days go on past the run; every night the product's own look, tests and **strategy trial** run (a
+  trial whenever 30 fresh hidden problems have built up: the method in use, a challenger and the frozen
+  control at equal budget, the winner inherited by itself). After the third trial, once 30 more fresh problems
+  have built up, the **final set** judges every generation and the frozen control. Counts only are kept.
 - ``checks``: the survival checks that need the whole run and not the card (a negative result, a source
   deletion, app/engine version skew).
 - ``benchmark``: the card's work that needs the whole run, last (O116: the release check runs every person's
@@ -58,7 +63,10 @@ logger = logging.getLogger("row_bot.seeded")
 
 EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
-STAGES = ("profile", "past", "days", "checks", "benchmark", "tidy")
+#: The ChatGPT lane answered with a usage or rate limit: the run stops at once (the person's own use comes first).
+EXIT_PROVIDER_LIMIT = 76
+_PROVIDER_LIMIT = ("rate limit", "rate_limit", "usage limit", "usage_limit", "429", "too many requests")
+STAGES = ("profile", "past", "days", "generations", "checks", "benchmark", "tidy")
 #: Extra simulated days generated beyond the run, for requests asked outside the stream (a night
 #: request while training, the asked-for trial).
 EXTRA_DAYS = 6
@@ -201,7 +209,8 @@ class PersonRun:
         self.person_id = args.person
         self.person = generator.load_person(args.person)
         self.state = State(self.run_dir / "state.json")
-        self.history = generator.generate(args.person, seed=args.seed, days=args.days + EXTRA_DAYS)
+        self.history = generator.generate(args.person, seed=args.seed,
+                                          days=args.days + EXTRA_DAYS + int(getattr(args, "generation_days", 0) or 0))
         self.clock = clock_module.SimClock(generator.day_date(1))
         self.clock.restore(self.state.data.get("clock"))
         self.sim = SimulatedPerson(self.person, args.seed)
@@ -667,13 +676,15 @@ class PersonRun:
         return {"refresh": dict(added), "summary": dict(summary)}
 
     def night_look(self) -> Any:
-        """The product's night's look (L3a), on the simulated clock: issues, a diagnosis each, drafts."""
+        """The product's night's look (L3a), its tests (L3b) and its strategy trial (L4a): quiet hours and the
+        person's last message on the simulated clock; Learning's own records on the real one, like the work
+        capture stamps (the look's 30 days of evidence are then the person's real recent work)."""
 
         from row_bot.learning.lease import ResourceLease
         from row_bot.learning.runner import NightLook
 
         return NightLook(lease=ResourceLease(since_activity=self.clock.idle_seconds), root=self.data,
-                         hours=clock_module.sim_quiet_hours(self.clock, self.data), clock=self.clock.time)
+                         hours=clock_module.sim_quiet_hours(self.clock, self.data))
 
     def _look(self) -> Any:
         """Tonight's look for things to improve (L3a) and its tests (L3b): counts only (drafts by kind of
@@ -715,6 +726,123 @@ class PersonRun:
         return {"ran": True, **{key: tested.get(key) for key in ("state", "tested", "ready", "not_better", "unclear",
                                                                  "used", "tokens")},
                 "use_undo_survived": survived, "use_undo_failed": failed}
+
+    # ── Stage: generations (L4a) ────────────────────────────────────────
+
+    def stage_generations(self) -> None:
+        """Three inherited generations of how Row-Bot learns, in simulated time (O109): the person's days go on,
+        and the product's own nights run its strategy trials (``NightLook``); then the final set. A resumed run
+        goes on from its last night."""
+
+        if not int(self.args.generations or 0):
+            self.state.data["generations"] = {"state": "not_run", "why": "not asked for (--generations 0)"}
+            self.save()
+            return
+        from tests.fixtures.learning import save_learning_settings
+
+        # The person's monthly limit for these nights: trials together may use 20% of it.
+        save_learning_settings(self.data, monthly_token_limit=int(self.args.monthly_limit))
+        found = self.state.data.setdefault("generations", {"state": "running", "nights": {}})
+        by_day = self.history.by_day()
+        first = int(self.args.days) + 1
+        last = int(self.args.days) + int(self.args.generation_days)
+        for day in range(first, last + 1):
+            if found.get("final", {}).get("state") == "done":
+                break
+            for request in by_day.get(day, []):
+                if self.state.request_done(request.id):
+                    continue
+                self.clock.request_time(day, request.order)
+                record = self.ask(request, label="generations")
+                self.state.data["requests"].append(record)
+                self.save()
+                errors = " ".join(str(item.get("error") or "") for item in record["attempts"]).lower()
+                if any(marker in errors for marker in _PROVIDER_LIMIT):
+                    self.note("the ChatGPT lane answered with a usage or rate limit: stopping at once")
+                    raise SystemExit(EXIT_PROVIDER_LIMIT)
+            # The computer is on for quiet hours every ``night_every`` nights (fewer nights, the same work).
+            if (day - first + 1) % max(1, int(self.args.night_every)):
+                continue
+            self.check_cap()
+            if str(day) not in self.state.data["nights"] or not self.state.data["nights"][str(day)].get("done"):
+                self.night(day)
+            found["nights"][str(day)] = self._trial_night()
+            if self._strategy_trials() >= int(self.args.generations) and "final" not in found:
+                final = self._final_set(day)
+                if final.get("state") in ("done", "failed"):
+                    found["final"] = final
+            self._record_generations(found)
+            self.save()
+            self.note(f"generations: day {day}, {self._strategy_trials()} trials, method v{found.get('method_version')}"
+                      + (", final set done" if found.get("final", {}).get("state") == "done" else ""))
+        found["state"] = "done" if found.get("final", {}).get("state") == "done" else "incomplete"
+        self._record_generations(found)
+        self.save()
+
+    def _store(self) -> Any:
+        from row_bot.learning.store import LearningStore
+
+        return LearningStore(self.data)
+
+    def _strategy_trials(self) -> int:
+        from row_bot.learning.improver import archive
+
+        return sum(1 for item in archive.trials(self._store()) if not item.get("final"))
+
+    def _trial_night(self) -> dict[str, Any]:
+        """Tonight's trial in counts (``meta.last_night``) and the fresh problems now."""
+
+        from row_bot.learning import evaluation
+        from row_bot.learning.improver import meta
+
+        store = self._store()
+        night = meta.last_night(store) or {}
+        fresh = evaluation.fresh_problems(asked_by="the release check's generations", store=store)
+        return {"state": night.get("state"), "trial": night.get("trial"), "problems": night.get("problems"),
+                "switched": night.get("switched"), "tokens": night.get("tokens"), "fresh": fresh["fresh"]}
+
+    def _final_set(self, day: int) -> dict[str, Any]:
+        """The final set once 30 fresh problems have built up after the last trial: every generation and the
+        frozen control at the trials' budget, judged on them (no switch)."""
+
+        from row_bot.learning import evaluation
+        from row_bot.learning.calls import LedgerModelClient
+        from row_bot.learning.improver import archive, meta
+        from row_bot.learning.spending import TokenMeter
+
+        store = self._store()
+        fresh = evaluation.fresh_problems(asked_by="the release check's final set", store=store)["fresh"]
+        if fresh < evaluation.MIN_FRESH:
+            return {"state": "waiting", "fresh": fresh}
+        done = [item for item in archive.trials(store) if not item.get("final")]
+        budget = int(done[-1].get("arm_tokens") or meta.ARM_TOKENS_MAX)
+        look = self.night_look()
+        self.check_cap()
+        report = meta.run_final(store, label=f"release check, night {day}", client=LedgerModelClient(),
+                                tester_factory=lambda method: look._tester(method, meta.PURPOSE),  # noqa: SLF001
+                                arm_tokens=budget, meter=TokenMeter(10**12))
+        return {"state": "done" if report.state == "done" else "failed" if report.state == "stopped" else report.state,
+                "trial": report.trial, "problems": report.problems, "day": day, "tokens": report.tokens}
+
+    def _record_generations(self, found: dict[str, Any]) -> None:
+        """The trials, the chain and the H3 estimate (§7) in counts: what the report reads."""
+
+        from row_bot.learning import evaluation
+        from row_bot.learning.improver import archive
+
+        store = self._store()
+        trials = archive.trials(store)
+        current = archive.current(store, create=False)
+        found["method_version"] = current.version if current is not None else 1
+        found["trials"] = [{key: item.get(key) for key in ("id", "problems", "arm_tokens", "switched", "final",
+                                                           "judging_tokens")}
+                           | {"arms": [{key: arm.get(key) for key in ("role", "version", "drafted", "tested", "accepted",
+                                                                      "better", "tokens", "cloud_tokens", "yield")}
+                                       for arm in item.get("arms") or ()],
+                              "judged": bool(item.get("judged"))}
+                           for item in trials]
+        found["chain"] = [{key: step.get(key) for key in ("version", "by")} for step in archive.chain(store)]
+        found["h3"] = evaluation.h3_estimate(archive.generations(store), store=store)
 
     # ── Learning's runner at night ──────────────────────────────────────
 
@@ -1392,6 +1520,7 @@ class PersonRun:
             "stages": data["stages"], "past": data.get("past"), "requests": data["requests"],
             "nights": data["nights"], "versions": data["versions"], "uses": data["uses"],
             "survival": data["survival"], "gpu": data["gpu"], "benchmark": data.get("benchmark"),
+            "generations": data.get("generations"),
             "tokens": {"ledger": self.ledger_tokens(), "sim_person": self.sim.tokens.to_dict(),
                        "cloud_total": self.cloud_tokens()},
             "refused_tool_calls": data.get("refused_tool_calls", 0), "builds": data.get("builds", []),
@@ -1496,6 +1625,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--crash", action="store_true", help="crash the first training at a checkpoint")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false", help="nights skip Learning's runner (a pilot)")
     parser.add_argument("--pilot-compare", action="store_true", help="a pilot's comparison: one visible task a pack")
+    parser.add_argument("--generations", type=int, default=0,
+                        help="L4a: inherited generations of how Row-Bot learns (trials), then the final set")
+    parser.add_argument("--generation-days", type=int, default=0,
+                        help="L4a: at most this many simulated days after the run for the generations")
+    parser.add_argument("--night-every", type=int, default=1,
+                        help="L4a: during the generations, quiet hours run every this many nights")
+    parser.add_argument("--monthly-limit", type=int, default=MONTHLY_LIMIT,
+                        help="L4a: the person's monthly Learning limit during the generations (trials get 20%%)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     check_scratch(Path(args.data), Path(args.eval_profile))

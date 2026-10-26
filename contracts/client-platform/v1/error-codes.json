@@ -323,6 +323,7 @@
     "learning_download_changed": 409,
     "learning_download_unavailable": 409,
     "learning_export_unavailable": 409,
+    "learning_method_changed": 409,
     "learning_not_enough_disk": 409,
     "learning_nothing_to_train": 409,
     "learning_off": 409,

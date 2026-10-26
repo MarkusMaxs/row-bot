@@ -168,7 +168,8 @@
         "dont_suggest_change",
         "edit_change",
         "test_lesson",
-        "delete_lesson"
+        "delete_lesson",
+        "undo_method"
       ],
       "title": "Action",
       "type": "string"

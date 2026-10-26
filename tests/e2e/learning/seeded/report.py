@@ -34,8 +34,6 @@ NOT_BUILT = (
     {"stage": "Testing the drafted lessons, skills and ways of working, using and undoing them (the drafts wait)",
      "work_package": "L3b"},
     {"stage": "The harder pack split where the main model fails (O31)", "work_package": "L3b"},
-    {"stage": "Improver strategies: three inherited generations at equal budget, frozen control (D15, H3)",
-     "work_package": "L4a"},
     {"stage": "Practice tasks from failure patterns, the quick question (D17)", "work_package": "L4b"},
     {"stage": "The personal model taking over learning jobs (D21)", "work_package": "L4c"},
     {"stage": "Learn from corrections (self-distillation) against SFT", "work_package": "L2e"},
@@ -244,10 +242,27 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
             "total_cloud": int(tokens.get("cloud_total") or 0),
         },
         "looks": looks(result.get("nights") or {}),
+        "generations": generations(result.get("generations")),
         "gpu_hours": round(float(gpu.get("seconds") or 0) / 3600, 3),
         "gpu_hours_by_phase": {name: round(value / 3600, 3) for name, value in sorted(phases.items())},
         "refused_tool_calls": result.get("refused_tool_calls", 0),
     }
+
+
+def generations(found: Mapping[str, Any] | None) -> dict[str, Any]:
+    """How Row-Bot learns over the run (L4a): each trial (its fresh problems and each method's accepted and better
+    changes, tokens and yield per 1M tokens), whether it switched, the final set, and the H3 estimate (§7)."""
+
+    if not found or found.get("state") == "not_run":
+        return {"state": "not_run", "why": (found or {}).get("why")}
+    h3 = dict(found.get("h3") or {})
+    return {"state": found.get("state"), "method_version": found.get("method_version"),
+            "trials": list(found.get("trials") or []), "chain": list(found.get("chain") or []),
+            "final": found.get("final"),
+            "h3": {key: h3.get(key) for key in ("estimate", "low", "high", "p_value", "enough", "resamples", "seed")}
+            | {"generations": [{key: row.get(key) for key in ("problems", "clusters", "inherited", "control",
+                                                              "difference")}
+                               for row in h3.get("generations") or ()]}}
 
 
 def looks(nights: Mapping[str, Any]) -> dict[str, Any]:
@@ -515,6 +530,7 @@ def markdown(report: Mapping[str, Any]) -> str:
                          f"{tests['ready']} ready, {tests['not_better']} not better, {tests['unclear']} with too "
                          f"little of their kind to tell; use → Undo {tests['use_undo_survived']} survived, "
                          f"{tests['use_undo_failed']} failed; {tests['tokens']:,} testing tokens.")
+        lines += _generation_lines(person.get("generations") or {})
         lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}{_survival_note(check)}"
                                                for name, check in person["survival"].items()))
         lines.append("- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
@@ -544,5 +560,28 @@ def markdown(report: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["FORMAT", "NOT_BUILT", "SURVIVAL", "build", "live_work", "markdown", "model_rates", "paired",
+def _generation_lines(found: Mapping[str, Any]) -> list[str]:
+    """How Row-Bot learns (L4a) in the person's section: a line per trial, the final set and H3's estimate."""
+
+    if not found or found.get("state") == "not_run":
+        return []
+    lines = [f"- How Row-Bot learns (L4a): {found.get('state')}, method v{found.get('method_version')} in use."]
+    for number, trial in enumerate(found.get("trials") or (), 1):
+        arms = "; ".join(f"v{arm.get('version')} {arm.get('role')}: {arm.get('better')} of {arm.get('accepted')} "
+                         f"accepted better, {int(arm.get('tokens') or 0):,} tokens, {arm.get('yield')} per 1M"
+                         for arm in trial.get("arms") or ())
+        name = "final set" if trial.get("final") else f"trial {number}"
+        lines.append(f"  - {name}: {trial.get('problems')} fresh problems, {int(trial.get('arm_tokens') or 0):,} "
+                     f"tokens a method; {arms}; {'switched' if trial.get('switched') else 'no switch'}.")
+    h3 = found.get("h3") or {}
+    rows = h3.get("generations") or []
+    if rows:
+        lines.append(f"  - H3 (§7): {len(rows)} generations judged, differences "
+                     + ", ".join(f"{row.get('difference')} on {row.get('problems')}" for row in rows)
+                     + f"; estimate {h3.get('estimate')} [{h3.get('low')}, {h3.get('high')}], p {h3.get('p_value')}"
+                     + ("" if h3.get("enough") else " (below §7's minimum: descriptive)") + ".")
+    return lines
+
+
+__all__ = ["FORMAT", "NOT_BUILT", "SURVIVAL", "build", "generations", "live_work", "markdown", "model_rates", "paired",
            "person_report", "rate", "wilson"]

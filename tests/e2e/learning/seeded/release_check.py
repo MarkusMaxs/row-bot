@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[4]
 EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
 MAX_RESTARTS = 3
-STAGES = ("profile", "past", "days", "checks", "benchmark", "tidy")
+STAGES = ("profile", "past", "days", "generations", "checks", "benchmark", "tidy")
 #: Run after every person's work (O116): the benchmarks hold the card longest, and tidy follows them.
 LAST = ("benchmark", "tidy")
 #: A person's run kept under another name: ``<person>@<label>`` (``--archive``).
@@ -184,6 +184,10 @@ class ReleaseCheck:
             command.append("--no-gpu")
         if self.args.pilot_compare:
             command.append("--pilot-compare")
+        if self.args.generations:
+            command += ["--generations", str(self.args.generations), "--generation-days",
+                        str(self.args.generation_days), "--monthly-limit", str(self.args.monthly_limit),
+                        "--night-every", str(self.args.night_every)]
         record: dict[str, Any] = {"exits": []}
         for attempt in range(MAX_RESTARTS + 1):
             started = time.monotonic()
@@ -316,6 +320,14 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="a pilot: nights run Dream and the vault but not Learning's runner (no training)")
     parser.add_argument("--pilot-compare", action="store_true",
                         help="a pilot: comparisons run one visible task a pack and no hidden problems")
+    parser.add_argument("--generations", type=int, default=0,
+                        help="L4a: inherited generations of how Row-Bot learns in simulated time (3 for the gate)")
+    parser.add_argument("--generation-days", type=int, default=120,
+                        help="L4a: at most this many simulated days after the run for the generations")
+    parser.add_argument("--night-every", type=int, default=1,
+                        help="L4a: during the generations, quiet hours run every this many nights")
+    parser.add_argument("--monthly-limit", type=int, default=100_000_000,
+                        help="L4a: each person's monthly Learning limit during the generations (trials get 20%%)")
     parser.add_argument("--plan", action="store_true", help="print the plan and run nothing")
     parser.add_argument("--report-only", action="store_true", help="write the report from the results so far")
     parser.add_argument("--archive", default="", help="keep a person's run as <person>@<label> and stop")

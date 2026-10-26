@@ -178,3 +178,35 @@ def test_the_nights_looks_and_their_tests_add_up(tmp_path):
     assert looks["tests"]["use_undo_survived"] == 1
     assert ("Changes tested (L3b): 2 tested on 1 nights, 1 ready, 1 not better, 0 with too little of their kind "
             "to tell; use → Undo 1 survived, 0 failed; 400,000 testing tokens.") in text
+
+
+def test_the_generations_show_each_trial_with_its_denominators_and_h3(tmp_path):
+    # L4a (O109): how Row-Bot learns over the run: each trial's fresh problems, each method's accepted and better
+    # changes with its tokens and yield, the switch, the final set and H3's estimate (below the minimum: said so).
+    arm = {"role": "incumbent", "version": 1, "drafted": 2, "tested": 2, "accepted": 1, "better": 0,
+           "tokens": 900_000, "cloud_tokens": 900_000, "yield": 0.0}
+    challenger = {**arm, "role": "challenger", "version": 2, "accepted": 2, "better": 1, "tokens": 500_000,
+                  "yield": 2.0}
+    found = {"state": "done", "method_version": 2, "chain": [{"version": 1, "by": "first"}, {"version": 2, "by": "trial"}],
+             "trials": [{"id": "t1", "problems": 30, "arm_tokens": 2_000_000, "switched": True, "final": False,
+                         "judging_tokens": 4_000_000, "arms": [arm, challenger], "judged": False},
+                        {"id": "f", "problems": 31, "arm_tokens": 2_000_000, "switched": False, "final": True,
+                         "judging_tokens": 3_000_000, "arms": [{**challenger, "role": "incumbent"}], "judged": True}],
+             "final": {"state": "done", "problems": 31},
+             "h3": {"estimate": 2.0, "low": 2.0, "high": 2.0, "p_value": 0.0, "enough": False, "resamples": 10_000,
+                    "seed": 20261022, "minimum": 30,
+                    "generations": [{"problems": 31, "clusters": 20, "inherited": {"yield": 2.0},
+                                     "control": {"yield": 0.0}, "difference": 2.0}]}}
+    result = {**_result("mara", first=1, final=1), "generations": found}
+
+    person = report.person_report(result)
+    text = "\n".join(report._generation_lines(person["generations"]))  # noqa: SLF001
+
+    assert person["generations"]["method_version"] == 2 and len(person["generations"]["trials"]) == 2
+    assert "trial 1: 30 fresh problems, 2,000,000 tokens a method" in text
+    assert "v2 challenger: 1 of 2 accepted better, 500,000 tokens, 2.0 per 1M" in text and "switched" in text
+    assert "final set: 31 fresh problems" in text
+    assert "H3 (§7): 1 generations judged, differences 2.0 on 31; estimate 2.0 [2.0, 2.0], p 0.0 " \
+           "(below §7's minimum: descriptive)." in text
+    assert all(item["work_package"] != "L4a" for item in report.NOT_BUILT)
+    assert report.person_report({**result, "generations": None})["generations"]["state"] == "not_run"

@@ -4291,6 +4291,74 @@ class LearningOvernight(WireModel):
     not_better: int = Field(default=0, ge=0)
     used: int = Field(default=0, ge=0)
     tests_state: Literal["stopped", "limit", "claude_plan", "failed"] | None = None
+    # L4a: the night's strategy trial: a new learning method switched in by itself (with Undo), or one tried and
+    # not better (the method in use kept); the version in use after it and what the new one changes, in words.
+    method: Literal["switched", "kept"] | None = None
+    method_version: int | None = Field(default=None, ge=1)
+    method_words: str = Field(default="", max_length=200)
+
+
+class LearningMethodArm(WireModel):
+    """One method's result in a trial: the changes it accepted and how many were better on the trial's new
+    problems, what its improvement loop spent, and the ideas kept per 1M tokens."""
+
+    role: Literal["incumbent", "challenger", "control", "generation"]
+    version: int = Field(ge=1)
+    accepted: int = Field(ge=0)
+    better: int = Field(ge=0)
+    tokens: int = Field(ge=0)
+    per_million: float = Field(ge=0)
+
+
+class LearningMethodTrial(WireModel):
+    """One strategy trial (L4a): every method on the same new problems at the same budget."""
+
+    at: str = Field(max_length=64)
+    problems: int = Field(ge=0)
+    arm_tokens: int = Field(ge=0)
+    arms: list[LearningMethodArm] = Field(max_length=8)
+    # switched: a new method won and is in use; kept: the method in use stayed; final: the paper's final set.
+    outcome: Literal["switched", "kept", "final"]
+    to_version: int | None = Field(default=None, ge=1)
+
+
+class LearningMethodStep(WireModel):
+    """A line of the learning method's history: the first method, a switch, one tried and dropped, an Undo."""
+
+    at: str = Field(max_length=64)
+    version: int = Field(ge=1)
+    event: Literal["first", "switched", "tried", "undone"]
+    # What it changes from the method before, in plain words ("tries a lesson first").
+    words: str = Field(default="", max_length=200)
+    # Against which version it was tried (a dropped one).
+    against: int | None = Field(default=None, ge=1)
+    can_undo: bool = False
+
+
+class LearningNextTrial(WireModel):
+    """When the next strategy trial can run: once 30 new hidden problems have built up and the trials' share of
+    the month allows it."""
+
+    state: Literal["waiting", "ready", "running", "limit"]
+    fresh: int = Field(ge=0)
+    needed: int = Field(ge=0)
+
+
+class LearningMethod(WireModel):
+    """How Row-Bot learns (L4a; designs/learning-ux.md §6): the method in use in plain words, its trials with their
+    denominators, its history and Undo."""
+
+    version: int = Field(ge=1)
+    since: str | None = Field(default=None, max_length=64)
+    description: str = Field(max_length=600)
+    # This month: ideas tested, kept, and Learning's tokens.
+    tried: int = Field(ge=0)
+    kept: int = Field(ge=0)
+    tokens: int = Field(ge=0)
+    trials: list[LearningMethodTrial] = Field(default_factory=list, max_length=20)
+    history: list[LearningMethodStep] = Field(default_factory=list, max_length=30)
+    can_undo: bool = False
+    next_trial: LearningNextTrial
 
 
 class LearningChangeWhy(WireModel):
@@ -4455,6 +4523,8 @@ class LearningSnapshot(WireModel):
     kinds_learning: list[LearningKindState] = Field(default_factory=list, max_length=5)
     # L3b: the change being tested now, if any.
     testing_now: LearningTestingNow | None = None
+    # L4a: how Row-Bot learns (while Learning is on).
+    method: LearningMethod | None = None
 
 
 class LearningNamedValue(WireModel):
@@ -4615,7 +4685,7 @@ class LearningCommand(WireModel):
         "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
         "review_version", "use_smaller_model", "change_starting_model",
         "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
-        "test_lesson", "delete_lesson",
+        "test_lesson", "delete_lesson", "undo_method",
     ]
     setup: LearningSetupChoices | None = None
     # use_smaller_model (O112): the smaller starting model the Personal model view offered;
