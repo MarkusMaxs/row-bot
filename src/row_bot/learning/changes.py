@@ -108,6 +108,18 @@ class TestPlan:
     task_tokens: int = 150_000
     runtime: bool = True
 
+    @classmethod
+    def of(cls, method: Any = None, **overrides: Any) -> TestPlan:
+        """The test plan a learning method's budget split asks for (``improver.strategy``); the repeats and each
+        task's budget are fixed points and stay as they are."""
+
+        from row_bot.learning.improver import strategy
+
+        budget = (method or strategy.FIRST).budget
+        return cls(own=budget.own_problems, other=budget.other_problems, visible_own=budget.visible_own,
+                   visible_other=budget.visible_other, hidden_own=budget.hidden_own, harder_own=budget.harder_own,
+                   **overrides)
+
 
 @dataclass
 class Result:
@@ -377,7 +389,7 @@ class Tester:
                  runner_factory: Callable[..., Any] | None = None, meter: Callable[[], Any] | None = None,
                  main_ref: Callable[[], str] | None = None, container: Callable[[], bool] | None = None,
                  plan: TestPlan = TestPlan(), clock: Callable[[], float] = time.time,
-                 check_model: Callable[[], None] | None = None) -> None:
+                 check_model: Callable[[], None] | None = None, purpose: str = "learning_test") -> None:
         self._root = root
         self._store = store
         self.client = client
@@ -388,6 +400,8 @@ class Tester:
         self.plan = plan
         self.clock = clock
         self.check_model = check_model
+        # ``learning_meta`` for a strategy trial's own tests (they count toward the trials' share, E13).
+        self.purpose = purpose
 
     @property
     def store(self) -> Any:
@@ -475,8 +489,6 @@ class Tester:
         """Test one drafted change now and keep the result on it (and its Attempt). Raises
         :class:`ChangeError` when it can't be tested (``claude_plan``, ``not_found``)."""
 
-        from row_bot.learning import evaluation
-
         proposal = get(change_id)
         meta = block(proposal)
         if view_state(proposal) not in ("waiting_to_test", "edited"):
@@ -486,12 +498,35 @@ class Tester:
                 self.check_model()
             except Exception as error:  # noqa: BLE001 - the Claude plan (O99) or no model: it waits
                 raise ChangeError("claude_plan" if type(error).__name__ == "ClaudePlanRefused" else "no_model") from None
+        started = float(self.clock())
+        _evolution().update_learning(change_id, {"state": TESTING})
+        try:
+            result = self.measure(proposal, should_stop=should_stop, progress=True)
+        except Exception:
+            _evolution().update_learning(change_id, {"state": meta.get("state") or WAITING})
+            self._progress(state="failed")
+            raise
+        if result.verdict == "stopped" and result.stopped == "stopped":
+            _evolution().update_learning(change_id, {"state": WAITING if meta.get("state") != EDITED else EDITED})
+            return result
+        self._record(change_id, proposal, result, started)
+        return result
+
+    def measure(self, proposal: Mapping[str, Any], *, should_stop: Callable[[], bool] = lambda: False,
+                progress: bool = False, meter: Any = None, leave_out: str | None = None) -> Result:
+        """One change against the same assistant without it, at equal budget, by the plan; nothing about the
+        change is kept (``test`` keeps it). A strategy trial's arm measures its own drafts this way with its own
+        ``meter`` and leaves its fresh problems out (``leave_out``: the trial whose problems judge it)."""
+
+        from row_bot.learning import evaluation
+
+        meta = block(proposal)
         kind = kinds.from_label(str(meta.get("kind_of_work") or "")) if meta.get("kind_of_work") else kinds.OTHER
         main_ref = self._main()
         arms = self.arms(proposal, main_ref)
         container = self._has_container()
         visible = self._visible(kind, container)
-        meter = (self._meter or evaluation.TokenMeter.for_month)()
+        meter = meter if meter is not None else (self._meter or evaluation.TokenMeter.for_month)()
         budget = evaluation.Budget(task_tokens=self.plan.task_tokens)
         cache = evaluation.ArmCache(self._root, clock=self.clock)
         focus = evaluation.Focus(kind, own=self.plan.own, other=self.plan.other)
@@ -502,47 +537,49 @@ class Tester:
         if self.store.exists():
             try:
                 hidden_total = evaluation.audit_size(asked_by=ASKED_BY, store=self.store, packs=packs, verifiers=verifiers,
-                                                     focus=focus)
+                                                     focus=focus, leave_out=leave_out)
             except Exception:  # noqa: BLE001 - no vault yet: nothing hidden to run
                 hidden_total = 0
         total = (len(visible) * self.plan.visible_repeats + hidden_total * self.plan.repeats) * len(arms)
-        title = str(proposal.get("title") or "")
-        started = float(self.clock())
-        self._progress(change_id=change_id, title=title, state="running", done=0, total=total, started_at=started)
-        _evolution().update_learning(change_id, {"state": TESTING})
+        if progress:
+            self._progress(change_id=str(proposal.get("id") or ""), title=str(proposal.get("title") or ""),
+                           state="running", done=0, total=total, started_at=float(self.clock()))
         done = [0]
 
         def counted(_arm: str, _case: Any) -> None:
             done[0] += 1
-            self._progress(done=done[0])
+            if progress:
+                self._progress(done=done[0])
             if should_stop():
                 raise _Stop("stopped")
 
+        client = self.client
+        if self.purpose != evaluation.PURPOSE:
+            from row_bot.learning.calls import Purposed
+
+            client = Purposed(client or evaluation.LedgerModelClient(), self.purpose)
         runner, close = (None, None)
         if self.plan.runtime and visible:
             runner, close = self._runner(arms, main_ref)
         try:
             shown = evaluation.compare(arms, tasks=visible, runner=runner, cache=cache, meter=meter, store=self.store,
-                                       client=self.client, clock=self.clock, on_case=counted, budget=budget,
-                                       repeats=self.plan.visible_repeats, kind_key=_family_key) if visible else None
+                                       client=client, clock=self.clock, on_case=counted, budget=budget,
+                                       repeats=self.plan.visible_repeats, kind_key=_family_key,
+                                       save=leave_out is None) if visible else None
             hidden = None
             if hidden_total and not (shown is not None and shown.stopped):
                 def hidden_progress(_done: int, _total: int) -> None:
                     counted("", None)
 
                 hidden = evaluation.audit_check(
-                    arms, asked_by=ASKED_BY, store=self.store, client=self.client, runner=runner, cache=cache,
+                    arms, asked_by=ASKED_BY, store=self.store, client=client, runner=runner, cache=cache,
                     meter=meter, clock=self.clock, packs=packs, verifiers=verifiers, budget=budget,
                     on_progress=hidden_progress, repeats=self.plan.repeats, combine_with=shown, kind_key=_family_key,
-                    focus=focus)
+                    focus=focus, leave_out=leave_out, save=leave_out is None)
         except _Stop:
-            _evolution().update_learning(change_id, {"state": WAITING if meta.get("state") != EDITED else EDITED})
-            self._progress(state="stopped")
+            if progress:
+                self._progress(state="stopped")
             return Result("stopped", stopped="stopped", tested_at=float(self.clock()))
-        except Exception:
-            _evolution().update_learning(change_id, {"state": meta.get("state") or WAITING})
-            self._progress(state="failed")
-            raise
         finally:
             if close is not None:
                 try:
@@ -550,8 +587,8 @@ class Tester:
                 except Exception:  # noqa: BLE001
                     logger.debug("Learning couldn't stop its evaluation worker", exc_info=True)
         result = self._result(kind, shown, hidden)
-        self._progress(state="done", done=done[0])
-        self._record(change_id, proposal, result, started)
+        if progress:
+            self._progress(state="done", done=done[0])
         return result
 
     def _runner(self, arms: Sequence[Any], main_ref: str) -> tuple[Any, Callable[[], None] | None]:
@@ -582,7 +619,7 @@ class Tester:
             logger.info("Learning's evaluation worker didn't start (%s); packs run in-process", getattr(error, "code", ""))
             worker.stop()
             return None, None
-        runner = eval_worker.RuntimeRunner(worker, worker_arms, record_usage=eval_worker.ledger_recorder())
+        runner = eval_worker.RuntimeRunner(worker, worker_arms, record_usage=eval_worker.ledger_recorder(self.purpose))
         return runner, worker.stop
 
     def _result(self, kind: str, shown: Any, hidden: Any) -> Result:
@@ -1057,7 +1094,8 @@ def last_tests(store: Any) -> dict[str, Any] | None:
 
 def test_waiting(tester: Tester, *, night: str, should_stop: Callable[[], bool] = lambda: False,
                  limit: int = MAX_TESTS_PER_NIGHT) -> NightTests:
-    """Test tonight's waiting drafts (after the look, before training), at most ``limit``."""
+    """Test tonight's waiting drafts (after the look, before training), at most ``limit`` (the learning method's
+    budget split)."""
 
     report = NightTests(night)
     earlier = last_tests(tester.store)

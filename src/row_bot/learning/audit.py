@@ -29,6 +29,11 @@ order they were made and holds every :data:`HOLD_EVERY`-th one, nothing a strate
 can steer. Past :data:`MAX_REPLAY_TASKS` the oldest retire (their text is dropped; the
 decision stays held out of training and drafting for good).
 
+**Fresh problems for strategy trials** (L4a, pre-registration §3.3): real-work tasks no trial has drawn.
+:meth:`AuditVault.draw` gives a trial every fresh one at once (so the next trial's are those that arrived
+after it), and the trial's judgments (each change's per-problem pass fractions with and without it) are
+kept here, sealed like the tasks, for the paper's H3 estimate; only aggregates leave ``evaluation``.
+
 **Deletion reaches it**: a deleted or opted-out conversation's tasks leave the vault
 (``store`` calls :func:`forget_threads`), and "Delete learning data" removes the file.
 """
@@ -97,6 +102,12 @@ def _schema(connection: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS looks ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, asked_by TEXT NOT NULL,"
         " caller TEXT NOT NULL, kind TEXT NOT NULL, answer TEXT NOT NULL, tasks INTEGER NOT NULL DEFAULT 0);"
+        # L4a: which trial drew each fresh problem, and each trial's judgments (per change and problem).
+        "CREATE TABLE IF NOT EXISTS draws (task_id TEXT PRIMARY KEY, trial TEXT NOT NULL, drawn_at REAL NOT NULL);"
+        "CREATE INDEX IF NOT EXISTS draws_trial ON draws(trial);"
+        "CREATE TABLE IF NOT EXISTS judgments (trial TEXT NOT NULL, change TEXT NOT NULL, task_id TEXT NOT NULL,"
+        " cluster TEXT NOT NULL, kind TEXT NOT NULL, base REAL NOT NULL, arm REAL NOT NULL,"
+        " PRIMARY KEY (trial, change, task_id));"
     )
 
 
@@ -170,6 +181,10 @@ def forget_threads(thread_ids: Iterable[str], *, root: Path | None = None) -> in
             removed += connection.execute(
                 f"DELETE FROM tasks WHERE thread_id IN ({marks}) OR conversation_id IN ({marks})", (*chunk, *chunk)
             ).rowcount
+            # A trial's judgments of the chat's problems go with them (their cluster is the conversation).
+            connection.execute(f"DELETE FROM judgments WHERE cluster IN ({marks})", chunk)
+        connection.execute("DELETE FROM draws WHERE task_id NOT IN (SELECT id FROM tasks)")
+        connection.execute("DELETE FROM judgments WHERE task_id NOT IN (SELECT id FROM tasks)")
     if removed:
         try:
             with _LOCK:
@@ -527,6 +542,99 @@ class AuditVault:
             _log(connection, self._clock(), asked_by, caller, "summary", "counts")
         return {"pack_tasks": len(hidden.TASKS), "replay_tasks": active, "correction_tasks": corrected,
                 "retired_replay_tasks": retired}
+
+    # ── Fresh problems for strategy trials (L4a) ────────────────────────
+
+    _FRESH = ("SELECT id, kind_of_work, thread_id, conversation_id, source_at, content FROM tasks"
+              " WHERE retired_at IS NULL AND content IS NOT NULL AND origin IN ('replay', 'correction')"
+              " AND id NOT IN (SELECT task_id FROM draws)")
+
+    def fresh_tasks(self, *, asked_by: str) -> list[dict[str, Any]]:
+        """The real-work tasks no trial has drawn (pre-registration §3.3's fresh hidden problems). Logged."""
+
+        caller = require_reader(_SEAL, "fresh_tasks")
+        with self._open() as connection:
+            rows = connection.execute(self._FRESH + " ORDER BY source_at, id").fetchall()
+            _log(connection, self._clock(), asked_by, caller, "run", "fresh tasks", len(rows))
+        return self._rows(rows)
+
+    def draw(self, trial: str, *, asked_by: str, minimum: int) -> int:
+        """Give ``trial`` every fresh task at once (at least ``minimum``, else none). Returns how many."""
+
+        caller = require_reader(_SEAL, "draw")
+        now = float(self._clock())
+        with self._open() as connection:
+            ids = [str(row[0]) for row in connection.execute(self._FRESH)]
+            if len(ids) < int(minimum):
+                _log(connection, now, asked_by, caller, "draw", f"too few ({len(ids)})", 0)
+                return 0
+            connection.executemany("INSERT OR IGNORE INTO draws (task_id, trial, drawn_at) VALUES (?, ?, ?)",
+                                   [(item, str(trial), now) for item in ids])
+            _log(connection, now, asked_by, caller, "draw", f"drew {len(ids)}", len(ids))
+        return len(ids)
+
+    def drawn_ids(self, trial: str) -> set[str]:
+        """The tasks ``trial`` drew (ids only, for evaluation to leave out or run)."""
+
+        require_reader(_SEAL, "drawn_ids")
+        if not vault_exists(self._root):
+            return set()
+        with _connect(self._root, create=False) as connection:
+            if connection is None:
+                return set()
+            return {str(row[0]) for row in connection.execute("SELECT task_id FROM draws WHERE trial = ?",
+                                                              (str(trial),))}
+
+    def drawn_tasks(self, trial: str, *, asked_by: str) -> list[dict[str, Any]]:
+        """The content of the tasks ``trial`` drew that are still held. Logged."""
+
+        caller = require_reader(_SEAL, "drawn_tasks")
+        with self._open() as connection:
+            rows = connection.execute(
+                "SELECT id, kind_of_work, thread_id, conversation_id, source_at, content FROM tasks"
+                " WHERE retired_at IS NULL AND content IS NOT NULL AND id IN"
+                " (SELECT task_id FROM draws WHERE trial = ?) ORDER BY source_at, id", (str(trial),)).fetchall()
+            _log(connection, self._clock(), asked_by, caller, "run", "a trial's tasks", len(rows))
+        return self._rows(rows)
+
+    def put_judgments(self, trial: str, change: str, rows: Iterable[tuple[str, str, str, float, float]]) -> int:
+        """Keep a trial's judgment of one change: per problem (task, cluster, kind, without, with)."""
+
+        require_reader(_SEAL, "put_judgments")
+        found = [(str(trial), str(change), str(task), str(cluster), str(kind), float(base), float(arm))
+                 for task, cluster, kind, base, arm in rows]
+        with self._open() as connection:
+            connection.executemany("INSERT OR REPLACE INTO judgments (trial, change, task_id, cluster, kind, base, arm)"
+                                   " VALUES (?, ?, ?, ?, ?, ?, ?)", found)
+        return len(found)
+
+    def judgments(self, trial: str) -> dict[str, list[tuple[str, str, str, float, float]]]:
+        """A trial's judgments by change (for evaluation's H3 estimate)."""
+
+        require_reader(_SEAL, "judgments")
+        if not vault_exists(self._root):
+            return {}
+        with _connect(self._root, create=False) as connection:
+            if connection is None:
+                return {}
+            rows = connection.execute("SELECT change, task_id, cluster, kind, base, arm FROM judgments WHERE trial = ?"
+                                      " ORDER BY change, task_id", (str(trial),)).fetchall()
+        found: dict[str, list[tuple[str, str, str, float, float]]] = {}
+        for change, task, cluster, kind, base, arm in rows:
+            found.setdefault(str(change), []).append((str(task), str(cluster), str(kind), float(base), float(arm)))
+        return found
+
+    @staticmethod
+    def _rows(rows: Sequence[Any]) -> list[dict[str, Any]]:
+        found = []
+        for row in rows:
+            try:
+                content = json.loads(row[5])
+            except ValueError:
+                continue
+            found.append({"id": row[0], "kind_of_work": row[1], "thread_id": row[2], "conversation_id": row[3],
+                          "created_at": row[4], **content})
+        return found
 
     def looks(self, *, limit: int = 200) -> list[Look]:
         """The newest looks first."""

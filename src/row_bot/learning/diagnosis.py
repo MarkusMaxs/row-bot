@@ -44,6 +44,8 @@ from row_bot import learning as gate
 from row_bot.learning import corrections, kinds
 from row_bot.learning.calls import ClaudePlanRefused, ModelClient, NoModel, estimate_tokens, text_of
 from row_bot.learning.contracts import Attempt, Cost, Decision, Episode, Ref, Signal, new_id
+from row_bot.learning.improver import strategy as strategy_module
+from row_bot.learning.improver.strategy import Strategy
 from row_bot.learning.spending import TokenMeter
 from row_bot.learning.store import LearningStore
 
@@ -55,10 +57,9 @@ LOOKBACK_DAYS = 30
 MAX_ISSUES_PER_NIGHT = 6
 EVIDENCE_SHOWN = 6
 EXCERPT = 500
-# An issue is diagnosed with at least this much of the person's own feedback (a Teach with a note
-# alone is enough), or this many failed steps across two chats or more.
-MIN_FEEDBACK = 2
-MIN_FAILURES = 3
+# How much evidence an issue needs, which issues come first, how many a night and what each shows are the
+# learning method's choices (``improver.strategy``; the first method: at least 2 pieces of the person's own
+# feedback, or a Teach with a note, or 3 failed steps across 2 chats; up to 6 issues, 6 cases of 500 characters).
 CLAUDE_PLAN_WORDS = ("Learning's improvement work needs a model other than your Claude plan. Choose another "
                      "default model to let Learning look for things to improve.")
 NO_MODEL_WORDS = "Learning needs a default model to look for things to improve."
@@ -133,20 +134,27 @@ class Issue:
     def feedback(self) -> int:
         return sum(1 for item in self.evidence if item.from_person)
 
-    def enough(self) -> bool:
+    def enough(self, method: Strategy | None = None) -> bool:
+        """Whether there is enough evidence to diagnose it, by the learning method's thresholds."""
+
         if self.single:
             return True
+        issues = (method or strategy_module.FIRST).issues
         counts = self.counts()
         if any(item.source == "teach" and item.note for item in self.evidence):
             return True
-        if self.feedback >= MIN_FEEDBACK:
+        if self.feedback >= issues.min_feedback:
             return True
-        return counts["failures"] >= MIN_FAILURES and counts["chats"] >= 2
+        return counts["failures"] >= issues.min_failures and counts["chats"] >= 2
 
-    def weight(self) -> float:
+    def weight(self, method: Strategy | None = None) -> float:
+        """How much it counts, by the learning method's issue priority."""
+
+        issues = (method or strategy_module.FIRST).issues
         counts = self.counts()
-        return (3 * counts["corrections"] + 2 * (counts["stops"] + counts["retries"] + counts["denials"])
-                + counts["failures"] + counts["chats"])
+        return (issues.corrections * counts["corrections"]
+                + issues.pushback * (counts["stops"] + counts["retries"] + counts["denials"])
+                + issues.failures * counts["failures"] + issues.chats * counts["chats"])
 
     def newest(self) -> float:
         return max((item.at for item in self.evidence), default=0.0)
@@ -284,15 +292,17 @@ def standing(issue: Issue, proposals: Sequence[Mapping[str, Any]], attempts: Seq
 
 # ── The diagnosis call ──────────────────────────────────────────────────────
 
-SYSTEM = """You are Row-Bot's Learning. You look at one recurring problem in the person's own work with Row-Bot \
-and decide the single change most likely to fix it. Choose exactly one:
-- lesson: a short "do it this way" note Row-Bot recalls when relevant: one or two general sentences.
-- way_of_working: a standing instruction for how Row-Bot works, one or two sentences, in one slot: guidance \
-(how to approach the work), tool_guidance (how to use its tools), delegation (when to hand work to a helper).
-- create_skill: a new reusable procedure: a snake_case name, a one-line description and numbered steps.
-- patch_skill: a change to one of the existing skills listed: its name and its full updated instructions.
-- train: the person's own model should learn this kind of work from these examples.
-- needs_examples: there isn't enough evidence yet to know what to change.
+_OPTIONS = {
+    "lesson": '- lesson: a short "do it this way" note Row-Bot recalls when relevant: one or two general sentences.',
+    "way_of_working": ("- way_of_working: a standing instruction for how Row-Bot works, one or two sentences, in one "
+                       "slot: guidance (how to approach the work), tool_guidance (how to use its tools), delegation "
+                       "(when to hand work to a helper)."),
+    "create_skill": "- create_skill: a new reusable procedure: a snake_case name, a one-line description and numbered steps.",
+    "patch_skill": "- patch_skill: a change to one of the existing skills listed: its name and its full updated instructions.",
+    "train": "- train: the person's own model should learn this kind of work from these examples.",
+}
+# The fixed part of the instructions (what may be drafted and how it is written stays outside every method, E4).
+_RULES = """- needs_examples: there isn't enough evidence yet to know what to change.
 - wait: nothing Row-Bot can change (the person's own slip, a one-off, or something outside Row-Bot).
 Say too whether it looks like a bug in Row-Bot itself (one of its tools failing or misbehaving).
 Write general guidance, never the person's data: no names of people, no email addresses, phone numbers or links, \
@@ -300,6 +310,24 @@ no passwords, keys or tokens, and nothing that changes what needs the person's a
 Answer with JSON only: {"finding": "one or two plain sentences: what went wrong and why", "looks_like_bug": \
 false, "change": "lesson", "title": "a short title", "text": "the lesson or way of working", "slot": "", \
 "skill_name": "", "skill_description": "", "instructions": ""}"""
+
+
+def system_prompt(method: Strategy | None = None) -> str:
+    """The diagnosis's instructions under a learning method: the changes it may draft in the order it tries
+    them, its own words (if any), then the fixed rules."""
+
+    method = method or strategy_module.FIRST
+    lines = ["You are Row-Bot's Learning. You look at one recurring problem in the person's own work with Row-Bot "
+             "and decide the single change most likely to fix it. Choose exactly one:"]
+    lines += [_OPTIONS[name] for name in method.methods.prefer]
+    if method.methods.prefer != strategy_module.METHODS:
+        lines.append("When more than one could fix it, prefer the one listed first.")
+    if method.prompts.diagnosis:
+        lines.append("How to go about it: " + " ".join(method.prompts.diagnosis.split()))
+    return "\n".join(lines) + "\n" + _RULES
+
+
+SYSTEM = system_prompt()
 
 _FACET_WORDS = {
     "corrected": "the person corrected Row-Bot's answer",
@@ -312,9 +340,13 @@ _FACET_WORDS = {
 }
 
 
-def _clip(text: str, limit: int = EXCERPT) -> str:
+def _clipped(text: str, limit: int) -> str:
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _clip(text: str, limit: int = EXCERPT) -> str:
+    return _clipped(text, limit)
 
 
 def _output_text(store: LearningStore, decision: Decision) -> tuple[list[str], str]:
@@ -341,14 +373,26 @@ def _tools_used(book: corrections.Book, episode_id: str) -> list[str]:
     return [name for name in dict.fromkeys(names) if name]
 
 
-def describe(store: LearningStore, book: corrections.Book, issue: Issue, *, now: float) -> str:
-    """The issue as the diagnosis call sees it: its kind, counts and up to :data:`EVIDENCE_SHOWN` cases."""
+def describe(store: LearningStore, book: corrections.Book, issue: Issue, *, now: float,
+             method: Strategy | None = None) -> str:
+    """The issue as the diagnosis call sees it: its kind, counts and the cases the learning method shows
+    (how many, which first, how much of each, and whether the accepted redo is shown)."""
+
+    examples = (method or strategy_module.FIRST).examples
+    excerpt = examples.excerpt
+
+    def _clip(text: str, limit: int = excerpt) -> str:
+        return _clipped(text, limit)
 
     counts = issue.counts()
     lines = [f"Kind of work: {kinds.label(issue.kind)}.",
              f"What went wrong: {_FACET_WORDS.get(issue.facet, issue.facet)} "
              f"({len(issue.evidence)} times in {counts['chats']} chats).", ""]
-    shown = sorted(issue.evidence, key=lambda item: (not item.from_person, -item.at))[:EVIDENCE_SHOWN]
+    if examples.order == "newest_first":
+        ordered = sorted(issue.evidence, key=lambda item: -item.at)
+    else:
+        ordered = sorted(issue.evidence, key=lambda item: (not item.from_person, -item.at))
+    shown = ordered[:examples.shown]
     for number, item in enumerate(shown, 1):
         episode = book.episodes.get(item.episode_id)
         decision = book.decisions.get(item.decision_id)
@@ -376,7 +420,7 @@ def describe(store: LearningStore, book: corrections.Book, issue: Issue, *, now:
             lines.append(f"   The person turned down: {decision.tool_name if decision else 'an action'}")
         elif item.source == "failed":
             lines.append("   No feedback from the person: the step failed.")
-        if decision is not None and item.source in ("teach", "next_message_correction", "retry"):
+        if examples.show_redo and decision is not None and item.source in ("teach", "next_message_correction", "retry"):
             redo = corrections.accepted_redo(store, decision, clock=lambda: now, book=book)
             first = corrections.first_call(book, redo) if redo is not None else None
             if first is not None:
@@ -430,8 +474,9 @@ class Diagnosis:
     instructions: str = ""
 
 
-def parse(reply: str) -> Diagnosis | None:
-    """The diagnosis call's JSON answer, or None when it isn't one we can use."""
+def parse(reply: str, method: Strategy | None = None) -> Diagnosis | None:
+    """The diagnosis call's JSON answer, or None when it isn't one we can use (a change the learning method
+    doesn't draft included)."""
 
     text = str(reply or "").strip()
     match = re.search(r"\{.*\}", text, flags=re.S)
@@ -442,6 +487,9 @@ def parse(reply: str) -> Diagnosis | None:
     except ValueError:
         return None
     if not isinstance(data, dict) or str(data.get("change") or "") not in CHANGES:
+        return None
+    allowed = (*(method or strategy_module.FIRST).methods.prefer, "needs_examples", "wait")
+    if str(data["change"]) not in allowed:
         return None
 
     def field_text(name: str, limit: int) -> str:
@@ -646,25 +694,35 @@ def note_night(store: LearningStore, night: str, state: str, note: str = "") -> 
     _save(store, NightReport(night, state=state, note=note, at=store.now()))
 
 
-def _messages(issue_text: str, context: str) -> list[Any]:
+def _messages(issue_text: str, context: str, method: Strategy | None = None) -> list[Any]:
     from langchain_core.messages import HumanMessage, SystemMessage
 
     body = issue_text + (("\n\n" + context) if context else "")
-    return [SystemMessage(content=SYSTEM), HumanMessage(content=body)]
+    return [SystemMessage(content=system_prompt(method)), HumanMessage(content=body)]
+
+
+#: ``sink(issue, diagnosis or None, tokens) -> Outcome``: where a diagnosis goes instead of the archive and
+#: evolution's drafts (a strategy trial's arm keeps its drafts to itself).
+Sink = Callable[[Issue, "Diagnosis | None", int], Outcome]
 
 
 def run(store: LearningStore, *, client: ModelClient, night: str, now: float | None = None,
         meter: TokenMeter | None = None, should_stop: Callable[[], bool] = lambda: False,
-        limit: int = MAX_ISSUES_PER_NIGHT, single: bool = False, save: bool = True,
+        limit: int | None = None, single: bool = False, save: bool = True,
         context: str | None = None, check_model: Callable[[], None] | None = None,
-        strategy_release_id: str | None = None) -> NightReport:
+        strategy_release_id: str | None = None, method: Strategy | None = None,
+        sink: Sink | None = None, purpose: str = PURPOSE) -> NightReport:
     """One night's look: issues → (dedup) → one diagnosis call each → a drafted change or a note.
 
     ``should_stop`` is asked before every call (the person came back, Learning was paused): the night
     stops there and goes on later. ``check_model`` raises :class:`ClaudePlanRefused` or :class:`NoModel`
     before any call when the default model can't be used. ``single`` drafts from single signals (the
-    paper's ablation arm, never the product's)."""
+    paper's ablation arm, never the product's). ``method`` is the learning method in use (its issue
+    priority, method choice, examples and how many issues a night); ``sink`` takes each diagnosis instead
+    of the archive and the drafts (a trial's arm), its calls tagged ``purpose``."""
 
+    method = method or strategy_module.FIRST
+    limit = method.budget.issues if limit is None else limit
     moment = float(now if now is not None else store.now())
     report = NightReport(night, at=moment)
     if not store.exists() or not gate.is_enabled(store.root):
@@ -682,7 +740,7 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
     skipped: Counter[str] = Counter()
     due: list[Issue] = []
     for issue in issues:
-        if not issue.enough():
+        if not issue.enough(method):
             skipped["needs_more"] += 1
             continue
         why = standing(issue, proposals.get(issue.key, ()), attempts.get(issue.key, ()))
@@ -690,7 +748,8 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
             skipped[why] += 1
             continue
         due.append(issue)
-    due.sort(key=lambda item: (-(item.feedback > 0), -item.weight(), -item.newest(), item.key))
+    first = method.issues.feedback_first
+    due.sort(key=lambda item: (-(item.feedback > 0) if first else 0, -item.weight(method), -item.newest(), item.key))
     report.found = len(due)
     report.skipped = dict(skipped)
     if not due:
@@ -715,14 +774,14 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
         if should_stop():
             report.state = "stopped"
             break
-        messages = _messages(describe(store, book, issue, now=moment), extra)
+        messages = _messages(describe(store, book, issue, now=moment, method=method), extra, method)
         estimate = estimate_tokens(messages)
         local = client.is_local(None)
         if not meter.allows(estimate, local=local):
             report.state, report.note = "limit", meter.note()
             break
         try:
-            reply = client.invoke(messages, tools=None, model_ref=None, purpose=PURPOSE)
+            reply = client.invoke(messages, tools=None, model_ref=None, purpose=purpose)
         except ClaudePlanRefused:
             report.state, report.note = "claude_plan", CLAUDE_PLAN_WORDS
             break
@@ -735,8 +794,9 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
             break
         meter.charge(reply.tokens, local=reply.local)
         report.tokens += reply.tokens
-        outcome = record(store, issue, parse(text_of(reply.message)), now=moment, tokens=reply.tokens,
-                         strategy_release_id=strategy_release_id)
+        found = parse(text_of(reply.message), method)
+        outcome = (sink(issue, found, reply.tokens) if sink is not None else
+                   record(store, issue, found, now=moment, tokens=reply.tokens, strategy_release_id=strategy_release_id))
         report.outcomes.append(outcome)
         report.diagnosed += 1
         report.drafted += bool(outcome.proposal_id)

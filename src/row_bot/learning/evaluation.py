@@ -1848,9 +1848,13 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 on_progress: Callable[[int, int], None] | None = None, repeats: int = 3,
                 seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
                 kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = (),
-                corrected: bool | None = None, focus: Focus | None = None) -> Comparison:
+                corrected: bool | None = None, focus: Focus | None = None,
+                leave_out: str | None = None) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
     work and tokens per arm, and the paired analysis; no task, id or text (E10).
+
+    ``leave_out`` (a strategy trial's id) leaves out the fresh problems that trial drew: an arm of the trial
+    tests its own drafts on everything else, never on the problems that judge it (L4a).
 
     ``corrected``: True runs only the held-out corrections (O87, H2's hidden corrected problems),
     False only the uncorrected decisions, None both.
@@ -1878,6 +1882,9 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
              if allowed is None or task.verifier.kind in allowed]
     replay = ([ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who, origin=_origin(corrected))]
               if include_replay else [])
+    if leave_out:
+        drawn = vault.drawn_ids(leave_out)
+        replay = [case for case in replay if case.decision_id not in drawn]
     if focus is not None:
         replay = _focused(replay, focus)
         tasks = _per_pack(tasks, focus.packs)
@@ -1897,7 +1904,7 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
 
 def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,
                verifiers: Iterable[str] | None = None, include_replay: bool = True,
-               corrected: bool | None = None, focus: Focus | None = None) -> int:
+               corrected: bool | None = None, focus: Focus | None = None, leave_out: str | None = None) -> int:
     """How many hidden problems an :func:`audit_check` with the same choices would run (a count only)."""
 
     allowed = None if verifiers is None else set(verifiers)
@@ -1909,6 +1916,9 @@ def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] 
     if not include_replay:
         return count
     replay = vault.replay_tasks(asked_by=who, origin=_origin(corrected))
+    if leave_out:
+        drawn = vault.drawn_ids(leave_out)
+        replay = [item for item in replay if str(item.get("id")) not in drawn]
     if focus is not None:
         return count + len(_focused([ReplayCase.from_content(item) for item in replay], focus))
     return count + len(replay)
@@ -2147,6 +2157,198 @@ def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts:
                          "with_picture": sum(1 for case in replay if case.has_picture)}, **found}
 
 
+# ── Strategy trials (L4a, pre-registration §3.3, §6.1, §7): only aggregates leave ──
+
+#: A trial runs once at least this many fresh hidden problems have built up since the last (O82); H3 counts a
+#: generation only when it was judged on at least this many (§7's minimum size).
+MIN_FRESH = 30
+
+
+def _replay_tokens(case: ReplayCase) -> int:
+    """About how many tokens one run of a replayed problem sends (its prefix and tools) and answers."""
+
+    from row_bot.learning.calls import CHARS_PER_TOKEN, OUTPUT_ALLOWANCE
+
+    sent = len(json.dumps(list(case.messages), default=str)) + len(json.dumps(list(case.tools or ()), default=str))
+    return math.ceil(sent / CHARS_PER_TOKEN) + OUTPUT_ALLOWANCE
+
+
+def fresh_problems(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
+    """How many fresh hidden problems wait for a strategy trial (real work no trial has drawn) and about how many
+    tokens one run of each costs together: counts only. Never creates a vault."""
+
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    if not audit.vault_exists(saved.root):
+        return {"fresh": 0, "tokens_per_run": 0}
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    cases = [ReplayCase.from_content(item) for item in _vault(saved).fresh_tasks(asked_by=who)]
+    return {"fresh": len(cases), "tokens_per_run": sum(_replay_tokens(case) for case in cases)}
+
+
+def draw_trial(trial_id: str, *, asked_by: str, store: Any | None = None, minimum: int = MIN_FRESH) -> int:
+    """Give a strategy trial every fresh hidden problem now (at least ``minimum``, else none): from now on they
+    are that trial's, and the next trial's fresh problems are those that arrive after. Returns how many."""
+
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    return int(_vault(store).draw(str(trial_id), asked_by=who, minimum=int(minimum)))
+
+
+def trial_size(trial_id: str, *, asked_by: str, store: Any | None = None) -> int:
+    """How many of a trial's problems are still held (a count only)."""
+
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    return len(_vault(store).drawn_tasks(str(trial_id), asked_by=who))
+
+
+def judge_trial(trial_id: str, baseline: Arm, changes: Sequence[tuple[str, Arm]], *, asked_by: str,
+                client: ModelClient | None = None, budget: Budget = Budget(), meter: TokenMeter | None = None,
+                store: Any | None = None, repeats: int = 3, seed: int = ANALYSIS_SEED,
+                on_progress: Callable[[int, int], None] | None = None,
+                clock: Callable[[], float] = time.time) -> dict[str, Any]:
+    """Judge a strategy trial's accepted changes on its fresh problems (§6.1): every change against the same
+    assistant without it (``baseline``, run once for all of them), ``repeats`` runs per arm, equal budget per
+    task. Returns per change (its key) the paired analysis by kind of work (kinds' keys) and overall, and what the
+    judging spent; the per-problem pass fractions stay in the vault for the paper's H3 estimate (E10)."""
+
+    from row_bot.learning import kinds
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    vault = _vault(saved)
+    replay = [replace(case, kind_of_work=kind_label_of(case))
+              for case in (ReplayCase.from_content(item) for item in vault.drawn_tasks(str(trial_id), asked_by=who))]
+    arms = [baseline, *(arm for _key, arm in changes)]
+    if len({arm.name for arm in arms}) != len(arms):
+        raise EvaluationError("arm_names_repeat")
+    total = len(replay) * len(arms) * max(1, int(repeats))
+    done = [0]
+
+    def counted(_arm: str, _case: CaseResult) -> None:
+        done[0] += 1
+        if on_progress is not None:
+            on_progress(done[0], total)
+
+    kept: dict[str, list[tuple[str, str, str, float, float]]] = {}
+    clusters = {case.decision_id: case.conversation_id or case.thread_id or case.decision_id for case in replay}
+    family = {case.decision_id: kinds.from_label(case.kind_of_work) for case in replay}
+
+    def inspect(results: Mapping[str, list[CaseResult]]) -> None:
+        base = pass_fractions(results[baseline.name])
+        for key, arm in changes:
+            other = pass_fractions(results[arm.name])
+            kept[key] = [(task, clusters.get(task, task), family.get(task, kinds.OTHER), base[task][1], other[task][1])
+                         for task in sorted(base) if task in other]
+
+    comparison = _compare(arms, [], replay, client=client, judge=None, calibration=None, budget=budget, meter=meter,
+                          store=saved, save=False, clock=clock, backend="auto", suite="audit", aggregate_only=True,
+                          on_case=counted, repeats=repeats, seed=seed, kind_key=kinds.from_label, inspect=inspect)
+    if not comparison.stopped:
+        for key, rows in kept.items():
+            vault.put_judgments(str(trial_id), key, rows)
+    by_name = {item.arm.name: item for item in comparison.arms}
+    found: dict[str, Any] = {}
+    for key, arm in changes:
+        analysis = (comparison.analysis.get("arms") or {}).get(arm.name) or {}
+        found[key] = {"overall": analysis.get("overall") or {}, "by_kind": dict(analysis.get("by_kind") or {})}
+    return {"problems": len(replay), "changes": found, "stopped": comparison.stopped,
+            "tokens": comparison.tokens, "local_tokens": comparison.local_tokens,
+            "measured_tokens": sum(item.measured_tokens for item in by_name.values()),
+            "repeats": comparison.repeats, "metric_version": METRIC_VERSION}
+
+
+def _verdicts(rows: Sequence[tuple[str, str, str, float, float]], weights: Mapping[str, int] | None,
+              kind: str) -> str:
+    """The keeping rule (§6.1, ``changes.verdict``) on one change's per-problem pairs, the problems weighted by how
+    often a resample drew them (None: once each)."""
+
+    from row_bot.learning import changes
+
+    own_sum = own_n = rest_sum = rest_n = 0.0
+    for task, _cluster, family, base, arm in rows:
+        weight = 1 if weights is None else weights.get(task, 0)
+        if not weight:
+            continue
+        if family == kind:
+            own_sum += weight * (arm - base)
+            own_n += weight
+        else:
+            rest_sum += weight * (arm - base)
+            rest_n += weight
+    own = {"problems": own_n, "difference": own_sum / own_n if own_n else None}
+    rest = {"problems": rest_n, "difference": rest_sum / rest_n if rest_n else None}
+    return changes.verdict(own, rest)
+
+
+def h3_estimate(generations: Sequence[Mapping[str, Any]], *, store: Any | None = None, resamples: int = RESAMPLES,
+                seed: int = ANALYSIS_SEED, minimum: int = MIN_FRESH) -> dict[str, Any]:
+    """The paper's H3 estimate (§7): over generations 1..G, the mean of each generation's improvement yield per
+    1M tokens minus the frozen control's, on the fresh problems that judged it (generation g on trial g+1's, the
+    last on the final set), with a 95% percentile bootstrap stratified by trial (each trial's problems resampled by
+    their source chat, every change's keeping verdict recomputed) and a p-value from the bootstrap distribution.
+
+    ``generations``: per generation, ``{"trial": its judging trial's id, "inherited": side, "control": side}``
+    where a side is ``{"changes": [(key, kind of work key)], "tokens": its improvement loop's tokens}``.
+    Aggregates only: counts, yields, the estimate and its interval."""
+
+    import random
+
+    vault = _vault(store)
+    rows: list[dict[str, Any]] = []
+    tables: list[tuple[dict[str, list[tuple[str, str, str, float, float]]], list[str], dict[str, list[str]]]] = []
+    for generation in generations:
+        judged = vault.judgments(str(generation["trial"]))
+        problems = sorted({task for found in judged.values() for task, *_rest in found})
+        by_cluster: dict[str, list[str]] = {}
+        for found in judged.values():
+            for task, cluster, *_rest in found:
+                if task not in by_cluster.setdefault(cluster, []):
+                    by_cluster[cluster].append(task)
+        tables.append((judged, problems, by_cluster))
+        row: dict[str, Any] = {"problems": len(problems), "clusters": len(by_cluster)}
+        for side in ("inherited", "control"):
+            part = generation[side]
+            better = sum(_verdicts(judged.get(key, []), None, kind) == "better" for key, kind in part["changes"])
+            tokens = int(part["tokens"])
+            row[side] = {"accepted": len(part["changes"]), "better": better, "tokens": tokens,
+                         "yield": round(better / (tokens / 1e6), 6) if tokens else 0.0}
+        row["difference"] = round(row["inherited"]["yield"] - row["control"]["yield"], 6)
+        rows.append(row)
+    count = len(rows)
+    base = {"generations": rows, "resamples": int(resamples), "seed": int(seed), "minimum": int(minimum)}
+    if not count:
+        return {**base, "estimate": None, "low": None, "high": None, "p_value": None, "enough": False}
+    estimate = sum(row["difference"] for row in rows) / count
+    rng = random.Random(int(seed))
+    boots: list[float] = []
+    for _ in range(int(resamples)):
+        total = 0.0
+        for generation, (judged, _problems, by_cluster) in zip(generations, tables):
+            keys = sorted(by_cluster)
+            weights: dict[str, int] = {}
+            for cluster in (rng.choice(keys) for _ in keys) if keys else ():
+                for task in by_cluster[cluster]:
+                    weights[task] = weights.get(task, 0) + 1
+            yields = []
+            for side in ("inherited", "control"):
+                part = generation[side]
+                better = sum(_verdicts(judged.get(key, []), weights, kind) == "better" for key, kind in part["changes"])
+                tokens = int(part["tokens"])
+                yields.append(better / (tokens / 1e6) if tokens else 0.0)
+            total += yields[0] - yields[1]
+        boots.append(total / count)
+    boots.sort()
+    below = sum(1 for value in boots if value <= 0)
+    above = sum(1 for value in boots if value >= 0)
+    p_value = min(1.0, 2 * min(below, above) / len(boots)) if boots else None
+    enough = count >= 3 and all(row["problems"] >= int(minimum) for row in rows)
+    return {**base, "estimate": round(estimate, 6), "low": round(_percentile(boots, 0.025), 6),
+            "high": round(_percentile(boots, 0.975), 6), "p_value": None if p_value is None else round(p_value, 6),
+            "enough": enough}
+
+
 def audit_counts(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
     """How many hidden problems the vault holds (packs, real work uncorrected and corrected, by fidelity,
     retired) and how many held-out corrections wait for it: counts only. Never creates a vault."""
@@ -2238,6 +2440,12 @@ __all__ = [
     "SPLITS",
     "audit_counts",
     "audit_size",
+    "MIN_FRESH",
+    "draw_trial",
+    "fresh_problems",
+    "h3_estimate",
+    "judge_trial",
+    "trial_size",
     "Focus",
     "kind_label_of",
     "freeze_check",

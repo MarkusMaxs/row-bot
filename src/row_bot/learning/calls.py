@@ -151,8 +151,25 @@ class LedgerModelClient:
         return ModelReply(message, input_tokens, output_tokens, is_local_provider(provider), selection_ref)
 
 
+class Purposed:
+    """A model client whose every call is tagged ``purpose`` in the usage ledger, whatever its caller asks (a
+    strategy trial's diagnosis and tests are ``learning_meta``: they count toward the trials' share, E13)."""
+
+    def __init__(self, client: ModelClient, purpose: str) -> None:
+        self.client = client
+        self.purpose = purpose
+
+    def invoke(self, messages: Sequence[Any], *, tools: Sequence[Mapping[str, Any]] | None, model_ref: str | None,
+               purpose: str = "") -> ModelReply:
+        return self.client.invoke(messages, tools=tools, model_ref=model_ref, purpose=self.purpose)
+
+    def is_local(self, model_ref: str | None) -> bool:
+        return self.client.is_local(model_ref)
+
+
 __all__ = [
     "CHARS_PER_TOKEN",
+    "Purposed",
     "ClaudePlanRefused",
     "LedgerModelClient",
     "ModelClient",
